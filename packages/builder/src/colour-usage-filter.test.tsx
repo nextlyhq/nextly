@@ -70,6 +70,8 @@ const reach = (
   byKind: { ...NONE, pages: documents },
   sharedStyles: [],
   blockDefaults,
+  variables: [],
+  siteText: [],
   complete,
 });
 

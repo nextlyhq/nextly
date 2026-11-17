@@ -13,7 +13,9 @@
  * @module used-on-page
  */
 import {
+  blockDefaultsOf,
   documentTokenUsage,
+  selectNodes,
   resolveComponentInstances,
   siteTextUses,
   styleEnvelopeProperties,
@@ -49,12 +51,22 @@ export function usedOnPage(
   const ids = new Set<string>();
   const properties = new Set<string>();
   const worn = new Set<string>();
-  for (const part of parts) readPart(part, limits, { ids, properties, worn });
-  // The shared styles and looks the page's blocks wear.
-  for (const style of classes) {
-    if (!worn.has(style.id)) continue;
-    styleEnvelopeTokens(style.styles, ids);
-    styleEnvelopeProperties(style.styles, properties);
+  const types = new Set<string>();
+  for (const part of parts) {
+    readPart(part, limits, { ids, properties, worn, types });
+  }
+  // The shared styles and looks the page's blocks wear, and the site's own
+  // look of each block type it draws, which no block names.
+  const ownLooks = blockDefaultsOf(classes);
+  const styles = [
+    ...classes.filter(style => worn.has(style.id)).map(style => style.styles),
+    ...[...types].flatMap(type =>
+      Object.hasOwn(ownLooks, type) ? [ownLooks[type]] : []
+    ),
+  ];
+  for (const style of styles) {
+    styleEnvelopeTokens(style, ids);
+    styleEnvelopeProperties(style, properties);
   }
   // The site's text, which every page's body, headings, links, buttons and
   // captions take: a row's reference by identity, or its `var()` by property.
@@ -79,7 +91,12 @@ export function usedOnPage(
 function readPart(
   { document, components }: PageDocument,
   limits: DocumentLimits,
-  into: { ids: Set<string>; properties: Set<string>; worn: Set<string> }
+  into: {
+    ids: Set<string>;
+    properties: Set<string>;
+    worn: Set<string>;
+    types: Set<string>;
+  }
 ): void {
   const rendered = resolveComponentInstances(document, components, {
     limits,
@@ -89,6 +106,9 @@ function readPart(
   for (const id of usage.ids) into.ids.add(id);
   for (const property of usage.properties) into.properties.add(property);
   for (const id of classUsageOf(rendered, limits).ids) into.worn.add(id);
+  for (const entry of selectNodes(rendered, limits).nodes) {
+    into.types.add(entry.node.type);
+  }
 }
 
 /**

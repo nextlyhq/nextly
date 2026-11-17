@@ -39,6 +39,9 @@ function reach(
     byKind: { ...NONE, pages: documents },
     sharedStyles,
     blockDefaults,
+    // As a current host answers: no variable and no Site text row names it.
+    variables: [],
+    siteText: [],
     complete,
   };
 }
@@ -104,6 +107,12 @@ describe("whether a variable is used, for the usage filter", () => {
 
   it("is unused where only a core block's built-in look names it", () => {
     expect(usageState(reach(0, [], true, ["core/button"]))).toBe("unused");
+  });
+
+  it("is still counting where the count says nothing of the variables or rows naming it", () => {
+    // An older server's answer: neither relation is said, so neither is none.
+    const { variables: _v, siteText: _s, ...unsaid } = reach(0);
+    expect(usageState(unsaid)).toBe("counting");
   });
 
   it("is unused only once every document is counted", () => {

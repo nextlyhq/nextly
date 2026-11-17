@@ -269,7 +269,10 @@ export function usageState(reach: VariableReach | undefined): UsageState {
   if (named || reach.documents > 0 || reach.sharedStyles.length > 0) {
     return "used";
   }
-  return reach.complete ? "unused" : "counting";
+  // A count that says nothing of the variables or rows naming it, as an
+  // older host's does, has not shown it unused.
+  const said = reach.variables !== undefined && reach.siteText !== undefined;
+  return reach.complete && said ? "unused" : "counting";
 }
 
 /** The editor's line beside Remove: how widely the variable is used. */

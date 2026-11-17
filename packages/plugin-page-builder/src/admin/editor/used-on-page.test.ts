@@ -104,6 +104,27 @@ describe("the variables the open page uses", () => {
     ]).toEqual(["color.border"]);
   });
 
+  it("reads the site's own look for a block type the page draws, and not for one it does not", () => {
+    const look = (blockType: string, colour: string): NamedClass => ({
+      id: `l-${blockType}`,
+      slug: `look-${blockType.replace("/", "-")}`,
+      label: "Own look",
+      orderIndex: 0,
+      blockType,
+      isDefault: true,
+      styles: { base: { base: { color: { $token: colour } } } },
+    });
+    const page = document([coloured("p1", "#111111")]);
+    expect([
+      ...usedOnPage(
+        [{ document: page, components: new Map() }],
+        DEFAULT_LIMITS,
+        TOKENS,
+        [look("core/text", "color.primary"), look("core/image", "color.muted")]
+      ),
+    ]).toEqual(["color.primary"]);
+  });
+
   it("reads the colour a variable it uses names through var()", () => {
     const page = document([
       {
