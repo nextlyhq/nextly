@@ -50,6 +50,7 @@ import {
   activityHref,
 } from "@admin/hooks/queries/useRecentActivity";
 import { formatRelativeTime } from "@admin/lib/dashboard";
+import { useDocumentAddress } from "@admin/lib/navigation/useDocumentAddress";
 import type { Activity } from "@admin/types/dashboard/activity";
 
 /**
@@ -235,6 +236,8 @@ export const TeamActivityCard: React.FC<TeamActivityCardProps> = ({
   // A relative time is read again as time passes: the clock ticks.
   const { tier, drawn, density, now } = useListCard(settings.limit);
   const labelOf = useCollectionLabel();
+  // Each row opens where every other link to its document opens.
+  const addressOf = useDocumentAddress();
   // A row this build cannot read is left out rather than drawn from guesses.
   const rows = data.items.flatMap(row => {
     const activity = activityFromRow(row);
@@ -249,7 +252,7 @@ export const TeamActivityCard: React.FC<TeamActivityCardProps> = ({
     return [
       {
         activity: named,
-        href: activityHref(row),
+        href: activityHref(row, addressOf),
         settings: row.subjectKind === "settings",
       },
     ];

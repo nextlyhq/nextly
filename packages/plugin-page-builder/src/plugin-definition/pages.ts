@@ -8,7 +8,6 @@
 import { NextlyError, type PluginRoute } from "@nextlyhq/plugin-sdk";
 
 import { version as PLUGIN_VERSION } from "../../package.json";
-
 import {
   backfillPageClaims,
   publishedPagesInTransaction,
@@ -61,6 +60,7 @@ import {
   storedAddressProblem,
   TEMPLATE_ADDRESS_FIELD,
 } from "../templates/template-routing";
+
 import type { InitContext } from "./install-context";
 import { componentStoreOf, publishReadinessSetup } from "./options";
 import type { Definition, DefinitionState } from "./state";
@@ -670,7 +670,7 @@ export function routesForPages(def: Definition): {
     // The relation control's read: a collection's entries as `{ id, title }`,
     // for the collections a registered block prop names as relation targets,
     // read as the author asking.
-    entries: entriesRoute(),
+    entries: entriesRoute(def.blocks),
     // The editor's page search: the site's pages (entries of collections
     // with a Page Builder field, the composition stores left out), by
     // title, read as the author asking.

@@ -36,6 +36,15 @@ import type { EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";
 import { StyleInspectorPanel } from "./style-inspector-panel";
 
+/**
+ * Open a section of the panel unless it is open already: sections fold on
+ * their own, and one holding a value, or the first, starts open.
+ */
+function openSection(name: RegExp): void {
+  const header = screen.getByRole("button", { name });
+  if (header.getAttribute("aria-expanded") !== "true") fireEvent.click(header);
+}
+
 afterEach(() => {
   cleanup();
   clearBlocks();
@@ -509,7 +518,7 @@ describe("the contrast readout", () => {
     // has to open Background rather than counting two readouts at once — which
     // is itself worth knowing: an author never sees both controls together.
     mount(styles("#000000", "#ffffff"));
-    fireEvent.click(screen.getByRole("button", { name: /^Background/ }));
+    openSection(/^Background/);
     expect(
       screen.getByRole("textbox", { name: "Background colour" })
     ).toHaveProperty("value", "#ffffff");
@@ -624,17 +633,22 @@ describe("the contrast readout keeps up with the picker", () => {
     // an author is choosing, which is when a contrast readout is for. It also
     // put the swatch and the figure beside it on two different colours.
     mount(styles("#000000", "#ffffff"));
-    expect(screen.getAllByText(/Contrast 21\.0:1/).length).toBeGreaterThan(0);
+    // The text colour's own section: Background, open as well since it
+    // holds a value, says its own verdict on what is stored.
+    const field = screen.getByRole("textbox", { name: "Colour" });
+    const section = field.closest<HTMLElement>("[data-section]");
+    if (section === null) throw new Error("no section");
+    expect(
+      within(section).getAllByText(/Contrast 21\.0:1/).length
+    ).toBeGreaterThan(0);
 
     // Type a low-contrast colour without committing it.
-    fireEvent.change(screen.getByRole("textbox", { name: "Colour" }), {
-      target: { value: "#f0f0f0" },
-    });
+    fireEvent.change(field, { target: { value: "#f0f0f0" } });
 
     // The verdict follows immediately, and the old one is gone.
-    expect(screen.queryByText(/Contrast 21\.0:1/)).toBeNull();
+    expect(within(section).queryByText(/Contrast 21\.0:1/)).toBeNull();
     expect(
-      screen.getAllByText(/below AA for body text/).length
+      within(section).getAllByText(/below AA for body text/).length
     ).toBeGreaterThan(0);
   });
 });

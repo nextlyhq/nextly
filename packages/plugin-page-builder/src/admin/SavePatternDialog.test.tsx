@@ -137,7 +137,7 @@ describe("what the form refuses to submit", () => {
 
     expect(
       screen
-        .getByRole("button", { name: /save pattern/i })
+        .getByRole("button", { name: /save section/i })
         .hasAttribute("disabled")
     ).toBe(true);
   });
@@ -152,7 +152,7 @@ describe("what the form refuses to submit", () => {
 
     expect(
       screen
-        .getByRole("button", { name: /save pattern/i })
+        .getByRole("button", { name: /save section/i })
         .hasAttribute("disabled")
     ).toBe(true);
   });
@@ -166,7 +166,7 @@ describe("what the form refuses to submit", () => {
 
     expect(
       screen
-        .getByRole("button", { name: /save pattern/i })
+        .getByRole("button", { name: /save section/i })
         .hasAttribute("disabled")
     ).toBe(true);
   });
@@ -195,7 +195,7 @@ describe("what the form sends, and what it does afterwards", () => {
     fireEvent.change(screen.getByLabelText(/Category/), {
       target: { value: " Heroes " },
     });
-    fireEvent.click(screen.getByRole("button", { name: /save pattern/i }));
+    fireEvent.click(screen.getByRole("button", { name: /save section/i }));
 
     expect(onSave).toHaveBeenCalledWith({
       title: "Hero",
@@ -208,7 +208,7 @@ describe("what the form sends, and what it does afterwards", () => {
     const { onSave, onOpenChange } = mount();
     fillRequired();
 
-    fireEvent.click(screen.getByRole("button", { name: /save pattern/i }));
+    fireEvent.click(screen.getByRole("button", { name: /save section/i }));
     await vi.waitFor(() => expect(onSave).toHaveBeenCalled());
 
     await vi.waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
@@ -227,7 +227,7 @@ describe("what the form sends, and what it does afterwards", () => {
           onOpenChange={onOpenChange}
           subject="3 blocks"
           onSave={onSave}
-          error="A pattern with that name already exists."
+          error="A saved section with that name already exists."
         />
       )
     );
@@ -236,7 +236,7 @@ describe("what the form sends, and what it does afterwards", () => {
       target: { value: "The top of the page" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /save pattern/i }));
+    fireEvent.click(screen.getByRole("button", { name: /save section/i }));
     await vi.waitFor(() =>
       expect(screen.getByRole("alert").textContent).toContain("already exists")
     );
@@ -260,7 +260,7 @@ describe("what the form sends, and what it does afterwards", () => {
           onOpenChange={vi.fn()}
           subject="3 blocks"
           onSave={vi.fn(async () => true)}
-          error="A pattern with that name already exists."
+          error="A saved section with that name already exists."
         />
       )
     );
@@ -291,7 +291,7 @@ describe("while the write is in flight", () => {
       )
     );
     fillRequired();
-    fireEvent.click(screen.getByRole("button", { name: /save pattern/i }));
+    fireEvent.click(screen.getByRole("button", { name: /save section/i }));
     await vi.waitFor(() =>
       expect(screen.getByRole("button", { name: /saving/i })).toBeTruthy()
     );
@@ -314,7 +314,7 @@ describe("while the write is in flight", () => {
       )
     );
     fillRequired();
-    fireEvent.click(screen.getByRole("button", { name: /save pattern/i }));
+    fireEvent.click(screen.getByRole("button", { name: /save section/i }));
 
     await vi.waitFor(() => {
       expect(
@@ -358,7 +358,7 @@ describe("what the granularity group tells assistive technology", () => {
     fillRequired();
 
     const form = screen
-      .getByRole("button", { name: /save pattern/i })
+      .getByRole("button", { name: /save section/i })
       .closest("form");
 
     expect(form?.checkValidity()).toBe(true);
@@ -426,7 +426,7 @@ describe("fitting a short viewport", () => {
     // The footer is OUTSIDE the scrolling region, which is what keeps it in
     // view rather than scrolling away with the fields.
     expect(
-      scroller?.contains(screen.getByRole("button", { name: /save pattern/i }))
+      scroller?.contains(screen.getByRole("button", { name: /save section/i }))
     ).toBe(false);
   });
 });
@@ -498,7 +498,7 @@ describe("reaching the save without the mouse", () => {
      * nothing.
      */
     const opener = window.document.createElement("button");
-    opener.textContent = "Save as pattern";
+    opener.textContent = "Save as section";
     window.document.body.append(opener);
     opener.focus();
 

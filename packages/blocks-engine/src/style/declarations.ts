@@ -501,7 +501,8 @@ function leafDeclarations(
 
 /**
  * A keyword no one property expresses also writes its fixed declarations,
- * each under its own descendant; a CSS-wide keyword names none of them.
+ * each under its own descendant or on the block itself; a CSS-wide keyword
+ * names none of them.
  */
 function expandedDeclarations(
   shape: KeywordLeaf,
@@ -519,7 +520,7 @@ function expandedDeclarations(
       path,
       property: each.property,
       value: each.value,
-      descendant: each.descendant,
+      ...(each.descendant === undefined ? {} : { descendant: each.descendant }),
     });
   }
 }

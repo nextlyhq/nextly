@@ -24,6 +24,12 @@
  * read, each leave the row dirty to be judged again on the next pass, rather
  * than an older answer kept.
  *
+ * The same pass writes where each judged document binds a Single, the index
+ * a Single's panel reads (`uses.ts`): read off each stored value, the draft
+ * and the published one, not composed with the components it places, since
+ * a component's own document holds its bindings. It is settled and recorded
+ * with the document's report row, under its mark (`store.ts`).
+ *
  * Judged as the system: the report says what is broken; who may see each row
  * is the route's question.
  *
@@ -34,6 +40,7 @@ import {
   walkNodes,
   type BindingSchemaRef,
   type BlockDocument,
+  type BlockRegistryReader,
   type DocumentLimits,
   type ResolvedBlockNode,
   type NamedQuerySource,
@@ -64,6 +71,8 @@ import type {
   DirtyDocument,
   ReportedDocument,
 } from "./store";
+import { bindingUsesOf } from "./uses";
+import type { DocumentUse } from "./uses-store";
 
 /** How the report reads a document as stored. */
 export interface DocumentReading {
@@ -97,6 +106,8 @@ export interface BindingReportDeps {
   readonly kick?: () => void;
   /** The site's named queries, whose rows a list's item bindings read. */
   readonly namedQueries?: NamedQuerySource;
+  /** The site's block registry, whose definitions the bindings are read by. */
+  readonly blocks: BlockRegistryReader;
   /**
    * Whether a document of `collection` may hold blocks at all, known
    * without a read; absent, every collection may. A write to one that may
@@ -169,7 +180,10 @@ async function composedWith(
 async function valueRows(
   entryOf: Pick<HostAddress, "kind" | "slug">,
   value: unknown,
-  deps: Pick<BindingReportDeps, "shapesOf" | "limits" | "namedQueries">,
+  deps: Pick<
+    BindingReportDeps,
+    "shapesOf" | "limits" | "namedQueries" | "blocks"
+  >,
   components: ComponentSource | undefined
 ): Promise<{
   readonly rows: BindingReportRow[];
@@ -185,6 +199,7 @@ async function valueRows(
     {
       shapesOf: deps.shapesOf,
       maxNodes: deps.limits().maxNodes,
+      blocks: deps.blocks,
       ...(deps.namedQueries === undefined
         ? {}
         : { namedQueries: deps.namedQueries }),
@@ -222,29 +237,73 @@ function valueOf(read: ReadValue | null): unknown {
 async function documentRows(
   at: Pick<HostAddress, "kind" | "slug" | "id">,
   hosts: readonly HostCandidate[],
-  deps: Pick<BindingReportDeps, "shapesOf" | "limits" | "namedQueries">,
+  deps: Pick<
+    BindingReportDeps,
+    "shapesOf" | "limits" | "namedQueries" | "blocks"
+  >,
   reading: DocumentReading
-): Promise<{
-  readonly rows: BindingReportRow[];
-  readonly incomplete: boolean;
-}> {
+): Promise<Judged> {
   const rows: BindingReportRow[] = [];
+  const uses: DocumentUse[] = [];
   let incomplete = false;
+  let unread = false;
   const shared = new Set<string>();
   for (const candidate of hosts) {
     const judged = await hostRows(candidate, shared, deps, reading);
     incomplete ||= judged.incomplete;
+    unread ||= judged.unread;
     rows.push(...judged.rows);
+    uses.push(...judged.uses);
   }
   const layout = await reading.layoutOf?.(at);
   if (layout !== undefined) {
     const judged = await valueRows(at, layout.value, deps, reading.components);
     incomplete ||= judged.incomplete;
+    // The Layout's own uses are its document's, judged there.
     for (const row of judged.rows) {
       rows.push({ ...row, layout: layout.id, blocksField: "layout" });
     }
   }
-  return { rows, incomplete };
+  return { rows, uses, incomplete, unread };
+}
+
+/** One document's judgement: its report rows, and where it binds a Single. */
+interface Judged {
+  readonly rows: BindingReportRow[];
+  readonly uses: DocumentUse[];
+  /** Whether the rows may miss a problem, so the row is not settled. */
+  readonly incomplete: boolean;
+  /**
+   * Whether a stored value could not be read, so the uses may miss some
+   * too. Uses are read off the stored values alone, so they are whole
+   * whenever every value was read, a judgement left incomplete included.
+   */
+  readonly unread: boolean;
+}
+
+/**
+ * Where one host's stored values bind a Single: the published value's uses,
+ * and the draft's where it holds another value.
+ */
+function hostUses(
+  read: Awaited<ReturnType<HostReader>>,
+  where: Pick<DocumentUse, "blocksField" | "locale">,
+  maxNodes: number
+): DocumentUse[] {
+  const published = valueOf(read.published);
+  const draft = valueOf(read.draft);
+  const versions: ["draft" | "published", unknown][] = [];
+  if (published !== undefined) versions.push(["published", published]);
+  if (
+    draft !== undefined &&
+    (published === undefined ||
+      JSON.stringify(draft) !== JSON.stringify(published))
+  ) {
+    versions.push(["draft", draft]);
+  }
+  return versions.flatMap(([version, value]) =>
+    bindingUsesOf(value, maxNodes).map(use => ({ ...use, version, ...where }))
+  );
 }
 
 /**
@@ -255,15 +314,16 @@ async function documentRows(
 async function hostRows(
   { host, access, maybeShared }: HostCandidate,
   shared: Set<string>,
-  deps: Pick<BindingReportDeps, "shapesOf" | "limits" | "namedQueries">,
+  deps: Pick<
+    BindingReportDeps,
+    "shapesOf" | "limits" | "namedQueries" | "blocks"
+  >,
   reading: DocumentReading
-): Promise<{
-  readonly rows: BindingReportRow[];
-  readonly incomplete: boolean;
-}> {
+): Promise<Judged> {
+  const none = { rows: [], uses: [], unread: false };
   // A host searched row by row (a blocks field inside a repeater) is not one
   // document the report can point an author at; it is left out.
-  if (access === "scan") return { rows: [], incomplete: false };
+  if (access === "scan") return { ...none, incomplete: false };
   let read;
   try {
     read = await reading.read(host);
@@ -271,20 +331,31 @@ async function hostRows(
     // Not read is not judged: a read that failed (the database, or a value
     // that kept changing while it was read) leaves the document marked, so
     // its last verdict stands until a later pass reads it.
-    return { rows: [], incomplete: true };
+    return { ...none, incomplete: true, unread: true };
   }
   const value = valueOf(read.draft) ?? valueOf(read.published);
-  if (value === undefined) return { rows: [], incomplete: false };
+  if (value === undefined) return { ...none, incomplete: false };
   const field = host.path.join(".");
   if (maybeShared === true) {
     const seen = `${field}\u0000${JSON.stringify(value)}`;
-    if (shared.has(seen)) return { rows: [], incomplete: false };
+    if (shared.has(seen)) return { ...none, incomplete: false };
     shared.add(seen);
   }
   const perLanguage = host.locale !== undefined && maybeShared !== true;
   const judged = await valueRows(host, value, deps, reading.components);
   return {
     incomplete: judged.incomplete,
+    unread: false,
+    uses: hostUses(
+      read,
+      {
+        blocksField: field,
+        ...(perLanguage && host.locale !== undefined
+          ? { locale: host.locale }
+          : {}),
+      },
+      deps.limits().maxNodes
+    ),
     rows: judged.rows.map(row => ({
       ...row,
       blocksField: field,
@@ -418,28 +489,33 @@ async function settleDirty(
   deps: BindingReportDeps,
   reading: DocumentReading,
   deadline: Date
-): Promise<boolean> {
+): Promise<{ readonly done: boolean; readonly unread: boolean }> {
   // A cursor over the marked keys: each is tried once a pass, and one left
   // marked (its judgement incomplete) is not read again until the next.
   let after: string | undefined;
+  let unread = false;
   for (;;) {
     const batch = await store.dirty(DIRTY_BATCH, after);
-    if (batch.length === 0) return true;
+    if (batch.length === 0) return { done: true, unread };
     for (const marked of batch) {
-      if (Date.now() >= deadline.getTime()) return false;
+      if (Date.now() >= deadline.getTime()) return { done: false, unread };
       after = marked.document.documentKey;
-      await settleOne(marked, store, deps, reading);
+      unread = (await settleOne(marked, store, deps, reading)) || unread;
     }
   }
 }
 
-/** Judge one marked document as stored, and settle it if the judgement is whole. */
+/**
+ * Judge one marked document as stored, and settle it if the judgement is
+ * whole; `true` when a stored value could not be read, so its uses could not
+ * be written either.
+ */
 async function settleOne(
   marked: DirtyDocument,
   store: BindingReportStore,
   deps: BindingReportDeps,
   reading: DocumentReading
-): Promise<void> {
+): Promise<boolean> {
   const { kind, slug, documentId } = marked.document;
   const at = {
     kind,
@@ -450,9 +526,16 @@ async function settleOne(
   // A document gone, or holding no blocks field any more, has nothing.
   const judged =
     hosts.length === 0
-      ? { rows: [], incomplete: false }
+      ? { rows: [], uses: [], incomplete: false, unread: false }
       : await documentRows(at, hosts, deps, reading);
-  if (!judged.incomplete) await store.settle(marked, judged.rows);
+  if (!judged.incomplete) {
+    await store.settle(marked, judged.rows, judged.uses);
+  } else if (!judged.unread) {
+    // The report waits for a whole judgement; where the document binds a
+    // Single is known already, so a Single's panel does not wait with it.
+    await store.keepUses(marked, judged.uses);
+  }
+  return judged.unread;
 }
 
 /** What the check of every document walks the site with. */
@@ -469,19 +552,29 @@ export type FullCheckOutcome = "current" | "paused" | "complete";
 
 /**
  * One document judged and recorded; one whose judgement could not read a
- * source is marked to be judged again instead of recorded as it was found.
+ * source is marked to be judged again instead of recorded as it was found,
+ * with its uses written under that mark wherever every stored value was
+ * read. `true` when one could not be read, so its uses wait too.
  */
 async function checkDocument(
   document: HostDocument,
   store: BindingReportStore,
   deps: BindingReportDeps,
   reading: DocumentReading
-): Promise<void> {
+): Promise<boolean> {
   const first = document.hosts[0]?.host;
-  if (first === undefined) return;
+  if (first === undefined) return false;
   const judged = await documentRows(first, document.hosts, deps, reading);
-  if (judged.incomplete) await store.markDirty(reported(first, deps));
-  else await store.record(reported(first, deps), judged.rows);
+  const at = reported(first, deps);
+  if (!judged.incomplete) {
+    await store.record(at, judged.rows, judged.uses);
+    return false;
+  }
+  const token = await store.markDirty(at);
+  if (!judged.unread) {
+    await store.keepUses({ document: at, token }, judged.uses);
+  }
+  return judged.unread;
 }
 
 /**
@@ -491,6 +584,11 @@ async function checkDocument(
  * the last pass stopped until `deadline`, and records where it stopped. A
  * complete check records the fingerprint it was made against, and when, and
  * drops the rows of documents it no longer found.
+ *
+ * The index of where documents bind a Single is "filled" once a complete
+ * check has written every document's uses: at its end where no stored value
+ * failed to be read, else on the first later pass that judges every marked
+ * document with all of its values read (those that failed are marked).
  */
 export async function runFullCheck(
   site: FullCheckSite,
@@ -500,9 +598,17 @@ export async function runFullCheck(
   const store = deps.store();
   const reading = deps.reading();
   if (store === null || reading === null) return "paused";
-  if (!(await settleDirty(store, deps, reading, deadline))) return "paused";
+  const settled = await settleDirty(store, deps, reading, deadline);
+  if (!settled.done) return "paused";
   const fingerprint = await site.fingerprint();
   const state = await store.fullCheck();
+  if (state.usesPending && !settled.unread && state.checking === null) {
+    // Every document a complete check could not read has been judged since.
+    // The mark first: a pass that stops between the two writes leaves the
+    // pending flag to set it again, never a check with no mark to follow.
+    await store.markUsesFilled();
+    await store.setFullCheck({ ...state, usesPending: false });
+  }
   if (state.checked === fingerprint && state.checking === null) {
     return "current";
   }
@@ -511,12 +617,15 @@ export async function runFullCheck(
   const startedAt =
     resuming && state.startedAt !== null ? state.startedAt : new Date();
   let cursor = resuming ? state.cursor : null;
+  // Whether a value this check judged could not be read, its uses waiting.
+  let unread = state.usesPending && resuming;
   const progress = () => ({
     checked: state.checked,
     completedAt: state.completedAt,
     checking: fingerprint,
     cursor,
     startedAt,
+    usesPending: unread,
   });
   await store.setFullCheck(progress());
   for await (const document of site.documents(cursor)) {
@@ -524,18 +633,25 @@ export async function runFullCheck(
       await store.setFullCheck(progress());
       return "paused";
     }
-    await checkDocument(document, store, deps, reading);
+    unread = (await checkDocument(document, store, deps, reading)) || unread;
     cursor = site.cursorOf(document);
   }
   // Every document still on the site was judged since the check started, so a
   // row older than that is a document no longer there.
   await store.dropCheckedBefore(startedAt);
+  // Every document has had its uses written once: a Single's panel stops
+  // saying it is still checking pages. One that could not be read is
+  // marked, and the pass that next reads it whole fills the index. The mark
+  // goes first, so a pass stopping after it only checks every document
+  // again, rather than leaving a complete check with no mark.
+  if (!unread) await store.markUsesFilled();
   await store.setFullCheck({
     checked: fingerprint,
     completedAt: new Date(),
     checking: null,
     cursor: null,
     startedAt: null,
+    usesPending: unread,
   });
   return "complete";
 }

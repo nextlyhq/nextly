@@ -13,6 +13,7 @@
     "block-manifest-stale",
     "block-manifest-unreadable",
     "block-schema-derivation-failed",
+    "builder-definition-missing",
     "builder-migration-snapshot-missing",
     "builder-relation-target-unknown",
     "builder-slug-collision",
@@ -76,6 +77,7 @@
     "migration-irreversible",
     "migration-missing",
     "migration-name-required",
+    "migration-not-proven",
     "migration-sql-uncheckable",
     "migration-tampered",
     "missing-migration",
@@ -215,6 +217,7 @@
     "upgrade-backup-not-confirmed",
     "upgrade-cancelled",
     "upgrade-events-table-taken",
+    "upgrade-ledger-unreadable",
     "widget-generate-cancelled",
     "workflow-cannot-attach"
   ]

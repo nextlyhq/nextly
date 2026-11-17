@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * "Visible on" in the Content tab: which devices a block shows on, and a
+ * "Visible on" in the Advanced tab: which devices a block shows on, and a
  * press to show or hide it on any one of them.
  *
  * Each device shows its RESOLVED state, the one a visitor on that device
@@ -23,9 +23,9 @@ import {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import { deviceOptions, tierIcon } from "./breakpoint-switcher";
 import type { EditorState } from "./editor-state";
-import { toggleOnDeviceOp } from "./layer-row-actions";
+import { toggleOnDeviceOp } from "./panels/layers/layer-row-actions";
+import { deviceOptions, tierIcon } from "./shell/breakpoint-switcher";
 
 /** Whether the site's breakpoints are its own set yet, as the editor reads it. */
 export type BreakpointsStatus = "loading" | "unavailable" | "ready";

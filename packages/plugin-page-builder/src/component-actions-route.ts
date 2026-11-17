@@ -30,10 +30,10 @@ import {
   planDetach,
   planDuplicateComponent,
   planUpdatePatternFromSelection,
-  registryNestingSource,
   sameStoredValue,
   type BlockDocument,
   type BlockNode,
+  type BlockRegistryReader,
   type BuilderOp,
   type ComponentDocument,
   type DocumentLimits,
@@ -166,6 +166,8 @@ export interface ComponentActionsSetup extends CompositionRouteSetup {
   readonly reads?: ComponentActionReads;
   /** Where a duplicate's origin is recorded. */
   readonly origins?: () => OriginStore | undefined;
+  /** The site's block registry, whose nesting rules the plans follow. */
+  readonly blocks: BlockRegistryReader;
 }
 
 /** A stored page's address, with its field defaulted. */
@@ -194,7 +196,7 @@ interface PlacementIn {
 export async function detachPlacement(
   req: Request,
   ctx: CompositionRouteContext,
-  setup: ComponentActionsSetup = {}
+  setup: ComponentActionsSetup
 ): Promise<Response> {
   const by = await actingCaller(ctx);
   const body = await readBodyWith(req, DetachBody, "detach");
@@ -208,7 +210,7 @@ export async function detachPlacement(
     at.document,
     at.instanceId,
     shown.definitions,
-    registryNestingSource(),
+    setup.blocks.nestingSource(),
     limits
   );
   if (plan.problem !== undefined) throw planRefusal(plan, "detach");
@@ -293,7 +295,7 @@ async function readShownLibrary(
 export async function duplicateComponent(
   req: Request,
   ctx: CompositionRouteContext,
-  setup: ComponentActionsSetup = {}
+  setup: ComponentActionsSetup
 ): Promise<Response> {
   requirePluginStore(ctx, setup);
   const store = storeOf(ctx, setup);
@@ -479,7 +481,7 @@ function repointOp(at: PlacementIn, componentId: string): BuilderOp {
 export async function updatePatternFromSelection(
   req: Request,
   ctx: CompositionRouteContext,
-  setup: ComponentActionsSetup = {}
+  setup: ComponentActionsSetup
 ): Promise<Response> {
   const slug = ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG;
   const by = await actingCaller(ctx, [["publish", slug]]);
@@ -497,7 +499,7 @@ export async function updatePatternFromSelection(
     document,
     body.selectedIds,
     { collection: slug, id },
-    registryNestingSource()
+    setup.blocks.nestingSource()
   );
   if (plan.problem !== undefined) throw planRefusal(plan, "update-pattern");
   const update = plan.update;
@@ -528,7 +530,7 @@ export async function updatePatternFromSelection(
     asCaller(ctx)
   );
   return respondMutation<UpdatePatternResult>(
-    "The pattern was updated.",
+    "The saved section was updated.",
     result(false)
   );
 }
@@ -714,7 +716,7 @@ function directReads(
 }
 
 /** The three route declarations. */
-export function componentActionRoutes(setup: ComponentActionsSetup = {}): {
+export function componentActionRoutes(setup: ComponentActionsSetup): {
   method: "POST";
   path: string;
   requiredPermission: (scope: PluginRoutePermissionScope) => string;

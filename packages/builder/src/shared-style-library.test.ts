@@ -429,7 +429,7 @@ describe("how widely a style is used, in words", () => {
         reachOf({ pages: 4, patterns: 2, layouts: 1 }, false)
       )
     ).toBe(
-      "1 block on this page · on at least 4 pages, 2 patterns and 1 layout"
+      "1 block on this page · on at least 4 pages, 2 saved sections and 1 header & footer set"
     );
   });
 

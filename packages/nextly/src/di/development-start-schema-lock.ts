@@ -20,6 +20,14 @@ import type { Logger } from "../shared/types";
 export const DEVELOPMENT_START_SYNC_COMMAND = "development start: schema sync";
 
 /**
+ * Whether this start holds the schema lock around its schema writes: outside production only. The
+ * migrations at start, which run in production only, never run inside it.
+ */
+export function takesDevelopmentStartHold(): boolean {
+  return process.env.NODE_ENV !== "production";
+}
+
+/**
  * Run the start's schema writes holding the schema lock, outside production.
  *
  * A held lock is waited for, as a command-line run waits (about a minute, then the start stops
@@ -35,7 +43,7 @@ export async function withDevelopmentStartSchemaLock<T>(
   logger: Logger,
   work: () => Promise<T>
 ): Promise<T> {
-  if (process.env.NODE_ENV === "production") return work();
+  if (!takesDevelopmentStartHold()) return work();
 
   // Loaded on demand, as the other boot paths load it, so the lock machinery stays out of the
   // module graph of a production boot.

@@ -9,7 +9,7 @@ import {
   type BlockDocument,
   type BuilderOp,
 } from "@nextlyhq/blocks-engine";
-import { ShortcutProvider } from "@nextlyhq/ui";
+import { ShortcutProvider, toast } from "@nextlyhq/ui";
 import {
   act,
   cleanup,
@@ -125,10 +125,14 @@ describe("detaching from the editor", () => {
     expect(routes.detach).toHaveBeenCalledWith(
       expect.objectContaining({ dryRun: true, instanceId: "p" })
     );
+    const success = vi.spyOn(toast, "success");
     fireEvent.click(screen.getByRole("button", { name: "Detach" }));
 
     expect(applyAll).toHaveBeenCalledWith(DETACH_OPS);
     expect(onClose).toHaveBeenCalled();
+    expect(success).toHaveBeenCalledWith(
+      "Detached. These blocks no longer update with the component."
+    );
   });
 
   it("says before detaching when the component has unpublished changes", async () => {
@@ -261,7 +265,7 @@ describe("updating a pattern from the editor", () => {
     expect(screen.getByText(/keep their own copies/)).toBeTruthy();
     expect(
       screen
-        .getByRole("button", { name: "Update pattern" })
+        .getByRole("button", { name: "Update saved section" })
         .hasAttribute("disabled")
     ).toBe(true);
     expect(routes.update).not.toHaveBeenCalled();

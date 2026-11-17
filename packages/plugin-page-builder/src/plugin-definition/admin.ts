@@ -2,7 +2,8 @@
  * What the plugin contributes to the admin: the editor's client config, its
  * pages and panel, the full-screen editor view, the Layout and template
  * screens' actions, the Settings dialog's place, an entry's Design section,
- * Delete component on the component store, and the menu.
+ * a Single's "Shown on (from the builder)" section, Delete component on the
+ * component store, and the menu.
  */
 import type { PluginAdminContributions } from "@nextlyhq/plugin-sdk";
 
@@ -12,6 +13,7 @@ import {
   COMPONENT_STORE_DELETE_HOST_COMPONENT,
   ENTRY_DESIGN_SECTION_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
+  SINGLE_SHOWN_ON_SECTION_COMPONENT,
   TEMPLATE_DELETE_COMPONENT,
   TEMPLATE_DESIGN_DETAILS_COMPONENT,
   TEMPLATE_OWN_DESIGNS_COMPONENT,
@@ -24,7 +26,9 @@ import {
   PAGE_BUILDER_PANEL,
 } from "../overview/admin-panel";
 import { PAGE_BUILDER_SETTINGS_PLACE } from "../settings-place-contract";
+import { SHOWN_ON_TITLE } from "../shown-on-contract";
 import { ENTRY_DESIGN_STARTUP_PATH } from "../templates/entry-designs-contract";
+
 import {
   adminClientConfig,
   componentStoreOf,
@@ -132,6 +136,17 @@ export function adminContributions(def: Definition): PluginAdminContributions {
         // once the section mounts, so the section is drawn above Status
         // with the editor instead of pushing it down after.
         startupReads: [{ path: ENTRY_DESIGN_STARTUP_PATH }],
+      },
+      // Where the builder shows a Single's values, on every Single's side
+      // panel, among the sections plugins add: after Last changed, before
+      // For developers. Offered on every Single, a Single the Schema Builder
+      // adds later included.
+      {
+        id: "nextlyhq-plugin-page-builder.single-shown-on",
+        kind: "sidebarSection",
+        place: "single.edit",
+        label: SHOWN_ON_TITLE,
+        component: SINGLE_SHOWN_ON_SECTION_COMPONENT,
       },
     ],
     // Delete component on the component store, wherever it is: the

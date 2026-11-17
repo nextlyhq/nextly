@@ -55,6 +55,11 @@
       ],
       // Same reason: a card's body height and the rows it holds, the one
       // formula the frame draws by and a widget's load counts by.
+      // Same reason: a comparison baseline's name grammar, which the
+      // registry refuses a name by and an address is read by.
+      "nextly/comparison-baseline-name": [
+        "../nextly/src/domains/versions/comparison-baseline-name.ts"
+      ],
       "nextly/card-geometry": [
         "../nextly/src/domains/widgets/card-geometry.ts"
       ],

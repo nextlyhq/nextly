@@ -199,6 +199,12 @@ const clientEntries = [
   // module imports only the row limits, so the admin reaching it takes nothing
   // more.
   "src/domains/widgets/card-geometry.ts",
+  // A comparison baseline's name grammar, as its own entry. The registry
+  // refuses a name by it and the admin reads a name from an address by it,
+  // so neither keeps a copy; the registry's module reads the database, so the
+  // admin reaching the grammar through it would take that too. It imports
+  // nothing.
+  "src/domains/versions/comparison-baseline-name.ts",
   // The one humaniser of a field's key, as its own entry: the admin names a
   // field by it on screen and a widget's `describe` read names one by it on
   // the server, so neither keeps a copy; it imports nothing. Internal: not a

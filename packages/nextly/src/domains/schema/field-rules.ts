@@ -135,6 +135,20 @@ export function uniqueNotOnListMessage(fieldName: string): string {
 }
 
 /**
+ * Whether `field` is a relation holding a list that is marked unique: the one decision every road
+ * refusing the mark asks (`relationHoldsReferenceList` says why no list can be unique), and the one
+ * a change asks of the field as it was, to drop the index an earlier release made for it.
+ */
+export function isListMarkedUnique(field: {
+  type?: unknown;
+  unique?: unknown;
+  hasMany?: unknown;
+  options?: unknown;
+}): boolean {
+  return field.unique === true && relationHoldsReferenceList(field);
+}
+
+/**
  * The name of the first relation holding a list that is marked unique among `fields`, wherever it
  * is declared: at the top level, inside a group or a repeater at any depth, translated or not.
  * Undefined when there is none. Asked of the fields as declared, before any road filters them by
@@ -153,7 +167,7 @@ export function listMarkedUnique(
       options?: unknown;
       fields?: unknown;
     };
-    if (declared.unique === true && relationHoldsReferenceList(declared)) {
+    if (isListMarkedUnique(declared)) {
       return typeof declared.name === "string" ? declared.name : "";
     }
     if (Array.isArray(declared.fields)) {

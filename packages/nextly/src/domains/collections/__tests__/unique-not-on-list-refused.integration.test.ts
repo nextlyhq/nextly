@@ -8,7 +8,7 @@
  * refuses the mark the same way everywhere, naming the field and what to do instead, and nothing is
  * built for it.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,6 +23,8 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
+import { consoleLogger } from "../../../shared/types";
+import { DynamicCollectionRegistryService } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 
 /** A Builder action, as a development server runs it, where it applies its DDL first. */
 async function inDevelopment<T>(run: () => Promise<T>): Promise<T> {
@@ -55,6 +57,49 @@ function listOfTags(unique: boolean): Record<string, unknown> {
     options: { target: "uql_tags", relationType: "manyToOne" },
     hasMany: true,
     ...(unique ? { unique: true } : {}),
+  };
+}
+
+/** Every file under `dir`, by path, with what it holds. */
+async function filesUnder(dir: string): Promise<Record<string, string>> {
+  const entries = await readdir(dir, { recursive: true, withFileTypes: true });
+  const files: Record<string, string> = {};
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const path = join(entry.parentPath, entry.name);
+    files[path] = await readFile(path, "utf-8");
+  }
+  return files;
+}
+
+/**
+ * What a refused save must leave as it was: the project's files (the definition file and the
+ * migrations), the collection's stored fields, and the live indexes on its table.
+ */
+async function stateOf(
+  t: TestNextly,
+  dialect: string,
+  projectRoot: string
+): Promise<unknown> {
+  const stored = (await new DynamicCollectionRegistryService(
+    t.adapter as never,
+    consoleLogger
+  ).getCollection("uql_posts")) as { fields: unknown };
+  const indexSql =
+    dialect === "postgresql"
+      ? "SELECT indexname AS name FROM pg_indexes WHERE tablename = 'dc_uql_posts'"
+      : dialect === "mysql"
+        ? "SELECT DISTINCT INDEX_NAME AS name FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'dc_uql_posts'"
+        : "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'dc_uql_posts'";
+  const indexes = (
+    (await t.adapter.executeQuery(indexSql)) as Array<{ name: string }>
+  )
+    .map(row => row.name)
+    .sort();
+  return {
+    files: await filesUnder(projectRoot),
+    fields: stored.fields,
+    indexes,
   };
 }
 
@@ -152,12 +197,13 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await t!.adapter.tableExists("dc_uql_posts")).toBe(false);
     }, 120_000);
 
-    it("at a later save that marks it unique", async () => {
+    it("at a later save that marks it unique, changing nothing", async () => {
       await dispatch(
         "createCollection",
         {},
         { name: "uql_posts", label: "Posts", fields: [listOfTags(false)] }
       );
+      const before = await stateOf(t!, dialect, projectRoot);
       await expect(
         dispatch(
           "applySchemaChanges",
@@ -165,6 +211,9 @@ for (const dialect of getConfiguredTestDialects()) {
           { fields: [listOfTags(true)], confirmed: true, schemaVersion: 1 }
         )
       ).rejects.toMatchObject(REFUSED);
+      // Refused before anything was written: no definition or migration file, no stored field
+      // and no index changed.
+      expect(await stateOf(t!, dialect, projectRoot)).toEqual(before);
     }, 120_000);
   });
 }

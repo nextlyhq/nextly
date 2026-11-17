@@ -24,6 +24,8 @@ import {
 } from "vitest";
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  // The person signed in, whom the builder's start-up answers are for.
+  useCurrentUserId: () => "ada",
   usePluginRoute: vi.fn(),
   useDocumentIdentity: vi.fn(),
   useDocumentLocale: vi.fn(() => null),
@@ -63,6 +65,7 @@ const choices: LayoutChoicesResponse = {
       title: "Main",
       published: true,
       draftChangesNotLive: false,
+      isEmpty: false,
       regions: [{ area: "header", componentId: "h" }],
     },
     {
@@ -70,6 +73,7 @@ const choices: LayoutChoicesResponse = {
       title: "Landing",
       published: true,
       draftChangesNotLive: true,
+      isEmpty: false,
       regions: [
         { area: "header", componentId: "lh" },
         { area: "footer", componentId: "lf" },
@@ -161,7 +165,7 @@ function renderPicker(
 }
 
 async function choose(label: string) {
-  const trigger = screen.getByRole("combobox", { name: "Layout" });
+  const trigger = screen.getByRole("combobox", { name: "Header & footer" });
   await act(async () => {
     fireEvent.keyDown(trigger, { key: "Enter" });
   });
@@ -173,14 +177,14 @@ async function choose(label: string) {
 describe("the page's Layout picker", () => {
   it("is one labelled control, described by the line saying which Layout is in effect", () => {
     renderPicker();
-    const trigger = screen.getByRole("combobox", { name: "Layout" });
+    const trigger = screen.getByRole("combobox", { name: "Header & footer" });
     const why = document.getElementById(
       trigger.getAttribute("aria-describedby") ?? ""
     );
     expect(why?.textContent).toBe(
-      "Follows the site default, Main, because this page doesn't choose its own Layout."
+      "Follows the site default, Main, because this page doesn't choose its own header & footer set."
     );
-    expect(trigger.textContent).toContain("Site default · Main");
+    expect(trigger.textContent).toContain("Site default (Main)");
   });
 
   it("writes the Layout and clears the switch when a Layout is chosen", async () => {
@@ -204,17 +208,17 @@ describe("the page's Layout picker", () => {
       Object.assign(new Error("Forbidden"), { status: 403 })
     );
     renderPicker({ layout: "landing", noHeaderFooter: false });
-    const trigger = screen.getByRole("combobox", { name: "Layout" });
+    const trigger = screen.getByRole("combobox", { name: "Header & footer" });
     expect(trigger).toHaveProperty("disabled", true);
     expect(
-      screen.getAllByText("A Layout you can't view").length
+      screen.getAllByText("A header & footer set you can't view").length
     ).toBeGreaterThan(0);
   });
 
   it("offers a retry when the choices could not be read", () => {
     answering(undefined, Object.assign(new Error("Boom"), { status: 500 }));
     renderPicker();
-    expect(screen.getByText("Couldn't load Layouts")).toBeTruthy();
+    expect(screen.getByText("Couldn't load header & footer sets")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
   });
 
@@ -242,6 +246,7 @@ describe("the page's Layout picker", () => {
       title: `Layout ${i}`,
       published: true,
       draftChangesNotLive: false,
+      isEmpty: false,
       regions: [],
     });
     const first = {
@@ -275,14 +280,16 @@ describe("the page's Layout picker", () => {
       } as unknown as ReturnType<typeof usePluginRoute>;
     });
     renderPicker();
-    const trigger = screen.getByRole("combobox", { name: "Layout" });
+    const trigger = screen.getByRole("combobox", { name: "Header & footer" });
     await act(async () => {
       fireEvent.click(trigger);
     });
     expect(
       screen.getByText("Showing the first 200; search to find more.")
     ).toBeTruthy();
-    const search = screen.getByRole("combobox", { name: "Search Layouts" });
+    const search = screen.getByRole("combobox", {
+      name: "Search header & footer sets",
+    });
     await act(async () => {
       fireEvent.change(search, { target: { value: "Layout 230" } });
     });
@@ -306,6 +313,7 @@ describe("the page's Layout picker", () => {
       title: `Layout ${i}`,
       published: true,
       draftChangesNotLive: false,
+      isEmpty: false,
       regions: [],
     });
     const first = {
@@ -340,11 +348,13 @@ describe("the page's Layout picker", () => {
     });
     renderPicker();
     await act(async () => {
-      fireEvent.click(screen.getByRole("combobox", { name: "Layout" }));
+      fireEvent.click(
+        screen.getByRole("combobox", { name: "Header & footer" })
+      );
     });
     await act(async () => {
       fireEvent.change(
-        screen.getByRole("combobox", { name: "Search Layouts" }),
+        screen.getByRole("combobox", { name: "Search header & footer sets" }),
         { target: { value: query } }
       );
     });
@@ -374,6 +384,7 @@ describe("the page's Layout picker", () => {
               title: "Layout 0",
               published: true,
               draftChangesNotLive: false,
+              isEmpty: false,
               regions: [],
             },
           ],
@@ -387,12 +398,12 @@ describe("the page's Layout picker", () => {
       },
       "zzz"
     );
-    expect(screen.getByText("No Layouts match.")).toBeTruthy();
+    expect(screen.getByText("No header & footer sets match.")).toBeTruthy();
     expect(screen.queryAllByRole("option")).toEqual([]);
     // The trigger still says what is chosen.
     expect(
-      screen.getByRole("combobox", { name: "Layout" }).textContent
-    ).toContain("Site default · Layout 0");
+      screen.getByRole("combobox", { name: "Header & footer" }).textContent
+    ).toContain("Site default (Layout 0)");
   });
 
   it("keeps the rows the server matched, however their titles compare here", async () => {
@@ -408,6 +419,7 @@ describe("the page's Layout picker", () => {
               title: "Layout 0",
               published: true,
               draftChangesNotLive: false,
+              isEmpty: false,
               regions: [],
             },
             {
@@ -415,6 +427,7 @@ describe("the page's Layout picker", () => {
               title: "Café",
               published: true,
               draftChangesNotLive: false,
+              isEmpty: false,
               regions: [],
             },
           ],
@@ -437,7 +450,9 @@ describe("the page's Layout picker", () => {
     const { retry } = await searchCapped({
       error: Object.assign(new Error("Boom"), { status: 500 }),
     });
-    expect(screen.getByText("Couldn't search Layouts")).toBeTruthy();
+    expect(
+      screen.getByText("Couldn't search header & footer sets")
+    ).toBeTruthy();
     expect(screen.queryByRole("option", { name: "Layout 5" })).toBeNull();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Try again" }));
@@ -478,9 +493,9 @@ describe("the page's Layout picker", () => {
       screen.queryByText("Showing the first 200; search to find more.")
     ).toBeNull();
     // The dropdown's own trigger, not a search field.
-    expect(screen.queryByRole("combobox", { name: "Search Layouts" })).toBe(
-      null
-    );
+    expect(
+      screen.queryByRole("combobox", { name: "Search header & footer sets" })
+    ).toBe(null);
   });
 
   it("draws on the pages collection a host renamed", () => {
@@ -488,7 +503,9 @@ describe("the page's Layout picker", () => {
     pagesCollection = "site-pages";
     answering(choices);
     renderPicker();
-    expect(screen.getByRole("combobox", { name: "Layout" })).toBeTruthy();
+    expect(
+      screen.getByRole("combobox", { name: "Header & footer" })
+    ).toBeTruthy();
   });
 
   it("draws nothing on another collection with its own switch of the same name", () => {
@@ -532,10 +549,12 @@ describe("the Settings section for the page's Layout", () => {
       screen.getByRole("heading", { level: 3, name: "Header and footer" })
     ).toBeTruthy();
     expect(section.textContent).toContain(
-      "Which Layout this page is drawn inside."
+      "Which header & footer set this page is drawn inside."
     );
     expect(
-      section.contains(screen.getByRole("combobox", { name: "Layout" }))
+      section.contains(
+        screen.getByRole("combobox", { name: "Header & footer" })
+      )
     ).toBe(true);
   });
 
@@ -583,13 +602,13 @@ describe("the regions the editor draws from the choice", () => {
       return usePageLayoutRegions(form.control, null);
     });
     expect(hook.result.current.canvas[0]?.label).toBe(
-      "Header, from Layout Main"
+      "Header, from header & footer set Main"
     );
     await act(async () => {
       form?.setValue("layout", "landing");
     });
     expect(hook.result.current.canvas[0]?.label).toBe(
-      "Header, from Layout Main"
+      "Header, from header & footer set Main"
     );
   });
 
@@ -601,24 +620,24 @@ describe("the regions the editor draws from the choice", () => {
     expect(canvas).toHaveLength(1);
     expect(canvas[0]).toMatchObject({
       area: "header",
-      label: "Header, from Layout Main",
-      badge: "Header · from Layout",
+      label: "Header, from header & footer set Main",
+      badge: "Header · from header & footer set",
       edit: {
         href: "/admin/collections/layouts/main",
-        text: "Edit Layout ↗",
-        name: "Edit Layout Main (opens in a new tab)",
+        text: "Edit header & footer set ↗",
+        name: "Edit header & footer set Main (opens in a new tab)",
       },
     });
     expect(layers.map(row => [row.name, row.origin])).toEqual([
-      ["Header", "from Layout Main"],
+      ["Header", "from header & footer set Main"],
     ]);
   });
 
   it("says when the Layout in effect has changes a visitor does not see yet", () => {
     const { canvas } = regionsFor({ layout: "landing", noHeaderFooter: false });
     expect(canvas.map(region => region.note)).toEqual([
-      "Draft changes not live: Layout Landing",
-      "Draft changes not live: Layout Landing",
+      "Draft changes not live: header & footer set Landing",
+      "Draft changes not live: header & footer set Landing",
     ]);
   });
 
@@ -650,19 +669,19 @@ describe("a save refused for its Layout", () => {
       return <PageLayoutPicker control={form.control} />;
     }
     render(<Refused />);
-    await screen.findByRole("combobox", { name: "Layout" });
+    await screen.findByRole("combobox", { name: "Header & footer" });
 
     act(() =>
       setError?.(
-        "This Layout is being removed, so pages can't choose it. Choose another Layout."
+        "This header & footer set is being removed, so pages can't choose it. Choose another header & footer set."
       )
     );
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toBe(
-      "This Layout is being removed, so pages can't choose it. Choose another Layout."
+      "This header & footer set is being removed, so pages can't choose it. Choose another header & footer set."
     );
-    const control = screen.getByRole("combobox", { name: "Layout" });
+    const control = screen.getByRole("combobox", { name: "Header & footer" });
     expect(control.getAttribute("aria-invalid")).toBe("true");
     expect(control.getAttribute("aria-describedby")).toContain(alert.id);
   });
@@ -679,13 +698,14 @@ describe("a Layout behind Remove Layout's fence in the list", () => {
           title: "Campaign",
           published: false,
           draftChangesNotLive: false,
+          isEmpty: false,
           regions: [],
           removal: "unpublished",
         },
       ],
     });
     renderPicker();
-    const trigger = screen.getByRole("combobox", { name: "Layout" });
+    const trigger = screen.getByRole("combobox", { name: "Header & footer" });
     await act(async () => {
       fireEvent.keyDown(trigger, { key: "Enter" });
     });
@@ -695,7 +715,7 @@ describe("a Layout behind Remove Layout's fence in the list", () => {
       "Campaign · Unpublished. Publish it again to choose it."
     );
     const reason =
-      "This Layout was unpublished with Remove Layout, so pages can't choose it until it is published again. Choose another Layout.";
+      "This header & footer set was unpublished with Remove header & footer set, so pages can't choose it until it is published again. Choose another header & footer set.";
     expect(option.getAttribute("title")).toBe(reason);
     expect(option.getAttribute("aria-description")).toBe(reason);
     expect(option.getAttribute("aria-disabled")).toBe("true");
