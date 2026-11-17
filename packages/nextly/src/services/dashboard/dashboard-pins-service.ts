@@ -53,7 +53,7 @@ export interface ShownPin extends DocumentHeading {
 }
 
 /** The reader's pins: those they may read, and those they no longer may. */
-export interface ReaderPins {
+interface ReaderPins {
   /** The pins they may read, newest first, each with its heading. */
   shown: ShownPin[];
   /**

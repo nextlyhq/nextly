@@ -43,7 +43,7 @@ export interface ShownPin {
 }
 
 /** The reader's pins: those they may read, and those they no longer may. */
-export interface ReaderPins {
+interface ReaderPins {
   /** Newest first, titled. */
   shown: ShownPin[];
   /** Pins of documents they may no longer read, by what each names alone. */
