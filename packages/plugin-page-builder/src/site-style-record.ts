@@ -32,6 +32,7 @@ import {
   isDefaultLook,
   isLook,
   isUsableNamedClass,
+  MAX_TOKEN_NAME_LENGTH,
   ownLooksRead,
   namedClassesRead,
   newStyleIssueBudget,
@@ -169,6 +170,28 @@ function isStoredTokenShape(entry: unknown): entry is {
   );
 }
 
+/** The most colours an order may list: far beyond any palette. */
+const MAX_COLOUR_ORDER = 1000;
+
+/**
+ * The site's colour order as stored: identities, each once, none longer
+ * than a code name can be. A colour the order does not name is listed after
+ * the ones it does, so an order naming a colour since removed is harmless.
+ */
+function isColourOrder(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= MAX_COLOUR_ORDER &&
+    value.every(
+      identity =>
+        typeof identity === "string" &&
+        identity !== "" &&
+        identity.length <= MAX_TOKEN_NAME_LENGTH
+    ) &&
+    new Set(value).size === value.length
+  );
+}
+
 /**
  * The site's fluid range as stored: two positive, finite widths in px, the
  * smallest screen below the largest, or a fluid size would grow across no
@@ -243,6 +266,15 @@ export function checkStoredTokens(
       );
       return;
     }
+    // A colour's group is display text too, held to the same rule.
+    const group: unknown = (entry as { group?: unknown }).group;
+    const groupIssue = tokenLabelIssue(group);
+    if (groupIssue !== undefined) {
+      issues.push(
+        `tokens[${index}] has a group that cannot be used. ${groupIssue.replace(/^A label/, "A group name")}`
+      );
+      return;
+    }
     tokens.push({
       // Carried, not rebuilt. The id is the whole point of the field: it is
       // what a rename leaves alone, so a write that does not preserve it turns
@@ -250,6 +282,7 @@ export function checkStoredTokens(
       ...(entry.id === undefined ? {} : { id: entry.id }),
       name: entry.name,
       ...(entry.label === undefined ? {} : { label: entry.label }),
+      ...(typeof group === "string" ? { group } : {}),
       kind: entry.kind as TokenKind,
       values: {
         light: entry.values.light,
@@ -297,6 +330,13 @@ export function checkStoredTokens(
     );
   }
 
+  const order = raw.order;
+  if (order !== undefined && !isColourOrder(order)) {
+    issues.push(
+      "The colour order must be a list of different code names, each used once."
+    );
+  }
+
   const set: SiteTokenSet = {
     tokens,
     ...(typeof raw.prefix === "string" ? { prefix: raw.prefix } : {}),
@@ -304,6 +344,7 @@ export function checkStoredTokens(
     ...(isFluidRange(fluidRange)
       ? { fluidRange: { min: fluidRange.min, max: fluidRange.max } }
       : {}),
+    ...(isColourOrder(order) ? { order: [...order] } : {}),
   };
   issues.push(...tokenEmissionIssues(set, policy));
   return { value: set, issues };

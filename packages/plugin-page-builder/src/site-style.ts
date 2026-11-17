@@ -263,6 +263,11 @@ export function tokenOverrideOf(
       ? {}
       : { darkMode: edited.darkMode }),
     ...storedFluidRange(defaults, edited, tokens),
+    // The colour order, once the site has one of its own.
+    ...(edited.order === undefined ||
+    sameJsonValue(edited.order, defaults?.order)
+      ? {}
+      : { order: edited.order }),
   };
 }
 
@@ -439,11 +444,13 @@ function mergeTokens(
   const prefix = stored?.prefix ?? defaults?.prefix;
   const darkMode = stored?.darkMode ?? defaults?.darkMode;
   const fluidRange = stored?.fluidRange ?? defaults?.fluidRange;
+  const order = stored?.order ?? defaults?.order;
   return {
     tokens: tokens === undefined ? [] : [...tokens],
     ...(prefix === undefined ? {} : { prefix }),
     ...(darkMode === undefined ? {} : { darkMode }),
     ...(fluidRange === undefined ? {} : { fluidRange }),
+    ...(order === undefined ? {} : { order }),
   };
 }
 
