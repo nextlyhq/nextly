@@ -438,6 +438,47 @@
   outline-offset: 3px;
 }
 
+/*
+ * A block the page hides on the device shown: striped over in the editor's
+ * surface and tagged in its middle with where it is hidden, drawn over the
+ * canvas so nothing inside the page is laid out differently (the frame's own
+ * sheet adds only a dashed edge). The tag is the editor's text on its raised
+ * surface, 4.5:1 in both themes.
+ */
+.nx-canvas-mark[data-mark="device-hidden"] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem;
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--nx-builder-surface-raised) 72%, transparent) 0 10px,
+    color-mix(
+        in srgb,
+        color-mix(
+            in srgb,
+            var(--nx-builder-text) 10%,
+            var(--nx-builder-surface-raised)
+          )
+          85%,
+        transparent
+      )
+      10px 20px
+  );
+}
+
+.nx-canvas-mark[data-mark="device-hidden"]::after {
+  content: attr(data-device-tag);
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: center;
+}
+
 .nx-canvas-mark[data-mark="drop-parent"] {
   outline: 2px dashed var(--nx-builder-select);
   outline-offset: 2px;

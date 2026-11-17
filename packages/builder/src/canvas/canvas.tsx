@@ -42,6 +42,8 @@
  * - `canvas-drop-refusal.tsx`: why a dragged block can't land.
  * - `canvas-layout-parts.tsx`: the Layout's regions around the page.
  * - `canvas-drawn-page.tsx`: the page as the canvas draws it.
+ * - `canvas-device-hidden.ts`: the blocks hidden on the device shown, drawn
+ *   striped.
  *
  * @module canvas
  */
@@ -58,6 +60,10 @@ import {
   lockMarksOf,
 } from "./canvas-block-marks";
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
+import {
+  drawnBreakpoints,
+  useDeviceHiddenDrawing,
+} from "./canvas-device-hidden";
 import { useCanvasEnvironment, useDrawnPage } from "./canvas-drawn-page";
 import { drawnRefusal } from "./canvas-drop-refusal";
 import { useCanvasFrame } from "./canvas-frame-context";
@@ -299,11 +305,18 @@ export function Canvas({
     composed,
     render
   );
+  // The blocks the page hides on the device shown, drawn anyway and striped;
+  // none while the page is shown as a visitor gets it.
+  const deviceHidden = useDeviceHiddenDrawing(
+    appliedDrawing ?? composedPage,
+    drawnBreakpoints(render, siteStyles),
+    conditionsApplied === undefined
+  );
   const { drawn, page } = useDrawnPage({
     regions,
     rendered: entryDrawing.render,
     sheet: siteStyles,
-    document: appliedDrawing ?? composedPage,
+    document: deviceHidden.document,
     environment,
     applied: conditionsApplied,
   });
@@ -360,7 +373,8 @@ export function Canvas({
     drag,
     lockedIds,
     conditionMarks,
-    entryContentMarks
+    entryContentMarks,
+    deviceHidden.marks
   );
 
   // The refusal the cursor shows, asked of the same rule the notice draws by.

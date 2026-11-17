@@ -14,6 +14,7 @@ import {
   declarationsText,
   FULL_WIDTH_WRITES,
   heightShortcutWrites,
+  hideOnWrites,
   controlWrites,
   propWrites,
   sizeShortcutWrites,
@@ -130,6 +131,19 @@ describe("what a control writes", () => {
       searchPreviews: "data-nosnippet",
     });
     expect(tagWrites("section")).toBe("<section>");
+  });
+
+  it("says Hide on's write at the device's own widths", () => {
+    expect(hideOnWrites({ from: 768, to: 1023 })).toBe(
+      "display: none at 768–1023px"
+    );
+    expect(hideOnWrites({ from: 1024 })).toBe(
+      "display: none at 1024px and wider"
+    );
+    expect(hideOnWrites({ to: 767 })).toBe(
+      "display: none at 767px and narrower"
+    );
+    expect(hideOnWrites({})).toBe("display: none");
   });
 });
 

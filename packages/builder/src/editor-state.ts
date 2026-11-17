@@ -79,6 +79,7 @@ import {
   type BlockSelection,
   type SelectionMode,
 } from "./selection";
+import { joinsTyping, typingRunNow, type TypingStep } from "./typing-run";
 
 /** How deep the undo history goes before the oldest step is dropped. */
 export const MAX_HISTORY = 100;
@@ -939,8 +940,15 @@ function useHistoryStacks(): {
    * once a replay of one takes effect or any other entry is pushed.
    */
   const endedBranch = useRef<StepRun | null>(null);
+  // The run of typing the newest step was pushed for (`typing-run.ts`).
+  const typing = useRef<TypingStep<HistoryEntry> | null>(null);
   const push = useCallback(
     (entry: HistoryEntry, into: "undo" | "redo" | "new") => {
+      // A later write of a run of typing keeps the run's one step, whose
+      // inverse puts back what was there before the author started.
+      const run = into === "new" ? typingRunNow() : null;
+      if (joinsTyping(typing.current, undoStack.current.at(-1), run)) return;
+      typing.current = run && { run, entry };
       let dropped: HistoryEntry | undefined;
       endedBranch.current = runAfterPush(
         endedBranch.current,

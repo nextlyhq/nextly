@@ -72,6 +72,8 @@
 @import "./layers.css";
 
 @import "./block-toolbar.css";
+/* The floating format bar over words being edited, and its paste notice. */
+@import "./format-bar.css";
 
 @import "./variables.css";
 
@@ -88,6 +90,7 @@
 @import "./fonts.css";
 
 @import "./spacing-box.css";
+@import "./spacing-popover.css";
 
 @import "./link-picker.css";
 
