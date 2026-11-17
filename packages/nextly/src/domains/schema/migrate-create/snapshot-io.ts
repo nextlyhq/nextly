@@ -122,6 +122,8 @@ export interface TemplateEntity {
   slug: string;
   /** The table the template's migration made for it, where the file says. */
   tableName?: string;
+  /** Whether the template made it with the Draft/Published columns. */
+  status: boolean;
   /** Its top-level fields as listed: a name, a type and whatever else was written. */
   fields: { name: string; type: string; [key: string]: unknown }[];
 }
@@ -132,39 +134,71 @@ export interface TemplateEntities {
   singles: TemplateEntity[];
 }
 
-/** The entities under one key of an older-format snapshot; an entry without a slug is passed over. */
-function templateEntityList(value: unknown): TemplateEntity[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((entry: unknown): TemplateEntity[] => {
-    if (entry === null || typeof entry !== "object") return [];
-    const { slug, tableName, fields } = entry as Record<string, unknown>;
-    if (typeof slug !== "string") return [];
-    return [
-      {
-        slug,
-        ...(typeof tableName === "string" ? { tableName } : {}),
-        fields: (Array.isArray(fields) ? fields : []).filter(
-          (field: unknown): field is TemplateEntity["fields"][number] =>
-            field !== null &&
-            typeof field === "object" &&
-            typeof (field as { name?: unknown }).name === "string" &&
-            typeof (field as { type?: unknown }).type === "string"
-        ),
-      },
-    ];
+/** Whether `value` is a plain object. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The entities under one key of an older-format snapshot. The key may be
+ * absent; present, it is a list of entities, each with a slug and a list of
+ * named, typed fields. Anything else is refused: read as an empty list, the
+ * tables the template made would be taken as never made.
+ */
+function templateEntityList(
+  file: Record<string, unknown>,
+  key: "collections" | "singles",
+  filename: string
+): TemplateEntity[] {
+  const value = file[key];
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new SnapshotFileError(filename, `expected ${key} to be a list`);
+  }
+  return value.map((entry: unknown, index): TemplateEntity => {
+    const at = `${key}[${index}]`;
+    if (!isRecord(entry) || typeof entry.slug !== "string") {
+      throw new SnapshotFileError(filename, `expected ${at} to have a slug`);
+    }
+    const fields = entry.fields ?? [];
+    if (
+      !Array.isArray(fields) ||
+      !fields.every(
+        (field: unknown): field is TemplateEntity["fields"][number] =>
+          isRecord(field) &&
+          typeof field.name === "string" &&
+          typeof field.type === "string"
+      )
+    ) {
+      throw new SnapshotFileError(
+        filename,
+        `expected ${at}.fields to be a list of fields, each with a name and a type`
+      );
+    }
+    return {
+      slug: entry.slug,
+      ...(typeof entry.tableName === "string"
+        ? { tableName: entry.tableName }
+        : {}),
+      status: entry.status === true,
+      fields,
+    };
   });
 }
 
 /**
  * What a template's older-format snapshot (`isOlderFormatSnapshot`) lists:
  * each collection and Single with its top-level fields. The one reading of
- * that file's content.
+ * that file's content; a damaged list is refused as an invalid snapshot.
  */
-function templateEntitiesOf(parsed: unknown): TemplateEntities {
-  const file = (parsed ?? {}) as Record<string, unknown>;
+function templateEntitiesOf(
+  parsed: unknown,
+  filename: string
+): TemplateEntities {
+  const file = isRecord(parsed) ? parsed : {};
   return {
-    collections: templateEntityList(file.collections),
-    singles: templateEntityList(file.singles),
+    collections: templateEntityList(file, "collections", filename),
+    singles: templateEntityList(file, "singles", filename),
   };
 }
 
@@ -237,7 +271,7 @@ export async function loadLatestSnapshot(
           version: 1,
           // The file's own content, hashed: it has no migration hash to carry.
           migrationHash: createHash("sha256").update(content).digest("hex"),
-          snapshot: templateStart(templateEntitiesOf(parsed)),
+          snapshot: templateStart(templateEntitiesOf(parsed, latest)),
         },
         template: true,
       };

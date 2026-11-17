@@ -22,7 +22,6 @@ import type {
 } from "../../../schemas/_zod/ui-schema";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { assertPluginFieldDeclarations } from "../../../shared/lib/assert-plugin-field-declarations";
-import { pluginCollectionSources } from "../migrate/plugin/plugin-collection-sources";
 import {
   judgeBuilderDefinitions,
   readBuilderDefinitions,
@@ -48,7 +47,7 @@ import {
   type LatestSnapshot,
   type SnapshotFile,
 } from "./snapshot-io";
-import { templateStartingTables } from "./template-start";
+import { templateStartFor } from "./template-start";
 
 /**
  * The parts of the app's config a migration is generated from: the code-first
@@ -175,16 +174,12 @@ export async function appMigrationInputs(
   // snapshot, read as the tables its listed entities were made with.
   const latest = await loadLatestSnapshot(
     resolve(input.migrationsDir, "meta"),
-    template =>
-      templateStartingTables({
-        template,
-        collections,
-        singles,
-        pluginCollections: new Set(
-          pluginCollectionSources(config.plugins ?? []).keys()
-        ),
-        dialect,
-      })
+    templateStartFor({
+      collections,
+      singles,
+      plugins: config.plugins,
+      dialect,
+    })
   );
 
   // The definitions judged against that snapshot, as `migrate:check` judges

@@ -102,8 +102,10 @@ import {
   loadLatestSnapshot,
   parseSnapshotFile,
   SnapshotFileError,
+  type TemplateStart,
   verifyMigrationHash,
 } from "../../domains/schema/migrate-create/snapshot-io";
+import { templateStartFor } from "../../domains/schema/migrate-create/template-start";
 import { describeOp } from "../../domains/schema/pipeline/diff/describe-operation";
 import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
@@ -253,6 +255,14 @@ export async function runMigrateCheck(
     // Each entity with its settings, as `migrate:create` records them; the
     // merge sets a Builder entity's (`uiToMinimal`).
     entities: merged,
+    // A project made from a template starts from the template's snapshot,
+    // read as `migrate:create` reads it.
+    templateStart: templateStartFor({
+      collections: merged.collections,
+      singles: merged.singles,
+      plugins: configResult.config.plugins,
+      dialect,
+    }),
     definitions,
     // Every permission the configuration declares, as `migrate:create` records them, so a plugin
     // release that only adds or removes one is named here as `nextly migrate` names it.
@@ -301,6 +311,12 @@ export async function runChecks(args: {
     singles: readonly MinimalConfigEntity[];
     components: readonly MinimalConfigEntity[];
   };
+  /**
+   * How a template's older-format snapshot, where it is the newest, is read
+   * as starting tables (`templateStartFor`). Omitted, such a snapshot is
+   * refused as invalid.
+   */
+  templateStart?: TemplateStart;
   /**
    * The Builder's definitions as `readBuilderDefinitions` read them, judged
    * against the newest snapshot as `migrate:create` judges them: a Builder
@@ -411,7 +427,7 @@ export async function runChecks(args: {
   let desiredSnapshot: NextlySchemaSnapshot;
   let latest: Awaited<ReturnType<typeof loadLatestSnapshot>>;
   try {
-    latest = await loadLatestSnapshot(metaDir);
+    latest = await loadLatestSnapshot(metaDir, args.templateStart);
     const existing = latest?.data.snapshot ?? EMPTY_SNAPSHOT;
     const stream = appStreamSnapshots({
       previous: existing,

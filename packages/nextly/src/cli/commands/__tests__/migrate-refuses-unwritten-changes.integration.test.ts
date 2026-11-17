@@ -12,6 +12,7 @@
  * up to date." and exited 0, the edit reaching no database.
  */
 import {
+  cpSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -22,6 +23,7 @@ import {
 import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -575,6 +577,67 @@ describe.each(getConfiguredTestDialects())(
       const again = await migrate(config([TITLE, BODY]));
       expect(again.code, again.said).toBeUndefined();
       expect(again.said).toContain(UP_TO_DATE);
+    });
+
+    it("a fresh project made from the blog template with the Schema Builder approach: its migration is applied and nothing is named", async () => {
+      // As the scaffold makes it: the template's migrations folder beside a
+      // configuration that declares no collection and no Single.
+      const TEMPLATE_TABLES = [
+        "dc_posts_categories",
+        "dc_posts_tags",
+        "dc_posts",
+        "dc_categories",
+        "dc_tags",
+        "dc_authors",
+        "user_ext",
+        "single_site_settings",
+        "single_navigation",
+        "single_homepage",
+      ];
+      const db = instance!.adapter as unknown as {
+        executeQuery(sql: string): Promise<unknown>;
+      };
+      const q = dialect === "mysql" ? "`" : '"';
+      const dropTemplateTables = async () => {
+        for (const table of TEMPLATE_TABLES) {
+          await db.executeQuery(
+            `DROP TABLE IF EXISTS ${q}${table}${q}${dialect === "postgresql" ? " CASCADE" : ""}`
+          );
+        }
+      };
+      await dropTemplateTables();
+      cpSync(
+        fileURLToPath(
+          new URL(
+            "../../../../../../templates/blog/migrations",
+            import.meta.url
+          )
+        ),
+        join(dir, "migrations"),
+        { recursive: true }
+      );
+      const scaffolded = config([], { noPosts: true });
+      try {
+        const first = await migrate(scaffolded);
+
+        expect(first.code, first.said).toBeUndefined();
+        expect(first.said).not.toContain("with no migration");
+        const drizzle = (
+          instance!.adapter as unknown as DrizzleAdapter
+        ).getDrizzle();
+        const live = await liveColumnNames(drizzle, dialect, [
+          "dc_posts",
+          "single_homepage",
+        ]);
+        expect(live.get("dc_posts")?.has("title")).toBe(true);
+        expect(live.get("single_homepage")).toBeDefined();
+
+        const again = await migrate(scaffolded);
+        expect(again.code, again.said).toBeUndefined();
+        expect(again.said).toContain(UP_TO_DATE);
+      } finally {
+        await dropTemplateTables();
+      }
     });
 
     it("a database db:sync made, with no migration yet, is told migrate:baseline", async () => {

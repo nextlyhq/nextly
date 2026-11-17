@@ -3210,6 +3210,9 @@ async function refuseDatabaseBehindLedger(
     )
   ).map(entry => ({
     ...entry,
+    // The core reconcile makes a missing core table again without the app's
+    // columns, so those are named even where the whole table is gone.
+    remade: core,
     snapshot: {
       ...entry.snapshot,
       // A core table the app contributed to stays: `appOwnedTables` has

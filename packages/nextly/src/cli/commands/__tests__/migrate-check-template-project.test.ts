@@ -136,8 +136,8 @@ async function templateExport(file: string, name: string): Promise<unknown> {
   return module[name];
 }
 
-/** The template's configuration, with a field added to Posts. */
-async function projectWithSubtitle() {
+/** The template's configuration; `subtitle` adds a field to Posts. */
+async function project(options: { subtitle?: boolean } = {}) {
   const [Posts, Authors, Categories, Tags, SiteSettings, Navigation, Homepage] =
     (await Promise.all([
       templateExport("src/collections/Posts/index.ts", "Posts"),
@@ -150,7 +150,9 @@ async function projectWithSubtitle() {
     ])) as { fields: unknown[] }[];
   return defineConfig({
     collections: [
-      { ...Posts, fields: [...Posts.fields, text({ name: "subtitle" })] },
+      options.subtitle === true
+        ? { ...Posts, fields: [...Posts.fields, text({ name: "subtitle" })] }
+        : Posts,
       Authors,
       Categories,
       Tags,
@@ -159,6 +161,7 @@ async function projectWithSubtitle() {
     db: { migrationsDir: "./migrations" },
   } as Parameters<typeof defineConfig>[0]);
 }
+const projectWithSubtitle = () => project({ subtitle: true });
 
 const create = (config: unknown) =>
   run(config, context => {
@@ -172,6 +175,32 @@ const check = (config: unknown) =>
   run(config, context => runMigrateCheck({ cwd: dir }, context));
 
 describe("migrate:check on a project made from the blog template", () => {
+  it("passes as the scaffold makes the project: the Schema Builder approach, declaring no entity", async () => {
+    const { code, said } = await check(
+      defineConfig({
+        collections: [],
+        singles: [],
+        db: { migrationsDir: "./migrations" },
+      })
+    );
+
+    expect(code, said.join("\n")).toBeUndefined();
+  });
+
+  it("passes before the project has written any migration", async () => {
+    const { code, said } = await check(await project());
+
+    expect(code, said.join("\n")).toBeUndefined();
+  });
+
+  it("fails naming a field added since the template with no migration", async () => {
+    const { code, said } = await check(await projectWithSubtitle());
+
+    expect(code).toBe(1);
+    expect(said.join("\n")).toContain("subtitle");
+    expect(said.join("\n")).not.toContain("INVALID_SNAPSHOT");
+  });
+
   it("passes once the project's first migration is written", async () => {
     const config = await projectWithSubtitle();
     const created = await create(config);

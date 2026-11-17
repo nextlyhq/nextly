@@ -4,14 +4,27 @@
  * tables. Both readers of the newest snapshot take the template's entities as
  * already made:
  *
- * - the comparison `nextly migrate` makes names a collection, a Single or a
- *   top-level field added or removed since, and nothing for the template as
- *   shipped;
+ * - the comparison `nextly migrate` makes names a collection or a Single
+ *   added since, and a top-level field added to or removed from a listed
+ *   entity once the project declares it;
+ * - an entity the template lists that nothing declares is never read as
+ *   removed: the scaffold ships this snapshot with the Schema Builder
+ *   approach, whose configuration declares no entity at all;
  * - `migrate:create` writes a migration holding that change alone.
  *
- * Driven with the template's own collections, Singles and migrations folder.
+ * Two shapes are driven, both over the template's own migrations folder: the
+ * configuration the scaffold makes (no entity declared), and the template's
+ * collections and Singles declared, as a project is once it moves them into
+ * its configuration or saves them from the Schema Builder.
  */
-import { cp, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import {
+  cp,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -185,7 +198,7 @@ describe("a project starting from the blog template's snapshot", () => {
     expect(lines[0]).toMatch(/^- .*dc_posts.*excerpt/);
   });
 
-  it("names a collection added and a collection removed", async () => {
+  it("names a collection added, and never one the template lists that is no longer declared", async () => {
     // Removed with the one field that points at it, as a declaration has to:
     // a collection another field still points at is refused before this.
     const declared = withCollection(await blog(), "posts", posts => ({
@@ -203,14 +216,79 @@ describe("a project starting from the blog template's snapshot", () => {
       ],
     });
 
-    // The two tables, and the removed field with its index; no other table of
-    // the template is named.
+    // The added table and the removed field with its index. `dc_authors` is
+    // not named: an entity nothing declares may be one the Schema Builder
+    // holds, so its absence is never read as a removal.
     expect([...lines].sort()).toEqual([
       "+ add_table dc_tpl_events",
       "- drop_column dc_posts.byline",
       "- drop_index idx_dc_posts_byline on dc_posts",
-      "- drop_table dc_authors",
     ]);
+  });
+
+  describe("as the scaffold makes it: the Schema Builder approach, declaring no entity", () => {
+    /** The configuration the scaffold copies beside the template's migrations. */
+    const visualConfig = () =>
+      readFile(
+        fileURLToPath(new URL("configs/visual.config.ts", TEMPLATE)),
+        "utf-8"
+      );
+
+    it("is the configuration these cases stand for: no collection and no Single", async () => {
+      // The file imports by paths that resolve only once the scaffold has
+      // copied it to a project's root, so it is read rather than loaded.
+      const config = await visualConfig();
+      expect(config).toMatch(/collections: \[\],/);
+      expect(config).toMatch(/singles: \[\],/);
+    });
+
+    it("names nothing: every listed entity stays as the template made it", async () => {
+      const changes = await unwrittenChangesOf(
+        asked({ collections: [], singles: [] })
+      );
+
+      expect(unwrittenChangeLines(changes)).toEqual([]);
+      expect(nothingUnwritten(changes)).toBe(true);
+    });
+
+    it("migrate:create writes a collection added in the configuration, and no drop of a template table", async () => {
+      const declared = {
+        collections: [
+          defineCollection({
+            slug: "tpl_events",
+            fields: [text({ name: "venue" })],
+          }) as unknown as Entity,
+        ],
+        singles: [],
+      };
+      expect(await linesFor(declared)).toEqual(["+ add_table dc_tpl_events"]);
+      const inputs = await appMigrationInputs(asked(declared));
+
+      const result = await generateMigration({
+        name: "add_events",
+        dialect: DIALECT,
+        migrationsDir,
+        collections: inputs.collections,
+        singles: inputs.singles,
+        components: inputs.components,
+        metadataUpserts: inputs.metadataUpserts,
+        previousMetadataUpserts: inputs.previousMetadataUpserts,
+        appStream: inputs.appStream,
+        previous: inputs.latest,
+        nonInteractive: true,
+      });
+
+      expect(result).not.toBeNull();
+      const written = (await readdir(migrationsDir)).find(name =>
+        name.endsWith("_add_events.sql")
+      );
+      const up = (await readFile(join(migrationsDir, written!), "utf-8")).split(
+        "-- DOWN"
+      )[0];
+      expect(up).toMatch(/CREATE TABLE "dc_tpl_events"/);
+      expect(up).not.toMatch(/DROP TABLE/);
+      expect(up).not.toMatch(/dc_posts|dc_authors|single_/);
+    });
   });
 
   it("names a field group added, whose table the template never made", async () => {
@@ -240,6 +318,46 @@ describe("a project starting from the blog template's snapshot", () => {
     expect(lines.some(line => /dc_tags\b/.test(line))).toBe(true);
     expect(lines.some(line => /dc_tpl_labels\b/.test(line))).toBe(true);
   });
+
+  it("names the Draft/Published columns of a listed collection that has since turned it off", async () => {
+    const lines = await linesFor(
+      withCollection(await blog(), "posts", posts => ({
+        ...posts,
+        status: false,
+      }))
+    );
+
+    // The template made Posts with Draft/Published; its columns are still there.
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.every(line => /^[-~] .*dc_posts/.test(line))).toBe(true);
+    expect(lines.some(line => /^- .*dc_posts.*\bstatus\b/.test(line))).toBe(
+      true
+    );
+  });
+
+  it.each([
+    ["an object", { collections: {}, singles: [] }],
+    ["null", { collections: null, singles: [] }],
+    ["an entry without a slug", { collections: [{ fields: [] }], singles: [] }],
+    [
+      "a field without a name",
+      { collections: [{ slug: "posts", fields: [{ type: "text" }] }] },
+    ],
+  ])(
+    "refuses a template snapshot whose entity list is %s, rather than reading it as empty",
+    async (_what, damaged) => {
+      const meta = join(migrationsDir, "meta");
+      const [name] = await readdir(meta);
+      await rm(join(meta, name));
+      await writeFile(join(meta, name), JSON.stringify(damaged), {
+        flag: "wx",
+      });
+
+      await expect(unwrittenChangesOf(asked(await blog()))).rejects.toThrow(
+        /snapshot file .* is invalid/
+      );
+    }
+  );
 
   it("migrate:create writes the added field alone, and the next comparison names nothing", async () => {
     const declared = withCollection(await blog(), "posts", posts => ({
