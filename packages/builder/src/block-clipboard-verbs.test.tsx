@@ -74,11 +74,12 @@ function setUp(initialDocument: BlockDocument, nesting = anyParent) {
 }
 
 /** A clipboard write that keeps the text, as a copy event's data would. */
-function clipboard(): { write: (text: string) => void; text: () => string } {
+function clipboard(): { write: (text: string) => boolean; text: () => string } {
   let held = "";
   return {
     write: text => {
       held = text;
+      return true;
     },
     text: () => held,
   };
@@ -244,6 +245,53 @@ describe("several blocks at once", () => {
   });
 });
 
+describe("a clipboard that will not take the copy", () => {
+  it("cuts nothing when the write fails, and says so", () => {
+    const { result, notify } = setUp(
+      page(node("a", "core/heading"), node("b", "core/heading"))
+    );
+    act(() => result.current.editor.select("a"));
+    act(() => {
+      result.current.verbs.cut(() => false);
+    });
+    expect(result.current.editor.document.nodes).toHaveLength(2);
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringMatching(/couldn’t be put on the clipboard/)
+    );
+  });
+
+  it("removes the blocks only once a write that answers later succeeds", async () => {
+    const { result } = setUp(
+      page(node("a", "core/heading"), node("b", "core/heading"))
+    );
+    act(() => result.current.editor.select("a"));
+    let answer: (ok: boolean) => void = () => undefined;
+    act(() => {
+      result.current.verbs.cut(
+        () => new Promise<boolean>(resolve => (answer = resolve))
+      );
+    });
+    // Nothing removed while the clipboard has not answered.
+    expect(result.current.editor.document.nodes).toHaveLength(2);
+    await act(async () => answer(true));
+    expect(result.current.editor.document.nodes.map(each => each.id)).toEqual([
+      "b",
+    ]);
+  });
+
+  it("keeps the blocks when a write that answers later fails", async () => {
+    const { result, notify } = setUp(
+      page(node("a", "core/heading"), node("b", "core/heading"))
+    );
+    act(() => result.current.editor.select("a"));
+    await act(async () => {
+      result.current.verbs.cut(() => Promise.resolve(false));
+    });
+    expect(result.current.editor.document.nodes).toHaveLength(2);
+    expect(notify).toHaveBeenCalled();
+  });
+});
+
 describe("cutting blocks", () => {
   it("copies then removes, as one undo step", () => {
     const { result } = setUp(
@@ -389,7 +437,7 @@ describe("which clipboard events are the blocks'", () => {
     const button = document.createElement("button");
     chrome().append(button);
     const verbs: BlockClipboardVerbs = {
-      copy: vi.fn((write?: (text: string) => void) => {
+      copy: vi.fn((write?: (text: string) => boolean) => {
         write?.("copied");
         return true;
       }),

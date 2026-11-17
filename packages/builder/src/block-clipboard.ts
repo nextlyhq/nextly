@@ -25,6 +25,7 @@
 
 import {
   ENTRY_CONTENT_TYPE,
+  entryContentFieldOf,
   findNode,
   holdsEntryContent,
   isPlainRecord,
@@ -37,6 +38,7 @@ import {
   type ComponentLookup,
   type NestingSource,
   type PlanRefusal,
+  walkNodes,
 } from "@nextlyhq/blocks-engine";
 import { z } from "zod";
 
@@ -76,6 +78,28 @@ export const OTHER_VERSION_REFUSAL =
 /** Said when copied Entry content would land in a page that is not a template. */
 const ENTRY_CONTENT_TEMPLATE_ONLY =
   "An Entry content block goes only in a template, so it can’t be pasted here.";
+
+/** Said when copied Entry content draws a field this template's collection lacks. */
+const ENTRY_CONTENT_FIELD_MISSING =
+  "This Entry content block draws a field this template’s collection doesn’t have, so it can’t be pasted here.";
+
+/**
+ * Why pasted Entry content can't go in this template: a block naming a
+ * blocks field the template's collection does not have, which the save would
+ * refuse. `undefined` when every one names a field the collection has.
+ */
+function foreignFieldRefusal(
+  blocks: readonly BlockNode[],
+  fields: readonly string[]
+): string | undefined {
+  let foreign = false;
+  walkNodes([...blocks], node => {
+    if (node.type !== ENTRY_CONTENT_TYPE) return;
+    const field = entryContentFieldOf(node);
+    if (field === undefined || !fields.includes(field)) foreign = true;
+  });
+  return foreign ? ENTRY_CONTENT_FIELD_MISSING : undefined;
+}
 
 /** Said when Paste finds no copied blocks on the clipboard. */
 export const NOTHING_TO_PASTE =
@@ -190,6 +214,11 @@ export interface PasteSources {
   /** Each block type's regions, for pasting inside a container. */
   readonly slots?: SlotSource;
   /**
+   * In a template, its collection's blocks fields by name, which a pasted
+   * Entry content block must name one of; `undefined` while they are read.
+   */
+  readonly entryFields?: readonly string[];
+  /**
    * The editor's lock check, phrased: why a lock refuses these ops, or
    * `null`. A place whose lock refuses the paste is passed over for the next
    * one, as the Add panel passes over a locked place for a clicked tile.
@@ -232,7 +261,10 @@ export function planPaste(
     if (!offeredIn(document.kind, ENTRY_CONTENT_TYPE)) {
       return { refusal: ENTRY_CONTENT_TEMPLATE_ONLY };
     }
-    const held = entryContentRefusal(document, ENTRY_CONTENT_TYPE);
+    const fields = sources.entryFields;
+    const held =
+      entryContentRefusal(document, ENTRY_CONTENT_TYPE, fields !== undefined) ??
+      foreignFieldRefusal(blocks, fields ?? []);
     if (held !== undefined) return { refusal: held };
   }
 

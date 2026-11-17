@@ -25,18 +25,22 @@ let lastCopied: string | undefined;
  * cut the browser is performing. Taking the event's default away is what
  * makes the browser keep this text rather than the page's selected text.
  */
-export function putOnClipboard(event: ClipboardEvent, text: string): void {
+export function putOnClipboard(event: ClipboardEvent, text: string): boolean {
   lastCopied = text;
   const data = event.clipboardData;
-  if (data === null) return;
+  // Answers whether the clipboard took the text, so a Cut never removes
+  // blocks that were not copied.
+  if (data === null) return false;
   data.setData(BLOCK_CLIPBOARD_TYPE, text);
   data.setData("text/plain", text);
   event.preventDefault();
+  return true;
 }
 
 /**
  * Copy text from a control, such as a menu's Copy, where no clipboard event
- * is under way.
+ * is under way. Answers whether the clipboard took it, now or once the
+ * asynchronous clipboard has answered.
  *
  * Asks the document for a copy (`execCommand("copy")`), which the browser
  * allows during the click or keypress that chose the command, and fills the
@@ -44,15 +48,17 @@ export function putOnClipboard(event: ClipboardEvent, text: string): void {
  * so this write is the only one made. Where the browser does not run the
  * command, the asynchronous clipboard takes the plain text instead.
  */
-export function writeToClipboard(doc: Document, text: string): void {
+export function writeToClipboard(
+  doc: Document,
+  text: string
+): boolean | Promise<boolean> {
   lastCopied = text;
   const view = doc.defaultView;
   let written = false;
   const fill = (event: Event) => {
     if (!isClipboardEvent(event)) return;
     event.stopImmediatePropagation();
-    putOnClipboard(event, text);
-    written = event.clipboardData !== null;
+    written = putOnClipboard(event, text);
   };
   view?.addEventListener("copy", fill, true);
   try {
@@ -62,8 +68,15 @@ export function writeToClipboard(doc: Document, text: string): void {
   } finally {
     view?.removeEventListener("copy", fill, true);
   }
-  if (written) return;
-  void view?.navigator.clipboard?.writeText(text).catch(() => undefined);
+  if (written) return true;
+  // The asynchronous clipboard answers later; a browser with none, or one
+  // that refuses, answers that nothing was written.
+  const clipboard = view?.navigator.clipboard;
+  if (clipboard === undefined) return false;
+  return clipboard.writeText(text).then(
+    () => true,
+    () => false
+  );
 }
 
 /** The text a paste event carries that may be copied blocks, or nothing. */

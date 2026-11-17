@@ -28,8 +28,23 @@ import { registrySlotSource } from "./panels/add/inserter";
 import { slotsShowingEmpty } from "./panels/add/inserter-types";
 import { isRefusal, selectionDeletion, subjectOf } from "./selection-ops";
 
-/** Where copied text goes: the system clipboard, or a clipboard event being handled. */
-export type ClipboardWrite = (text: string) => void;
+/**
+ * Where copied text goes: the system clipboard, or a clipboard event being
+ * handled. Answers whether the text was taken, now or later.
+ */
+export type ClipboardWrite = (text: string) => boolean | Promise<boolean>;
+
+/** Said when the clipboard would not take the copied blocks. */
+const NOT_ON_CLIPBOARD = "The blocks couldn’t be put on the clipboard";
+
+/** Run `then` with whether a write was taken, once it has answered. */
+function afterWrite(
+  written: boolean | Promise<boolean>,
+  then: (ok: boolean) => void
+): void {
+  if (typeof written === "boolean") then(written);
+  else void written.then(then, () => then(false));
+}
 
 /** The three verbs, plus a paste of text a clipboard event already carries. */
 export interface BlockClipboardVerbs {
@@ -56,6 +71,11 @@ export interface BlockClipboardOptions {
   readonly notify: (message: string) => void;
   readonly nesting: NestingSource;
   readonly components?: ComponentLookup | undefined;
+  /**
+   * In a template, its collection's blocks fields by name, for a pasted
+   * Entry content block; `undefined` while they are being read.
+   */
+  readonly entryFields?: readonly string[] | undefined;
 }
 
 /**
@@ -74,7 +94,7 @@ function shellDocument(): Document | undefined {
 /** The system clipboard, through the editor's document. */
 const systemWrite: ClipboardWrite = text => {
   const doc = shellDocument();
-  if (doc !== undefined) writeToClipboard(doc, text);
+  return doc === undefined ? false : writeToClipboard(doc, text);
 };
 
 export function useBlockClipboardVerbs({
@@ -83,6 +103,7 @@ export function useBlockClipboardVerbs({
   notify,
   nesting,
   components,
+  entryFields,
 }: BlockClipboardOptions): BlockClipboardVerbs {
   const copy = React.useCallback(
     (write: ClipboardWrite = systemWrite): boolean => {
@@ -90,11 +111,14 @@ export function useBlockClipboardVerbs({
       const ids = editorNow.selection.ids;
       const copied = copyOfSelection(editorNow.document, ids, siteOrigin());
       if (copied === null) return false;
-      write(serializeCopiedBlocks(copied));
-      announce(`${subjectOf(editorNow.document, ids)} copied.`);
+      const subject = subjectOf(editorNow.document, ids);
+      afterWrite(write(serializeCopiedBlocks(copied)), ok => {
+        if (ok) announce(`${subject} copied.`);
+        else notify(`${NOT_ON_CLIPBOARD}.`);
+      });
       return true;
     },
-    [latest, announce]
+    [latest, announce, notify]
   );
 
   const cut = React.useCallback(
@@ -115,15 +139,21 @@ export function useBlockClipboardVerbs({
         announce(locked);
         return false;
       }
-      // Removed first and copied only once the editor took the removal, so a
-      // refused cut leaves the clipboard as it was. One apply, one undo step.
-      if (editorNow.applyAll(plan.ops) === null) return false;
-      write(serializeCopiedBlocks(copied));
-      editorNow.select(plan.nextSelection);
-      announce(`${plan.subject} cut. Undo with ${UNDO_KEYS_SPOKEN}.`);
+      // Copied first, and removed only once the clipboard has taken the copy,
+      // so a cut the clipboard refuses keeps the blocks. One apply, one undo
+      // step.
+      afterWrite(write(serializeCopiedBlocks(copied)), ok => {
+        if (!ok) {
+          notify(`${NOT_ON_CLIPBOARD}, so nothing was cut.`);
+          return;
+        }
+        if (editorNow.applyAll(plan.ops) === null) return;
+        editorNow.select(plan.nextSelection);
+        announce(`${plan.subject} cut. Undo with ${UNDO_KEYS_SPOKEN}.`);
+      });
       return true;
     },
-    [latest, announce]
+    [latest, announce, notify]
   );
 
   const pasteText = React.useCallback(
@@ -149,6 +179,7 @@ export function useBlockClipboardVerbs({
             editorNow.listsShowingEmpty
           ),
           lockRefusal: ops => lockSentence(editorNow, ops),
+          ...(entryFields === undefined ? {} : { entryFields }),
         }
       );
       if (plan.refusal !== undefined) {
@@ -173,7 +204,7 @@ export function useBlockClipboardVerbs({
       );
       return true;
     },
-    [latest, notify, announce, nesting, components]
+    [latest, notify, announce, nesting, components, entryFields]
   );
 
   const paste = React.useCallback(() => {

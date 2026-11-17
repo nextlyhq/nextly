@@ -85,6 +85,7 @@ import {
   unmovedAnnouncement,
 } from "./move-refusal";
 import { pathTo } from "./panels/layers/layers";
+import { usePreviewedCollection } from "./previewed-entry";
 import { offerSignal, useSelectionOffer } from "./selection-offer";
 import {
   isRefusal,
@@ -231,12 +232,19 @@ export function useBlockKeyboardActions({
    * dim beside it and nothing on the page says why nothing arrived.
    */
   const notify = useNoticeSink();
+  // In a template, the fields a pasted Entry content block may name.
+  const blocksFields = usePreviewedCollection()?.blocksFields;
+  const entryFields = React.useMemo(
+    () => blocksFields?.map(field => field.name),
+    [blocksFields]
+  );
   const clipboard = useBlockClipboardVerbs({
     latest,
     announce,
     notify,
     nesting: nestingSource,
     components: definitions,
+    entryFields,
   });
 
   const duplicateSelected = React.useCallback(() => {

@@ -263,6 +263,28 @@ describe("where pasted blocks land", () => {
     expect(plan.refusal).toMatch(/only in a template/);
   });
 
+  it("refuses Entry content naming a field the template's collection doesn't have", () => {
+    const entry = node("entry", "core/entry-content", {
+      props: { field: "body" },
+    });
+    const template = {
+      formatVersion: 1,
+      kind: "template",
+      nodes: [],
+    } as unknown as BlockDocument;
+    const elsewhere = planPaste(template, null, [entry], {
+      ...sources,
+      entryFields: ["content"],
+    });
+    expect(elsewhere.refusal).toMatch(/field this template’s collection doesn’t have/);
+    // The control: the same block pastes where the collection has the field.
+    const here = planPaste(template, null, [entry], {
+      ...sources,
+      entryFields: ["body"],
+    });
+    expect(here.refusal).toBeUndefined();
+  });
+
   it("refuses a second Entry content block in a template", () => {
     const entry = node("entry", "core/entry-content", {
       props: { field: "body" },
@@ -272,7 +294,10 @@ describe("where pasted blocks land", () => {
       kind: "template",
       nodes: [entry],
     } as BlockDocument;
-    const plan = planPaste(template, null, [entry], sources);
+    const plan = planPaste(template, null, [entry], {
+      ...sources,
+      entryFields: ["body"],
+    });
     expect(plan.refusal).toBe("A template holds one Entry content block.");
   });
 });
