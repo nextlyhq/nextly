@@ -102,6 +102,17 @@ export function hookLanguage(): HookLanguage {
   };
 }
 
+/**
+ * What an event recorded now says about languages: what a hook called at the
+ * same point is told, so an event and the hooks of one change cannot name
+ * different languages. `undefined` on a site without languages, where there
+ * is no language to name and no part apart from the rest.
+ */
+export function eventLanguage(): HookLanguage | undefined {
+  const language = hookLanguage();
+  return language.locales.length === 0 ? undefined : language;
+}
+
 /** `context` with what a hook called now is told about languages. */
 export function withHookLanguage<C extends object>(
   context: C

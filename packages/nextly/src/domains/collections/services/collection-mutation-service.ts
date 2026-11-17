@@ -87,8 +87,10 @@ import { getEventBus } from "../../../events/event-bus";
 // marker as changing. Shared with the in-transaction phase, which marks one the
 // same way.
 import {
+  eventLanguage,
   withWriteParts,
   writeMovesSharedPart,
+  type HookLanguage,
   type WriteParts,
 } from "../../../hooks/hook-language";
 import {
@@ -474,6 +476,7 @@ import {
   type VersionRow,
 } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
+import { computeChangedFields } from "../../webhooks/envelope";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { projectFields } from "../../webhooks/project-fields";
 import {
@@ -583,17 +586,61 @@ function emitCollectionEvent(
   action: CollectionEventAction,
   collection: string,
   data: Record<string, unknown>,
-  user: unknown
+  user: unknown,
+  changedFields?: readonly string[]
 ): void {
   deliverCollectionEvent(
     action,
     collection,
     detachedForListeners(data),
-    detachedForListeners(user)
+    detachedForListeners(user),
+    collectionEventFacts(changedFields)
   );
 }
 
 type CollectionEventAction = "created" | "updated" | "deleted";
+
+/**
+ * What a collection event says beside the row: the languages of the change,
+ * as its hooks are told them (`eventLanguage`, absent on a site without
+ * languages), and the fields it changed, where the write knows them.
+ */
+interface CollectionEventFacts {
+  language?: HookLanguage;
+  changedFields?: readonly string[];
+}
+
+/**
+ * The facts of an event announced now: the languages read at this call, as a
+ * hook called here would be told them, and `changedFields` as the write gives
+ * them.
+ */
+function collectionEventFacts(
+  changedFields?: readonly string[]
+): CollectionEventFacts {
+  const language = eventLanguage();
+  return {
+    ...(language === undefined ? {} : { language }),
+    ...(changedFields === undefined ? {} : { changedFields }),
+  };
+}
+
+/**
+ * The payload of `collection.<slug>.<action>`. `locale` (the language the
+ * change was made in; absent for one of every language), `locales` (every
+ * language it involved) and `changedFields` (the top-level fields it changed,
+ * as its outbox event names them) are additive and optional: absent on a site
+ * without languages, and where the write does not know the fields.
+ */
+interface CollectionEventPayload {
+  collection: string;
+  id: unknown;
+  data: Record<string, unknown>;
+  user: unknown;
+  locale?: string;
+  locales?: string[];
+  changedFields?: string[];
+}
 
 /**
  * Put the event on the bus, handed `data` and `user` as they are: the caller
@@ -604,15 +651,23 @@ function deliverCollectionEvent(
   action: CollectionEventAction,
   collection: string,
   data: Record<string, unknown>,
-  user: unknown
+  user: unknown,
+  facts: CollectionEventFacts
 ): void {
+  const { language, changedFields } = facts;
+  const payload: CollectionEventPayload = {
+    collection,
+    id: data.id,
+    data,
+    user,
+    ...(language?.locale === undefined ? {} : { locale: language.locale }),
+    ...(language === undefined ? {} : { locales: [...language.locales] }),
+    ...(changedFields === undefined
+      ? {}
+      : { changedFields: [...changedFields] }),
+  };
   try {
-    getEventBus().emit(`collection.${collection}.${action}`, {
-      collection,
-      id: data.id,
-      data,
-      user,
-    });
+    getEventBus().emit(`collection.${collection}.${action}`, payload);
   } catch {
     // Best-effort — never surface event-dispatch failures to the caller.
   }
@@ -9192,6 +9247,10 @@ export class CollectionMutationService extends BaseService {
       // collection opted out of recording), so the post-commit fast drain is
       // scheduled only for a write that recorded something.
       let recorded = false;
+      // The fields this write changed, by the outbox event's own diff over the
+      // documents it records, for the in-process event; set where the event
+      // is recorded, undefined where none was.
+      let createdChangedFields: string[] | undefined;
       let createdVersion: string | undefined;
       // Verify every localized field group in this payload can actually be written
       // BEFORE the transaction opens. Inside it the probes would borrow a second
@@ -9454,6 +9513,9 @@ export class CollectionMutationService extends BaseService {
         // Append the outbox event in the same transaction, so it commits with
         // the entry and is never recorded for a write that later rolls back.
         const createdDocument = assembleDocument(documentParts);
+        // The fields the outbox event names as changed, from the same
+        // document, for the in-process event announced once this commits.
+        createdChangedFields = computeChangedFields(null, createdDocument);
         recorded = await recordMutationEvent(tx, {
           type: "entry.created",
           resource: {
@@ -9583,7 +9645,8 @@ export class CollectionMutationService extends BaseService {
           "created",
           params.collectionName,
           committed,
-          params.user
+          params.user,
+          createdChangedFields
         );
 
         // Execute afterCreate hooks (code-registered)
@@ -9945,18 +10008,22 @@ export class CollectionMutationService extends BaseService {
         ...localeDocument,
         status: prior,
       };
-      const did = await this.recordStatusEvents(tx, {
-        collection: args.collectionName,
-        id: args.entryId,
-        locale,
-        from: prior,
-        to: args.status,
-        isCreate: false,
-        data: localeDocument,
-        previous: localePrevious,
-        fields: args.fields,
-        actor: args.actor,
-      });
+      // A language the write swept names itself alone, as a publish of every
+      // language's per-language events do.
+      const did = await withRuleLanguage({ locale, locales: [locale] }, () =>
+        this.recordStatusEvents(tx, {
+          collection: args.collectionName,
+          id: args.entryId,
+          locale,
+          from: prior,
+          to: args.status,
+          isCreate: false,
+          data: localeDocument,
+          previous: localePrevious,
+          fields: args.fields,
+          actor: args.actor,
+        })
+      );
       recorded = recorded || did;
       // Carried out so the post-commit replay reaches in-process workflow
       // subscribers with THIS language's document, without reading it twice.
@@ -10932,6 +10999,10 @@ export class CollectionMutationService extends BaseService {
       // Set inside the transaction when the publish records its outbox events, so
       // the caller can flush the drain after IT commits.
       let eventRecorded = false;
+      // The fields this write changed, by the outbox event's own diff over the
+      // documents it records, for the in-process event; set where the event
+      // is recorded, undefined where none was.
+      let publishChangedFields: string[] | undefined;
       // Set inside the transaction when the row is gone by the time the lock is
       // taken (deleted between the pre-transaction read and the lock), so the
       // publish records nothing and the caller answers not-found rather than
@@ -11812,6 +11883,12 @@ export class CollectionMutationService extends BaseService {
           ? "published"
           : (priorLanguageStatuses.find(status => status !== "published") ??
             null);
+        // The fields the outbox event names as changed, for the in-process
+        // event announced once this commits.
+        publishChangedFields = computeChangedFields(
+          previousDocument,
+          publishedDocument
+        );
         const baseRecorded = await recordMutationEvent(tx, {
           type: "entry.updated",
           resource: {
@@ -11924,41 +12001,52 @@ export class CollectionMutationService extends BaseService {
               typeof language.priorStatus === "string"
                 ? language.priorStatus
                 : null;
-            const updatedRecorded = await recordMutationEvent(tx, {
-              type: "entry.updated",
-              resource: {
-                kind: "entry",
+            // One language's events name that language alone, as the
+            // after-hook run for its change is told it.
+            const inThisLanguage = <T>(record: () => Promise<T>) =>
+              withRuleLanguage(
+                { locale: language.locale, locales: [language.locale] },
+                record
+              );
+            const updatedRecorded = await inThisLanguage(() =>
+              recordMutationEvent(tx, {
+                type: "entry.updated",
+                resource: {
+                  kind: "entry",
+                  collection: params.collectionName,
+                  id: params.entryId,
+                  locale: language.locale,
+                },
+                data,
+                previous,
+                fields: publishEventFields,
+                actor: publishActor,
+                publication: {
+                  statusAfter: direction.nextStatus,
+                  statusBefore,
+                  promotedPendingEdits: language.promoted,
+                  requestEdits: promotions.some(
+                    p => p.locale === language.locale && p.carriesContent
+                  ),
+                },
+              })
+            );
+            eventRecorded = updatedRecorded || eventRecorded;
+            if (!taggedTransitions.has(language.locale)) continue;
+            const localeRecorded = await inThisLanguage(() =>
+              this.recordStatusEvents(tx, {
                 collection: params.collectionName,
                 id: params.entryId,
                 locale: language.locale,
-              },
-              data,
-              previous,
-              fields: publishEventFields,
-              actor: publishActor,
-              publication: {
-                statusAfter: direction.nextStatus,
-                statusBefore,
-                promotedPendingEdits: language.promoted,
-                requestEdits: promotions.some(
-                  p => p.locale === language.locale && p.carriesContent
-                ),
-              },
-            });
-            eventRecorded = updatedRecorded || eventRecorded;
-            if (!taggedTransitions.has(language.locale)) continue;
-            const localeRecorded = await this.recordStatusEvents(tx, {
-              collection: params.collectionName,
-              id: params.entryId,
-              locale: language.locale,
-              from: statusBefore,
-              to: direction.nextStatus,
-              isCreate: false,
-              data,
-              previous,
-              fields: publishEventFields,
-              actor: publishActor,
-            });
+                from: statusBefore,
+                to: direction.nextStatus,
+                isCreate: false,
+                data,
+                previous,
+                fields: publishEventFields,
+                actor: publishActor,
+              })
+            );
             eventRecorded = localeRecorded || eventRecorded;
             // Remember the transition so the same locale is replayed to the
             // in-process workflow subscribers post-commit, the way the
@@ -12063,18 +12151,23 @@ export class CollectionMutationService extends BaseService {
               components: localeComponents,
               manyToMany: localeM2M,
             });
-            const localeRecorded = await this.recordStatusEvents(tx, {
-              collection: params.collectionName,
-              id: params.entryId,
-              locale,
-              from: priorLocaleStatus,
-              to: direction.nextStatus,
-              isCreate: false,
-              data: localeData,
-              previous: localePrevious,
-              fields: publishEventFields,
-              actor: publishActor,
-            });
+            // This language's events name it alone, as on a publish above.
+            const localeRecorded = await withRuleLanguage(
+              { locale, locales: [locale] },
+              () =>
+                this.recordStatusEvents(tx, {
+                  collection: params.collectionName,
+                  id: params.entryId,
+                  locale,
+                  from: priorLocaleStatus,
+                  to: direction.nextStatus,
+                  isCreate: false,
+                  data: localeData,
+                  previous: localePrevious,
+                  fields: publishEventFields,
+                  actor: publishActor,
+                })
+            );
             eventRecorded = localeRecorded || eventRecorded;
             // Replayed post-commit, as for a publish above.
             perLocaleTransitions.push({
@@ -12250,7 +12343,8 @@ export class CollectionMutationService extends BaseService {
               "updated",
               params.collectionName,
               updated as Record<string, unknown>,
-              params.user
+              params.user,
+              publishChangedFields
             );
           }
         } catch {
@@ -16937,6 +17031,10 @@ export class CollectionMutationService extends BaseService {
       // resolves, so a rolled-back attempt (a version conflict) or a commit
       // failure never flags a durable event that isn't there.
       let recorded = false;
+      // The fields this write changed, by the outbox event's own diff over the
+      // documents it records, for the in-process event; set where the event
+      // is recorded, undefined where none was.
+      let updatedChangedFields: string[] | undefined;
       // Set when this update was stored as a working draft (see the split below).
       // The live row is left untouched, so the row re-fetched after the
       // transaction is the OLD published content; the response, afterUpdate/
@@ -18241,6 +18339,13 @@ export class CollectionMutationService extends BaseService {
               workingDraftDocument
             );
             if (!storeAsWorkingDraft) {
+              // The fields the outbox event names as changed, from the same
+              // two documents, for the in-process event announced once this
+              // commits.
+              updatedChangedFields = computeChangedFields(
+                previousDocument,
+                workingDraftDocument ?? updatedDocument
+              );
               recorded = await recordMutationEvent(tx, {
                 type: "entry.updated",
                 resource: {
@@ -18676,7 +18781,8 @@ export class CollectionMutationService extends BaseService {
             "updated",
             params.collectionName,
             updatedAtCommit,
-            params.user
+            params.user,
+            updatedChangedFields
           );
         }
 
@@ -20662,6 +20768,10 @@ export class CollectionMutationService extends BaseService {
       // False when the collection opted out of recording, so the post-commit
       // drain is not scheduled for a delete that recorded nothing.
       let recorded = false;
+      // The fields this write changed, by the outbox event's own diff over the
+      // documents it records, for the in-process event; set where the event
+      // is recorded, undefined where none was.
+      let deletedChangedFields: string[] | undefined;
       // Set when the locked row is outside the caller's filter: a concurrent
       // write moved it out after the check above, and nothing is deleted.
       let refusedUnderLock: CollectionServiceResult | null = null;
@@ -20814,6 +20924,9 @@ export class CollectionMutationService extends BaseService {
         // post-delete state, so `previous` is null (mirroring create, which
         // carries only `data`). `locale` is set only for a localized collection,
         // so a receiver knows which translation the payload represents.
+        // The fields the outbox event names, from the same document, for the
+        // in-process event announced once this commits.
+        deletedChangedFields = computeChangedFields(null, deletedDocument);
         recorded = await recordMutationEvent(tx, {
           type: "entry.deleted",
           resource: {
@@ -20889,7 +21002,8 @@ export class CollectionMutationService extends BaseService {
           "deleted",
           params.collectionName,
           deleted,
-          params.user
+          params.user,
+          deletedChangedFields
         );
 
         // Execute afterDelete hooks (code-registered)
@@ -21798,8 +21912,11 @@ export class CollectionMutationService extends BaseService {
   ): Promise<void> {
     const committed = detachedForListeners(row);
     const by = detachedForListeners(user);
+    // The languages read now, inside the write, rather than when the caller's
+    // transaction commits, which may happen outside the write's languages.
+    const facts = collectionEventFacts();
     return this.afterCommit(() =>
-      deliverCollectionEvent(action, collectionName, committed, by)
+      deliverCollectionEvent(action, collectionName, committed, by, facts)
     );
   }
 

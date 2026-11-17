@@ -2859,14 +2859,20 @@ export class SinglePublishAllService extends BaseService {
           ? (["single.updated"] as const)
           : (["single.updated", "single.published"] as const);
       for (const type of types) {
-        const localeRecorded = await recordMutationEvent(tx, {
-          type,
-          resource: { ...resource, locale },
-          data,
-          previous,
-          fields: webhookFields,
-          actor: plan.actor,
-        });
+        // This language's events name it alone, as the after-hook run for
+        // its change is told it.
+        const localeRecorded = await withRuleLanguage(
+          { locale, locales: [locale] },
+          () =>
+            recordMutationEvent(tx, {
+              type,
+              resource: { ...resource, locale },
+              data,
+              previous,
+              fields: webhookFields,
+              actor: plan.actor,
+            })
+        );
         recorded = localeRecorded || recorded;
       }
     }

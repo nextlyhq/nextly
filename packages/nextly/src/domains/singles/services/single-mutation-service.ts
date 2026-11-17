@@ -5757,21 +5757,27 @@ export class SingleMutationService extends BaseService {
                 // would be worse than none, because a consumer cannot tell it
                 // is wrong.
                 const localeDoc = { ...dataDoc, ...localeValues };
-                await recordMutationEvent(tx, {
-                  type: nowPublished
-                    ? "single.published"
-                    : "single.unpublished",
-                  resource: {
-                    kind: "single",
-                    slug,
-                    id: existingDoc.id,
-                    locale,
-                  },
-                  data: localeDoc,
-                  previous: { ...localeDoc, status: prior },
-                  fields: webhookFields,
-                  actor,
-                });
+                // Read before the callback below, where the document's
+                // narrowing to non-null does not reach.
+                const documentId = existingDoc.id;
+                // A swept language's event names it alone.
+                await withRuleLanguage({ locale, locales: [locale] }, () =>
+                  recordMutationEvent(tx, {
+                    type: nowPublished
+                      ? "single.published"
+                      : "single.unpublished",
+                    resource: {
+                      kind: "single",
+                      slug,
+                      id: documentId,
+                      locale,
+                    },
+                    data: localeDoc,
+                    previous: { ...localeDoc, status: prior },
+                    fields: webhookFields,
+                    actor,
+                  })
+                );
               }
             }
           }
