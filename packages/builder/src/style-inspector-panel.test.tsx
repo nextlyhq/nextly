@@ -6366,5 +6366,10 @@ describe("what the Style tab tells the panel's filter", () => {
     expect(set).not.toContain("backgroundColor");
     // And says a shared style is the target, which draws no block shortcuts.
     expect(report.mock.lastCall?.[0]?.shared).toBe(true);
+    // And reports the style's own values at every state and device, which
+    // "Also changed on" reads, not the block's.
+    expect(report.mock.lastCall?.[0]?.styles).toEqual({
+      base: { [BASE_BREAKPOINT]: { color: "#ff0000" } },
+    });
   });
 });

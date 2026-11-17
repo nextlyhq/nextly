@@ -89,6 +89,7 @@ import {
   type EditedAddress,
 } from "./style-field-surroundings";
 import {
+  fieldStyles,
   sharedStyleNamer,
   targetProvenance,
   targetReadOnly,
@@ -490,7 +491,8 @@ function StyleInspectorBody({
   useReportStyle(
     inspection?.nodeId,
     inspection?.sections,
-    target.kind === "shared"
+    target.kind === "shared",
+    editedStyles(target, editor)
   );
 
   const chooseForm = (property: string, path: readonly string[], arm: number) =>
@@ -790,4 +792,13 @@ function sharesItsId(editor: EditorState, id: string): boolean {
     if (node.id === id) seen += 1;
   });
   return seen > 1;
+}
+
+/**
+ * The edited target's own styles at every state and device, as the controls
+ * read them: a shared style's while one is the target, the block's otherwise.
+ */
+function editedStyles(target: StyleTarget, editor: EditorState): unknown {
+  if (editor.selectedId === null) return undefined;
+  return fieldStyles(target, editor, editor.selectedId).styles;
 }

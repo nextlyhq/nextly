@@ -66,10 +66,11 @@ export interface VariableRowProps {
   /** Adds a copy right below, and opens it. */
   onDuplicate: () => void;
   /**
-   * Just added and shown though the search does not match it, until its
-   * editor closes: marked "New", so its place in a narrowed list is clear.
+   * Just added or copied and never saved, while its editor is open: its
+   * editor's code name follows its name as it is typed. `marked` while a
+   * search would hide it, so it shows marked "New" in a narrowed list.
    */
-  marked?: boolean;
+  fresh?: { readonly marked: boolean } | undefined;
   /** How widely it is used, where the host reads it. */
   usage: VariableUsageHere | undefined;
   /** Every variable the row stands for, together, once read. */
@@ -93,7 +94,7 @@ export function VariableRow({
   onChange,
   onRemoved,
   onDuplicate,
-  marked = false,
+  fresh,
   usage,
   reach,
 }: VariableRowProps): React.JSX.Element {
@@ -129,41 +130,18 @@ export function VariableRow({
                 row={button}
               />
             ) : (
-              <CountTip reach={reach} quiet={open || menuOpen}>
-                <PopoverTrigger asChild>
-                  <button
-                    ref={button}
-                    type="button"
-                    className="nx-vars__row"
-                    data-variable-key={entry.row.key}
-                    // The visible name first, then the values the swatch
-                    // shows, so a screen reader hears both and speech input
-                    // still matches.
-                    aria-label={rowLabel({
-                      entry,
-                      token,
-                      tokens,
-                      mode,
-                      reach,
-                      marked,
-                    })}
-                    data-kind={entry.row.kind}
-                    // Drawn as chosen while its editor is open. Its own mark:
-                    // the row's tooltip sets `data-state` too, over the
-                    // popover's.
-                    data-open={markOf(open)}
-                    onKeyDown={onKeyDown}
-                  >
-                    <RowFace
-                      entry={entry}
-                      token={token}
-                      tokens={tokens}
-                      mode={mode}
-                      marked={marked}
-                    />
-                  </button>
-                </PopoverTrigger>
-              </CountTip>
+              <RowTrigger
+                entry={entry}
+                token={token}
+                tokens={tokens}
+                mode={mode}
+                reach={reach}
+                marked={fresh?.marked === true}
+                open={open}
+                quiet={open || menuOpen}
+                button={button}
+                onKeyDown={onKeyDown}
+              />
             )}
             {changing ? (
               <RowMenu
@@ -196,11 +174,69 @@ export function VariableRow({
           onChange={onChange}
           onRemoved={onRemoved}
           removing={removing}
+          isNew={fresh !== undefined}
           usage={usage}
           handOff={handOff}
         />
       </Popover>
     </li>
+  );
+}
+
+/**
+ * The row's button, which opens its editor: named by the visible name, then
+ * the values the swatch shows, so a screen reader hears both and speech
+ * input still matches; its tooltip says how widely it is used.
+ */
+function RowTrigger({
+  entry,
+  token,
+  tokens,
+  mode,
+  reach,
+  marked,
+  open,
+  quiet,
+  button,
+  onKeyDown,
+}: {
+  entry: VariableEntry;
+  token: SiteToken | undefined;
+  tokens: SiteTokenSet;
+  mode: TokenMode;
+  reach: VariableReach | undefined;
+  marked: boolean;
+  open: boolean;
+  /** The tooltip stays closed: the editor or the menu is open. */
+  quiet: boolean;
+  button: React.RefObject<HTMLButtonElement | null>;
+  onKeyDown: ((event: React.KeyboardEvent) => void) | undefined;
+}): React.JSX.Element {
+  return (
+    <CountTip reach={reach} quiet={quiet}>
+      <PopoverTrigger asChild>
+        <button
+          ref={button}
+          type="button"
+          className="nx-vars__row"
+          data-variable-key={entry.row.key}
+          aria-label={rowLabel({ entry, token, tokens, mode, reach, marked })}
+          data-kind={entry.row.kind}
+          // Drawn as chosen while its editor is open. Its own mark: the
+          // row's tooltip sets `data-state` too, over the popover's.
+          data-open={markOf(open)}
+          onKeyDown={onKeyDown}
+        >
+          <RowFace
+            entry={entry}
+            token={token}
+            tokens={tokens}
+            mode={mode}
+            marked={marked}
+          />
+        </button>
+      </PopoverTrigger>
+    </CountTip>
   );
 }
 

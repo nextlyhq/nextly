@@ -500,7 +500,7 @@ describe("the editor beside the panel", () => {
     await waitFor(() =>
       expect(document.activeElement).toBe(within(editor).getByLabelText("Name"))
     );
-    expect(within(editor).getByText("color.brand")).toBeDefined();
+    expect(within(editor).getByText("--site-color-brand")).toBeDefined();
     escape();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(document.activeElement).toBe(row(/^Brand/));
@@ -593,7 +593,7 @@ describe("the editor beside the panel", () => {
     enter(within(editor).getByLabelText("Dark"), "#e7e9ee");
     expect(darkOf()).toBe("#e7e9ee");
     fireEvent.click(
-      within(editor).getByRole("button", { name: "Use light value" })
+      within(editor).getByRole("button", { name: "Remove dark value" })
     );
     expect(darkOf()).toBeUndefined();
   });
@@ -815,32 +815,42 @@ describe("import and export", () => {
   });
 });
 
-describe("dark values for every kind", () => {
-  it("gives a spacing variable Light, then Dark that can be added, changed and cleared", async () => {
+describe("dark values where they make sense", () => {
+  it("gives a spacing variable Light only, with no dark value to add", async () => {
+    render(<Hosted tokens={SITE} />);
+    const editor = await openEditor(/^Space 4/);
+    expect(sizeShown(within(editor).getByLabelText("Light"))).toBe("1rem");
+    expect(within(editor).queryByText("Same as light")).toBeNull();
+    expect(
+      within(editor).queryByRole("button", { name: /^Add dark value/ })
+    ).toBeNull();
+    expect(within(editor).queryByLabelText("Dark")).toBeNull();
+  });
+
+  it("shows a spacing variable's dark value from an import, changes it, and removes it", async () => {
     const onChange = vi.fn();
-    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const imported: SiteTokenSet = {
+      tokens: SITE.tokens.map(token =>
+        token.name === "space.4"
+          ? { ...token, values: { light: "1rem", dark: "1.5rem" } }
+          : token
+      ),
+    };
+    render(<Hosted tokens={imported} onChange={onChange} />);
     const editor = await openEditor(/^Space 4/);
     const darkOf = () =>
       (onChange.mock.calls.at(-1)?.[0] as SiteTokenSet).tokens[4]?.values.dark;
-    expect(sizeShown(within(editor).getByLabelText("Light"))).toBe("1rem");
-    expect(within(editor).getByText("Same as light")).toBeDefined();
-    fireEvent.click(
-      within(editor).getByRole("button", { name: "Add dark value" })
-    );
-    expect(darkOf()).toBe("1rem");
     enter(within(editor).getByLabelText("Dark"), "2rem");
     expect(darkOf()).toBe("2rem");
     fireEvent.click(
-      within(editor).getByRole("button", { name: "Use light value" })
+      within(editor).getByRole("button", { name: "Remove dark value" })
     );
     expect(darkOf()).toBeUndefined();
   });
 
-  it("lays a type size out as one pair: two Light values, one action for both darks", async () => {
-    const onChange = vi.fn();
-    render(<Hosted tokens={SITE} onChange={onChange} />);
+  it("lays a type size out as one pair: two Light values, and no dark value to add", async () => {
+    render(<Hosted tokens={SITE} />);
     const editor = await openEditor(/^Body/);
-    const saved = () => onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
     expect(sizeShown(within(editor).getByLabelText("Size, light"))).toBe(
       "16px"
     );
@@ -848,21 +858,31 @@ describe("dark values for every kind", () => {
       "value",
       "26px"
     );
-    // One line and one action for the pair while neither has a dark value.
-    expect(within(editor).getAllByText("Same as light")).toHaveLength(1);
+    expect(within(editor).queryByText("Same as light")).toBeNull();
     expect(
-      within(editor).queryAllByRole("button", { name: /^Add dark value/ })
-    ).toHaveLength(1);
-    fireEvent.click(
-      within(editor).getByRole("button", { name: "Add dark values" })
-    );
-    expect(saved().tokens[2]?.values).toEqual({ light: "16px", dark: "16px" });
-    expect(saved().tokens[3]?.values).toEqual({ light: "26px", dark: "26px" });
+      within(editor).queryByRole("button", { name: /^Add dark value/ })
+    ).toBeNull();
+  });
+
+  it("keeps a type size's dark values from an import, with one action that removes both", async () => {
+    const onChange = vi.fn();
+    const imported: SiteTokenSet = {
+      tokens: SITE.tokens.map(token =>
+        token.name === "font-size.body"
+          ? { ...token, values: { light: "16px", dark: "18px" } }
+          : token.name === "line-height.body"
+            ? { ...token, values: { light: "26px", dark: "28px" } }
+            : token
+      ),
+    };
+    render(<Hosted tokens={imported} onChange={onChange} />);
+    const editor = await openEditor(/^Body/);
+    const saved = () => onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
     enter(within(editor).getByLabelText("Line height, dark"), "30px");
     expect(saved().tokens[3]?.values).toEqual({ light: "26px", dark: "30px" });
     expect(within(editor).getByLabelText("Size, dark")).toBeDefined();
     fireEvent.click(
-      within(editor).getByRole("button", { name: "Use light values" })
+      within(editor).getByRole("button", { name: "Remove dark value" })
     );
     expect(saved().tokens[2]?.values).toEqual({ light: "16px" });
     expect(saved().tokens[3]?.values).toEqual({ light: "26px" });
@@ -891,14 +911,11 @@ describe("a type size's line height", () => {
     const editor = await openEditor(/^Body/);
     enter(within(editor).getByLabelText("Line height, light"), "1.4");
     expect(
-      within(editor).getByText(
-        "Dark now follows the light value; set a dark value again if you need one."
-      )
+      within(editor).getByText("Dark now follows the light value.")
     ).toBeDefined();
   });
 
-  const FOLLOWS =
-    "Dark now follows the light value; set a dark value again if you need one.";
+  const FOLLOWS = "Dark now follows the light value.";
   const BOTH: SiteTokenSet = {
     tokens: [
       { name: "font-size.body", kind: "dimension", values: { light: "16px" } },
@@ -909,17 +926,6 @@ describe("a type size's line height", () => {
       },
     ],
   };
-
-  it("drops the dark-follows note when Add dark values sets dark again", async () => {
-    render(<Hosted tokens={BOTH} />);
-    const editor = await openEditor(/^Body/);
-    enter(within(editor).getByLabelText("Line height, light"), "1.4");
-    expect(within(editor).getByText(FOLLOWS)).toBeDefined();
-    fireEvent.click(
-      within(editor).getByRole("button", { name: "Add dark values" })
-    );
-    expect(within(editor).queryByText(FOLLOWS)).toBeNull();
-  });
 
   it("drops the dark-follows note when Reset puts the code's values back", async () => {
     render(<Hosted tokens={BOTH} supplied={BOTH} />);

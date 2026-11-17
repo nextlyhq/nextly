@@ -465,10 +465,108 @@
 
 .nx-vars-editor__code {
   margin: 0;
-  font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 11px;
   color: var(--nx-muted-foreground);
   overflow-wrap: anywhere;
+}
+
+.nx-vars-editor__code code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--nx-foreground);
+}
+
+/* ☀ or ☾ before "Light" or "Dark", muted beside the words. */
+.nx-vars-editor__mode-icon {
+  margin-inline-end: 0.25rem;
+  vertical-align: -1px;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-vars-editor__contrast-line .nx-vars-editor__mode-icon {
+  margin-inline-end: 0;
+}
+
+/* "Code name: --site-…", Copy at its end, the rename note under it. */
+.nx-vars-editor__code-name {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 0.5rem;
+}
+
+.nx-vars-editor__copy {
+  font-size: 11px;
+}
+
+.nx-vars-editor__copied {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-vars-editor__copied:empty {
+  display: none;
+}
+
+.nx-vars-editor__hint {
+  grid-column: 1 / -1;
+  margin: 0.125rem 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--nx-muted-foreground);
+}
+
+/* How widely it is used, and where on request. */
+.nx-vars-editor__usage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.5rem;
+  font-size: var(--text-xs);
+}
+
+.nx-vars-editor__usage > .nx-vars-editor__status {
+  margin-inline-end: 0;
+}
+
+/* Contrast with Background and Text: each a name over its light and dark
+   lines, the ratio in figures of one width so the two lines read down. */
+.nx-vars-editor__contrast {
+  display: grid;
+  gap: 0.375rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--nx-border);
+}
+
+.nx-vars-editor__contrast-pair {
+  display: grid;
+  gap: 0.125rem;
+  font-size: 11px;
+}
+
+.nx-vars-editor__contrast-name {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-vars-editor__contrast-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 0.25rem;
+}
+
+.nx-vars-editor__ratio {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.nx-vars-editor__contrast-line[data-band="Low contrast"]
+  .nx-vars-editor__ratio {
+  color: var(--nx-destructive);
+}
+
+.nx-vars-editor__same-dark {
+  color: var(--nx-muted-foreground);
 }
 
 .nx-vars-editor__mono {
