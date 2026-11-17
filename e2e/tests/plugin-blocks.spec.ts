@@ -173,6 +173,13 @@ test.describe("blocks a plugin contributes", () => {
     // What every block keeps beside its own inspector: the Advanced tab,
     // where the CSS id and attributes live.
     await page.getByRole("tab", { name: "Advanced" }).click();
+    // HTML starts closed on a block whose HTML holds nothing.
+    const html = page
+      .getByTestId("inspector")
+      .locator('[data-section="html"] [data-slot="accordion-trigger"]');
+    if ((await html.getAttribute("aria-expanded")) !== "true") {
+      await html.click();
+    }
     const cssId = page.getByRole("textbox", { name: "CSS id" });
     await cssId.fill("fixture-anchor");
     await cssId.press("Enter");

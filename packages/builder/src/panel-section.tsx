@@ -93,7 +93,14 @@ export function PanelSections({
             label={section.label}
             holdsValues={section.holdsValue}
           />
-          <AccordionContent forceMount className="nx-panel-section__body">
+          {/* Kept mounted but hidden while closed: forced present, the
+              accordion would otherwise leave a closed section's controls
+              on screen and in the Tab order. */}
+          <AccordionContent
+            forceMount
+            hidden={!open.includes(section.key)}
+            className="nx-panel-section__body"
+          >
             {section.body}
           </AccordionContent>
         </AccordionItem>

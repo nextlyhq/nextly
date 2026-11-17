@@ -97,6 +97,19 @@ function editorFor(id: string, document: BlockDocument = PAGE): EditorState {
 }
 
 /** The panel with `id` selected, re-selectable as an author clicks blocks. */
+/**
+ * Open Advanced's HTML section unless it is open: it starts closed on a block
+ * whose HTML holds nothing.
+ */
+function openHtmlSection(): void {
+  const header = document.querySelector<HTMLElement>(
+    '[data-section="html"] [data-slot="accordion-trigger"]'
+  );
+  if (header !== null && header.getAttribute("aria-expanded") !== "true") {
+    fireEvent.click(header);
+  }
+}
+
 function mount(id: string, styleState?: StyleStateBinding) {
   const view = render(
     <InspectorPanel editor={editorFor(id)} styleState={styleState} />
@@ -273,6 +286,7 @@ describe("the shared settings in Advanced", () => {
   it("are drawn by the builder for a block that declares no settings", () => {
     mount("spacer");
     choose("Advanced");
+    openHtmlSection();
     const advanced = screen.getByRole("tabpanel", { name: "Advanced" });
 
     expect(within(advanced).getByText("Visible on")).toBeTruthy();
@@ -286,6 +300,7 @@ describe("the shared settings in Advanced", () => {
   it("put Visibility before HTML, and the CSS id under HTML", () => {
     mount("button");
     choose("Advanced");
+    openHtmlSection();
     const advanced = screen.getByRole("tabpanel", { name: "Advanced" });
 
     // The tab's own section headers, in order; a control's own title (Show

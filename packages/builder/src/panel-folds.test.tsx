@@ -305,4 +305,87 @@ describe("the panel's sections inside the shell", () => {
     expect(spacing.textContent).toContain("has changes");
     expect(header("Layout").textContent).not.toContain("has changes");
   });
+
+  it("hides a collapsed section's controls while keeping them mounted", () => {
+    render(shellWith("button", memoryStore()));
+    openTab("Advanced");
+    // HTML starts closed on a Button, so its CSS id is hidden already.
+    expect(screen.queryByRole("textbox", { name: "CSS id" })).toBe(null);
+    const options = screen.getByRole("button", { name: "Panel options" });
+    fireEvent.keyDown(options, { key: "Enter" });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Expand all" }));
+    expect(screen.getByRole("textbox", { name: "CSS id" })).toBeDefined();
+    fireEvent.keyDown(options, { key: "Enter" });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Collapse all" }));
+    // Out of sight and out of the Tab order, though still in the page.
+    expect(screen.queryByRole("textbox", { name: "CSS id" })).toBe(null);
+    const field = document.querySelector<HTMLInputElement>(
+      '[data-section="html"] input'
+    );
+    expect(field).not.toBe(null);
+    expect(field?.closest("[hidden]")).not.toBe(null);
+  });
 });
+
+describe("a block's own Advanced settings named after a built-in section", () => {
+  it("joins the built-in Visibility section rather than a second one", () => {
+    clearBlocks();
+    registerBlocks(
+      [
+        ...coreBlocks,
+        {
+          name: "test/tracked",
+          version: 1,
+          description: "A tracked block.",
+          editor: { label: "Tracked" },
+          example: { props: {} },
+          props: {
+            track: {
+              type: "checkbox",
+              label: "Count views",
+              group: "advanced",
+              section: "Visibility",
+            },
+          },
+          defaultProps: {},
+          render: () => null,
+        },
+      ] as never,
+      { source: "core" }
+    );
+    const page = {
+      ...PAGE,
+      nodes: [...PAGE.nodes, nodeOf2("tracked", "test/tracked")],
+    } as BlockDocument;
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        inspector={
+          <InspectorPanel
+            editor={{ ...editorFor("tracked"), document: page } as EditorState}
+          />
+        }
+      />
+    );
+    openTab("Advanced");
+    const advanced = screen.getByRole("tabpanel", { name: "Advanced" });
+    expect(
+      [
+        ...advanced.querySelectorAll(
+          "[data-section] > h3 .nx-style-inspector__section-label"
+        ),
+      ].map(label => label.firstChild?.textContent)
+    ).toEqual(["Visibility", "HTML"]);
+    const visibility = advanced.querySelector<HTMLElement>(
+      '[data-section="visibility"]'
+    );
+    if (visibility === null) throw new Error("no Visibility section");
+    expect(within(visibility).getByText("Count views")).toBeDefined();
+  });
+});
+
+/** A block of a type registered here, at version 1. */
+function nodeOf2(id: string, type: string): BlockNode {
+  return { id, type, version: 1, props: {} } as BlockNode;
+}

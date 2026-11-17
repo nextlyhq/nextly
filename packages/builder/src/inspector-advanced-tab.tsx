@@ -98,11 +98,9 @@ function DrawnAdvancedTab({
   );
   // The block's own Advanced settings, by section: those in HTML are drawn
   // above the CSS id, the others in sections of their own after it.
-  const own = block.sections.advanced;
-  const htmlRows =
-    own.find(section => section.label === HTML_SECTION)?.rows ?? [];
-  const others = own.filter(section => section.label !== HTML_SECTION);
-  // The block's own settings, drawn by the same generated fields as Content.
+  const { htmlRows, visibilityRows, others } = advancedRowsBySection(
+    block.sections.advanced
+  );
   const fieldsFor = (rows: readonly EditableProp[]): React.JSX.Element => (
     <ContentFields
       inspection={block}
@@ -161,6 +159,8 @@ function DrawnAdvancedTab({
         heldBy={designLocked}
         reasonId={reasonId}
       />
+      {/* The block's own settings it places in Visibility. */}
+      {visibilityRows.length === 0 ? null : fieldsFor(visibilityRows)}
     </>
   );
   const html = (
@@ -198,16 +198,14 @@ function DrawnAdvancedTab({
         {
           key: "visibility",
           label: VISIBILITY_SECTION,
-          holdsValue: visibilityHoldsValue(node),
+          holdsValue:
+            visibilityHoldsValue(node) || rowsHoldValue(visibilityRows),
           body: visibility,
         },
         {
           key: "html",
           label: HTML_SECTION,
-          holdsValue:
-            block.html.cssId !== undefined ||
-            block.html.attributes !== undefined ||
-            rowsHoldValue(htmlRows),
+          holdsValue: htmlHoldsValue(block, htmlRows),
           body: html,
         },
         ...others.map(section => ({
@@ -218,6 +216,40 @@ function DrawnAdvancedTab({
         })),
       ]}
     />
+  );
+}
+
+/**
+ * A block's own Advanced settings by where they are drawn: its Visibility and
+ * HTML settings join the builder's sections of those names, so each is one
+ * section, folded as one; any other section it declares is its own.
+ */
+function advancedRowsBySection(own: BlockInspection["sections"]["advanced"]): {
+  htmlRows: readonly EditableProp[];
+  visibilityRows: readonly EditableProp[];
+  others: BlockInspection["sections"]["advanced"];
+} {
+  const rowsOf = (label: string) =>
+    own.find(section => section.label === label)?.rows ?? [];
+  return {
+    htmlRows: rowsOf(HTML_SECTION),
+    visibilityRows: rowsOf(VISIBILITY_SECTION),
+    others: own.filter(
+      section =>
+        section.label !== HTML_SECTION && section.label !== VISIBILITY_SECTION
+    ),
+  };
+}
+
+/** Whether the block's HTML holds a value: a CSS id, attributes, a setting. */
+function htmlHoldsValue(
+  block: BlockInspection,
+  rows: readonly EditableProp[]
+): boolean {
+  return (
+    block.html.cssId !== undefined ||
+    block.html.attributes !== undefined ||
+    rowsHoldValue(rows)
   );
 }
 
