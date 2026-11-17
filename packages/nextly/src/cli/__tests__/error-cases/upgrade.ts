@@ -5,6 +5,7 @@
  * @module cli/__tests__/error-cases/upgrade
  */
 import { NextlyError } from "../../../errors/nextly-error";
+import { CliError } from "../../errors";
 
 import type { ErrorCases } from "./types";
 
@@ -44,24 +45,41 @@ export const UPGRADE_CASES = {
       logContext: { reason: "migrate-backup-declined" },
     }),
   // As `ledgerUnreadable` in `cli/commands/legacy-bookkeeping.ts` throws it.
-  UPGRADE_LEDGER_UNREADABLE: () =>
+  MIGRATE_LEDGER_UNREADABLE: () =>
     new NextlyError({
       code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
       publicMessage:
         'The table "nextly_migrations" holds records `nextly migrate` cannot read: the record of 0001_init.sql has the status "rolled_back". ' +
         "Rename the table if Nextly did not create it, then run `nextly migrate` again.",
       logContext: {
-        reason: "legacy-ledger-unreadable",
+        reason: "migrate-ledger-unreadable",
         table: "nextly_migrations",
       },
     }),
-  // As `planMove` in `cli/commands/legacy-bookkeeping.ts` throws it.
-  UPGRADE_EVENTS_TABLE_TAKEN: () =>
+  // As `planMove` in the same module throws it.
+  MIGRATE_EVENTS_TABLE_TAKEN: () =>
     new NextlyError({
       code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
       publicMessage:
         'A table named "nextly_schema_events" already exists with an unexpected ' +
         "shape. Rename it, then run `nextly migrate` again.",
-      logContext: { table: "nextly_schema_events" },
+      logContext: {
+        reason: "migrate-events-table-taken",
+        table: "nextly_schema_events",
+      },
+    }),
+  // Retired: as `nextly upgrade` ended with it while it moved the migration records.
+  UPGRADE_LEDGER_UNREADABLE: () =>
+    new CliError("UPGRADE_LEDGER_UNREADABLE", {
+      what: 'The table "nextly_migrations" holds records `nextly upgrade` cannot read: the record of 0001_init.sql has the status "rolled_back".',
+      why: "`nextly upgrade` moves the records an earlier release kept in `nextly_migrations` into `nextly_schema_events`, and reads every one before writing any. One of them it cannot read, so nothing was changed.",
+      next: "Rename the table if Nextly did not create it, then run `nextly upgrade` again.",
+    }),
+  // Retired: as `nextly upgrade` ended with it while it moved the migration records.
+  UPGRADE_EVENTS_TABLE_TAKEN: () =>
+    new CliError("UPGRADE_EVENTS_TABLE_TAKEN", {
+      what: 'A table named "nextly_schema_events" already exists with an unexpected shape.',
+      why: '`nextly upgrade` moves the migration records into "nextly_schema_events", and the table there does not have the columns it writes. Nothing was changed.',
+      next: "Rename it, or re-run with `--target-table-name <name>`.",
     }),
 } satisfies ErrorCases;

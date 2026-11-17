@@ -199,8 +199,8 @@
   "UNIQUE_INDEX_NAME_TAKEN": "`nextly migrate` would make a one-to-one relationship unique under an index name another object already holds.",
   "UPGRADE_BACKUP_NOT_CONFIRMED": "`nextly upgrade` would change the database, and no backup was confirmed, with no terminal attached to ask.",
   "UPGRADE_CANCELLED": "The backup prompt of `nextly upgrade` was answered no, so the upgrade did not run.",
-  "UPGRADE_EVENTS_TABLE_TAKEN": "A table of another shape already has the name the migration records of an earlier release are moved into.",
-  "UPGRADE_LEDGER_UNREADABLE": "A `nextly_migrations` table holds records Nextly cannot read, so none of them was moved.",
+  "UPGRADE_EVENTS_TABLE_TAKEN": "A table of another shape already has the name `nextly upgrade` moves the migration records into.",
+  "UPGRADE_LEDGER_UNREADABLE": "`nextly upgrade` found a `nextly_migrations` table holding records it cannot read, so it moved none of them.",
   "WIDGET_GENERATE_CANCELLED": "A prompt of `nextly generate:widget` was cancelled, so it wrote no widget.",
   "WORKFLOW_CANNOT_ATTACH": "A workflow in the configuration is attached to a collection or Single it cannot run on.",
   "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS": "A full uninstall would drop schema another owner built on the plugin's.",
@@ -218,5 +218,7 @@
   "PLUGIN_CONFIG_NOT_EDITABLE": "`nextly plugins add` cannot place a plugin in the configuration file safely, so it left the file as it was.",
   "CREATE_BLOCKED_BY_LEFTOVER_TABLE": "A collection, field group or Single create was refused, because tables nothing registered owns stand where it would build and they hold rows or something else depends on them.",
   "MIGRATE_BACKUP_NOT_CONFIRMED": "`nextly migrate` found the migration records of an earlier Nextly release, and no backup was confirmed, with no terminal attached to ask.",
-  "MIGRATE_BACKUP_DECLINED": "`nextly migrate` found the migration records of an earlier Nextly release, and its backup question was answered no."
+  "MIGRATE_BACKUP_DECLINED": "`nextly migrate` found the migration records of an earlier Nextly release, and its backup question was answered no.",
+  "MIGRATE_LEDGER_UNREADABLE": "`nextly migrate` found a `nextly_migrations` table of an earlier Nextly release holding records it cannot read, so it moved none of them.",
+  "MIGRATE_EVENTS_TABLE_TAKEN": "A table of another shape already has the name `nextly migrate` moves the migration records of an earlier Nextly release into."
 }

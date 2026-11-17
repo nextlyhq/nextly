@@ -1,23 +1,26 @@
 ---
 title: UPGRADE_EVENTS_TABLE_TAKEN
-description: "A table of another shape already has the name the migration records of an earlier release are moved into."
+description: "A table of another shape already has the name `nextly upgrade` moves the migration records into."
 ---
 
 ## Cause
 
-A table of another shape already has the name the migration records of an earlier release are moved into.
+A table of another shape already has the name `nextly upgrade` moves the migration records into.
 
-`nextly migrate` moves the migration records an earlier release kept into `nextly_schema_events`. A table of that name already exists without the columns the move writes, so the run stopped before writing anything.
+This code is retired. `nextly upgrade` no longer moves the migration records of an earlier release: `nextly migrate` does, and a table of another shape under the events table's name ends it as `MIGRATE_EVENTS_TABLE_TAKEN`. No command ends with it any more; it is kept so a script or a log search that names it still reads correctly. Releases before the change ended `nextly upgrade` with it:
+
+`nextly upgrade` moves the migration records into `nextly_schema_events`. A table of that name already exists without the columns the upgrade writes, so it stopped before writing anything.
 
 ## Fix
 
-- Rename the existing table, then run `nextly migrate` again.
+- Rename the existing table, then run `nextly upgrade` again.
+- Or run `nextly upgrade --target-table-name <name>` to use another name.
 
 ## Example
 
 ```text
 ✗ A table named "nextly_schema_events" already exists with an unexpected shape.
-  Why:  `nextly migrate` moves the migration records of an earlier release into "nextly_schema_events", and the table there does not have the columns it writes. Nothing was changed.
-  Next: Rename it, then run `nextly migrate` again.
+  Why:  `nextly upgrade` moves the migration records into "nextly_schema_events", and the table there does not have the columns it writes. Nothing was changed.
+  Next: Rename it, or re-run with `--target-table-name <name>`.
   Docs: https://nextlyhq.com/docs/cli/errors/upgrade-events-table-taken  (UPGRADE_EVENTS_TABLE_TAKEN)
 ```

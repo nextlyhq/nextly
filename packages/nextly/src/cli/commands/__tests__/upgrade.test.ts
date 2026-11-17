@@ -190,6 +190,44 @@ describe("the move of an earlier release's migration records (sqlite)", () => {
     expect(asked).toEqual([]);
   });
 
+  it("another run moved the records first: nobody is asked, nothing is refused", async () => {
+    // The run found a legacy table, and by the time it reads them another
+    // run has moved the records and dropped both tables.
+    testDb.sqlite.exec("DROP TABLE nextly_migrations");
+    const { moved, asked } = move({ interactive: false });
+    await expect(moved).resolves.toBeUndefined();
+    expect(asked).toEqual([]);
+  });
+
+  it("another run drops the table while this one reads it: the run carries on", async () => {
+    // The table is there when the run looks for it and gone when it reads it.
+    const real = adapter.tableExists;
+    let looked = 0;
+    adapter.tableExists = name => {
+      if (name !== "nextly_migrations") return real(name);
+      looked += 1;
+      if (looked === 1) {
+        testDb.sqlite.exec("DROP TABLE nextly_migrations");
+        return Promise.resolve(true);
+      }
+      return real(name);
+    };
+    const { moved, asked } = move({ interactive: false });
+    await expect(moved).resolves.toBeUndefined();
+    expect(asked).toEqual([]);
+  });
+
+  it("a table it cannot read while the legacy table stands is still refused", async () => {
+    testDb.sqlite.exec(
+      "INSERT INTO nextly_migrations (id, filename, sha256, status) VALUES ('2', '0002.sql', 'bb', 'rolled_back')"
+    );
+    await expect(move({ backupConfirmed: true }).moved).rejects.toMatchObject({
+      code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
+      logContext: { reason: "migrate-ledger-unreadable" },
+    });
+    expect(tableExistsSync(testDb, "nextly_migrations")).toBe(true);
+  });
+
   it("nextly upgrade refuses the database, running no step and naming nextly migrate", async () => {
     let ran = false;
     const refusal = await runUpgrade(

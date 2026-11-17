@@ -38,6 +38,11 @@ import {
 import { createAdapter } from "../../../database/factory";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import {
+  startHolder,
+  type Holder,
+  type LockWorld,
+} from "../../../domains/schema/pipeline/__tests__/helpers/schema-lock-world";
+import {
   readSchemaLockState,
   type SchemaLockReading,
 } from "../../../domains/schema/pipeline/schema-lock";
@@ -110,6 +115,29 @@ vi.mock(
   }
 );
 
+/** Called once the run has moved the records and before it takes the lock for its migrations. */
+const afterTheMove = vi.hoisted(() => ({
+  probe: undefined as (() => Promise<void>) | undefined,
+}));
+
+// The run compiles the plugins' schema between the move and its own lock:
+// the real compile, with the test told first.
+vi.mock("../../../domains/schema/extension/publish", async importOriginal => {
+  const original =
+    await importOriginal<
+      typeof import("../../../domains/schema/extension/publish")
+    >();
+  return {
+    ...original,
+    compileExtensionSchema: async (
+      ...args: Parameters<typeof original.compileExtensionSchema>
+    ) => {
+      await afterTheMove.probe?.();
+      return original.compileExtensionSchema(...args);
+    },
+  };
+});
+
 const POSTS = "mcl-posts";
 const POSTS_TABLE = "dc_mcl_posts";
 
@@ -167,6 +195,8 @@ describe.each(getConfiguredTestDialects())(
   (dialect: TestDialect) => {
     let url: string;
     let drop: () => Promise<void>;
+    /** Another process holding the schema lock, ended after the test. */
+    let holder: Holder | undefined;
     const q = dialect === "mysql" ? "`" : '"';
     const id = (name: string) => `${q}${name}${q}`;
 
@@ -194,6 +224,12 @@ describe.each(getConfiguredTestDialects())(
 
     afterEach(async () => {
       beforeStatements.probe = undefined;
+      afterTheMove.probe = undefined;
+      if (holder !== undefined) {
+        holder.kill("SIGKILL");
+        await holder.exited;
+        holder = undefined;
+      }
       setNonInteractive(false);
       vi.restoreAllMocks();
       vi.unstubAllEnvs();
@@ -249,7 +285,11 @@ describe.each(getConfiguredTestDialects())(
 
     /** `nextly migrate` with `options`; what it said, or the error it refused with. */
     async function migrate(
-      options: { backupConfirmed?: boolean; dryRun?: boolean } = {}
+      options: {
+        backupConfirmed?: boolean;
+        dryRun?: boolean;
+        forceUnlock?: boolean;
+      } = {}
     ): Promise<string[]> {
       const { context, said } = command();
       await runMigrate(
@@ -441,6 +481,49 @@ describe.each(getConfiguredTestDialects())(
       // A second run finds nothing to move and nothing to apply.
       await migrate();
       expect((await fileApplies()).get(files[0] ?? "")).toHaveLength(1);
+    }, 240_000);
+
+    it("--force-unlock clears the lock once: a run that takes it after the move is waited for, not cleared", async () => {
+      await siteOnThisRelease();
+      const files = await asTheEarlierReleaseLeftIt();
+
+      // Once the records are moved and the move's lock is let go, another
+      // process takes the schema lock, and lets it go a few seconds later.
+      let heldAtRelease: SchemaLockReading | undefined;
+      afterTheMove.probe = async () => {
+        afterTheMove.probe = undefined;
+        expect(await legacyTables()).toEqual({
+          migrations: false,
+          journal: false,
+        });
+        holder = startHolder(
+          {
+            dialect,
+            url: dialect === "sqlite" ? url.replace(/^file:/, "") : url,
+          } as LockWorld,
+          { command: "nextly db:sync", leaseSeconds: 30, prefix: "mcl_holder" }
+        );
+        await holder.printed("held");
+        const held = holder;
+        setTimeout(() => {
+          void on(readSchemaLockState).then(reading => {
+            heldAtRelease = reading;
+            held.send("release");
+          });
+        }, 3_000);
+      };
+
+      setNonInteractive(true);
+      await migrate({ backupConfirmed: true, forceUnlock: true });
+
+      // The other process still held the lock when it let go of it: the run
+      // waited for it rather than clear a lock that was not stale.
+      expect(heldAtRelease).toMatchObject({
+        state: "held",
+        holder: { kind: "schema", command: "nextly db:sync" },
+      });
+      const applies = await fileApplies();
+      for (const file of files) expect(applies.get(file), file).toHaveLength(1);
     }, 240_000);
 
     it("without the confirmation: every table byte for byte, the flag named", async () => {

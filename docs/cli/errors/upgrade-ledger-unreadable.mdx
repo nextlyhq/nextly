@@ -1,24 +1,26 @@
 ---
 title: UPGRADE_LEDGER_UNREADABLE
-description: "A `nextly_migrations` table holds records Nextly cannot read, so none of them was moved."
+description: "`nextly upgrade` found a `nextly_migrations` table holding records it cannot read, so it moved none of them."
 ---
 
 ## Cause
 
-A `nextly_migrations` table holds records Nextly cannot read, so none of them was moved.
+`nextly upgrade` found a `nextly_migrations` table holding records it cannot read, so it moved none of them.
 
-An earlier release kept its migration records in `nextly_migrations`. `nextly migrate` moves them into `nextly_schema_events` and reads every record before writing any. It reads the two shapes `nextly migrate` and `nextly db:sync` kept the table in. This table has a record it cannot read: one with a status no release wrote, one naming no migration file, or a table of another shape that holds rows, such as the one the adapters' migration helper kept, whose records name a label rather than a migration file. So the run stopped before changing anything.
+This code is retired. `nextly upgrade` no longer moves the migration records of an earlier release: `nextly migrate` does, and a `nextly_migrations` table it cannot read ends it as `MIGRATE_LEDGER_UNREADABLE`. No command ends with it any more; it is kept so a script or a log search that names it still reads correctly. Releases before the change ended `nextly upgrade` with it:
+
+An earlier release kept its migration records in `nextly_migrations`. `nextly upgrade` moves them into `nextly_schema_events` and reads every record before writing any. It reads the two shapes `nextly migrate` and `nextly db:sync` kept the table in. This table has a record it cannot read: one with a status no release wrote, one naming no migration file, or a table of another shape that holds rows, such as the one the adapters' migration helper kept, whose records name a label rather than a migration file. So the upgrade stopped before changing anything.
 
 ## Fix
 
-- If Nextly did not create the table, rename it, then run `nextly migrate` again.
+- If Nextly did not create the table, rename it, then run `nextly upgrade` again.
 - If it holds your migration history, back up the database and open an issue with the record named in the message.
 
 ## Example
 
 ```text
-✗ The table "nextly_migrations" holds records `nextly migrate` cannot read: the record of 0001_init.sql has the status "rolled_back".
-  Why:  `nextly migrate` moves the records an earlier release kept in `nextly_migrations` into `nextly_schema_events`, and reads every one before writing any. One of them it cannot read, so nothing was changed.
-  Next: Rename the table if Nextly did not create it, then run `nextly migrate` again.
+✗ The table "nextly_migrations" holds records `nextly upgrade` cannot read: the record of 0001_init.sql has the status "rolled_back".
+  Why:  `nextly upgrade` moves the records an earlier release kept in `nextly_migrations` into `nextly_schema_events`, and reads every one before writing any. One of them it cannot read, so nothing was changed.
+  Next: Rename the table if Nextly did not create it, then run `nextly upgrade` again.
   Docs: https://nextlyhq.com/docs/cli/errors/upgrade-ledger-unreadable  (UPGRADE_LEDGER_UNREADABLE)
 ```

@@ -542,7 +542,7 @@ describe.each(getConfiguredTestDialects())(
           pathed.toString()
         );
 
-        expect(plan.changes[0]).toEqual({
+        expect(plan?.changes[0]).toEqual({
           action: "move",
           target: `${String(files.length)} ${files.length === 1 ? "record" : "records"} from nextly_migrations into nextly_schema_events`,
         });

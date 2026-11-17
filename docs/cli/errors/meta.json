@@ -80,6 +80,8 @@
     "migration-not-proven",
     "migrate-backup-declined",
     "migrate-backup-not-confirmed",
+    "migrate-events-table-taken",
+    "migrate-ledger-unreadable",
     "migration-sql-uncheckable",
     "migration-tampered",
     "missing-migration",

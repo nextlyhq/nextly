@@ -253,7 +253,7 @@ function ledgerUnreadable(why: string): NextlyError {
       `The table "nextly_migrations" holds records \`nextly migrate\` cannot read: ${why}. ` +
       "Rename the table if Nextly did not create it, then run `nextly migrate` again.",
     logContext: {
-      reason: "legacy-ledger-unreadable",
+      reason: "migrate-ledger-unreadable",
       table: "nextly_migrations",
     },
   });
@@ -287,7 +287,7 @@ async function planMove(
       publicMessage:
         `A table named "${EVENTS_TABLE}" already exists with an unexpected ` +
         "shape. Rename it, then run `nextly migrate` again.",
-      logContext: { table: EVENTS_TABLE },
+      logContext: { reason: "migrate-events-table-taken", table: EVENTS_TABLE },
     });
   }
 
@@ -444,6 +444,31 @@ async function run(context: LegacyBookkeepingContext): Promise<number> {
   return written;
 }
 
+/**
+ * The move's plan, or undefined once no legacy table is left.
+ *
+ * The plan is read before the lock, so another run holding it may drop a
+ * table between this run finding it and reading it: the read then fails on a
+ * table that is gone, or finds none. Either way the records are moved, by
+ * that run, and there is nothing here to refuse. A read that fails while a
+ * legacy table still stands is the refusal it is.
+ */
+async function planWhileLegacyStands(
+  context: Pick<LegacyBookkeepingContext, "adapter" | "db" | "dialect">
+): Promise<LegacyTablePlan[] | undefined> {
+  const stands = async () =>
+    (await detectLegacyBookkeeping(context.adapter)).hasLegacy;
+  let plan: LegacyTablePlan[];
+  try {
+    plan = await planMove(context);
+  } catch (error) {
+    if (await stands()) throw error;
+    return undefined;
+  }
+  // Read again after the plan: a table planned and since dropped is moved.
+  return plan.length > 0 && (await stands()) ? plan : undefined;
+}
+
 /** What `consolidateLegacyBookkeeping` is handed by `nextly migrate`. */
 export interface ConsolidateLegacyArgs {
   /** The run's adapter, whose sessions the schema statements and the lock use. */
@@ -520,7 +545,9 @@ export async function consolidateLegacyBookkeeping(
   args: ConsolidateLegacyArgs
 ): Promise<void> {
   const context = contextOf(args);
-  await planMove(context);
+  // Nothing left to move: another run moved the records while this one was
+  // starting. Nobody is asked and nothing is refused; the run carries on.
+  if ((await planWhileLegacyStands(context)) === undefined) return;
 
   if (!args.backupConfirmed) {
     if (!args.interactive) throw backupNotConfirmed();
@@ -555,7 +582,8 @@ export async function consolidateLegacyBookkeeping(
  * the real run would make it, read-only, with no backup question and no lock.
  * The run's pending migrations are not listed: which files have applied is
  * recorded in the legacy tables until the move, and every check of that
- * history reads the events table.
+ * history reads the events table. Undefined once no legacy table is left:
+ * another run moved the records, and the dry run lists the rest as usual.
  */
 export async function previewLegacyConsolidation(args: {
   adapter: DrizzleAdapter;
@@ -563,10 +591,10 @@ export async function previewLegacyConsolidation(args: {
   backupConfirmed: boolean;
   /** Whether a real run could ask at a terminal. */
   interactive: boolean;
-}): Promise<DryRunPlan> {
-  let tables: LegacyTablePlan[];
+}): Promise<DryRunPlan | undefined> {
+  let tables: LegacyTablePlan[] | undefined;
   try {
-    tables = await planMove({
+    tables = await planWhileLegacyStands({
       adapter: args.adapter as unknown as UpgradeAdapter,
       db: args.adapter.getDrizzle(),
       dialect: args.dialect,
@@ -578,6 +606,7 @@ export async function previewLegacyConsolidation(args: {
     }
     return { changes: [], refusals: [error.publicMessage] };
   }
+  if (tables === undefined) return undefined;
   const notes: string[] = [];
   let refusal: string | undefined;
   if (!args.backupConfirmed) {

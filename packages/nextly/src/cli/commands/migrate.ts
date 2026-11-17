@@ -525,6 +525,12 @@ function orFail<T>(read: () => T, fail: (error: unknown) => never): T {
   }
 }
 
+/** `work`, run the first time it is asked for and never again; later calls wait for that one run. */
+function oncePerRun(work: () => Promise<void>): () => Promise<void> {
+  let ran: Promise<void> | undefined;
+  return () => (ran ??= work());
+}
+
 /** What a run says of itself before it connects: its configuration, its dialect, and a dry run. */
 function announceRun(
   logger: CommandContext["logger"],
@@ -559,13 +565,11 @@ function announceRun(
  */
 async function moveEarlierRecords(args: {
   adapter: DrizzleAdapter;
-  db: unknown;
   dialect: SupportedDialect;
   bounds: ReturnType<typeof busyTableBounds>;
-  options: Pick<
-    MigrateCommandOptions,
-    "backupConfirmed" | "dryRun" | "forceUnlock"
-  >;
+  options: Pick<MigrateCommandOptions, "backupConfirmed" | "dryRun">;
+  /** The run's `--force-unlock`, which clears a stale lock once in the whole run. */
+  clearStaleLock: () => Promise<void>;
   lockTtlSeconds: number | undefined;
   logger: CommandContext["logger"];
 }): Promise<boolean> {
@@ -577,15 +581,16 @@ async function moveEarlierRecords(args: {
     await import("./legacy-bookkeeping");
   const backupConfirmed = options.backupConfirmed === true;
   if (options.dryRun) {
-    reportDryRun(
-      logger,
-      await previewLegacyConsolidation({
-        adapter,
-        dialect,
-        backupConfirmed,
-        interactive: canPrompt(),
-      })
-    );
+    const plan = await previewLegacyConsolidation({
+      adapter,
+      dialect,
+      backupConfirmed,
+      interactive: canPrompt(),
+    });
+    // No plan: another run moved the records meanwhile, and this dry run
+    // goes on to list the pending migrations as on any database.
+    if (plan === undefined) return false;
+    reportDryRun(logger, plan);
     return true;
   }
   await consolidateLegacyBookkeeping({
@@ -596,8 +601,8 @@ async function moveEarlierRecords(args: {
     interactive: canPrompt(),
     askBackedUp: () =>
       askYesInTerminal("Have you backed up your database? [y/N]: "),
-    // A stale lock is cleared before this lock as before the run's own.
-    beforeLock: () => maybeForceUnlock(options, args.db, dialect),
+    // A stale lock is cleared before this lock, and not again in this run.
+    beforeLock: args.clearStaleLock,
     lockTtlSeconds: args.lockTtlSeconds,
     log: message => logger.info(message),
     warn: message => logger.warn(message),
@@ -703,12 +708,19 @@ export async function runMigrate(
     // earlier release did has them moved into `nextly_schema_events` first.
     // Before every check below, since each reads the run's history from the
     // events table. A dry run lists the move and ends here.
+    // `--force-unlock` clears a stale lock once in a run: before the move's
+    // lock where there are records to move, otherwise before the run's own.
+    // Cleared a second time, it would take the lock from a run that took it
+    // after the move let it go, and both would change the schema at once.
+    const clearStaleLock = oncePerRun(() =>
+      maybeForceUnlock(options, db, dialect)
+    );
     const ended = await moveEarlierRecords({
       adapter: adapter as unknown as DrizzleAdapter,
-      db,
       dialect,
       bounds,
       options,
+      clearStaleLock,
       lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
       logger,
     });
@@ -794,8 +806,9 @@ export async function runMigrate(
     };
 
     // Clear a stale lock first when --force-unlock is passed (e.g. left by a
-    // crashed prior run), then proceed with the normal migrate.
-    await maybeForceUnlock(options, db, dialect);
+    // crashed prior run), then proceed with the normal migrate. Already
+    // cleared where the run moved an earlier release's records, above.
+    await clearStaleLock();
 
     // Every entity as the registry records it before any file applies, so the companion pass
     // after the migrations can tell a field this run newly translates from one translated before.

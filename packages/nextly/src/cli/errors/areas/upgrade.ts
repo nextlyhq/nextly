@@ -92,13 +92,13 @@ export const UPGRADE_CODES = defineCodes({
       },
     ],
   },
-  UPGRADE_LEDGER_UNREADABLE: {
+  MIGRATE_LEDGER_UNREADABLE: {
     cause:
-      "A `nextly_migrations` table holds records Nextly cannot read, so none of them was moved.",
+      "`nextly migrate` found a `nextly_migrations` table of an earlier Nextly release holding records it cannot read, so it moved none of them.",
     from: [
       {
         code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
-        reason: "legacy-ledger-unreadable",
+        reason: "migrate-ledger-unreadable",
         describe: error =>
           whatThenNext(
             error.publicMessage,
@@ -107,12 +107,13 @@ export const UPGRADE_CODES = defineCodes({
       },
     ],
   },
-  UPGRADE_EVENTS_TABLE_TAKEN: {
+  MIGRATE_EVENTS_TABLE_TAKEN: {
     cause:
-      "A table of another shape already has the name the migration records of an earlier release are moved into.",
+      "A table of another shape already has the name `nextly migrate` moves the migration records of an earlier Nextly release into.",
     from: [
       {
         code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
+        reason: "migrate-events-table-taken",
         describe: error =>
           whatThenNext(
             error.publicMessage,
@@ -120,5 +121,19 @@ export const UPGRADE_CODES = defineCodes({
           ),
       },
     ],
+  },
+  UPGRADE_LEDGER_UNREADABLE: {
+    cause:
+      "`nextly upgrade` found a `nextly_migrations` table holding records it cannot read, so it moved none of them.",
+    retired: {
+      why: "`nextly upgrade` no longer moves the migration records of an earlier release: `nextly migrate` does, and a `nextly_migrations` table it cannot read ends it as `MIGRATE_LEDGER_UNREADABLE`.",
+    },
+  },
+  UPGRADE_EVENTS_TABLE_TAKEN: {
+    cause:
+      "A table of another shape already has the name `nextly upgrade` moves the migration records into.",
+    retired: {
+      why: "`nextly upgrade` no longer moves the migration records of an earlier release: `nextly migrate` does, and a table of another shape under the events table's name ends it as `MIGRATE_EVENTS_TABLE_TAKEN`.",
+    },
   },
 });
