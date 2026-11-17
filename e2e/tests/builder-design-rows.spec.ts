@@ -23,6 +23,8 @@ import { countEveryPage } from "./support/usage-count";
 test.describe.configure({ lock: [LOCK.homepage, LOCK.siteStyle] });
 
 const SITE_STYLE = "/admin/api/singles/site-style";
+/** For reads with no timeout of their own, which would otherwise wait out the test. */
+const BOUNDED = { timeout: 10_000 };
 const NODES = [
   {
     id: "rows-text",
@@ -86,68 +88,76 @@ async function openDesign(page: Page, tab: string): Promise<void> {
   await panel.getByRole("tab", { name: new RegExp(`^${tab}`) }).click();
 }
 
+/**
+ * The site style as the running test found it, put back after it.
+ *
+ * In an after hook rather than a `finally`: Playwright gives its after hooks a
+ * budget of their own, so a test that spends its whole timeout waiting still
+ * puts the variables back for the specs after it.
+ */
+let found: { tokens: unknown } | null = null;
+
+test.afterEach(async ({ page }) => {
+  if (found === null) return;
+  const { tokens } = found;
+  found = null;
+  await seed(page, tokens);
+});
+
 test("a colour is renamed in place: Enter and leaving the field keep the name, Escape cancels, and the code name stays", async ({
   page,
 }) => {
   test.setTimeout(180_000);
-  const before = await storedTokens(page);
-  try {
-    await seed(page, { tokens: TOKENS });
-    await page.setViewportSize({ width: 1280, height: 720 });
-    await openEditorWith(page, NODES, "rows-text");
-    await openDesign(page, "Colours");
-    const panel = page.getByRole("region", { name: "Design panel" });
+  found = { tokens: await storedTokens(page) };
+  await seed(page, { tokens: TOKENS });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await openEditorWith(page, NODES, "rows-text");
+  await openDesign(page, "Colours");
+  const panel = page.getByRole("region", { name: "Design panel" });
 
-    // From the ⋯ menu's Rename: the field is in the row, and Enter keeps it.
-    // Names no colour the site's code supplies has, which would be refused.
-    await panel.getByRole("button", { name: "More actions for Brand" }).click();
-    await page.getByRole("menuitem", { name: "Rename" }).click();
-    const brand = panel.getByRole("textbox", { name: "Name of Brand" });
-    await expect(brand).toBeFocused();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
-    await brand.fill("Harbour");
-    await brand.press("Enter");
-    await expect(
-      panel.getByRole("button", { name: /^Harbour,/ })
-    ).toBeFocused();
-    await expect
-      .poll(() => storedNames(page))
-      .toEqual(["color.brand=Harbour", "color.text="]);
+  // From the ⋯ menu's Rename: the field is in the row, and Enter keeps it.
+  // Names no colour the site's code supplies has, which would be refused.
+  await panel.getByRole("button", { name: "More actions for Brand" }).click();
+  await page.getByRole("menuitem", { name: "Rename" }).click();
+  const brand = panel.getByRole("textbox", { name: "Name of Brand" });
+  await expect(brand).toBeFocused();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await brand.fill("Harbour");
+  await brand.press("Enter");
+  await expect(panel.getByRole("button", { name: /^Harbour,/ })).toBeFocused();
+  await expect
+    .poll(() => storedNames(page))
+    .toEqual(["color.brand=Harbour", "color.text="]);
 
-    // F2, then leaving the field: kept.
-    await panel.getByRole("button", { name: /^Text,/ }).focus();
-    await page.keyboard.press("F2");
-    const text = panel.getByRole("textbox", { name: "Name of Text" });
-    await expect(text).toBeFocused();
-    await text.fill("Paper ink");
-    await page.getByRole("tab", { name: /^Colours/ }).click();
-    await expect(
-      panel.getByRole("button", { name: /^Paper ink,/ })
-    ).toBeVisible();
-    await expect
-      .poll(() => storedNames(page))
-      .toEqual(["color.brand=Harbour", "color.text=Paper ink"]);
+  // F2, then leaving the field: kept.
+  await panel.getByRole("button", { name: /^Text,/ }).focus();
+  await page.keyboard.press("F2");
+  const text = panel.getByRole("textbox", { name: "Name of Text" });
+  await expect(text).toBeFocused();
+  await text.fill("Paper ink");
+  await page.getByRole("tab", { name: /^Colours/ }).click();
+  await expect(
+    panel.getByRole("button", { name: /^Paper ink,/ })
+  ).toBeVisible();
+  await expect
+    .poll(() => storedNames(page))
+    .toEqual(["color.brand=Harbour", "color.text=Paper ink"]);
 
-    // F2, then Escape: cancelled, focus back on the row, nothing stored.
-    const harbour = panel.getByRole("button", { name: /^Harbour,/ });
-    await harbour.focus();
-    await page.keyboard.press("F2");
-    const field = panel.getByRole("textbox", { name: "Name of Harbour" });
-    await field.fill("Gone");
-    await field.press("Escape");
-    await expect(field).toHaveCount(0);
-    await expect(
-      panel.getByRole("button", { name: /^Harbour,/ })
-    ).toBeFocused();
-    // The Design panel stays open: Escape closed only the field.
-    await expect(panel).toBeVisible();
-    expect(await storedNames(page)).toEqual([
-      "color.brand=Harbour",
-      "color.text=Paper ink",
-    ]);
-  } finally {
-    await seed(page, before);
-  }
+  // F2, then Escape: cancelled, focus back on the row, nothing stored.
+  const harbour = panel.getByRole("button", { name: /^Harbour,/ });
+  await harbour.focus();
+  await page.keyboard.press("F2");
+  const field = panel.getByRole("textbox", { name: "Name of Harbour" });
+  await field.fill("Gone");
+  await field.press("Escape");
+  await expect(field).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: /^Harbour,/ })).toBeFocused();
+  // The Design panel stays open: Escape closed only the field.
+  await expect(panel).toBeVisible();
+  expect(await storedNames(page)).toEqual([
+    "color.brand=Harbour",
+    "color.text=Paper ink",
+  ]);
 });
 
 /** `count` colours, named so they sort in order. */
@@ -167,58 +177,63 @@ test("+ Add colour keeps the search and the list's place, and opens the new colo
   // Thirty colours seeded and read back, then restored: slow on a busy
   // machine, so more room than the other tests here.
   test.setTimeout(300_000);
-  const before = await storedTokens(page);
-  try {
-    await seed(page, colours(30));
-    await page.setViewportSize({ width: 1280, height: 720 });
-    await openEditorWith(page, NODES, "rows-text");
-    await openDesign(page, "Colours");
-    const panel = page.getByRole("region", { name: "Design panel" });
-    const search = panel.getByRole("searchbox", { name: "Search Design" });
-    // Matches every colour, enough rows to scroll, and not the new one.
-    await search.fill("many");
-    await expect(panel.locator(".nx-vars__row")).toHaveCount(30);
-    const body = panel.locator(".nx-vars__body").first();
-    // Part way down, where the add row is in view.
-    const add = panel.getByRole("button", { name: "Add colour" });
-    await add.scrollIntoViewIfNeeded();
-    const scrolled = await body.evaluate(element => element.scrollTop);
-    await add.click();
+  found = { tokens: await storedTokens(page) };
+  await seed(page, colours(30));
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await openEditorWith(page, NODES, "rows-text");
+  await openDesign(page, "Colours");
+  // By its element rather than its role: the open editor hides the rest from
+  // the tree, and a role query for the panel would then wait out the test.
+  const panel = page.locator('section[aria-label="Design panel"]');
+  const search = panel.getByRole("searchbox", { name: "Search Design" });
+  // Matches every colour, enough rows to scroll, and not the new one.
+  await search.fill("many");
+  await expect(panel.locator(".nx-vars__row")).toHaveCount(30);
+  const body = panel.locator(".nx-vars__body").first();
+  // Part way down, where the add row is in view.
+  const add = panel.getByRole("button", { name: "Add colour" });
+  await add.scrollIntoViewIfNeeded();
+  const scrolled = await body.evaluate(
+    element => element.scrollTop,
+    undefined,
+    BOUNDED
+  );
+  await add.click();
 
-    const editor = page.getByRole("dialog", { name: "Edit New colour" });
-    await expect(editor).toBeVisible();
-    await expect(editor.getByLabel("Name", { exact: true })).toBeFocused();
-    // The search is kept, and the list did not jump back to its top. Read
-    // by its field: the open editor hides the rest from the tree.
-    await expect(page.locator('input[aria-label="Search Design"]')).toHaveValue(
-      "many"
-    );
-    expect(
-      Math.abs((await body.evaluate(element => element.scrollTop)) - scrolled)
-    ).toBeLessThan(80);
-    // The new row is the group's last, marked New, in view, and the editor
-    // opens beside it.
-    const added = panel.locator(".nx-vars__item").last();
-    await expect(added.locator(".nx-vars__name")).toContainText("New colour");
-    await expect(added.locator(".nx-vars__new")).toHaveText("New");
-    await expect(added).toBeInViewport();
-    const rowBox = await added.boundingBox();
-    const box = await editor.boundingBox();
-    const view = page.viewportSize();
-    if (rowBox === null || box === null || view === null) {
-      throw new Error("[e2e] no box");
-    }
-    expect(box.x).toBeGreaterThanOrEqual(rowBox.x + rowBox.width - 1);
-    expect(box.y).toBeLessThanOrEqual(rowBox.y + rowBox.height);
-    expect(box.y + box.height).toBeGreaterThanOrEqual(rowBox.y);
-    expect(box.y + box.height).toBeLessThanOrEqual(view.height);
-    // Closed, so the new colour is saved and the panel is at rest before
-    // the variables are put back.
-    await page.keyboard.press("Escape");
-    await expect(editor).toBeHidden();
-  } finally {
-    await seed(page, before);
+  const editor = page.getByRole("dialog", { name: "Edit New colour" });
+  await expect(editor).toBeVisible();
+  await expect(editor.getByLabel("Name", { exact: true })).toBeFocused();
+  // The search is kept, and the list did not jump back to its top. Read
+  // by its field: the open editor hides the rest from the tree.
+  await expect(page.locator('input[aria-label="Search Design"]')).toHaveValue(
+    "many"
+  );
+  expect(
+    Math.abs(
+      (await body.evaluate(element => element.scrollTop, undefined, BOUNDED)) -
+        scrolled
+    )
+  ).toBeLessThan(80);
+  // The new row is the group's last, marked New, in view, and the editor
+  // opens beside it.
+  const added = panel.locator(".nx-vars__item").last();
+  await expect(added.locator(".nx-vars__name")).toContainText("New colour");
+  await expect(added.locator(".nx-vars__new")).toHaveText("New");
+  await expect(added).toBeInViewport();
+  const rowBox = await added.boundingBox(BOUNDED);
+  const box = await editor.boundingBox(BOUNDED);
+  const view = page.viewportSize();
+  if (rowBox === null || box === null || view === null) {
+    throw new Error("[e2e] no box");
   }
+  expect(box.x).toBeGreaterThanOrEqual(rowBox.x + rowBox.width - 1);
+  expect(box.y).toBeLessThanOrEqual(rowBox.y + rowBox.height);
+  expect(box.y + box.height).toBeGreaterThanOrEqual(rowBox.y);
+  expect(box.y + box.height).toBeLessThanOrEqual(view.height);
+  // Closed, so the new colour is saved and the panel is at rest before
+  // the variables are put back.
+  await page.keyboard.press("Escape");
+  await expect(editor).toBeHidden();
 });
 
 test("a new colour's code name follows each keystroke of its name, and a saved one keeps its code name on rename", async ({
