@@ -50,10 +50,13 @@ import {
   useViewSearch,
 } from "./design-group-toggle";
 import { isHTMLElement } from "./dom-kind";
+import { FluidRangeFields } from "./fluid-popover";
 import { ShowMore, withOpenRow } from "./panel-actions";
 import {
   addVariable,
   duplicateVariable,
+  fluidRangeOf,
+  setFluidRange,
   labelNewVariable,
   searchVariableGroups,
   type VariableEntry,
@@ -357,6 +360,12 @@ function VariablesView({
         }
         overlays={placedOverlays(placed, header)}
       >
+        <TypeTabRange
+          groups={hosted.groups}
+          tokens={tokens}
+          onChange={onChange}
+          readOnly={readOnly}
+        />
         <VariableGroups
           shown={shown}
           searching={searching}
@@ -380,6 +389,32 @@ function VariablesView({
         />
       </ViewBody>
     </div>
+  );
+}
+
+/**
+ * The site's fluid range, where the view lists the type scale: the Type
+ * tab, or a view of every group. Changing it remakes every size made with
+ * "Fluid…", in the same edit, so it saves and undoes as one.
+ */
+function TypeTabRange({
+  groups,
+  tokens,
+  onChange,
+  readOnly,
+}: {
+  groups: readonly VariableGroup[] | undefined;
+  tokens: SiteTokenSet;
+  onChange: (tokens: SiteTokenSet) => void;
+  readOnly: boolean;
+}): React.JSX.Element | null {
+  if (groups !== undefined && !groups.includes("type")) return null;
+  return (
+    <FluidRangeFields
+      range={fluidRangeOf(tokens)}
+      onRange={range => onChange(setFluidRange(tokens, range))}
+      readOnly={readOnly}
+    />
   );
 }
 
