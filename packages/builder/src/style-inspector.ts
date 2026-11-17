@@ -331,7 +331,11 @@ export function inspectStyle(
     }
   }
 
-  const parent = parentArrangementOf(document, node, at, options);
+  // A block taken out of the flow by its own position isn't laid out by its
+  // parent: no Fill, Fit or Fixed is offered for it.
+  const parent = OUT_OF_FLOW.has(context.position ?? "")
+    ? undefined
+    : parentArrangementOf(document, node, at, options);
   return {
     nodeId: node.id,
     state,
@@ -391,6 +395,9 @@ function appliesContextOf(
           : false,
   };
 }
+
+/** The positions that take a block out of its parent's layout. */
+const OUT_OF_FLOW: ReadonlySet<string> = new Set(["absolute", "fixed"]);
 
 /** A display that lays children out in flow, for a box nothing gives one. */
 const IN_FLOW = "block";

@@ -233,3 +233,38 @@ describe("Inside its parent, by the settings search", () => {
     expect(axis("Width")).not.toBeNull();
   });
 });
+
+describe("a block taken out of the flow", () => {
+  it("gets no Fill, Fit or Fixed, its parent not laying it out", () => {
+    render(
+      <Host
+        page={
+          {
+            ...pageOf({ display: "flex" }),
+            nodes: [
+              {
+                ...pageOf({ display: "flex" }).nodes[0]!,
+                slots: {
+                  children: [
+                    {
+                      id: "button",
+                      type: "core/button",
+                      version: versionOf("core/button"),
+                      props: { label: "Go", type: "button" },
+                      styles: {
+                        base: { base: { position: { type: "absolute" } } },
+                      },
+                    } as BlockNode,
+                  ],
+                },
+              } as BlockNode,
+            ],
+          } as BlockDocument
+        }
+      />
+    );
+    act(() => editor().select("button"));
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+    expect(document.querySelector('[data-control="inside-parent"]')).toBeNull();
+  });
+});
