@@ -70,6 +70,7 @@ import {
 } from "../../../shared/lib/field-level-registry";
 import {
   type FieldGroupReach,
+  instanceFields,
   reachesPasswordField,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
@@ -82,12 +83,16 @@ import {
   type LiveFieldGroupReadPass,
 } from "../../field-groups/live-read-access";
 import { passwordReachOf } from "../../field-groups/password-reach";
+import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import {
   fillCompanionFields,
   populateCompanionFields,
   selectRowsWithCompanion,
 } from "../../i18n/companion-join";
-import { publishedInLanguageCondition } from "../../i18n/read-in-language";
+import {
+  publishedInLanguageCondition,
+  valuesBesideRow,
+} from "../../i18n/read-in-language";
 import { resolveCompanionSchemaReadiness } from "../../i18n/runtime/companion-readiness";
 import {
   NO_DECISIONS,
@@ -195,6 +200,12 @@ interface NestedHookStateBase {
   /** One schema read per collection per read, rather than per row per depth. */
   fields: Map<string, FieldDefinition[]>;
   /**
+   * One registry read per field group per read, for the same reason: a page of
+   * entries holds the same component in every row. `null` for a field group
+   * the registry does not know.
+   */
+  fieldGroups: Map<string, Promise<FieldDefinition[] | null>>;
+  /**
    * Physical table per collection, filled by the same registry read as
    * `fields`. A walked row's contributed hidden columns are keyed by this name,
    * which for a `dbName` collection is not `dc_<slug>`.
@@ -260,6 +271,7 @@ function createNestedHookState(): NestedHookState {
   return {
     visited: new Set(),
     fields: new Map(),
+    fieldGroups: new Map(),
     tables: new Map(),
     labelFields: new Map(),
     redactions: new WeakMap(),
@@ -652,6 +664,17 @@ function getNestedFields(field: FieldDefinition): FieldDefinition[] {
     return field.fields;
   }
   return [];
+}
+
+/**
+ * Whether a field's value is rows of the document's own rather than a
+ * reference: a group's or repeater's, or a component's, whose fields the
+ * component declares (`extractFieldGroupReferences` reads both spellings).
+ */
+function holdsOwnRows(field: FieldDefinition): boolean {
+  if (getNestedFields(field).length > 0) return true;
+  const { single, many } = extractFieldGroupReferences(field);
+  return single !== undefined || many !== undefined;
 }
 
 /**
@@ -3848,8 +3871,60 @@ export class CollectionRelationshipService extends BaseService {
     // once every entry has been walked. One that does not is a single document,
     // so its walk is already complete here.
     const shared = state ?? createNestedHookState();
-    await this.walkNestedRows(entry, collectionName, access, shared, 0);
+    await this.walkDocument(
+      entry,
+      await this.fieldsForNestedWalk(collectionName, shared),
+      access,
+      shared
+    );
     if (!state) await this.finalizeRelatedRows(shared, access);
+  }
+
+  /**
+   * {@link applyNestedFieldHooks} for a document described by its own fields
+   * rather than by a collection: a Single, whose fields the collection registry
+   * does not hold. The same walk and the same finish, so a related row is
+   * answered alike from an entry and from a Single. One document, so its walk
+   * is finished here.
+   */
+  async applyNestedFieldHooksToDocument(
+    doc: Record<string, unknown>,
+    fields: FieldDefinition[],
+    access: RelatedRowAccess
+  ): Promise<void> {
+    if (!access.enforceFieldAccess) return;
+    const state = createNestedHookState();
+    await this.walkDocument(doc, fields, access, state);
+    await this.finalizeRelatedRows(state, access);
+  }
+
+  /**
+   * The top of the walk: the document's own fields, and every language's
+   * values carried beside it (`_allLocales`, `{ field: { code: value } }`).
+   *
+   * A read of every language populates the related rows inside each
+   * language's component values as it does the document's own, so each of
+   * those rows is a related row like any other and is walked by the same
+   * field. A row both places share is claimed once (`visited`).
+   */
+  private async walkDocument(
+    entry: Record<string, unknown>,
+    fields: FieldDefinition[],
+    access: RelatedRowAccess,
+    state: NestedHookState
+  ): Promise<void> {
+    await this.walkFields(entry, fields, access, state, 0);
+    const every = valuesBesideRow(entry);
+    if (!every) return;
+    for (const field of fields) {
+      const keyed = every[field.name];
+      if (keyed === null || typeof keyed !== "object" || Array.isArray(keyed)) {
+        continue;
+      }
+      for (const inLanguage of Object.values(keyed)) {
+        await this.walkFieldValue(inLanguage, field, access, state, 0);
+      }
+    }
   }
 
   /**
@@ -4255,12 +4330,11 @@ export class CollectionRelationshipService extends BaseService {
     );
     if (rows.length === 0) return;
 
-    const nested = getNestedFields(field);
-    if (nested.length > 0) {
+    if (holdsOwnRows(field)) {
       // A container: its rows belong to THIS collection; descend to reach any
-      // relationship inside them.
+      // relationship inside them, a component's by the walk's own fields.
       for (const row of rows) {
-        for (const inner of nested) {
+        for (const inner of await this.containedFields(field, row, state)) {
           await this.reapplyFieldValueAccess(
             row[inner.name],
             inner,
@@ -4330,6 +4404,17 @@ export class CollectionRelationshipService extends BaseService {
     if (depth > MAX_RELATIONSHIP_DEPTH) return;
 
     const fields = await this.fieldsForNestedWalk(collectionName, state);
+    await this.walkFields(entry, fields, access, state, depth);
+  }
+
+  /** Visit each of `fields` on one level of a document or a related row. */
+  private async walkFields(
+    entry: Record<string, unknown>,
+    fields: readonly FieldDefinition[],
+    access: RelatedRowAccess,
+    state: NestedHookState,
+    depth: number
+  ): Promise<void> {
     for (const field of fields) {
       this.decodeJsonBackedFieldInPlace(entry, field);
       await this.walkFieldValue(entry[field.name], field, access, state, depth);
@@ -4337,12 +4422,74 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
+   * The fields one row of a container holds: a group's or a repeater's own, or
+   * those of the component the field names for this row (for a zone's row, the
+   * one its type names), read as every other walk over the read reads an
+   * instance (`instanceFields`). A component's fields are declared on the
+   * component, not on the field, so a walk that read only `field.fields` never
+   * reached a relationship inside one. Empty for a component the registry does
+   * not know, whose row then holds nothing the walk can name.
+   */
+  private async containedFields(
+    field: FieldDefinition,
+    row: Record<string, unknown>,
+    state: NestedHookState
+  ): Promise<readonly FieldDefinition[]> {
+    const nested = getNestedFields(field);
+    if (nested.length > 0) return nested;
+    const references = extractFieldGroupReferences(field);
+    const known = new Map<string, FieldDefinition[]>();
+    for (const slug of [
+      ...(references.single === undefined ? [] : [references.single]),
+      ...(references.many ?? []),
+    ]) {
+      const fields = await this.fieldGroupFieldsForNestedWalk(slug, state);
+      if (fields) known.set(slug, fields);
+    }
+    return (
+      instanceFields(row, references, {
+        reach: { fieldsOf: slug => known.get(slug) },
+        // A zone's row carrying no type is read by every component the zone
+        // allows, as the read's password strip reads it.
+        untypedZoneRows: "union",
+      }) ?? []
+    );
+  }
+
+  /**
+   * A field group's fields, read once per read from the registry the read's
+   * own component population reads. A lookup that fails rejects, and the read
+   * with it, rather than answering rows whose hooks it could not find.
+   */
+  private fieldGroupFieldsForNestedWalk(
+    slug: string,
+    state: NestedHookState
+  ): Promise<FieldDefinition[] | null> {
+    let pending = state.fieldGroups.get(slug);
+    if (!pending) {
+      const source = container.has("fieldGroupDataService")
+        ? container.get<FieldGroupDataService>("fieldGroupDataService")
+        : undefined;
+      // FieldConfig and FieldDefinition are structurally compatible for the
+      // properties the walk reads: name, type, nested fields, relationTo and
+      // the field-group references.
+      pending = source
+        ? source
+            .getComponentFields(slug)
+            .then(fields => fields as unknown as FieldDefinition[] | null)
+        : Promise.resolve(null);
+      state.fieldGroups.set(slug, pending);
+    }
+    return pending;
+  }
+
+  /**
    * Visit one field's value, whatever shape it takes.
    *
-   * A relationship can sit directly on the collection or inside a `group` or
-   * `repeater`, and `expandRelationships` populates it either way, so a walk
-   * that only looked at top-level `relationTo` fields left everything inside a
-   * container unmasked.
+   * A relationship can sit directly on the collection or inside a `group`, a
+   * `repeater` or a component (a zone's included), and the read populates it
+   * in each, so a walk that only looked at top-level `relationTo` fields left
+   * the field hooks of every related row inside a container unrun.
    */
   private async walkFieldValue(
     value: unknown,
@@ -4359,21 +4506,17 @@ export class CollectionRelationshipService extends BaseService {
     );
     if (rows.length === 0) return;
 
-    const nested = getNestedFields(field);
-    if (nested.length > 0) {
+    if (holdsOwnRows(field)) {
       // A container: its rows belong to THIS collection, so they carry no
       // hooks of their own -- only the relationships inside them do.
       for (const row of rows) {
-        for (const inner of nested) {
-          this.decodeJsonBackedFieldInPlace(row, inner);
-          await this.walkFieldValue(
-            row[inner.name],
-            inner,
-            access,
-            state,
-            depth
-          );
-        }
+        await this.walkFields(
+          row,
+          await this.containedFields(field, row, state),
+          access,
+          state,
+          depth
+        );
       }
       return;
     }

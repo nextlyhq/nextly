@@ -1714,6 +1714,29 @@ export class SingleQueryService extends BaseService {
       // in that language: after its field groups are put beside it, so a
       // refused language is withheld from them too.
       withholdLanguages(doc, refusedLanguages);
+      // Each related row the Single holds, on the document, inside a group,
+      // a repeater or a component, and in every language's values beside it,
+      // answered as its own collection's field afterRead hooks return it: the
+      // walk an entry's read runs, so a related row reads alike from either.
+      // After the refused languages are withheld, so no hook runs on a value
+      // the read does not return; before the Single's own hooks, which are
+      // handed the related rows as the walk leaves them. Not waived with the
+      // Single's hooks: they belong to the related collection.
+      await this.resolveRelationshipService()?.applyNestedFieldHooksToDocument(
+        doc,
+        // FieldConfig and FieldDefinition are structurally compatible for the
+        // properties the walk reads, as for the expansion above.
+        singleMeta.fields as unknown as FieldDefinition[],
+        this.relatedRowAccess(
+          options,
+          true,
+          resolveLocaleChain(
+            this.localization,
+            options.locale,
+            options.fallbackLocale
+          )
+        )
+      );
       // Every language's values beside the Single are kept off it while its
       // hooks and its own field rules run, and put back only to be judged
       // language by language: no hook is handed a value before it is judged,
