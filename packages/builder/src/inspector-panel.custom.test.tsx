@@ -22,7 +22,7 @@
  *
  * @module inspector-panel.custom.test
  */
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import {
   afterEach,
   beforeAll,
@@ -311,5 +311,29 @@ describe("a block's own inspector", () => {
       "could not be shown"
     );
     quiet.mockRestore();
+  });
+});
+
+describe("a block's own inspector while the panel is filtered", () => {
+  it("gives way to the generated fields, which the filter hides by the word", () => {
+    render(
+      <InspectorPanel
+        editor={editorFor(documentOf([hero()]))}
+        inspectors={resolving}
+      />
+    );
+    expect(given).toBeDefined();
+    given = undefined;
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Find a setting" }),
+      {
+        target: { value: "qqqq" },
+      }
+    );
+    // The block's own inspector isn't drawn; the generated Title is, hidden.
+    expect(given).toBeUndefined();
+    expect(
+      screen.getByLabelText("Title", { selector: "input" }).closest("[hidden]")
+    ).not.toBeNull();
   });
 });

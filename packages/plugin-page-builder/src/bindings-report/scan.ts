@@ -336,9 +336,22 @@ async function hostRows(
   const value = valueOf(read.draft) ?? valueOf(read.published);
   if (value === undefined) return { ...none, incomplete: false };
   const field = host.path.join(".");
+  // Where it binds a Single is kept for each language it was read in, even
+  // where the value may be shared by every language: one shared truly holds
+  // the same uses in the default language too, and one stored per language
+  // keeps the language its uses are in, so a place only in another
+  // language's value is never taken for the default's.
+  const uses = hostUses(
+    read,
+    {
+      blocksField: field,
+      ...(host.locale === undefined ? {} : { locale: host.locale }),
+    },
+    deps.limits().maxNodes
+  );
   if (maybeShared === true) {
     const seen = `${field}\u0000${JSON.stringify(value)}`;
-    if (shared.has(seen)) return { ...none, incomplete: false };
+    if (shared.has(seen)) return { ...none, uses, incomplete: false };
     shared.add(seen);
   }
   const perLanguage = host.locale !== undefined && maybeShared !== true;
@@ -346,16 +359,7 @@ async function hostRows(
   return {
     incomplete: judged.incomplete,
     unread: false,
-    uses: hostUses(
-      read,
-      {
-        blocksField: field,
-        ...(perLanguage && host.locale !== undefined
-          ? { locale: host.locale }
-          : {}),
-      },
-      deps.limits().maxNodes
-    ),
+    uses,
     rows: judged.rows.map(row => ({
       ...row,
       blocksField: field,

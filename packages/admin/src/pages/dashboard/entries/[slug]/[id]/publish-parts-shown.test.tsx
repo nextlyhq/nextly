@@ -67,6 +67,10 @@ vi.mock("@admin/hooks/queries/useCollections", () => ({
     error: null,
   }),
 }));
+// When the entry's reads start: entry-read-start's own concern, ready here.
+vi.mock("@admin/hooks/queries/entry-read-start", () => ({
+  useEntryReadStart: () => ({ ready: true, draft: false }),
+}));
 vi.mock("@admin/hooks/queries/useEntry", () => ({
   useEntry: () => ({
     data: { id: "42", title: "A post", _rev: "3" },

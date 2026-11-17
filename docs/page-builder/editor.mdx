@@ -249,6 +249,21 @@ while your pointer is over it, and Escape closes it. If you'd rather always see 
 turn on **Show CSS names** in the **⋯** menu: each control then prints its CSS property
 names in small type under its label. The editor remembers the choice in this browser.
 
+**Find a setting**, under the tabs, finds a setting by its name, the CSS it writes or
+another common word for it: "colour" or "color", "z-index", "corners" for the corner
+radius, "nofollow" for Link relationship. The tab you're on shows only what matches, each
+under its section with the section opened, and each tab's label says how many it holds.
+When the tab you're on has none, it says so and links to the tabs that do ("1 in
+Content"). Press <kbd>/</kbd> anywhere in the panel outside a text field to jump to the
+field, and <kbd>Esc</kbd> or ✕ to clear it; your sections come back as you left them. The
+search stays while you select other blocks.
+
+**Only changed**, beside it, shows only what the block holds a value for: in Content and
+Advanced, settings you've set; in Style, values at the device and state you're editing.
+A line says where else the block holds styles ("Also changed on Tablet (2) · Hover (1)"),
+and each part of it switches to that device or state. With both on, a setting must meet
+both.
+
 The Style tab lists its sections in the same order for every block: Block style, Layout,
 Inside its parent, Spacing, Size, Position, Text, Background, Border, Effects, Icon and
 CSS properties, each shown only where the block offers it. Advanced lists Visibility, then
@@ -467,6 +482,14 @@ section says so ("2 settings from Row aren't used · Clear"); **Clear** removes 
 step you can undo. A layout set in CSS with no plain equivalent, such as `inline-flex`,
 reads **Arrange: Custom** with the CSS rows that hold it; **Use plain controls** rewrites
 it to the nearest plain choice.
+
+Every block with a size says how it takes its place in its parent, under **Style → Inside
+its parent**: **Width: Fill**, **Fit** or **Fixed**, and **Height** the same when the
+parent arranges as a Row or a Grid. Fill takes the space it's given, Fit is as wide as its
+content, and Fixed is a width you set. Each choice writes what it means for the parent's
+arrangement at the device you're editing: in a Row, Fill takes the rest of the row. In a
+Row stacked on that device, a block is sized as in a Stack and Height isn't offered there.
+Values that match no choice read as **Custom**, with the CSS rows that hold them.
 
 Every container has **Content width** under **Style → Layout**: **Boxed** or **Full
 width**. A new Section starts Boxed, and every other container starts Full width.

@@ -117,10 +117,13 @@ export interface ContentWidthControlProps {
   readonly onWidth: (width: StoredWidth | undefined) => void;
 }
 
-const CHOICES = [
+/** Content width's two choices, by the words drawn on them. */
+export const CONTENT_WIDTH_CHOICES = [
   { contained: true, label: "Boxed" },
   { contained: false, label: "Full width" },
 ] as const;
+
+const CHOICES = CONTENT_WIDTH_CHOICES;
 
 /** Boxed and Full width, as a radio group of picture buttons. */
 function WidthChoices({

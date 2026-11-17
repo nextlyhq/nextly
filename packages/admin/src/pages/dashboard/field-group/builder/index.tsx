@@ -25,6 +25,7 @@ import {
   unsavedFieldGroupFrom,
 } from "@admin/lib/builder/unsaved-entities";
 import { navigateTo } from "@admin/lib/navigation";
+import type { FieldDefinition } from "@admin/types/collection";
 
 import { FIELD_GROUP_BUILDER_CONFIG } from "./builder-config";
 
@@ -37,9 +38,17 @@ export default function FieldGroupBuilderPage(): React.ReactElement | null {
     }
   }, [open]);
 
-  const handleSubmit = (values: BuilderSettingsValues) => {
-    // Made here, it has no owner: its own editor's first save creates it.
-    const entity = unsavedFieldGroupFrom(values);
+  const handleSubmit = (
+    values: BuilderSettingsValues,
+    templateFields: FieldDefinition[]
+  ) => {
+    // Made here, it has no owner: its own editor's first save creates it. It
+    // starts with its template's fields, or none; the rest are added in its
+    // editor.
+    const entity = {
+      ...unsavedFieldGroupFrom(values),
+      fields: templateFields,
+    };
     const slug = entity.address;
     const added = addUnsavedEntity(entity);
     // The dialog's check counts an unsaved entity's address as used, so this

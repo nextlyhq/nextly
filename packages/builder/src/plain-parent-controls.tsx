@@ -27,6 +27,7 @@ import {
 } from "./plain-layout";
 import { DraftInput, useApply, useLayoutTiers } from "./plain-layout-controls";
 import { SegmentChoices } from "./segment-choices";
+import { SettingSlot } from "./settings-filter";
 import {
   StyleTargetContext,
   type StyleFieldSurroundings,
@@ -36,6 +37,12 @@ import {
 export const ParentArrangementContext: React.Context<
   ParentArrangement | undefined
 > = React.createContext<ParentArrangement | undefined>(undefined);
+
+/** The ids the settings search knows Width and Height by. */
+export const CHILD_SIZE_IDS = {
+  width: "child:width",
+  height: "child:height",
+} as const;
 
 const CHOICES = ["fill", "fit", "fixed"] as const;
 const CHOICE_LABELS = { fill: "Fill", fit: "Fit", fixed: "Fixed" } as const;
@@ -93,8 +100,14 @@ export function InsideParentFields({
       : undefined;
   return (
     <div className="nx-inside-parent" data-control="inside-parent">
-      <AxisRow axis={width} apply={apply} />
-      {height === undefined ? null : <AxisRow axis={height} apply={apply} />}
+      <SettingSlot tab="style" ids={[CHILD_SIZE_IDS.width]}>
+        <AxisRow axis={width} apply={apply} />
+      </SettingSlot>
+      {height === undefined ? null : (
+        <SettingSlot tab="style" ids={[CHILD_SIZE_IDS.height]}>
+          <AxisRow axis={height} apply={apply} />
+        </SettingSlot>
+      )}
     </div>
   );
 }

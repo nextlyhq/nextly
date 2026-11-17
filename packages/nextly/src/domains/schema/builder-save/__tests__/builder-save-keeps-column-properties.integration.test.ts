@@ -9,10 +9,9 @@
  * be the one before with only the named change applied (`helpers/table-definition.ts`), so a
  * property nobody listed here is held too.
  *
- * Every road a Builder save takes to the database is driven: a collection's save, and a Single's
- * and a field group's schema dialog, run the migration file the save writes where the save moves
- * no values; a translated collection's runs the development push; a Single's settings save runs
- * the SQL its service plans. A SQLite rebuild that cannot keep what it would drop must refuse, say
+ * Every road a Builder save takes to the database is driven: a collection's save, a Single's and a
+ * field group's schema dialog, and a Single's settings save run the migration file the save writes
+ * where the save moves no values; a translated collection's runs the development push. A SQLite rebuild that cannot keep what it would drop must refuse, say
  * why, and leave the table as it was. A file over a default given by hand, which its snapshot does
  * not record, is refused as drift and changes nothing.
  *
@@ -207,22 +206,29 @@ const ROADS: Road[] = [
       ),
   },
   {
-    name: "a Single's settings save (its service's SQL)",
+    name: "a Single's settings save (its migration file)",
     table: "single_hero",
-    // The service plans and runs its own SQL (`applyUpdateDdl`), neither the push nor the file.
-    known: {
-      [RENAME]: {
-        on: ["postgresql", "mysql"],
-        why: "the service's SQL restates the renamed column",
-      },
-      [RENAME_NOT_NULL]: {
-        on: ["postgresql", "mysql", "sqlite"],
-        why: "the service's SQL restates the renamed column",
-      },
-    },
+    // The service writes the save's migration file, and in development the writer runs it, as the
+    // dialog's save does where the push would carry no values.
+    runsFile: true,
     create: createHero,
     save: (_t, fields) =>
       dispatchSingles("updateSingleSchema", { slug: "hero" }, { fields }),
+  },
+  {
+    // A translated Single renaming a shared field: no companion value moves, so its own file runs.
+    name: "a translated Single's settings save (its migration file)",
+    table: "single_tale",
+    runsFile: true,
+    async create(_t, fields) {
+      await dispatchSingles(
+        "createSingle",
+        {},
+        { slug: "tale", label: "Tale", localized: true, fields }
+      );
+    },
+    save: (_t, fields) =>
+      dispatchSingles("updateSingleSchema", { slug: "tale" }, { fields }),
   },
   {
     name: "a field group (its migration file)",

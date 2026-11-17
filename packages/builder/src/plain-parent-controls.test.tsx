@@ -215,3 +215,21 @@ describe("Inside its parent", () => {
     expect(fields().textContent).toContain("Custom");
   });
 });
+
+describe("Inside its parent, by the settings search", () => {
+  it("finds Height by its name, leaving Width out", () => {
+    mount({ display: "flex" });
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Find a setting" }),
+      {
+        target: { value: "height" },
+      }
+    );
+    const axis = (name: string) =>
+      within(fields())
+        .getByRole("radiogroup", { name, hidden: true })
+        .closest("[hidden]");
+    expect(axis("Height")).toBeNull();
+    expect(axis("Width")).not.toBeNull();
+  });
+});
