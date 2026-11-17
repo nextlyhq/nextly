@@ -20,8 +20,10 @@
  *   taken as made whole. A field group is always new: the format has no place
  *   for one, and a template's migration makes no table for one.
  *
- * Names only: a listed field whose type or options changed is not seen, since
- * the template's wording for them is not the declaration's.
+ * An entity's own options (its table, Draft/Published, translation, compound
+ * indexes) come from the template alone. Its fields are compared by name
+ * only: a listed field whose type or options changed is not seen, since the
+ * template's wording for them is not the declaration's.
  *
  * @module domains/schema/migrate-create/template-start
  */
@@ -58,22 +60,24 @@ function asMade(
   if (listed === undefined) return undefined;
   const listedNames = new Set(listed.fields.map(field => field.name));
   const declaredNames = new Set(declared.fields.map(field => field.name));
-  // Compound indexes are the declaration's own: the template lists none, so
-  // each one declared has been added since.
-  const asDeclared: MinimalConfigEntity = { ...declared };
-  delete asDeclared.indexes;
+  // Built from the template alone, never spread from the declaration: every
+  // option of the entity that shapes its table is what the template recorded,
+  // or what a template's migration makes where it records none. An option the
+  // declaration has changed or added since is then a difference.
   return {
-    ...asDeclared,
-    // Untranslated, every column on the one table, as a template's migration
-    // makes it: translation turned on since moves columns it has yet to move.
-    localized: false,
-    // The table the template made, where the file names it: a declaration
-    // that has since moved the entity to another table has changed it.
+    slug: declared.slug,
+    // The table the template made, where the file names it.
     tableName: listed.tableName ?? declared.tableName,
-    // Draft/Published as the template made it: its columns are in the
-    // database whatever the declaration says now.
+    // Draft/Published as the template made it.
     status: listed.status,
+    // Untranslated, every column on the one table; and no compound index,
+    // which the format has no place for (`indexes` is left out).
+    localized: false,
     fields: [
+      // Each listed field as the declaration defines it today: fields are
+      // compared by name alone, since the template's wording for a type or an
+      // index is not the declaration's, and the names of the indexes its
+      // migration made are not the ones a declaration would give them.
       // A field without a name (a layout container) is not one the template
       // could list, so it stays.
       ...declared.fields.filter(

@@ -335,26 +335,30 @@ describe("a project starting from the blog template's snapshot", () => {
     );
   });
 
-  it("names a compound index added to a listed collection, and translation turned on for one", async () => {
-    const indexed = await linesFor(
+  it("names a compound index added to a listed collection since the template", async () => {
+    const lines = await linesFor(
       withCollection(await blog(), "tags", tags => ({
         ...tags,
         indexes: [{ fields: ["name", "slug"] }],
       }))
     );
-    // The template made `dc_tags` without it.
-    expect(indexed).toHaveLength(1);
-    expect(indexed[0]).toMatch(/^\+ .*index.*dc_tags/);
 
-    const translated = await linesFor(
+    // The template made `dc_tags` without it.
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^\+ .*index.*dc_tags/);
+  });
+
+  it("names translation turned on for a listed collection since the template", async () => {
+    const lines = await linesFor(
       withCollection(await blog(), "tags", tags => ({
         ...tags,
         localized: true,
       }))
     );
+
     // The template made `dc_tags` untranslated, every column on the one table.
-    expect(translated.length).toBeGreaterThan(0);
-    expect(translated.every(line => line.includes("dc_tags"))).toBe(true);
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.every(line => line.includes("dc_tags"))).toBe(true);
   });
 
   it.each([
