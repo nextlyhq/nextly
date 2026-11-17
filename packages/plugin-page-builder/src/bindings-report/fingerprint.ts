@@ -4,7 +4,8 @@
  * for each says (a field group's fields are judged where a collection or a
  * Single places it), whether
  * a collection's entries carry timestamps, every registered block's
- * props, and the site settings a page may bind.
+ * props, the site settings a page may bind, and the format of the index of
+ * where documents bind Singles, which the same check fills.
  *
  * Nothing tells a plugin that one of these changed, so the check of every
  * document compares this with the one the last complete check was made
@@ -20,6 +21,8 @@ import {
   SITE_SETTING_FIELD_SHAPES,
   type BindingFieldShape,
 } from "@nextlyhq/blocks-engine";
+
+import { BINDING_USES_FORMAT } from "./uses";
 
 /** One registry record, as far as the fingerprint reads it. */
 interface RegistryRow {
@@ -106,6 +109,9 @@ export async function schemaFingerprint(
       .map(block => `b:${block.name}:${JSON.stringify(block.props ?? {})}`),
     `d:${designs}`,
     `site:${JSON.stringify(sources.siteSettings?.() ?? SITE_SETTING_FIELD_SHAPES)}`,
+    // What the check writes beside the report: a new format of the index of
+    // where documents bind Singles fills it on every site's next check.
+    `uses:${BINDING_USES_FORMAT}`,
   ].sort();
   return hashId(parts.join("\n"));
 }

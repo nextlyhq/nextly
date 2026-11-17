@@ -362,7 +362,7 @@ test.describe("the composition exit tests", () => {
       .getByRole("navigation", { name: "Editor panels" })
       .getByRole("button", { name: "Add", exact: true });
     if ((await add.getAttribute("aria-pressed")) !== "true") await add.click();
-    await page.getByRole("tab", { name: "Sections" }).click();
+    await page.getByRole("tab", { name: "Saved sections" }).click();
     const tile = page.getByRole("option", { name: patternTitle, exact: true });
     await tile.click();
     await tile.click();
@@ -545,9 +545,9 @@ test.describe("the composition exit tests", () => {
 
     // Chosen on the page's form, then published, as an author does.
     await gotoAdmin(page, `/collections/pages/${switching}`);
-    const picker = page.getByRole("combobox", { name: "Layout" });
+    const picker = page.getByRole("combobox", { name: "Header & footer" });
     await expect(picker).toBeVisible({ timeout: 30_000 });
-    await expect(picker).toContainText(`Site default · main ${STAMP}`);
+    await expect(picker).toContainText(`Site default (main ${STAMP})`);
     await picker.click();
     await page
       .getByRole("option", { name: `other ${STAMP}`, exact: true })

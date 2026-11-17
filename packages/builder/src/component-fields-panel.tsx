@@ -409,8 +409,8 @@ export function PropExposeControl({
 }
 
 /**
- * Above a block's props while a component is edited: its Shown row, with the
- * same icon, letting each page hide the block.
+ * In the Advanced tab's Visibility section while a component is edited: its
+ * Shown row, with the same icon, letting each page hide the block.
  */
 export function VisibilityExposeControl({
   binding,
@@ -622,7 +622,9 @@ export function ExposedFieldsList({
   const slots = exposedSlotIds(component);
   const headingId = React.useId();
   return (
-    <div className="nx-inspector" data-component-fields="">
+    // No box of its own: drawn inside the panel's frame for the document,
+    // among the host's own rows for it.
+    <div className="contents" data-component-fields="">
       <ComponentHeader
         name={binding.name ?? "This component"}
         fieldCount={fields.length + slots.length}

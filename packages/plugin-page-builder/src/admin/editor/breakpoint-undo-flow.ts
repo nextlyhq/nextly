@@ -69,7 +69,7 @@ export function undoConfirmWords(labels: readonly string[]): UndoConfirmWords {
   const one = labels.length === 1;
   return {
     title: `Put ${names} back?`,
-    body: `${names} ${one ? "is" : "are"} added back to the site's breakpoints as ${one ? "it was" : "they were"}, and the styles the removal took out go back on every page, component, pattern and shared style. Anything set for ${names} since the removal stays as it is.`,
+    body: `${names} ${one ? "is" : "are"} added back to the site's breakpoints as ${one ? "it was" : "they were"}, and the styles the removal took out go back on every page, component, saved section and shared style. Anything set for ${names} since the removal stays as it is.`,
     hint: "Only the newest removal can be undone, and only once.",
     confirm: `Put ${names} back`,
   };
@@ -85,7 +85,7 @@ export function undoingWords(labels: readonly string[]): {
   const one = labels.length === 1;
   return {
     title: `Putting ${names}'s styles back`,
-    body: `${names} ${one ? "is" : "are"} back in the site's breakpoints. ${one ? "Its" : "Their"} styles are being put back on each page, component and pattern.`,
+    body: `${names} ${one ? "is" : "are"} back in the site's breakpoints. ${one ? "Its" : "Their"} styles are being put back on each page, component and saved section.`,
     hint: "On a large site this takes a few minutes. You can close Settings; it carries on in the background.",
   };
 }
@@ -114,8 +114,8 @@ function documentWord(entry: SiteBreakpointUndoSkipped): string {
   const words: Readonly<Record<string, string>> = {
     pages: "page",
     components: "component",
-    patterns: "pattern",
-    layouts: "Layout",
+    patterns: "saved section",
+    layouts: "header & footer set",
   };
   return words[entry.slug] ?? "entry";
 }

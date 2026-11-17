@@ -293,8 +293,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
     beforeStore = handler;
   },
   // The header's controls the bar places; drawn by the admin, not here.
-  DocumentSaveIndicator: () => null,
-  DocumentPrimaryAction: () => null,
+  DocumentSaveAndPublish: () => null,
+  useDocumentLifeStage: () => null,
   useDocumentActions: () =>
     React.useSyncExternalStore(
       listener => {

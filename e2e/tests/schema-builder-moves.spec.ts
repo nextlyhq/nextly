@@ -202,11 +202,8 @@ test.describe("moving fields in the Builder outline", () => {
     await says(page, `${NOT_YET} Nothing moved.`);
     await expect(row(page, "meta/caption")).toBeFocused();
     // The keys are named in the row's description.
-    const describedBy = await row(page, "meta/caption").getAttribute(
-      "aria-describedby"
-    );
-    await expect(page.locator(`[id="${describedBy}"]`)).toContainText(
-      "Alt+Up and Alt+Down move the field"
+    await expect(row(page, "meta/caption")).toHaveAccessibleDescription(
+      /Alt\+Up and Alt\+Down move the field/
     );
   });
 

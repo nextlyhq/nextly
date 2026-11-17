@@ -15,7 +15,6 @@ import {
 import * as React from "react";
 
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
-import { useSurvivingReport } from "./builder-notices";
 import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import {
@@ -29,6 +28,7 @@ import {
   sharedStyleChange,
   sharedStyleWrite,
 } from "./shared-style-target";
+import { useSurvivingReport } from "./shell/builder-notices";
 import {
   type ProvenanceOf,
   StyleTargetContext,

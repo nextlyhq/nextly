@@ -75,6 +75,8 @@ import type {
   FindMediaArgs,
   FindMediaByIDArgs,
   FindMediaByIDsArgs,
+  MediaCopyArgs,
+  MediaCopiesArgs,
   FindPermissionByIDArgs,
   FindPermissionsArgs,
   FindRoleByIDArgs,
@@ -133,6 +135,7 @@ import type {
   EmailTemplateComparison,
   OwnerUpdateUndo,
 } from "../domains/email/services/email-template-service";
+import type { MediaCopy } from "../domains/media/copies/media-copies";
 import type { FieldRewriteResult } from "../domains/versions/field-rewrite";
 import type { NextlyPrincipals } from "../plugins/principals/types";
 import type { PublicSiteSettings } from "../runtime/site-settings-read";
@@ -690,6 +693,20 @@ export interface Nextly {
      * @experimental
      */
     findByIDs: (args: FindMediaByIDsArgs) => Promise<MediaFile[]>;
+    /**
+     * A resized copy of an image at the allowed width nearest `width`, or
+     * `null` where the image is used as it is.
+     *
+     * @experimental
+     */
+    copyOf: (args: MediaCopyArgs) => Promise<MediaCopy | null>;
+    /**
+     * Every resized copy of an image up to `upTo` wide, narrowest first, or
+     * `[]` where no copy can be had. The item is read and checked once.
+     *
+     * @experimental
+     */
+    copiesOf: (args: MediaCopiesArgs) => Promise<MediaCopy[]>;
     update: (args: UpdateMediaArgs) => Promise<MutationResult<MediaFile>>;
     delete: (args: DeleteMediaArgs) => Promise<MutationResult<{ id: string }>>;
     bulkDelete: (args: BulkDeleteMediaArgs) => Promise<BulkOperationResult>;
@@ -1079,8 +1096,6 @@ export interface Nextly {
    *   kinds: ["published"],
    * });
    * ```
-   *
-   * @experimental
    */
   contentEvents: ContentEventsNamespace;
 

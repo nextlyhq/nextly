@@ -46,6 +46,8 @@ vi.mock("@admin/hooks/queries/useVersions", () => ({
   // The rail's summary lines fetch one of these each. They are not what these
   // tests are about, so they answer nothing and stay quiet.
   useVersionDiff: () => ({ data: undefined, isLoading: false, isError: false }),
+  // Read only for a version a refused baseline names; none is refused here.
+  useVersion: () => ({ data: undefined }),
   // No baseline is named in these tests: the server is never asked.
   useBaselineDiff: () => ({
     data: undefined,

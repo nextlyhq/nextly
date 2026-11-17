@@ -18,10 +18,11 @@ import {
   PRELOAD,
   ROOT,
   SECRET,
+  flag,
   sleep,
 } from "./config.mjs";
 
-export function serverEnv(log) {
+function serverEnv(log) {
   const { NODE_ENV: _inherited, ...base } = process.env;
   return {
     ...base,
@@ -40,7 +41,7 @@ export function serverEnv(log) {
   };
 }
 
-export function run(command, env) {
+function run(command, env) {
   const result = spawnSync(command, {
     cwd: ROOT,
     env,
@@ -51,7 +52,7 @@ export function run(command, env) {
     throw new Error(`"${command}" ended with ${String(result.status)}`);
 }
 
-export async function portOpen(port) {
+async function portOpen(port) {
   return new Promise(resolve => {
     const socket = net.connect(port, "127.0.0.1");
     socket.on("connect", () => {
@@ -66,7 +67,7 @@ export async function portOpen(port) {
  * A fresh database with the playground's seed, its plugins installed, and
  * the speed fixture, as a deployment migrates and seeds before it builds.
  */
-export function prepareDatabase(env) {
+function prepareDatabase(env) {
   for (const suffix of ["", "-shm", "-wal"])
     fs.rmSync(DB_FILE + suffix, { force: true });
   run("pnpm --filter playground exec tsx scripts/seed.ts", env);
@@ -74,7 +75,24 @@ export function prepareDatabase(env) {
   run("pnpm --filter playground exec tsx scripts/seed-speed-fixture.ts", env);
 }
 
-export async function startServer(env) {
+/**
+ * The server a run starts for itself: refused when its port is taken, then a
+ * fresh database, the playground built when `--build` asks, and the
+ * production server started, counting statements into `log` when given.
+ */
+export async function startOwnServer(log) {
+  if (await portOpen(PORT))
+    throw new Error(
+      `port ${String(PORT)} is already in use; stop what listens there, set BUILDER_SPEED_PORT, or measure it with --base-url`
+    );
+  const env = serverEnv();
+  prepareDatabase(env);
+  if (flag("build")) run("pnpm --filter playground exec next build", env);
+  if (log) fs.rmSync(log, { force: true });
+  return startServer(serverEnv(log));
+}
+
+async function startServer(env) {
   const server = spawn(
     "pnpm",
     ["--filter", "playground", "exec", "next", "start", "-p", String(PORT)],

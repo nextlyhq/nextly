@@ -9,7 +9,10 @@ import { describe, expect, it } from "vitest";
 import type { StoragePlace } from "../check-move";
 import { moveDataStatements, type MoveColumn } from "../move-statements";
 
-const column = (name: string): StoragePlace => ({ kind: "column", column: name });
+const column = (name: string): StoragePlace => ({
+  kind: "column",
+  column: name,
+});
 const key = (name: string, ...keys: string[]): StoragePlace => ({
   kind: "json",
   column: name,
@@ -22,7 +25,10 @@ function run(db: Database.Database, statements: readonly string[]): void {
 }
 
 describe("moveDataStatements on SQLite", () => {
-  const sqlite = (kind: MoveColumn["kind"], columnType = "text"): MoveColumn => ({
+  const sqlite = (
+    kind: MoveColumn["kind"],
+    columnType = "text"
+  ): MoveColumn => ({
     table: "dc_posts",
     dialect: "sqlite",
     kind,
@@ -31,7 +37,9 @@ describe("moveDataStatements on SQLite", () => {
 
   function table(columnSql: string): Database.Database {
     const db = new Database(":memory:");
-    db.exec(`CREATE TABLE dc_posts (id integer primary key, ${columnSql}, meta text);`);
+    db.exec(
+      `CREATE TABLE dc_posts (id integer primary key, ${columnSql}, meta text);`
+    );
     return db;
   }
 
@@ -45,7 +53,9 @@ describe("moveDataStatements on SQLite", () => {
       sqlite("text")
     );
     run(db, into.copy);
-    expect(db.prepare("SELECT id, meta FROM dc_posts ORDER BY id").all()).toEqual([
+    expect(
+      db.prepare("SELECT id, meta FROM dc_posts ORDER BY id").all()
+    ).toEqual([
       { id: 1, meta: '{"summary":"s","title":"Hello \'there\'"}' },
       { id: 2, meta: null },
       { id: 3, meta: '{"title":"Bare"}' },
@@ -59,7 +69,9 @@ describe("moveDataStatements on SQLite", () => {
     );
     run(db, out.copy);
     run(db, out.clearSource);
-    expect(db.prepare("SELECT id, title, meta FROM dc_posts ORDER BY id").all()).toEqual([
+    expect(
+      db.prepare("SELECT id, title, meta FROM dc_posts ORDER BY id").all()
+    ).toEqual([
       { id: 1, title: "Hello 'there'", meta: '{"summary":"s"}' },
       { id: 2, title: null, meta: null },
       { id: 3, title: "Bare", meta: "{}" },
@@ -88,10 +100,9 @@ describe("moveDataStatements on SQLite", () => {
         sqlite("boolean", "integer")
       ).copy
     );
-    expect(db.prepare("SELECT featured FROM dc_posts ORDER BY id").all()).toEqual([
-      { featured: 1 },
-      { featured: 0 },
-    ]);
+    expect(
+      db.prepare("SELECT featured FROM dc_posts ORDER BY id").all()
+    ).toEqual([{ featured: 1 }, { featured: 0 }]);
   });
 
   it("writes a date the column holds in seconds as an ISO string in the group, and back", () => {
@@ -148,9 +159,15 @@ describe("moveDataStatements on SQLite", () => {
     );
     run(db, out.copy);
     run(db, out.clearSource);
-    expect(db.prepare("SELECT id, published, meta FROM dc_posts ORDER BY id").all()).toEqual([
+    expect(
+      db.prepare("SELECT id, published, meta FROM dc_posts ORDER BY id").all()
+    ).toEqual([
       { id: 1, published: null, meta: '{"published":"July 17, 2026"}' },
-      { id: 2, published: Date.parse("2026-07-17T00:00:00.000Z") / 1000, meta: "{}" },
+      {
+        id: 2,
+        published: Date.parse("2026-07-17T00:00:00.000Z") / 1000,
+        meta: "{}",
+      },
     ]);
   });
 
@@ -232,8 +249,10 @@ describe("moveDataStatements on PostgreSQL and MySQL", () => {
       columnType: "integer",
     };
     expect(
-      moveDataStatements({ from: column("views"), to: key("meta", "views") }, pg)
-        .copy
+      moveDataStatements(
+        { from: column("views"), to: key("meta", "views") },
+        pg
+      ).copy
     ).toEqual([
       `UPDATE "dc_posts" SET "meta" = jsonb_set(COALESCE("meta", '{}'::jsonb), '{"views"}', to_jsonb("views"), true) WHERE "views" IS NOT NULL;`,
     ]);
@@ -257,8 +276,10 @@ describe("moveDataStatements on PostgreSQL and MySQL", () => {
       columnType: "varchar(255)",
     };
     expect(
-      moveDataStatements({ from: column("title"), to: key("meta", "title") }, mysql)
-        .copy
+      moveDataStatements(
+        { from: column("title"), to: key("meta", "title") },
+        mysql
+      ).copy
     ).toEqual([
       "UPDATE `dc_posts` SET `meta` = JSON_SET(COALESCE(`meta`, JSON_OBJECT()), '$.\"title\"', `title`) WHERE `title` IS NOT NULL;",
     ]);
@@ -275,20 +296,30 @@ describe("moveDataStatements on PostgreSQL and MySQL", () => {
   });
 
   it("reads a date out of a group as an instant on PostgreSQL and MySQL, whatever its offset", () => {
-    const date = (dialect: "postgresql" | "mysql", columnType: string): MoveColumn => ({
+    const date = (
+      dialect: "postgresql" | "mysql",
+      columnType: string
+    ): MoveColumn => ({
       table: "dc_posts",
       dialect,
       kind: "timestamp",
       columnType,
     });
     const out = { from: key("meta", "published"), to: column("published") };
-    expect(moveDataStatements(out, date("postgresql", "timestamp")).copy[0]).toContain(
+    expect(
+      moveDataStatements(out, date("postgresql", "timestamp")).copy[0]
+    ).toContain(
       `SET "published" = (("meta" #>> '{"published"}')::timestamptz AT TIME ZONE 'UTC')`
     );
     expect(
-      moveDataStatements(out, date("postgresql", "timestamp with time zone")).copy[0]
-    ).toContain(`SET "published" = ("meta" #>> '{"published"}')::timestamptz WHERE`);
-    expect(moveDataStatements(out, date("mysql", "datetime(3)")).copy[0]).toContain(
+      moveDataStatements(out, date("postgresql", "timestamp with time zone"))
+        .copy[0]
+    ).toContain(
+      `SET "published" = ("meta" #>> '{"published"}')::timestamptz WHERE`
+    );
+    expect(
+      moveDataStatements(out, date("mysql", "datetime(3)")).copy[0]
+    ).toContain(
       "CONVERT_TZ(CAST(REPLACE(REGEXP_REPLACE(JSON_UNQUOTE(JSON_EXTRACT(`meta`, '$.\"published\"')), '(Z|[+-][0-9]{2}:[0-9]{2})$', ''), 'T', ' ') AS DATETIME(3)), IF("
     );
   });
@@ -297,7 +328,12 @@ describe("moveDataStatements on PostgreSQL and MySQL", () => {
     expect(() =>
       moveDataStatements(
         { from: column("title"), to: key("meta", `ti"tle`) },
-        { table: "dc_posts", dialect: "sqlite", kind: "text", columnType: "text" }
+        {
+          table: "dc_posts",
+          dialect: "sqlite",
+          kind: "text",
+          columnType: "text",
+        }
       )
     ).toThrow();
   });

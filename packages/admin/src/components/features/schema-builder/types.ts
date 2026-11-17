@@ -7,9 +7,15 @@
 import type { DragStartEvent, useSensors } from "@dnd-kit/core";
 import type { Dispatch, SetStateAction } from "react";
 
+import type {
+  BuilderFieldsStep,
+  BuilderSnapshot,
+} from "@admin/hooks/useFieldBuilder";
 import type { FieldBuilderValidationResult } from "@admin/lib/builder/field-validators";
 import type { SchemaPreviewResponse } from "@admin/services/schemaApi";
 import type { FieldConfig } from "@admin/types/ui/collection";
+
+import type { BuilderSettingsValues } from "./BuilderSettingsModal";
 
 // ============================================================
 // Field Width Options
@@ -477,13 +483,28 @@ export interface BuilderFieldsApi {
   handleFieldUpdate: (updatedField: BuilderField) => void;
   handleNestedFieldAdd: (parentFieldId: string, newField: BuilderField) => void;
   validateFields: (userFields: BuilderField[]) => FieldBuilderValidationResult;
-  resetFields: (fields: BuilderField[]) => void;
-  clearHistory: (saved?: BuilderField[], step?: number) => void;
+  // The fields and the entity's settings share one history: see
+  // `useFieldBuilder`'s `BuilderSnapshot`.
+  settings: BuilderSnapshot["settings"];
+  setSettings: (next: BuilderSettingsValues) => void;
+  snapshot: BuilderSnapshot;
+  rewriteSnapshots: (
+    change: (snapshot: BuilderSnapshot) => BuilderSnapshot
+  ) => void;
+  resetFields: (
+    fields: BuilderField[],
+    settings?: BuilderSnapshot["settings"]
+  ) => void;
+  clearHistory: (
+    saved?: BuilderSnapshot,
+    step?: number,
+    before?: BuilderSnapshot
+  ) => void;
   historyStep: number;
   canUndo: boolean;
   canRedo: boolean;
-  undo: () => { from: BuilderField[]; to: BuilderField[] } | null;
-  redo: () => { from: BuilderField[]; to: BuilderField[] } | null;
+  undo: () => BuilderFieldsStep | null;
+  redo: () => BuilderFieldsStep | null;
 }
 
 /**

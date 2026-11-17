@@ -63,7 +63,8 @@ import type { LucideIcon } from "lucide-react";
 import * as React from "react";
 
 import { BlockCard, type CardVerbs } from "./block-card";
-import { CanvasPassageContext } from "./canvas-passage";
+import { CanvasPassageContext } from "./canvas/canvas-passage";
+import { markExposedParts } from "./canvas/exposed-outline";
 import {
   ChosenMedia,
   ContentServicesContext,
@@ -72,7 +73,6 @@ import {
   type PickedMedia,
 } from "./content-controls";
 import type { EditorState } from "./editor-state";
-import { markExposedParts } from "./exposed-outline";
 import { HeldByLock, HeldHere } from "./held-by-lock";
 import { lockOp, lockStatusOf, lockViewOf, renameOp } from "./inspector";
 import {

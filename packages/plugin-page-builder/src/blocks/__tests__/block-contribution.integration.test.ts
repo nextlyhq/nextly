@@ -10,13 +10,6 @@
  * are listed in.
  */
 
-import {
-  allBlocks,
-  clearBlocks,
-  getBlock,
-  getBlockSource,
-  getSupport,
-} from "@nextlyhq/blocks-engine";
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -25,17 +18,16 @@ import { createTestNextly, type TestNextly } from "nextly/testing";
 import { defineBlock } from "@nextlyhq/plugin-sdk/blocks";
 
 import { blockRegistry } from "../index";
-import { pageBuilder } from "../../plugin";
+import { blocksOf, pageBuilder } from "../../plugin";
 
 let current: TestNextly | undefined;
 
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
-  // Cleared so each test starts from an empty registry. The boot path does its
-  // own reset — proven by the second-boot test below, which deliberately boots
-  // twice WITHOUT this hook running in between.
-  clearBlocks();
+  // Each test boots its own page builder, so each starts from an empty
+  // registry. The boot path does its own reset — proven by the second-boot
+  // tests below, which boot one page builder twice.
 });
 
 const pricingTable = defineBlock({
@@ -74,21 +66,25 @@ describe("a plugin contributes blocks through the page builder", () => {
   it("registers the block, whichever order the plugins are listed in", async () => {
     // The contributor listed FIRST: if registration depended on the page
     // builder having already initialized, this is the ordering that breaks.
+    const plugin = pageBuilder();
     current = await createTestNextly({
-      plugins: [contributor(), pageBuilder()],
+      plugins: [contributor(), plugin],
     });
 
-    expect(getBlock("acme/pricing-table")).toBeDefined();
+    expect(blocksOf(plugin).get("acme/pricing-table")).toBeDefined();
   });
 
   it("records which plugin contributed the block", async () => {
     // A collision between two plugins' blocks has to name both culprits, which
     // it cannot do if every contribution is filed under one anonymous source.
+    const plugin = pageBuilder();
     current = await createTestNextly({
-      plugins: [pageBuilder(), contributor()],
+      plugins: [plugin, contributor()],
     });
 
-    expect(getBlockSource("acme/pricing-table")).toBe("@acme/pricing-blocks");
+    expect(blocksOf(plugin).sourceOf("acme/pricing-table")).toBe(
+      "@acme/pricing-blocks"
+    );
   });
 
   it("attributes each block to the plugin that registered it", async () => {
@@ -106,12 +102,17 @@ describe("a plugin contributes blocks through the page builder", () => {
       },
     });
 
+    const plugin = pageBuilder();
     current = await createTestNextly({
-      plugins: [pageBuilder(), contributor(), marketing],
+      plugins: [plugin, contributor(), marketing],
     });
 
-    expect(getBlockSource("acme/pricing-table")).toBe("@acme/pricing-blocks");
-    expect(getBlockSource("acme/hero-banner")).toBe("@acme/marketing-blocks");
+    expect(blocksOf(plugin).sourceOf("acme/pricing-table")).toBe(
+      "@acme/pricing-blocks"
+    );
+    expect(blocksOf(plugin).sourceOf("acme/hero-banner")).toBe(
+      "@acme/marketing-blocks"
+    );
   });
 
   it("refuses to contribute when the page builder is absent", async () => {
@@ -134,9 +135,14 @@ describe("a plugin contributes blocks through the page builder", () => {
       },
     });
 
-    current = await createTestNextly({ plugins: [pageBuilder(), empty] });
+    const plugin = pageBuilder();
+    current = await createTestNextly({ plugins: [plugin, empty] });
 
-    expect(allBlocks().some(b => b.name.startsWith("acme/"))).toBe(false);
+    expect(
+      blocksOf(plugin)
+        .all()
+        .some(b => b.name.startsWith("acme/"))
+    ).toBe(false);
   });
 });
 
@@ -157,12 +163,13 @@ describe("resetting blocks leaves the support vocabulary alone", () => {
       },
     });
 
+    const plugin = pageBuilder();
     current = await createTestNextly({
-      plugins: [pageBuilder(), withSupport],
+      plugins: [plugin, withSupport],
     });
 
-    expect(getSupport("telepathy")).toBeDefined();
-    expect(getBlock("acme/pricing-table")).toBeDefined();
+    expect(blocksOf(plugin).support("telepathy")).toBeDefined();
+    expect(blocksOf(plugin).get("acme/pricing-table")).toBeDefined();
   });
 
   it("re-registers a custom support without a collision", async () => {
@@ -182,17 +189,19 @@ describe("resetting blocks leaves the support vocabulary alone", () => {
         },
       });
 
+    // One page builder booted twice, so its registry outlives the first boot.
+    const plugin = pageBuilder();
     current = await createTestNextly({
-      plugins: [pageBuilder(), withSupport()],
+      plugins: [plugin, withSupport()],
     });
     await current.destroy();
 
     current = await createTestNextly({
-      plugins: [pageBuilder(), withSupport()],
+      plugins: [plugin, withSupport()],
     });
 
-    expect(getSupport("telepathy")).toBeDefined();
-    expect(getBlock("acme/pricing-table")).toBeDefined();
+    expect(blocksOf(plugin).support("telepathy")).toBeDefined();
+    expect(blocksOf(plugin).get("acme/pricing-table")).toBeDefined();
   });
 });
 
@@ -201,32 +210,34 @@ describe("the registry survives a second boot", () => {
     // The reset runs when the registry service is first resolved, and the
     // service is lazy — so on a boot where nothing contributes, nothing would
     // resolve it and the departed plugin's blocks would still be offered.
-    // Both boots run inside one test because the suite's `afterEach` clears the
-    // registry, which would hide exactly the leak being asserted.
+    // Both boots run inside one test, of one page builder, so its registry
+    // outlives the first boot as it does a reload.
+    const plugin = pageBuilder();
     current = await createTestNextly({
-      plugins: [pageBuilder(), contributor()],
+      plugins: [plugin, contributor()],
     });
-    expect(getBlock("acme/pricing-table")).toBeDefined();
+    expect(blocksOf(plugin).get("acme/pricing-table")).toBeDefined();
     await current.destroy();
 
-    current = await createTestNextly({ plugins: [pageBuilder()] });
+    current = await createTestNextly({ plugins: [plugin] });
 
-    expect(getBlock("acme/pricing-table")).toBeUndefined();
+    expect(blocksOf(plugin).get("acme/pricing-table")).toBeUndefined();
   });
 
   it("re-registers the same block without a collision", async () => {
-    // The registry is pinned to globalThis and outlives a config reload, while
-    // every plugin's init runs again — so a boot that did not reset it would
-    // refuse the second registration.
+    // The site's registry outlives a config reload, while every plugin's init
+    // runs again — so a boot that did not reset it would refuse the second
+    // registration.
+    const plugin = pageBuilder();
     current = await createTestNextly({
-      plugins: [pageBuilder(), contributor()],
+      plugins: [plugin, contributor()],
     });
     await current.destroy();
 
     current = await createTestNextly({
-      plugins: [pageBuilder(), contributor()],
+      plugins: [plugin, contributor()],
     });
 
-    expect(getBlock("acme/pricing-table")).toBeDefined();
+    expect(blocksOf(plugin).get("acme/pricing-table")).toBeDefined();
   });
 });

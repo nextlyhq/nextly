@@ -123,27 +123,19 @@ const run = <T>(t: TestNextly, statement: string) =>
   ) as unknown as Promise<T[]>;
 
 /**
- * `columns` as a receiving column is compared with the column it came from, the date column's type
- * each dialect keeps on purpose or by a defect of its own aside: on MySQL the translations table
- * keeps a date as `DATETIME(3)` beside the main table's `timestamp`, both holding the UTC wall clock
- * Nextly writes, its adapter pinning every session to UTC; on PostgreSQL it keeps one as
- * `timestamp with time zone` beside the main table's `timestamp without time zone`, and moving a
- * value between the two stores its instant shifted by the session's time zone, a defect of its
- * own, so its type is not held here as expected. Everything else about the date column is.
+ * `columns` as a receiving column is compared with the column it came from, the one difference a
+ * dialect keeps on purpose aside: on MySQL the translations table keeps a date as `DATETIME(3)`
+ * beside the main table's `timestamp`, both holding the UTC wall clock Nextly writes, its adapter
+ * pinning every session to UTC. PostgreSQL keeps a date as `timestamp without time zone` in both
+ * tables, so its date column is compared whole, type included, as SQLite's is.
  */
 function forComparison(
   columns: Record<string, ColumnDefinition | undefined>,
   dialect: TestDialect
 ): Record<string, ColumnDefinition | undefined> {
   const date = columns.published;
-  if (!date || dialect === "sqlite") return columns;
-  return {
-    ...columns,
-    published:
-      dialect === "mysql"
-        ? { ...date, type: "datetime(3)" }
-        : { ...date, type: "(not compared)" },
-  };
+  if (!date || dialect !== "mysql") return columns;
+  return { ...columns, published: { ...date, type: "datetime(3)" } };
 }
 
 /** The moved fields' columns in `table`, by name, as the database's catalog reports them. */

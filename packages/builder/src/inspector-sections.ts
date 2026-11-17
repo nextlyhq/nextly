@@ -5,9 +5,10 @@
  * **The builder's own arrangement, over the engine's vocabulary.** The engine's
  * groups (`STYLE_GROUP_DEFS`) are also the `supports` keys block and plugin
  * authors declare, so they stay exactly as they are. What an author SEES is
- * arranged here: eight sections in the order Webflow and Elementor V4 share —
- * Layout, Spacing, Size, Position, Typography, Background, Border, Effects —
- * with the colour and list properties inside Typography, shadow inside
+ * arranged here: one order for every block, so a section is always in the
+ * same place — Block style, Layout, Inside its parent, Spacing, Size,
+ * Position, Text, Background, Border, Effects, Icon, CSS properties — with
+ * the colour and list properties inside Text, shadow inside
  * Effects, and the container-query and box-sizing properties behind Layout's
  * and Size's "+ More". There is no "Advanced" style section: that name belongs
  * to Content alone, so an author never has to guess which one is meant.
@@ -18,12 +19,16 @@
  * new capability is reachable on the day it ships rather than invisible until
  * this table catches up.
  *
- * **Common first, the rest behind "+ More".** Each property's tier says when
- * it shows without being asked for. Some depend on the block: the flex
- * controls once the block is a flex container, the media fit controls on a
- * replaced element such as an image, the transition once a state other than
- * Normal is being edited. A property holding a value always shows, whatever
- * its tier: a set value is never hidden.
+ * **Common first, the rest behind "+ More".** Each property's tier says
+ * whether it is one an author reaches for first. A common property shows
+ * without being asked for where it also has an effect on the block, which is
+ * the engine's answer (`applies`), not this table's: the flex controls on a
+ * flex container, the grid ones on a grid, a child's sizing inside a Row or a
+ * Grid, an image's fit on a replaced element. Three tiers are the builder's
+ * own, because they are about editing rather than CSS: the transition once a
+ * state other than Normal is being edited, the outline while Focus is, and an
+ * icon's position while an icon is drawn. A property holding a value always
+ * shows, whatever its tier: a set value is never hidden.
  *
  * @module inspector-sections
  */
@@ -32,41 +37,42 @@ import type { StyleGroup, StyleState } from "@nextlyhq/blocks-engine";
 
 /** The Style tab's sections, by key. */
 export type InspectorSectionKey =
-  | "icon"
+  | "block-style"
   | "layout"
+  | "inside-parent"
   | "spacing"
   | "size"
   | "position"
   | "typography"
   | "background"
   | "border"
-  | "effects";
+  | "effects"
+  | "icon"
+  | "css-properties";
 
 /**
  * When a property shows without being asked for.
  *
- * - `common`: always.
+ * - `common`: wherever it has an effect.
  * - `more`: only from "+ More", or once it holds a value.
- * - `flex`, `grid`, `flex-or-grid`: while the block is that kind of container.
- * - `media`: on a replaced element (an image, a video, an embed).
- * - `framed-media`: on a replaced element whose fit leaves a choice of where
- *   it sits: Cover (which part stays in view), Contain, None or Scale down
- *   (where it sits in its box). Fill stretches it to the box, so there is
- *   nothing to place.
+ * - `common-on-media`: common where the block draws a replaced element (an
+ *   image, a video, an embed), `more` on every other block. A choice about
+ *   what an author reaches for first, not about whether the property works:
+ *   an aspect ratio sizes any box, but it is what an image is set by.
  * - `icon-drawn`: while a disclosure draws an icon of its own (not the
  *   browser's marker, and not none), which is what a position moves.
  * - `state`: while a state other than Normal is being edited.
+ * - `focus-state`: while the Focus state is being edited, `more` in every
+ *   other state. An outline is mostly a focus ring, so that is where an
+ *   author looks for it.
  */
 export type PropertyTier =
   | "common"
   | "more"
-  | "flex"
-  | "grid"
-  | "flex-or-grid"
-  | "media"
-  | "framed-media"
+  | "common-on-media"
   | "icon-drawn"
-  | "state";
+  | "state"
+  | "focus-state";
 
 export interface InspectorSectionDef {
   readonly key: InspectorSectionKey;
@@ -86,35 +92,33 @@ export interface InspectorSectionDef {
  * weight, then size.
  */
 export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
-  // First, where a block has it: an Accordion's icon is the look an author
-  // sets on one before any other. Only a block offering it shows the section.
-  {
-    key: "icon",
-    label: "Icon",
-    properties: [
-      ["disclosureIcon", "common"],
-      ["disclosurePosition", "icon-drawn"],
-    ],
-  },
+  // Each block's style tiles. Their controls are drawn above the sections
+  // today, so the section holds no property yet; it is in the order so
+  // every block lists its sections the same way.
+  { key: "block-style", label: "Block style", properties: [] },
   {
     key: "layout",
     label: "Layout",
     properties: [
       ["display", "common"],
-      ["flexDirection", "flex"],
-      ["justifyContent", "flex-or-grid"],
-      ["alignItems", "flex-or-grid"],
-      ["gap", "flex-or-grid"],
-      ["flexWrap", "flex"],
-      ["gridTemplateColumns", "grid"],
-      ["gridTemplateRows", "grid"],
+      ["flexDirection", "common"],
+      ["justifyContent", "common"],
+      ["alignItems", "common"],
+      ["gap", "common"],
+      ["flexWrap", "common"],
+      ["gridTemplateColumns", "common"],
+      ["gridTemplateRows", "common"],
       ["alignContent", "more"],
       ["gridAutoFlow", "more"],
+      ["justifyItems", "more"],
       ["rowGap", "more"],
       ["columnGap", "more"],
       ["containerType", "more"],
     ],
   },
+  // How a block sits in its parent's row or grid. Its properties are still
+  // in Size; the section is in the order, and draws once it holds them.
+  { key: "inside-parent", label: "Inside its parent", properties: [] },
   {
     key: "spacing",
     label: "Spacing",
@@ -126,16 +130,24 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
   {
     key: "size",
     label: "Size",
-    // An image's fit and ratio first: how it fills its box is what an author
-    // changes first on one. Both show only on a replaced element.
+    // An image's fit and focal point first: how it fills its box is what an
+    // author changes first on one. Both have an effect only on a replaced
+    // element, so a box never shows them. A child's share of a Row or a Grid
+    // comes after its own size, and only inside one.
     properties: [
-      ["objectFit", "media"],
-      ["objectPosition", "framed-media"],
-      ["aspectRatio", "media"],
+      ["objectFit", "common"],
+      ["objectPosition", "common"],
       ["width", "common"],
       ["height", "common"],
       ["minWidth", "common"],
       ["maxWidth", "common"],
+      ["aspectRatio", "common-on-media"],
+      ["flexGrow", "common"],
+      ["flexShrink", "common"],
+      ["flexBasis", "common"],
+      ["alignSelf", "common"],
+      ["justifySelf", "common"],
+      ["order", "common"],
       ["minHeight", "more"],
       ["maxHeight", "more"],
       ["overflow", "more"],
@@ -149,7 +161,7 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
   },
   {
     key: "typography",
-    label: "Typography",
+    label: "Text",
     properties: [
       ["fontFamily", "common"],
       ["fontWeight", "common"],
@@ -183,6 +195,7 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
     properties: [
       ["border", "common"],
       ["borderRadius", "common"],
+      ["outline", "focus-state"],
     ],
   },
   {
@@ -191,12 +204,25 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
     properties: [
       ["boxShadow", "common"],
       ["opacity", "common"],
+      ["appear", "common"],
       ["transition", "state"],
       ["transform", "more"],
       ["filter", "more"],
       ["mixBlendMode", "more"],
     ],
   },
+  // Only a block offering it (an Accordion) shows the section.
+  {
+    key: "icon",
+    label: "Icon",
+    properties: [
+      ["disclosureIcon", "common"],
+      ["disclosurePosition", "icon-drawn"],
+    ],
+  },
+  // Any CSS property the sections above do not offer. In the order so every
+  // block lists its sections the same way; it draws once it holds them.
+  { key: "css-properties", label: "CSS properties", properties: [] },
 ];
 
 /**
@@ -254,23 +280,16 @@ export function placementOf(
   return { section, tier: "more", order: index * 100 + 99 };
 }
 
-/** The fits that leave a choice of where the content sits. */
-const FRAMED_FITS: ReadonlySet<string> = new Set([
-  "cover",
-  "contain",
-  "none",
-  // None or Contain, whichever is smaller: either way it sits in its box.
-  "scale-down",
-]);
-
-/** What the block is, as far as a tier needs to know. */
+/**
+ * What a tier needs to know about the editing, beyond what the block is: the
+ * engine's `applies` judges that.
+ */
 export interface TierContext {
-  /** The display the block is given here, if it is given one. */
-  readonly display: string | undefined;
-  /** Whether the block renders a replaced element: an image, a video, an embed. */
-  readonly media: boolean;
-  /** The fit the block is given here, if it is given one. */
-  readonly objectFit?: string | undefined;
+  /**
+   * Whether the block draws a replaced element, `undefined` until the canvas
+   * has said what it draws.
+   */
+  readonly replaced?: boolean | undefined;
   /** The disclosure icon the block draws here, if it is given one. */
   readonly disclosureIcon?: string | undefined;
   /** The state being edited. */
@@ -283,31 +302,27 @@ export interface TierContext {
  */
 const UNDRAWN_ICONS: ReadonlySet<string> = new Set(["browser", "none"]);
 
-/** Whether a property of this tier shows without being asked for. */
+/**
+ * Whether a property of this tier shows without being asked for, where it
+ * has an effect at all. That second half is the caller's to ask of the engine.
+ */
 export function tierShows(tier: PropertyTier, context: TierContext): boolean {
-  const display = context.display ?? "";
-  const flex = /(^|\s)(inline-)?flex(\s|$)/.test(display);
-  const grid = /(^|\s)(inline-)?grid(\s|$)/.test(display);
   switch (tier) {
     case "common":
       return true;
     case "more":
       return false;
-    case "flex":
-      return flex;
-    case "grid":
-      return grid;
-    case "flex-or-grid":
-      return flex || grid;
-    case "media":
-      return context.media;
-    case "framed-media":
-      return context.media && FRAMED_FITS.has(context.objectFit ?? "");
+    // Shown where it is not yet known too, as `applies` treats what it
+    // cannot read.
+    case "common-on-media":
+      return context.replaced !== false;
     // Shown where the icon in force is unknown too: the block's default
     // draws one.
     case "icon-drawn":
       return !UNDRAWN_ICONS.has(context.disclosureIcon ?? "");
     case "state":
       return context.state !== "base";
+    case "focus-state":
+      return context.state === "focus";
   }
 }

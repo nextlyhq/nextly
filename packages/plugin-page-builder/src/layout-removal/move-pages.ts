@@ -406,8 +406,8 @@ async function finish(
     liveLeft === undefined ? 0 : liveLeft.pages.length + liveLeft.unreadable;
   const message =
     request.action === "delete"
-      ? "The pages were moved to the site default, and the Layout was deleted."
-      : "The pages were moved to the site default, and the Layout was unpublished.";
+      ? "The pages were moved to the site default, and the header & footer set was deleted."
+      : "The pages were moved to the site default, and the header & footer set was unpublished.";
   return answer(
     request,
     left === 0 ? message : `${message} ${liveCopiesLeftSentence(left)}`,
@@ -556,8 +556,8 @@ async function refuseTheRest(
   return answer(
     request,
     found.complete
-      ? "Some pages couldn't be moved, so the Layout was not removed."
-      : "Not every page could be checked, so the Layout was not removed.",
+      ? "Some pages couldn't be moved, so the header & footer set was not removed."
+      : "Not every page could be checked, so the header & footer set was not removed.",
     {
       state: "refused",
       moved: run.moved,

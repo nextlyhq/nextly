@@ -48,6 +48,8 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
+import { keywordLabel } from "./style-keyword-labels";
+
 /**
  * The grammar CSS calls a `<number>`: an optional sign, digits with an optional
  * decimal part, and an optional exponent.
@@ -269,7 +271,10 @@ function accepts(
  */
 export function unitChoicesFor(leaf: StyleLeaf): readonly string[] {
   if (leaf.kind !== "dimension") return [];
-  return UNIT_CANDIDATES.filter(unit => accepts(leaf, `1${unit}`));
+  const candidates = SCREEN_HEIGHT_PROPERTIES.has(leaf.cssProperty)
+    ? SCREEN_HEIGHT_CANDIDATES
+    : UNIT_CANDIDATES;
+  return candidates.filter(unit => accepts(leaf, `1${unit}`));
 }
 
 /**
@@ -282,6 +287,34 @@ export function unitChoicesFor(leaf: StyleLeaf): readonly string[] {
  * scroll costs every author to serve a few.
  */
 const UNIT_CANDIDATES: readonly string[] = ["px", "rem", "em", "vw", "vh", "%"];
+
+/**
+ * The properties a screen's own height is offered on: the small, dynamic and
+ * large viewport heights, after `vh`.
+ *
+ * On a phone `100vh` is the height with the browser's toolbar hidden, so a
+ * block sized by it runs under the toolbar while it shows. `svh` is the
+ * height with it showing (what Full screen writes), `lvh` with it hidden and
+ * `dvh` follows it as it moves. Only on the heights, where that matters; on
+ * any other length they are typeable, and the menu stays short.
+ */
+const SCREEN_HEIGHT_PROPERTIES: ReadonlySet<string> = new Set([
+  "height",
+  "min-height",
+  "max-height",
+]);
+
+const SCREEN_HEIGHT_CANDIDATES: readonly string[] = [
+  "px",
+  "rem",
+  "em",
+  "vw",
+  "vh",
+  "svh",
+  "dvh",
+  "lvh",
+  "%",
+];
 
 /**
  * The same value carrying a different unit, or `undefined` when the swap would
@@ -602,7 +635,14 @@ export function toggleOptionsFor(
   if ((leaf.maxParts ?? 1) !== 1) return undefined;
 
   const values = leaf.values;
-  return fitsSideBySide(values, STYLE_ROW) ? values : undefined;
+  // By the words the buttons show, which can be far longer than the keyword:
+  // `scroll` reads "When scrolled into view".
+  return fitsSideBySide(
+    values.map(value => keywordLabel(leaf.cssProperty, value)),
+    STYLE_ROW
+  )
+    ? values
+    : undefined;
 }
 
 /** How much room a row of options has: how many, how long each and together. */
@@ -651,4 +691,22 @@ export function toggleShows(
 ): boolean {
   if (value === undefined) return true;
   return typeof value === "string" && options.includes(value);
+}
+
+/**
+ * Above this, a bare line height reads as pixels typed without their unit:
+ * `20` is twenty times the text size, which no text is set at, where `1.5`
+ * or `2` is an ordinary multiple.
+ */
+const LINE_HEIGHT_PIXELS_ABOVE = 4;
+
+/**
+ * The pixels a bare line height was probably meant as (`20` gives `20px`), or
+ * nothing for a multiple an author would choose, or for any value that
+ * already says its unit.
+ */
+export function lineHeightAsPixels(text: string): string | undefined {
+  const number = trimCssWhitespace(text);
+  if (!CSS_NUMBER.test(number)) return undefined;
+  return Number(number) > LINE_HEIGHT_PIXELS_ABOVE ? `${number}px` : undefined;
 }

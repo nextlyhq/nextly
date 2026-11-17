@@ -92,6 +92,12 @@ export const nextlyVersionsPg = pgTable(
     // the history reads it, and retention keeps every version it names. NULL
     // on every other row.
     fieldSources: jsonb("field_sources").$type<Record<string, number>>(),
+    // The parts this version changed (`domains/versions/changed-parts`): the
+    // language codes it wrote or put live, and whether it changed the shared
+    // part. Both NULL on a version recorded before they existed, which reads
+    // as unknown, so neither has a default.
+    changedLocales: jsonb("changed_locales").$type<string[]>(),
+    sharedChanged: boolean("shared_changed"),
   },
   table => [
     // Durable versions get a unique, monotonic sequence per document.

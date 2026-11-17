@@ -33,6 +33,10 @@ import {
   publicAddressErrors,
   publicAddressFieldProblem,
 } from "../../domains/public-addresses/public-address-template";
+import {
+  isListMarkedUnique,
+  uniqueNotOnListMessage,
+} from "../../domains/schema/field-rules";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import {
   isManagedIndexName,
@@ -129,6 +133,8 @@ export type ValidationErrorCode =
   | "RELATIONSHIP_TARGET_REQUIRED"
   | "RELATIONSHIP_TARGET_INVALID"
   | "RELATIONSHIP_TARGET_UNKNOWN"
+  // `unique` on a relation holding a list of references, which no index can make unique.
+  | "UNIQUE_NOT_ON_LIST"
   | "ARRAY_FIELDS_REQUIRED"
   | "GROUP_FIELDS_REQUIRED"
   | "DECIMAL_PRECISION_INVALID"
@@ -424,6 +430,24 @@ function validateIndexes(
  * Dispatches to shared helpers for name/type/relationship/select/component
  * rules, and recurses into `repeater`/`group` children.
  */
+/**
+ * The refusal of `unique` on a relation holding a list of references, or none. Such a relation
+ * cannot be unique on any dialect (`relationHoldsReferenceList` says why), so the mark is refused
+ * where the config is defined rather than built as an index that refuses long lists, or as none at
+ * all. One rule for every config a field is defined in: a collection's and a Single's.
+ */
+export function uniqueOnListError(
+  field: Record<string, unknown>,
+  path: string
+): { path: string; message: string; code: "UNIQUE_NOT_ON_LIST" } | null {
+  if (!isListMarkedUnique(field)) return null;
+  return {
+    path: `${path}.unique`,
+    message: uniqueNotOnListMessage(String(field.name)),
+    code: "UNIQUE_NOT_ON_LIST",
+  };
+}
+
 function validateField(
   field: unknown,
   path: string,
@@ -455,6 +479,9 @@ function validateField(
     return;
   }
   const fieldType = f.type as string;
+
+  const listUnique = uniqueOnListError(f, path);
+  if (listUnique) errors.push(listUnique);
 
   // A plugin type reaches none of the cases below, so its own declaration
   // checks run here rather than as a case that could never be written for a

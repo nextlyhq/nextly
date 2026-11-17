@@ -13,8 +13,9 @@ import type { PageContext } from "../context";
 import { LAYOUT } from "./categories";
 import {
   CONTAINER_CHILD_GAP,
-  CONTAINER_SUPPORTS,
   containerContentModel,
+  CONTAINER_SUPPORTS,
+  CONTENT_WIDTH_PROPS,
   renderContainer,
 } from "./container";
 import type { ContainerProps } from "./container";
@@ -47,7 +48,7 @@ export const section: BlockDefinition<ContainerProps, PageContext> =
     },
     props: {
       as: htmlTagProp(["section", "header", "footer", "main"]),
-      contained: { label: "Constrain content width", type: "checkbox" },
+      ...CONTENT_WIDTH_PROPS,
     },
     defaultProps: { as: "section", contained: true },
     example: { props: { as: "section", contained: true } },

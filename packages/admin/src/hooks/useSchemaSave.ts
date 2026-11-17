@@ -17,12 +17,13 @@
  * `endApply` leaves the page permanently "applying", and a `stopRestart` missed
  * on one branch leaves the overlay up over a page that has finished.
  */
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { SchemaChangeConfirmation } from "@admin/components/features/schema-builder/types";
 import { toast } from "@admin/components/ui";
 import { useRestart } from "@admin/context/RestartContext";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import type { SettingChange } from "@admin/lib/builder/settings-changes";
 import type {
   FieldResolution,
   SchemaPreviewResponse,
@@ -115,7 +116,11 @@ export interface UseSchemaSaveOptions {
     resolutions: Record<string, FieldResolution>,
     renameResolutions: SchemaRenameResolution[]
   ) => Promise<SchemaApplyOutcome>;
-  /** The preview found nothing to migrate — persist the rest and stop. */
+  /**
+   * The preview found nothing to migrate: persist the settings. Run at once
+   * when no setting changed either, and otherwise once the review of the
+   * settings it changes is confirmed.
+   */
   onNoChanges: (fields: FieldDefinition[]) => void;
   /** The schema landed — re-pin the baselines, persist settings, mirror the file. */
   onApplied: (fields: FieldDefinition[]) => void | Promise<void>;
@@ -125,9 +130,39 @@ export interface UseSchemaSaveOptions {
    * the preview was made with, as for the fields.
    */
   previewedWith?: unknown;
+  /**
+   * The entity's settings changed since the save. A save that changes only
+   * these is reviewed before it is saved, and a confirmation saves them only
+   * as the review showed them.
+   */
+  settingChanges?: readonly SettingChange[];
+  /**
+   * The field groups not saved yet that the fields use, which the save creates
+   * before the entity: listed in the review, and created by `create` once it
+   * is confirmed, so cancelling the review creates nothing. `create` answers
+   * why one was refused, which stops the save before the entity; null when
+   * every one was created. `letGoUnused` runs once a schema apply has landed,
+   * for the ones the entity's picker made that no field uses any more; a save
+   * that changes no schema writes later, so it keeps them, and leaving the
+   * editor releases them.
+   */
+  fieldGroupsFirst?: {
+    creates: readonly { address: string; label: string }[];
+    create: () => Promise<string | null>;
+    letGoUnused?: () => void;
+  };
 }
 
+/** One empty list, so a page passing none keeps one value between renders. */
+const NO_SETTING_CHANGES: readonly SettingChange[] = [];
+
 export interface UseSchemaSaveReturn {
+  /**
+   * The setting changes the review on show was previewed with: what it lists,
+   * and what its confirmation saves. A setting changed while the preview was
+   * on its way is not listed, and the confirmation refuses it unseen.
+   */
+  reviewedSettingChanges: readonly SettingChange[];
   /** The toolbar's Save. */
   handleSave: () => void;
   /** The confirmation dialog's confirm. */
@@ -148,7 +183,15 @@ export function useSchemaSave({
   onNoChanges,
   onApplied,
   previewedWith,
+  settingChanges = NO_SETTING_CHANGES,
+  fieldGroupsFirst,
 }: UseSchemaSaveOptions): UseSchemaSaveReturn {
+  // The groups the save creates first, by address: part of what a review agrees to, as the
+  // fields are, so a confirmation creates exactly the groups the review listed.
+  const creates = JSON.stringify(
+    (fieldGroupsFirst?.creates ?? []).map(group => group.address)
+  );
+  const createsAny = (fieldGroupsFirst?.creates.length ?? 0) > 0;
   const { startRestart, stopRestart } = useRestart();
   // The fields and settings each preview was made from. The dialog shows that
   // preview, so those are what a confirmation agrees to: an edit, an undo or a
@@ -158,6 +201,9 @@ export function useSchemaSave({
   // Whether the page is still there. Leaving it drops its pending changes, so
   // a preview that answers afterwards saves nothing and asks nobody.
   const mounted = useRef(true);
+  // The setting changes the review on show was previewed with.
+  const [reviewedSettingChanges, setReviewedSettingChanges] =
+    useState<readonly SettingChange[]>(NO_SETTING_CHANGES);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -181,14 +227,20 @@ export function useSchemaSave({
       try {
         const previewed = await preview(fields);
         if (!mounted.current) return;
-        if (!previewed.hasChanges) {
+        // Nothing to migrate, no setting changed and no field group to create: nothing to review.
+        if (
+          !previewed.hasChanges &&
+          settingChanges.length === 0 &&
+          !createsAny
+        ) {
           onNoChanges(fields);
           return;
         }
         previewedFields.current.set(
           previewed,
-          JSON.stringify({ fields, previewedWith })
+          JSON.stringify({ fields, previewedWith, settingChanges, creates })
         );
+        setReviewedSettingChanges(settingChanges);
         confirmation.request(previewed);
       } catch (err) {
         toast.error(apiErrorMessage(err, "Failed to preview schema changes"));
@@ -204,6 +256,9 @@ export function useSchemaSave({
     onNoChanges,
     confirmation,
     previewedWith,
+    settingChanges,
+    createsAny,
+    creates,
   ]);
 
   const confirmApply = useCallback(
@@ -217,7 +272,8 @@ export function useSchemaSave({
       const shown = previewedFields.current.get(previewed);
       if (
         shown !== undefined &&
-        shown !== JSON.stringify({ fields, previewedWith })
+        shown !==
+          JSON.stringify({ fields, previewedWith, settingChanges, creates })
       ) {
         confirmation.settle();
         toast.error(
@@ -226,10 +282,40 @@ export function useSchemaSave({
         return;
       }
 
+      // Only settings changed, or field groups to create: the review was of
+      // them, and its confirmation creates the groups and saves the settings.
+      // Nothing is migrated, so nothing restarts.
+      if (!previewed.hasChanges) {
+        void (async () => {
+          confirmation.beginApply();
+          try {
+            const refused = await fieldGroupsFirst?.create();
+            if (refused) {
+              toast.error(refused);
+              return;
+            }
+            confirmation.settle();
+            onNoChanges(fields);
+          } catch (err) {
+            toast.error(apiErrorMessage(err, "Failed to save the changes"));
+          } finally {
+            confirmation.endApply();
+          }
+        })();
+        return;
+      }
+
       void (async () => {
         confirmation.beginApply();
         startRestart();
         try {
+          // The groups the fields use exist before the entity names them; a refused one stops
+          // here, before the entity, with every change still pending.
+          const refused = await fieldGroupsFirst?.create();
+          if (refused) {
+            stopRestart(false, refused);
+            return;
+          }
           const result = await apply(
             fields,
             previewed.schemaVersion,
@@ -253,6 +339,8 @@ export function useSchemaSave({
           confirmation.settle();
 
           await runPostApply(() => onApplied(fields), label);
+          // Landed: the groups the entity's picker made that no field uses go.
+          fieldGroupsFirst?.letGoUnused?.();
         } catch (err) {
           // A refused apply names each field and why; its envelope's own message is only
           // "Validation failed.", which says neither.
@@ -275,8 +363,12 @@ export function useSchemaSave({
       startRestart,
       stopRestart,
       previewedWith,
+      settingChanges,
+      onNoChanges,
+      fieldGroupsFirst,
+      creates,
     ]
   );
 
-  return { handleSave, confirmApply };
+  return { handleSave, confirmApply, reviewedSettingChanges };
 }

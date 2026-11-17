@@ -24,6 +24,7 @@
 import {
   RESERVED_SLUGS,
   statusOptionError,
+  uniqueOnListError,
 } from "../../collections/config/validate-config";
 import { publicAddressErrors } from "../../domains/public-addresses/public-address-template";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
@@ -110,6 +111,8 @@ export type SingleValidationErrorCode =
   | "RADIO_OPTIONS_EMPTY"
   | "RELATIONSHIP_TARGET_REQUIRED"
   | "RELATIONSHIP_TARGET_INVALID"
+  // `unique` on a relation holding a list of references, which no index can make unique.
+  | "UNIQUE_NOT_ON_LIST"
   | "REPEATER_FIELDS_REQUIRED"
   | "GROUP_FIELDS_REQUIRED"
   | "DECIMAL_PRECISION_INVALID"
@@ -223,6 +226,10 @@ function validateField(
     return;
   }
   const fieldType = f.type as string;
+
+  // The one refusal a collection's config makes of `unique` on a relation holding a list.
+  const listUnique = uniqueOnListError(f, path);
+  if (listUnique) errors.push(listUnique);
 
   // A plugin type reaches none of the cases below, so its own declaration
   // checks run here rather than as a case that could never be written for a

@@ -68,8 +68,8 @@
 import {
   documentRefusal,
   planSaveAsPattern,
-  registryNestingSource,
   type BlockDocument,
+  type BlockRegistryReader,
   type PlanRefusal,
 } from "@nextlyhq/blocks-engine";
 import type {
@@ -181,7 +181,9 @@ export interface SavePatternRouteContext {
  */
 export async function savePattern(
   req: Request,
-  ctx: SavePatternRouteContext
+  ctx: SavePatternRouteContext,
+  /** The site's block registry, whose nesting rules the plan follows. */
+  blocks: BlockRegistryReader
 ): Promise<Response> {
   const request = await readRequest(req);
   const slug = ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG;
@@ -190,10 +192,10 @@ export async function savePattern(
     request.document,
     request.selectedIds,
     { collection: slug, fields: request.fields },
-    // The SERVER's registry, which is the one that knows every block: the
-    // declared blocks another plugin contributed are registered here and not in
-    // the browser.
-    registryNestingSource()
+    // The site's registry on the SERVER, which is the one that knows every
+    // block: the declared blocks another plugin contributed are registered
+    // here and not in the browser.
+    blocks.nestingSource()
   );
   if (plan.problem !== undefined) throw refusal(plan);
 
@@ -227,8 +229,8 @@ export async function savePattern(
     };
     return respondMutation(
       judged.refusal === null
-        ? "Nothing was written: this is the pattern it would save."
-        : "Nothing was written: the site would refuse this pattern.",
+        ? "Nothing was written: this is the saved section it would save."
+        : "Nothing was written: the site would refuse this saved section.",
       result
     );
   }
@@ -244,7 +246,7 @@ export async function savePattern(
   // plugin collection facade writes post-commit failures into, because a
   // failure is recorded against every collector that is open — so forwarding
   // the facade's own `warnings` beside it would report each of them twice.
-  return respondMutation("Pattern created.", writtenRow(written.item), {
+  return respondMutation("Saved to Saved sections.", writtenRow(written.item), {
     status: 201,
   });
 }
@@ -313,7 +315,7 @@ function writtenRow(item: unknown): { id: string } & Record<string, unknown> {
   }
   throw new NextlyError({
     code: "INTERNAL_ERROR",
-    publicMessage: "The pattern was saved but could not be identified.",
+    publicMessage: "The saved section was saved but could not be identified.",
     logMessage: "createEntry returned no usable id for a saved pattern",
     logContext: { reason: "save-pattern-no-id" },
   });
@@ -342,13 +344,13 @@ function writtenRow(item: unknown): { id: string } & Record<string, unknown> {
 function refusal(refused: PlanRefusal): NextlyError {
   return new NextlyError({
     code: "BUSINESS_RULE_VIOLATION",
-    publicMessage: "The selection cannot be saved as a pattern.",
+    publicMessage: "The selection cannot be saved as a section.",
     publicData: {
       errors: [
         {
           path: "selectedIds",
           code: refused.problem,
-          message: "The selection cannot be saved as a pattern.",
+          message: "The selection cannot be saved as a section.",
         },
       ],
     },
@@ -474,7 +476,7 @@ function malformed(path: string): NextlyError {
       {
         path,
         code: "INVALID_TYPE",
-        message: "The request is not a save-as-pattern request.",
+        message: "The request is not a save-as-section request.",
       },
     ],
   });
@@ -492,7 +494,10 @@ function malformed(path: string): NextlyError {
  * fact that it declares no permission — which is the part a reader of
  * `contributes.routes` needs to see without following a call.
  */
-export function savePatternRoute(): {
+export function savePatternRoute(
+  /** The site's block registry, whose nesting rules the plan follows. */
+  blocks: BlockRegistryReader
+): {
   method: "POST";
   path: string;
   requiredPermission: (scope: PluginRoutePermissionScope) => string;
@@ -505,6 +510,6 @@ export function savePatternRoute(): {
     // `requiredPermission`, which is what keeps it callable on a site that
     // renamed the collection. See the module docblock.
     requiredPermission: ({ collection }) => collection(PATTERNS_SLUG, "create"),
-    handler: savePattern,
+    handler: (req, ctx) => savePattern(req, ctx, blocks),
   };
 }

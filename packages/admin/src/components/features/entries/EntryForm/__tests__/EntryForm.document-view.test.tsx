@@ -57,6 +57,7 @@ const { useDocumentLock, update, recovery, updateOptions } = vi.hoisted(() => ({
       offer: null as { savedAt: Date; snapshot: unknown } | null,
       isResolved: true,
       dismiss: () => {},
+      discard: () => {},
       restore: () => {},
       restoreChecked: (_apply?: () => void): Promise<RestoreOutcome> =>
         Promise.resolve("changed"),
@@ -791,6 +792,7 @@ describe("EntryForm with a document view", () => {
     function offerFromLastVisit(outcome: RestoreOutcome) {
       const answer = { outcome };
       const dismiss = vi.fn();
+      const discard = vi.fn();
       // As the recovery's own take does: the snapshot into the form, kept
       // dirty against the stored defaults.
       const take = vi.fn(() => {
@@ -804,11 +806,12 @@ describe("EntryForm with a document view", () => {
         ...recovery.current,
         offer: { savedAt: new Date(), snapshot: SNAPSHOT },
         dismiss,
+        discard,
         restore: vi.fn(),
         restoreChecked,
         take,
       };
-      return { answer, dismiss, restoreChecked, take };
+      return { answer, dismiss, discard, restoreChecked, take };
     }
 
     function open() {
@@ -916,10 +919,11 @@ describe("EntryForm with a document view", () => {
       expect(update.mock.calls[0]?.[0]).toMatchObject({ title: "Recovered" });
     });
 
-    it("drops them on Discard, saving nothing", async () => {
-      const { dismiss, restoreChecked } = offerFromLastVisit("restored");
-      // The real recovery stops offering on dismiss.
-      dismiss.mockImplementation(() => {
+    it("drops them on Discard for good, saving nothing", async () => {
+      const { dismiss, discard, restoreChecked } =
+        offerFromLastVisit("restored");
+      // The real recovery stops offering on discard.
+      discard.mockImplementation(() => {
         recovery.current = { ...recovery.current, offer: null };
       });
       open();
@@ -934,7 +938,9 @@ describe("EntryForm with a document view", () => {
         within(popover).getByRole("button", { name: "Discard" })
       );
 
-      expect(dismiss).toHaveBeenCalledTimes(1);
+      // The lasting Discard, not the session-only Not now.
+      expect(discard).toHaveBeenCalledTimes(1);
+      expect(dismiss).not.toHaveBeenCalled();
       expect(restoreChecked).not.toHaveBeenCalled();
       expect(update).not.toHaveBeenCalled();
     });

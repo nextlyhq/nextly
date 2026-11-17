@@ -22,8 +22,8 @@
  */
 import {
   isComponentDocument,
-  registryBlockSource,
   type BlockDocument,
+  type BlockRegistryReader,
   type ComponentDocument,
   type DocumentLimits,
   type ExposureEdit,
@@ -122,6 +122,8 @@ export interface DefinitionActionsSetup {
   readonly readRetired?: (
     ctx: PluginRouteContext
   ) => (componentId: string) => Promise<RetiredExposures | null>;
+  /** The site's block registry, whose definitions the planner reads. */
+  readonly blocks: BlockRegistryReader;
 }
 
 /**
@@ -282,7 +284,7 @@ async function plannedEdit(
   const retired = (await setup.readRetired?.(ctx)(componentId)) ?? undefined;
   const limits = setup.limits?.();
   const plan = planDefinitionAction(definition, body.action, {
-    definitions: registryBlockSource(),
+    definitions: setup.blocks.blockSource(),
     ...(retired === undefined ? {} : { retired }),
     ...(limits === undefined ? {} : { limits }),
   });
@@ -385,7 +387,7 @@ function refusedEdit(problem: string, detail: string | undefined): NextlyError {
 }
 
 /** The definition actions route declaration. */
-export function definitionActionsRoute(setup: DefinitionActionsSetup = {}): {
+export function definitionActionsRoute(setup: DefinitionActionsSetup): {
   method: "POST";
   path: string;
   requiredPermission: (scope: PluginRoutePermissionScope) => string;

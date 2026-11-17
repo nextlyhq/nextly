@@ -166,7 +166,7 @@ test.describe("the canvas's add controls", () => {
     for (const open of [false, true]) {
       await setAdd(page, open);
       await appender.click();
-      await expectAnswered(page, "Adding inside Section");
+      await expectAnswered(page, "Adding inside Section, at the end");
     }
     // The "+" in the gap after the heading, pressed from the keyboard: it is
     // a button an author can tab to, and Enter runs the same press a click
@@ -178,7 +178,7 @@ test.describe("the canvas's add controls", () => {
       await setAdd(page, open);
       await after.focus();
       await page.keyboard.press("Enter");
-      await expectAnswered(page, "Adding after Heading");
+      await expectAnswered(page, "Adding between Heading and Section");
     }
   });
 });
@@ -219,11 +219,13 @@ test.describe("the Add panel's tile card", () => {
     expect(cardBox.x).toBeGreaterThanOrEqual(panel.x + panel.width);
     expect(Math.abs(cardBox.y - a.y)).toBeLessThan(2);
 
-    // The tile beside takes the very next click: it adds its block.
+    // The tile beside takes the very next click: it adds its block, which
+    // is then the selection the line names (inside it, when it holds
+    // blocks).
     const name = (await beside.getAttribute("aria-label")) ?? "";
     await beside.click();
     await expect(page.locator(".nx-insert-panel__placement")).toHaveText(
-      `Adding after ${name}`
+      new RegExp(`^Adding (after ${name}|inside ${name}, at the end)$`)
     );
   });
 });
