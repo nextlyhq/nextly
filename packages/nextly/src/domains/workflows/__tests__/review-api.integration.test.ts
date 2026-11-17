@@ -410,6 +410,44 @@ describe.each(getConfiguredTestDialects())(
         ]);
       });
 
+      it("leaves out the parts in a language its reader may not read the document in", async () => {
+        current = await bootSteps(dialect);
+        // Letters are read in every language but Spanish.
+        await person(app(), "lena", [
+          ["read", "letters"],
+          ["update", "letters"],
+          ["sign-off", "letters"],
+        ]);
+        const LENA: Who = { kind: "person", id: "lena" };
+        const id = await entry(app(), "letters");
+        await seedState(app(), partOf("letters", id, "es"), "legal", {
+          definitionHash: HASH,
+          assignee: { kind: "user", id: "lena" },
+        });
+        await seedState(app(), partOf("letters", id, "en"), "legal", {
+          definitionHash: HASH,
+          assignee: { kind: "user", id: "lena" },
+        });
+
+        const state = await door.reviewState(LENA, {
+          collection: "letters",
+          id,
+        });
+
+        const parts = (state.parts as { part: string | null }[]).map(
+          each => each.part
+        );
+        expect(parts).toContain("en");
+        expect(parts).not.toContain("es");
+        // Nor is the Spanish part listed among what waits for her, though it is assigned to her.
+        const waiting = await door.waiting(LENA, { page: 1, limit: 10 });
+        const listed = (waiting.items as { part: string | null }[]).map(
+          each => each.part
+        );
+        expect(listed).toContain("en");
+        expect(listed).not.toContain("es");
+      });
+
       it("answers a caller who holds a step but may not read the document as though it did not exist", async () => {
         current = await bootSteps(dialect);
         await people();
