@@ -6,7 +6,7 @@
  * ## What is read, and as whom
  *
  * - Which collections: those the registry holds that the caller may read,
- *   each by its admin name. A template of a collection the caller cannot
+ *   each by its singular admin name. A template of a collection the caller cannot
  *   read is never named.
  * - The templates: one read AS THE CALLER, of those collections' templates
  *   (a collection has one), with every lifecycle state the caller may see.
@@ -31,7 +31,7 @@ import type {
 } from "@nextlyhq/plugin-sdk";
 import type { WhereFilter } from "nextly";
 
-import { labelOf, pluralLabelOf } from "../collection-labels";
+import { labelOf } from "../collection-labels";
 import { COMPONENTS_SLUG } from "../collections/components";
 import {
   TEMPLATE_CONTENT_FIELD,
@@ -202,7 +202,8 @@ function directPanelReads(
         if ((await ctx.caller?.can("read", slug)) !== true) continue;
         readable.push({
           slug,
-          label: pluralLabelOf(record).pluralLabel ?? labelOf(record, slug),
+          // The collection's own name, as a row reads it: "Blog post".
+          label: labelOf(record, slug),
         });
       }
       return readable;
