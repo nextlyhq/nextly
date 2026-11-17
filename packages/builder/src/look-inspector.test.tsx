@@ -538,6 +538,9 @@ describe("a look's sides, named by the site's direction", () => {
   });
 });
 
+/** A site with no breakpoints of its own, for the page's compile. */
+const NO_BREAKPOINTS = { viewport: [], container: [] };
+
 describe("a block style's states and devices, in the style editor", () => {
   const ghost: NamedClass = {
     id: "look:acme/button:ghost",
@@ -676,7 +679,10 @@ describe("a block style's states and devices, in the style editor", () => {
           },
         ],
       } as unknown as BlockDocument,
-      { namedClasses: [{ ...ghost, styles: out.styles }] }
+      {
+        breakpoints: NO_BREAKPOINTS,
+        namedClasses: [{ ...ghost, styles: out.styles }],
+      }
     );
     expect(css).toMatch(/:hover\)? \{ color: #ff0000 \}/);
     // The control: the same colour at Normal is written with no state.
@@ -695,6 +701,7 @@ describe("a block style's states and devices, in the style editor", () => {
         ],
       } as unknown as BlockDocument,
       {
+        breakpoints: NO_BREAKPOINTS,
         namedClasses: [
           {
             ...ghost,
