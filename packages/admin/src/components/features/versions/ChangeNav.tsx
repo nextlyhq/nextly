@@ -19,6 +19,32 @@ import { cn } from "@admin/lib/utils";
  * it on a phone, where the same moves sit in the bottom bar under the thumb;
  * the comparison page shows it at every width.
  */
+/**
+ * Where a move between changes landed, told to assistive technology: focus moves to the field
+ * silently, so this is how a screen reader hears the place. Says nothing until the person moves:
+ * on arrival the page already says how many fields changed. Shared by every control that moves
+ * between changes, so each says it alike.
+ */
+export function ChangeMoveStatus({
+  moved,
+  position,
+  changed,
+  currentLabel,
+}: {
+  moved: boolean;
+  position: number;
+  changed: number;
+  currentLabel?: string;
+}): JSX.Element {
+  return (
+    <span role="status" aria-live="polite" className="sr-only">
+      {moved
+        ? `Change ${position + 1} of ${changed}${currentLabel ? `: ${currentLabel}` : ""}`
+        : ""}
+    </span>
+  );
+}
+
 export function ChangeNav({
   changed,
   position,
@@ -47,11 +73,12 @@ export function ChangeNav({
       <span className="text-muted-foreground" aria-hidden="true">
         {where}
       </span>
-      {/* Where a move landed, told to assistive technology: focus moves to the
-          field silently, so this is how a screen reader hears the place. */}
-      <span role="status" aria-live="polite" className="sr-only">
-        {moved ? `${where}${currentLabel ? `: ${currentLabel}` : ""}` : ""}
-      </span>
+      <ChangeMoveStatus
+        moved={moved}
+        position={position}
+        changed={changed}
+        currentLabel={currentLabel}
+      />
       <Button
         type="button"
         variant="outline"
