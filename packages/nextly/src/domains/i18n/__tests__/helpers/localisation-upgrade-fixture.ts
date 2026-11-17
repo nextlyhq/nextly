@@ -36,6 +36,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
 import { _resetEnvCache } from "../../../../shared/lib/env";
+import type { Logger } from "../../../../services/shared";
 import type { SingleEntryService } from "../../../singles/services/single-entry-service";
 import { VERSIONS_TABLE } from "../../../../schemas/versions/types";
 import {
@@ -174,7 +175,9 @@ export async function openUpgradeDatabase(
 export async function bootSite(
   database: UpgradeDatabase,
   layout: "legacy" | "upgraded",
-  site: FixtureSite = SITE
+  site: FixtureSite = SITE,
+  /** Where the start's log goes, for a test that reads what it warned. */
+  logger?: Logger
 ): Promise<TestNextly> {
   clearServices();
   _resetPerLanguageStorage();
@@ -187,6 +190,7 @@ export async function bootSite(
       defaultLocale: site.localization.defaultLocale,
     },
     perLanguageStorage: layout === "upgraded",
+    ...(logger === undefined ? {} : { logger }),
   });
 }
 

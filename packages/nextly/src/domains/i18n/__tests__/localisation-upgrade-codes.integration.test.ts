@@ -194,5 +194,35 @@ describeEachDialect(
       );
       expect(await storedLanguages()).toEqual(["en", "pt_BR"]);
     });
+
+    it("refuses to start while rows are under the older code, and warns once they are not", async () => {
+      await legacyArticle();
+      const warnings: string[] = [];
+      const logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: (message: string) => {
+          warnings.push(message);
+        },
+        error: () => undefined,
+      } as unknown as Parameters<typeof bootSite>[3];
+
+      // Before the upgrade: the site would read Portuguese under `pt-BR` and find nothing.
+      await expect(
+        bootSite(database!, "legacy", UNDERSCORED, logger)
+      ).rejects.toThrow(/pt_BR[\s\S]*nextly upgrade/);
+
+      await runUpgrade(
+        { confirmBackedUp: true },
+        { adapter: database!.adapter as never, config: UNDERSCORED }
+      );
+      warnings.length = 0;
+      await bootSite(database!, "upgraded", UNDERSCORED, logger);
+
+      // Once upgraded it starts, and says which code the configuration should name.
+      expect(warnings).toContainEqual(
+        expect.stringMatching(/pt_BR[\s\S]*pt-BR/)
+      );
+    });
   }
 );

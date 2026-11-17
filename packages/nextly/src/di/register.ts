@@ -1326,6 +1326,13 @@ async function registerServicesOnce(
         transformedConfig,
         transformedConfig.perLanguageStorage === true
       );
+      // A configured code written the earlier way (`pt_BR`) is read in standard form (`pt-BR`):
+      // the start says so, and refuses while rows are still stored under the older spelling.
+      await refuseOlderCodesStillStored(
+        adapter,
+        transformedConfig,
+        resolvedLogger
+      );
 
       // ----------------------------------------
       // Layer 3: Domain Service Registrations
@@ -6388,6 +6395,53 @@ async function entitiesTheLayoutCanRefuse<T extends { tableName: string }>(
   return entities.filter(entity =>
     tables.has(`${entity.tableName}_locales`.toLowerCase())
   );
+}
+
+/**
+ * For each configured code the configuration writes the earlier way, a warning naming the code it
+ * is read as; and a refusal while the database still stores rows under the older spelling, since
+ * the site would read that language under the standard code and find nothing. `nextly upgrade`
+ * moves them. Nothing is read where the configuration writes every code in standard form.
+ */
+async function refuseOlderCodesStillStored(
+  adapter: DrizzleAdapter,
+  config: NextlyServiceConfig,
+  logger: Logger
+): Promise<void> {
+  const olderCodes = config.localization?.olderCodes ?? [];
+  if (olderCodes.length === 0) return;
+  for (const { from, to } of olderCodes) {
+    logger.warn(
+      `localization names the language "${from}", which is read as "${to}". Write "${to}" in the ` +
+        `configuration: the older spelling is accepted for one release.`
+    );
+  }
+  const { tablesHoldingCode } = await import("../domains/i18n/older-codes");
+  const declared = declaredLaidOutEntities(config);
+  const entities = [
+    ...declared,
+    ...(await readLayoutScanEntities(
+      adapter,
+      new Set(declared.map(entity => entity.tableName)),
+      startRegistryNow()
+    )),
+  ];
+  const translationTables: string[] = [];
+  for (const entity of entities) {
+    const table = `${entity.tableName}_locales`;
+    if (await adapter.tableExists(table)) translationTables.push(table);
+  }
+  for (const { from, to } of olderCodes) {
+    const holding = await tablesHoldingCode(adapter, translationTables, from);
+    if (holding.length === 0) continue;
+    throw new NextlyError({
+      code: "NEXTLY_LANGUAGE_CODES_NOT_UPGRADED",
+      publicMessage:
+        `This database still stores content under the language code "${from}", which the site now ` +
+        `reads as "${to}". Run \`nextly upgrade\` to move it, then restart.`,
+      logContext: { from, to, tables: holding },
+    });
+  }
 }
 
 /**

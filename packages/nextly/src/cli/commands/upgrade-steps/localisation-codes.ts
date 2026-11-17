@@ -21,6 +21,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
 import { standardLanguageCode } from "../../../domains/i18n/config/standard-code";
+import { tablesHoldingCode } from "../../../domains/i18n/older-codes";
 import { releaseMemberKey } from "../../../domains/releases/release-member-key";
 import { runStatement } from "../../../domains/schema/pipeline/_internal/run-statement";
 import { versionPinKey } from "../../../domains/versions/version-pins";
@@ -95,18 +96,6 @@ async function translationTables(
   return tables;
 }
 
-/** Whether `table` holds a row in `code`. */
-async function holdsCode(
-  adapter: DrizzleAdapter,
-  table: string,
-  code: string
-): Promise<boolean> {
-  const rows = await adapter.queryStatement<{ found: unknown }>(
-    sql`SELECT 1 AS ${sql.identifier("found")} FROM ${sql.identifier(table)} WHERE ${sql.identifier("_locale")} = ${code} LIMIT 1`
-  );
-  return rows.length > 0;
-}
-
 /**
  * Whether a document of `table` holds a row in both spellings: two translations of one document
  * that would become one row, so the upgrade stops rather than keep either.
@@ -119,19 +108,6 @@ async function holdsBoth(
   const rows = await adapter.queryStatement<{ found: unknown }>(
     sql`SELECT 1 AS ${sql.identifier("found")} FROM ${sql.identifier(table)} ${sql.identifier("a")} JOIN ${sql.identifier(table)} ${sql.identifier("b")} ON ${sql.identifier("a")}.${sql.identifier("_parent")} = ${sql.identifier("b")}.${sql.identifier("_parent")} WHERE ${sql.identifier("a")}.${sql.identifier("_locale")} = ${conversion.from} AND ${sql.identifier("b")}.${sql.identifier("_locale")} = ${conversion.to} LIMIT 1`
   );
-  return rows.length > 0;
-}
-
-/** Whether any version is kept under `code`. */
-async function versionsHoldCode(
-  adapter: DrizzleAdapter,
-  code: string
-): Promise<boolean> {
-  const rows = await adapter.select<{ id: string }>(VERSIONS_TABLE, {
-    columns: ["id"],
-    where: { and: [{ column: "locale", op: "=", value: code }] },
-    limit: 1,
-  });
   return rows.length > 0;
 }
 
@@ -148,14 +124,14 @@ async function conversionsToRun(
   const tables = await translationTables(context);
   const pending: CodeConversion[] = [];
   for (const conversion of conversions) {
-    let held = await versionsHoldCode(adapter, conversion.from);
     for (const table of tables) {
       if (await holdsBoth(adapter, table, conversion)) {
         throw collision([[conversion.to, [conversion.from, conversion.to]]]);
       }
-      held = held || (await holdsCode(adapter, table, conversion.from));
     }
-    if (held) pending.push(conversion);
+    // Where the start finds rows under the older spelling, the same answer as its refusal.
+    const held = await tablesHoldingCode(adapter, tables, conversion.from);
+    if (held.length > 0) pending.push(conversion);
   }
   return pending;
 }
