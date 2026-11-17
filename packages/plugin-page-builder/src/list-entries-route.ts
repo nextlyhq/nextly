@@ -72,7 +72,6 @@ import { readBodyWith } from "./composition-route-kit";
 import { assertMayOpen, directOpenReads } from "./conditions-preview-route";
 import { editorReaderAsCaller, publicSourceReader } from "./entry-reads";
 import { readingAsUser } from "./library-route";
-import { allowanceFromWire } from "./page-allowance";
 import {
   LIST_ENTRIES_NAMED_MAX_PARAMS,
   LIST_ENTRIES_ROUTE_PATH,
@@ -82,6 +81,7 @@ import {
   type ListEntriesRequest,
   type ListEntriesResponse,
 } from "./list-entries-contract";
+import { allowanceFromWire } from "./page-allowance";
 import type { TemplateGuardSetup } from "./templates/template-guard";
 
 /** The most reads a run may be allowed: far past any page's limit. */
