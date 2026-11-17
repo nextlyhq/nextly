@@ -7,7 +7,9 @@
  *
  * @module admin/editor/manage-sets
  */
-import { createContext } from "react";
+import { createContext, type Context } from "react";
 
 /** Opens the builder's list of sets, or null where there is none. */
-export const ManageSetsContext = createContext<(() => void) | null>(null);
+export const ManageSetsContext: Context<(() => void) | null> = createContext<
+  (() => void) | null
+>(null);
