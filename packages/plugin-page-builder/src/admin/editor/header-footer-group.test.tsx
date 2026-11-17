@@ -43,6 +43,25 @@ vi.mock("../header-footer-pictures", () => ({
   ),
 }));
 
+const setWrites = vi.hoisted(() => ({
+  renameLayout: vi.fn(async (id: string, title: string) => ({ id, title })),
+  duplicateLayout: vi.fn(async (id: string) => ({
+    id: `${id}-copy`,
+    title: "Copy of Landing",
+  })),
+}));
+vi.mock("../layout-writes-client", () => setWrites);
+
+const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+vi.mock("@nextlyhq/ui", async importOriginal => ({
+  ...(await importOriginal<typeof import("@nextlyhq/ui")>()),
+  toast: toasts,
+}));
+
+Element.prototype.hasPointerCapture ??= () => false;
+Element.prototype.releasePointerCapture ??= () => {};
+Element.prototype.scrollIntoView ??= () => {};
+
 const { HeaderFooterGroup } = await import("./header-footer-group");
 
 const set = (
@@ -67,7 +86,8 @@ function answer(items: ReturnType<typeof set>[], defaultLayout = "main") {
         defaultLayout,
         defaultUnreadable: false,
         layoutsCollection: "layouts",
-        canUpdateLayouts: true,
+        canUpdateLayouts: rights.update,
+        canCreateLayouts: rights.create,
         more: false,
         matched: items.map(item => item.id),
         regionComponents: {},
@@ -78,8 +98,16 @@ function answer(items: ReturnType<typeof set>[], defaultLayout = "main") {
 }
 
 const folds = { folded: new Set<string>(), onFold: vi.fn() };
+/** What the author may do to sets. */
+const rights = { update: true, create: true };
 
 beforeEach(() => {
+  rights.update = true;
+  rights.create = true;
+  setWrites.renameLayout.mockClear();
+  setWrites.duplicateLayout.mockClear();
+  toasts.success.mockClear();
+  toasts.error.mockClear();
   routeReads.length = 0;
   refetch.mockClear();
   folds.folded = new Set();
@@ -205,5 +233,68 @@ describe("the Header & footer group", () => {
     expect(
       screen.queryByRole("list", { name: "Header & footer sets" })
     ).toBeNull();
+  });
+});
+
+/** A set row's menu, opened. */
+async function openMenu(title: string) {
+  await userEvent.click(
+    screen.getByRole("button", { name: `More for ${title}` })
+  );
+}
+
+describe("a set's menu", () => {
+  it("offers Open, Rename and Duplicate to an author who may change and make sets", async () => {
+    render(<HeaderFooterGroup folds={folds} />);
+    await openMenu("Landing");
+    expect(
+      screen.getAllByRole("menuitem").map(entry => entry.textContent)
+    ).toEqual(["Open", "Rename", "Duplicate"]);
+  });
+
+  it("offers neither Rename without the right to change sets nor Duplicate without the right to make them", async () => {
+    rights.update = false;
+    rights.create = false;
+    answer([set("main", "Main"), set("landing", "Landing")]);
+    render(<HeaderFooterGroup folds={folds} />);
+    await openMenu("Landing");
+    expect(
+      screen.getAllByRole("menuitem").map(entry => entry.textContent)
+    ).toEqual(["Open"]);
+  });
+
+  it("renames a set in place, then reads the sets again", async () => {
+    render(<HeaderFooterGroup folds={folds} />);
+    await openMenu("Landing");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+    const field = await screen.findByRole("textbox", {
+      name: "Header & footer set name",
+    });
+    await userEvent.clear(field);
+    await userEvent.type(field, "Launch{Enter}");
+    expect(setWrites.renameLayout).toHaveBeenCalledWith("landing", "Launch");
+    await vi.waitFor(() => expect(refetch).toHaveBeenCalled());
+  });
+
+  it("copies a set, says so, then reads the sets again", async () => {
+    render(<HeaderFooterGroup folds={folds} />);
+    refetch.mockClear();
+    await openMenu("Landing");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }));
+    expect(setWrites.duplicateLayout).toHaveBeenCalledWith("landing");
+    await vi.waitFor(() =>
+      expect(toasts.success).toHaveBeenCalledWith("Copy of Landing was made.")
+    );
+    expect(refetch).toHaveBeenCalled();
+  });
+
+  it("says why a write was refused", async () => {
+    setWrites.duplicateLayout.mockRejectedValueOnce(new Error("Not allowed."));
+    render(<HeaderFooterGroup folds={folds} />);
+    await openMenu("Landing");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }));
+    await vi.waitFor(() =>
+      expect(toasts.error).toHaveBeenCalledWith("Not allowed.")
+    );
   });
 });

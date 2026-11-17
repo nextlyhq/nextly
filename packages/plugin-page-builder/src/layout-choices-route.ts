@@ -234,6 +234,7 @@ export async function readLayoutChoices(
     defaultLayout !== null && items.some(item => item.id === defaultLayout);
 
   const canUpdateLayouts = (await ctx.caller?.can("update", layouts)) === true;
+  const canCreateLayouts = (await ctx.caller?.can("create", layouts)) === true;
   const focused = items.filter(item => focus.includes(item.id));
   // Asked of each focused row as this author, whatever the collection-wide
   // answer: a rule may let them update this Layout and not others, and only
@@ -338,6 +339,7 @@ export async function readLayoutChoices(
       defaultUnreadable: defaultLayout !== null && !defaultReadable,
       layoutsCollection: layouts,
       canUpdateLayouts,
+      canCreateLayouts,
       more:
         (listing as { meta?: { hasNext?: unknown } }).meta?.hasNext === true,
       // The rows the list read itself returned, which for a search are the

@@ -61,6 +61,7 @@ import { builderAddress } from "./builder-address";
 import { pagesFoldsStoreFor } from "./editor-preference-stores";
 import { useGroupFolds } from "./group-folds";
 import { HeaderFooterGroup } from "./header-footer-group";
+import { RenameField } from "./rename-field";
 
 /** How long typing must pause before the list is searched. */
 const SEARCH_DEBOUNCE_MS = 150;
@@ -765,35 +766,6 @@ function NotedItem({
         {note}
       </span>
     </>
-  );
-}
-
-/** The title, edited where it stands: Enter keeps it, Escape leaves it. */
-function RenameField({
-  title,
-  onDone,
-}: {
-  title: string;
-  onDone: (title: string | null) => void;
-}): React.JSX.Element {
-  const [value, setValue] = React.useState(title);
-  const finish = (keep: boolean) => {
-    const next = value.trim();
-    onDone(keep && next !== "" ? next : null);
-  };
-  return (
-    <Input
-      aria-label="Page title"
-      autoFocus
-      value={value}
-      onChange={event => setValue(event.target.value)}
-      onBlur={() => finish(true)}
-      onKeyDown={event => {
-        if (event.key === "Enter") finish(true);
-        if (event.key === "Escape") finish(false);
-      }}
-      className="h-7 min-w-0 flex-1 text-sm"
-    />
   );
 }
 

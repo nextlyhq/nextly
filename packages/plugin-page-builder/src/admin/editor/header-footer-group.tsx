@@ -17,8 +17,15 @@
  */
 import { GroupToggle, type GroupFolds } from "@nextlyhq/builder/shell";
 import { usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
-import { Button } from "@nextlyhq/ui";
-import { Plus } from "lucide-react";
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  toast,
+} from "@nextlyhq/ui";
+import { MoreHorizontal, Plus } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -33,7 +40,10 @@ import {
 } from "../../layout-counts-contract";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../../library-contract";
 import { useSetPictures } from "../header-footer-pictures";
+import { duplicateLayout, renameLayout } from "../layout-writes-client";
 import { useRefreshOnReturn } from "../refresh-on-return";
+
+import { RenameField } from "./rename-field";
 
 /** The group's key in the panel's fold memory. */
 const HEADER_FOOTER_GROUP = "header-footer";
@@ -131,7 +141,12 @@ export function HeaderFooterGroup({
         onToggle={() => folds.onFold(HEADER_FOOTER_GROUP, open)}
       />
       {open ? (
-        <GroupBody read={choices} counts={counts.data} picture={picture} />
+        <GroupBody
+          read={choices}
+          counts={counts.data}
+          picture={picture}
+          reread={refresh}
+        />
       ) : null}
     </section>
   );
@@ -142,10 +157,13 @@ function GroupBody({
   read,
   counts,
   picture,
+  reread,
 }: {
   read: ReturnType<typeof usePluginRoute<LayoutChoicesResponse>>;
   counts: LayoutPageCountsResponse | undefined;
   picture: ReturnType<typeof useSetPictures>;
+  /** Reads the sets and their counts again, after a write here. */
+  reread: () => void;
 }): React.JSX.Element | null {
   if (read.error !== null) {
     return (
@@ -167,28 +185,18 @@ function GroupBody({
   return (
     <ul aria-label="Header & footer sets" className="grid gap-0.5">
       {items.map(set => (
-        <li key={set.id}>
-          <a
-            href={formHref(meta.layoutsCollection, set.id)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2.5 rounded-md px-1.5 py-1 text-sm hover:bg-[color:var(--nx-builder-hover)]"
-          >
-            <span
-              aria-hidden="true"
-              className="h-[30px] w-[46px] shrink-0 overflow-hidden rounded-sm border border-[color:var(--nx-builder-border)]"
-            >
-              {picture(set.regions)}
-            </span>
-            <span className="grid min-w-0">
-              <span className="truncate font-medium">{set.title}</span>
-              <span className="truncate text-xs text-muted-foreground">
-                {setNote(set, meta.defaultLayout, counts?.[set.id])}
-              </span>
-            </span>
-            <span className="sr-only"> (opens in a new tab)</span>
-          </a>
-        </li>
+        <SetRow
+          key={set.id}
+          set={set}
+          href={formHref(meta.layoutsCollection, set.id)}
+          note={setNote(set, meta.defaultLayout, counts?.[set.id])}
+          picture={picture(set.regions)}
+          may={{
+            rename: meta.canUpdateLayouts,
+            duplicate: meta.canCreateLayouts === true,
+          }}
+          onWritten={reread}
+        />
       ))}
       {meta.more ? (
         <li>
@@ -216,5 +224,143 @@ function GroupBody({
         </a>
       </li>
     </ul>
+  );
+}
+
+/** What a refused write says: core's own words, or a plain fallback. */
+function refusalOf(error: unknown): string {
+  return error instanceof Error && error.message !== ""
+    ? error.message
+    : "The header & footer set could not be changed. Try again.";
+}
+
+/**
+ * One set's row: its picture, name and note, opening its form in a new tab,
+ * and its ⋯ menu. Rename edits the name in place; each action is offered only
+ * to an author with the right it needs.
+ */
+function SetRow({
+  set,
+  href,
+  note,
+  picture,
+  may,
+  onWritten,
+}: {
+  set: LayoutChoice;
+  href: string;
+  note: string;
+  picture: React.ReactNode;
+  may: { readonly rename: boolean; readonly duplicate: boolean };
+  onWritten: () => void;
+}): React.JSX.Element {
+  const [renaming, setRenaming] = React.useState(false);
+  // Rename starts once the menu has CLOSED, as a page's does: started while
+  // it closes, the menu's focus return would end the rename at once.
+  const renameAfterClose = React.useRef(false);
+  const write = (run: () => Promise<unknown>) => {
+    void run().then(onWritten, (error: unknown) =>
+      toast.error(refusalOf(error))
+    );
+  };
+  return (
+    <li className="group flex items-center gap-1 rounded-md hover:bg-[color:var(--nx-builder-hover)]">
+      {renaming ? (
+        <div className="flex min-w-0 flex-1 items-center gap-2.5 px-1.5 py-1 text-sm">
+          <SetPicture>{picture}</SetPicture>
+          <RenameField
+            title={set.title}
+            label="Header & footer set name"
+            onDone={title => {
+              setRenaming(false);
+              if (title !== null && title !== set.title) {
+                write(() => renameLayout(set.id, title));
+              }
+            }}
+          />
+        </div>
+      ) : (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex min-w-0 flex-1 items-center gap-2.5 px-1.5 py-1 text-sm"
+        >
+          <SetPicture>{picture}</SetPicture>
+          <span className="grid min-w-0">
+            <span className="truncate font-medium">{set.title}</span>
+            <span className="truncate text-xs text-muted-foreground">
+              {note}
+            </span>
+          </span>
+          <span className="sr-only"> (opens in a new tab)</span>
+        </a>
+      )}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label={`More for ${set.title}`}
+            className="mr-1 shrink-0 rounded p-0.5 text-muted-foreground opacity-0 focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
+          >
+            <MoreHorizontal aria-hidden="true" className="size-4" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="start"
+          onCloseAutoFocus={event => {
+            if (!renameAfterClose.current) return;
+            renameAfterClose.current = false;
+            event.preventDefault();
+            setRenaming(true);
+          }}
+        >
+          <DropdownMenuItem
+            onSelect={() => {
+              window.open(href, "_blank", "noopener,noreferrer");
+            }}
+          >
+            Open
+          </DropdownMenuItem>
+          {may.rename ? (
+            <DropdownMenuItem
+              onSelect={() => {
+                renameAfterClose.current = true;
+              }}
+            >
+              Rename
+            </DropdownMenuItem>
+          ) : null}
+          {may.duplicate ? (
+            <DropdownMenuItem
+              onSelect={() =>
+                write(async () => {
+                  const copy = await duplicateLayout(set.id);
+                  toast.success(`${copy.title} was made.`);
+                })
+              }
+            >
+              Duplicate
+            </DropdownMenuItem>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </li>
+  );
+}
+
+/** A set's small picture, at the size the panel's rows draw it. */
+function SetPicture({
+  children,
+}: {
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <span
+      aria-hidden="true"
+      className="h-[30px] w-[46px] shrink-0 overflow-hidden rounded-sm border border-[color:var(--nx-builder-border)]"
+    >
+      {children}
+    </span>
   );
 }
