@@ -113,8 +113,10 @@ import {
   SettingsSearchRow,
   settingsMatch,
   TabCount,
+  StyleReportContext,
   useFilterState,
   useFindShortcut,
+  type ReportedStyle,
   type SettingsMatch,
 } from "./settings-filter";
 import {
@@ -125,7 +127,7 @@ import {
 } from "./settings-index";
 import { stateLabel } from "./state-switcher";
 import { breakpointLabel } from "./style-provenance-indicators";
-import { inspectStyle } from "./style-inspector";
+import { inspectStyle, type StyleSection } from "./style-inspector";
 import { placedDefinition } from "./variant-picker";
 
 // What the panel takes, the style state it edits, the Content and Style tabs,
@@ -558,6 +560,10 @@ function SelectionInspector({
   // "Find a setting" and "Only changed", kept across selections above this.
   const filter = useFilterState();
   const find = useFindShortcut();
+  // What the Style tab draws, while it is open, for the target it edits.
+  const [reportedStyle, setReportedStyle] = React.useState<
+    ReportedStyle | undefined
+  >(undefined);
 
   const commit = React.useCallback(
     (name: string, value: unknown): BlockDocument | null => {
@@ -602,6 +608,11 @@ function SelectionInspector({
   const match = blockMatch(editor.document, block, filter, {
     state: styleState?.state,
     breakpoint,
+    breakpoints: styleOnly.breakpoints,
+    reported:
+      reportedStyle?.nodeId === block.nodeId
+        ? reportedStyle.sections
+        : undefined,
   });
 
   return (
@@ -646,18 +657,19 @@ function SelectionInspector({
         the chosen tab shows its first, and the next block that has the
         chosen one shows it again.
       */}
-      <SettingsMatchProvider value={match}>
-        <Tabs
-          value={shown}
-          onValueChange={choose}
-          className="nx-inspector__tabs"
-        >
-          <InspectorTabList tabs={tabs} shown={shown} />
-          {/* Under the tabs, on every tab; before the panels in the page's
+      <StyleReportContext.Provider value={setReportedStyle}>
+        <SettingsMatchProvider value={match}>
+          <Tabs
+            value={shown}
+            onValueChange={choose}
+            className="nx-inspector__tabs"
+          >
+            <InspectorTabList tabs={tabs} shown={shown} />
+            {/* Under the tabs, on every tab; before the panels in the page's
             order, so a sticky header can hold the two together. */}
-          <SettingsSearchRow field={find.field} />
+            <SettingsSearchRow field={find.field} />
 
-          {/*
+            {/*
           FORCE-MOUNTED, Content and Advanced both: a field commits on blur
           and the tabs activate on mousedown, before the blur, and Advanced
           holds a draft, so unmounting either threw away what the author
@@ -666,71 +678,72 @@ function SelectionInspector({
           accessibility tree as unmounting did. A block without a Content tab
           mounts none.
         */}
-          <ContentTabPanel
-            tabs={tabs}
-            shown={shown}
-            onChoose={choose}
-            block={block}
-            editor={editor}
-            onCommit={commit}
-            inspectors={inspectors}
-            services={contentServices}
-            reasonId={reasonId}
-            fields={fields}
-            around={{
-              breakpoints: styleOnly.breakpoints,
-              cascade,
-              renderedTag: canvas.tag,
-            }}
-          />
-
-          <TabsContent value="style">
-            <FilterNote tab="style" onChoose={choose} />
-            <StyleChangedElsewhere
-              node={styleNode}
-              state={styleState}
-              breakpoint={breakpoint}
-              breakpoints={styleOnly.breakpoints}
-              onJumpToBreakpoint={styleOnly.onJumpToBreakpoint}
-            />
-            <StyleTab
-              {...styleOnly}
-              editor={editor}
-              styleNode={styleNode}
-              renderedTag={canvas.tag}
-              renderedPicture={canvas.picture}
-              renderedPicturePosition={canvas.picturePosition}
-              sideOrientation={canvas.orientation}
-              styleState={styleState}
-              breakpoint={breakpoint}
-              cascade={cascade}
-              previewContainer={previewContainer}
-              verbs={verbs}
-            />
-          </TabsContent>
-
-          <TabsContent
-            value="advanced"
-            forceMount
-            hidden={shown !== "advanced"}
-          >
-            <FilterNote tab="advanced" onChoose={choose} />
-            <AdvancedTab
+            <ContentTabPanel
+              tabs={tabs}
+              shown={shown}
+              onChoose={choose}
               block={block}
               editor={editor}
               onCommit={commit}
+              inspectors={inspectors}
               services={contentServices}
-              blocks={blocks}
-              onScreen={shown === "advanced"}
               reasonId={reasonId}
               fields={fields}
-              breakpoints={styleOnly.breakpoints}
-              breakpoint={breakpoint}
-              breakpointsStatus={breakpointsStatus}
+              around={{
+                breakpoints: styleOnly.breakpoints,
+                cascade,
+                renderedTag: canvas.tag,
+              }}
             />
-          </TabsContent>
-        </Tabs>
-      </SettingsMatchProvider>
+
+            <TabsContent value="style">
+              <FilterNote tab="style" onChoose={choose} />
+              <StyleChangedElsewhere
+                node={styleNode}
+                state={styleState}
+                breakpoint={breakpoint}
+                breakpoints={styleOnly.breakpoints}
+                onJumpToBreakpoint={styleOnly.onJumpToBreakpoint}
+              />
+              <StyleTab
+                {...styleOnly}
+                editor={editor}
+                styleNode={styleNode}
+                renderedTag={canvas.tag}
+                renderedPicture={canvas.picture}
+                renderedPicturePosition={canvas.picturePosition}
+                sideOrientation={canvas.orientation}
+                styleState={styleState}
+                breakpoint={breakpoint}
+                cascade={cascade}
+                previewContainer={previewContainer}
+                verbs={verbs}
+              />
+            </TabsContent>
+
+            <TabsContent
+              value="advanced"
+              forceMount
+              hidden={shown !== "advanced"}
+            >
+              <FilterNote tab="advanced" onChoose={choose} />
+              <AdvancedTab
+                block={block}
+                editor={editor}
+                onCommit={commit}
+                services={contentServices}
+                blocks={blocks}
+                onScreen={shown === "advanced"}
+                reasonId={reasonId}
+                fields={fields}
+                breakpoints={styleOnly.breakpoints}
+                breakpoint={breakpoint}
+                breakpointsStatus={breakpointsStatus}
+              />
+            </TabsContent>
+          </Tabs>
+        </SettingsMatchProvider>
+      </StyleReportContext.Provider>
     </div>
   );
 }
@@ -800,18 +813,30 @@ function blockMatch(
   document: BlockDocument,
   block: BlockInspection,
   filter: SettingsFilter,
-  at: { state: StyleState | undefined; breakpoint: BreakpointId | undefined }
+  at: {
+    state: StyleState | undefined;
+    breakpoint: BreakpointId | undefined;
+    breakpoints: BreakpointSet | undefined;
+    /** What the Style tab draws, while it is open, for its target. */
+    reported: readonly StyleSection[] | undefined;
+  }
 ): SettingsMatch {
   if (!filtering(filter)) return settingsMatch([], filter);
-  const style = inspectStyle(document, block.nodeId, {
-    state: at.state ?? "base",
-    breakpoint: at.breakpoint ?? BASE_BREAKPOINT,
-  });
+  // The Style tab's own sections while it is open: the target it edits may
+  // be a shared style. Closed, it edits the block, read here the same way.
+  const styleSections =
+    at.reported ??
+    inspectStyle(document, block.nodeId, {
+      state: at.state ?? "base",
+      breakpoint: at.breakpoint ?? BASE_BREAKPOINT,
+    })?.sections ??
+    [];
+  const node = findNode(document.nodes, block.nodeId);
   return settingsMatch(
     [
-      ...contentEntries(block),
-      ...styleEntries(style?.sections ?? [], block),
-      ...advancedEntries(block, findNode(document.nodes, block.nodeId)),
+      ...contentEntries(block, node, at.breakpoints),
+      ...styleEntries(styleSections, block),
+      ...advancedEntries(block, node),
     ],
     filter
   );

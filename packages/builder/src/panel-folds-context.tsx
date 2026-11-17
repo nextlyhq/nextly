@@ -86,17 +86,29 @@ export function useTabFolds(
   // While the panel is filtered, the sections holding a match open on their
   // own, and what the author opens or closes then is kept for that search
   // alone: the folds they left come back as they were once it is cleared.
-  const searching = `${match.query}\u0000${String(match.onlyChanged)}`;
+  const matchedKeys = sections
+    .filter(section => sectionShown(match, tab, section.key))
+    .map(section => section.key);
+  // What a search's own folds belong to: the words and the toggle, and the
+  // sections they keep, so a new device, state, block or search starts from
+  // its matches again.
+  const searching = [
+    match.query,
+    String(match.onlyChanged),
+    ...matchedKeys,
+  ].join("\u0000");
   const [during, setDuring] = React.useState<{
     readonly search: string;
     readonly open: string[];
   } | null>(null);
+  // Dropped once the filter is off, so the same search typed again opens
+  // its matches afresh.
+  React.useEffect(() => {
+    if (!match.active && during !== null) setDuring(null);
+  }, [match.active, during]);
   if (match.active) {
-    const matched = sections
-      .filter(section => sectionShown(match, tab, section.key))
-      .map(section => section.key);
     return {
-      open: during?.search === searching ? during.open : matched,
+      open: during?.search === searching ? during.open : matchedKeys,
       onOpenChange: next => setDuring({ search: searching, open: next }),
     };
   }

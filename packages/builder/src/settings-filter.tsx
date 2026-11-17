@@ -17,6 +17,7 @@ import { Search, X } from "lucide-react";
 import * as React from "react";
 
 import { isElement } from "./dom-kind";
+import type { StyleSection } from "./style-inspector";
 import {
   filterEntries,
   filtering,
@@ -134,10 +135,7 @@ export const SettingTabContext: React.Context<SettingTab | undefined> =
   React.createContext<SettingTab | undefined>(undefined);
 
 /** Whether any of a row's settings is kept on its tab. */
-function useSettingShown(
-  ids: readonly string[],
-  tab?: SettingTab
-): boolean {
+function useSettingShown(ids: readonly string[], tab?: SettingTab): boolean {
   const match = useSettingsMatch();
   const drawnOn = React.useContext(SettingTabContext);
   const on = tab ?? drawnOn;
@@ -413,4 +411,53 @@ export function ChangedElsewhere({
       ))}
     </p>
   );
+}
+
+/** The Style tab's sections, as it draws them for the target it edits. */
+export interface ReportedStyle {
+  readonly nodeId: string;
+  readonly sections: readonly StyleSection[];
+}
+
+/**
+ * Where the Style tab says what it draws: the sections of the target it is
+ * editing, a shared style's while one is chosen, so the filter keeps what
+ * the controls show rather than what the block alone holds.
+ */
+export const StyleReportContext: React.Context<
+  ((reported: ReportedStyle | undefined) => void) | undefined
+> = React.createContext<
+  ((reported: ReportedStyle | undefined) => void) | undefined
+>(undefined);
+
+/** What a section set says to the filter: each property, and whether set. */
+function sectionsSignature(sections: readonly StyleSection[]): string {
+  return sections
+    .map(
+      section =>
+        `${section.key}:${section.properties
+          .map(property => `${property.property}${property.set ? "+" : "-"}`)
+          .join(",")}`
+    )
+    .join("|");
+}
+
+/**
+ * Tells the panel what the Style tab draws, each time that changes, and that
+ * it no longer draws anything once it closes.
+ */
+export function useReportStyle(
+  nodeId: string | undefined,
+  sections: readonly StyleSection[] | undefined
+): void {
+  const report = React.useContext(StyleReportContext);
+  const latest = React.useRef(sections);
+  latest.current = sections;
+  const signature = sections === undefined ? "" : sectionsSignature(sections);
+  React.useEffect(() => {
+    if (report === undefined || nodeId === undefined) return;
+    const now = latest.current;
+    report(now === undefined ? undefined : { nodeId, sections: now });
+  }, [report, nodeId, signature]);
+  React.useEffect(() => () => report?.(undefined), [report]);
 }

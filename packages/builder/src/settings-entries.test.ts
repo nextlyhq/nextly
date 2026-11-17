@@ -1,0 +1,70 @@
+/**
+ * The selected block's settings as index entries: what each tab draws, and
+ * what counts as set.
+ */
+import {
+  clearBlocks,
+  DOCUMENT_FORMAT_VERSION,
+  findNode,
+  registerBlocks,
+  type BlockDocument,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { inspectSelection } from "./inspector";
+import { contentEntries } from "./settings-entries";
+
+beforeEach(() => registerBlocks(coreBlocks as never, { source: "core" }));
+afterEach(() => clearBlocks());
+
+function pageWith(node: Partial<BlockNode> & { type: string }): BlockDocument {
+  const block = coreBlocks.find(each => each.name === node.type);
+  return {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [{ id: "a", version: block?.version ?? 1, props: {}, ...node }],
+  } as BlockDocument;
+}
+
+function entriesOf(document: BlockDocument) {
+  const inspection = inspectSelection(document, "a");
+  if (inspection === null) throw new Error("nothing inspected");
+  return contentEntries(inspection, findNode(document.nodes, "a"));
+}
+
+describe("a Columns row's Content", () => {
+  it("indexes the builder's Layout and Stack on, set as the row stores them", () => {
+    const entries = entriesOf(
+      pageWith({
+        type: "core/columns",
+        props: { as: "div" },
+        styles: { base: { base: { gridTemplateColumns: "1fr 2fr" } } },
+        slots: { children: [] },
+      })
+    );
+    const byId = new Map(entries.map(entry => [entry.id, entry]));
+    expect(byId.get("columnsLayout")).toMatchObject({
+      tab: "content",
+      label: "Layout",
+      set: true,
+    });
+    expect(byId.get("stackOn")).toMatchObject({ set: false });
+  });
+});
+
+describe("a setting bound to data", () => {
+  it("counts as set, with no value of its own", () => {
+    const entries = entriesOf(
+      pageWith({
+        type: "core/button",
+        props: { type: "button" },
+        bindings: { label: { kind: "field", field: "title" } },
+      } as never)
+    );
+    expect(entries.find(entry => entry.id === "label")).toMatchObject({
+      set: true,
+    });
+  });
+});

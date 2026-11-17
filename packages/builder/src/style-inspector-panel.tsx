@@ -94,6 +94,7 @@ import {
   targetCascade,
   targetStyles,
 } from "./style-field-target";
+import { useReportStyle } from "./settings-filter";
 import { inspectStyle, type StyleInspection } from "./style-inspector";
 import {
   appliedAtReader,
@@ -482,6 +483,9 @@ function StyleInspectorBody({
     // and offer what the style stores rather than what the block does.
     styles: targetStyles(target),
   });
+
+  // What the panel's filter keeps in Style: what these controls draw.
+  useReportStyle(inspection?.nodeId, inspection?.sections);
 
   const chooseForm = (property: string, path: readonly string[], arm: number) =>
     setChosenForms(current => ({ ...current, [formKey(property, path)]: arm }));

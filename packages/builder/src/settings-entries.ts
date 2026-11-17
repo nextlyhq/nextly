@@ -6,9 +6,15 @@
  *
  * @module settings-entries
  */
-import type { BlockNode, PropSchema } from "@nextlyhq/blocks-engine";
+import {
+  BASE_BREAKPOINT,
+  type BlockNode,
+  type BreakpointSet,
+  type PropSchema,
+} from "@nextlyhq/blocks-engine";
 
 import { BUILT_IN_WRITES } from "./code-hints";
+import { COLUMNS_ROW, stackOf, stackTiers } from "./columns-layout";
 import {
   advancedRowsBySection,
   HTML_SECTION,
@@ -16,6 +22,7 @@ import {
 } from "./inspector-advanced-tab";
 import {
   builderContentSectionOf,
+  contentRowsOf,
   type BlockInspection,
   type EditableProp,
 } from "./inspector";
@@ -27,6 +34,7 @@ import {
   type SettingEntry,
 } from "./settings-index";
 import type { StyleSection } from "./style-inspector";
+import { readStyleValue } from "./style-values";
 
 /** What a prop writes into the page, every spelling its schema gives. */
 function writesOf(schema: Pick<PropSchema, "code">): readonly string[] {
@@ -42,39 +50,91 @@ function optionLabelOf(schema: PropSchema, option: string): string {
   return labels?.[option] ?? option;
 }
 
-/** A drawn prop as an index row. */
-function propRow(row: EditableProp): IndexedRow {
+/** A drawn prop as an index row; a binding of its own counts as set. */
+function propRow(row: EditableProp, bound: ReadonlySet<string>): IndexedRow {
   return {
     id: row.name,
     label: propLabel(row.name, row.schema),
     // As the author reads them: a select's labels, not its stored values.
     options: row.options.map(option => optionLabelOf(row.schema, option)),
     css: writesOf(row.schema),
-    set: row.value !== undefined,
+    set: row.value !== undefined || bound.has(row.name),
   };
 }
 
+/** The props a block binds to data, which hold a setting of their own. */
+function boundProps(node: BlockNode | undefined): ReadonlySet<string> {
+  const bindings = (node as { bindings?: Record<string, unknown> } | undefined)
+    ?.bindings;
+  return new Set(Object.keys(bindings ?? {}));
+}
+
 /** The props a section draws. */
-function drawnRows(rows: readonly EditableProp[]): IndexedRow[] {
-  return rows.filter(row => row.offered).map(propRow);
+function drawnRows(
+  rows: readonly EditableProp[],
+  bound: ReadonlySet<string>
+): IndexedRow[] {
+  return rows.filter(row => row.offered).map(row => propRow(row, bound));
+}
+
+/**
+ * The controls a builder-drawn Content section holds: Columns' Layout tiles,
+ * Stack on and its Reverse, set as the section's own dot says.
+ */
+function builderRows(
+  node: BlockNode | undefined,
+  breakpoints: BreakpointSet | undefined
+): IndexedRow[] {
+  if (node === undefined || node.type !== COLUMNS_ROW) return [];
+  const tiers = stackTiers(breakpoints);
+  const template = readStyleValue(node.styles, {
+    state: "base",
+    breakpoint: BASE_BREAKPOINT,
+    property: "gridTemplateColumns",
+    path: [],
+  });
+  const stacked = stackOf(node, tiers, "base").on !== "never";
+  return [
+    {
+      id: "columnsLayout",
+      label: "Layout",
+      css: ["grid-template-columns"],
+      set: template !== undefined,
+    },
+    { id: "stackOn", label: "Stack on", css: ["flex-direction"], set: stacked },
+    {
+      id: "reverseStacked",
+      label: "Reverse when stacked",
+      css: ["flex-direction"],
+      set: stacked,
+    },
+  ];
 }
 
 /** The Content tab's settings: the builder's own section, then the block's. */
-export function contentEntries(inspection: BlockInspection): SettingEntry[] {
+export function contentEntries(
+  inspection: BlockInspection,
+  node: BlockNode | undefined,
+  breakpoints?: BreakpointSet
+): SettingEntry[] {
+  const bound = boundProps(node);
   const own = builderContentSectionOf(inspection.blockName);
+  // The builder's own section comes first, drawn whatever else the tab holds.
   const builder =
     own === undefined
       ? []
-      : sectionEntries("content", { key: own, label: own }, [
-          { id: `builder:${own}`, label: own, set: false },
-        ]);
+      : sectionEntries(
+          "content",
+          { key: own, label: own },
+          builderRows(node, breakpoints)
+        );
   const sections = inspection.sections.content;
-  if (sections.length === 0) {
-    // A block with no sections draws its rows bare.
+  if (sections.length === 0 && builder.length === 0) {
+    // A block with no sections draws its Content rows bare.
     return sectionEntries(
       "content",
       { key: "", label: "" },
-      drawnRows(inspection.props.filter(row => row.schema.group !== "style"))
+      drawnRows(contentRowsOf(inspection), bound)
     );
   }
   return [
@@ -83,7 +143,7 @@ export function contentEntries(inspection: BlockInspection): SettingEntry[] {
       sectionEntries(
         "content",
         { key: section.label, label: section.label },
-        drawnRows(section.rows)
+        drawnRows(section.rows, bound)
       )
     ),
   ];
@@ -100,6 +160,7 @@ export function advancedEntries(
   inspection: BlockInspection,
   node: BlockNode | undefined
 ): SettingEntry[] {
+  const bound = boundProps(node);
   const { htmlRows, visibilityRows, others } = advancedRowsBySection(
     inspection.sections.advanced
   );
@@ -121,14 +182,14 @@ export function advancedEntries(
           },
         ]
       : []),
-    ...drawnRows(visibilityRows),
+    ...drawnRows(visibilityRows, bound),
   ];
   const { cssId, attributes } = inspection.html;
   const otherAttributes = Object.keys(attributes ?? {}).filter(
     name => name !== "class"
   );
   const html: IndexedRow[] = [
-    ...drawnRows(htmlRows),
+    ...drawnRows(htmlRows, bound),
     {
       id: "anchor",
       label: "Anchor (ID)",
@@ -159,7 +220,7 @@ export function advancedEntries(
       sectionEntries(
         "advanced",
         { key: `own:${section.label}`, label: section.label },
-        drawnRows(section.rows)
+        drawnRows(section.rows, bound)
       )
     ),
   ];
@@ -187,7 +248,7 @@ export function styleEntries(
   return sections.flatMap(section => {
     const own = props.find(each => each.key === section.key)?.rows ?? [];
     return sectionEntries("style", section, [
-      ...drawnRows(own),
+      ...drawnRows(own, new Set()),
       ...section.properties.map(property => ({
         id: property.property,
         label: property.label,

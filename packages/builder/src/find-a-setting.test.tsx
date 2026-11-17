@@ -203,6 +203,23 @@ describe("Find a setting", () => {
     expect(openSections()).toEqual(openBefore);
   });
 
+  it("opens a search's matches afresh when it is typed again", () => {
+    mount();
+    openTab("Style");
+    type("colour");
+    const opened = openSections();
+    expect(opened.length).toBeGreaterThan(0);
+    // Folded during the search, then the search cleared and typed again.
+    const first = shownPanel().querySelector<HTMLElement>(
+      `[data-section="${opened[0]}"] [data-slot="accordion-trigger"]`
+    );
+    fireEvent.click(first!);
+    expect(openSections()).not.toContain(opened[0]);
+    type("");
+    type("colour");
+    expect(openSections()).toContain(opened[0]);
+  });
+
   it("stays while another block is selected", () => {
     mount();
     type("colour");
