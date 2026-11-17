@@ -9,6 +9,12 @@
  * `<cite>` marks the TITLE of a work, not a person, so it wraps the source when
  * one is given and never the attribution alone.
  *
+ * Where the quote comes from is the shared link every linking block stores
+ * (an address or an entry, a new tab, a relationship): it becomes `cite` on
+ * the blockquote, and the source's title links to it. The dash before the
+ * person's name is drawn by CSS, so it is never part of the words a reader
+ * copies or a screen reader reads as text.
+ *
  * @module blocks/quote
  */
 import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
@@ -17,82 +23,128 @@ import type { ReactElement } from "react";
 import type { BlockRenderArgs, PageContext } from "../context";
 
 import { CONTENT } from "./categories";
-import { boundText, text, url } from "./props";
+import { quoteLooks } from "./looks";
+import {
+  addressLinkFor,
+  boundText,
+  LINK_PROPS,
+  linkFor,
+  linksToEntry,
+  readClaimOf,
+  text,
+  type LinkAttributes,
+  type LinkProps,
+} from "./props";
 
-export interface QuoteProps {
+export interface QuoteProps extends LinkProps {
   /** The quoted text. */
   text?: string;
   /** Who said it. */
   attribution?: string;
-  /** The work it came from. */
+  /** The work it came from, which links where the shared link goes. */
   source?: string;
-  /** A URL for the source, which becomes `cite` on the blockquote. */
-  citeUrl?: string;
 }
 
-export function renderQuote({
-  props,
-  className,
-  markProp,
-  partClass,
-  bound,
-}: BlockRenderArgs<QuoteProps>): ReactElement {
+/** The mark the person's name carries, which the dash before it is drawn on. */
+const BY_ATTRIBUTE = "data-nx-quote-by";
+
+/**
+ * The dash before the person's name: generated content, which no reader
+ * copies with the words. Hoisted and deduped by React, one copy per page,
+ * and carried by every attributed quote so none reaches a page without it.
+ */
+const QUOTE_CSS = `[${BY_ATTRIBUTE}]::before{content:"\\2014\\00a0"}`;
+
+/** The key the quote's rule is hoisted under. */
+const QUOTE_STYLE_KEY = "nx-quote";
+
+/**
+ * Render a quote, its source linked where its link says. Only a link to an
+ * entry waits, for the entry's path; one by address, or none, renders at once.
+ */
+export function renderQuote(
+  args: BlockRenderArgs<QuoteProps>
+): ReactElement | Promise<ReactElement> {
+  const { props, ctx, node } = args;
+  if (linksToEntry(props)) {
+    // Claimed as this block's, as every linking block's entry read is.
+    return linkFor(props, (collection, id) =>
+      ctx.resolveEntryPath(collection, id, readClaimOf(node))
+    ).then(link => drawQuote(args, link));
+  }
+  return drawQuote(args, addressLinkFor(props));
+}
+
+/** The quote, with `cite` and its source's link where it has one. */
+function drawQuote(
+  { props, className, markProp, partClass, bound }: BlockRenderArgs<QuoteProps>,
+  link: LinkAttributes | undefined
+): ReactElement {
   const quoted = boundText(text(props.text), bound?.text);
   // Kept as text for the emptiness tests below; the date markup, when there is
   // one, is added where each is drawn.
   const attribution = text(props.attribution);
   const source = text(props.source);
-  const citeUrl = url(props.citeUrl);
-
-  /*
-   * Only the two values that already have an element of their own are marked.
-   * `attribution` is a bare text node inside the figcaption, and an attribute
-   * needs an element — wrapping it in a span to gain one would change the
-   * published markup for the editor's convenience, which is the wrong trade.
-   * It stays editable in the inspector, which is the safe direction.
-   */
+  const cite = link === undefined ? {} : { cite: link.href };
   const markText = markProp?.("text");
+  // The source's words are marked where they are drawn: inside its link
+  // when it has one, else on the `<cite>` itself.
   const markSource = markProp?.("source");
-
-  // Marked as a PART rather than given the block's own class. The attributed
-  // branch wraps this in a `<figure>` that already takes that class, and giving
-  // the same one to the quotation inside applies the whole default twice — the
-  // indent as well as the reset — so an attributed quote would step in further
-  // than a bare one. A part carries only what this element needs, which is the
-  // user-agent margin removed.
-  const blockquote = (
-    <blockquote
-      className={partClass("quotation")}
-      {...(citeUrl === undefined ? {} : { cite: citeUrl })}
-    >
-      <p {...markText}>{quoted}</p>
-    </blockquote>
-  );
 
   // With nothing to attribute, the blockquote IS the block and takes the class.
   if (attribution === "" && source === "") {
     return (
-      <blockquote
-        className={className}
-        {...(citeUrl === undefined ? {} : { cite: citeUrl })}
-      >
+      <blockquote className={className} {...cite}>
         <p {...markText}>{quoted}</p>
       </blockquote>
     );
   }
-
+  // Marked as a PART rather than given the block's own class: the figure
+  // around it already takes that class, and giving the same one to the
+  // quotation inside applies the whole default twice.
   return (
     <figure className={className}>
-      {blockquote}
+      <blockquote className={partClass("quotation")} {...cite}>
+        <p {...markText}>{quoted}</p>
+      </blockquote>
       <figcaption className={partClass("attribution")}>
-        {boundText(attribution, bound?.attribution)}
+        {attribution === "" ? null : (
+          <>
+            <style href={QUOTE_STYLE_KEY} precedence="default">
+              {QUOTE_CSS}
+            </style>
+            <span {...{ [BY_ATTRIBUTE]: "" }}>
+              {boundText(attribution, bound?.attribution)}
+            </span>
+          </>
+        )}
         {attribution !== "" && source !== "" ? ", " : null}
         {source === "" ? null : (
-          <cite {...markSource}>{boundText(source, bound?.source)}</cite>
+          <cite {...(link === undefined ? markSource : {})}>
+            {link === undefined ? (
+              boundText(source, bound?.source)
+            ) : (
+              <a {...link} {...markSource}>
+                {boundText(source, bound?.source)}
+              </a>
+            )}
+          </cite>
         )}
       </figcaption>
     </figure>
   );
+}
+
+/**
+ * Version 1 to 2: the source's loose address becomes the shared link's
+ * address. A new tab and a relationship are left unset, as version 1 had
+ * neither; every other value is kept as it is.
+ */
+function fromVersion1(props: Record<string, unknown>): Record<string, unknown> {
+  const { citeUrl, ...rest } = props;
+  return typeof citeUrl === "string" && citeUrl.trim() !== ""
+    ? { ...rest, href: citeUrl }
+    : rest;
 }
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
@@ -148,6 +200,19 @@ const QUOTE_BASE_STYLES = {
         inlineEnd: "0",
       },
       padding: { inlineStart: "1.5em" },
+      // Line, the quote's own block style: a line on the inline start in the
+      // site's accent colour, following writing direction. Plain and Large
+      // are the looks that take it away.
+      border: {
+        width: {
+          blockStart: "0",
+          blockEnd: "0",
+          inlineStart: "4px",
+          inlineEnd: "0",
+        },
+        style: "solid",
+        color: { $token: "color.primary" },
+      },
     },
   },
 } as const;
@@ -196,7 +261,8 @@ const QUOTE_PARTS = {
 
 export const quote: BlockDefinition<QuoteProps, PageContext> = defineBlock({
   name: QUOTE_BLOCK,
-  version: 1,
+  version: 2,
+  migrate: { 1: fromVersion1 },
   // What an author reads, in the Add panel and the block card: one plain line.
   // What the block does, for whoever maintains it: Quoted text with an optional
   // attribution, kept outside the quotation so the speaker is not quoted saying
@@ -210,6 +276,9 @@ export const quote: BlockDefinition<QuoteProps, PageContext> = defineBlock({
     icon: "quote",
     category: CONTENT,
     keywords: ["blockquote", "pull quote", "citation"],
+    // Its looks, Line (its own), Plain and Large, offered as tiles on a block
+    // already on the page.
+    variations: quoteLooks(),
   },
   baseStyles: QUOTE_BASE_STYLES,
   parts: QUOTE_PARTS,
@@ -228,13 +297,13 @@ export const quote: BlockDefinition<QuoteProps, PageContext> = defineBlock({
       type: "text",
       inline: true,
     },
-    // Where the quote comes from, drawn with its title in the Source section.
-    citeUrl: {
-      label: "Source URL",
-      section: "Source",
-      role: "content",
-      type: "url",
-    },
+    // Where the quote comes from: the shared link, in the Source section with
+    // the source's title, which it links. Its relationship is in Advanced.
+    href: { ...LINK_PROPS.href, label: "Source link", section: "Source" },
+    entryCollection: { ...LINK_PROPS.entryCollection, section: "Source" },
+    entryId: { ...LINK_PROPS.entryId, section: "Source" },
+    target: { ...LINK_PROPS.target, section: "Source" },
+    rel: LINK_PROPS.rel,
   },
   defaultProps: { text: "" },
   example: {
