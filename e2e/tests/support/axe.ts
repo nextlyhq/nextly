@@ -47,6 +47,8 @@ export async function expectNoAxeViolations(
     ).toBeVisible();
   }
   const { results, findings } = await scanAxe(page, scope);
+  console.log("DIAG-AXE", JSON.stringify((results.incomplete||[]).filter((r: {id: string}) => r.id === "color-contrast").flatMap((r: {nodes: {target: unknown; any: {data: unknown; message: string}[]}[]}) => r.nodes.map(n => ({t: n.target, m: n.any.map(a => a.message), d: n.any.map(a => a.data)})))).slice(0, 3000));
+  console.log("DIAG-AXE-PASSRULES", JSON.stringify((results.passes||[]).map((r: {id: string; nodes: unknown[]}) => r.id + ":" + r.nodes.length)));
   expectScannedSomething(results, scope);
   expect(
     findings,
