@@ -122,6 +122,7 @@ import { DocumentLanguagePanel } from "@admin/components/features/entries/Langua
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
 import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
 import { storedStampOf } from "@admin/components/features/entries/review/review-words";
+import { ReviewStatusLine } from "@admin/components/features/entries/review/ReviewStatusLine";
 import { useEditorReview } from "@admin/components/features/entries/review/useEditorReview";
 import { TranslationPanes } from "@admin/components/features/entries/TranslationMode/TranslationPanes";
 import { useTranslationSource } from "@admin/components/features/entries/TranslationMode/useTranslationSource";
@@ -2096,6 +2097,13 @@ export function SingleForm({
                                       // holds the title read-only through the lock
                                       // instead.
                                       isSubmitting={writePending}
+                                    />
+                                    <ReviewStatusLine
+                                      status={editedStatus.status}
+                                      hasWorkingDraft={
+                                        editedStatus.hasWorkingDraft
+                                      }
+                                      part={review.part}
                                     />
                                     <EntryMetaStrip
                                       panelCarriesId={panel.docked}

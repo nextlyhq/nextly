@@ -81,6 +81,7 @@ import { previewRevisionOf } from "../PreviewMode/previewRevision";
 import { isRemovedFromCode } from "../removed-from-code-notice";
 import { RemovedFromCodeNotice } from "../RemovedFromCodeNotice";
 import { storedStampOf } from "../review/review-words";
+import { ReviewStatusLine } from "../review/ReviewStatusLine";
 import { useEditorReview } from "../review/useEditorReview";
 import { TranslationPanes } from "../TranslationMode/TranslationPanes";
 import { useTranslationSource } from "../TranslationMode/useTranslationSource";
@@ -1835,6 +1836,13 @@ export function EntryForm({
                                         status={
                                           hasStatus ? editedStatus : undefined
                                         }
+                                      />
+                                      <ReviewStatusLine
+                                        status={editedStatus.status}
+                                        hasWorkingDraft={
+                                          editedStatus.hasWorkingDraft
+                                        }
+                                        part={review.part}
                                       />
                                       <EntryMetaStrip
                                         panelCarriesId={panelDocked}
