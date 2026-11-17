@@ -491,10 +491,7 @@ function StyleInspectorBody({
     inspection?.nodeId,
     inspection?.sections,
     target.kind === "shared",
-    targetStyles(target) ??
-      (editor.selectedId === null
-        ? undefined
-        : findNode(editor.document.nodes, editor.selectedId)?.styles)
+    editedStyles(target, editor)
   );
 
   const chooseForm = (property: string, path: readonly string[], arm: number) =>
@@ -794,4 +791,16 @@ function sharesItsId(editor: EditorState, id: string): boolean {
     if (node.id === id) seen += 1;
   });
   return seen > 1;
+}
+
+/**
+ * The edited target's own styles at every state and device: a shared
+ * style's while one is the target, the selected block's otherwise.
+ */
+function editedStyles(target: StyleTarget, editor: EditorState): unknown {
+  const shared = targetStyles(target);
+  if (shared !== undefined) return shared;
+  return editor.selectedId === null
+    ? undefined
+    : findNode(editor.document.nodes, editor.selectedId)?.styles;
 }
