@@ -1,6 +1,6 @@
 /**
- * Site text: the size and line height a site gives its body text, its six
- * heading levels, its links, its buttons and its captions, set once for
+ * Site text: the font, size and line height a site gives its body text, its
+ * six heading levels, its links, its buttons and its captions, set once for
  * every page.
  *
  * ## One map, read by every compile
@@ -19,8 +19,9 @@
  * `font-size.h6`, whose values are the heading sizes the block library drew
  * before this map existed, so a site that never opens Site text renders as it
  * did at a 16px root. Body, Links, Buttons and Captions hold nothing until an
- * author sets them, and an empty row writes no CSS: a host's own typography
- * keeps working inside builder content until someone chooses otherwise.
+ * author sets them, no row holds a font until an author picks one, and an
+ * empty row writes no CSS: a host's own typography keeps working inside
+ * builder content until someone chooses otherwise.
  *
  * ## No row moves a block
  *
@@ -92,6 +93,11 @@ export const SITE_TEXT_UNDERLINES: readonly SiteTextUnderline[] = [
  * is optional: a row says only what the author set.
  */
 export interface SiteTextEntry {
+  /**
+   * The font: a font variable (`{ $token: "font.body" }`) or a font stack.
+   * Every row but Links.
+   */
+  readonly fontFamily?: string | TokenRef;
   /** The text size: a type size (`{ $token: "font-size.h2" }`) or a size. */
   readonly fontSize?: string | TokenRef;
   /** The line height: a type size's partner, or a number or length. */
@@ -256,7 +262,7 @@ const ELEMENT_ROW: ReadonlyMap<string, SiteTextRole> = new Map(
 
 /**
  * The CSS properties a row writes: a link's colours and underline, every
- * other row's size and line height. The tier's own defaults write the rest
+ * other row's font, size and line height. The tier's own defaults write the rest
  * (a margin, a heading's weight).
  */
 const LINK_PROPERTIES: ReadonlySet<string> = new Set([
@@ -264,6 +270,7 @@ const LINK_PROPERTIES: ReadonlySet<string> = new Set([
   "text-decoration",
 ]);
 const TEXT_PROPERTIES: ReadonlySet<string> = new Set([
+  "font-family",
   "font-size",
   "line-height",
 ]);
@@ -289,8 +296,8 @@ export function siteTextRoleOf(
 /**
  * The styles one row writes, or `undefined` for a row that writes nothing.
  *
- * Typography only: a size and a line height, and for links a colour, a
- * colour on hover and the underline. A link writes no size, so it takes the
+ * Typography only: a font, a size and a line height, and for links a
+ * colour, a colour on hover and the underline. A link writes no size, so it takes the
  * size of the text around it, in a paragraph or a heading alike.
  */
 export function siteTextStyles(
@@ -309,9 +316,10 @@ export function siteTextStyles(
   return Object.keys(styles).length === 0 ? undefined : styles;
 }
 
-/** A text row's size and line height, where it states them. */
+/** A text row's font, size and line height, where it states them. */
 function textValues(entry: SiteTextEntry): Record<string, StyleValue> {
   return {
+    ...(entry.fontFamily === undefined ? {} : { fontFamily: entry.fontFamily }),
     ...(entry.fontSize === undefined ? {} : { fontSize: entry.fontSize }),
     ...(entry.lineHeight === undefined ? {} : { lineHeight: entry.lineHeight }),
   };
@@ -386,6 +394,7 @@ const LINK_KEYS: ReadonlySet<string> = new Set([
   "underline",
 ]);
 const TEXT_KEYS: ReadonlySet<string> = new Set([
+  "fontFamily",
   "fontSize",
   "lineHeight",
   "fluid",
@@ -393,6 +402,7 @@ const TEXT_KEYS: ReadonlySet<string> = new Set([
 
 /** The style key each value of a row is judged as. */
 const JUDGED_AS: readonly (readonly [string, string])[] = [
+  ["fontFamily", "fontFamily"],
   ["fontSize", "fontSize"],
   ["lineHeight", "lineHeight"],
   ["color", "color"],
@@ -526,6 +536,7 @@ function underlineIssues(
 
 /** What each value of a row is called, for a refusal naming it. */
 const VALUE_WORDS: Readonly<Record<string, string>> = {
+  fontFamily: "font",
   fontSize: "size",
   lineHeight: "line height",
   color: "colour",
@@ -569,6 +580,7 @@ export function siteTextUses(
     const entry: unknown = stated[role];
     if (!isPlainRecord(entry)) continue;
     const values = [
+      entry.fontFamily,
       entry.fontSize,
       entry.lineHeight,
       entry.color,
