@@ -33,6 +33,7 @@ import {
 } from "../../layout-counts-contract";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../../library-contract";
 import { useSetPictures } from "../header-footer-pictures";
+import { useRefreshOnReturn } from "../refresh-on-return";
 
 /** The group's key in the panel's fold memory. */
 const HEADER_FOOTER_GROUP = "header-footer";
@@ -95,11 +96,24 @@ export function HeaderFooterGroup({
     // Every listed set's picture and its changes not published, which only
     // this list asks for, so the page's own menu read stays small.
     path: layoutChoicesPath(null, { pictures: true, drafts: true }),
+    // Never served from an earlier answer: a set made, renamed or published
+    // in its form's tab is shown when the author comes back (below).
+    staleTime: 0,
   });
   const counts = usePluginRoute<LayoutPageCountsResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: LAYOUT_COUNTS_ROUTE_PATH,
+    staleTime: 0,
   });
+  // A set's row and "+ New header & footer" open its form in another tab,
+  // and the admin asks no read again on focus, so both are asked here.
+  const refetchChoices = choices.refetch;
+  const refetchCounts = counts.refetch;
+  const refresh = React.useCallback(() => {
+    refetchChoices();
+    refetchCounts();
+  }, [refetchChoices, refetchCounts]);
+  useRefreshOnReturn(true, refresh);
   const picture = useSetPictures(
     choices.data?.meta.regionDefinitions ?? {},
     choices.data !== undefined
@@ -176,6 +190,19 @@ function GroupBody({
           </a>
         </li>
       ))}
+      {meta.more ? (
+        <li>
+          <a
+            href={`/admin/collections/${encodeURIComponent(meta.layoutsCollection)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block rounded-md px-1.5 py-1 text-xs text-muted-foreground underline-offset-4 hover:underline"
+          >
+            Showing the first {items.length}. See every header & footer set
+            <span className="sr-only"> (opens in a new tab)</span>
+          </a>
+        </li>
+      ) : null}
       <li>
         <a
           href={formHref(meta.layoutsCollection)}

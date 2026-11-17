@@ -17,6 +17,7 @@ interface RouteRead {
   path: string;
 }
 const routeReads: RouteRead[] = [];
+const refetch = vi.fn();
 let choices: { data?: unknown; error?: unknown } = {};
 let counts: { data?: unknown; error?: unknown } = {};
 
@@ -29,7 +30,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
       error: answer.error ?? null,
       pending: answer.data === undefined && answer.error === undefined,
       fetching: false,
-      refetch: () => {},
+      refetch,
     };
   },
 }));
@@ -80,6 +81,7 @@ const folds = { folded: new Set<string>(), onFold: vi.fn() };
 
 beforeEach(() => {
   routeReads.length = 0;
+  refetch.mockClear();
   folds.folded = new Set();
   folds.onFold.mockClear();
   answer([
@@ -146,6 +148,28 @@ describe("the Header & footer group", () => {
     const add = screen.getByRole("link", { name: /New header & footer/ });
     expect(add.getAttribute("href")).toBe("/admin/collections/layouts/create");
     expect(add.getAttribute("target")).toBe("_blank");
+  });
+
+  it("asks both reads again when the author comes back from a set's form", () => {
+    render(<HeaderFooterGroup folds={folds} />);
+    refetch.mockClear();
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    // The sets and their counts.
+    expect(refetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("says when more sets exist than it lists, and where to see them all", () => {
+    const listed = [set("main", "Main")];
+    answer(listed);
+    (choices.data as { meta: { more: boolean } }).meta.more = true;
+    render(<HeaderFooterGroup folds={folds} />);
+    const all = screen.getByRole("link", {
+      name: /See every header & footer set/,
+    });
+    expect(all.getAttribute("href")).toBe("/admin/collections/layouts");
+    expect(all.textContent).toContain("Showing the first 1.");
   });
 
   it("is hidden from an author who may not read sets", () => {

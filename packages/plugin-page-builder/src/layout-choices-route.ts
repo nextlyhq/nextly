@@ -26,10 +26,10 @@ import {
 import { definitionsFor } from "@nextlyhq/blocks-react";
 import {
   NextlyError,
+  PENDING_CHANGE_KEY,
   type PluginRouteContext,
   type PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
-import { PENDING_CHANGE_KEY } from "nextly/reserved-filter-keys";
 import { z } from "nextly/zod";
 
 import { COMPONENTS_SLUG } from "./collections/components";
@@ -294,8 +294,10 @@ export async function readLayoutChoices(
   // Asked for every listed set: one read of core's workflow filter, the
   // versions domain's one statement of a working draft with changes not yet
   // published, read as the caller, rather than a read by id per set.
+  // Only for a caller who may update sets: a working draft is overlaid for
+  // one who may change it, so one who may not learns nothing of a draft.
   const listedDrafts =
-    request.drafts === true
+    request.drafts === true && canUpdateLayouts
       ? await idsKeptByWorkflowKey(
           async args => {
             const found = await nextly.find({

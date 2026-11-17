@@ -89,12 +89,9 @@ function fake(store: Store) {
               args.overrideAccess === true ||
               !(store.filtered ?? []).includes(String(row.id))
           )
-          .filter(
-            row =>
-              !pendingOnly ||
-              (store.drafts.includes(String(row.id)) &&
-                (store.updatable?.includes(String(row.id)) ?? true))
-          )
+          // As core's filter answers: it keeps a row with a working draft
+          // whatever the caller may do to it.
+          .filter(row => !pendingOnly || store.drafts.includes(String(row.id)))
           .filter(row => asked === undefined || asked.includes(String(row.id)))
           .filter(
             row =>
@@ -717,6 +714,23 @@ describe("readLayoutChoices", () => {
       call => call.collection === "layouts" && "draft" in call
     );
     expect(byIdLayoutReads.map(call => call.id)).toEqual(["l0"]);
+  });
+
+  it("says nothing of other sets' changes to a caller who may not update sets", async () => {
+    const { nextly } = fake({
+      ...store,
+      layouts: [layoutRow("l0", "Main"), layoutRow("l2", "Campaign")],
+      drafts: ["l2"],
+      defaultLayout: "l0",
+    });
+    const { items } = await readLayoutChoices(
+      context(false),
+      nextly,
+      asked(null, DEFAULT_COMPONENT_STORE, { drafts: true })
+    );
+    expect(items.find(item => item.id === "l2")?.draftChangesNotLive).toBe(
+      false
+    );
   });
 
   it("says nothing of unfocused sets' changes when not asked", async () => {
