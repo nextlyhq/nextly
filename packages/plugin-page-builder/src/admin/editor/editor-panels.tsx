@@ -53,7 +53,7 @@ import type { Control, FieldValues } from "react-hook-form";
 
 import type { ComponentLibraryRead } from "../component-library-client";
 import { lazyPart } from "../lazy-part";
-import { usePageLayoutRegions, usePageLayoutSettings } from "../page-layout";
+import { usePageLayoutSettings } from "../page-layout";
 import {
   usePatternLibrary,
   type LibraryReadState,
@@ -89,7 +89,7 @@ import {
   useSectionPictures,
   type SectionPictureInputs,
 } from "./section-pictures";
-import { useSelectedRegion, type SelectedRegion } from "./selected-region";
+import { usePageRegions, type SelectedRegion } from "./selected-region";
 import type { FontsPanelWithUpload as FontsPanelWithUploadPart } from "./site-style-fonts";
 import {
   offerableFaces,
@@ -572,10 +572,9 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   // The Layout section for the Settings dialog's "This page" tab, or null for
   // a form that is not a page's.
   const pageLayout = usePageLayoutSettings(page.control);
-  // From the form's unsaved values, so a change of Layout redraws at once.
-  const layoutRegions = usePageLayoutRegions(page.control, page.canvasRoot);
-  // The header or footer selected on the canvas or in Layers.
-  const selectedRegion = useSelectedRegion(editor, layoutRegions);
+  // From the form's unsaved values, so a change of Layout redraws at once,
+  // with the header or footer selected on the canvas or in Layers.
+  const layoutRegions = usePageRegions(page.control, page.canvasRoot, editor);
   /*
    * The entry's other fields, ALREADY DRAWN, or null when there are none.
    *
@@ -641,8 +640,8 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     availablePanels: AVAILABLE_PANELS,
     pageLayout,
     canvasRegions: layoutRegions.canvas,
-    layersRegions: selectedRegion.layers,
-    selectedRegion,
+    layersRegions: layoutRegions.selectedRegion.layers,
+    selectedRegion: layoutRegions.selectedRegion,
     ...library,
     ...requests,
   };

@@ -114,7 +114,7 @@ export interface CanvasRegion {
 export const REGION_ATTRIBUTE = "data-nx-region";
 
 /** The attribute a drawn region carries while it is selected. */
-export const REGION_SELECTED_ATTRIBUTE = "data-selected";
+const REGION_SELECTED_ATTRIBUTE = "data-selected";
 
 /**
  * One region on the canvas, selected as a whole.

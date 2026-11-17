@@ -117,17 +117,17 @@ export function RegionsAround({
   drawn,
   rendered,
   environment,
-  selected,
-  onSelect,
+  selection,
   children,
 }: {
   drawn: LayoutParts | undefined;
   rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
   environment: BlockEnvironment | undefined;
-  /** The region selected, or `null`. */
-  selected: RegionArea | null;
-  /** Select a region; absent, a region selects nothing. */
-  onSelect: ((area: RegionArea) => void) | undefined;
+  /** The region selected, and the way to select one; absent, none is. */
+  selection: {
+    readonly selectedRegion?: RegionArea | null;
+    readonly onSelectRegion?: (area: RegionArea) => void;
+  };
   children: React.ReactNode;
 }): React.JSX.Element {
   const frame = (part: DrawnRegion | undefined) =>
@@ -137,8 +137,8 @@ export function RegionsAround({
           region={part.region}
           rendered={rendered}
           sheet={part.sheet}
-          selected={selected === part.region.area}
-          onSelect={onSelect}
+          selected={selection.selectedRegion === part.region.area}
+          onSelect={selection.onSelectRegion}
         />
       </BlockEnvironmentProvider>
     );

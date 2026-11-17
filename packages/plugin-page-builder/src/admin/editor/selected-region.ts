@@ -17,8 +17,13 @@ import {
   type RegionSelection,
 } from "@nextlyhq/builder/shell";
 import { useCallback, useMemo } from "react";
+import type { Control, FieldValues } from "react-hook-form";
 
-import type { PageLayoutRegions, RegionCardFacts } from "../page-layout";
+import {
+  usePageLayoutRegions,
+  type PageLayoutRegions,
+  type RegionCardFacts,
+} from "../page-layout";
 
 /** The selected region and what reads it. */
 export interface SelectedRegion {
@@ -35,7 +40,7 @@ export interface SelectedRegion {
 }
 
 /** The region selection for the regions drawn around the page. */
-export function useSelectedRegion(
+function useSelectedRegion(
   editor: Pick<EditorState, "selectedId" | "select">,
   drawn: PageLayoutRegions
 ): SelectedRegion {
@@ -75,4 +80,18 @@ export function useSelectedRegion(
     () => ({ selection, layers, card, selectOnCanvas }),
     [selection, layers, card, selectOnCanvas]
   );
+}
+
+/**
+ * The regions drawn around the page, from the form's unsaved values, with
+ * the one selected and what reads it.
+ */
+export function usePageRegions<T extends FieldValues>(
+  control: Control<T>,
+  canvasRoot: HTMLElement | null,
+  editor: Pick<EditorState, "selectedId" | "select">
+): PageLayoutRegions & { readonly selectedRegion: SelectedRegion } {
+  const drawn = usePageLayoutRegions(control, canvasRoot);
+  const selectedRegion = useSelectedRegion(editor, drawn);
+  return useMemo(() => ({ ...drawn, selectedRegion }), [drawn, selectedRegion]);
 }

@@ -260,11 +260,11 @@ export function Canvas({
   onListSortField,
   overlay,
   regions,
-  selectedRegion = null,
-  onSelectRegion,
   conditionsUnchecked,
   conditionsApplied,
   composed,
+  // The selected region and the way to select one, for the regions alone.
+  ...regionSelection
 }: CanvasProps): JSX.Element {
   const root = useRef<HTMLDivElement | null>(null);
   usePublishedRoot(root, rootRef, onRoot);
@@ -448,8 +448,7 @@ export function Canvas({
         drawn={drawn}
         rendered={render}
         environment={environment}
-        selected={selectedRegion}
-        onSelect={onSelectRegion}
+        selection={regionSelection}
       >
         {page}
       </RegionsAround>
