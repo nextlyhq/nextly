@@ -74,6 +74,7 @@ import { AdvancedTab } from "./inspector-advanced-tab";
 import { commitProp, ContentTab } from "./inspector-content-tab";
 import type {
   ComponentLibrary,
+  DocumentSettingsView,
   InspectorPanelProps,
   StyleStateBinding,
 } from "./inspector-panel-types";
@@ -101,6 +102,7 @@ export type { ComponentLibrary } from "./inspector-panel-types";
 export type { StyleStateBinding } from "./inspector-panel-types";
 export type {
   BlockInspectorResolver,
+  DocumentSettingsView,
   InspectorPanelProps,
 } from "./inspector-panel-types";
 export { editedStyleState } from "./inspector-style-state";
@@ -161,7 +163,8 @@ function selectedInstance(
  * instance next, before the empty case: the block inspection IS empty for an
  * instance — its type is not in the registry — and answering "select a block"
  * to an author who just clicked a component was the state that surface
- * replaces. Nothing selected last: one note, and no tabs.
+ * replaces. Nothing selected last: the document's own settings, and no
+ * tabs.
  */
 function surfaceFor(
   editor: EditorState,
@@ -171,7 +174,9 @@ function surfaceFor(
   fields: ComponentFieldsBinding | undefined,
   definitions: ComponentLookup,
   /** The canvas's root, where the instance panel marks a placement's parts. */
-  canvasRoot?: HTMLElement | null
+  canvasRoot: HTMLElement | null | undefined,
+  /** The host's view of the open document, drawn while nothing is selected. */
+  documentSettings: DocumentSettingsView | undefined
 ):
   | { readonly tabless: React.JSX.Element }
   | { readonly block: BlockInspection } {
@@ -213,39 +218,43 @@ function surfaceFor(
     };
   }
   /*
-   * Nothing selected: one note, and no tabs.
+   * Nothing selected: the open document's own settings, drawn by the host
+   * (a page's title, address and header & footer), in the same frame and so
+   * at the same width, so the canvas never rescales on a click. Tabs are
+   * withheld: a Style tab over no selection would offer an author somewhere
+   * to click that can never show anything.
    *
-   * The entry's OWN fields are not drawn here. They already ship as a left
-   * panel the host renders, and reproducing them in this region would be the
-   * second surface-meaning-two-things the layout ruling removed, wearing a
-   * different shape. Tabs are withheld too: a Style tab over no selection would
-   * offer an author somewhere to click that can never show anything.
-   *
-   * In a component's own view, nothing selected means the component itself is
-   * what is being looked at, so its exposed fields are listed, and the
-   * variants that preset them under those.
+   * In a component's own view, nothing selected means the component itself
+   * is what is being looked at, so its exposed fields are listed, and the
+   * variants that preset them under those, handed to the host to place
+   * among its own rows.
    */
-  if (
-    inspection === null &&
-    editor.selectedId === null &&
-    fields !== undefined
-  ) {
-    return {
-      tabless: (
+  if (editor.selectedId === null) {
+    const own =
+      inspection === null && fields !== undefined ? (
         <ExposedFieldsList binding={fields} editor={editor}>
           <ComponentVariantsSection
             editor={editor}
             component={fields.context.component}
           />
         </ExposedFieldsList>
-      ),
-    };
-  }
-  if (inspection === null) {
+      ) : null;
     return {
       tabless: (
         <div className="nx-inspector" data-empty="no-selection">
-          <p className="nx-inspector__note">Select a block to edit it.</p>
+          {documentSettings === undefined ? own : documentSettings(own)}
+        </div>
+      ),
+    };
+  }
+  // A block whose type this site does not register: nothing to edit it with.
+  if (inspection === null) {
+    return {
+      tabless: (
+        <div className="nx-inspector" data-empty="unregistered">
+          <p className="nx-inspector__note">
+            {"This block can't be edited here: its type isn't on this site."}
+          </p>
         </div>
       ),
     };
@@ -452,6 +461,7 @@ function SelectionInspector({
   verbs,
   contentServices,
   breakpointsStatus = "ready",
+  documentSettings,
   // What only the Style tab reads, carried to it whole.
   ...styleOnly
 }: Omit<
@@ -526,7 +536,8 @@ function SelectionInspector({
     verbs,
     fields,
     (componentLibrary ?? NO_LIBRARY).definitions,
-    canvasRoot
+    canvasRoot,
+    documentSettings
   );
   // A tabless surface still reaches the host's media library: a component
   // placement's exposed image chooses a file as the Content tab does.
