@@ -15,6 +15,8 @@
  * @module style-keyword-labels
  */
 import {
+  APPEAR_EFFECT_PROPERTY,
+  APPEAR_START_PROPERTY,
   asciiLower,
   decodeIdentifier,
   DISCLOSURE_ICON_PROPERTY,
@@ -207,6 +209,19 @@ const KEYWORD_LABELS: Readonly<
     "inline-size": "Width",
     size: "Width and height",
     "scroll-state": "Scroll state",
+  },
+  // "Animation when it appears", traced on its own custom properties.
+  [APPEAR_EFFECT_PROPERTY]: {
+    none: "None",
+    "fade-in": "Fade in",
+    rise: "Rise",
+    "slide-in-left": "Slide in from the left",
+    "slide-in-right": "Slide in from the right",
+    "zoom-in": "Zoom in",
+  },
+  [APPEAR_START_PROPERTY]: {
+    scroll: "When scrolled into view",
+    load: "When the page loads",
   },
 };
 

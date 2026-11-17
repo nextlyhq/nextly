@@ -159,7 +159,9 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     <UnsavedChangesGuard
       isDirty={unsavedCount > 0 || isSaving}
       disabled={locked}
-      busy={isSaving}
+      // Nor while an unsaved entity's new address is checked: discarding then
+      // would let the entity go before the move renames it.
+      busy={isSaving || saveHeld !== undefined}
       onDiscard={onDiscard}
     >
       <div className="flex flex-col min-h-screen bg-background">
