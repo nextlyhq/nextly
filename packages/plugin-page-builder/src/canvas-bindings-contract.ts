@@ -185,7 +185,15 @@ export function conditionsFromWire(
 }
 
 /** What the route answers: the sources, read as the caller. */
-export type CanvasBindingsResponse = WireBindings;
+export type CanvasBindingsResponse = WireBindings & {
+  /**
+   * The change check's mark of the sources the ask names
+   * ({@link sourcesChangedAskOf}), taken before they were read, so the
+   * editor's check starts from it rather than asking once the canvas is
+   * drawn. Left out when the mark could not be read: the editor then asks.
+   */
+  readonly stamp?: string;
+};
 
 /** One source's demand as JSON carries it. */
 function sourceToWire(demand: SourceDemand): CanvasSourceDemand {
