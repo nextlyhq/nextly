@@ -12,6 +12,7 @@ import { sql } from "drizzle-orm";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { previewUpgrade, runUpgrade } from "../../../cli/commands/upgrade";
+import { UPGRADE_STEPS } from "../../../cli/commands/upgrade-steps";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import type { TestNextly } from "../../../plugins/test-nextly";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
@@ -127,9 +128,17 @@ describeEachDialect(
     it("stores every row under the standard code, the pending change and its key included", async () => {
       const id = await legacyArticle();
 
+      // The conversion alone: a later step that rewrites whole-document drafts gives them new
+      // keys, which would hide a key this one left under the older code.
       await runUpgrade(
         { confirmBackedUp: true },
-        { adapter: database!.adapter as never, config: UNDERSCORED }
+        {
+          adapter: database!.adapter as never,
+          config: UNDERSCORED,
+          steps: UPGRADE_STEPS.filter(step =>
+            step.title.startsWith("convert language codes")
+          ),
+        }
       );
 
       expect(await storedLanguages()).toEqual(["en", "pt-BR"]);
