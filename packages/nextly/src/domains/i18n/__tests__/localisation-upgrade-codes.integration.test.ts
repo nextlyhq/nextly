@@ -28,7 +28,7 @@ import {
   bootSite,
   openUpgradeDatabase,
   siteWithLanguages,
-  type FixtureSite,
+  storeUnderCode,
   type UpgradeDatabase,
 } from "./helpers/localisation-upgrade-fixture";
 
@@ -37,6 +37,8 @@ import {
  * so a read of it that found nothing would answer in English, never as Portuguese.
  */
 const UNDERSCORED = siteWithLanguages(["en", "pt_BR"], "en");
+/** The same site written in standard form, which this release writes rows under. */
+const STANDARD = siteWithLanguages(["en", "pt-BR"], "en");
 /** A site whose configuration holds both spellings of one language. */
 const BOTH_SPELLINGS = siteWithLanguages(["en", "pt_BR", "pt-BR"], "en");
 
@@ -57,10 +59,15 @@ describeEachDialect(
         t.getService("collectionsHandler") as CollectionsHandler
       ).getEntryService();
 
-    /** The legacy `site` holding one article, live in English and `pt_BR`, pending in `pt_BR`. */
-    async function legacyArticle(site: FixtureSite): Promise<string> {
+    /**
+     * One article, live in English and Portuguese and pending in Portuguese, its Portuguese rows
+     * stored under `pt_BR` as a release from before codes were checked stored them. This release
+     * writes every row under the standard code, so they are written so and then renamed by
+     * column, the pending change's key computed from the old code as that release computed it.
+     */
+    async function legacyArticle(): Promise<string> {
       database = await openUpgradeDatabase(dialect);
-      const t = await bootSite(database, "legacy", site);
+      const t = await bootSite(database, "legacy", STANDARD);
       const entries = entriesOf(t);
       const created = await entries.createEntry(
         { collectionName: ARTICLES, overrideAccess: true, locale: "en" },
@@ -78,15 +85,16 @@ describeEachDialect(
         locale,
         overrideAccess: true,
       });
-      await entries.updateEntry(at("pt_BR"), {
+      await entries.updateEntry(at("pt-BR"), {
         title: "olá",
         status: "published",
         _overwrite: true,
       });
-      await entries.updateEntry(at("pt_BR"), {
+      await entries.updateEntry(at("pt-BR"), {
         title: "olá 2",
         _overwrite: true,
       });
+      await storeUnderCode(database, "pt-BR", "pt_BR");
       return id;
     }
 
@@ -117,7 +125,7 @@ describeEachDialect(
     }
 
     it("stores every row under the standard code, the pending change and its key included", async () => {
-      const id = await legacyArticle(UNDERSCORED);
+      const id = await legacyArticle();
 
       await runUpgrade(
         { confirmBackedUp: true },
@@ -136,7 +144,7 @@ describeEachDialect(
     });
 
     it("serves the old code as the standard one once upgraded", async () => {
-      const id = await legacyArticle(UNDERSCORED);
+      const id = await legacyArticle();
       await runUpgrade(
         { confirmBackedUp: true },
         { adapter: database!.adapter as never, config: UNDERSCORED }
@@ -156,7 +164,7 @@ describeEachDialect(
     });
 
     it("lists each conversion in a dry run", async () => {
-      await legacyArticle(UNDERSCORED);
+      await legacyArticle();
 
       const plan = await previewUpgrade(
         { confirmBackedUp: true },
@@ -170,7 +178,7 @@ describeEachDialect(
     });
 
     it("stops, naming both, where two codes would become one, and changes nothing", async () => {
-      await legacyArticle(BOTH_SPELLINGS);
+      await legacyArticle();
       const deps = {
         adapter: database!.adapter as never,
         config: BOTH_SPELLINGS,

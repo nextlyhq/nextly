@@ -42,6 +42,7 @@ import {
   WORKING_DRAFT_SHAPE,
   type VersionRow,
 } from "../../../versions/versions-repository";
+import { workingDraftKey } from "../../../versions/working-draft-key";
 import { _resetPerLanguageStorage } from "../../per-language-storage";
 
 /** The languages of the site, its default first. */
@@ -399,6 +400,53 @@ async function writeRows(
   await database.adapter
     .getDrizzle<{ execute(query: SQL): Promise<unknown> }>()
     .execute(statement);
+}
+
+/**
+ * Store every row written under `standard` under `old` instead, as a release from before codes
+ * were checked stored them: each translation table's rows, each version's language, and each
+ * pending change's key, computed from the old code as that release computed it. This release
+ * writes every row under the standard code, so no service writes this state any longer.
+ */
+export async function storeUnderCode(
+  database: UpgradeDatabase,
+  standard: string,
+  old: string
+): Promise<void> {
+  for (const table of [
+    "dc_articles_locales",
+    "dc_notes_locales",
+    "single_banner_locales",
+    "single_footer_locales",
+  ]) {
+    if (!(await database.adapter.tableExists(table))) continue;
+    await writeRows(
+      database,
+      sql`UPDATE ${sql.identifier(table)} SET ${sql.identifier("_locale")} = ${old} WHERE ${sql.identifier("_locale")} = ${standard}`
+    );
+  }
+  const versions = await database.adapter.select<
+    VersionRow & { draftKey: string | null }
+  >(VERSIONS_TABLE, {
+    where: { and: [{ column: "locale", op: "=", value: standard }] },
+  });
+  for (const row of versions) {
+    const ref = {
+      scopeKind: row.scopeKind,
+      scopeSlug: row.scopeSlug,
+      entryId: row.entryId,
+    };
+    await database.adapter.update(
+      VERSIONS_TABLE,
+      {
+        locale: old,
+        ...(row.draftKey === null
+          ? {}
+          : { draftKey: workingDraftKey(ref, old) }),
+      },
+      { and: [{ column: "id", op: "=", value: row.id }] }
+    );
+  }
 }
 
 /** What a reader sees of one document in one language: its values, or nothing. */
