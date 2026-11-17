@@ -191,6 +191,10 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   ],
   // The Add panel's group of layout blocks, by its heading there.
   "docs/page-builder/index.mdx": ["Layout (section, box, columns"],
+  // The Style tab's Layout section, where a container's Content width is.
+  "docs/page-builder/editor.mdx": [
+    "Every container has **Content width** under **Style → Layout**: **Boxed** or **Full width**. A new Section starts Boxed, and every other container starts Full width.",
+  ],
 };
 
 function findingsIn(

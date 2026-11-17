@@ -270,6 +270,13 @@ export {
   PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
 } from "../style/node-class";
+// A container's own content width: the prop the page compile reads it from,
+// and the custom property it writes for the site sheet's rule to read.
+export {
+  CONTENT_WIDTH_PROP,
+  CONTENT_WIDTH_PROPERTY,
+  contentWidthTokenOf,
+} from "../style/content-width";
 export {
   compileStyleValues,
   scaledTokenText,

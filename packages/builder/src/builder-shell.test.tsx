@@ -579,7 +579,6 @@ describe("panels the host cannot fill", () => {
       "Pages",
       "Components",
       "Design",
-      "Settings",
       "Help",
     ]);
   });
@@ -634,7 +633,8 @@ describe("the rail", () => {
 
 describe("the rail's groups", () => {
   it("keeps Settings and Help apart from the daily tools, at the bottom", () => {
-    renderShell();
+    // Settings is the host's dialog, offered only where the host draws one.
+    renderShell({ renderSettings: () => null });
 
     const rail = screen.getByRole("navigation", { name: "Editor panels" });
     const [top, bottom] = within(rail).getAllByRole("list");
@@ -858,17 +858,21 @@ describe("a panel's view", () => {
     });
   });
 
-  it("opens a panel stored under its old name on the part it became", () => {
-    // Fonts was a panel of its own, and is now Design's Fonts tab. An author
-    // who left it open comes back to it rather than to a closed rail.
-    const shell = renderWithView(
+  it("opens the default panel for a panel stored under an old name", () => {
+    // Fonts was a panel of its own before it became part of Design. No table
+    // of old names is kept, so the editor opens as it does the first time.
+    renderWithView(
       memoryStore(
         JSON.stringify({ ...DEFAULT_PREFERENCES, leftPanel: "fonts" })
       )
     );
 
-    expect(screen.getByText("design panel")).toBeTruthy();
-    expect(shell.seen.at(-1)).toBe("fonts");
+    expect(screen.queryByText(/ panel$/)).toBeNull();
+    expect(
+      screen
+        .getByRole("navigation", { name: "Editor panels" })
+        .querySelector('[aria-pressed="true"]')
+    ).toBeNull();
   });
 
   it("opens the part a request names", () => {

@@ -131,7 +131,10 @@ async function routeHtml(
     nextly: t.nextly as never,
     ...(blocks === undefined ? {} : { blocks }),
     styleContext: {
-      breakpoints: { viewport: [{ id: "base", label: "Desktop" }], container: [] },
+      breakpoints: {
+        viewport: [{ id: "base", label: "Desktop" }],
+        container: [],
+      },
     },
   });
   return streamed(

@@ -41,16 +41,14 @@ export function panelTopology(
  *
  * A name this shell does not know is never available, whatever the host
  * offers: a request from untyped code can still name a panel that was
- * renamed, and there is no chrome to draw it with. Settings is the host's
- * dialog when it draws one, never a panel too.
+ * renamed or removed, Settings among them, and there is no chrome to draw it
+ * with.
  */
 export function panelAvailability(
-  availablePanels: readonly LeftPanel[] | undefined,
-  renderSettings: BuilderShellProps["renderSettings"]
+  availablePanels: readonly LeftPanel[] | undefined
 ): (panel: LeftPanel) => boolean {
   return panel =>
     isLeftPanel(panel) &&
-    !(panel === "settings" && renderSettings !== undefined) &&
     (availablePanels === undefined || availablePanels.includes(panel));
 }
 

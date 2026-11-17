@@ -111,7 +111,7 @@ export function ShellRegions({
   useDesignSystemStylesheet(chromeRef);
 
   // Whether the host can fill a panel: see `panelAvailability`.
-  const isAvailable = panelAvailability(availablePanels, renderSettings);
+  const isAvailable = panelAvailability(availablePanels);
 
   /**
    * The open panel, NORMALISED against what the host can fill.

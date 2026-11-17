@@ -18,6 +18,7 @@ import { LAYOUT } from "./categories";
 import {
   CONTAINER_CHILD_GAP,
   CONTAINER_SUPPORTS,
+  CONTENT_WIDTH_PROPS,
   LINKABLE_BASE_STYLE,
   linkableContentModel,
   renderLinkableContainer,
@@ -51,7 +52,7 @@ export const box: BlockDefinition<ContainerProps, PageContext> = defineBlock({
     // Declared even though a box is full width by default: a preset differs
     // from its sibling in what it starts as, never in what it can be told to
     // do, and a schema is what lets anything but a human change a value.
-    contained: { label: "Constrain content width", type: "checkbox" },
+    ...CONTENT_WIDTH_PROPS,
     // A whole-block link. Content, because where a box leads is what an
     // editor changes; the block reads it through `url()` like Heading and
     // Button, so an unusable value renders no link and makes nothing

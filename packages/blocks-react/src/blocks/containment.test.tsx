@@ -146,7 +146,7 @@ describe("a sheet stored before contained blocks were padded in", () => {
     expect(stored.css).not.toContain(PADDED_IN);
     const served = resolvePageStyles(DOC, stored, undefined, resolver);
     expect(served.css).toContain(PADDED_IN);
-    expect(served.sharedInputsId?.startsWith("v9:")).toBe(true);
+    expect(served.sharedInputsId?.startsWith("v10:")).toBe(true);
   });
 
   it("is recompiled where a compile context exists", () => {
@@ -225,7 +225,7 @@ describe("a sheet stored before a row's items were flagged", () => {
     for (const read of [undefined, context]) {
       const served = resolvePageStyles(DOC, storedByV7(), read, resolver);
       expect(served.css).toContain(FLAGGED);
-      expect(served.sharedInputsId?.startsWith("v9:")).toBe(true);
+      expect(served.sharedInputsId?.startsWith("v10:")).toBe(true);
     }
   });
 });

@@ -25,6 +25,7 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { ContentWidthFields } from "./content-width-fields";
 import { FocalFrame } from "./focal-frame";
 import type { InspectorSectionKey } from "./inspector-sections";
 import { SectionHeld } from "./section-held";
@@ -307,7 +308,10 @@ function SectionFields({
     <fieldset className="nx-inspector__fields" disabled={readOnly}>
       <SectionHeld.Provider value={readOnly}>
         {sectionKey === "layout" ? (
-          <ColumnsLayoutFields surroundings={surroundings} />
+          <>
+            <ContentWidthFields surroundings={surroundings} />
+            <ColumnsLayoutFields surroundings={surroundings} />
+          </>
         ) : null}
         {sectionKey === "size" ? (
           <BlockShortcutsFields

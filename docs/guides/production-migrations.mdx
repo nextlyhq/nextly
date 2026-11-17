@@ -923,6 +923,17 @@ The Builder dual-writes every entity it creates or saves into the UI-schema mani
 `db.uiSchemaFile` names, `./ui-schema.json` by default — for all three entity kinds. Commit that
 file with your migrations: it is the **input** `nextly migrate:create` reads to know a Builder
 entity exists, and a Builder change missing from the commit cannot appear in any migration.
+Nextly's scaffold does not ignore it; if your project's `.gitignore` lists it, remove that line.
+
+`nextly migrate:create` and `nextly migrate:check` read the file by the same rules, so a definition
+one refuses the other refuses with the same message. Both refuse, as
+[`BUILDER_DEFINITION_MISSING`](/docs/cli/errors/builder-definition-missing), when the newest
+migration snapshot records a Builder entity that neither `nextly.config.ts` nor the file declares:
+the file lost it (it was never committed, or the entry was removed by hand), and a migration
+written from what is left would drop that entity's table and its content. Restore the file from
+version control. To remove an entity, delete it in the Builder, which writes the migration that
+drops it. An entry whose slug a code-first entity of the same kind also uses is ignored, and both
+commands warn, naming its kind and slug: the code-first definition wins.
 
 Two things to know before relying on it:
 
@@ -965,10 +976,10 @@ than something production generates.
   leave the `localized` registry value behind, because the upsert is filtered by the same
   touched-table set the companion file does not populate. Check the registry row after toggling
   localization on an existing entity.
-- **A deletion leaves the registry row behind.** Deleting a Collection in the Builder writes a
-  migration that drops its table. Deleting a Single or a Field Group writes none: the Builder drops
-  the development table and removes the manifest entry, and the next `migrate:create` finds that
-  table in the previous snapshot but not in the manifest and writes the `DROP TABLE`. Either way the
+- **A deletion leaves the registry row behind.** Deleting a Collection, a Single or a Field Group
+  in the Builder writes the migration that drops its table, with a snapshot that no longer records
+  the entity, so the next `migrate:create` and `migrate:check` find nothing lost. Removing the
+  entry from `ui-schema.json` by hand is not a deletion: both commands refuse it, as above. The
   table goes. Its registry row does not: `migrate:create`
   builds registry upserts only for entities still in the manifest, and nothing on the
   `nextly migrate` path removes a row. The other environment keeps a row describing a table that no

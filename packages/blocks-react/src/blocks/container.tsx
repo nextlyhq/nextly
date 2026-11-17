@@ -22,9 +22,13 @@
  * @module blocks/library/container
  */
 
-import { CONTENT_WIDTH_CLASS } from "@nextlyhq/blocks-engine";
+import {
+  CONTENT_WIDTH_CLASS,
+  CONTENT_WIDTH_PROPERTY,
+} from "@nextlyhq/blocks-engine";
 import type {
   ContentModel,
+  PropSchema,
   RemotePatternInput,
   TokenRef,
 } from "@nextlyhq/blocks-engine";
@@ -50,11 +54,19 @@ export interface ContainerProps {
    */
   as?: "section" | "div" | "article" | "aside" | "header" | "footer" | "main";
   /**
-   * Whether the content is held to the site's content width. The width itself
-   * is a site setting rather than a per-instance value, so a site-wide change
-   * moves every page instead of none of them.
+   * Whether the content is held to a content width (Boxed) or runs edge to
+   * edge (Full width). The block's background runs edge to edge either way.
    */
   contained?: boolean;
+  /**
+   * The width this container holds its content to while it is Boxed, in
+   * place of the site's: a length or a percentage (`"1400px"`), or a site
+   * variable. Left out, the site's content width, so a site-wide change still
+   * moves every container that states none. The page compile writes it on
+   * the container alone: a Boxed container inside this one boxes to the
+   * site's width.
+   */
+  contentWidth?: string | TokenRef;
   /**
    * Where the whole block links to. Only the presets that declare it (Box and
    * Card) render it: linked, the root element is an `<a>` instead of the `as`
@@ -103,6 +115,54 @@ export type ContainerTag = (typeof CONTAINER_TAGS)[number];
  * selector matches nothing simply does not apply.
  */
 export { CONTENT_WIDTH_CLASS };
+
+/**
+ * A container's Content width settings, drawn in Style › Layout: whether its
+ * content is Boxed or runs Full width, and the width it boxes to where it
+ * states one of its own. Declared once and spread into every container's
+ * props, for the reason {@link CONTAINER_SUPPORTS} is: nine copies would let a
+ * label or a place drift on some containers and not others.
+ *
+ * Settings rather than styles. A style has a device, a state and a shared
+ * style it can come from; whether a container is boxed has none of those, so
+ * it is the block's own, and one value on every device.
+ *
+ * The width's key is the engine's `CONTENT_WIDTH_PROP`, which the page
+ * compile reads; a test holds the two to one spelling.
+ */
+export const CONTENT_WIDTH_PROPS: {
+  readonly contained: PropSchema;
+  readonly contentWidth: PropSchema;
+} = {
+  contained: {
+    label: "Content width",
+    type: "checkbox",
+    group: "style",
+    section: "layout",
+    code: `class="${CONTENT_WIDTH_CLASS}"`,
+  },
+  contentWidth: {
+    label: "Width for this section",
+    type: "length",
+    group: "style",
+    section: "layout",
+    code: `${CONTENT_WIDTH_PROPERTY}: <width>`,
+  },
+};
+
+/**
+ * The root's classes with the content-width opt-in where the container is
+ * Boxed. One function for every container, including the ones that render
+ * their own root (Collection list, Entry content).
+ */
+export function withContentWidth(
+  className: string,
+  props: { readonly contained?: unknown }
+): string {
+  return props.contained === true
+    ? `${className} ${CONTENT_WIDTH_CLASS}`
+    : className;
+}
 
 /**
  * The style capabilities every container preset opts into.
@@ -282,9 +342,7 @@ export function renderLinkableContainer(
   const href = linkOf(args.props);
   if (href === undefined) return renderContainer(args);
   const classes = withRevision(
-    args.props.contained === true
-      ? `${args.className} ${CONTENT_WIDTH_CLASS}`
-      : args.className,
+    withContentWidth(args.className, args.props),
     args
   );
   return (
@@ -313,12 +371,7 @@ export function renderContainer(
   // handed children and throw, taking the page with it, so an unknown tag falls
   // back to the one every container can safely be.
   const Tag = rootTagOf(props, false);
-  const classes = withRevision(
-    props.contained === true
-      ? `${className} ${CONTENT_WIDTH_CLASS}`
-      : className,
-    args
-  );
+  const classes = withRevision(withContentWidth(className, props), args);
   // The children's images are sized to the width this container leaves them.
   return (
     <Tag className={classes}>
