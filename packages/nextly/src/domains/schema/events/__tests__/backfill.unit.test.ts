@@ -4,7 +4,12 @@
  */
 import { describe, it, expect } from "vitest";
 
-import { mapMigrationsRow, mapJournalRow } from "../backfill";
+import {
+  legacyLedgerShape,
+  mapJournalRow,
+  mapMigrationsRow,
+  readLegacyLedgerRow,
+} from "../backfill";
 
 describe("mapMigrationsRow", () => {
   it("maps a nextly_migrations row to a file_apply event", () => {
@@ -76,5 +81,128 @@ describe("mapJournalRow", () => {
   it("returns null (skip) for in_progress / aborted rows", () => {
     expect(mapJournalRow({ ...base, status: "in_progress" })).toBeNull();
     expect(mapJournalRow({ ...base, status: "aborted" })).toBeNull();
+  });
+});
+
+describe("reading nextly_migrations in the shape an earlier release kept it", () => {
+  const FILE_LEDGER = [
+    "id",
+    "filename",
+    "sha256",
+    "status",
+    "applied_at",
+    "applied_by",
+    "duration_ms",
+    "error_json",
+  ];
+  const EARLIER = [
+    "id",
+    "name",
+    "batch",
+    "checksum",
+    "status",
+    "error_message",
+    "executed_at",
+  ];
+  const HELPER = ["id", "name", "applied_at", "checksum"];
+
+  it("reads a table with no column naming the file as no known shape", () => {
+    expect(legacyLedgerShape(["id", "label", "created_at"])).toBeNull();
+  });
+
+  it("reads the file ledger as it was written", () => {
+    const shape = legacyLedgerShape(FILE_LEDGER)!;
+    const read = readLegacyLedgerRow(
+      {
+        filename: "0001_init.sql",
+        sha256: "a".repeat(64),
+        status: "applied",
+        applied_at: Date.UTC(2026, 0, 2),
+        applied_by: "ci",
+        duration_ms: 12,
+        error_json: null,
+      },
+      shape
+    );
+    expect(read).toEqual({
+      kind: "move",
+      row: {
+        filename: "0001_init.sql",
+        sha256: "a".repeat(64),
+        status: "applied",
+        appliedAt: new Date(Date.UTC(2026, 0, 2)),
+        appliedBy: "ci",
+        durationMs: 12,
+        errorJson: null,
+      },
+    });
+  });
+
+  it("reads the earlier shape by its own names, its time in seconds and its error as text", () => {
+    const shape = legacyLedgerShape(EARLIER)!;
+    const seconds = Date.UTC(2026, 0, 2) / 1000;
+    const read = readLegacyLedgerRow(
+      {
+        id: "x",
+        name: "0002_posts.sql",
+        batch: 1,
+        checksum: "b".repeat(64),
+        status: "failed",
+        error_message: "relation exists",
+        executed_at: seconds,
+      },
+      shape
+    );
+    expect(read).toEqual({
+      kind: "move",
+      row: {
+        filename: "0002_posts.sql",
+        sha256: "b".repeat(64),
+        status: "failed",
+        appliedAt: new Date(Date.UTC(2026, 0, 2)),
+        appliedBy: null,
+        durationMs: null,
+        errorJson: { message: "relation exists" },
+      },
+    });
+  });
+
+  it("reads the helper's shape, which kept no status, as applied, and its SQLite time as UTC", () => {
+    const read = readLegacyLedgerRow(
+      {
+        id: "x",
+        name: "0003.sql",
+        applied_at: "2026-01-02 03:04:05",
+        checksum: null,
+      },
+      legacyLedgerShape(HELPER)!
+    );
+    expect(read).toMatchObject({
+      kind: "move",
+      row: {
+        status: "applied",
+        sha256: null,
+        appliedAt: new Date(Date.UTC(2026, 0, 2, 3, 4, 5)),
+      },
+    });
+  });
+
+  it("skips a record of a run that never finished", () => {
+    expect(
+      readLegacyLedgerRow(
+        { name: "0004.sql", checksum: "c", status: "pending", executed_at: 1 },
+        legacyLedgerShape(EARLIER)!
+      )
+    ).toEqual({ kind: "skip", filename: "0004.sql", status: "pending" });
+  });
+
+  it("refuses a status no release wrote, and a record naming no file", () => {
+    const shape = legacyLedgerShape(EARLIER)!;
+    expect(
+      readLegacyLedgerRow({ name: "0005.sql", status: "rolled_back" }, shape)
+    ).toMatchObject({ kind: "refuse" });
+    expect(
+      readLegacyLedgerRow({ name: "", status: "applied" }, shape)
+    ).toMatchObject({ kind: "refuse" });
   });
 });

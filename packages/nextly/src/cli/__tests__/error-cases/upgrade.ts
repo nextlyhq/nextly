@@ -24,6 +24,18 @@ export const UPGRADE_CASES = {
         "`--confirm-backed-up` (CI/non-TTY) after backing up your database.",
       logContext: { reason: "backup-not-confirmed" },
     }),
+  // As `ledgerUnreadable` in `cli/commands/upgrade-steps/schema-events.ts` throws it.
+  UPGRADE_LEDGER_UNREADABLE: () =>
+    new NextlyError({
+      code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
+      publicMessage:
+        'The table "nextly_migrations" holds records `nextly upgrade` cannot read: the record of 0001_init.sql has the status "rolled_back". ' +
+        "Rename the table if Nextly did not create it, then run `nextly upgrade` again.",
+      logContext: {
+        reason: "legacy-ledger-unreadable",
+        table: "nextly_migrations",
+      },
+    }),
   // As `pending` in `cli/commands/upgrade-steps/schema-events.ts` throws it.
   UPGRADE_EVENTS_TABLE_TAKEN: () =>
     new NextlyError({

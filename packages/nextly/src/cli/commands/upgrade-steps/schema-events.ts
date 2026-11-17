@@ -8,6 +8,17 @@
  * tables. A database with no legacy table and an events table of the
  * expected shape has nothing to move.
  *
+ * `nextly_migrations` is read in whichever shape an earlier release kept it
+ * (`legacyLedgerShape`), and every row is read before anything is written, so
+ * a row the step cannot move stops the upgrade with the database unchanged.
+ *
+ * Resumable rather than one transaction: MySQL commits a `DROP TABLE` on its
+ * own, so a transaction around the step would promise on one dialect what it
+ * cannot keep. Instead every row is written before the legacy tables are
+ * dropped, and a record already in the events table is not written again. A
+ * run stopped anywhere keeps the legacy tables, and the next run finishes the
+ * move without writing anything twice.
+ *
  * @module cli/commands/upgrade-steps/schema-events
  */
 
@@ -20,10 +31,13 @@ import {
 } from "../../../domains/schema/busy-table/bounds";
 import { runStatementsInTries } from "../../../domains/schema/busy-table/run-on-session";
 import {
+  legacyLedgerShape,
   mapJournalRow,
   mapMigrationsRow,
+  readLegacyLedgerRow,
   synthesizedCoreApplyEvent,
   type BackfillEvent,
+  type LegacyMigrationsRow,
 } from "../../../domains/schema/events/backfill";
 import { detectLegacyBookkeeping } from "../../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../../domains/schema/events/schema-events-ddl";
@@ -161,6 +175,78 @@ async function runSchemaStatements(
 const eventsTableOf = (context: UpgradeStepContext) =>
   context.options.targetTableName ?? EVENTS_TABLE;
 
+/** The column names of `table` in the live database, lowercased. */
+async function columnsOf(
+  db: unknown,
+  dialect: UpgradeDialect,
+  table: string
+): Promise<string[]> {
+  const statement =
+    dialect === "sqlite"
+      ? `SELECT name AS column_name FROM pragma_table_info('${table}')`
+      : dialect === "postgresql"
+        ? `SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${table}'`
+        : `SELECT COLUMN_NAME AS column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = '${table}'`;
+  const rows = await queryRaw(db, dialect, statement);
+  return rows.map(row =>
+    String(row.column_name ?? row.COLUMN_NAME).toLowerCase()
+  );
+}
+
+/** What the step moves out of `nextly_migrations`, read whole before anything is written. */
+interface LegacyLedgerPlan {
+  moves: LegacyMigrationsRow[];
+  skips: { filename: string; status: string }[];
+}
+
+/**
+ * Every row of `nextly_migrations`, read through the shape the table has.
+ * A table of no known shape that holds rows, or a row whose meaning is not
+ * known, stops the upgrade here, before anything is written: guessed into
+ * the ledger, it would change what `nextly migrate` believes has run. An
+ * empty table of any shape has nothing to move and is only dropped.
+ */
+async function readLegacyLedger(
+  db: unknown,
+  dialect: UpgradeDialect
+): Promise<LegacyLedgerPlan> {
+  const columns = await columnsOf(db, dialect, "nextly_migrations");
+  const rows = await queryRaw(db, dialect, "SELECT * FROM nextly_migrations");
+  if (rows.length === 0) return { moves: [], skips: [] };
+  const shape = legacyLedgerShape(columns);
+  if (shape === null) {
+    throw ledgerUnreadable(
+      `it has no column naming the migration file (columns: ${columns.join(", ")})`
+    );
+  }
+  const plan: LegacyLedgerPlan = { moves: [], skips: [] };
+  for (const raw of rows) {
+    // Keys as the driver gives them, matched by their lowercased names.
+    const row = Object.fromEntries(
+      Object.entries(raw).map(([key, value]) => [key.toLowerCase(), value])
+    );
+    const read = readLegacyLedgerRow(row, shape);
+    if (read.kind === "refuse") throw ledgerUnreadable(read.reason);
+    if (read.kind === "skip") plan.skips.push(read);
+    else plan.moves.push(read.row);
+  }
+  return plan;
+}
+
+/** The refusal of a `nextly_migrations` table the step cannot move. */
+function ledgerUnreadable(why: string): NextlyError {
+  return new NextlyError({
+    code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
+    publicMessage:
+      `The table "nextly_migrations" holds records \`nextly upgrade\` cannot read: ${why}. ` +
+      "Rename the table if Nextly did not create it, then run `nextly upgrade` again.",
+    logContext: {
+      reason: "legacy-ledger-unreadable",
+      table: "nextly_migrations",
+    },
+  });
+}
+
 /**
  * How many rows the step would write: one per legacy record, plus the core
  * schema's audit row. 0 once moved. A table squatting the events table's
@@ -189,6 +275,12 @@ async function pending(context: UpgradeStepContext): Promise<number> {
     });
   }
 
+  // Read whole first, so a table the run could not move is refused here, by a
+  // dry run as by a real one, before the backup question and before any write.
+  if (legacy.tables.includes("nextly_migrations")) {
+    await readLegacyLedger(db, dialect);
+  }
+
   let rows = 1;
   for (const table of legacy.tables) {
     const [count] = await queryRaw(
@@ -201,30 +293,42 @@ async function pending(context: UpgradeStepContext): Promise<number> {
   return rows;
 }
 
-/** Backfill `nextly_migrations`' rows; returns how many were written. */
+/** Whether `event` is already in the events table: written by a run that stopped before its drop. */
+async function alreadyMoved(
+  repo: SchemaEventsRepository,
+  event: BackfillEvent
+): Promise<boolean> {
+  if (typeof event.filename !== "string") return false;
+  return (await repo.findFileApplies(event.filename)).some(
+    found =>
+      found.status === event.status &&
+      (found.sha256 ?? null) === (event.sha256 ?? null)
+  );
+}
+
+/**
+ * Backfill `nextly_migrations`' rows, read in its own shape; returns how many
+ * were written. A record already moved by a run that stopped is not written
+ * again, and one of a run that never finished is skipped, and said so.
+ */
 async function backfillMigrations(
   repo: SchemaEventsRepository,
-  db: unknown,
-  dialect: UpgradeDialect
+  context: UpgradeStepContext
 ): Promise<number> {
-  const rows = await queryRaw(
-    db,
-    dialect,
-    "SELECT filename, sha256, status, applied_at, applied_by, duration_ms, error_json FROM nextly_migrations"
-  );
-  for (const r of rows) {
-    const event = mapMigrationsRow({
-      filename: String(r.filename),
-      sha256: String(r.sha256),
-      status: String(r.status),
-      appliedAt: toDate(r.applied_at),
-      appliedBy: (r.applied_by as string | null) ?? null,
-      durationMs: (r.duration_ms as number | null) ?? null,
-      errorJson: r.error_json ?? null,
-    });
-    await repo.insertEvent(toInsertValues(event));
+  const { moves, skips } = await readLegacyLedger(context.db, context.dialect);
+  for (const skip of skips) {
+    context.warn(
+      `Skipping the record of ${skip.filename}, which never finished (status=${skip.status}).`
+    );
   }
-  return rows.length;
+  let written = 0;
+  for (const row of moves) {
+    const event = mapMigrationsRow(row);
+    if (await alreadyMoved(repo, event)) continue;
+    await repo.insertEvent(toInsertValues(event));
+    written++;
+  }
+  return written;
 }
 
 /**
@@ -292,7 +396,7 @@ async function run(context: UpgradeStepContext): Promise<number> {
   const repo = new SchemaEventsRepository(db, dialect);
   let written = 0;
   if (legacy.tables.includes("nextly_migrations")) {
-    const migrated = await backfillMigrations(repo, db, dialect);
+    const migrated = await backfillMigrations(repo, context);
     log(`Backfilled ${migrated} rows from nextly_migrations`);
     written += migrated;
   }
@@ -302,9 +406,18 @@ async function run(context: UpgradeStepContext): Promise<number> {
     written += journaled;
   }
 
-  // Synthesize a core_apply audit row for the pre-existing core schema.
-  await repo.insertEvent(toInsertValues(synthesizedCoreApplyEvent()));
-  log("Synthesized 1 audit row for pre-existing core schema");
+  // Synthesize a core_apply audit row for the pre-existing core schema, once:
+  // a run that stopped after writing it, before its drop, wrote it already.
+  const [prior] = await queryRaw(
+    db,
+    dialect,
+    `SELECT COUNT(*) AS n FROM ${quoteIdent(EVENTS_TABLE, dialect)} WHERE source = 'legacy-prebackfill'`
+  );
+  if (Number(prior?.n ?? 0) === 0) {
+    await repo.insertEvent(toInsertValues(synthesizedCoreApplyEvent()));
+    log("Synthesized 1 audit row for pre-existing core schema");
+    written++;
+  }
 
   for (const table of legacy.tables) {
     applied.push(
@@ -318,7 +431,7 @@ async function run(context: UpgradeStepContext): Promise<number> {
     );
     log(`Dropped ${table}`);
   }
-  return written + 1;
+  return written;
 }
 
 export const schemaEventsStep: UpgradeStep = {

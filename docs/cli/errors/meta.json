@@ -216,6 +216,7 @@
     "upgrade-backup-not-confirmed",
     "upgrade-cancelled",
     "upgrade-events-table-taken",
+    "upgrade-ledger-unreadable",
     "widget-generate-cancelled",
     "workflow-cannot-attach"
   ]
