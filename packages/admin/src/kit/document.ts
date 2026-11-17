@@ -186,3 +186,19 @@ export {
   useDocumentValues,
   type DocumentField,
 } from "../components/features/entries/EntryForm/document-values";
+
+/**
+ * Where the document being edited opens by the admin's one "open this
+ * document" rule, and its list, for a document view whose way out depends on
+ * them (@experimental).
+ */
+export {
+  useDocumentOpensIn,
+  type DocumentOpensIn,
+} from "../lib/navigation/useDocumentOpensIn";
+
+/**
+ * The pin action's id among a document's actions, for a view that offers it
+ * from its own menu through `useDocumentActions().run` (@experimental).
+ */
+export { PIN_TO_DASHBOARD_ACTION } from "../components/features/dashboard/pin-action-id";

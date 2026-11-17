@@ -252,6 +252,10 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // Where the page opens and the pin's id, which the top bar reads; no
+  // collection is named here, so the exit goes to the form.
+  useDocumentOpensIn: () => null,
+  PIN_TO_DASHBOARD_ACTION: "pin-to-dashboard",
   // Settings' place for other plugins' tabs, with none added: the page's own
   // settings alone, as the admin draws them with no tab.
   PlaceTabs: ({ children }: { children: unknown }) => children,
