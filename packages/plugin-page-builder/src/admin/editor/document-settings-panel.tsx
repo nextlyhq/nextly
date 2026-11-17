@@ -35,6 +35,7 @@ import type { Control, FieldValues } from "react-hook-form";
 import { PageLayoutPicker } from "../page-layout";
 
 import { useSavedAddress, type SettingsAddress } from "./settings-address";
+import { shareTitle } from "./share-preview";
 
 /** Each document's panel heading, and the way to the rest of its settings. */
 export const DOCUMENT_SETTINGS_WORDS: Record<
@@ -282,7 +283,7 @@ function SearchSummary({
           </p>
         )}
         <p className="m-0 truncate text-[13px] font-medium text-info-text">
-          {title.trim() === "" ? "Untitled page" : title}
+          {shareTitle(undefined, title)}
         </p>
       </div>
       <p className="nx-inspector__note">

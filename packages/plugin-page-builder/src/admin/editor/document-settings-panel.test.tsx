@@ -165,6 +165,12 @@ describe("a page's settings in the right panel", () => {
     ).toBeTruthy();
   });
 
+  it("titles the search result as Settings' preview does", () => {
+    mount("page", {}, { title: "  ", slug: "pricing" });
+    const result = screen.getByRole("region", { name: "Search result" });
+    expect(within(result).getByText("Untitled")).toBeTruthy();
+  });
+
   it("copies the saved address, and says it did", async () => {
     const writeText = vi.fn(() => Promise.resolve());
     Object.assign(navigator, { clipboard: { writeText } });
