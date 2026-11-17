@@ -155,6 +155,24 @@ describe("moving a colour", () => {
     ]);
   });
 
+  it("keeps focus on a colour its ⋯ menu moves into the next group", async () => {
+    render(<Host />);
+    fireEvent.click(
+      within(await openMenu("Accent")).getByRole("menuitem", {
+        name: "Move down",
+      })
+    );
+    expect(shape(saved)).toEqual([
+      "Brand: color.brand",
+      "Text and surfaces: color.accent color.text color.muted",
+    ]);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: /^Accent,/ })
+      )
+    );
+  });
+
   it("moves up by its ⋯ menu, and offers no Move up at the very top", async () => {
     render(<Host />);
     expect(
@@ -274,6 +292,52 @@ describe("a group's ⋯ menu", () => {
       "Accents: color.brand color.accent",
       "Text and surfaces: color.text color.muted",
     ]);
+  });
+
+  it("hands focus back to the group's ⋯ once Enter or Escape ends the rename", async () => {
+    render(<Host />);
+    fireEvent.click(
+      within(await openGroupMenu("Brand")).getByRole("menuitem", {
+        name: "Rename group",
+      })
+    );
+    const field = await screen.findByRole("textbox", { name: "Group name" });
+    fireEvent.change(field, { target: { value: "Accents" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "More actions for group Accents" })
+      )
+    );
+    fireEvent.click(
+      within(await openGroupMenu("Accents")).getByRole("menuitem", {
+        name: "Rename group",
+      })
+    );
+    fireEvent.keyDown(
+      await screen.findByRole("textbox", { name: "Group name" }),
+      { key: "Escape" }
+    );
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "More actions for group Accents" })
+      )
+    );
+  });
+
+  it("commits nothing on the Enter that confirms an input method's text", async () => {
+    saved = SITE;
+    render(<Host />);
+    fireEvent.click(
+      within(await openGroupMenu("Brand")).getByRole("menuitem", {
+        name: "Rename group",
+      })
+    );
+    const field = await screen.findByRole("textbox", { name: "Group name" });
+    fireEvent.change(field, { target: { value: "ブラ" } });
+    fireEvent.keyDown(field, { key: "Enter", isComposing: true });
+    expect(saved).toBe(SITE);
+    expect(screen.getByRole("textbox", { name: "Group name" })).toBe(field);
   });
 
   it("removes a group, its colours joining the group above", async () => {

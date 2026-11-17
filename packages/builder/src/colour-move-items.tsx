@@ -17,7 +17,7 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { useColourGroupNames } from "./colour-group-ui";
+import { ColourGroupHostContext, useColourGroupNames } from "./colour-group-ui";
 import { colourGroups, moveColour, moveColourToGroup } from "./colour-groups";
 
 /** Where a colour sits: whether anything is above it, or below it. */
@@ -37,14 +37,22 @@ function edgesOf(
 }
 
 export function ColourMoveItems({
-  identity,
+  row,
   tokens,
   onChange,
 }: {
-  identity: string;
+  row: { readonly key: string; readonly identity: string };
   tokens: SiteTokenSet;
   onChange: (tokens: SiteTokenSet) => void;
 }): React.JSX.Element {
+  const { identity } = row;
+  const host = React.useContext(ColourGroupHostContext);
+  // Each move tells the panel after, so the row keeps the focus where it is
+  // drawn now, in another group as well.
+  const moved = (next: SiteTokenSet): void => {
+    onChange(next);
+    host?.onMoved?.(row, next);
+  };
   const { first, last, group } = edgesOf(tokens, identity);
   // The groups there are, and any new one no colour is in yet.
   const named = useColourGroupNames();
@@ -58,13 +66,13 @@ export function ColourMoveItems({
       <DropdownMenuSeparator />
       <DropdownMenuItem
         disabled={first}
-        onSelect={() => onChange(moveColour(tokens, identity, -1))}
+        onSelect={() => moved(moveColour(tokens, identity, -1))}
       >
         Move up
       </DropdownMenuItem>
       <DropdownMenuItem
         disabled={last}
-        onSelect={() => onChange(moveColour(tokens, identity, 1))}
+        onSelect={() => moved(moveColour(tokens, identity, 1))}
       >
         Move down
       </DropdownMenuItem>
@@ -76,7 +84,7 @@ export function ColourMoveItems({
               <DropdownMenuItem
                 key={name}
                 onSelect={() =>
-                  onChange(moveColourToGroup(tokens, identity, name))
+                  moved(moveColourToGroup(tokens, identity, name))
                 }
               >
                 {name}

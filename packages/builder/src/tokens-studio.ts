@@ -689,9 +689,17 @@ export function clearDarkValue(tokens: SiteTokenSet, at: number): SiteTokenSet {
  * both, which is the opposite of what an author repairing a collision means.
  */
 export function removeToken(tokens: SiteTokenSet, at: number): SiteTokenSet {
+  const removed = tokens.tokens[at];
+  // Its place in the colour order goes with it, so a later variable given
+  // its free name is not listed where it was.
+  const order =
+    removed === undefined
+      ? tokens.order
+      : withoutIdentity(tokens.order, removed);
   return {
     ...tokens,
     tokens: tokens.tokens.filter((_, index) => index !== at),
+    ...(order === undefined ? {} : { order }),
   };
 }
 
@@ -1313,8 +1321,10 @@ export function labelNewVariable(
   }
   // With no id, its code name is its identity, so the colour order follows
   // the new name: the variable keeps its place.
-  const order = relabelled.order?.map(identity =>
-    identity === token.name ? `${prefix}.${words}` : identity
+  const order = renamedInOrder(
+    relabelled.order,
+    token.name,
+    `${prefix}.${words}`
   );
   return {
     ...relabelled,
@@ -1384,9 +1394,12 @@ function orderWithCopy(
   token: SiteToken,
   copies: readonly SiteToken[]
 ): { order?: readonly string[] } {
-  const order = tokens.order;
-  const at = order?.indexOf(tokenIdentity(token)) ?? -1;
   const copy = copies[0];
+  // A colour removed before may have left the copy's free name in the order:
+  // it is listed once, here.
+  const order =
+    copy === undefined ? tokens.order : withoutIdentity(tokens.order, copy);
+  const at = order?.indexOf(tokenIdentity(token)) ?? -1;
   if (order === undefined || at === -1 || copy === undefined) return {};
   return {
     order: [
@@ -1395,6 +1408,28 @@ function orderWithCopy(
       ...order.slice(at + 1),
     ],
   };
+}
+
+/** The colour order without a variable's identity, where it has one. */
+function withoutIdentity(
+  order: readonly string[] | undefined,
+  token: SiteToken
+): readonly string[] | undefined {
+  return order?.filter(identity => identity !== tokenIdentity(token));
+}
+
+/**
+ * The colour order with one identity renamed in its place, listed there
+ * once: a colour removed before may have left the new name in the order.
+ */
+function renamedInOrder(
+  order: readonly string[] | undefined,
+  from: string,
+  to: string
+): readonly string[] | undefined {
+  return order
+    ?.filter(identity => identity !== to)
+    .map(identity => (identity === from ? to : identity));
 }
 
 /**

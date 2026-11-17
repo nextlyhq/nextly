@@ -933,6 +933,64 @@ describe("duplicating a variable", () => {
     ]);
   });
 
+  describe("a colour order naming a colour the site no longer has", () => {
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.brand",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#111111" },
+        },
+        {
+          name: "color.accent",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#222222" },
+        },
+      ],
+      // A copy made and removed before: its name is free again.
+      order: [
+        "color.accent",
+        "color.accent-copy",
+        "color.highlight",
+        "color.brand",
+      ],
+    };
+    const once = (order: readonly string[] | undefined) =>
+      new Set(order).size === order?.length;
+
+    it("lists a new copy under that name once", () => {
+      const made = duplicateVariable(set, 1, "Accent");
+      expect(made.tokens.tokens[made.at]?.name).toBe("color.accent-copy");
+      expect(once(made.tokens.order)).toBe(true);
+      expect(colourOrder(made.tokens)).toEqual([
+        "color.accent",
+        "color.accent-copy",
+        "color.brand",
+      ]);
+    });
+
+    it("lists a copy once when it is named as the colour removed was", () => {
+      const made = duplicateVariable(set, 1, "Accent");
+      const named = labelNewVariable(made.tokens, made.at, "Highlight");
+      expect(named.tokens[made.at]?.name).toBe("color.highlight");
+      expect(once(named.order)).toBe(true);
+      expect(colourOrder(named)).toEqual([
+        "color.accent",
+        "color.highlight",
+        "color.brand",
+      ]);
+    });
+
+    it("lets a removed colour go from the order", () => {
+      const made = duplicateVariable(set, 1, "Accent");
+      expect(removeToken(made.tokens, made.at).order).not.toContain(
+        "color.accent-copy"
+      );
+    });
+  });
+
   it("keeps a copy of a long name within the label limit", () => {
     const long = "L".repeat(MAX_TOKEN_LABEL_LENGTH);
     const set: SiteTokenSet = {

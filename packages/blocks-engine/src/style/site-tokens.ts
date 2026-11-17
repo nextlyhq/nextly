@@ -680,6 +680,25 @@ function typeInstead(kind: TokenKind): string {
  * be a design system would be a set most sites delete.
  */
 /**
+ * A site's own token over the one it replaces, keeping the replaced token's
+ * group and label where the site's says neither: a built-in colour the site
+ * gave its own value to before colours had groups and these names is still
+ * listed where, and as, the built-in one is. Display only, as both are.
+ */
+function withDefaultWords(
+  token: SiteToken,
+  replaced: SiteToken | undefined
+): SiteToken {
+  const group = token.group ?? replaced?.group;
+  const label = token.label ?? replaced?.label;
+  return {
+    ...token,
+    ...(group === undefined ? {} : { group }),
+    ...(label === undefined ? {} : { label }),
+  };
+}
+
+/**
  * The token set a site actually renders with: the defaults, with a site's own
  * definitions layered over them by NAME.
  *
@@ -728,7 +747,8 @@ export function resolveSiteTokens(override?: SiteTokenSet): SiteTokenSet {
   // imported DTCG file can carry one, and taking the first would apply a value
   // the author replaced.
   for (const token of override?.tokens ?? []) {
-    byIdentity.set(tokenIdentity(token), token);
+    const identity = tokenIdentity(token);
+    byIdentity.set(identity, withDefaultWords(token, byIdentity.get(identity)));
   }
   return {
     tokens: [...byIdentity.values()],

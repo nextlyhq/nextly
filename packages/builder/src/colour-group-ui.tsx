@@ -45,6 +45,9 @@ export interface ColourGroupHost {
   /** The group whose name is being edited in place. */
   readonly renaming: string | null;
   readonly setRenaming: (name: string | null) => void;
+  /** The group whose ⋯ takes focus back once its rename is ended by a key. */
+  readonly refocus: string | null;
+  readonly setRefocus: (name: string | null) => void;
   readonly addPending: () => void;
   readonly renamePending: (from: string, to: string) => void;
   readonly dropPending: (name: string) => void;
@@ -82,6 +85,7 @@ export function useColourGroupHost(
 ): ColourGroupHost {
   const [drafts, setDrafts] = React.useState<readonly string[]>([]);
   const [renaming, setRenaming] = React.useState<string | null>(null);
+  const [refocus, setRefocus] = React.useState<string | null>(null);
   const [dragging, setDragging] = React.useState<string | null>(null);
   const real = colourGroups(tokens).map(group => group.name);
   // A draft a colour has moved into is a group like any other now, so it is
@@ -96,6 +100,8 @@ export function useColourGroupHost(
     pending,
     renaming,
     setRenaming,
+    refocus,
+    setRefocus,
     addPending: () => {
       const name = newGroupName([...real, ...pending]);
       setDrafts([...pending, name]);
@@ -248,10 +254,20 @@ function GroupMenu({
   const pending = host.pending.includes(name);
   const only = colourGroups(host.tokens).length < 2 && !pending;
   const renamed = React.useRef(false);
+  const more = React.useRef<HTMLButtonElement>(null);
+  // A rename ended by Enter or Escape hands focus back here, where it began,
+  // under the name the group has now.
+  const { refocus, setRefocus } = host;
+  React.useEffect(() => {
+    if (refocus !== name) return;
+    more.current?.focus();
+    setRefocus(null);
+  }, [refocus, setRefocus, name]);
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <button
+          ref={more}
           type="button"
           className="nx-vars__icon-button nx-vars__more nx-colour-group__more"
           aria-label={`More actions for group ${name}`}
@@ -292,6 +308,24 @@ function GroupMenu({
 }
 
 /**
+ * The name typed for a group, where it can be taken: not empty, storable as a
+ * label, and no other group's. Otherwise nothing, and the old name stays.
+ */
+function acceptedName(
+  host: ColourGroupHost,
+  name: string,
+  draft: string
+): string | undefined {
+  const next = draft.trim();
+  const taken = [
+    ...colourGroups(host.tokens).map(group => group.name),
+    ...host.pending,
+  ].filter(other => other !== name);
+  const refused = next === "" || tokenLabelIssue(next) !== undefined;
+  return refused || next === name || taken.includes(next) ? undefined : next;
+}
+
+/**
  * The group's name in place: Enter or leaving keeps it, Escape keeps the old
  * one. An empty name, or one another group has, keeps the old one too.
  */
@@ -304,20 +338,19 @@ function GroupNameField({
 }): React.JSX.Element {
   const [draft, setDraft] = React.useState(name);
   const { field, done } = useInPlaceField();
-  const finish = (keep: boolean): void => {
+  // Ended by a key, focus goes back to the group's ⋯; by leaving the field,
+  // it stays where the author went.
+  const finish = (keep: boolean, byKey: boolean): void => {
     if (done.current) return;
     done.current = true;
     host.setRenaming(null);
-    const next = draft.trim();
-    const taken = [
-      ...colourGroups(host.tokens).map(group => group.name),
-      ...host.pending,
-    ].filter(other => other !== name);
-    // A name the site could not store keeps the old one, as a taken one does.
-    const refused = next === "" || tokenLabelIssue(next) !== undefined;
-    if (!keep || refused || next === name || taken.includes(next)) return;
-    if (host.pending.includes(name)) host.renamePending(name, next);
-    else host.commit(renameColourGroup(host.tokens, name, next));
+    const next = keep ? acceptedName(host, name, draft) : undefined;
+    if (next !== undefined && host.pending.includes(name)) {
+      host.renamePending(name, next);
+    } else if (next !== undefined) {
+      host.commit(renameColourGroup(host.tokens, name, next));
+    }
+    if (byKey) host.setRefocus(next ?? name);
   };
   return (
     <input
@@ -329,15 +362,17 @@ function GroupNameField({
       value={draft}
       maxLength={MAX_TOKEN_LABEL_LENGTH}
       onChange={event => setDraft(event.currentTarget.value)}
-      onBlur={() => finish(true)}
+      onBlur={() => finish(true, false)}
       onKeyDown={event => {
-        if (event.key === "Enter") {
+        // The Enter that confirms an input method's text is not the end of
+        // the name.
+        if (event.key === "Enter" && !event.nativeEvent.isComposing) {
           event.preventDefault();
-          finish(true);
+          finish(true, true);
         } else if (event.key === "Escape") {
           event.preventDefault();
           event.stopPropagation();
-          finish(false);
+          finish(false, true);
         }
       }}
     />

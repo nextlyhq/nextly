@@ -111,7 +111,7 @@ export function RowMenu({
         </DropdownMenuItem>
         {entry.row.kind === "color" ? (
           <ColourMoveItems
-            identity={entry.row.identity}
+            row={entry.row}
             tokens={tokens}
             onChange={onChange}
           />

@@ -1204,6 +1204,38 @@ describe("resolveSiteTokens", () => {
     });
   });
 
+  it("keeps a built-in colour's group and name where the site's own value of it says neither", () => {
+    // A site that set its own text and muted colours before colours had
+    // groups stores them with neither a group nor a label.
+    const resolved = resolveSiteTokens({
+      tokens: [
+        { name: "color.text", kind: "color", values: { light: "#111111" } },
+        { name: "color.muted", kind: "color", values: { light: "#555555" } },
+        {
+          name: "color.border",
+          kind: "color",
+          label: "Hairline",
+          group: "Lines",
+          values: { light: "#dddddd" },
+        },
+      ],
+    });
+    const of = (name: string) =>
+      resolved.tokens.find(token => token.name === name);
+    expect(of("color.text")).toMatchObject({
+      group: "Text and surfaces",
+      values: { light: "#111111" },
+    });
+    expect(of("color.muted")?.group).toBe("Text and surfaces");
+    const muted = of("color.muted");
+    expect(muted && tokenDisplayLabel(muted)).toBe("Muted text");
+    // A group or name of the site's own is kept.
+    expect(of("color.border")).toMatchObject({
+      label: "Hairline",
+      group: "Lines",
+    });
+  });
+
   it("keeps the site's fluid range, a site-wide setting like the prefix", () => {
     // Dropped here, a reopened editor read the default range while the stored
     // sizes were made across the site's own, and the next "Make fluid" used

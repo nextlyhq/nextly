@@ -11,6 +11,7 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
 import { clickBlock, openEditorWith } from "./canvas/editor-driver";
+import { canvasFrame } from "./support/canvas-frame";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 import { countEveryPage } from "./support/usage-count";
@@ -79,6 +80,34 @@ async function listed(panel: Locator): Promise<string[]> {
     );
 }
 
+/** The site's built-in colours, by code name. */
+const COLOURS = [
+  "primary",
+  "text",
+  "background",
+  "surface",
+  "border",
+  "border-strong",
+  "muted",
+];
+
+/** Each built-in colour's value as the canvas resolves it, by code name. */
+async function canvasColours(page: Page): Promise<Record<string, string>> {
+  const root = canvasFrame(page).locator("html");
+  return root.evaluate(
+    (element, names) =>
+      Object.fromEntries(
+        names.map(name => [
+          name,
+          getComputedStyle(element)
+            .getPropertyValue(`--site-color-${name}`)
+            .trim(),
+        ])
+      ),
+    COLOURS
+  );
+}
+
 const row = (panel: Locator, name: string): Locator =>
   panel.getByRole("button", { name: new RegExp(`^${name},`) });
 
@@ -98,7 +127,8 @@ test("colours sit in named groups an author adds to, moves between and removes, 
         "Brand: Primary",
         "Text and surfaces: Text, Background, Surface, Border, Strong border, Muted text",
       ]);
-    const css = (await storedTokens(page))?.tokens ?? [];
+    const values = await canvasColours(page);
+    expect(Object.values(values).every(value => value !== "")).toBe(true);
 
     // + New group, named in place.
     await panel.getByRole("button", { name: "New group" }).click();
@@ -151,11 +181,14 @@ test("colours sit in named groups an author adds to, moves between and removes, 
         "Text and surfaces: Background, Text, Surface, Border, Strong border",
         "Accents: Primary, Muted text",
       ]);
-    const after = (await storedTokens(page))?.tokens ?? [];
-    for (const token of after) {
-      const was = css.find(candidate => candidate.name === token.name);
-      if (was !== undefined) expect(token.values).toEqual(was.values);
+    // Every colour the moves stored is a built-in one under its own code
+    // name, and every colour resolves to the value it had before.
+    const stored = (await storedTokens(page))?.tokens ?? [];
+    expect(stored.length).toBeGreaterThan(0);
+    for (const token of stored) {
+      expect(COLOURS.map(name => `color.${name}`)).toContain(token.name);
     }
+    expect(await canvasColours(page)).toEqual(values);
 
     // A block's colour picker lists colours in the same order.
     await clickBlock(page, "groups-text");
