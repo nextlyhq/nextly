@@ -2,7 +2,8 @@
  * The blocks on the page an edit to a look reaches, marked dashed on the
  * canvas while the look is edited on its own: every block of its type for a
  * block's own look, which is the base every other look of the type is laid on,
- * and every block wearing it for any other look.
+ * and every block wearing it for any other look, with, for the look carrying
+ * ★, every block of its type wearing none of its type's looks.
  *
  * Which look a block wears is the Style tab's own answer (`wornLook` over the
  * looks the library renders), so the marks and the tiles cannot disagree.
@@ -28,17 +29,33 @@ export const LOOK_REACH_ATTRIBUTE = "data-nx-look-reach";
 export function lookReach(
   document: BlockDocument,
   library: readonly NamedClass[],
-  look: Pick<BlockLookRow, "id" | "blockType" | "own">
+  look: Pick<BlockLookRow, "id" | "blockType" | "own"> & {
+    /** The look carries ★, so a block that picked none is drawn with it. */
+    readonly starred?: boolean;
+  }
 ): Set<string> {
   const looks = looksOfType(library, look.blockType);
   const reached = new Set<string>();
   walkNodes(document.nodes, node => {
     if (node.type !== look.blockType) return;
-    if (look.own || appliesLook(node.classes, looks, look.id)) {
+    if (
+      look.own ||
+      appliesLook(node.classes, looks, look.id) ||
+      (look.starred === true && wearsNone(node.classes, looks))
+    ) {
       reached.add(node.id);
     }
   });
   return reached;
+}
+
+/** Whether a block's classes apply none of its type's looks: it picked none. */
+function wearsNone(
+  classes: readonly string[] | undefined,
+  looks: readonly NamedClass[]
+): boolean {
+  const read = (classes ?? []).slice(0, MAX_CLASSES_PER_NODE);
+  return !looks.some(each => read.includes(each.id));
 }
 
 /**

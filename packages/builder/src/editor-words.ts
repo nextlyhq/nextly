@@ -28,6 +28,7 @@ export const EDITOR_WORDS = {
   styles: "Styles",
   variables: "Variables",
   sharedStyles: "Shared styles",
+  blockStyles: "Block styles",
   fonts: "Fonts",
   sections: "Saved sections",
   content: "Content",

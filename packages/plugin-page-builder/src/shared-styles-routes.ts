@@ -118,6 +118,7 @@ import {
   usageCoverageGap,
   type UsageCoverageGap,
 } from "./usage-index-health";
+import { TIMED_OUT, within } from "./within-time";
 
 /** The permission that locks and unlocks shared styles, in its parts. */
 const LOCK_SHARED_STYLES = {
@@ -782,6 +783,65 @@ export interface StillUsedCheck {
   uses(ids: readonly string[]): Promise<readonly StoredUse[]>;
   /** The title of the first of these the caller may open, if any. */
   firstReadable(uses: readonly StoredUse[]): Promise<string | undefined>;
+  /**
+   * The titles of the documents in an index listing the caller may open, so
+   * an in-use refusal says where. Absent: the refusal counts them only.
+   */
+  readonly titles?: (found: DocumentsUsing) => Promise<readonly string[]>;
+}
+
+/** How many documents an in-use refusal names before counting the rest. */
+const NAMED_USES_MAX = 3;
+
+/**
+ * Where a style is used, as a refusal says it: the first documents the
+ * caller may open by title, then how many more there are, readable or not.
+ */
+function whereUsedWords(titles: readonly string[], documents: number): string {
+  const shown = titles.slice(0, NAMED_USES_MAX);
+  const more = documents - shown.length;
+  if (more > 0) return `${shown.join(", ")} and ${more} more`;
+  if (shown.length === 1) return shown[0];
+  return `${shown.slice(0, -1).join(", ")} and ${shown.at(-1) as string}`;
+}
+
+/** One in-use reason with the documents it counts named, where any can be. */
+async function namedUseReason(
+  reason: UsageReason,
+  usage: SharedStyleUsageSource,
+  health: UsageIndexHealth,
+  titles: NonNullable<StillUsedCheck["titles"]>
+): Promise<UsageReason> {
+  if (!reason.used || reason.id === undefined) return reason;
+  const found = await listingOf(usage, reason.id, health);
+  const named = await titles(found);
+  // The reason's words end on its count's full stop; the names follow it.
+  if (named.length === 0 || !reason.message.endsWith(".")) return reason;
+  const where = whereUsedWords(named, documentCountOf(found));
+  return { ...reason, message: `${reason.message.slice(0, -1)}: ${where}.` };
+}
+
+/**
+ * The index's reasons against a removal, each use naming where it is, within
+ * {@link REMOVAL_COUNT_MS}: past it they are counted only, so the refusal
+ * never waits on its own wording.
+ */
+async function withWhereUsed(
+  reasons: readonly UsageReason[],
+  usage: SharedStyleUsageSource,
+  titles: StillUsedCheck["titles"]
+): Promise<UsageReason[]> {
+  if (titles === undefined || !reasons.some(reason => reason.used)) {
+    return [...reasons];
+  }
+  const health = await usage.health();
+  const named = await within(
+    Promise.all(
+      reasons.map(reason => namedUseReason(reason, usage, health, titles))
+    ),
+    REMOVAL_COUNT_MS
+  );
+  return named === TIMED_OUT ? [...reasons] : named;
 }
 
 /**
@@ -826,7 +886,13 @@ export async function removeSharedStyles(
         configClassIds
       );
       // Read just before the write, never taken from what the panel showed.
-      reasons.push(...(await usageRefusals(removable, usage, "shared style")));
+      reasons.push(
+        ...(await withWhereUsed(
+          await usageRefusals(removable, usage, "shared style"),
+          usage,
+          stillUsed.titles
+        ))
+      );
       if (reasons.length > 0) {
         throw removalRefusalOf(reasons, { classIds: ids });
       }
@@ -1338,12 +1404,18 @@ export function sharedStyleRoutes(setup: SharedStyleRouteSetup): {
       handler: async (req, ctx) => {
         const nextly = await getCachedNextly();
         const readNamed = namedDocumentsReader(ctx);
+        const usage = setup.usage(ctx);
+        const readers = { named: readNamed, single: namedSingleReader(ctx) };
         return removeSharedStyles(
           req,
           siteStyleClassStore(ctx, nextly),
-          setup.usage(ctx),
+          usage,
           setup.configClassIds,
           {
+            titles: async found =>
+              (await readableUses(found, usage, readers)).readable.map(
+                use => use.title
+              ),
             uses: storedSharedStyleUses(
               storedDocumentsOf(ctx, nextly),
               setup.limits

@@ -749,6 +749,9 @@ export { sharedStyleNameTaken } from "./shared-style-target";
 export { useNoticeQueue } from "./shell/builder-notices";
 export type { NoticeQueue, RaiseNotice } from "./shell/builder-notices";
 export { SharedStylesPanel } from "./shared-styles-panel";
+// The whole-list class write the Styles tab's Block styles make, copy,
+// rename and hide block styles and move ★ through.
+export type { ClassListEdit, EditClasses } from "./block-style-actions";
 export type {
   ClassRenameOutcome,
   PageClassBlocks,

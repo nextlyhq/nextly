@@ -16,10 +16,12 @@ import {
   getBlock,
   overlaidStyles,
   ownLooksRead,
+  starredLooksOf,
   type NamedClass,
   type NodeStyles,
 } from "@nextlyhq/blocks-engine";
 
+import { usableSiteClasses } from "./class-library";
 import {
   sharedStyleName,
   sharedStyleRows,
@@ -75,6 +77,14 @@ export interface BlockLookRow extends SharedStyleRow {
    * worn look.
    */
   readonly sharedId: boolean;
+  /**
+   * The look carries ★: the one a block of its type has until another is
+   * picked. The worn look the compiler reads as starred, or the block's own
+   * look while no worn look of its type is.
+   */
+  readonly starred: boolean;
+  /** Hidden from the block panel's tiles; a block already wearing it keeps it. */
+  readonly hidden: boolean;
 }
 
 /** One block type's looks, its own look first. */
@@ -95,20 +105,33 @@ export function blockLookGroups(
 ): BlockLookGroup[] {
   const ownRead = ownLooksRead(library);
   const shared = idsHeldTwice(library);
+  // Which look of each type carries ★, as the compiler reads it.
+  const starred = starredLooksOf(usableSiteClasses(library));
   const own = new Map(
     ownRead.map(entry => [
       entry.blockType as string,
-      ownRow(entry, suppliedIds, shared.has(entry.id)),
+      ownRow(entry, suppliedIds, {
+        sharedId: shared.has(entry.id),
+        starred: !starred.has(entry.blockType as string),
+      }),
     ])
   );
-  const typeOf = new Map(library.map(entry => [entry?.id, entry?.blockType]));
+  const entryOf = new Map(library.map(entry => [entry?.id, entry]));
   const worn = new Map<string, BlockLookRow[]>();
   for (const row of sharedStyleRows(library, suppliedIds)) {
-    const blockType = typeOf.get(row.id);
+    const entry = entryOf.get(row.id);
+    const blockType = entry?.blockType;
     if (row.look !== true || blockType === undefined) continue;
     worn.set(blockType, [
       ...(worn.get(blockType) ?? []),
-      { ...row, blockType, own: false, sharedId: false },
+      {
+        ...row,
+        blockType,
+        own: false,
+        sharedId: false,
+        starred: starred.get(blockType)?.id === row.id,
+        hidden: entry?.hidden === true,
+      },
     ]);
   }
   const types: string[] = [];
@@ -150,7 +173,7 @@ function idsHeldTwice(library: readonly NamedClass[]): Set<string> {
 function ownRow(
   entry: NamedClass,
   suppliedIds: ReadonlySet<string>,
-  sharedId: boolean
+  marks: { readonly sharedId: boolean; readonly starred: boolean }
 ): BlockLookRow {
   return {
     id: entry.id,
@@ -163,7 +186,10 @@ function ownRow(
     styles: entry.styles,
     blockType: entry.blockType as string,
     own: true,
-    sharedId,
+    sharedId: marks.sharedId,
+    starred: marks.starred,
+    // Never hidden: it is what a block of its type is with no look picked.
+    hidden: false,
   };
 }
 

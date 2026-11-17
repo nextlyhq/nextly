@@ -6,10 +6,17 @@
  * Drawn in the Variables and Fonts tabs' language: a search, a small-caps
  * group, compact rows, and a 240px popover editor per row.
  *
- * ## Styles are made from a block
+ * ## Two sections
  *
- * There is no "+" here. A shared style is made from a block's own look, with
- * "Save as shared style…" on the block, so the empty tab says that.
+ * "Block styles" first, the saved looks for one kind of block by block type
+ * ({@link block-looks-group}), then "Shared styles", the author's own styles
+ * for any block, each with a line that says which is which.
+ *
+ * ## Shared styles are made from a block
+ *
+ * There is no "+" among the shared styles. One is made from a block's own
+ * look, with "Save as shared style…" on the block, so the empty list says
+ * that. A block style is made with its type's "+ New <block> style".
  *
  * ## Counts are read a page of rows at a time
  *
@@ -45,6 +52,11 @@ import * as React from "react";
 
 import { lookKeyOf, type BlockLookGroup } from "./block-look-rows";
 import { BlockLooksGroup } from "./block-looks-group";
+import {
+  BLOCK_STYLE_WORDS,
+  blockStyleActionsOf,
+  type BlockStyleActions,
+} from "./block-style-actions";
 import { ShowMore, withOpenRow } from "./panel-actions";
 import {
   inSharedStyleFilter,
@@ -78,6 +90,7 @@ import { RemoveUnusedHead } from "./shared-styles-remove-unused";
 import type {
   PageClassBlocks,
   PanelLookEditing,
+  SharedStylesAccess,
   SharedStylesPanelProps,
 } from "./shared-styles-types";
 import { PAGE_SIZE } from "./shared-styles-types";
@@ -93,6 +106,7 @@ import {
   foundSharedStyles,
   stylesTabSource,
 } from "./styles-tab-matches";
+import type { GroupFolds } from "./tokens-panel";
 import { idsKey, idsOf } from "./usage-reads";
 
 // The tab's shapes, its usage reads and rename, its row, its list and the
@@ -253,9 +267,9 @@ function useLookGroups(
 }
 
 /**
- * The Block looks group above the shared styles: the site's looks by block
- * type, found by the same search, with the worn looks' counts read as the
- * shared styles' are. An own look has no count of its own.
+ * The Block styles section above the shared styles: the site's looks by
+ * block type, found by the same search, with the worn looks' counts read as
+ * the shared styles' are. An own look has no count of its own.
  */
 function PanelLooks({
   library,
@@ -266,6 +280,9 @@ function PanelLooks({
   styleContext,
   reaches,
   blocksOf,
+  actions,
+  readOnly,
+  folds,
 }: {
   library: readonly NamedClass[];
   suppliedClassIds: readonly string[] | undefined;
@@ -277,6 +294,9 @@ function PanelLooks({
   reaches: ReadonlyMap<string, SharedStyleReach>;
   /** The open page's blocks carrying a class, as the shared styles read them. */
   blocksOf: (id: string) => BlocksOnThisPage;
+  actions: BlockStyleActions | undefined;
+  readOnly: boolean;
+  folds: GroupFolds | undefined;
 }): React.JSX.Element | null {
   const groups = useLookGroups(library, suppliedClassIds, query, styleContext);
   return (
@@ -287,10 +307,29 @@ function PanelLooks({
       mode={paint.mode}
       editing={editing?.editing}
       onEdit={editing?.onEdit}
+      {...(actions === undefined ? {} : { actions })}
+      readOnly={readOnly}
+      {...(folds === undefined ? {} : { folds })}
+      searching={query.trim() !== ""}
       reachOf={row => reaches.get(row.id)}
       blocksOf={row => blocksOf(row.id)}
       chip={reach => <ReachChip reach={reach} />}
     />
+  );
+}
+
+/**
+ * The Block styles section's writes, over the host's whole-list class write
+ * and the shared styles' removal, which refuses a style a page still uses.
+ */
+function useBlockStyleActions(
+  edit: SharedStylesPanelProps["onEditClasses"],
+  access: SharedStylesAccess | undefined
+): BlockStyleActions | undefined {
+  const remove = access?.remove;
+  return React.useMemo(
+    () => (edit === undefined ? undefined : blockStyleActionsOf(edit, remove)),
+    [edit, remove]
   );
 }
 
@@ -322,6 +361,8 @@ export function SharedStylesPanel({
   currentRenameAttempt,
   pendingNames = NO_NAMES,
   looks,
+  onEditClasses,
+  folds,
   initialOpenId,
 }: SharedStylesPanelProps): React.JSX.Element {
   const { query, setQuery, box: search } = usePanelSearch();
@@ -359,6 +400,7 @@ export function SharedStylesPanel({
     pendingNames,
     setIssue,
   });
+  const blockStyles = useBlockStyleActions(onEditClasses, access);
   if (library === undefined) return <Unread absence={absence} />;
 
   const blocksOf = (id: string): BlocksOnThisPage =>
@@ -405,10 +447,14 @@ export function SharedStylesPanel({
           styleContext={styleContext}
           reaches={usage.styles}
           blocksOf={blocksOf}
+          actions={blockStyles}
+          readOnly={readOnly}
+          folds={folds}
         />
         <section
           className="nx-vars__group"
           aria-labelledby="nx-shared-styles-all"
+          aria-describedby="nx-shared-styles-line"
         >
           <RemoveUnusedHead
             rows={rows}
@@ -420,6 +466,9 @@ export function SharedStylesPanel({
             blocksOf={blocksOf}
             onRemoved={() => search.current?.focus()}
           />
+          <p className="nx-shared-styles__line" id="nx-shared-styles-line">
+            {BLOCK_STYLE_WORDS.sharedLine}
+          </p>
           <TopNote
             note={notes.top}
             says={notes.one}
