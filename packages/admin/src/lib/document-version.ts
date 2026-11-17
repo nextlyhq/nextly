@@ -77,6 +77,11 @@ export interface ShownCopy {
   version: string | undefined;
   locale?: string;
   draft?: boolean;
+  /**
+   * The document the editor records recovery points under (`documentRecordingKey`), so a write
+   * made outside the editor's own save waits for one on its way, as the editor's own do.
+   */
+  recordings?: string | null;
 }
 
 /**

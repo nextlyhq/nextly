@@ -521,16 +521,22 @@ export function EntryForm({
   // availability rule through the locale context. Called unconditionally with
   // the resolved slug; the seam below is what decides whether the action is
   // offered, so a create form supplies none and nothing renders.
+  // Where the entry's recovery points are recorded: a write made outside a save
+  // waits for one on its way.
+  const recordingsOf = documentRecordingKey(
+    autosaveScopeFor("collection", collection.name, entry?.id)
+  );
   // The copy on screen, read as the editor reads it, so a publish of every
   // language, or of chosen parts from the page, is refused when that language
-  // changed since it opened.
+  // changed since it opened, and waits for the copy's recordings on their way.
   const shownCopyOf = useCallback(
     (): ShownCopy => ({
       version: versionStartedFrom(),
       locale,
       draft: readsDraft,
+      recordings: recordingsOf,
     }),
-    [versionStartedFrom, locale, readsDraft]
+    [versionStartedFrom, locale, readsDraft, recordingsOf]
   );
   useEffect(() => {
     if (!shownCopy) return undefined;
@@ -545,12 +551,7 @@ export function EntryForm({
   });
   // Publishing every language waits for the entry's recordings in flight.
   const { run: runAfterRecordings, pending: publishAllPending } =
-    useAfterRecordings(
-      documentRecordingKey(
-        autosaveScopeFor("collection", collection.name, entry?.id)
-      ),
-      publishAllEntryLocales.isPending
-    );
+    useAfterRecordings(recordingsOf, publishAllEntryLocales.isPending);
 
   // Publish-every-language rides the same kind of seam `fetchSourceValues`
   // does, and its ABSENCE is what keeps the action off a create form: there is

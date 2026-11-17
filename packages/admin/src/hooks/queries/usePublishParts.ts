@@ -21,6 +21,7 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
+import { recordingsSettled } from "@admin/hooks/useSnapshotAutosave";
 import {
   EVERY_LANGUAGE,
   refusedAsChangedSince,
@@ -132,15 +133,22 @@ export function usePublishParts({
 > {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (request: PartsRequest) =>
-      send(target, direction, {
+    mutationFn: async (request: PartsRequest) => {
+      const copy = shown?.();
+      // A recording of the editor's work already sent must land before the publish: one landing
+      // after it would be offered as current work made from the document before it went live.
+      // Pending throughout, so the action shows busy while it waits.
+      await recordingsSettled(copy?.recordings ?? null);
+      return send(target, direction, {
         ...request,
         version: await versionToPublishEveryLanguage(
           () => readIn(target, { locale: EVERY_LANGUAGE }),
-          shown?.(),
-          copy => readIn(target, { locale: copy.locale, draft: copy.draft })
+          copy,
+          shownCopy =>
+            readIn(target, { locale: shownCopy.locale, draft: shownCopy.draft })
         ),
-      }),
+      });
+    },
     onSuccess: () => {
       // Every language-keyed variant changed status, and the lists show it.
       void queryClient.invalidateQueries({ queryKey: detailKey(target) });

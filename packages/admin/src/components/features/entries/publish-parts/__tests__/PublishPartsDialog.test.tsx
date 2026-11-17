@@ -7,10 +7,12 @@
  * that always takes the shared fields, one whose sentences describe a different choice from the
  * one sent, and one that reports a refusal only as a toast nobody can match to a part.
  */
+import { act, renderHook } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen, waitFor } from "@admin/__tests__/utils";
+import { useSnapshotAutosave } from "@admin/hooks/useSnapshotAutosave";
 import { parseApiError } from "@admin/lib/api/parseApiError";
 import type {
   PublishPartsChoice,
@@ -242,5 +244,60 @@ describe("choosing what to publish", () => {
       "slug: Another entry already uses this value in Spanish."
     );
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+  it("publishes only once the editor's recordings on their way have landed", async () => {
+    // The editor's recording of this entry, sent and not yet answered.
+    const DOC = "collection:posts:post-1";
+    let land: () => void = () => undefined;
+    const record = vi.fn(
+      () =>
+        new Promise<{ updatedAt: string }>(resolve => {
+          land = () => resolve({ updatedAt: "2026-11-17T05:00:00.000Z" });
+        })
+    );
+    const recorder = renderHook(() =>
+      useSnapshotAutosave({
+        identity: `${DOC}:`,
+        document: DOC,
+        save: record,
+        debounceMs: 1,
+      })
+    );
+    act(() => recorder.result.current.schedule());
+    await waitFor(() => expect(record).toHaveBeenCalledTimes(1));
+    const user = userEvent.setup();
+    render(
+      <PublishPartsDialog
+        open
+        onOpenChange={() => undefined}
+        target={{ kind: "collection", slug: "posts", id: "post-1" }}
+        direction="publish"
+        languages={LANGUAGES}
+        labelOf={labelOf}
+        initialChoice={{ locales: ["es"], shared: false }}
+        shown={() => ({ version: undefined, recordings: DOC })}
+      />
+    );
+    await screen.findByText("Goes live for the first time.");
+    const moves = () => calls().filter(call => call.describe !== true);
+
+    await user.click(screen.getByRole("button", { name: "Publish" }));
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Held while the recording is on its way: it could land after the publish.
+    expect(moves()).toEqual([]);
+
+    await act(async () => land());
+
+    await waitFor(() =>
+      expect(moves()).toEqual([
+        expect.objectContaining({
+          direction: "publish",
+          locales: ["es"],
+          shared: false,
+        }),
+      ])
+    );
+    recorder.unmount();
   });
 });

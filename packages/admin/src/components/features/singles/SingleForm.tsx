@@ -1559,7 +1559,7 @@ export function SingleForm({
   // source read.
   // The copy on screen, read as the editor reads it, so a publish of every
   // language, or of chosen parts from the page, is refused when that language
-  // changed since it opened.
+  // changed since it opened, and waits for the copy's recordings on their way.
   const startedFrom = version.startedFrom;
   const readsDraft = schema.draftsEnabled === true;
   const shownCopyOf = useCallback(
@@ -1567,8 +1567,9 @@ export function SingleForm({
       version: startedFrom(),
       locale,
       draft: readsDraft,
+      recordings: recordingsFor,
     }),
-    [startedFrom, locale, readsDraft]
+    [startedFrom, locale, readsDraft, recordingsFor]
   );
   useEffect(() => {
     if (!shownCopy) return undefined;
