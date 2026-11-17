@@ -110,6 +110,12 @@ export interface BuilderShellProps {
     readonly panel: LeftPanel;
     readonly view?: string;
     readonly count: number;
+    /**
+     * Asked by the editor rather than by the author: the Add panel an empty
+     * page opens on. It shows in the left side, but a left side the author
+     * hid themselves stays hidden.
+     */
+    readonly unlessHidden?: boolean;
   };
   /**
    * Reports the canvas zoom, and takes the change back.

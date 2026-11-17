@@ -60,9 +60,7 @@ describe("the builder's ⋯ menu", () => {
 
     // Save is the bar's own; the menu holds only what the bar doesn't.
     expect(rows()).toEqual(["Open as form", "Pin to dashboard"]);
-    await userEvent.click(
-      screen.getByRole("menuitem", { name: "Open as form" })
-    );
+    await userEvent.click(screen.getByRole("menuitem", { name: "Open as form" }));
     expect(openAsForm).toHaveBeenCalledTimes(1);
     expect(run).not.toHaveBeenCalled();
   });

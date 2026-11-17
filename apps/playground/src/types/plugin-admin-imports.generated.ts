@@ -41,6 +41,7 @@ const registered = {
   "@nextlyhq/plugin-page-builder/admin#PageBuilderOverview": _p5.PageBuilderOverview,
   "@nextlyhq/plugin-page-builder/admin#PageBuilderView": _p5.PageBuilderView,
   "@nextlyhq/plugin-page-builder/admin#RemoveLayoutToolbarSlot": _p5.RemoveLayoutToolbarSlot,
+  "@nextlyhq/plugin-page-builder/admin#ShownOnSection": _p5.ShownOnSection,
   "@nextlyhq/plugin-page-builder/admin#TemplateDeleteAction": _p5.TemplateDeleteAction,
   "@nextlyhq/plugin-page-builder/admin#TemplateDesignDetails": _p5.TemplateDesignDetails,
   "@nextlyhq/plugin-page-builder/admin#TemplateOwnDesigns": _p5.TemplateOwnDesigns,

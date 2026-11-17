@@ -8,13 +8,19 @@
  *
  * @module spacing-box-fields
  */
+import { isTokenRef } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import { fieldLabel } from "./inspector";
 import { CompactSides } from "./spacing-box";
+import { SpacingRingContext } from "./spacing-side";
 import type { StyleControl } from "./style-controls";
 import { StyleControlField } from "./style-field-shell";
-import type { StyleFieldSurroundings } from "./style-field-surroundings";
+import {
+  StyleTargetContext,
+  type StyleFieldSurroundings,
+} from "./style-field-surroundings";
+import { fieldStyles } from "./style-field-target";
 import type { InspectedStyleProperty } from "./style-inspector";
 import {
   physicalSideName,
@@ -22,6 +28,7 @@ import {
   sideOf,
   type SideBox,
 } from "./style-sides";
+import { readStyleValue } from "./style-values";
 
 /**
  * The element that carries the box arrangement, wrapping ONLY the four sides.
@@ -110,6 +117,7 @@ export function SpacingBox({
       surroundings={surroundings}
     />
   );
+  const bound = useAnySideBound([margin, padding], surroundings);
   return (
     <div className="nx-spacing-box">
       <CompactSides.Provider value={true}>
@@ -125,7 +133,38 @@ export function SpacingBox({
           </SpacingRing>
         )}
       </CompactSides.Provider>
+      {bound ? (
+        <p className="nx-spacing-box__note">
+          Green values come from your spacing variables.
+        </p>
+      ) : null}
     </div>
+  );
+}
+
+/** Whether any side of the box holds a variable, at the tier being edited. */
+function useAnySideBound(
+  properties: readonly (InspectedStyleProperty | undefined)[],
+  surroundings: StyleFieldSurroundings
+): boolean {
+  const target = React.useContext(StyleTargetContext);
+  const { styles } = fieldStyles(
+    target,
+    surroundings.editor,
+    surroundings.nodeId
+  );
+  const { state, breakpoint } = surroundings;
+  return properties.some(property =>
+    (property?.controls ?? []).some(control =>
+      isTokenRef(
+        readStyleValue(styles, {
+          state,
+          breakpoint,
+          property: control.property,
+          path: control.path,
+        })
+      )
+    )
   );
 }
 
@@ -148,6 +187,7 @@ function SpacingRing({
       className="nx-style-inspector__property"
       data-property={property.property}
     >
+      <SpacingRingContext.Provider value={box}>
       <SideBoxFrame box={box} ring={ring}>
         {/* Seen, not heard: every side's own name already says it. */}
         <span className="nx-spacing-box__caption" aria-hidden="true">
@@ -182,6 +222,7 @@ function SpacingRing({
         })}
         {children}
       </SideBoxFrame>
+      </SpacingRingContext.Provider>
     </div>
   );
 }

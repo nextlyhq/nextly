@@ -30,12 +30,13 @@ import { Undo2 } from "lucide-react";
 import * as React from "react";
 
 import { FluidButton, type FluidHook } from "./fluid-popover";
-import { DEFAULT_FLUID_RANGE } from "./fluid-size";
 import { useRecentColours } from "./recent-colours";
 import { colourHexOf } from "./style-colour";
 import {
   clearDarkValue,
   labelNewVariable,
+  fluidRangeOf,
+  setFluidRange,
   setFluidSize,
   relabelToken,
   variableLabelIssue,
@@ -56,6 +57,7 @@ import {
   withoutParts,
   type RemovalPlan,
 } from "./variable-removal";
+import { ShadowValue, ShadowVariables } from "./variable-shadow-value";
 import { swatchStyle } from "./variable-swatch";
 import type { VariableRemoval } from "./variable-usage";
 import { VariableRefusal, type VariableUsageHere } from "./variable-usage-view";
@@ -67,6 +69,7 @@ import {
   unwritableValue,
   valueFieldFor,
   variableCss,
+  type ValueFieldProps,
 } from "./variable-value-controls";
 
 export interface VariableEditorProps {
@@ -441,15 +444,18 @@ function Values({
 }): React.JSX.Element {
   const { row, lineHeight } = entry;
   const pair = (at: number, held: SiteToken): React.JSX.Element => (
-    <ModeValues
-      token={held}
-      cssOf={value => variableCss(tokens, held, value)}
-      readOnly={readOnly}
-      onCommit={(mode, value) => write(at, mode, value)}
-      onClear={() => onChange(clearDarkValue(tokens, at))}
-      refusedIn={mode => refusalAt(refused, at, mode)}
-      fluid={fluidHookOf({ token: held, tokens, at, onChange, readOnly })}
-    />
+    // A shadow's Colour offers the site's colour variables.
+    <ShadowVariables.Provider value={tokens}>
+      <ModeValues
+        token={held}
+        cssOf={value => variableCss(tokens, held, value)}
+        readOnly={readOnly}
+        onCommit={(mode, value) => write(at, mode, value)}
+        onClear={() => onChange(clearDarkValue(tokens, at))}
+        refusedIn={mode => refusalAt(refused, at, mode)}
+        fluid={fluidHookOf({ token: held, tokens, at, onChange, readOnly })}
+      />
+    </ShadowVariables.Provider>
   );
   const lineToken =
     lineHeight === undefined ? undefined : tokens.tokens[lineHeight.at];
@@ -681,11 +687,13 @@ function fluidHookOf({
   readOnly: boolean;
 }): FluidHook | undefined {
   if (readOnly || token.kind !== "dimension") return undefined;
+  const range = fluidRangeOf(tokens);
   return {
     sizes: token.fluid,
     value: token.values.light,
-    onFluid: sizes =>
-      onChange(setFluidSize(tokens, at, sizes, DEFAULT_FLUID_RANGE)),
+    range,
+    onFluid: sizes => onChange(setFluidSize(tokens, at, sizes, range)),
+    onRange: next => onChange(setFluidRange(tokens, next)),
   };
 }
 
@@ -713,7 +721,7 @@ function ModeValues({
   /** "Fluid…" on a size's light value, where it can be changed. */
   fluid: FluidHook | undefined;
 }): React.JSX.Element {
-  const Field = token.kind === "color" ? ColourValue : valueFieldFor(token);
+  const Field = fieldFor(token);
   return (
     <>
       <Field
@@ -737,6 +745,17 @@ function ModeValues({
       />
     </>
   );
+}
+
+/**
+ * The field a variable's values are edited with: a colour's swatch and
+ * picker, a shadow's layers, and every other kind's own field.
+ */
+function fieldFor(
+  token: SiteToken
+): (props: ValueFieldProps) => React.JSX.Element {
+  if (token.kind === "color") return ColourValue;
+  return token.kind === "shadow" ? ShadowValue : valueFieldFor(token);
 }
 
 /**
@@ -999,7 +1018,7 @@ function DarkValue({
       </div>
     );
   }
-  const Field = token.kind === "color" ? ColourValue : valueFieldFor(token);
+  const Field = fieldFor(token);
   return (
     <>
       <Field

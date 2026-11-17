@@ -17,6 +17,9 @@
  * 6. A form picked from a provider is handed to it, trimmed to the fields
  *    it describes; a simple form's answers are checked against its own
  *    fields and passed on to its "Send to" address, and stored nowhere.
+ * 7. Once a send is accepted, the visitor is sent where the block says: the
+ *    picked form's own setting, the block's message, or the page the block
+ *    names, read from the stored block and never from the post.
  *
  * Every answer is a `303` back to a path of the same site, with the outcome
  * in the fragment (`#form-<id>-sent`, `-invalid`, `-closed` or `-error`), so
@@ -28,22 +31,24 @@
  *
  * @module forms/receiver
  */
-import type { BlockNode } from "@nextlyhq/blocks-engine";
+import { migrateDocument, type BlockNode } from "@nextlyhq/blocks-engine";
 import {
+  form as FORM_BLOCK,
+  FORM_FILE_NEEDS_SCRIPT,
   FORM_HONEYPOT_FIELD,
-  formFields,
-  type FormProps,
+  FORM_POST_FIELDS as BLOCK_POST_FIELDS,
+  formFieldDrawings,
 } from "@nextlyhq/blocks-react/blocks";
 import type { PluginContext, PluginLimiter } from "@nextlyhq/plugin-sdk";
 import type {
   FormAcceptResult,
   FormAfterSending,
   FormDescription,
-  FormFieldDescription,
   FormProvider,
 } from "@nextlyhq/plugin-sdk/blocks";
 
 import { checkAnswers, describedAnswers, type CheckedAnswer } from "./answers";
+import { servedUnderBase } from "./base-path";
 import {
   parseDefiningDocument,
   type DefiningDocument,
@@ -51,25 +56,15 @@ import {
 import type { Delivery } from "./deliver";
 import { SIMPLE_FORM_PROVIDER } from "./providers";
 
-/** The hidden fields a form posts beside its answers, and the trap. */
-const FORM_POST_FIELDS: {
-  readonly document: "_form";
-  readonly node: "_node";
-  readonly returnTo: "_return";
-  readonly item: "_item";
-  readonly locale: "_locale";
+/**
+ * The hidden fields a form posts beside its answers, and the trap. The ones
+ * the Form block draws (the document defining the form, its node, the path
+ * to come back to, the page's language) are named once, by the block.
+ */
+const FORM_POST_FIELDS: typeof BLOCK_POST_FIELDS & {
   readonly honeypot: typeof FORM_HONEYPOT_FIELD;
 } = {
-  /** The document defining the form (`defining-document.ts`). */
-  document: "_form",
-  /** The form node's id in that document. */
-  node: "_node",
-  /** The path to come back to. */
-  returnTo: "_return",
-  /** The item's position, for a form repeated in a collection list. */
-  item: "_item",
-  /** The page's language, when the site has several. */
-  locale: "_locale",
+  ...BLOCK_POST_FIELDS,
   /** The spam trap the Form block draws. */
   honeypot: FORM_HONEYPOT_FIELD,
 };
@@ -109,6 +104,18 @@ export interface ReceiverDeps {
     address: string,
     answers: readonly CheckedAnswer[]
   ) => Promise<Delivery>;
+  /**
+   * Where a page or entry of the site is served, in `locale`, for a block
+   * that sends visitors there once a send is accepted; `null` where it is
+   * served nowhere. Absent, such a block shows its message instead.
+   */
+  readonly entryAddress?: (
+    collection: string,
+    id: string,
+    locale: string | undefined,
+    /** The same-site path the visitor sent from, in its own language's form. */
+    from: string
+  ) => Promise<string | null>;
   readonly logger: Pick<PluginContext["logger"], "warn">;
 }
 
@@ -154,23 +161,169 @@ export async function receiveFormPost(
     deps.logger.warn("[page-builder] A form's page could not be read.");
     return answer("error");
   }
-  if (node === null || node.type !== "core/form") return answer("error");
+  if (node === null || node.type !== FORM_BLOCK.name) return answer("error");
+  const current = upgraded(node);
+  if (current === null) return answer("error");
 
-  const answers = answersOf(post);
+  return sendForm({
+    node: current,
+    answers: answersOf(post),
+    back,
+    locale,
+    request,
+    deps,
+    answer,
+  });
+}
+
+/**
+ * Send a post's answers to the form `node` is, and answer where the visitor
+ * goes: the provider's or the simple form's outcome, and once accepted, the
+ * page the block or its form names.
+ */
+async function sendForm(send: {
+  readonly node: BlockNode;
+  readonly answers: Map<string, string[]>;
+  /** The same-site path the visitor came from and goes back to. */
+  readonly back: string;
+  readonly locale: string | undefined;
+  readonly request: Request;
+  readonly deps: ReceiverDeps;
+  readonly answer: (outcome: FormOutcome) => Response;
+}): Promise<Response> {
+  const { node, answers, back, locale, request, deps, answer } = send;
   const picked = pickedForm(node);
-  if (picked !== null) {
-    const outcome = await sendToProvider(
-      picked,
-      answers,
-      locale,
-      request,
-      deps
-    );
-    return outcome.kind === "page"
-      ? redirect(outcome.href, null, "sent")
-      : answer(outcome.kind);
+  const chosen = afterSendingChosen(node, picked !== null);
+  // Where the block itself sends a visitor once a send is accepted.
+  const blockPage = async (): Promise<Response> => {
+    const href = await blockPageOf(node, locale, back, deps);
+    return href === null ? answer("sent") : redirect(href, null, "sent");
+  };
+  if (picked === null) {
+    const sent = await sendSimpleForm(node, answers, deps);
+    return sent === "sent" && chosen === "page" ? blockPage() : answer(sent);
   }
-  return answer(await sendSimpleForm(node, answers, deps));
+  const outcome = await sendToProvider(
+    picked,
+    answers,
+    locale,
+    request,
+    deps,
+    chosen
+  );
+  if (outcome.kind === "block-page") return blockPage();
+  if (outcome.kind === "needs-script") {
+    return plain(422, FORM_FILE_NEEDS_SCRIPT);
+  }
+  return outcome.kind === "page"
+    ? redirect(outcome.href, null, "sent")
+    : answer(outcome.kind);
+}
+
+/**
+ * The form as its page draws it: a node stored at an older version of the
+ * block upgraded, as every reader of the page upgrades it, so its answers
+ * are checked under the names and settings the visitor was shown. `null`
+ * where the upgrade fails, which the page draws as no form.
+ */
+function upgraded(node: BlockNode): BlockNode | null {
+  if (node.version === FORM_BLOCK.version) return node;
+  const { doc } = migrateDocument(
+    { formatVersion: 1, kind: "page", nodes: [node] },
+    {
+      get: type =>
+        type === FORM_BLOCK.name
+          ? {
+              version: FORM_BLOCK.version,
+              ...(FORM_BLOCK.migrate === undefined
+                ? {}
+                : { migrate: FORM_BLOCK.migrate }),
+            }
+          : undefined,
+    }
+  );
+  const [migrated] = doc.nodes;
+  return migrated?.version === FORM_BLOCK.version ? migrated : null;
+}
+
+/** What a block shows once a send is accepted. */
+type AfterSendingChoice = "form" | "message" | "page";
+
+/**
+ * What the block chose to show once a send is accepted: the picked form's
+ * own setting, its message, or a page it names. Absent or unknown, a
+ * provider's form follows its own setting and a simple form shows its
+ * message.
+ */
+function afterSendingChosen(
+  node: BlockNode,
+  picked: boolean
+): AfterSendingChoice {
+  const stored: unknown = node.props.afterSending;
+  if (stored === "message" || stored === "page") return stored;
+  return picked ? "form" : "message";
+}
+
+/** A stored prop's text, or `""` where it holds none. */
+function storedText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * The page a block sends visitors to once a send is accepted, as the
+ * author stored it: a page of the site picked by its entry, where the site
+ * serves it, or an address the author wrote, on this site or another.
+ * `null` where it names none that can be followed, and the block's message
+ * shows instead. A bound address is refused, as "Send to" is: where a
+ * visitor is sent must be what the author wrote.
+ */
+async function blockPageOf(
+  node: BlockNode,
+  locale: string | undefined,
+  from: string,
+  deps: ReceiverDeps
+): Promise<string | null> {
+  const collection = storedText(node.props.entryCollection);
+  const id = storedText(node.props.entryId);
+  if (collection !== "" && id !== "" && deps.entryAddress !== undefined) {
+    const served = await deps
+      .entryAddress(collection, id, locale, from)
+      .catch(() => null);
+    const path = sameSitePath(served ?? undefined);
+    if (path !== null) return path;
+  }
+  if (node.bindings?.href !== undefined) return null;
+  const href = storedText(node.props.href);
+  return authoredPath(href, from) ?? webAddress(href);
+}
+
+/** A fragment as an author may name a section of a page. */
+const FRAGMENT = /^#[A-Za-z0-9_\-:.]{1,128}$/;
+
+/**
+ * A same-site destination an author wrote, its section kept: a path with
+ * its fragment, or a fragment alone, on the page the visitor sent from.
+ * `null` for anything else.
+ */
+function authoredPath(raw: string, from: string): string | null {
+  const at = raw.indexOf("#");
+  const fragment = at === -1 ? "" : raw.slice(at);
+  if (fragment !== "" && !FRAGMENT.test(fragment)) return null;
+  if (at === 0) return `${from}${fragment}`;
+  const path = sameSitePath(at === -1 ? raw : raw.slice(0, at));
+  return path === null ? null : `${path}${fragment}`;
+}
+
+/** `raw` as an `http` or `https` address an author wrote, or `null`. */
+function webAddress(raw: string): string | null {
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === "https:" || parsed.protocol === "http:"
+      ? parsed.href
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /** A post's fields, or why it was refused before any was read. */
@@ -306,12 +459,17 @@ function hasUnsafeCharacter(raw: string): boolean {
   return false;
 }
 
-/** The fragment's stem, `form-<node>` or `form-<node>-<item>`; `null` without a usable node id. */
+/**
+ * The fragment's stem, `form-<node>` or `form-<node>-<item>`, as the block
+ * names the copy it drew; `null` without a usable node id. An item is the
+ * copy's position among its list's entries, after those of the lists around
+ * it (`3`, `0-3`).
+ */
 function anchorOf(post: Map<string, string[]>): string | null {
   const node = post.get(FORM_POST_FIELDS.node)?.[0];
   if (node === undefined || !/^[A-Za-z0-9_-]{1,128}$/.test(node)) return null;
   const item = post.get(FORM_POST_FIELDS.item)?.[0];
-  return item !== undefined && /^\d{1,4}$/.test(item)
+  return item !== undefined && /^\d{1,4}(?:-\d{1,4}){0,7}$/.test(item)
     ? `form-${node}-${item}`
     : `form-${node}`;
 }
@@ -381,10 +539,15 @@ function pickedForm(node: BlockNode): PickedForm | null {
   return { provider, ref: typeof ref === "string" ? ref : "" };
 }
 
-/** A provider send's outcome: an outcome to show, or a page to go to. */
+/**
+ * A provider send's outcome: an outcome to show, a page to go to, or the
+ * page the block itself names.
+ */
 type ProviderOutcome =
   | { readonly kind: FormOutcome }
-  | { readonly kind: "page"; readonly href: string };
+  | { readonly kind: "page"; readonly href: string }
+  | { readonly kind: "block-page" }
+  | { readonly kind: "needs-script" };
 
 /**
  * Hand a post to the provider of a form the block picked. The provider's
@@ -397,7 +560,8 @@ async function sendToProvider(
   answers: Map<string, string[]>,
   locale: string | undefined,
   request: Request,
-  deps: ReceiverDeps
+  deps: ReceiverDeps,
+  chosen: AfterSendingChoice
 ): Promise<ProviderOutcome> {
   const provider = deps.provider(picked.provider);
   if (provider === undefined) return { kind: "error" };
@@ -414,6 +578,11 @@ async function sendToProvider(
       };
     }
     description = described;
+    // A plain form post through the page builder carries no file, and the
+    // file is never dropped without a word: such a form is refused here.
+    if (description.fields.some(field => field.kind === "file")) {
+      return { kind: "needs-script" };
+    }
     result = await provider.accept(picked.ref, {
       answers: describedAnswers(description.fields, answers),
       ...(locale === undefined ? {} : { locale }),
@@ -427,8 +596,10 @@ async function sendToProvider(
   }
   switch (result.kind) {
     case "sent":
-      // The provider's answer overrides the form's own setting; without one,
-      // the form's own applies.
+      // The block's own choice comes first. Without one, the provider's
+      // answer overrides the form's own setting, and the form's own applies.
+      if (chosen === "message") return { kind: "sent" };
+      if (chosen === "page") return { kind: "block-page" };
       return afterSending(result.afterSending ?? description.afterSending);
     case "invalid":
       return { kind: "invalid" };
@@ -459,7 +630,9 @@ async function sendSimpleForm(
 ): Promise<FormOutcome> {
   const address = sendTo(node);
   if (address === null) return "error";
-  const checked = checkAnswers(simpleFormFields(node), answers);
+  // Checked against the description the block draws its controls from, so
+  // the rules the browser applied are the rules checked here.
+  const checked = checkAnswers(formFieldDrawings(node.props), answers);
   if (!checked.ok) return "invalid";
   const delivery = await deps.deliver(address, checked.answers);
   if (delivery.ok) return "sent";
@@ -472,19 +645,6 @@ async function sendSimpleForm(
     }
   );
   return "error";
-}
-
-/**
- * The simple form's fields as the block draws them, in the provider
- * contract's shape: one description for drawing and for checking.
- */
-function simpleFormFields(node: BlockNode): FormFieldDescription[] {
-  return formFields(node.props as FormProps).map(field => ({
-    name: field.name,
-    label: field.label,
-    kind: field.type,
-    required: field.required,
-  }));
 }
 
 /**
@@ -510,15 +670,20 @@ function hostOf(address: string): string | null {
   }
 }
 
-/** A `303` to `path`, with the outcome in its fragment. */
+/**
+ * A `303` to `path`, with the outcome in its fragment. A path of the app's
+ * own is one its routes name, so it is sent under the app's base path,
+ * where the browser reaches it.
+ */
 function redirect(
   path: string,
   anchor: string | null,
   outcome: FormOutcome,
   retryAfter?: number
 ): Response {
+  const served = servedUnderBase(path);
   const headers = new Headers({
-    location: anchor === null ? path : `${path}#${anchor}-${outcome}`,
+    location: anchor === null ? served : `${served}#${anchor}-${outcome}`,
     "cache-control": "no-store",
   });
   if (retryAfter !== undefined) headers.set("retry-after", String(retryAfter));

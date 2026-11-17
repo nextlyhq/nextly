@@ -870,18 +870,14 @@ describe("Inside its parent: vertical flow and a parent's Align", () => {
     // Fixed leaves the alignment to the parent, so the block stays centred
     // at the size it was given, and reads as Fixed with that size.
     const grid = new Block();
-    grid.apply(
-      planChildSize(grid.tiers(), "base", "grid", "width", "fixed", "200px")
-    );
+    grid.apply(planChildSize(grid.tiers(), "base", "grid", "width", "fixed", "200px"));
     expect(
       readChildSize(grid.tiers(), "base", "grid", "width", {
         justifyItems: "center",
       })
     ).toEqual({ choice: "fixed", size: "200px" });
     const row = new Block();
-    row.apply(
-      planChildSize(row.tiers(), "base", "row", "height", "fixed", "80px")
-    );
+    row.apply(planChildSize(row.tiers(), "base", "row", "height", "fixed", "80px"));
     expect(
       readChildSize(row.tiers(), "base", "row", "height", {
         alignItems: "center",
@@ -889,8 +885,8 @@ describe("Inside its parent: vertical flow and a parent's Align", () => {
     ).toEqual({ choice: "fixed", size: "80px" });
     // A centring of the block's own is no choice's, so it stays Custom.
     row.own.base.alignSelf = "center";
-    expect(readChildSize(row.tiers(), "base", "row", "height")).toEqual({
-      choice: "custom",
-    });
+    expect(
+      readChildSize(row.tiers(), "base", "row", "height")
+    ).toEqual({ choice: "custom" });
   });
 });
