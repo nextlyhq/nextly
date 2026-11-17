@@ -223,7 +223,8 @@ describe("pressing an add row", () => {
   });
 
   it("marks nothing New where the new row matches the search", async () => {
-    render(<Host initialSearch="new" />);
+    // "e" matches "Text", so the colours are listed, and "New colour" too.
+    render(<Host initialSearch="e" />);
     fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
     await screen.findByRole("dialog", { name: "Edit New colour" });
     expect(document.querySelector(".nx-vars__new")).toBeNull();

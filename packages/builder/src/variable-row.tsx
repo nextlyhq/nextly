@@ -161,13 +161,21 @@ export function VariableRow({
                       tokens={tokens}
                       mode={mode}
                     />
-                    <RowName entry={entry} marked={marked} />
-                    <RowTail
-                      entry={entry}
-                      token={token}
-                      tokens={tokens}
-                      mode={mode}
-                    />
+                    <RowName entry={entry} />
+                    {/* Where the value goes, while the editor beside it
+                        shows the value. */}
+                    {marked ? (
+                      <span className="nx-vars__new" aria-hidden="true">
+                        New
+                      </span>
+                    ) : (
+                      <RowTail
+                        entry={entry}
+                        token={token}
+                        tokens={tokens}
+                        mode={mode}
+                      />
+                    )}
                   </button>
                 </PopoverTrigger>
               </CountTip>
@@ -224,24 +232,13 @@ export function VariableRow({
 }
 
 /** The row's name, and its kind where another row shares the name. */
-function RowName({
-  entry,
-  marked,
-}: {
-  entry: VariableEntry;
-  marked: boolean;
-}): React.JSX.Element {
+function RowName({ entry }: { entry: VariableEntry }): React.JSX.Element {
   return (
     <span className="nx-vars__name">
       {entry.label}
       {entry.kindWord === undefined ? null : (
         <span className="nx-vars__name-kind">{` · ${entry.kindWord}`}</span>
       )}
-      {marked ? (
-        <span className="nx-vars__new" aria-hidden="true">
-          New
-        </span>
-      ) : null}
     </span>
   );
 }
