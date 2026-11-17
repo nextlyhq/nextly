@@ -1,32 +1,26 @@
 /**
- * What the editor says about starting an empty document, and about adding at
- * its top level: of sections on a page, of blocks in every other kind of
- * document. One source for the canvas's start card and gaps and for the
- * Getting started checklist, so the checklist names the control that is there.
+ * What the editor says about starting an empty document, and about adding in
+ * a gap between blocks. The start card speaks of sections on a page and of
+ * blocks in every other kind of document; a gap's "+" names where it adds.
+ * One source for the canvas's start card and gaps and for the Getting started
+ * checklist, so the checklist names the control that is there.
  *
  * @module page-start-words
  */
 
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 
-/**
- * What the start card and a gap's "+" say: of sections on a page, of blocks
- * in a document built of blocks.
- */
+/** What the start card says: of sections on a page, of blocks elsewhere. */
 const WORDS = {
   sections: {
     title: "Start your page",
     hint: "Add a section, or drag one here from the panel.",
     start: "Add section",
-    gap: "Add a section here",
-    after: "Add a section after",
   },
   blocks: {
     title: "Add the first block",
     hint: "Add a block, or drag one here from the panel.",
     start: "Add block",
-    gap: "Add a block here",
-    after: "Add a block after",
   },
 } as const;
 
@@ -59,4 +53,19 @@ export function startWords(
   return WORDS[
     Object.hasOwn(WORDS_OF_KIND, kind) ? WORDS_OF_KIND[kind] : "blocks"
   ];
+}
+
+/**
+ * What a gap's "+" says, as its name and its tooltip: where the block it adds
+ * goes. "Add a block between Hero and Pricing" between two blocks, and "Add a
+ * block after Contact" after the last one, in every kind of document: the "+"
+ * adds any block, so it names none.
+ *
+ * @param after - the name of the block before the gap
+ * @param before - the name of the block after it, absent after the last
+ */
+export function gapWords(after: string, before?: string): string {
+  return before === undefined
+    ? `Add a block after ${after}`
+    : `Add a block between ${after} and ${before}`;
 }
