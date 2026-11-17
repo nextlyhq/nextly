@@ -1011,12 +1011,16 @@ export class SinglePublishAllService extends BaseService {
           message: `Single "${slug}" has no document to unpublish`,
         };
       }
-      // The hooks an update runs once it is durable, as a publish runs them.
+      // The hooks an update runs once it is durable, as a publish runs them:
+      // one run, over the documents of a move of statuses alone, told every
+      // language it moved.
       const hookDocuments = outcome.hookDocuments;
       if (hookDocuments !== undefined) {
-        await this.afterCommit(() =>
-          this.runUpdateHooks(hookCall, hookDocuments)
-        );
+        await this.afterCommit(async () => {
+          for (const documents of hookDocuments) {
+            await this.runUpdateHooks(hookCall, documents);
+          }
+        });
       }
       return {
         success: true,
@@ -1214,8 +1218,10 @@ export class SinglePublishAllService extends BaseService {
         })
       : false;
     await this.runInTransactionPhase(tx, documents, options.user);
+    // An unpublish puts no pending change live, so its hooks run once, over
+    // the documents in the default language, named for no one language.
     const hookDocuments = plan.runsUpdateHooks
-      ? await this.publishDocuments(tx, documents)
+      ? [await this.publishDocuments(tx, documents)]
       : undefined;
     return {
       documentVanished: false,
