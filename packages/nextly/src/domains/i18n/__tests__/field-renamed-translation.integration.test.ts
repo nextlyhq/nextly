@@ -106,6 +106,37 @@ describeEachDialect("a translated field that is renamed", dialect => {
     ).executeQuery<T>(sql);
   }
 
+  /**
+   * Whether a save of `table`'s entity runs the migration file it writes, planned from the
+   * migration history: a Single's and a field group's do; a collection's is still applied by its
+   * push.
+   */
+  const runsItsFile = (table: string) => !table.startsWith("dc_");
+
+  /**
+   * A save over a rename an earlier apply left half-done, on a path that runs its file: the
+   * translations table is not what the history records, so the save is refused as `nextly migrate`
+   * refuses drift, before anything changes, with every language where that apply left it.
+   */
+  async function expectRefusedAsDrift(
+    refusal: unknown,
+    table: string,
+    id: string
+  ): Promise<void> {
+    expect(refusal).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+    expect(await companionValues(table, "title2", id)).toEqual({
+      en: "Hello",
+      es: "Hola",
+    });
+  }
+
+  /** Whatever `change` threw, or undefined when it resolved. */
+  const refusalOf = (change: () => Promise<unknown>) =>
+    change().then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
   /** A table's column names, read from the database rather than the registry. */
   async function columnsOf(table: string): Promise<string[]> {
     if (dialect === "sqlite") {
@@ -339,15 +370,20 @@ describeEachDialect("a translated field that is renamed", dialect => {
 
   // An apply that renamed the companion column and then stopped (MySQL commits each schema
   // statement; the registry write comes last everywhere) leaves the column renamed while the
-  // registry still records the old field. Retried, the save has to finish rather than rename again.
+  // registry still records the old field. Retried, the save has to finish rather than rename again,
+  // or, on a path that runs its file, be refused as drift with every language where it is.
   it.each(PATHS)(
-    "finishes a rename an earlier apply already made on the companion when $path",
+    "finishes, or refuses as drift, a rename an earlier apply already made on the companion when $path",
     async ({ table, seed, change }) => {
       const id = await seed();
       await query(
         `ALTER TABLE ${quote(dialect, `${table}_locales`)} RENAME COLUMN ${quote(dialect, "heading")} TO ${quote(dialect, "title2")}`
       );
 
+      if (runsItsFile(table)) {
+        await expectRefusedAsDrift(await refusalOf(change), table, id);
+        return;
+      }
       await change();
 
       expect(await companionValues(table, "title2", id)).toEqual({
@@ -715,10 +751,12 @@ describeEachDialect("a translated field that is renamed", dialect => {
     { name: "views", type: "number" },
   ];
 
-  // Before translation is on, `heading` is a main-table column, so a schema dialog's push asks
-  // about its drop like any other: refused with no answer, and applied once the admin confirms it.
+  // Before translation is on, `heading` is a main-table column, so its drop is asked about like any
+  // other. A schema dialog's push asks for it by field: refused with no answer, and applied once the
+  // admin confirms it. A dialog whose save runs its file applies it on the dialog's confirm, which
+  // listed the drop, as it does for an entity that is not translated.
   it.each(ENABLING_DIALOGS)(
-    "refuses an unconfirmed drop in the save that turns translation on, when $path applies",
+    "refuses an unconfirmed drop, or applies it on the dialog's confirm, in the save that turns translation on, when $path applies",
     async ({ table, seed, apply }) => {
       const id = await seed();
 
@@ -727,6 +765,11 @@ describeEachDialect("a translated field that is renamed", dialect => {
         (error: unknown) => error
       );
 
+      if (runsItsFile(table)) {
+        expect(refusal).toBeUndefined();
+        expect(await columnsOf(table)).not.toContain("heading");
+        return;
+      }
       expect(reported(refusal)).toMatch(/cancelled/);
       expect(await mainValue(table, "heading", id)).toBe("Hello");
     }
@@ -1515,13 +1558,17 @@ describeEachDialect("a translated field that is renamed", dialect => {
       },
     },
   ])(
-    "finishes a rename to shared an earlier apply already made on the companion when $path",
+    "finishes, or refuses as drift, a rename to shared an earlier apply already made on the companion when $path",
     async ({ table, seed, change }) => {
       const id = await seed();
       await query(
         `ALTER TABLE ${quote(dialect, `${table}_locales`)} RENAME COLUMN ${quote(dialect, "heading")} TO ${quote(dialect, "title2")}`
       );
 
+      if (runsItsFile(table)) {
+        await expectRefusedAsDrift(await refusalOf(change), table, id);
+        return;
+      }
       await change();
 
       expect(await mainValue(table, "title2", id)).toBe("Hello");
@@ -1582,7 +1629,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
       },
     },
   ])(
-    "finishes a rename to shared an earlier apply completed before the registry recorded it, when $path",
+    "finishes, or refuses as drift, a rename to shared an earlier apply completed before the registry recorded it, when $path",
     async ({ table, seed, change }) => {
       const id = await seed();
       // The state the earlier apply left: the value on main, the companion column gone.
@@ -1596,6 +1643,14 @@ describeEachDialect("a translated field that is renamed", dialect => {
         `ALTER TABLE ${quote(dialect, `${table}_locales`)} DROP COLUMN ${quote(dialect, "heading")}`
       );
 
+      if (runsItsFile(table)) {
+        // The history still records `heading` on the translations table: drift, nothing changed.
+        expect(await refusalOf(change)).toMatchObject({
+          code: "NEXTLY_MIGRATION_DRIFT",
+        });
+        expect(await mainValue(table, "title2", id)).toBe("Hello");
+        return;
+      }
       await change();
 
       expect(await mainValue(table, "title2", id)).toBe("Hello");
@@ -1861,6 +1916,16 @@ describeEachDialect("a translated field that is renamed", dialect => {
         (error: unknown) => error
       );
 
+      // A save that would otherwise go ahead, over a rename an earlier apply left half-done, on a
+      // path that runs its file: refused as drift.
+      if (
+        state === "part-applied" &&
+        runsItsFile(table) &&
+        !mustRefuse(answer, storage)
+      ) {
+        await expectRefusedAsDrift(refusal, table, id);
+        return;
+      }
       if (mustRefuse(answer, storage)) {
         expect(refusal, "the change is refused").toBeDefined();
       }
