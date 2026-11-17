@@ -267,6 +267,7 @@ import { COMPANION_DEFAULT_STATUS } from "../../i18n/migration/generate-up";
 import { reachesLocalizedFieldGroup } from "../../i18n/per-language-fields";
 import {
   assertClaimsAllowed,
+  assertCopySources,
   provenanceClaimsOf,
   type ProvenanceClaims,
 } from "../../i18n/provenance/provenance-claims";
@@ -8625,7 +8626,8 @@ export class CollectionMutationService extends BaseService {
     // read before the key is dropped with the version.
     const provenance = this.provenanceOf(
       body,
-      actorForWrite(params.actor, params.user)
+      actorForWrite(params.actor, params.user),
+      params.locale
     );
     if ("refused" in provenance) return provenance.refused;
     // A version sent with the body is the server's to decide; see updateEntry.
@@ -15587,13 +15589,24 @@ export class CollectionMutationService extends BaseService {
    */
   private provenanceOf(
     body: Record<string, unknown>,
-    savedBy: RequestActor
+    savedBy: RequestActor,
+    /** The language the write is in, as the caller named it. */
+    locale: string | undefined
   ):
     | { claims: ProvenanceClaims | undefined }
     | { refused: CollectionServiceResult } {
     try {
       const claims = provenanceClaimsOf(body);
       assertClaimsAllowed(claims, savedBy);
+      // A copy's source must be another of the site's languages: checked here, before the save
+      // writes anything, rather than found out of date against nothing once it has.
+      assertCopySources(claims, {
+        configured: this.localization?.locales.map(l => l.code) ?? [],
+        target:
+          locale === EVERY_LOCALE
+            ? null
+            : (locale ?? this.localization?.defaultLocale ?? null),
+      });
       return { claims };
     } catch (error) {
       return {
@@ -15840,7 +15853,8 @@ export class CollectionMutationService extends BaseService {
     // before the key is dropped below.
     const provenance = this.provenanceOf(
       body,
-      actorForWrite(rawParams.actor, rawParams.user)
+      actorForWrite(rawParams.actor, rawParams.user),
+      rawParams.locale
     );
     if ("refused" in provenance) return provenance.refused;
     const provenanceClaims = provenance.claims;
@@ -20955,7 +20969,9 @@ export class CollectionMutationService extends BaseService {
     // read before the key is dropped with the version.
     const provenance = this.provenanceOf(
       body,
-      actorForWrite(params.actor, params.user)
+      actorForWrite(params.actor, params.user),
+      // A write in a caller's transaction names no language: it writes the default one.
+      undefined
     );
     if ("refused" in provenance) return provenance.refused;
     // A version sent with the body is the server's to decide; see updateEntry.
@@ -21751,7 +21767,9 @@ export class CollectionMutationService extends BaseService {
     // read before the key is dropped with the version.
     const provenance = this.provenanceOf(
       body,
-      actorForWrite(params.actor, params.user)
+      actorForWrite(params.actor, params.user),
+      // A write in a caller's transaction names no language: it writes the default one.
+      undefined
     );
     if ("refused" in provenance) return provenance.refused;
     // A version sent with the body is the server's to decide; see updateEntry.

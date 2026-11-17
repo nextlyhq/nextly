@@ -763,5 +763,48 @@ describe.each(getConfiguredTestDialects())(
         ).map(row => row.fieldPath)
       ).toEqual(["items"]);
     });
+    it("refuses a copy from a language that isn't configured, or into the language it copies", async () => {
+      // A copy names the language it came from. One the site doesn't have, or the language being
+      // written itself, is no source a value can be out of date against: refused before the save
+      // writes anything, on a collection and on a Single.
+      await boot(dialect);
+      const created = (await t!.nextly.create({
+        collection: "posts",
+        locale: "en",
+        data: { title: "Hi" },
+      })) as unknown as { item: { id: string } };
+      const id = created.item.id;
+      for (const sourceLocale of ["de", "es"]) {
+        const refused = await save(id, "es", {
+          title: "Hola",
+          _provenance: { title: { origin: "copy", sourceLocale } },
+        });
+        expect(refused, JSON.stringify(refused)).toMatchObject({
+          success: false,
+          statusCode: 400,
+        });
+      }
+      // Nothing was written: the language keeps no value and no record.
+      expect((await rowsOf(id)).es).toBeUndefined();
+
+      await t!.nextly.updateSingle({
+        slug: "banner",
+        locale: "en",
+        data: { headline: "Sale", _overwrite: true },
+      } as never);
+      for (const sourceLocale of ["de", "es"]) {
+        await expect(
+          t!.nextly.updateSingle({
+            slug: "banner",
+            locale: "es",
+            data: {
+              headline: "Rebajas",
+              _overwrite: true,
+              _provenance: { headline: { origin: "copy", sourceLocale } },
+            },
+          } as never)
+        ).rejects.toMatchObject({ statusCode: 400 });
+      }
+    });
   }
 );

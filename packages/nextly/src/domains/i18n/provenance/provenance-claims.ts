@@ -107,3 +107,34 @@ export function assertClaimsAllowed(
     })),
   });
 }
+
+/**
+ * Refuses a copy whose source is no language a value can be out of date against: one the site
+ * does not configure, or the language the write is in. `target` is null for a write of every
+ * language at once, which names no one language to compare with.
+ */
+export function assertCopySources(
+  claims: ProvenanceClaims | undefined,
+  languages: { configured: readonly string[]; target: string | null }
+): void {
+  if (claims === undefined) return;
+  const errors: { path: string; code: string; message: string }[] = [];
+  for (const [field, claim] of Object.entries(claims)) {
+    if (claim.origin !== "copy") continue;
+    const path = `${DOCUMENT_PROVENANCE_KEY}.${field}.sourceLocale`;
+    if (!languages.configured.includes(claim.sourceLocale)) {
+      errors.push({
+        path,
+        code: "PROVENANCE_COPY_SOURCE_UNKNOWN",
+        message: "A copy must name one of the site's languages as its source.",
+      });
+    } else if (claim.sourceLocale === languages.target) {
+      errors.push({
+        path,
+        code: "PROVENANCE_COPY_SOURCE_IS_TARGET",
+        message: "A value can't be a copy from the language it is written in.",
+      });
+    }
+  }
+  if (errors.length > 0) throw NextlyError.validation({ errors });
+}
