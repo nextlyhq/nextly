@@ -302,7 +302,9 @@ function setCount(view: LayoutPickerView): number {
 function useOptionPictures(
   opened: boolean,
   selected: string | null,
-  state: LayoutChoicesState
+  state: LayoutChoicesState,
+  /** What a search found, past the list: its sets' definitions, once in. */
+  found: LayoutChoicesResponse["meta"]["regionDefinitions"] | undefined
 ): (option: PickerOption) => JSX.Element {
   const [wanted, setWanted] = useState(false);
   useEffect(() => {
@@ -311,12 +313,18 @@ function useOptionPictures(
   const { state: all } = useLayoutChoices(wanted, selected, {
     pictures: true,
   });
-  const definitions =
+  const listed =
     all.kind === "ready"
       ? all.choices.meta.regionDefinitions
       : state.kind === "ready"
         ? state.choices.meta.regionDefinitions
         : NO_DEFINITIONS;
+  // A search's matches can sit past the list, so their definitions come with
+  // the search's own answer, drawn beside the list's.
+  const definitions = useMemo(
+    () => (found === undefined ? listed : { ...listed, ...found }),
+    [listed, found]
+  );
   // Answered, or failed: a region still without its definition then draws
   // the broken-picture icon rather than waiting on a read that is done.
   const settled = all.kind !== "pending";
@@ -372,8 +380,12 @@ function Picker<T extends FieldValues>({
   // the server, so every set the author may read can be found and chosen.
   const capped = state.kind === "ready" && state.choices.meta.more;
   const searchable = capped || setCount(view) > SEARCH_ABOVE;
-  const search = useLayoutSearch(open && searchable, stored, view);
-  const picture = useOptionPictures(open, selected, state);
+  const { definitions: foundDefinitions, ...search } = useLayoutSearch(
+    open && searchable,
+    stored,
+    view
+  );
+  const picture = useOptionPictures(open, selected, state, foundDefinitions);
 
   return (
     <div className="flex min-w-0 flex-col gap-1.5" data-slot="page-layout">
@@ -450,7 +462,10 @@ function useLayoutSearch(
   open: boolean,
   stored: { layout: unknown; noHeaderFooter: boolean },
   view: LayoutPickerView
-): MenuSearch {
+): MenuSearch & {
+  /** The answered search's set definitions, for its matches' pictures. */
+  definitions: LayoutChoicesResponse["meta"]["regionDefinitions"] | undefined;
+} {
   const [typed, setTyped] = useState("");
   const [search, setSearch] = useState("");
   useEffect(() => {
@@ -461,7 +476,8 @@ function useLayoutSearch(
   const { state: found, retry } = useLayoutChoices(
     open && search !== "",
     selectedOf(stored),
-    { search }
+    // With the pictures of what it finds, which may be past the list.
+    { search, pictures: true }
   );
   const current = searching && search === typed.trim();
   const answered = current && found.kind === "ready";
@@ -472,7 +488,20 @@ function useLayoutSearch(
     : found.kind === "ready" && answered
       ? matchingOptions(stored, found)
       : [];
-  return { typed, setTyped, searching, answered, failed, options, retry };
+  const definitions =
+    answered && found.kind === "ready"
+      ? found.choices.meta.regionDefinitions
+      : undefined;
+  return {
+    typed,
+    setTyped,
+    searching,
+    answered,
+    failed,
+    options,
+    retry,
+    definitions,
+  };
 }
 
 /**

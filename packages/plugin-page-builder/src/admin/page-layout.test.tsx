@@ -34,12 +34,20 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 // Each picture stands for the set it draws, by its regions' components: the
 // drawing itself is the pictures module's own test.
 vi.mock("./header-footer-pictures", () => ({
-  useSetPictures: () => (picture: readonly { componentId: string }[]) => (
-    <span
-      data-testid="picture"
-      data-regions={picture.map(region => region.componentId).join(",")}
-    />
-  ),
+  useSetPictures:
+    (definitions: Readonly<Record<string, unknown>>, complete: boolean) =>
+    (picture: readonly { componentId: string }[]) => (
+      <span
+        data-testid="picture"
+        data-regions={picture.map(region => region.componentId).join(",")}
+        // Whether every region's definition was handed in, and whether the
+        // reads holding them are done: what the real picture draws from.
+        data-defined={String(
+          picture.every(region => region.componentId in definitions)
+        )}
+        data-complete={String(complete)}
+      />
+    ),
 }));
 
 import {
@@ -480,6 +488,39 @@ describe("the page's Layout picker", () => {
     });
     return { retry };
   }
+
+  it("draws a set found past the list from the search's own definitions", async () => {
+    const found = {
+      id: "l230",
+      title: "Layout 230",
+      published: true,
+      draftChangesNotLive: false,
+      areasFilled: ["header" as const],
+      regions: [{ area: "header" as const, componentId: "far" }],
+    };
+    await searchCapped({
+      data: {
+        items: [found],
+        meta: {
+          ...choices.meta,
+          defaultLayout: "l0",
+          more: false,
+          matched: ["l230"],
+          regionDefinitions: { far: { formatVersion: 1, nodes: [] } },
+        },
+      },
+    });
+    // The search asks for the pictures of what it finds.
+    expect(
+      choicePaths().some(
+        path => path.includes("q=Layout+230") && path.includes("pictures=1")
+      )
+    ).toBe(true);
+    const picture = optionNamed("Layout 230").querySelector(
+      '[data-testid="picture"]'
+    );
+    expect(picture?.getAttribute("data-defined")).toBe("true");
+  });
 
   it("says it is searching, and shows none of the first answer, while a search is on its way", async () => {
     await searchCapped({});
