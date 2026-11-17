@@ -42,6 +42,7 @@ Section spacing", with each side named by the variable it reads.
 
 Compatibility: containers may now carry colour and typography, and a page compiles one
 more zero-specificity rule for the links inside each container with a text colour. A
-host stylesheet that colours `a` itself beats that rule. The Collection list's pager no
+host stylesheet that colours `a` itself beats that rule. Every page's stored stylesheet is
+compiled again once, on its next read, so pages saved before pick the rule up. The Collection list's pager no
 longer colours the gap between its page numbers; it takes the colour of the text around
 it.
