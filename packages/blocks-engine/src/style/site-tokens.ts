@@ -843,6 +843,8 @@ export function defaultSiteTokens(): SiteToken[] {
      */
     {
       name: "color.border-strong",
+      // Named as an author reads it; the code name stays as it was.
+      label: "Strong border",
       kind: "color",
       group: "Text and surfaces",
       values: { light: "#6b7280", dark: "#9ca3af" },
@@ -857,6 +859,8 @@ export function defaultSiteTokens(): SiteToken[] {
      */
     {
       name: "color.muted",
+      // Named as an author reads it; the code name stays as it was.
+      label: "Muted text",
       kind: "color",
       group: "Text and surfaces",
       values: { light: "#6b7280", dark: "#9ca3af" },

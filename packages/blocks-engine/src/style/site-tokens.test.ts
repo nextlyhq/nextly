@@ -1092,6 +1092,21 @@ describe("resolveSiteTokens", () => {
     expect(resolveSiteTokens({ tokens: [] })).not.toHaveProperty("order");
   });
 
+  it("names the built-in colours in words an author reads", () => {
+    const labels = resolveSiteTokens()
+      .tokens.filter(token => token.kind === "color")
+      .map(token => tokenDisplayLabel(token));
+    expect(labels).toEqual([
+      "Primary",
+      "Text",
+      "Background",
+      "Surface",
+      "Border",
+      "Strong border",
+      "Muted text",
+    ]);
+  });
+
   it("starts a site's colours in two groups: Brand, and Text and surfaces", () => {
     const groups = Object.fromEntries(
       resolveSiteTokens()
