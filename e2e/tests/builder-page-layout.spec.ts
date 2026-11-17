@@ -1,7 +1,7 @@
 /**
- * The page's Layout in the editor: one choice, which Layout is in effect and
- * why, and the Layout's regions drawn locked on the canvas with a way to open
- * the Layout.
+ * The page's header & footer in the editor: one menu with pictures, the same
+ * on the entry page and in Settings, which set is in effect and why, and the
+ * set's regions drawn locked on the canvas with a way to open the set.
  *
  * Seeded through the admin API: two components, a published Layout made the
  * site's default, a second published Layout and an unpublished one, and a
@@ -178,29 +178,49 @@ async function region(page: Page, area: "header" | "footer") {
   return (await canvasRoot(page)).locator(`[data-nx-region="${area}"]`);
 }
 
-async function choose(page: Page, label: string | RegExp): Promise<void> {
-  await page.getByRole("combobox", { name: "Header & footer" }).click();
-  await page.getByRole("option", { name: label }).click();
+/** The menu's option for the set or choice named `name`, by its bold name. */
+function option(page: Page, name: string) {
+  return page.getByRole("option").filter({
+    has: page.locator('[data-slot="hf-name"]').getByText(name, { exact: true }),
+  });
 }
 
-test("offers one Layout choice and says which Layout is in effect and why", async ({
+async function choose(page: Page, name: string): Promise<void> {
+  await page.getByRole("combobox", { name: "Header & footer" }).click();
+  await option(page, name).click();
+}
+
+test("offers one menu with pictures, the same on the entry page and in Settings, and says which set is in effect and why", async ({
   page,
 }) => {
   const { pageId } = await seed(page);
 
-  // On the entry form's Page Builder card.
+  // On the entry form's Page Builder card: the default by name, with its
+  // picture drawn from the default set's published header.
   await gotoAdmin(page, `/collections/pages/${pageId}`);
   const cardPicker = page.getByRole("combobox", { name: "Header & footer" });
   await expect(cardPicker).toBeVisible({ timeout: 30_000 });
-  await expect(cardPicker).toContainText(`Site default (${MAIN})`);
+  // The name, read past the picture, whose drawn text is the set's own.
+  await expect(cardPicker.locator('[data-slot="hf-name"]')).toHaveText(
+    `Site default (${MAIN})`
+  );
+  await expect(
+    cardPicker.locator('.nx-pb-hf-picture .nx-picture[data-state="drawn"]')
+  ).toHaveCount(1);
 
-  // And in the editor's Settings.
+  // And in the editor's Settings, the same choice shown the same way.
   await openBuilder(page, pageId);
   await openSettings(page);
   // The dialog's, not the right panel's beside it, which says the same.
   const settings = page.getByRole("dialog", { name: "Settings" });
-  const picker = page.getByRole("combobox", { name: "Header & footer" });
+  const picker = settings.getByRole("combobox", { name: "Header & footer" });
   await expect(picker).toBeVisible();
+  await expect(picker.locator('[data-slot="hf-name"]')).toHaveText(
+    `Site default (${MAIN})`
+  );
+  await expect(
+    picker.locator('.nx-pb-hf-picture .nx-picture[data-state="drawn"]')
+  ).toHaveCount(1);
   await expect(
     settings.getByText(
       `Follows the site default, ${MAIN}, because this page doesn't choose its own header & footer set.`
@@ -209,40 +229,55 @@ test("offers one Layout choice and says which Layout is in effect and why", asyn
 
   await picker.click();
   // The site default first, by name, and not again under its own name;
-  // published Layouts; an unpublished one marked; and no header or footer
-  // last. Other Layouts the suite's database holds sit among them, so the
-  // order is asserted between these.
-  const options = await page.getByRole("option").allTextContents();
-  expect(options[0]).toBe(
-    `Site default (${MAIN}) · Follows the site if the default changes`
+  // published sets; an unpublished one marked; then None. Other sets the
+  // suite's database holds sit among them, so the order is asserted between
+  // these.
+  const names = await page
+    .getByRole("option")
+    .locator('[data-slot="hf-name"]')
+    .allTextContents();
+  expect(names[0]).toBe(`Site default (${MAIN})`);
+  await expect(option(page, `Site default (${MAIN})`)).toContainText(
+    "Follows the site if the default changes"
   );
-  expect(options.at(-1)).toBe("No header or footer");
-  const unfinished = options.indexOf(
-    `${UNFINISHED} (not published: the site default shows until it is)`
+  expect(names.at(-1)).toBe("None");
+  await expect(option(page, "None")).toContainText("No header or footer");
+  expect(names).not.toContain(MAIN);
+  expect(names.indexOf(LANDING)).toBeGreaterThan(0);
+  expect(names.indexOf(UNFINISHED)).toBeGreaterThan(names.indexOf(LANDING));
+  await expect(option(page, LANDING)).toContainText("Header only");
+  await expect(option(page, UNFINISHED)).toContainText(
+    "Not published: the site default shows until it is"
   );
-  expect(options.indexOf(LANDING)).toBeGreaterThan(0);
-  expect(options).not.toContain(MAIN);
-  expect(unfinished).toBeGreaterThan(options.indexOf(LANDING));
+  // Each published set is drawn from its published header; one not
+  // published has nothing to draw.
+  await expect(
+    option(page, LANDING).locator('.nx-picture[data-state="drawn"]')
+  ).toHaveCount(1);
+  await expect(
+    option(page, UNFINISHED).locator('.nx-picture[data-state="empty"]')
+  ).toHaveCount(1);
+  // After a separator, the way to the list of sets, as a new tab.
+  await expect(
+    page.getByRole("option", { name: /Manage headers & footers ↗/ })
+  ).toBeVisible();
   await page.keyboard.press("Escape");
 
-  await choose(
-    page,
-    `${UNFINISHED} (not published: the site default shows until it is)`
-  );
+  await choose(page, UNFINISHED);
   await expect(
     settings.getByText(
       `${UNFINISHED} (not published, so the site default shows)`
     )
   ).toBeVisible();
 
-  await choose(page, "No header or footer");
+  await choose(page, "None");
   await expect(
-    page.getByText("No header or footer", { exact: true }).last()
+    settings.getByText("No header or footer", { exact: true })
   ).toBeVisible();
   await expect(await region(page, "header")).toHaveCount(0);
 
   await choose(page, LANDING);
-  await expect(page.getByText(LANDING, { exact: true }).last()).toBeVisible();
+  await expect(picker.locator('[data-slot="hf-name"]')).toHaveText(LANDING);
 });
 
 test("draws the Layout's regions locked on the canvas, with a way to open the Layout", async ({
@@ -294,8 +329,23 @@ test("draws the Layout's regions locked on the canvas, with a way to open the La
   });
   await expect(row).toBeVisible();
 
-  // Changing the Layout redraws the canvas at once, before anything is saved.
+  // Changing the set redraws the canvas at once, before anything is saved.
   await openSettings(page);
   await choose(page, LANDING);
   await expect(await region(page, "header")).toContainText(LANDING_HEADER);
+
+  // Nothing is stored until the page is saved: reloaded without saving, the
+  // page is drawn inside the default again and the menu says so.
+  page.on("dialog", dialog => void dialog.accept());
+  await page.reload();
+  await expect(await region(page, "header")).toContainText(MAIN_HEADER, {
+    timeout: 30_000,
+  });
+  await openSettings(page);
+  await expect(
+    page
+      .getByRole("dialog", { name: "Settings" })
+      .getByRole("combobox", { name: "Header & footer" })
+      .locator('[data-slot="hf-name"]')
+  ).toHaveText(`Site default (${MAIN})`);
 });
