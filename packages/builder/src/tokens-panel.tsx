@@ -373,6 +373,7 @@ function VariablesView({
             duplicate,
             usage,
             held,
+            fresh,
             forget,
             search,
           })}
@@ -450,6 +451,8 @@ interface RowsHost {
   readonly duplicate: (entry: VariableEntry) => void;
   /** The new row a search would hide, shown marked "New" meanwhile. */
   readonly held: string | null;
+  /** The row just added or copied, never saved, while its editor is open. */
+  readonly fresh: string | null;
 }
 
 /** The groups a search leaves, or that none match. */
@@ -499,7 +502,11 @@ function VariableGroups({
                 onOpenChange={open => rows.toggle(entry.row.key, open)}
                 onChange={rows.commitFrom(entry.row.key)}
                 onDuplicate={() => rows.duplicate(entry)}
-                marked={rows.held === entry.row.key}
+                fresh={
+                  rows.fresh === entry.row.key
+                    ? { marked: rows.held === entry.row.key }
+                    : undefined
+                }
                 usage={rows.usage}
                 reach={rowReach(entry, rows.usage)}
                 onRemoved={() => rows.onRemoved(entry.row.key)}
