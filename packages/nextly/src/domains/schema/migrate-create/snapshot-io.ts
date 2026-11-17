@@ -160,7 +160,7 @@ function templateEntityList(value: unknown): TemplateEntity[] {
  * each collection and Single with its top-level fields. The one reading of
  * that file's content.
  */
-export function templateEntitiesOf(parsed: unknown): TemplateEntities {
+function templateEntitiesOf(parsed: unknown): TemplateEntities {
   const file = (parsed ?? {}) as Record<string, unknown>;
   return {
     collections: templateEntityList(file.collections),
