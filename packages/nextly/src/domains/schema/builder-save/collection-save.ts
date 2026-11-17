@@ -683,7 +683,7 @@ function whatItDoes(op: Operation): WhatItDoes {
 function conversionOf(
   table: string,
   op: Operation
-): Omit<ColumnConversion, "change"> {
+): Omit<ColumnConversion, keyof WhatItDoes> {
   switch (op.type) {
     case "change_column_type":
       return { table, column: op.columnName, from: op.fromType, to: op.toType };
