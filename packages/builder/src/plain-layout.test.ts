@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  planChildSize,
   planAlign,
   planArrange,
   planChildHeight,
@@ -20,6 +21,7 @@ import {
   planPlain,
   readArrange,
   readChildHeight,
+  readChildSize,
   readChildWidth,
   type ChildFit,
   type ParentArrangement,
@@ -835,5 +837,56 @@ describe("Inside its parent with a self-alignment no choice writes", () => {
     expect(readChildWidth(block.tiers(), "base", "grid")).toEqual({
       choice: "custom",
     });
+  });
+});
+
+describe("Inside its parent: vertical flow and a parent's Align", () => {
+  it("fits an automatic width in vertical flow, and fills it with 100%", () => {
+    const block = new Block();
+    block.flow = { writingMode: "vertical-rl", rtl: false };
+    expect(readChildWidth(block.tiers(), "base", "flow")).toEqual({
+      choice: "fit",
+    });
+    block.apply(planChildWidth(block.tiers(), "base", "flow", "fill"));
+    expect(block.own.base.width).toBe("100%");
+  });
+
+  it("reads an automatic size under a parent Align that doesn't stretch as Custom", () => {
+    const block = new Block();
+    expect(
+      readChildSize(block.tiers(), "base", "column", "width", {
+        alignItems: "center",
+      })
+    ).toEqual({ choice: "custom" });
+    // Under one that stretches it is Fill, as before.
+    expect(
+      readChildSize(block.tiers(), "base", "column", "width", {
+        alignItems: "stretch",
+      })
+    ).toEqual({ choice: "fill" });
+  });
+
+  it("keeps Fixed under a parent Align that doesn't stretch, and its size editable", () => {
+    // Fixed leaves the alignment to the parent, so the block stays centred
+    // at the size it was given, and reads as Fixed with that size.
+    const grid = new Block();
+    grid.apply(planChildSize(grid.tiers(), "base", "grid", "width", "fixed", "200px"));
+    expect(
+      readChildSize(grid.tiers(), "base", "grid", "width", {
+        justifyItems: "center",
+      })
+    ).toEqual({ choice: "fixed", size: "200px" });
+    const row = new Block();
+    row.apply(planChildSize(row.tiers(), "base", "row", "height", "fixed", "80px"));
+    expect(
+      readChildSize(row.tiers(), "base", "row", "height", {
+        alignItems: "center",
+      })
+    ).toEqual({ choice: "fixed", size: "80px" });
+    // A centring of the block's own is no choice's, so it stays Custom.
+    row.own.base.alignSelf = "center";
+    expect(
+      readChildSize(row.tiers(), "base", "row", "height")
+    ).toEqual({ choice: "custom" });
   });
 });
