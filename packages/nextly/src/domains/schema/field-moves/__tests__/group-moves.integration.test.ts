@@ -250,6 +250,14 @@ async function migrateFolder(
   clearRegistryRowCache();
 }
 
+/** The newest migration file the saves wrote. */
+async function newestFile(): Promise<string> {
+  const files = (await readdir(join(basePath, "migrations")))
+    .filter(f => f.endsWith(".sql"))
+    .sort();
+  return readFile(join(basePath, "migrations", files.at(-1) ?? ""), "utf-8");
+}
+
 /** `nextly migrate:down` of the newest migration on `t`'s database, reading the files the saves wrote. */
 async function migrateDown(t: TestNextly): Promise<void> {
   const adapter = t.adapter as unknown as DrizzleAdapter;
@@ -423,6 +431,106 @@ describe.each(getConfiguredTestDialects())(
       expect(await required()).toBe(false);
     });
 
+    describe("a required field moved out of a group, onto a table holding entries", () => {
+      const summary: Field = { name: "summary", type: "text", required: true };
+      const inGroup = [group("meta", [NOTE, summary])];
+      const onRow = [summary, group("meta", [NOTE])];
+      const out = [{ from: ["meta", "summary"], to: ["summary"] }];
+
+      async function seedSummaries(t: TestNextly): Promise<void> {
+        await createPosts(t, SLUG, { fields: inGroup });
+        for (const [title, text] of [
+          ["One", "First"],
+          ["Two", "Second"],
+        ] as const) {
+          await t.nextly.create({
+            collection: SLUG,
+            data: { title, slug: title.toLowerCase(), meta: { summary: text } },
+          });
+        }
+      }
+      const summaryColumn = async (t: TestNextly) =>
+        (
+          await readTableDefinition(
+            statement => run(t, statement),
+            dialect,
+            TABLE
+          )
+        ).columns.find(column => column.name === "summary");
+
+      it("keeps every value, the column required once they are in", async () => {
+        const t = await boot(dialect);
+        await seedSummaries(t);
+
+        await save(t, onRow, out);
+
+        expect((await summaryColumn(t))?.nullable).toBe(false);
+        const rows = await run<{ summary: string }>(
+          t,
+          `SELECT ${q("summary")} AS summary FROM ${q(TABLE)} ORDER BY ${q("slug")}`
+        );
+        expect(rows.map(row => row.summary)).toEqual(["First", "Second"]);
+      });
+
+      it("is refused, nothing changed, when an entry holds no value to move", async () => {
+        const t = await boot(dialect);
+        await seedSummaries(t);
+        await run(
+          t,
+          `UPDATE ${q(TABLE)} SET ${q("meta")} = '{}' WHERE ${q("slug")} = 'two'`
+        );
+        const stated = await definition();
+
+        await expect(save(t, onRow, out)).rejects.toThrow(
+          expect.objectContaining({
+            message: expect.stringMatching(
+              /1 row|holds no value|hold no value/
+            ),
+          })
+        );
+
+        expect(await summaryColumn(t)).toBeUndefined();
+        expect(await definition()).toBe(stated);
+        const one = (await readAll(t)).get("one");
+        expect((one?.meta as Record<string, unknown>).summary).toBe("First");
+      });
+
+      it("refuses deleting the entries without a value, which would run before the values arrive", async () => {
+        const t = await boot(dialect);
+        await seedSummaries(t);
+        const stated = await definition();
+
+        await expect(
+          dispatchCollections(
+            {} as ServiceContainer,
+            "applySchemaChanges",
+            { collectionName: SLUG },
+            {
+              fields: onRow,
+              confirmed: true,
+              schemaVersion: await versionOf(t, SLUG),
+              hints: { moves: out },
+              eventResolutions: [
+                {
+                  kind: "delete_nonconforming",
+                  eventId: `add_required_field_no_default:${TABLE}.summary`,
+                },
+              ],
+            }
+          )
+        ).rejects.toThrow(
+          expect.objectContaining({
+            publicData: {
+              errors: [expect.objectContaining({ code: "FIELD_MOVE_REFUSED" })],
+            },
+          })
+        );
+
+        expect(await definition()).toBe(stated);
+        expect([...(await readAll(t)).keys()].sort()).toEqual(["one", "two"]);
+      });
+    });
+
     it("from one group to another, whose columns both stand, in a file of its own", async () => {
       const t = await boot(dialect);
       const summary: Field = { name: "summary", type: "text" };
@@ -442,8 +550,13 @@ describe.each(getConfiguredTestDialects())(
         [{ from: ["meta", "summary"], to: ["extra", "summary"] }]
       );
 
-      // No column changes, and the save still writes and runs the file that moves the values.
+      // No column changes, and the save still writes and runs the file that moves the values,
+      // naming the collection it changes and carrying its registry row, so a deploy's database
+      // reads the field where the file put its values.
       expect(await filesWritten()).toBe(files + 1);
+      const written = await newestFile();
+      expect(written).toMatch(/^-- Collections: gmv_posts$/m);
+      expect(written).toContain("dynamic_collections");
       const one = (await readAll(t)).get("one");
       expect((one?.extra as Record<string, unknown>).summary).toBe("First");
       expect(
@@ -563,14 +676,7 @@ describe.each(getConfiguredTestDialects())(
 
     /** The `-- Deletes:` lines of the newest migration file the saves wrote. */
     async function newestDeletesLines(): Promise<string> {
-      const files = (await readdir(join(basePath, "migrations")))
-        .filter(f => f.endsWith(".sql"))
-        .sort();
-      const written = await readFile(
-        join(basePath, "migrations", files.at(-1) ?? ""),
-        "utf-8"
-      );
-      return written
+      return (await newestFile())
         .split("\n")
         .filter(line => line.startsWith("-- Deletes:"))
         .join("\n");
