@@ -390,6 +390,23 @@ function fieldGroupFieldsAt(
 }
 
 /**
+ * The field-group fields a populate of `fields` reads at this level: those
+ * {@link fieldGroupFieldsAt} finds, narrowed to the ones `select` names when it names any. Both
+ * populate paths read exactly these, and a caller asks the same function whether a read populates
+ * any field group at all, so work done only for that population (the languages its translations
+ * skip) is not paid by a read that populates none.
+ */
+export function fieldGroupFieldsToPopulate(
+  fields: readonly FieldConfig[],
+  select?: Record<string, boolean>
+): FieldGroupFieldConfig[] {
+  const fieldGroups = fieldGroupFieldsAt(fields);
+  // An absent or empty selection selects every field.
+  if (!select || Object.keys(select).length === 0) return fieldGroups;
+  return fieldGroups.filter(field => select[field.name] === true);
+}
+
+/**
  * Whether an error is the component's own `comp_*` table simply not existing yet.
  *
  * The companion `_locales` reads no longer decide existence this way — they are told, because
@@ -956,12 +973,9 @@ export class FieldGroupQueryService extends BaseService {
 
     const results = languages.map(() => ({ ...entry }));
 
-    for (const field of fieldGroupFieldsAt(fields)) {
+    // The selected field groups, from the one function callers also ask before paying for this read.
+    for (const field of fieldGroupFieldsToPopulate(fields, select)) {
       const fieldName = field.name;
-
-      if (!this.shouldPopulateField(fieldName, select)) {
-        continue;
-      }
 
       // References resolved once, before the dispatch AND its failure path:
       // the populate default for a migrated dynamic zone is a list, and the
@@ -1135,10 +1149,8 @@ export class FieldGroupQueryService extends BaseService {
     if (entryIds.length === 0) return entries;
 
     const componentFields: FieldGroupFieldConfig[] = [];
-    for (const field of fieldGroupFieldsAt(fields)) {
-      if (!this.shouldPopulateField(field.name, select)) {
-        continue;
-      }
+    // The selected field groups, from the one function callers also ask before paying for this read.
+    for (const field of fieldGroupFieldsToPopulate(fields, select)) {
       // Resolved once, at collection: every reader below — the dispatch,
       // the slug reads, and the populate default for a failed or absent
       // entry — sees the references on the keys it opens, whichever
@@ -2034,16 +2046,6 @@ export class FieldGroupQueryService extends BaseService {
       return [];
     }
     return null;
-  }
-
-  private shouldPopulateField(
-    fieldName: string,
-    select?: Record<string, boolean>
-  ): boolean {
-    if (!select || Object.keys(select).length === 0) {
-      return true;
-    }
-    return select[fieldName] === true;
   }
 
   private async expandComponentRelationships(

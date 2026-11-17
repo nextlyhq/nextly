@@ -155,6 +155,7 @@ import {
   withFieldGroupEvidence,
 } from "../../field-groups/live-read-access";
 import { passwordReachOf } from "../../field-groups/password-reach";
+import { fieldGroupFieldsToPopulate } from "../../field-groups/services/field-group-query-service";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
@@ -1246,16 +1247,30 @@ export class CollectionQueryService extends BaseService {
   /**
    * On a public read, the languages each of `ids` is not published in, by id: what the field
    * groups it holds read their translations past (`skipLanguages`), as its own translated fields
-   * do. `undefined` where nothing is skipped; see `languagesNotPublishedIn`.
+   * do. `undefined` where nothing is skipped; see `languagesNotPublishedIn`. `populates` is the
+   * fields and selection the field-group population reads with: a read that populates no field
+   * group skips nothing, and pays no query for it.
    */
   private async componentSkipLanguages(
     companion: CompanionSchema | null | undefined,
     statusFilter: StatusFilter | null,
     ids: readonly (string | number)[],
-    revealed: Iterable<unknown>
+    revealed: Iterable<unknown>,
+    populates: {
+      fields: readonly FieldConfig[];
+      select: Record<string, boolean> | undefined;
+    }
   ): Promise<Map<string, ReadonlySet<string>> | undefined> {
-    // Asked before the readiness probe, so a trusted or draft read pays nothing for it.
-    if (statusFilter?.isPublicRead !== true || companion?.hasStatus !== true) {
+    // Asked before the readiness probe, so a trusted or draft read pays nothing for it. Whether the
+    // read populates a field group is the population's own answer (`fieldGroupFieldsToPopulate`),
+    // so the languages are read exactly where a field group will be read with them.
+    if (
+      statusFilter?.isPublicRead !== true ||
+      companion?.hasStatus !== true ||
+      !this.fieldGroupDataService ||
+      fieldGroupFieldsToPopulate(populates.fields, populates.select).length ===
+        0
+    ) {
       return undefined;
     }
     return languagesNotPublishedIn({
@@ -4380,7 +4395,9 @@ export class CollectionQueryService extends BaseService {
               (id): id is string | number =>
                 typeof id === "string" || typeof id === "number"
             ),
-          revealed
+          revealed,
+          // The fields and selection the population below reads with.
+          { fields: fields as FieldConfig[], select: params.select }
         );
         expandedEntries = await fieldGroupData.populateComponentDataMany({
           entries: expandedEntries,
@@ -5844,7 +5861,9 @@ export class CollectionQueryService extends BaseService {
               companion,
               statusFilter,
               [entryId],
-              decisions.reveal
+              decisions.reveal,
+              // The fields and selection this population reads with.
+              { fields: fields as FieldConfig[], select: params.select }
             )
           )?.get(String(entryId)),
           // As on the list path: a related row reached through a component

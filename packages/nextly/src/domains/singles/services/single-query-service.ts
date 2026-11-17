@@ -133,6 +133,7 @@ import {
   withFieldGroupEvidence,
 } from "../../field-groups/live-read-access";
 import { passwordReachOf } from "../../field-groups/password-reach";
+import { fieldGroupFieldsToPopulate } from "../../field-groups/services/field-group-query-service";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
@@ -1599,10 +1600,12 @@ export class SingleQueryService extends BaseService {
         translations,
         // Read as a due release will publish them, as the read admitted it.
         revealed: new Set<unknown>(revealed),
-        // The languages a public reader's field groups fall back past.
+        // The languages a public reader's field groups fall back past, asked of the fields the
+        // assembly populates field groups from (`readMeta`'s, narrowed by `select`).
         componentSkipLanguages: await this.componentSkipLanguages(
           slug,
           singleMeta,
+          readMeta.fields,
           doc,
           statusFilter,
           revealed
@@ -1842,22 +1845,28 @@ export class SingleQueryService extends BaseService {
   /**
    * On a public read, the languages the Single is not published in: what the field groups it
    * holds read their translations past, as its own translated fields do. `undefined` where nothing
-   * is skipped; see `languagesNotPublishedIn`.
+   * is skipped; see `languagesNotPublishedIn`. `populated` is the fields the read populates field
+   * groups from: a read that populates none skips nothing, and pays no query for it.
    */
   private async componentSkipLanguages(
     slug: string,
     singleMeta: DynamicSingleRecord,
+    populated: readonly FieldConfig[],
     doc: SingleDocument,
     statusFilter: StatusFilter | null,
     revealed: readonly string[]
   ): Promise<ReadonlySet<string> | undefined> {
     const id = (doc as { id?: unknown }).id;
     const companion = this.companionOf(slug, singleMeta);
-    // Asked before the readiness probe, so a trusted or draft read pays nothing for it.
+    // Asked before the readiness probe, so a trusted or draft read pays nothing for it. Whether the
+    // read populates a field group is the population's own answer (`fieldGroupFieldsToPopulate`):
+    // the assembly hands it `populated` with no selection, which `readMeta` has already applied.
     if (
       statusFilter?.isPublicRead !== true ||
       companion?.hasStatus !== true ||
-      (typeof id !== "string" && typeof id !== "number")
+      (typeof id !== "string" && typeof id !== "number") ||
+      !this.fieldGroupDataService ||
+      fieldGroupFieldsToPopulate(populated).length === 0
     ) {
       return undefined;
     }
