@@ -17,8 +17,9 @@
  *   starts twice with migrations at start off and twice with them on, each
  *   pair begun once by the Direct API and once by a request. After each, the
  *   database is compared with a copy taken before the first: every table's
- *   columns and indexes, every row of every table, and where each
- *   generated key stands.
+ *   columns and indexes, every row of every table (an entry the newer build
+ *   added among them, with a value in the newer field), where each generated
+ *   key stands, and on PostgreSQL and MySQL which object each table is.
  * - The older build runs `nextly migrate`: it stops with exit code 3 naming
  *   the migration its folder lacks, and the database, the ledger included,
  *   still matches the copy.
@@ -28,9 +29,11 @@
  * timestamp repair) was written by the starts before the copy, and a later
  * start has none of it left to write.
  *
- * Three controls show the comparison sees a write. A row inserted into a
+ * Controls show the comparison sees a write. A row inserted into a
  * table with a generated key and deleted again leaves every row as it was
- * and the next key moved on, which the copy shows. A development start of the
+ * and the next key moved on, which the copy shows; so does a PostgreSQL
+ * sequence marked as not yet handed out, and a table dropped and made again
+ * as it was. A development start of the
  * older build, which still syncs the registry from its configuration, leaves
  * the collection's registry row different from the copy. And with the newer
  * build's files back in its folder and a migration of its own written, the
@@ -148,13 +151,20 @@ const PLUGIN = definePlugin({
 /** The copy's entry for where the generated keys stand, beside the tables. */
 const GENERATED_KEYS = "(generated keys)";
 
+/** The entry the newer build adds: a value in the older field and the newer. */
+const ENTRY = { title: "obl first title", summary: "obl first summary" };
+
 /** How a start is begun. */
 type Entry = "the Direct API" | "a request";
 
-/** What a database holds: each table's columns, indexes and rows. */
+/**
+ * What a database holds: each table's columns, indexes and rows, and which
+ * object it is, where the dialect says (a table dropped and made again is
+ * another object, though it reads the same).
+ */
 type Copy = Record<
   string,
-  { columns: string[]; indexes: string[]; rows: string[] }
+  { identity: string[]; columns: string[]; indexes: string[]; rows: string[] }
 >;
 
 describe.each(getConfiguredTestDialects())(
@@ -407,7 +417,7 @@ describe.each(getConfiguredTestDialects())(
       try {
         const out: Copy = {};
         const of = (table: string) =>
-          (out[table] ??= { columns: [], indexes: [], rows: [] });
+          (out[table] ??= { identity: [], columns: [], indexes: [], rows: [] });
         const text = (row: Record<string, unknown>, name: string) =>
           String(row[name] ?? row[name.toUpperCase()]);
         const { columns, indexes } = structureQueries();
@@ -419,6 +429,19 @@ describe.each(getConfiguredTestDialects())(
           const { t: _t, T: _T, ...rest } = row;
           of(text(row, "t")).indexes.push(line(rest));
         }
+        // SQLite keeps nothing that tells a table from one made again in its
+        // place, so there a table is known by its definition alone.
+        const identities =
+          dialect === "postgresql"
+            ? "SELECT c.relname::text AS t, c.oid::text AS o FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = current_schema() AND c.relkind = 'r'"
+            : dialect === "mysql"
+              ? "SELECT table_name AS t, CAST(create_time AS CHAR) AS o FROM information_schema.tables WHERE table_schema = DATABASE()"
+              : undefined;
+        if (identities !== undefined) {
+          for (const row of await rowsOf(adapter, identities)) {
+            of(text(row, "t")).identity.push(text(row, "o"));
+          }
+        }
         for (const [table, held] of Object.entries(out)) {
           const rows = await rowsOf(adapter, `SELECT * FROM ${q}${table}${q}`);
           held.rows = rows.map(line).sort();
@@ -426,6 +449,7 @@ describe.each(getConfiguredTestDialects())(
           held.indexes.sort();
         }
         out[GENERATED_KEYS] = {
+          identity: [],
           columns: [],
           indexes: [],
           rows: await generatedKeys(adapter, Object.keys(out)),
@@ -447,14 +471,22 @@ describe.each(getConfiguredTestDialects())(
       tables: string[]
     ): Promise<string[]> {
       if (dialect === "postgresql") {
-        return (
-          await rowsOf(
+        // Each sequence read itself: its value, and whether that value has
+        // been handed out, which decides whether the next key is it or the
+        // one after.
+        const names = await rowsOf(
+          adapter,
+          "SELECT sequencename::text AS name FROM pg_sequences WHERE schemaname = current_schema()"
+        );
+        const out: string[] = [];
+        for (const { name } of names) {
+          const [at] = await rowsOf(
             adapter,
-            "SELECT sequencename::text AS name, last_value::text AS at FROM pg_sequences WHERE schemaname = current_schema()"
-          )
-        )
-          .map(line)
-          .sort();
+            `SELECT last_value::text AS at, is_called AS called FROM "${String(name)}"`
+          );
+          out.push(line({ name, ...at }));
+        }
+        return out.sort();
       }
       if (dialect === "sqlite") {
         // The table is there only once a table with such a key is.
@@ -487,7 +519,9 @@ describe.each(getConfiguredTestDialects())(
     async function start(
       config: unknown,
       entry: Entry,
-      mode: "production" | "development" = "production"
+      mode: "production" | "development" = "production",
+      /** An entry to add to the collection through the started app. */
+      entryToAdd?: Record<string, unknown>
     ): Promise<{ warnings: string[]; refusal?: unknown; status?: number }> {
       vi.stubEnv("NODE_ENV", mode);
       _resetEnvCache();
@@ -509,6 +543,9 @@ describe.each(getConfiguredTestDialects())(
           const nextly = await getNextly({ config: served });
           await startSettled();
           await nextly.find({ collection: SLUG });
+          if (entryToAdd !== undefined) {
+            await nextly.create({ collection: SLUG, data: entryToAdd });
+          }
         } else {
           const handlers = createDynamicHandlers({ config: served });
           const path = ["collections", SLUG, "entries"];
@@ -574,7 +611,12 @@ describe.each(getConfiguredTestDialects())(
       expect(await copy(), "the install recorded the plugin").not.toEqual(
         migratedOnly
       );
-      const second = await start(newer(), "the Direct API");
+      // With an entry that holds both fields, so the older build's starts are
+      // held to the content as well as the bookkeeping.
+      const second = await start(newer(), "the Direct API", "production", {
+        title: ENTRY.title,
+        summary: ENTRY.summary,
+      });
       expect(second.refusal, second.warnings.join("\n")).toBeUndefined();
 
       const aside = join(state.dir, "aside");
@@ -619,6 +661,9 @@ describe.each(getConfiguredTestDialects())(
       const registry = before["dynamic_collections"]?.rows.join("\n") ?? "";
       expect(registry).toContain("summary");
       expect(before["dc_obl_posts"]?.columns.join("\n")).toContain("summary");
+      const content = before["dc_obl_posts"]?.rows.join("\n") ?? "";
+      expect(content).toContain(ENTRY.title);
+      expect(content).toContain(ENTRY.summary);
       expect(await grantsOf("admin")).toContain(PLUGIN_PERMISSION);
       expect(before["permissions"]?.rows.join("\n")).toContain(
         PLUGIN_PERMISSION
@@ -668,14 +713,30 @@ describe.each(getConfiguredTestDialects())(
       expect(after["nextly_schema_events"]).not.toEqual(
         before["nextly_schema_events"]
       );
+      // And the entry's rows are compared: its newer field went with the
+      // column, and the copy shows it.
+      expect(after["dc_obl_posts"]?.rows).not.toEqual(
+        before["dc_obl_posts"]?.rows
+      );
+      expect(after["dc_obl_posts"]?.rows.join("\n")).toContain(ENTRY.title);
     }, 900_000);
 
-    it("the control: a row inserted and deleted again moves a generated key on", async () => {
+    it("the controls: a moved generated key and a table made again both show", async () => {
       await newerBuildDeployed();
-      const before = await copy();
-
       const adapter = await open();
       try {
+        // A table of the test's own, to drop and make again below.
+        const scratch = `CREATE TABLE ${q}obl_identity${q} (${q}id${q} INTEGER PRIMARY KEY)`;
+        await adapter.executeQuery(scratch);
+        const before = await copy();
+        /** `held` without `left`, to compare everything else. */
+        const without = (held: Copy, left: string) => ({
+          ...held,
+          [left]: undefined,
+        });
+
+        // A row inserted and deleted again: every table as it was, and only
+        // the key's standing different.
         const moment =
           dialect === "sqlite" ? "1900000000" : "'2030-01-01 00:00:00'";
         await adapter.executeQuery(
@@ -684,17 +745,65 @@ describe.each(getConfiguredTestDialects())(
         await adapter.executeQuery(
           `DELETE FROM ${q}password_reset_tokens${q} WHERE ${q}identifier${q} = 'obl'`
         );
+        const moved = await copy();
+        expect(moved[GENERATED_KEYS]).not.toEqual(before[GENERATED_KEYS]);
+        expect(without(moved, GENERATED_KEYS)).toEqual(
+          without(before, GENERATED_KEYS)
+        );
+
+        if (dialect === "postgresql") {
+          // The sequence set to the value it has, marked as not handed out:
+          // the same value, and the next key one lower.
+          const [named] = await rowsOf(
+            adapter,
+            "SELECT pg_get_serial_sequence('password_reset_tokens', 'id') AS name"
+          );
+          const sequence = String(named?.name);
+          await adapter.executeQuery(
+            `SELECT setval('${sequence}', (SELECT last_value FROM ${sequence}), false)`
+          );
+          const unmarked = await copy();
+          expect(unmarked[GENERATED_KEYS]).not.toEqual(moved[GENERATED_KEYS]);
+          // The one sequence, and only its mark: its value is the same.
+          const marks = (held: Copy) =>
+            held[GENERATED_KEYS]?.rows.filter(row =>
+              row.includes("password_reset_tokens")
+            );
+          expect(marks(moved)?.length).toBe(1);
+          expect(marks(moved)?.[0]).toContain('["called",true]');
+          expect(marks(unmarked)).toEqual(
+            marks(moved)?.map(row =>
+              row.replace('["called",true]', '["called",false]')
+            )
+          );
+        }
+
+        if (dialect !== "sqlite") {
+          // The table dropped and made again as it was: the same columns,
+          // indexes and rows, and another object. MySQL tells them apart by
+          // the second each was made in, so a second passes first.
+          if (dialect === "mysql") {
+            await adapter.executeQuery("SELECT SLEEP(1.1)");
+          }
+          const made = await copy();
+          await adapter.executeQuery(`DROP TABLE ${q}obl_identity${q}`);
+          await adapter.executeQuery(scratch);
+          const again = await copy();
+          expect(again["obl_identity"]?.identity).not.toEqual(
+            made["obl_identity"]?.identity
+          );
+          expect(again["obl_identity"]?.identity.length).toBe(1);
+          expect({ ...again["obl_identity"], identity: [] }).toEqual({
+            ...made["obl_identity"],
+            identity: [],
+          });
+          expect(without(again, "obl_identity")).toEqual(
+            without(made, "obl_identity")
+          );
+        }
       } finally {
         await adapter.disconnect().catch(() => undefined);
       }
-
-      const after = await copy();
-      // Every table as it was, and only the key's standing different.
-      expect(after[GENERATED_KEYS]).not.toEqual(before[GENERATED_KEYS]);
-      expect({ ...after, [GENERATED_KEYS]: undefined }).toEqual({
-        ...before,
-        [GENERATED_KEYS]: undefined,
-      });
     }, 900_000);
 
     it("the control: a development start of the older build rewrites the registry row", async () => {
