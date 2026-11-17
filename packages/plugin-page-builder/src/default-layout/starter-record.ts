@@ -14,7 +14,10 @@
  *
  * The row also says the starter was made, once and for good: a later repair
  * that re-seeds a lost default finds it and creates an empty set instead, so
- * a site that deleted its starter on purpose never gets it back.
+ * a site that deleted its starter on purpose never gets it back. It names the
+ * set the starter was made for, so a run that finds a claim on a site whose
+ * settings record no seed can tell another run still finishing (its set is
+ * there) from a seed that was lost (it is not).
  *
  * ## The fingerprint
  *
@@ -49,7 +52,19 @@ export interface StarterPart {
 }
 
 /** The starter header and footer the seed made. */
-export type StarterRecord = { readonly [A in StarterArea]: StarterPart };
+export type StarterComponents = { readonly [A in StarterArea]: StarterPart };
+
+/** What is recorded: the starter components, and the set made for them. */
+export interface StarterRecord extends StarterComponents {
+  /** The id of the set the seed made to hold them. */
+  readonly set: string;
+}
+
+/** The recorded starter, and when it was claimed (null when unknown). */
+export interface StarterClaim {
+  readonly record: StarterRecord | "made";
+  readonly claimedAt: Date | null;
+}
 
 /**
  * How many hex digits of the hash are kept: 128 bits, far past any chance of
@@ -86,9 +101,10 @@ export function starterFingerprint(document: unknown): string {
     .slice(0, FINGERPRINT_DIGITS);
 }
 
-/** The record as the row stores it: four words, header first. */
+/** The record as the row stores it: five words, the set first. */
 export function encodeStarterRecord(record: StarterRecord): string {
   return [
+    record.set,
     record.header.id,
     record.header.fingerprint,
     record.footer.id,
@@ -99,14 +115,16 @@ export function encodeStarterRecord(record: StarterRecord): string {
 /** The row's value as a record, or null for one this code did not write. */
 export function decodeStarterRecord(value: string): StarterRecord | null {
   const words = value.split(" ");
-  if (words.length !== 4 || words.some(word => word === "")) return null;
-  const [headerId, headerPrint, footerId, footerPrint] = words as [
+  if (words.length !== 5 || words.some(word => word === "")) return null;
+  const [set, headerId, headerPrint, footerId, footerPrint] = words as [
+    string,
     string,
     string,
     string,
     string,
   ];
   return {
+    set,
     header: { id: headerId, fingerprint: headerPrint },
     footer: { id: footerId, fingerprint: footerPrint },
   };
@@ -114,7 +132,7 @@ export function decodeStarterRecord(value: string): StarterRecord | null {
 
 /** Which area of the record, if any, `componentId` and `document` are untouched in. */
 export function untouchedStarterArea(
-  record: StarterRecord | null,
+  record: StarterComponents | null,
   componentId: string,
   publishedDocument: unknown
 ): StarterArea | null {
@@ -138,6 +156,8 @@ export interface StarterRecordStore {
    * this code cannot read (it still means the starter was made), or null.
    */
   read(): Promise<StarterRecord | "made" | null>;
+  /** The recorded starter with when it was claimed, or null for none. */
+  readClaim(): Promise<StarterClaim | null>;
   /**
    * Record `record` as the site's one starter. False, writing nothing, when a
    * starter is already recorded: another run made it first.
@@ -145,6 +165,19 @@ export interface StarterRecordStore {
   claim(record: StarterRecord): Promise<boolean>;
   /** Remove `record`, only while it is the one recorded. */
   release(record: StarterRecord): Promise<void>;
+}
+
+/** A stored time as a date, or null for one that cannot be read as one. */
+function dateOf(value: unknown): Date | null {
+  if (
+    !(value instanceof Date) &&
+    typeof value !== "string" &&
+    typeof value !== "number"
+  ) {
+    return null;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 /** Which database, so a lost race to insert the row is recognised. */
@@ -160,6 +193,17 @@ export function starterRecordStore(
       const value = await readSiteOption(db, STARTER_OPTION);
       if (value === null) return null;
       return decodeStarterRecord(value) ?? "made";
+    },
+    readClaim: async () => {
+      const row = (await db
+        .select(siteOptions)
+        .where(eq(db.table(siteOptions).name, STARTER_OPTION))
+        .first()) as { value?: unknown; createdAt?: unknown } | null;
+      if (row === null || typeof row.value !== "string") return null;
+      return {
+        record: decodeStarterRecord(row.value) ?? "made",
+        claimedAt: dateOf(row.createdAt),
+      };
     },
     claim: async record => {
       try {

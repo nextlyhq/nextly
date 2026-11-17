@@ -13,6 +13,11 @@
  * place it. The one thing that could name it, the seed's set, is deleted
  * first by its caller.
  *
+ * A delete that fails leaves nothing held: when the component is still there
+ * the run is closed, which lifts its fence, so the component can be deleted
+ * later through Delete component like any other. When the delete committed
+ * before failing, the tombstone is left as for a delete that succeeded.
+ *
  * @module component-delete/system-delete
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
@@ -27,8 +32,11 @@ const SYSTEM_STARTER = "system:page-builder";
 
 /** What the delete needs. */
 export interface SystemComponentDeleteDeps {
-  readonly nextly: Pick<Nextly, "delete">;
-  readonly runs: Pick<FenceStore, "open" | "advance" | "markDeleted">;
+  readonly nextly: Pick<Nextly, "delete" | "find">;
+  readonly runs: Pick<
+    FenceStore,
+    "open" | "advance" | "markDeleted" | "closeRun"
+  >;
   /** The RESOLVED collection components are stored in. */
   readonly components: string;
   readonly now?: () => Date;
@@ -55,14 +63,39 @@ export async function deleteUnplacedComponent(
     });
   }
   await deps.runs.advance(run.id, "preflight", "deleting", null);
-  await deps.nextly.delete({
-    collection: deps.components,
-    id,
-    overrideAccess: true,
-    context: { [COMPONENT_DELETE_CONTEXT_KEY]: run.id },
-  });
+  try {
+    await deps.nextly.delete({
+      collection: deps.components,
+      id,
+      overrideAccess: true,
+      context: { [COMPONENT_DELETE_CONTEXT_KEY]: run.id },
+    });
+  } catch (error) {
+    if (await stillThere(deps, id)) {
+      // Not deleted: the fence comes down, and nothing is left held.
+      await deps.runs.closeRun(run.id, ["preflight", "deleting"]);
+      throw error;
+    }
+  }
   await deps.runs.markDeleted(
     run.id,
     (deps.now ?? (() => new Date()))().toISOString()
   );
+}
+
+/** Whether component `id` is stored, in any state. */
+async function stillThere(
+  deps: Pick<SystemComponentDeleteDeps, "nextly" | "components">,
+  id: string
+): Promise<boolean> {
+  const found = await deps.nextly.find({
+    collection: deps.components,
+    where: { id: { equals: id } },
+    status: "all",
+    limit: 1,
+    depth: 0,
+    select: { id: true },
+    overrideAccess: true,
+  });
+  return found.items.length > 0;
 }

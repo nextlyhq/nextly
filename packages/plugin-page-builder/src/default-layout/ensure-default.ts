@@ -58,7 +58,7 @@ import { deleteUnrecordedLayout } from "../layout-removal/system-remove";
 
 import { moveEmptySeedPages, type EmptySeedParts } from "./empty-seed";
 import { seedSlug, seedTitle } from "./seed-names";
-import type { StarterRecord } from "./starter-record";
+import type { StarterComponents, StarterRecord } from "./starter-record";
 import {
   createStarterComponents,
   removeStarterComponents,
@@ -118,6 +118,8 @@ export interface EnsureDefaultDeps {
    * build one.
    */
   readonly starter?: StarterParts;
+  /** The clock a starter claim's age is judged by; the system's when absent. */
+  readonly now?: () => Date;
 }
 
 /**
@@ -248,7 +250,13 @@ async function reseed(
     return "kept";
   }
 
-  const starter = await seedStarter(deps, settings);
+  const plan = await starterPlan(deps, settings);
+  // Another run has claimed the starter and not yet recorded its seed: its
+  // seed is the one to keep, and the next run finds it recorded.
+  if (plan.kind === "wait") return "kept";
+  if (plan.kind === "adopt") return adoptStarterSet(deps, plan.set);
+  const starter =
+    plan.kind === "make" ? await seedStarter(deps, plan.starter) : NO_STARTER;
   let created: string | null;
   try {
     created = await createSeed(deps, settings.seededLayout, starter.areas);
@@ -289,7 +297,7 @@ async function reseed(
 /** What a seed makes beside its set: the starter, or nothing. */
 interface SeedStarter {
   /** The starter's two components, or null when this seed makes none. */
-  readonly made: StarterRecord | null;
+  readonly made: StarterComponents | null;
   /** The set's areas: the starter's header and footer, or none. */
   readonly areas: readonly { area: string; component: string }[];
   /** Record the starter as the site's one; false when another run did first. */
@@ -315,23 +323,29 @@ const NO_STARTER: SeedStarter = {
  */
 async function seedStarter(
   deps: EnsureDefaultDeps,
-  settings: LayoutSettings
+  starter: StarterParts
 ): Promise<SeedStarter> {
-  const starter = await starterToMake(deps, settings);
-  if (starter === null) return NO_STARTER;
   const made = await createStarterComponents({ ...deps, starter });
   const ids = [made.header.id, made.footer.id];
+  let claimed: StarterRecord | null = null;
   return {
     made,
     areas: areasOf(made),
-    claim: created => claimStarter(deps, starter, made, created),
-    release: () =>
-      starter.record.release(made).catch((error: unknown) => {
+    claim: async created => {
+      const record: StarterRecord = { ...made, set: created };
+      if (!(await claimStarter(deps, starter, record))) return false;
+      claimed = record;
+      return true;
+    },
+    release: async () => {
+      if (claimed === null) return;
+      await starter.record.release(claimed).catch((error: unknown) => {
         deps.warn(
           "[page-builder] the starter's record from a seed that did not finish could not be removed",
           { error: error instanceof Error ? error.message : String(error) }
         );
-      }),
+      });
+    },
     undo: () => removeStarterComponents({ ...deps, starter }, ids),
   };
 }
@@ -339,7 +353,7 @@ async function seedStarter(
 /** What the log says a seed did. */
 function seedWords(
   settings: LayoutSettings,
-  made: StarterRecord | null
+  made: StarterComponents | null
 ): string {
   if (settings.seededLayout !== null) {
     return "[page-builder] the seeded default header & footer set no longer exists, so an empty one was created and made the default";
@@ -350,22 +364,84 @@ function seedWords(
 }
 
 /**
- * The starter to make with this seed, or null: only for the first-ever seed
- * (no seed recorded, no starter recorded) on a site whose header and footer
- * the page builder draws.
+ * How long a starter may stay claimed with no seed recorded before the claim
+ * counts as a run that stopped part-way. Far past any seed's few writes, so a
+ * run still finishing is never taken over.
  */
-async function starterToMake(
+const CLAIM_GRACE_MS = 5 * 60_000;
+
+/**
+ * What this seed does about the starter.
+ *
+ * - `make`: the first-ever seed (no seed recorded, no starter claimed) on a
+ *   site whose header and footer the page builder draws.
+ * - `none`: an empty set. A re-seed of a lost default, a site that draws its
+ *   own, or a claim whose set is gone (the seed it was made for was lost).
+ * - `wait`: the starter is claimed and its set exists, but no seed is
+ *   recorded: another run is between its claim and its settings write.
+ * - `adopt`: the same, past {@link CLAIM_GRACE_MS}: that run stopped after its
+ *   claim, and its set becomes the seed.
+ */
+type StarterPlan =
+  | { readonly kind: "make"; readonly starter: StarterParts }
+  | { readonly kind: "none" }
+  | { readonly kind: "wait" }
+  | { readonly kind: "adopt"; readonly set: string };
+
+async function starterPlan(
   deps: EnsureDefaultDeps,
   settings: LayoutSettings
-): Promise<StarterParts | null> {
+): Promise<StarterPlan> {
   const starter = deps.starter;
-  if (starter === undefined || settings.seededLayout !== null) return null;
-  return (await starter.record.read()) === null ? starter : null;
+  if (starter === undefined || settings.seededLayout !== null) {
+    return { kind: "none" };
+  }
+  const claim = await starter.record.readClaim();
+  if (claim === null) return { kind: "make", starter };
+  if (claim.record === "made") return { kind: "none" };
+  const { set } = claim.record;
+  if (!(await layoutExists(deps.nextly, deps.slugs, set))) {
+    return { kind: "none" };
+  }
+  const now = (deps.now ?? (() => new Date()))().getTime();
+  const stopped =
+    claim.claimedAt !== null &&
+    now - claim.claimedAt.getTime() > CLAIM_GRACE_MS;
+  return stopped ? { kind: "adopt", set } : { kind: "wait" };
+}
+
+/**
+ * Record the set a stopped run made for the starter as the seed, and as the
+ * default while the default is still unusable. No person chose it, so nobody
+ * is credited.
+ */
+async function adoptStarterSet(
+  deps: EnsureDefaultDeps,
+  set: string
+): Promise<EnsureOutcome> {
+  const latest = await readLayoutSettings(deps.nextly, deps.slugs);
+  if (latest.seededLayout !== null) return "kept";
+  const keepDefault =
+    latest.defaultLayout !== null &&
+    (
+      await publishedLayoutIds(deps.nextly, deps.slugs, [latest.defaultLayout])
+    ).has(latest.defaultLayout);
+  await writeLayoutSettings(deps.nextly, deps.slugs, latest, {
+    seededLayout: set,
+    ...(keepDefault
+      ? {}
+      : { defaultLayout: set, defaultLayoutChangedBy: null }),
+  });
+  deps.warn(
+    "[page-builder] a seed stopped after making the starter header and footer, so the set it made was recorded as the default",
+    { seededLayout: set }
+  );
+  return "repointed";
 }
 
 /** The seed's areas: the starter's header and footer. */
 function areasOf(
-  made: StarterRecord
+  made: StarterComponents
 ): readonly { area: string; component: string }[] {
   return [
     { area: "header", component: made.header.id },
@@ -381,13 +457,12 @@ function areasOf(
 async function claimStarter(
   deps: EnsureDefaultDeps,
   starter: StarterParts,
-  made: StarterRecord,
-  created: string
+  made: StarterRecord
 ): Promise<boolean> {
   try {
     return await starter.record.claim(made);
   } catch (error) {
-    await removeSeed(deps, created);
+    await removeSeed(deps, made.set);
     await removeStarterComponents({ ...deps, starter }, [
       made.header.id,
       made.footer.id,

@@ -95,6 +95,8 @@ The starter header and footer are created once, on a new site only. A site that 
 default when it upgraded keeps it, and gets no starter header and footer. If the default is lost later and the plugin re-creates it,
 the new set is empty. A site that draws its header and footer in code
 (`pageBuilder({ siteHeaderFooter: "code" })`) gets an empty Main and no starter header and footer.
+So does a site that keeps its components in a collection of its own
+(`componentReadiness.collection`): the plugin writes nothing into a collection it doesn't own.
 
 A site set up on an earlier version keeps the name it was given then, such as **Site layout** or
 **Default (site)**; the plugin never renames it.

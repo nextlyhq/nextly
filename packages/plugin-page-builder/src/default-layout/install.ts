@@ -21,6 +21,8 @@ import { fenceStore } from "../host-rewrite/fence";
 import { registerLayoutRemovalGuard } from "../layout-removal/layout-removal-guard";
 import { registerPageReferenceGuard } from "../layout-removal/page-reference-guard";
 import { fenceOnExecutor, layoutRemovalStore } from "../layout-removal/store";
+import type { ComponentStore } from "../library-route";
+import { storeIsOwn } from "../plugin-definition/options";
 import type { SiteHeaderFooter } from "../site-header-footer";
 
 import { registerDefaultLayoutGuard } from "./default-layout-guard";
@@ -82,7 +84,11 @@ interface InstallContext {
  */
 export function installDefaultLayout(
   ctx: InstallContext,
-  options: { readonly siteHeaderFooter: SiteHeaderFooter }
+  options: {
+    readonly siteHeaderFooter: SiteHeaderFooter;
+    /** Where the site's components are stored, as the plugin was told. */
+    readonly componentStore: ComponentStore;
+  }
 ): DefaultLayoutSetup {
   const setup: DefaultLayoutSetup = {
     slugs: {
@@ -102,8 +108,12 @@ export function installDefaultLayout(
         ctx.services.collections.rewriteField(request, { as: "system" }),
     },
     // A site that draws its header and footer in code is seeded an empty
-    // set: no starter for it to draw twice.
-    ...(options.siteHeaderFooter === "page-builder"
+    // set: no starter for it to draw twice. So is a site whose components
+    // live in a collection of its own (`componentReadiness.collection`): the
+    // plugin can't know what that collection asks of a row, and writes no
+    // content into a collection it does not own.
+    ...(options.siteHeaderFooter === "page-builder" &&
+    storeIsOwn(options.componentStore)
       ? { starter: starterParts(ctx) }
       : {}),
   };

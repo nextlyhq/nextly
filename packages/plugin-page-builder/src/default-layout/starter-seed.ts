@@ -15,7 +15,7 @@ import { starterSlug, starterTitle, type StarterArea } from "./seed-names";
 import { starterDocument } from "./starter-documents";
 import {
   starterFingerprint,
-  type StarterRecord,
+  type StarterComponents,
   type StarterRecordStore,
 } from "./starter-record";
 import { relationId, type DefaultLayoutDirectApi } from "./store";
@@ -36,7 +36,7 @@ export interface StarterParts {
   readonly record: StarterRecordStore;
   /** Delete a component this run created and nothing places, as the system. */
   readonly removeComponent: (
-    nextly: Pick<DefaultLayoutDirectApi, "delete">,
+    nextly: Pick<DefaultLayoutDirectApi, "delete" | "find">,
     id: string
   ) => Promise<void>;
 }
@@ -57,7 +57,7 @@ export interface StarterSeedDeps {
  */
 export async function createStarterComponents(
   deps: StarterSeedDeps
-): Promise<StarterRecord> {
+): Promise<StarterComponents> {
   const taken = await takenNames(deps.nextly, deps.starter.components);
   const header = await createStarterComponent(deps, "header", taken);
   try {

@@ -297,6 +297,7 @@ export const pageBuilder = (
       // queue the repair when a write gets past that.
       state.defaultLayoutSetup = installDefaultLayout(ctx, {
         siteHeaderFooter: def.siteHeaderFooter,
+        componentStore: componentStoreOf(opts),
       });
 
       // How a blocks value is judged, and judged again in each write's

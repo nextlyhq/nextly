@@ -39,12 +39,14 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { Suspense, type ReactElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
-import { afterEach, describe, expect, it } from "vitest";
+import { defineCollection, text } from "nextly/config";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { COMPONENTS_SLUG } from "../collections/components";
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { PAGES_SLUG } from "../collections/pages";
 import { deleteUnplacedComponent } from "../component-delete/system-delete";
+import { BLOCKS_TYPE } from "../fields/blocksField";
 import { fenceStore } from "../host-rewrite/fence";
 import { readLayoutChoices } from "../layout-choices-route";
 import { layoutRemovalStore } from "../layout-removal/store";
@@ -94,6 +96,9 @@ function probePlugin(probe: Probe): PluginDefinition {
     },
   });
 }
+
+/** A host-owned component store, named by `componentReadiness`. */
+const HOST_STORE = "site_components";
 
 const heading = (id: string, text: string) => ({
   id,
@@ -157,21 +162,58 @@ describe.each(getConfiguredTestDialects())(
       };
     }
 
-    /** A fresh site, its boot's own seed settled. */
+    /**
+     * A fresh site, its boot's own seed settled: drawing its header and
+     * footer with the page builder, in code, or with its components in a
+     * collection of its own.
+     */
     async function boot(
-      mode: "page-builder" | "code" = "page-builder"
+      mode: "page-builder" | "code" | "host-store" = "page-builder"
     ): Promise<TestNextly> {
       current = await createTestNextly({
         dialect,
         seedPublic: true,
         plugins: [
-          pageBuilder(mode === "code" ? { siteHeaderFooter: "code" } : {}),
+          pageBuilder(
+            mode === "code"
+              ? { siteHeaderFooter: "code" }
+              : mode === "host-store"
+                ? {
+                    componentReadiness: {
+                      collection: HOST_STORE,
+                      field: "blocks",
+                    },
+                  }
+                : {}
+          ),
           probePlugin(probe),
         ],
+        ...(mode === "host-store"
+          ? {
+              collections: [
+                // A host's own store, as a site keeps its components: its own
+                // fields, none of the plugin's (no slug, no area, no status).
+                defineCollection({
+                  slug: HOST_STORE,
+                  fields: [
+                    text({ name: "title" }),
+                    {
+                      name: "blocks",
+                      type: BLOCKS_TYPE,
+                      blocks: { kinds: ["component"] },
+                    } as never,
+                  ],
+                }),
+              ],
+            }
+          : {}),
       });
-      // Joins the boot's own run, which `onReady` starts without awaiting.
+      // Joins the boot's own run, which `onReady` starts without awaiting,
+      // with what the installed plugin seeds with: a starter only where the
+      // plugin draws the header and footer from its own store (which
+      // `install.test.ts` pins).
       await ensureDefaultLayout(
-        deps(current, mode === "code" ? { starter: undefined } : {})
+        deps(current, mode === "page-builder" ? {} : { starter: undefined })
       );
       return current;
     }
@@ -201,15 +243,36 @@ describe.each(getConfiguredTestDialects())(
      * recorded, no starter, no components. The empty Main its boot made
      * stays, holding the name, so the next seed is "Main 2".
      */
-    async function asNeverSeeded(t: TestNextly): Promise<void> {
+    async function asNeverSeeded(
+      t: TestNextly,
+      { components }: { components: "none" | "kept" } = { components: "none" }
+    ): Promise<void> {
       await writeLayoutSettings(
         t.nextly,
         SLUGS,
         await readLayoutSettings(t.nextly, SLUGS),
         { seededLayout: null, defaultLayout: null }
       );
+      if (components === "kept") return;
       expect(await all(t, COMPONENTS_SLUG)).toEqual([]);
       expect(await recordRow()).toBeNull();
+    }
+
+    /** Remove a set past every hook, as an import or a script might. */
+    async function removeSetPastHooks(
+      t: TestNextly,
+      id: string
+    ): Promise<void> {
+      const registry = t.getService("collectionRegistryService") as unknown as {
+        getCollectionBySlug(
+          slug: string
+        ): Promise<{ tableName: string } | null>;
+      };
+      const table = (await registry.getCollectionBySlug(LAYOUTS_SLUG))!
+        .tableName;
+      await t.adapter.delete(table, {
+        and: [{ column: "id", op: "=", value: id }],
+      });
     }
 
     /** The default set, as stored. */
@@ -329,6 +392,7 @@ describe.each(getConfiguredTestDialects())(
       });
       const record = await starterRecordStore(db(), dialectOf()).read();
       expect(record).toMatchObject({
+        set: main.id,
         header: { id: byTitle.get("Starter header") },
         footer: { id: byTitle.get("Starter footer") },
       });
@@ -432,16 +496,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot();
       const main = await defaultSet(t);
       // Deleted by a path that runs no hooks, as an import or a script might.
-      const registry = t.getService("collectionRegistryService") as unknown as {
-        getCollectionBySlug(
-          slug: string
-        ): Promise<{ tableName: string } | null>;
-      };
-      const table = (await registry.getCollectionBySlug(LAYOUTS_SLUG))!
-        .tableName;
-      await t.adapter.delete(table, {
-        and: [{ column: "id", op: "=", value: String(main.id) }],
-      });
+      await removeSetPastHooks(t, String(main.id));
       const components = (await all(t, COMPONENTS_SLUG)).length;
       expect(await ensureDefaultLayout(deps(t))).toBe("seeded");
 
@@ -530,10 +585,12 @@ describe.each(getConfiguredTestDialects())(
 
       // Two inserts at once: one lands.
       const a: StarterRecord = {
+        set: "a-set",
         header: { id: "a-h", fingerprint: "1" },
         footer: { id: "a-f", fingerprint: "1" },
       };
       const b: StarterRecord = {
+        set: "b-set",
         header: { id: "b-h", fingerprint: "2" },
         footer: { id: "b-f", fingerprint: "2" },
       };
@@ -557,6 +614,178 @@ describe.each(getConfiguredTestDialects())(
       expect(await all(t, COMPONENTS_SLUG)).toEqual([]);
       expect((await all(t, LAYOUTS_SLUG)).length).toBe(sets);
       expect(await store.read()).toEqual(a);
+    });
+
+    it("gives a site whose components live in its own collection an empty Main, writing nothing there", async () => {
+      const t = await boot("host-store");
+      const main = await defaultSet(t);
+      expect(main).toMatchObject({ title: "Main", status: "published" });
+      expect(areasOf(main)).toEqual({});
+      expect(await all(t, HOST_STORE)).toEqual([]);
+      expect(await all(t, COMPONENTS_SLUG)).toEqual([]);
+      expect(await recordRow()).toBeNull();
+    });
+
+    it("lets a run that finds the starter claimed, its seed not yet recorded, stop: the one default is the starter's", async () => {
+      const t = await boot("code");
+      await asNeverSeeded(t);
+      const sets = (await all(t, LAYOUTS_SLUG)).length;
+
+      // The winner pauses between its claim and its settings write.
+      let claimed = (): void => {};
+      const winnerClaimed = new Promise<void>(resolve => {
+        claimed = resolve;
+      });
+      let finish = (): void => {};
+      const loserDone = new Promise<void>(resolve => {
+        finish = resolve;
+      });
+      const paused = new Proxy(t.nextly, {
+        get(target, key, receiver) {
+          if (key === "updateSingle") {
+            return async (args: Parameters<typeof target.updateSingle>[0]) => {
+              claimed();
+              await loserDone;
+              return target.updateSingle(args);
+            };
+          }
+          return Reflect.get(target, key, receiver) as unknown;
+        },
+      }) as DefaultLayoutDirectApi;
+      // The other process has passed its settings check before the claim,
+      // and reads the starter's record only once the claim has landed.
+      const real = starterRecordStore(db(), dialectOf());
+      const late: StarterRecordStore = {
+        ...real,
+        read: async () => {
+          await winnerClaimed;
+          return real.read();
+        },
+        readClaim: async () => {
+          await winnerClaimed;
+          return real.readClaim();
+        },
+      };
+      // Another process: its own copy of the seed, which no in-process join
+      // ties to this one's.
+      vi.resetModules();
+      const { ensureDefaultLayout: otherProcess } = await import(
+        "./ensure-default"
+      );
+
+      const winner = ensureDefaultLayout(deps(t, { nextly: paused }));
+      const loser = otherProcess(deps(t, { starter: starterParts(late) }));
+      expect(await loser).toBe("kept");
+      finish();
+      expect(await winner).toBe("seeded");
+
+      const record = await real.read();
+      if (record === null || record === "made") throw new Error("no record");
+      const main = await defaultSet(t);
+      expect(main.id).toBe(record.set);
+      expect(areasOf(main)).toEqual({
+        header: record.header.id,
+        footer: record.footer.id,
+      });
+      expect((await all(t, LAYOUTS_SLUG)).length).toBe(sets + 1);
+      expect(await all(t, COMPONENTS_SLUG)).toHaveLength(2);
+    });
+
+    it("records the set of a seed that stopped after its claim, once the claim is old, and re-seeds empty when that set is gone", async () => {
+      const t = await boot("code");
+      await asNeverSeeded(t);
+      expect(await ensureDefaultLayout(deps(t))).toBe("seeded");
+      const record = await starterRecordStore(db(), dialectOf()).read();
+      if (record === null || record === "made") throw new Error("no record");
+      // The run stopped between its claim and its settings write.
+      await asNeverSeeded(t, { components: "kept" });
+      const sets = (await all(t, LAYOUTS_SLUG)).length;
+
+      // Fresh: another run may still be finishing, so nothing is made.
+      expect(await ensureDefaultLayout(deps(t))).toBe("kept");
+      expect(
+        (await readLayoutSettings(t.nextly, SLUGS)).seededLayout
+      ).toBeNull();
+      // Old: the stopped run's set is the seed and the default.
+      const later = () => new Date(Date.now() + 60 * 60_000);
+      expect(await ensureDefaultLayout(deps(t, { now: later }))).toBe(
+        "repointed"
+      );
+      expect(await readLayoutSettings(t.nextly, SLUGS)).toMatchObject({
+        seededLayout: record.set,
+        defaultLayout: record.set,
+      });
+      expect((await all(t, LAYOUTS_SLUG)).length).toBe(sets);
+
+      // A claim whose set was lost: an empty re-seed, and no second starter.
+      await removeSetPastHooks(t, record.set);
+      await asNeverSeeded(t, { components: "kept" });
+      expect(await ensureDefaultLayout(deps(t, { now: later }))).toBe("seeded");
+      expect(areasOf(await defaultSet(t))).toEqual({});
+      expect(await all(t, COMPONENTS_SLUG)).toHaveLength(2);
+    });
+
+    it("lifts a failed system delete's fence, so the component can still be deleted like any other", async () => {
+      const t = await boot("code");
+      const create = async (slug: string) =>
+        String(
+          (
+            await t.nextly.create({
+              collection: COMPONENTS_SLUG,
+              data: {
+                title: slug,
+                slug,
+                content: {
+                  formatVersion: 1,
+                  kind: "component",
+                  nodes: [heading(`${slug}-h`, slug)],
+                },
+                status: "published",
+              },
+              overrideAccess: true,
+            })
+          ).item.id
+        );
+      const runs = fenceStore(db(), dialectOf());
+      const failing = (when: "before" | "after") =>
+        new Proxy(t.nextly, {
+          get(target, key, receiver) {
+            if (key === "delete") {
+              return async (args: Parameters<typeof target.delete>[0]) => {
+                if (when === "after") await target.delete(args);
+                throw new Error("the delete failed");
+              };
+            }
+            return Reflect.get(target, key, receiver) as unknown;
+          },
+        }) as DefaultLayoutDirectApi;
+      const remove = (nextly: DefaultLayoutDirectApi, id: string) =>
+        deleteUnplacedComponent(
+          { nextly, runs, components: COMPONENTS_SLUG },
+          id
+        );
+
+      // Refused before it committed: the component stays, and nothing holds it.
+      const kept = await create("kept");
+      await expect(remove(failing("before"), kept)).rejects.toThrow(
+        "the delete failed"
+      );
+      expect((await all(t, COMPONENTS_SLUG)).map(c => c.id)).toContain(kept);
+      expect(await runs.runFor(kept, "delete")).toBeNull();
+      expect([...(await runs.fenced([kept]))]).toEqual([]);
+      // So a later delete opens its own run and finishes.
+      await remove(t.nextly, kept);
+      expect((await all(t, COMPONENTS_SLUG)).map(c => c.id)).not.toContain(
+        kept
+      );
+
+      // Committed, then failed: done, with its tombstone.
+      const gone = await create("gone");
+      await remove(failing("after"), gone);
+      expect((await all(t, COMPONENTS_SLUG)).map(c => c.id)).not.toContain(
+        gone
+      );
+      expect((await runs.runFor(gone, "delete"))?.phase).toBe("deleted");
     });
   }
 );
