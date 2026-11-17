@@ -60,7 +60,7 @@ import {
   type VariableEntry,
   type VariableGroup,
 } from "./tokens-studio";
-import { ADDS, AddButton, EmptyGroup } from "./variable-adds";
+import { ADDS, AddRows, EmptyGroup } from "./variable-adds";
 import { VariableRow } from "./variable-row";
 import {
   combinedReach,
@@ -313,25 +313,22 @@ function VariablesView({
   placed: boolean;
 }): React.JSX.Element {
   const { mode } = header;
-  const { query, needle, searching, setQuery, clear, own } = useViewSearch(
+  const { query, needle, searching, setQuery, own } = useViewSearch(
     hosted.search,
     hosted.onSearch
   );
-  const { root, openKey, toggle, add, duplicate, forget, commitFrom } =
-    useOpenVariable({
-      tokens,
-      onChange,
-      currentTokens,
-      onAdded: clear,
-      onSettle,
-    });
+  const { root, openKey, fresh, toggle, add, duplicate, forget, commitFrom } =
+    useOpenVariable({ tokens, onChange, currentTokens, onSettle });
   const ownSearch = React.useRef<HTMLInputElement>(null);
   // Where focus goes once a variable is removed: the host's search where it
   // keeps one, else the view's own.
   const search = hosted.searchRef ?? ownSearch;
 
   const groups = useListedGroups(tokens, mode, hosted.groups);
-  const shown = searched(groups, needle);
+  // A row just added stays shown while its editor is open, though the
+  // search would hide it: added where the author is, it is not lost.
+  const shown = searched(groups, needle, fresh);
+  const held = heldOutside(groups, needle, fresh);
   const usage = useUsageOfRows(hosted, groups, issue);
 
   if (tokens === undefined) {
@@ -383,6 +380,7 @@ function VariablesView({
             commitFrom,
             duplicate,
             usage,
+            held,
             forget,
             search,
           })}
@@ -458,6 +456,8 @@ interface RowsHost {
   readonly onRemoved: (key: string) => void;
   /** Adds a copy of a row's variable right below it, and opens it. */
   readonly duplicate: (entry: VariableEntry) => void;
+  /** The new row a search would hide, shown marked "New" meanwhile. */
+  readonly held: string | null;
 }
 
 /** The groups a search leaves, or that none match. */
@@ -507,6 +507,7 @@ function VariableGroups({
                 onOpenChange={open => rows.toggle(entry.row.key, open)}
                 onChange={rows.commitFrom(entry.row.key)}
                 onDuplicate={() => rows.duplicate(entry)}
+                marked={rows.held === entry.row.key}
                 usage={rows.usage}
                 reach={rowReach(entry, rows.usage)}
                 onRemoved={() => rows.onRemoved(entry.row.key)}
@@ -713,19 +714,19 @@ function useOpenVariable({
   tokens,
   onChange,
   currentTokens,
-  onAdded,
   onSettle,
 }: {
   tokens: SiteTokenSet | undefined;
   onChange: (tokens: SiteTokenSet) => void;
   currentTokens: () => SiteTokenSet | undefined;
-  onAdded: () => void;
   /** The author is done with a variable; see `TokensPanelProps.onSettle`. */
   onSettle: (() => void) | undefined;
 }): {
   /** The panel's element, which rows are found in to be focused. */
   root: React.RefObject<HTMLDivElement | null>;
   openKey: string | null;
+  /** The row just added, while its editor is open; a search keeps it. */
+  fresh: string | null;
   toggle: (key: string, open: boolean) => void;
   add: (what: NewVariable) => void;
   duplicate: (entry: VariableEntry) => void;
@@ -737,6 +738,11 @@ function useOpenVariable({
   const [openKey, setOpenKey] = React.useState<string | null>(null);
   const [focusKey, setFocusKey] = React.useState<string | null>(null);
   const fresh = React.useRef(new Set<string>());
+  const [freshOpen, setFreshOpen] = React.useState<string | null>(null);
+  // What was pressed to add a variable: where focus goes back to when the
+  // new row is not drawn once its editor closes, as under a search it does
+  // not match.
+  const origin = React.useRef<HTMLElement | null>(null);
   // Focus a row after its key changed under it (a just-added variable named
   // after its label) or after the editor closed onto a new row.
   React.useEffect(() => {
@@ -744,7 +750,8 @@ function useOpenVariable({
     const row = root.current?.querySelector<HTMLElement>(
       `[data-variable-key="${CSS.escape(focusKey)}"]`
     );
-    row?.focus();
+    if (row) row.focus();
+    else if (origin.current?.isConnected === true) origin.current.focus();
     setFocusKey(null);
   }, [focusKey, tokens]);
 
@@ -768,18 +775,21 @@ function useOpenVariable({
     onChange(made.tokens);
     const key = tokenIdentity(added);
     fresh.current.add(key);
+    setFreshOpen(key);
     setOpenKey(key);
   };
 
+  // The search is kept: the new row is added where the author is.
   const add = (what: NewVariable): void => {
-    const made = addVariable(currentTokens() ?? tokens, what);
-    onAdded();
-    opened(made);
+    const active = root.current?.ownerDocument.activeElement;
+    origin.current = isHTMLElement(active) ? active : null;
+    opened(addVariable(currentTokens() ?? tokens, what));
   };
 
   const duplicate = (entry: VariableEntry): void => {
     const set = currentTokens() ?? tokens;
     if (set === undefined) return;
+    origin.current = null;
     opened(duplicateVariable(set, entry.row.at, entry.label));
   };
 
@@ -789,14 +799,14 @@ function useOpenVariable({
     // name typed there would otherwise miss the code name made below.
     commitFocusedField(root.current?.ownerDocument);
     setOpenKey(null);
+    setFreshOpen(null);
     // Settled after the renaming below, so a just-added variable's code name
     // is part of what is persisted with the rest of its edit.
     if (fresh.current.delete(key)) {
       const named = namedAfterLabel(currentTokens(), key);
-      if (named !== undefined) {
-        onChange(named.tokens);
-        setFocusKey(named.key);
-      }
+      if (named !== undefined) onChange(named.tokens);
+      // Its row once drawn again, or what added it where a search hides it.
+      setFocusKey(named?.key ?? key);
     }
     onSettle?.();
   };
@@ -804,6 +814,7 @@ function useOpenVariable({
   const forget = (key: string): void => {
     fresh.current.delete(key);
     setOpenKey(null);
+    setFreshOpen(null);
     onSettle?.();
   };
 
@@ -813,7 +824,16 @@ function useOpenVariable({
   };
 
   const commitFrom = useCommitsSettled(onChange, onSettle, openKey);
-  return { root, openKey, toggle, add, duplicate, forget, commitFrom };
+  return {
+    root,
+    openKey,
+    fresh: freshOpen,
+    toggle,
+    add,
+    duplicate,
+    forget,
+    commitFrom,
+  };
 }
 
 /**
@@ -869,19 +889,18 @@ function HiddenGroupAdds({
   );
   if (readOnly || searching || hidden.length === 0) return null;
   return (
-    <p className="nx-vars__hidden-adds">
+    <div className="nx-vars__hidden-adds">
       {hidden.map(group => (
-        <AddButton
+        <AddRows
           key={group.group}
-          adds={ADDS[group.group]}
+          group={group.group}
           onAdd={what => {
             openFold(folds, group.group);
             onAdd(what);
           }}
-          worded
         />
       ))}
-    </p>
+    </div>
   );
 }
 
@@ -903,16 +922,43 @@ const SHOWN_WHEN_FILLED: ReadonlySet<VariableGroup> = new Set<VariableGroup>([
 /**
  * The groups narrowed to a search, through the one search rule; with no
  * search, "Fonts and weights" and "Other values" only when they have rows.
+ * The row `kept` is listed at the end of its group whatever the search, so
+ * a variable just added stays in view while its editor is open.
  */
 function searched<
   G extends { group: VariableGroup; entries: readonly VariableEntry[] },
->(groups: readonly G[], needle: string): G[] {
+>(groups: readonly G[], needle: string, kept: string | null): G[] {
   if (needle === "") {
     return groups.filter(
       group => !SHOWN_WHEN_FILLED.has(group.group) || group.entries.length > 0
     );
   }
-  return searchVariableGroups(groups, needle);
+  const found = searchVariableGroups(groups, needle);
+  if (kept === null) return found;
+  return groups.flatMap(group => {
+    const hit = found.find(candidate => candidate.group === group.group);
+    const keep = group.entries.find(entry => entry.row.key === kept);
+    if (keep === undefined || hit?.entries.includes(keep) === true) {
+      return hit === undefined ? [] : [hit];
+    }
+    return [{ ...group, entries: [...(hit?.entries ?? []), keep] }];
+  });
+}
+
+/**
+ * The just-added row a search would hide, marked "New" while it is held in
+ * view; `null` when there is none or the search matches it.
+ */
+function heldOutside(
+  groups: readonly { entries: readonly VariableEntry[] }[],
+  needle: string,
+  kept: string | null
+): string | null {
+  if (needle === "" || kept === null) return null;
+  const matched = searchVariableGroups(groups, needle).some(group =>
+    group.entries.some(entry => entry.row.key === kept)
+  );
+  return matched ? null : kept;
 }
 
 /**
@@ -1005,30 +1051,28 @@ function Group({
             searching={searching}
           />
         </h3>
-        {/* An empty type scale offers its add in the line below instead. */}
-        {readOnly || (group === "type" && entries.length === 0) ? null : (
-          <AddButton
-            adds={ADDS[group]}
-            // A folded group opens for what is added to it, so the new row
-            // and its editor are drawn.
-            onAdd={what => {
-              openFold(folds, group);
-              onAdd(what);
-            }}
-          />
-        )}
       </div>
       {folded ? null : (
         <GroupRows
-          group={group}
           entries={entries}
+          empty={ADDS[group].empty}
           searching={searching}
-          readOnly={readOnly}
           openKey={openKey}
-          onAdd={onAdd}
         >
           {children}
         </GroupRows>
+      )}
+      {/* At the end of the list, so a new row is added where it is. A
+          folded group opens for what is added to it, so the new row and
+          its editor are drawn. */}
+      {readOnly || folded ? null : (
+        <AddRows
+          group={group}
+          onAdd={what => {
+            openFold(folds, group);
+            onAdd(what);
+          }}
+        />
       )}
     </section>
   );
@@ -1063,20 +1107,17 @@ function GroupHeading({
 
 /** An open group's rows, a page at a time, or its one empty line. */
 function GroupRows({
-  group,
   entries,
+  empty,
   searching,
-  readOnly,
   openKey,
-  onAdd,
   children,
 }: {
-  group: VariableGroup;
   entries: readonly VariableEntry[];
+  /** What an empty group says. */
+  empty: string;
   searching: boolean;
-  readOnly: boolean;
   openKey: string | null;
-  onAdd: (what: NewVariable) => void;
   children: (entry: VariableEntry) => React.ReactNode;
 }): React.JSX.Element {
   const [pages, setPages] = React.useState(1);
@@ -1091,12 +1132,7 @@ function GroupRows({
   return (
     <>
       {entries.length === 0 && !searching ? (
-        <EmptyGroup
-          group={group}
-          text={ADDS[group].empty}
-          readOnly={readOnly}
-          onAdd={onAdd}
-        />
+        <EmptyGroup text={empty} />
       ) : (
         <ul className="nx-vars__list">{shown.map(children)}</ul>
       )}

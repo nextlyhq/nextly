@@ -7,6 +7,9 @@
  * - Escape cancels and hands focus back to the row.
  * - The code name stays through every rename, so CSS that uses it keeps
  *   working.
+ * - "+ Add colour" at the end of the list, on a site with 30 colours and a
+ *   search on, keeps the search and the list where it is, and opens the new
+ *   colour beside its row, marked "New", with its name focused.
  */
 import { expect, type Page } from "@playwright/test";
 
@@ -139,6 +142,68 @@ test("a colour is renamed in place: Enter and leaving the field keep the name, E
       "color.brand=Primary",
       "color.text=Body text",
     ]);
+  } finally {
+    await seed(page, before);
+  }
+});
+
+/** `count` colours, named so they sort in order. */
+function colours(count: number) {
+  return {
+    tokens: Array.from({ length: count }, (_, at) => ({
+      name: `color.many-${String(at).padStart(2, "0")}`,
+      kind: "color",
+      values: { light: `#${(0x203040 + at * 0x050505).toString(16)}` },
+    })),
+  };
+}
+
+test("+ Add colour keeps the search and the list's place, and opens the new colour beside its row with its name focused", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  const before = await storedTokens(page);
+  try {
+    await seed(page, colours(30));
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await openEditorWith(page, NODES, "rows-text");
+    await openDesign(page, "Colours");
+    const panel = page.getByRole("region", { name: "Design panel" });
+    const search = panel.getByRole("searchbox", { name: "Search Design" });
+    // Matches every colour, enough rows to scroll, and not the new one.
+    await search.fill("many");
+    await expect(panel.locator(".nx-vars__row")).toHaveCount(30);
+    const body = panel.locator(".nx-vars__body").first();
+    // Part way down, where the add row is in view.
+    const add = panel.getByRole("button", { name: "Add colour" });
+    await add.scrollIntoViewIfNeeded();
+    const scrolled = await body.evaluate(element => element.scrollTop);
+    await add.click();
+
+    const editor = page.getByRole("dialog", { name: "Edit New colour" });
+    await expect(editor).toBeVisible();
+    await expect(editor.getByLabel("Name", { exact: true })).toBeFocused();
+    // The search is kept, and the list did not jump back to its top.
+    await expect(search).toHaveValue("many");
+    expect(
+      Math.abs((await body.evaluate(element => element.scrollTop)) - scrolled)
+    ).toBeLessThan(80);
+    // The new row is the group's last, marked New, in view, and the editor
+    // opens beside it.
+    const added = panel.locator(".nx-vars__item").last();
+    await expect(added.locator(".nx-vars__name")).toContainText("New colour");
+    await expect(added.locator(".nx-vars__new")).toHaveText("New");
+    await expect(added).toBeInViewport();
+    const rowBox = await added.boundingBox();
+    const box = await editor.boundingBox();
+    const view = page.viewportSize();
+    if (rowBox === null || box === null || view === null) {
+      throw new Error("[e2e] no box");
+    }
+    expect(box.x).toBeGreaterThanOrEqual(rowBox.x + rowBox.width - 1);
+    expect(box.y).toBeLessThanOrEqual(rowBox.y + rowBox.height);
+    expect(box.y + box.height).toBeGreaterThanOrEqual(rowBox.y);
+    expect(box.y + box.height).toBeLessThanOrEqual(view.height);
   } finally {
     await seed(page, before);
   }

@@ -1692,7 +1692,7 @@ describe("a Design tab's view of the variables", () => {
     render(<Folding groups={["spacing", "other"]} />);
     expect(screen.queryByRole("button", { name: /^Other values/ })).toBeNull();
     fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Add another variable" }),
+      screen.getByRole("button", { name: "Add value" }),
       { button: 0, ctrlKey: false }
     );
     fireEvent.click(await screen.findByRole("menuitem", { name: "Size" }));
@@ -1718,11 +1718,12 @@ describe("a Design tab's view of the variables", () => {
     ).toBe("true");
   });
 
-  it("empties the host's search when a variable is added, so its row is drawn", () => {
+  it("keeps the host's search when a variable is added, its row held in view", async () => {
     const onSearch = vi.fn();
     render(<Folding search="brand" onSearch={onSearch} />);
     fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
-    expect(onSearch).toHaveBeenCalledWith("");
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(onSearch).not.toHaveBeenCalled();
   });
 
   it("opens a hidden group the author had folded, for its first variable", async () => {
@@ -1730,7 +1731,7 @@ describe("a Design tab's view of the variables", () => {
       <Folding groups={["spacing", "other"]} initiallyFolded={["other"]} />
     );
     fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Add another variable" }),
+      screen.getByRole("button", { name: "Add value" }),
       { button: 0, ctrlKey: false }
     );
     fireEvent.click(await screen.findByRole("menuitem", { name: "Size" }));

@@ -64,6 +64,11 @@ export interface VariableRowProps {
   onRemoved: () => void;
   /** Adds a copy right below, and opens it. */
   onDuplicate: () => void;
+  /**
+   * Just added and shown though the search does not match it, until its
+   * editor closes: marked "New", so its place in a narrowed list is clear.
+   */
+  marked?: boolean;
   /** How widely it is used, where the host reads it. */
   usage: VariableUsageHere | undefined;
   /** Every variable the row stands for, together, once read. */
@@ -87,6 +92,7 @@ export function VariableRow({
   onChange,
   onRemoved,
   onDuplicate,
+  marked = false,
   usage,
   reach,
 }: VariableRowProps): React.JSX.Element {
@@ -141,7 +147,7 @@ export function VariableRow({
                     // The visible name first, then the values the swatch
                     // shows, so a screen reader hears both and speech input
                     // still matches.
-                    aria-label={`${shown}${describe(entry, token, tokens, mode)}${countWords(reach)}`}
+                    aria-label={`${shown}${marked ? ", new" : ""}${describe(entry, token, tokens, mode)}${countWords(reach)}`}
                     data-kind={entry.row.kind}
                     // Drawn as chosen while its editor is open. Its own mark:
                     // the row's tooltip sets `data-state` too, over the
@@ -155,7 +161,7 @@ export function VariableRow({
                       tokens={tokens}
                       mode={mode}
                     />
-                    <RowName entry={entry} />
+                    <RowName entry={entry} marked={marked} />
                     <RowTail
                       entry={entry}
                       token={token}
@@ -218,13 +224,24 @@ export function VariableRow({
 }
 
 /** The row's name, and its kind where another row shares the name. */
-function RowName({ entry }: { entry: VariableEntry }): React.JSX.Element {
+function RowName({
+  entry,
+  marked,
+}: {
+  entry: VariableEntry;
+  marked: boolean;
+}): React.JSX.Element {
   return (
     <span className="nx-vars__name">
       {entry.label}
       {entry.kindWord === undefined ? null : (
         <span className="nx-vars__name-kind">{` · ${entry.kindWord}`}</span>
       )}
+      {marked ? (
+        <span className="nx-vars__new" aria-hidden="true">
+          New
+        </span>
+      ) : null}
     </span>
   );
 }
