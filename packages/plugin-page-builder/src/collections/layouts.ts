@@ -67,7 +67,7 @@ import {
   textarea,
 } from "nextly/config";
 
-import { TRANSFER_IMPORT_COMPONENT } from "../transfer/transfer-contract";
+import { LAYOUT_LIST_TOOLS_COMPONENT } from "../builder-view";
 
 import { layoutAreaOptions } from "./areas";
 import { COMPONENTS_SLUG } from "./components";
@@ -167,9 +167,10 @@ export function layoutsCollection(): CollectionConfig {
     admin: {
       useAsTitle: "title",
       hidden: true,
-      // "Import from file" above the list, where a file exported from
-      // another site is brought in after its preview.
-      components: { BeforeListTable: TRANSFER_IMPORT_COMPONENT },
+      // Above the list: "Import from file", where a file exported from
+      // another site is brought in after its preview, and the rows' "Make
+      // site default", the one place the site default is chosen.
+      components: { BeforeListTable: LAYOUT_LIST_TOOLS_COMPONENT },
     },
   });
 }

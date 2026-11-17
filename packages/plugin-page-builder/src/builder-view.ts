@@ -79,6 +79,14 @@ export const COMPONENT_LIST_TOOLS_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#ComponentListTools";
 
 /**
+ * The tools above the Header & footer list: Import from file, and the
+ * "Make site default" row actions with the question they may ask. Declared
+ * here for the same reason.
+ */
+export const LAYOUT_LIST_TOOLS_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#LayoutListTools";
+
+/**
  * The delete tools for a host's own component store, drawn through the
  * plugin's header slot: on every admin page, so on the store's list whatever
  * the host draws above it, where they register the row action and draw its

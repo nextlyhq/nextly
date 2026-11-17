@@ -346,7 +346,7 @@ test("asks about a Layout chosen on the form while the question was out", async 
   expect(await statusOf(api, "pages", pageId)).toBe("draft");
 });
 
-test("warns before a Layout with an unpublished header becomes the default", async ({
+test("makes a set the site default from the Header & footer list, asking first about its unpublished header", async ({
   page,
 }) => {
   await gotoAdmin(page, "/");
@@ -361,19 +361,14 @@ test("warns before a Layout with an unpublished header becomes the default", asy
   const pageId = await draftPage(api, `Settings page ${s}`, []);
 
   try {
-    await openBuilder(page, pageId);
-    await page
-      .getByRole("navigation", { name: "Editor panels" })
-      .getByRole("button", { name: "Settings" })
-      .click();
-    const settings = page.getByRole("dialog", { name: "Settings" });
-    await settings.getByRole("tab", { name: "Site" }).click();
-    await settings
-      .getByRole("combobox", {
-        name: "Pages without a header & footer set of their own use",
-      })
-      .click();
-    await page.getByRole("option", { name: `Site ${s}` }).click();
+    // The row's own actions on the admin's Header & footer list. A clickable
+    // row is drawn as a button, so it is found by the link it holds.
+    await gotoAdmin(page, "/collections/layouts");
+    const row = page.locator("tr", {
+      has: page.getByRole("link", { name: `Site ${s}` }),
+    });
+    await row.getByRole("button", { name: "Row actions" }).click();
+    await page.getByRole("menuitem", { name: "Make site default" }).click();
 
     await expect(offer(page)).toContainText(
       "This header & footer set uses 1 component that isn't published"
@@ -382,13 +377,38 @@ test("warns before a Layout with an unpublished header becomes the default", asy
       .getByRole("button", { name: "Publish it, then make default" })
       .click();
     await expect(
-      settings.getByRole("status").filter({ hasText: "Saved" })
+      page.getByText(`Site ${s} is now the site default header & footer.`)
     ).toBeVisible({ timeout: 15_000 });
     expect(await statusOf(api, "components", header)).toBe("published");
     const after = (await (
       await api.get(`${PLUGIN}/layouts/choices`)
     ).json()) as { meta: { defaultLayout: string | null } };
     expect(after.meta.defaultLayout).toBe(site);
+
+    // The default's own row no longer offers to become it.
+    await row.getByRole("button", { name: "Row actions" }).click();
+    await expect(page.getByRole("menuitem", { name: "Export" })).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: "Make site default" })
+    ).toHaveCount(0);
+    await page.keyboard.press("Escape");
+
+    // Settings → Site names it, and chooses nothing itself.
+    await openBuilder(page, pageId);
+    await page
+      .getByRole("navigation", { name: "Editor panels" })
+      .getByRole("button", { name: "Settings" })
+      .click();
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    await settings.getByRole("tab", { name: "Site" }).click();
+    const line = settings.getByRole("region", {
+      name: "Site default header & footer",
+    });
+    await expect(line).toContainText(`Site default header & footer: Site ${s}`);
+    await expect(
+      line.getByRole("link", { name: /Change in Pages ▸ Header & footer/ })
+    ).toHaveAttribute("href", "/admin/collections/layouts");
+    await expect(settings.getByRole("combobox")).toHaveCount(0);
   } finally {
     if (previous !== null) {
       const csrf = (await (await api.get(`${API}/auth/csrf`)).json()) as {
