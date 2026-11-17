@@ -281,7 +281,9 @@ function lightboxOf(
   node: BlockNode | undefined,
   ctx: PageContext | undefined
 ): string | undefined {
-  if (whenClickedOf(props) !== "enlarge" || node?.id === undefined) {
+  // Unset, a picture in a gallery does what the gallery says.
+  const click = whenClickedOf(props, ctx?.galleryWhenClicked);
+  if (click !== "enlarge" || node?.id === undefined) {
     return undefined;
   }
   return lightboxId(node.id, ctx?.itemPosition);
