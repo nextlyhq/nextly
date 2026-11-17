@@ -28,6 +28,7 @@ import { Undo2 } from "lucide-react";
 import * as React from "react";
 
 import { VARIABLE_LOSS_WORDS } from "./editor-words";
+import { useRecentColours } from "./recent-colours";
 import { colourHexOf } from "./style-colour";
 import {
   clearDarkValue,
@@ -47,6 +48,14 @@ import {
   type VariableRemoval,
 } from "./variable-usage";
 import { VariableRefusal, type VariableUsageHere } from "./variable-usage-view";
+import {
+  LineHeightHint,
+  LineHeightInput,
+  SizeInput,
+  useDraft,
+  valueFieldFor,
+  variableCss,
+} from "./variable-value-controls";
 
 export interface VariableEditorProps {
   entry: VariableEntry;
@@ -319,6 +328,7 @@ function Values({
   const pair = (at: number, held: SiteToken): React.JSX.Element => (
     <ModeValues
       token={held}
+      cssOf={value => variableCss(tokens, held, value)}
       readOnly={readOnly}
       onCommit={(mode, value) => write(at, mode, value)}
       onClear={() => onChange(clearDarkValue(tokens, at))}
@@ -395,13 +405,15 @@ function TypePair({
           Light
         </span>
         {halves.map(half => (
-          <CommitInput
+          <HalfInput
             key={half.name}
+            half={half.name}
             label={`${half.name}, light`}
             value={half.token.values.light}
             readOnly={readOnly}
             refusedBy={refusalAt(refused, half.at, "light")}
             onCommit={value => write(half.at, "light", value)}
+            css={variableCss(tokens, half.token, half.token.values.light)}
           />
         ))}
         {hasDark ? (
@@ -411,10 +423,16 @@ function TypePair({
             </span>
             {halves.map(half => (
               <div key={half.name} className="nx-vars-editor__cell">
-                <CommitInput
+                <HalfInput
+                  half={half.name}
                   label={`${half.name}, dark`}
                   value={half.token.values.dark ?? ""}
                   placeholder={half.token.values.light}
+                  css={variableCss(
+                    tokens,
+                    half.token,
+                    half.token.values.dark ?? half.token.values.light
+                  )}
                   readOnly={readOnly}
                   refusedBy={refusalAt(refused, half.at, "dark")}
                   onCommit={value => write(half.at, "dark", value)}
@@ -437,6 +455,20 @@ function TypePair({
           </>
         ) : null}
       </div>
+      <LineHeightHint
+        value={line.values.light}
+        mode="light"
+        readOnly={readOnly}
+        onCommit={value => write(lineAt, "light", value)}
+      />
+      {line.values.dark === undefined ? null : (
+        <LineHeightHint
+          value={line.values.dark}
+          mode="dark"
+          readOnly={readOnly}
+          onCommit={value => write(lineAt, "dark", value)}
+        />
+      )}
       {hasDark ? (
         readOnly ||
         halves.some(half => half.token.values.dark === undefined) ? null : (
@@ -482,24 +514,51 @@ function TypePair({
 }
 
 /**
+ * One half of a type size's pair: the size with its unit menu, or the line
+ * height as a multiple of the text size.
+ */
+function HalfInput({
+  half,
+  ...field
+}: {
+  half: string;
+  label: string;
+  value: string;
+  placeholder?: string;
+  readOnly: boolean;
+  refusedBy: string | undefined;
+  onCommit: (value: string) => void;
+  css: string;
+}): React.JSX.Element {
+  return half === "Size" ? (
+    <SizeInput {...field} />
+  ) : (
+    <LineHeightInput {...field} />
+  );
+}
+
+/**
  * One variable's Light value, then its Dark value, for every kind: a colour
  * with its swatch and picker, anything else as text.
  */
 function ModeValues({
   token,
+  cssOf,
   readOnly,
   onCommit,
   onClear,
   refusedIn,
 }: {
   token: SiteToken;
+  /** The CSS a value of this variable writes. */
+  cssOf: (value: string) => string;
   readOnly: boolean;
   onCommit: (mode: TokenMode, value: string) => void;
   onClear: () => void;
   /** The reason's element while a mode's field holds a refused value. */
   refusedIn: (mode: TokenMode) => string | undefined;
 }): React.JSX.Element {
-  const Field = token.kind === "color" ? ColourValue : TextValue;
+  const Field = token.kind === "color" ? ColourValue : valueFieldFor(token);
   return (
     <>
       <Field
@@ -508,9 +567,12 @@ function ModeValues({
         readOnly={readOnly}
         refusedBy={refusedIn("light")}
         onCommit={value => onCommit("light", value)}
+        css={cssOf(token.values.light)}
+        mode="light"
       />
       <DarkValue
         token={token}
+        cssOf={cssOf}
         readOnly={readOnly}
         refusedBy={refusedIn("dark")}
         onCommit={value => onCommit("dark", value)}
@@ -521,93 +583,6 @@ function ModeValues({
   );
 }
 
-/** A text field that commits when it loses focus or on Enter. */
-function TextValue({
-  label,
-  value,
-  readOnly,
-  refusedBy,
-  onCommit,
-}: {
-  label: string;
-  value: string;
-  readOnly: boolean;
-  refusedBy?: string | undefined;
-  onCommit: (value: string) => void;
-}): React.JSX.Element {
-  const id = React.useId();
-  return (
-    <div className="nx-vars-editor__field">
-      <label className="nx-vars-editor__label" htmlFor={id}>
-        {label}
-      </label>
-      <CommitInput
-        id={id}
-        value={value}
-        readOnly={readOnly}
-        refusedBy={refusedBy}
-        onCommit={onCommit}
-      />
-    </div>
-  );
-}
-
-/**
- * A value field that commits on blur or Enter, and only a real change: an
- * empty field or the value it already holds writes nothing. While it holds a
- * refused value, the value it held before is committed too, since putting it
- * back is how the author answers the refusal.
- */
-function CommitInput({
-  id,
-  label,
-  value,
-  placeholder,
-  readOnly,
-  refusedBy,
-  onCommit,
-}: {
-  id?: string;
-  /** The field's name where no visible label points at it. */
-  label?: string;
-  value: string;
-  placeholder?: string;
-  readOnly: boolean;
-  /** The id of the reason, while this field holds a value that was refused. */
-  refusedBy?: string | undefined;
-  onCommit: (value: string) => void;
-}): React.JSX.Element {
-  const [draft, setDraft] = useDraft(value);
-  const commit = (next: string): void => {
-    if (
-      !readOnly &&
-      next.trim() !== "" &&
-      (next.trim() !== value || refusedBy !== undefined)
-    ) {
-      onCommit(next);
-    }
-  };
-  return (
-    <Input
-      id={id}
-      aria-label={label}
-      // A value, not words: no list of earlier entries over the field.
-      autoComplete="off"
-      aria-invalid={refusedBy === undefined ? undefined : true}
-      aria-describedby={refusedBy}
-      className="nx-vars-editor__mono"
-      value={draft}
-      placeholder={placeholder}
-      onChange={event => setDraft(event.currentTarget.value)}
-      readOnly={readOnly}
-      onBlur={event => commit(event.currentTarget.value)}
-      onKeyDown={event => {
-        if (event.key === "Enter") commit(event.currentTarget.value);
-      }}
-    />
-  );
-}
-
 /**
  * A colour: a swatch that opens the picker inline, and its hex field.
  *
@@ -615,6 +590,9 @@ function CommitInput({
  * stays in one dialog. What it composes is held as a draft and written once,
  * when the picker is closed or this editor goes away, so dragging across it
  * is one save rather than one per pointer move.
+ *
+ * Its picker lists the author's Recent colours, as a block's does; a colour
+ * written here, typed or picked, joins them.
  */
 function ColourValue({
   label,
@@ -637,19 +615,44 @@ function ColourValue({
   // What the picker shows while a gesture is under way, handed back to it as
   // its colour so each step builds on the last; written only when it closes.
   const [shown, setShown] = React.useState<string | null>(null);
-  const latest = React.useRef({ value, onCommit });
+  const [recentColours, remember] = useRecentColours();
+  const latest = React.useRef({ value, onCommit, remember });
   React.useEffect(() => {
-    latest.current = { value, onCommit };
+    latest.current = { value, onCommit, remember };
   });
   const flush = React.useCallback((): void => {
     const pending = draft.current;
     draft.current = null;
     if (pending !== null && pending !== latest.current.value) {
       latest.current.onCommit(pending);
+      latest.current.remember(pending);
     }
   }, []);
   // A picker still open when the popover closes writes what it showed.
   React.useEffect(() => flush, [flush]);
+  // The value it holds commits too while a refusal is shown: putting it
+  // back is how a refused value is corrected, and clears the refusal.
+  const commit = (typed: string): boolean => {
+    const next = typed.trim();
+    const writes =
+      !readOnly && next !== "" && (next !== value || refusedBy !== undefined);
+    if (writes) onCommit(next);
+    return writes;
+  };
+  // A typed colour joins Recent colours; text that is none is refused.
+  const commitTyped = (typed: string): void => {
+    if (commit(typed) && isColour(typed.trim())) remember(typed.trim());
+  };
+  // A recent colour is one choice, written as it is listed, as on a block,
+  // and moves to the front even where it is already the value.
+  const pickRecent = (colour: string): void => {
+    draft.current = null;
+    setShown(null);
+    setText(colour);
+    setPicking(false);
+    commit(colour);
+    remember(colour);
+  };
   const { hex, paint, invalid, said } = colourFieldState(
     text.trim(),
     value,
@@ -702,20 +705,9 @@ function ColourValue({
             setShown(null);
           }}
           readOnly={readOnly}
-          onBlur={event => {
-            const next = event.currentTarget.value.trim();
-            if (!readOnly && next !== "" && next !== value) onCommit(next);
-          }}
+          onBlur={event => commitTyped(event.currentTarget.value)}
           onKeyDown={event => {
-            const next = event.currentTarget.value.trim();
-            if (
-              event.key === "Enter" &&
-              !readOnly &&
-              next !== "" &&
-              next !== value
-            ) {
-              onCommit(next);
-            }
+            if (event.key === "Enter") commitTyped(event.currentTarget.value);
           }}
         />
       </div>
@@ -727,6 +719,8 @@ function ColourValue({
           // picked from there is seen.
           color={hex ?? NO_COLOUR}
           showAlpha
+          recentColors={[...recentColours]}
+          onRecentSelect={pickRecent}
           onColorChange={next => {
             draft.current = next;
             setShown(next);
@@ -765,19 +759,22 @@ function colourFieldState(
   said: string;
 } {
   const current = typed === "" ? value : typed;
-  const resolved = colourHexOf(current, undefined);
-  const invalid =
-    shown === null &&
-    typed !== "" &&
-    resolved === undefined &&
-    !isCssColour(current);
-  const hex = shown ?? resolved;
+  const invalid = shown === null && typed !== "" && !isColour(current);
+  const hex = shown ?? colourHexOf(current, undefined);
   return {
     hex,
     paint: hex,
     invalid,
     said: invalid ? " (not a valid colour)" : "",
   };
+}
+
+/**
+ * Whether `text` is a colour: one this package reads, or the browser does.
+ * The one answer both the field's invalid mark and Recent colours read.
+ */
+function isColour(text: string): boolean {
+  return colourHexOf(text, undefined) !== undefined || isCssColour(text);
 }
 
 /**
@@ -795,6 +792,7 @@ function isCssColour(text: string): boolean {
 /** The dark value: its field, or a line saying it follows light. */
 function DarkValue({
   token,
+  cssOf,
   readOnly,
   refusedBy,
   onCommit,
@@ -802,6 +800,7 @@ function DarkValue({
   onClear,
 }: {
   token: SiteToken;
+  cssOf: (value: string) => string;
   readOnly: boolean;
   refusedBy: string | undefined;
   onCommit: (value: string) => void;
@@ -831,7 +830,7 @@ function DarkValue({
       </div>
     );
   }
-  const Field = token.kind === "color" ? ColourValue : TextValue;
+  const Field = token.kind === "color" ? ColourValue : valueFieldFor(token);
   return (
     <>
       <Field
@@ -840,6 +839,8 @@ function DarkValue({
         readOnly={readOnly}
         refusedBy={refusedBy}
         onCommit={onCommit}
+        css={cssOf(dark)}
+        mode="dark"
       />
       {readOnly ? null : (
         <Button
@@ -1090,7 +1091,7 @@ function useRemoveStep(plan: RemovalPlan): {
 
 /** Whether Remove opens why it cannot go ahead rather than the confirm. */
 function refuses(removal: VariableRemoval): boolean {
-  return removal === "in-use" || removal === "not-whole";
+  return removal === "in-use";
 }
 
 /**
@@ -1198,21 +1199,4 @@ function withoutParts(
     .map(part => part.at)
     .sort((a, b) => b - a)
     .reduce(removeToken, tokens);
-}
-
-/**
- * What a field shows: the author's typing, until the stored value changes
- * underneath it (a reset, a refused save, an undo), which replaces it.
- *
- * A field keyed by its value would do the second by remounting, and would
- * then also remount after its own commit and drop the focus it had.
- */
-function useDraft(value: string): [string, (next: string) => void] {
-  const [draft, setDraft] = React.useState(value);
-  const [shown, setShown] = React.useState(value);
-  if (shown !== value) {
-    setShown(value);
-    setDraft(value);
-  }
-  return [draft, setDraft];
 }

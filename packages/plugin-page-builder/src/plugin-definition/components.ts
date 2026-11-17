@@ -78,6 +78,7 @@ import { listDocumentsUsingEach } from "../usage-count";
 import { usageHealthService } from "../usage-health-service";
 import { usageTableOf, usageTableRows } from "../usage-index-tables";
 import { variantUseRoute } from "../variant-use-route";
+
 import {
   type InitContext,
   siteStyleReads,
@@ -266,6 +267,8 @@ export function installComposition(
     // ones, a save would refuse a page the renderer draws, or pass one it
     // cuts short.
     limits: opts.limits ?? DEFAULT_LIMITS,
+    // The site's blocks, whose nesting rules and locks a write is held to.
+    blocks: def.blocks,
     // Off where the host turned component readiness off, which is the
     // setting for a renderer drawing components from its own
     // `resolveComponents` source: no collection stands for that source, so
@@ -589,10 +592,13 @@ export function routesForComponents(
     // Which registered blocks a blocks field accepts, with their props,
     // for the Schema Builder's outline: code-defined metadata only, to
     // any signed-in caller.
-    blocksList: blocksListRoute(),
+    blocksList: blocksListRoute({
+      blocks: () => def.blocks.all(),
+      sourceOf: name => def.blocks.sourceOf(name),
+    }),
     patternLibrary: patternLibraryRoute(),
     componentLibrary: componentLibraryRoute(componentStoreOf(opts)),
-    savePattern: savePatternRoute(),
+    savePattern: savePatternRoute(def.blocks),
     // What the editor may offer this caller: saving a pattern, making a
     // component or updating a pattern from a selection, and opening a
     // component in its own view from the store definitions live in.
@@ -669,13 +675,14 @@ export function routesForComponents(
     }),
     // Save a selection as a component, or convert it into one. Here
     // rather than left to the collection API for the reason the pattern
-    // save is: the planner needs the server's block registry.
+    // save is: the planner needs the site's block registry.
     componentFromSelection: componentFromSelectionRoute({
       store: componentStoreOf(opts),
       limits: () => opts.limits ?? DEFAULT_LIMITS,
       // Read when a request arrives, after `init` has registered the
       // usage hooks this hands back.
       reconcile: () => usage.reconcile,
+      blocks: def.blocks,
     }),
     // The editor's page edits (insert a pattern, place a component, set a
     // placement's values or variant, choose a Layout) and its component
@@ -684,11 +691,13 @@ export function routesForComponents(
       store: componentStoreOf(opts),
       limits: () => opts.limits ?? DEFAULT_LIMITS,
       bindings: pageActionBindings,
+      blocks: def.blocks,
     }),
     definitionActions: definitionActionsRoute({
       store: componentStoreOf(opts),
       limits: () => opts.limits ?? DEFAULT_LIMITS,
       readRetired: readRetiredFor,
+      blocks: def.blocks,
     }),
     // What an API client or an agent reads before composing: the
     // patterns, components (fields, slots, variants) and Layouts it may
@@ -704,6 +713,7 @@ export function routesForComponents(
       limits: () => opts.limits ?? DEFAULT_LIMITS,
       reconcile: () => usage.reconcile,
       origins: () => usage.origins,
+      blocks: def.blocks,
     }),
     // Delete component: the dry run, each step of the delete as the
     // person who started it, and its progress. A component's own delete
@@ -724,6 +734,7 @@ export function routesForComponents(
     exportFile: exportRoutes({
       store: componentStoreOf(opts),
       defaults: configStyle,
+      blocks: def.blocks,
     }),
     // Such a file read against this site: a preview of what it adds,
     // reuses and clashes with, or the import itself, as the caller.
@@ -731,6 +742,7 @@ export function routesForComponents(
       store: componentStoreOf(opts),
       defaults: configStyle,
       reconcile: () => usage.reconcile,
+      blocks: def.blocks,
     }),
   };
 }

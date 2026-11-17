@@ -293,6 +293,7 @@ import {
   getMinSearchLength,
   decodeJsonFieldValues,
 } from "./collection-utils";
+import { entryDetails } from "./entry-details";
 
 /**
  * A collection's declared top-level fields.
@@ -1331,23 +1332,29 @@ export class CollectionQueryService extends BaseService {
     collectionName: string,
     rows: Record<string, unknown>[],
     preloaded?: CompanionSchema | null,
-    statusFilterValues?: readonly string[] | null
+    statusFilter?: StatusFilter | null
   ): Promise<void> {
     if (!this.localization || rows.length === 0) return;
     const companion =
       preloaded ?? (await this.fileManager.loadCompanionSchema(collectionName));
     if (!companion) return;
+    // A public read is told which languages are published and nothing of the
+    // work in progress: no pending change and no staleness, which describe
+    // drafts it may not see.
+    const publicRead = statusFilter?.isPublicRead === true;
     // Which languages hold a pending change, for this whole page in one query.
     // Read here rather than inside the join because the versions repository
     // takes the adapter this service already has, and because a per-row lookup
     // would turn a list render into one round trip per document.
-    const pendingChangeLocales = await new VersionsRepository(
-      this.adapter
-    ).findPendingChangeLocales(
-      "collection",
-      collectionName,
-      rows.map(r => r.id).filter((id): id is string => typeof id === "string")
-    );
+    const pendingChangeLocales = publicRead
+      ? undefined
+      : await new VersionsRepository(this.adapter).findPendingChangeLocales(
+          "collection",
+          collectionName,
+          rows
+            .map(r => r.id)
+            .filter((id): id is string => typeof id === "string")
+        );
     // 🔴 Resolved ONCE and read twice. `populateTranslationStatus` returns immediately for any
     // verdict but `ready`, so probing the column for a companion that is not there introspects a
     // table that does not exist to answer a question nobody will ask — and since a negative column
@@ -1401,6 +1408,7 @@ export class CollectionQueryService extends BaseService {
       // already makes for an entity in a `pre-migration` state, and it is bounded the same way —
       // it stops the moment the operator migrates.
       staleness:
+        !publicRead &&
         readiness === "ready" &&
         (await resolveCompanionColumn(
           this.adapter,
@@ -1415,9 +1423,7 @@ export class CollectionQueryService extends BaseService {
 
       // On a status-scoped read, don't report a draft-only translation as present.
       statusValues:
-        companion.hasStatus && statusFilterValues
-          ? statusFilterValues
-          : undefined,
+        companion.hasStatus && statusFilter ? statusFilter.values : undefined,
     });
   }
 
@@ -1749,16 +1755,69 @@ export class CollectionQueryService extends BaseService {
     collectionName: string,
     filter: TranslationStatusFilter,
     mainIdColumn: unknown,
-    preloaded?: CompanionSchema | null
+    preloaded?: CompanionSchema | null,
+    statusFilter?: StatusFilter | null,
+    /** The documents a due release makes public as of this read. */
+    revealed?: readonly string[]
   ): Promise<ReturnType<typeof buildTranslationStatusCondition>> {
     if (!this.localization) return undefined;
     const companion =
       preloaded ?? (await this.fileManager.loadCompanionSchema(collectionName));
     if (!companion) return undefined;
+    // A public read sees a language's publication, never its drafts. There
+    // `translated` and `published` both ask whether the language is published,
+    // by the read's own rule (its status alone, a due release counting as
+    // published), `missing` whether it is not, and `draft` and `stale`, which
+    // only work in progress answers, find nothing. Only where each language
+    // publishes on its own: elsewhere every language follows the document's
+    // one status.
+    const publicRead =
+      statusFilter?.isPublicRead === true && companion.hasStatus;
+    if (publicRead && (filter.state === "draft" || filter.state === "stale")) {
+      return sql`1=0`;
+    }
+    const published = publicRead
+      ? publishedInLanguageCondition({
+          companion,
+          statusFilter,
+          revealed,
+          localeChain: [filter.locale],
+          mainIdColumn,
+        })
+      : undefined;
+    if (publicRead) {
+      return filter.state === "missing"
+        ? published
+          ? sql`NOT (${published})`
+          : sql`1=0`
+        : published;
+    }
+    return this.translationStatusCondition(companion, mainIdColumn, {
+      collectionName,
+      filter,
+    });
+  }
+
+  /** {@link buildTranslationStatusCondition} for `companion`, as this service reads it. */
+  private async translationStatusCondition(
+    companion: CompanionSchema,
+    mainIdColumn: unknown,
+    args: {
+      collectionName: string;
+      filter: TranslationStatusFilter;
+    }
+  ): Promise<ReturnType<typeof buildTranslationStatusCondition>> {
+    const { filter } = args;
+    if (!this.localization) return undefined;
     return buildTranslationStatusCondition({
       companionTableName: companion.companionTableName,
       mainIdColumn,
       localizedColumns: companion.localizedFields.map(f => f.column),
+      // A number, date or JSON column is non-blank when not null: compared
+      // with an empty string, PostgreSQL refuses the filter.
+      nonTextColumns: companion.localizedFields
+        .filter(f => f.nonText)
+        .map(f => f.column),
       hasStatus: companion.hasStatus,
       // 🔴 The PHYSICAL answer, not the declared one, and it is the same probe the per-row badge
       // resolves — so the tab and the badge cannot disagree about whether the question is even
@@ -1795,7 +1854,7 @@ export class CollectionQueryService extends BaseService {
         ? {
             provenance: {
               scopeKind: "collection" as const,
-              scopeSlug: collectionName,
+              scopeSlug: args.collectionName,
             },
           }
         : {}),
@@ -2566,7 +2625,6 @@ export class CollectionQueryService extends BaseService {
       revealed: decisions.reveal,
       localeChain,
       mainIdColumn: schema.id,
-      defaultLocale: this.localization?.defaultLocale,
     });
     if (inLanguage) conditions.push(inLanguage);
 
@@ -2608,7 +2666,9 @@ export class CollectionQueryService extends BaseService {
           params.collectionName,
           translationFilter,
           schema.id,
-          companion
+          companion,
+          statusFilter,
+          decisions.reveal
         );
       if (translationCondition) conditions.push(translationCondition);
     }
@@ -3312,10 +3372,11 @@ export class CollectionQueryService extends BaseService {
       );
     }
 
-    // Final owner-column strip at the response boundary — after every afterRead
-    // hook, field-level read access and transform — so nothing downstream can
-    // re-expose the creator's user id.
-    for (const row of finalData) stripServerOnlyColumns(row, tableName);
+    // Final strip at the response boundary — after every afterRead hook, the
+    // field-level ones included, field-level read access and transform — so
+    // nothing downstream can re-expose the creator's user id, or a password a
+    // field's read hook put back, as a Single's read clears it after its hooks.
+    this.redactServerOnlyFields(finalData, fields, tableName, reach);
 
     // Every language's values beside a row say only what the row says: the
     // fields it kept, each language's value redacted as the row's was.
@@ -4266,7 +4327,7 @@ export class CollectionQueryService extends BaseService {
               params.collectionName,
               entries,
               companion,
-              statusFilter?.values ?? null // the per-locale published filter
+              statusFilter // the per-locale published filter
             )
         );
       }
@@ -5374,6 +5435,13 @@ export class CollectionQueryService extends BaseService {
     sourceLocales?: boolean;
     /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
     translations?: "all";
+    /**
+     * Attach `_details`: where the site serves the entry, and who made and
+     * changed it (`entryDetails`). Who is personal data, so the route asks
+     * for it only for a signed-in admin user; it is attached only once this
+     * read has been granted.
+     */
+    details?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
@@ -5572,7 +5640,6 @@ export class CollectionQueryService extends BaseService {
         revealed: decisions.reveal,
         localeChain,
         mainIdColumn: schema.id,
-        defaultLocale: this.localization?.defaultLocale,
       });
       const whereParts = [
         idCondition,
@@ -5732,7 +5799,7 @@ export class CollectionQueryService extends BaseService {
               params.collectionName,
               [entry],
               companion,
-              statusFilter?.values ?? null // the per-locale published filter
+              statusFilter // the per-locale published filter
             )
         );
       }
@@ -6154,6 +6221,15 @@ export class CollectionQueryService extends BaseService {
       // language's editor read says whether there is one.
       if (sharedChangesPending !== undefined) {
         finalData._sharedChangesPending = sharedChangesPending;
+      }
+      // After every gate above: only a read already granted is told where
+      // the entry is served and who made and changed it.
+      if (params.details) {
+        finalData._details = await entryDetails({
+          collection: params.collectionName,
+          entry: finalData,
+          locale: params.locale,
+        });
       }
 
       return {

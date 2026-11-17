@@ -5,7 +5,9 @@
  * the route areas, the services and the jobs share.
  */
 import {
+  createBlockRegistry,
   createNamedQueryRegistry,
+  type BlockRegistry,
   namedQueryDeclaration,
   type NamedQueryRegistry,
   type NamedQuerySource,
@@ -40,6 +42,7 @@ import type { VariablesInUseCheck } from "../site-style-storage";
 import { checkedTemplateAddresses } from "../templates/template-addresses";
 import type { TemplateGuardSetup } from "../templates/template-guard";
 import type { BackfillHost } from "../usage-backfill-wiring";
+
 import type { InitContext } from "./install-context";
 import { fontCatalogueParts, type PageBuilderOptions } from "./options";
 
@@ -178,6 +181,13 @@ export interface DefinitionState {
 export interface Definition {
   readonly opts: PageBuilderOptions;
   readonly state: DefinitionState;
+  /**
+   * This page builder's block registry: filled on each boot through the
+   * registration service, and read by its validation, its routes and the
+   * site's public routes. Its own, so two sites in one process never share
+   * blocks.
+   */
+  readonly blocks: BlockRegistry;
   readonly namedQuerySource: NamedQuerySource;
   readonly namedQueryDeclarations: () => NamedQueryDeclaration[];
   readonly templateAddresses: ReadonlyMap<string, readonly string[]>;
@@ -425,6 +435,7 @@ export function createDefinition(opts: PageBuilderOptions): Definition {
   return {
     opts,
     state,
+    blocks: createBlockRegistry(),
     namedQuerySource,
     namedQueryDeclarations,
     templateAddresses,

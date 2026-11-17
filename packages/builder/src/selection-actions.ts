@@ -17,13 +17,13 @@
 
 import * as React from "react";
 
+import { toolbarActions, type ToolbarAction } from "./canvas/toolbar-actions";
 import type { EditorState } from "./editor-state";
 import {
   useNestingSource,
   useSelectionActionsContext,
 } from "./keyboard-actions";
 import type { SelectionVerbs } from "./selection-offer";
-import { toolbarActions, type ToolbarAction } from "./toolbar-actions";
 
 /**
  * What to offer for this editor's selection, recomputed only when it changes.

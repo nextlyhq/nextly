@@ -27,8 +27,9 @@ import type { PageContext } from "../context";
 import { LAYOUT } from "./categories";
 import {
   CONTAINER_CHILD_GAP,
-  CONTAINER_SUPPORTS,
   containerContentModel,
+  CONTAINER_SUPPORTS,
+  CONTENT_WIDTH_PROPS,
   renderContainer,
 } from "./container";
 import type { ContainerProps } from "./container";
@@ -102,7 +103,7 @@ export const column: BlockDefinition<ContainerProps, PageContext> = defineBlock(
       // make one level up. Anything genuinely semantic belongs in the column
       // rather than as the column.
       as: htmlTagProp(["div"]),
-      contained: { label: "Constrain content width", type: "checkbox" },
+      ...CONTENT_WIDTH_PROPS,
     },
     defaultProps: COLUMN_DEFAULT_PROPS,
     example: { props: { as: "div" } },

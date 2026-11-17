@@ -123,6 +123,18 @@ export {
 } from "../components/features/entries/EntryForm/DocumentSurfaceControls";
 
 /**
+ * The document's Save and Publish as a builder-density pair that says the
+ * document's state on its own controls, and where the document is in its
+ * life for a pill beside them. Exported for the plugin surface, so a
+ * full-window editor shows the header's own model rather than a copy.
+ */
+export {
+  DocumentSaveAndPublish,
+  useDocumentLifeStage,
+  type DocumentLifeStage,
+} from "../components/features/entries/EntryForm/DocumentSavePublish";
+
+/**
  * How a document view restores its own field from a recovery point, as an edit
  * it can undo. Exported for the plugin surface.
  */

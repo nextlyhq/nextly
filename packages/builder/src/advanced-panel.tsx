@@ -1,5 +1,6 @@
 /**
- * The block's HTML surface: its `id`, and the attributes an author may add.
+ * The block's HTML surface: its anchor (`id`), its own CSS classes, and the
+ * attributes an author may add.
  *
  * ## Why these two sit together, and away from Content and Style
  *
@@ -25,9 +26,11 @@
  *
  * @module advanced-panel
  */
+import { checkCssClassNames, findNode } from "@nextlyhq/blocks-engine";
 import { registeredBlocks } from "@nextlyhq/blocks-react";
 import type { BlockResolver } from "@nextlyhq/blocks-react";
 import { Button, Input, Label } from "@nextlyhq/ui";
+import { Plus } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -342,13 +345,16 @@ export function AdvancedPanel({
   }, [active]);
 
   /*
-   * Selecting another block still DESTROYS this panel, through the key on it,
-   * and so does closing the inspector. Neither passes through the effect above,
-   * so the draft is committed here as well.
+   * Selecting another block DESTROYS this panel, through the key on it, and
+   * so does closing the inspector. Neither passes through the effect above,
+   * so a panel still on screen commits its draft here as well. One that was
+   * not has already settled it on leaving the screen, and nothing can be
+   * typed in it since: written again from the props it was last drawn with,
+   * it would put back what an undo made since then took away.
    */
   React.useEffect(
     () => () => {
-      write.current(latest.current);
+      if (shown.current) write.current(latest.current);
     },
     []
   );
@@ -427,7 +433,7 @@ export function AdvancedPanel({
         </p>
       )}
       <div className="nx-inspector__field">
-        <Label htmlFor="nx-block-css-id">CSS id</Label>
+        <Label htmlFor="nx-block-css-id">Anchor (ID)</Label>
         <Input
           id="nx-block-css-id"
           value={draft.id}
@@ -447,10 +453,7 @@ export function AdvancedPanel({
           }}
         />
         {idProblem === undefined ? (
-          <p className="nx-inspector__hint">
-            Becomes this block&rsquo;s <code>id</code>, so a link can point at
-            it. It must be different from every other block&rsquo;s.
-          </p>
+          <p className="nx-inspector__hint">Lets a link jump here: #your-id</p>
         ) : (
           <p
             className="nx-attributes__problem"
@@ -494,6 +497,13 @@ export function AdvancedPanel({
         )}
       </div>
 
+      <CssClassesField
+        nodeId={nodeId}
+        stored={storedClassesOf(editor, nodeId)}
+        editor={editor}
+        active={active}
+      />
+
       <fieldset className="nx-attributes">
         <legend className="nx-attributes__legend">Attributes</legend>
         {draft.rows.length === 0 ? (
@@ -532,10 +542,13 @@ export function AdvancedPanel({
             </ul>
           </>
         )}
+        {/* A button that looks like one, with an edge: a ghost button here
+            read as indented text. */}
         <Button
           type="button"
-          variant="ghost"
+          variant="outline"
           size="sm"
+          className="nx-attributes__add"
           onClick={() =>
             setDraft(current => ({
               ...current,
@@ -543,9 +556,185 @@ export function AdvancedPanel({
             }))
           }
         >
+          <Plus aria-hidden="true" size={14} />
           Add attribute
         </Button>
       </fieldset>
+    </div>
+  );
+}
+
+/** The block's own class text as stored, or `undefined` where it has none. */
+function storedClassesOf(
+  editor: EditorState,
+  nodeId: string
+): string | undefined {
+  const value: unknown = findNode(editor.document.nodes, nodeId)?.cssClasses;
+  return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * The names of `text` to judge now: every name once the author has finished
+ * the field, and while they type only the names a space has closed, so a name
+ * half typed (`nx` on its way to `nxt-card`) is not refused yet.
+ */
+function finishedText(text: string, finished: boolean): string {
+  return finished ? text : text.replace(/[^\t\n\f\r ]+$/, "");
+}
+
+/**
+ * "CSS classes": the block's own class names, separated by spaces, added to
+ * its root element beside the classes Nextly generates. Judged by the same
+ * rule the save and the renderers use, name by name: the valid names are
+ * written, and each refused one is listed under the field with the reason,
+ * the author's text kept so it can be fixed.
+ *
+ * Written when the author finishes (Enter, leaving the field, the tab or the
+ * block), as the anchor and attributes are, so an undo is one step per edit.
+ */
+function CssClassesField({
+  nodeId,
+  stored,
+  editor,
+  active,
+}: {
+  nodeId: string;
+  stored: string | undefined;
+  editor: EditorState;
+  active: boolean;
+}): React.JSX.Element {
+  const id = React.useId();
+  const [draft, setDraft] = React.useState(stored ?? "");
+  // Whether the field holds what was last finished, so every name is judged.
+  const [finished, setFinished] = React.useState(true);
+  const [refusal, setRefusal] = React.useState<string | undefined>(undefined);
+  // The text the field was filled with or last saved at: leaving a field
+  // nobody changed writes nothing, even where the stored text would tidy.
+  const loaded = React.useRef(stored ?? "");
+  // What this field last wrote, so its own echo is told from an undo.
+  const lastWritten = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (
+      lastWritten.current !== null &&
+      lastWritten.current === (stored ?? "")
+    ) {
+      lastWritten.current = null;
+      return;
+    }
+    lastWritten.current = null;
+    setDraft(stored ?? "");
+    setFinished(true);
+    loaded.current = stored ?? "";
+  }, [stored]);
+
+  const latest = React.useRef(draft);
+  latest.current = draft;
+  const commit = React.useRef<() => void>(() => {});
+  commit.current = (): void => {
+    const text = latest.current;
+    setFinished(true);
+    // Back to what was saved: nothing is pending, so no save failed either.
+    if (text === loaded.current) {
+      setRefusal(undefined);
+      return;
+    }
+    const next = checkCssClassNames(text).valid.join(" ");
+    if (next === (stored ?? "")) {
+      loaded.current = text;
+      setRefusal(undefined);
+      return;
+    }
+    // Asked of the live document, as every write in the panel asks.
+    const locked = designReadOnlyReason(
+      editor.document,
+      nodeId,
+      lockViewOf(editor)
+    );
+    if (locked !== undefined) {
+      setRefusal(locked);
+      return;
+    }
+    const applied = editor.apply(
+      next === ""
+        ? { kind: "update", id: nodeId, patch: {}, unset: ["cssClasses"] }
+        : { kind: "update", id: nodeId, patch: { cssClasses: next } }
+    );
+    // A refused save leaves `loaded` where it was, so finishing the field
+    // again tries again once whatever refused it has cleared.
+    if (applied === null) {
+      setRefusal(REFUSED);
+      return;
+    }
+    loaded.current = text;
+    setRefusal(undefined);
+    lastWritten.current = next;
+  };
+
+  // Written when the author looks away (the tabs move on `mousedown`, before
+  // the blur), and when the field goes away while on screen.
+  const shown = React.useRef(active);
+  React.useEffect(() => {
+    if (shown.current === active) return;
+    shown.current = active;
+    if (!active) commit.current();
+  }, [active]);
+  React.useEffect(
+    () => () => {
+      if (shown.current) commit.current();
+    },
+    []
+  );
+
+  const refused = checkCssClassNames(finishedText(draft, finished)).refused;
+  const hintId = `${id}-hint`;
+  const refusedId = `${id}-refused`;
+  return (
+    <div className="nx-inspector__field">
+      <Label htmlFor={id}>CSS classes</Label>
+      <Input
+        id={id}
+        value={draft}
+        placeholder="none"
+        spellCheck={false}
+        autoComplete="off"
+        aria-describedby={refused.length === 0 ? hintId : refusedId}
+        aria-invalid={refused.length === 0 ? undefined : true}
+        onChange={event => {
+          setDraft(event.target.value);
+          setFinished(false);
+        }}
+        onBlur={() => commit.current()}
+        onKeyDown={event => {
+          if (event.key !== "Enter") return;
+          event.preventDefault();
+          commit.current();
+        }}
+      />
+      {refused.length === 0 ? (
+        <p className="nx-inspector__hint" id={hintId}>
+          Separate names with spaces.
+        </p>
+      ) : (
+        <ul
+          className="nx-css-classes__refused"
+          id={refusedId}
+          aria-label="Names not added"
+        >
+          {refused.map((each, at) => (
+            <li
+              key={`${String(at)}:${each.name}`}
+              className="nx-attributes__problem"
+            >
+              {each.reason}
+            </li>
+          ))}
+        </ul>
+      )}
+      {refusal === undefined ? null : (
+        <p className="nx-attributes__problem" role="alert">
+          {refusal}
+        </p>
+      )}
     </div>
   );
 }

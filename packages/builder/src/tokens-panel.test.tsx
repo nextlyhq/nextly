@@ -28,6 +28,7 @@ import {
   type TokensPanelProps,
   type VariablesPreview,
 } from "./tokens-panel";
+import type { VariableGroup } from "./tokens-studio";
 
 type HostedProps = Omit<TokensPanelProps, "currentTokens" | "onChange"> &
   Partial<Pick<TokensPanelProps, "currentTokens" | "onChange">>;
@@ -182,6 +183,20 @@ describe("the rows", () => {
     } finally {
       delete css.supports;
     }
+  });
+
+  it("clears a colour's refusal once its stored value is typed back", async () => {
+    render(<Hosted tokens={SITE} />);
+    const colour = await openEditor(/^Brand/);
+    const light = within(colour).getByLabelText(/^Light/);
+    fireEvent.change(light, { target: { value: "#12345" } });
+    fireEvent.keyDown(light, { key: "Enter" });
+    expect(light.getAttribute("aria-invalid")).toBe("true");
+    // The value it held, put back, is the fix: the refusal goes.
+    fireEvent.change(light, { target: { value: "#1d2b6b" } });
+    fireEvent.keyDown(light, { key: "Enter" });
+    expect(light.getAttribute("aria-invalid")).toBeNull();
+    expect(within(colour).queryByText(/is not a hex colour/)).toBeNull();
   });
 
   it("lets typing take over from a picker gesture", async () => {
@@ -450,6 +465,17 @@ describe("the rows", () => {
 async function openEditor(name: RegExp): Promise<HTMLElement> {
   fireEvent.click(row(name));
   return screen.findByRole("dialog");
+}
+
+/**
+ * A size as its field shows it: the number in the field, then the unit in the
+ * menu beside it.
+ */
+function sizeShown(field: HTMLElement): string {
+  const unit = field
+    .closest(".nx-style-inspector__numeric")
+    ?.querySelector(".nx-style-inspector__unit");
+  return `${(field as HTMLInputElement).value}${unit?.textContent ?? ""}`;
 }
 
 /** Type into a field and press Enter, which commits it. */
@@ -795,10 +821,7 @@ describe("dark values for every kind", () => {
     const editor = await openEditor(/^Space 4/);
     const darkOf = () =>
       (onChange.mock.calls.at(-1)?.[0] as SiteTokenSet).tokens[4]?.values.dark;
-    expect(within(editor).getByLabelText("Light")).toHaveProperty(
-      "value",
-      "1rem"
-    );
+    expect(sizeShown(within(editor).getByLabelText("Light"))).toBe("1rem");
     expect(within(editor).getByText("Same as light")).toBeDefined();
     fireEvent.click(
       within(editor).getByRole("button", { name: "Add dark value" })
@@ -817,8 +840,7 @@ describe("dark values for every kind", () => {
     render(<Hosted tokens={SITE} onChange={onChange} />);
     const editor = await openEditor(/^Body/);
     const saved = () => onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
-    expect(within(editor).getByLabelText("Size, light")).toHaveProperty(
-      "value",
+    expect(sizeShown(within(editor).getByLabelText("Size, light"))).toBe(
       "16px"
     );
     expect(within(editor).getByLabelText("Line height, light")).toHaveProperty(
@@ -1541,5 +1563,257 @@ describe("each half of a type pair's dark value", () => {
     expect(
       within(editor).getByRole("button", { name: "Use light size" })
     ).toBeDefined();
+  });
+});
+
+describe("a new variable's code name follows its name", () => {
+  it("however the name field is left, a click outside included", async () => {
+    // A click outside closed the editor before the name field's blur had
+    // committed, so the code name was made from the placeholder name and
+    // the rename was lost for good.
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
+    const editor = await screen.findByRole("dialog");
+    const name = within(editor).getByLabelText("Name");
+    name.focus();
+    fireEvent.change(name, { target: { value: "Brand accent" } });
+    // Away from the editor, with the name still in its field.
+    fireEvent.pointerDown(document.body);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const saved = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
+    const added = saved.tokens.find(token => token.label === "Brand accent");
+    expect(added?.name).toBe("color.brand-accent");
+    expect(
+      document.querySelector('[data-variable-key="color.brand-accent"]')
+    ).not.toBeNull();
+  });
+
+  it("is not what search matches: only the name shown is", () => {
+    const named: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.new-colour",
+          label: "Brand accent",
+          kind: "color",
+          values: { light: "#2563eb" },
+        },
+      ],
+    };
+    render(<Hosted tokens={named} />);
+    const search = screen.getByRole("searchbox", { name: "Search variables" });
+    fireEvent.change(search, { target: { value: "new" } });
+    expect(
+      document.querySelector('[data-variable-key="color.new-colour"]')
+    ).toBeNull();
+    fireEvent.change(search, { target: { value: "accent" } });
+    expect(
+      document.querySelector('[data-variable-key="color.new-colour"]')
+    ).not.toBeNull();
+  });
+});
+
+describe("a Design tab's view of the variables", () => {
+  /** The panel under a host that keeps the folds, as the Design panel does. */
+  function Folding({
+    search,
+    groups,
+    onSearch,
+    initiallyFolded = [],
+  }: {
+    search?: string;
+    groups?: readonly VariableGroup[];
+    onSearch?: (query: string) => void;
+    initiallyFolded?: readonly string[];
+  }): React.JSX.Element {
+    const [folded, setFolded] = React.useState<ReadonlySet<string>>(
+      new Set(initiallyFolded)
+    );
+    return (
+      <Hosted
+        tokens={SITE}
+        {...(search === undefined ? {} : { search })}
+        {...(groups === undefined ? {} : { groups })}
+        {...(onSearch === undefined ? {} : { onSearch })}
+        folds={{
+          folded,
+          onFold: (group, fold) =>
+            setFolded(current => {
+              const next = new Set(current);
+              if (fold) next.add(group);
+              else next.delete(group);
+              return next;
+            }),
+        }}
+      />
+    );
+  }
+  const regions = (): string[] =>
+    screen
+      .getAllByRole("region")
+      .map(region => region.getAttribute("aria-labelledby") ?? "")
+      .map(id => document.getElementById(id)?.textContent ?? "");
+
+  it("lists only its tab's groups", () => {
+    render(<Folding groups={["colours"]} />);
+    expect(regions()).toEqual(["Colours2"]);
+    expect(screen.queryByRole("button", { name: /^Space 4/ })).toBeNull();
+  });
+
+  it("folds a group by its heading, which says how many it holds", () => {
+    render(<Folding />);
+    const toggle = screen.getByRole("button", { name: "Colours, 2" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(row(/^Brand/)).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("button", { name: /^Brand/ })).toBeNull();
+    // The other groups stay open.
+    expect(row(/^Space 4/)).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(row(/^Brand/)).toBeTruthy();
+  });
+
+  it("takes its search from the host, opens every group it matches in, and folds none", () => {
+    const { rerender } = render(<Folding />);
+    fireEvent.click(screen.getByRole("button", { name: "Colours, 2" }));
+    expect(screen.queryByRole("button", { name: /^Brand/ })).toBeNull();
+    // A search kept by the host: no search box of its own.
+    rerender(<Folding search="brand" />);
+    expect(screen.queryByRole("searchbox")).toBeNull();
+    expect(row(/^Brand/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Space 4/ })).toBeNull();
+    // Cleared: the group folded before is folded again.
+    rerender(<Folding search="" />);
+    expect(screen.queryByRole("button", { name: /^Brand/ })).toBeNull();
+    expect(row(/^Space 4/)).toBeTruthy();
+  });
+
+  it("offers the add of a group hidden while empty, so its first variable can be made", async () => {
+    // Spacing lists "Other values" only once it holds something; its add is
+    // a worded line at the end of the tab meanwhile.
+    render(<Folding groups={["spacing", "other"]} />);
+    expect(screen.queryByRole("button", { name: /^Other values/ })).toBeNull();
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Add another variable" }),
+      { button: 0, ctrlKey: false }
+    );
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Size" }));
+    // The group appears with its first variable, its editor open (which
+    // hides the rest of the page from the accessibility tree).
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /^Other values, 1$/, hidden: true })
+    ).toBeTruthy();
+  });
+
+  it("opens a folded group for what is added to it", async () => {
+    render(<Folding />);
+    const toggle = screen.getByRole("button", { name: "Colours, 2" });
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: "Colours, 3", hidden: true })
+        .getAttribute("aria-expanded")
+    ).toBe("true");
+  });
+
+  it("empties the host's search when a variable is added, so its row is drawn", () => {
+    const onSearch = vi.fn();
+    render(<Folding search="brand" onSearch={onSearch} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
+    expect(onSearch).toHaveBeenCalledWith("");
+  });
+
+  it("opens a hidden group the author had folded, for its first variable", async () => {
+    render(
+      <Folding groups={["spacing", "other"]} initiallyFolded={["other"]} />
+    );
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Add another variable" }),
+      { button: 0, ctrlKey: false }
+    );
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Size" }));
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: /^Other values, 1$/, hidden: true })
+        .getAttribute("aria-expanded")
+    ).toBe("true");
+  });
+
+  it("opens a folded group for what is added during a search, once the search is cleared", () => {
+    const { rerender } = render(<Folding initiallyFolded={["colours"]} />);
+    rerender(<Folding initiallyFolded={["colours"]} search="brand" />);
+    fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
+    // The search is the host's to clear; cleared, the group stays open.
+    rerender(<Folding initiallyFolded={["colours"]} search="" />);
+    expect(
+      screen
+        .getByRole("button", { name: /^Colours, \d+$/, hidden: true })
+        .getAttribute("aria-expanded")
+    ).toBe("true");
+  });
+
+  it("puts focus on the host's search once a variable is removed", async () => {
+    // The row and its editor go with the variable; the host's search is the
+    // control that stays, as the view's own search is for a standalone view.
+    function WithSearch(): React.JSX.Element {
+      const searchRef = React.useRef<HTMLInputElement>(null);
+      return (
+        <>
+          <input aria-label="Host search" ref={searchRef} />
+          <Hosted tokens={SITE} search="" searchRef={searchRef} />
+        </>
+      );
+    }
+    render(<WithSearch />);
+    const editor = await openEditor(/^Brand/);
+    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    fireEvent.click(
+      await within(editor).findByRole("button", { name: /^Remove Brand/ })
+    );
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("textbox", { name: "Host search" })
+      )
+    );
+  });
+});
+
+describe("renaming from the keyboard", () => {
+  it("opens a row's editor on F2 with its name ready to type over", async () => {
+    render(<Hosted tokens={SITE} />);
+    const brand = row(/^Brand/);
+    brand.focus();
+    fireEvent.keyDown(brand, { key: "F2" });
+    const editor = await screen.findByRole("dialog");
+    const name = within(editor).getByLabelText("Name") as HTMLInputElement;
+    await waitFor(() => expect(document.activeElement).toBe(name));
+    expect(name.selectionStart).toBe(0);
+    expect(name.selectionEnd).toBe(name.value.length);
+  });
+
+  it("closes the editor on Escape and hands focus back to its row", async () => {
+    render(<Hosted tokens={SITE} />);
+    const brand = row(/^Brand/);
+    brand.focus();
+    fireEvent.keyDown(brand, { key: "F2" });
+    const editor = await screen.findByRole("dialog");
+    const name = within(editor).getByLabelText("Name");
+    await waitFor(() => expect(document.activeElement).toBe(name));
+    fireEvent.keyDown(name, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(row(/^Brand/)));
+  });
+
+  it("offers no rename on F2 where the variables are read-only", () => {
+    render(<Hosted tokens={SITE} readOnly />);
+    const brand = row(/^Brand/);
+    fireEvent.keyDown(brand, { key: "F2" });
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

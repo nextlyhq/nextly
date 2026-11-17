@@ -2,8 +2,8 @@
  * Merge code-first and UI-built entities into one set per type (spec §4.11).
  *
  * Code-first wins on slug collision: a UI entity whose slug already exists in
- * the code config is dropped (and reported via `droppedUiSlugs` so the caller
- * can warn). The result feeds the existing `buildDesiredSnapshotFromConfig` /
+ * the code config is dropped (and reported via `shadowed`, with its kind, so the
+ * caller can warn). The result feeds the existing `buildDesiredSnapshotFromConfig` /
  * `generateMigration` — no new snapshot logic.
  *
  * @module domains/schema/ui-schema/merge
@@ -34,12 +34,34 @@ export interface MergeUiEntitiesArgs {
   manifest: UiSchemaManifest;
 }
 
+/** The three kinds of entity the Builder makes, as the snapshot's settings record names them. */
+export type BuilderEntityKind = "collection" | "single" | "fieldGroup";
+
+/** A Builder entity left out because a code-first entity of its kind has its slug. */
+export interface ShadowedBuilderEntity {
+  kind: BuilderEntityKind;
+  slug: string;
+}
+
 export interface MergeUiEntitiesResult {
   collections: MinimalConfigEntity[];
   singles: MinimalConfigEntity[];
   components: MinimalConfigEntity[];
-  /** UI slugs dropped because a code entity already owns that slug. */
-  droppedUiSlugs: string[];
+  /**
+   * Builder entities dropped because a code-first entity of the same kind owns their slug, each
+   * with its kind: shadowing is per kind, so a caller naming one must say which kind it is.
+   */
+  shadowed: ShadowedBuilderEntity[];
+  /**
+   * The Builder's entries no code-first entity of their kind shadows, as the definition holds
+   * them: the ones the merged lists carry. Readers that judge the definition or write its
+   * registry rows take these, so the shadowing is decided here alone.
+   */
+  surviving: {
+    collections: UiSchemaEntity[];
+    singles: UiSchemaEntity[];
+    components: UiSchemaEntity[];
+  };
 }
 
 /**
@@ -79,15 +101,18 @@ function mergeType(
   code: MinimalConfigEntity[],
   ui: UiSchemaEntity[],
   prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix,
-  dropped: string[]
+  kind: BuilderEntityKind,
+  shadowed: ShadowedBuilderEntity[],
+  surviving: UiSchemaEntity[]
 ): MinimalConfigEntity[] {
   const codeSlugs = new Set(code.map(c => c.slug));
   const merged = [...code];
   for (const e of ui) {
     if (codeSlugs.has(e.slug)) {
-      dropped.push(e.slug);
+      shadowed.push({ kind, slug: e.slug });
       continue;
     }
+    surviving.push(e);
     merged.push(uiToMinimal(e, prefix));
   }
   return merged;
@@ -148,26 +173,38 @@ export function applyDeferredExtendsToManifest(
 export function mergeUiEntities(
   args: MergeUiEntitiesArgs
 ): MergeUiEntitiesResult {
-  const droppedUiSlugs: string[] = [];
+  const shadowed: ShadowedBuilderEntity[] = [];
+  const surviving: MergeUiEntitiesResult["surviving"] = {
+    collections: [],
+    singles: [],
+    components: [],
+  };
   return {
     collections: mergeType(
       args.codeCollections,
       args.manifest.collections,
       "dc_",
-      droppedUiSlugs
+      "collection",
+      shadowed,
+      surviving.collections
     ),
     singles: mergeType(
       args.codeSingles,
       args.manifest.singles,
       "single_",
-      droppedUiSlugs
+      "single",
+      shadowed,
+      surviving.singles
     ),
     components: mergeType(
       args.codeComponents,
       args.manifest.components,
       STORAGE_FORMAT.tablePrefix,
-      droppedUiSlugs
+      "fieldGroup",
+      shadowed,
+      surviving.components
     ),
-    droppedUiSlugs,
+    shadowed,
+    surviving,
   };
 }

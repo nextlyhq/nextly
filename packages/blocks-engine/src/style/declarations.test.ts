@@ -379,3 +379,115 @@ describe("whether a stored background paints an image", () => {
     expect(paintsBackgroundImage("gradient", undefined)).toBe(false);
   });
 });
+
+describe("a child's share of a Row or a Grid, and a grid's item alignment", () => {
+  const emitted = (values: Record<string, unknown>) =>
+    compileStyleValues(values, "/p").declarations.map(
+      each => `${each.property}: ${each.value}`
+    );
+
+  it("compiles each new property to its CSS", () => {
+    expect(
+      emitted({
+        flexGrow: 1,
+        flexShrink: 0,
+        flexBasis: "240px",
+        alignSelf: "start",
+        justifySelf: "center",
+        order: -1,
+        justifyItems: "stretch",
+      })
+    ).toEqual([
+      "align-self: start",
+      "flex-basis: 240px",
+      "flex-grow: 1",
+      "flex-shrink: 0",
+      "justify-items: stretch",
+      "justify-self: center",
+      "order: -1",
+    ]);
+  });
+
+  it("takes the keywords each one names", () => {
+    expect(emitted({ flexBasis: "content" })).toEqual(["flex-basis: content"]);
+    expect(emitted({ flexBasis: "fit-content" })).toEqual([
+      "flex-basis: fit-content",
+    ]);
+    expect(emitted({ flexBasis: "50%" })).toEqual(["flex-basis: 50%"]);
+    expect(emitted({ alignSelf: "baseline" })).toEqual([
+      "align-self: baseline",
+    ]);
+    expect(emitted({ justifySelf: "end" })).toEqual(["justify-self: end"]);
+    expect(emitted({ justifyItems: "center" })).toEqual([
+      "justify-items: center",
+    ]);
+  });
+
+  it("writes nothing for a value the property cannot take", () => {
+    // A negative share and a fractional order are discarded by a browser, and
+    // `left` is refused by the catalog's logical-only policy.
+    expect(emitted({ flexGrow: -1 })).toEqual([]);
+    expect(emitted({ flexShrink: -2 })).toEqual([]);
+    expect(emitted({ order: 1.5 })).toEqual([]);
+    expect(emitted({ alignSelf: "left" })).toEqual([]);
+    expect(emitted({ justifySelf: "right" })).toEqual([]);
+    expect(emitted({ flexBasis: "red" })).toEqual([]);
+    // Values a browser would drop on these properties, which Baseline does
+    // not yet mark widely available there.
+    expect(emitted({ flexBasis: "stretch" })).toEqual([]);
+    expect(emitted({ flexBasis: "fit-content(10rem)" })).toEqual([]);
+    expect(emitted({ justifySelf: "safe end" })).toEqual([]);
+    expect(emitted({ justifyItems: "legacy center" })).toEqual([]);
+  });
+});
+
+describe("an outline, with its offset", () => {
+  const emitted = (values: Record<string, unknown>) =>
+    compileStyleValues(values, "/p").declarations.map(
+      each => `${each.property}: ${each.value}`
+    );
+
+  it("compiles each part to its own longhand", () => {
+    expect(
+      emitted({
+        outline: {
+          width: "2px",
+          style: "solid",
+          color: "#00e",
+          offset: "4px",
+        },
+      })
+    ).toEqual([
+      "outline-color: #00e",
+      "outline-offset: 4px",
+      "outline-style: solid",
+      "outline-width: 2px",
+    ]);
+  });
+
+  it("takes the browser's own ring, the width keywords, a token and an inward offset", () => {
+    expect(emitted({ outline: { style: "auto" } })).toEqual([
+      "outline-style: auto",
+    ]);
+    expect(emitted({ outline: { width: "thick" } })).toEqual([
+      "outline-width: thick",
+    ]);
+    expect(
+      emitted({ outline: { color: { $token: "color.primary" } } })
+    ).toEqual(["outline-color: var(--site-color-primary)"]);
+    // Negative draws the ring inside the border box, over its edge.
+    expect(emitted({ outline: { offset: "-2px" } })).toEqual([
+      "outline-offset: -2px",
+    ]);
+  });
+
+  it("writes nothing for a part the property cannot take", () => {
+    // A percentage resolves against nothing on either, `hidden` is a border
+    // style an outline does not have, and a width is never negative.
+    expect(emitted({ outline: { width: "10%" } })).toEqual([]);
+    expect(emitted({ outline: { width: "-1px" } })).toEqual([]);
+    expect(emitted({ outline: { offset: "10%" } })).toEqual([]);
+    expect(emitted({ outline: { style: "hidden" } })).toEqual([]);
+    expect(emitted({ outline: { color: "16px" } })).toEqual([]);
+  });
+});

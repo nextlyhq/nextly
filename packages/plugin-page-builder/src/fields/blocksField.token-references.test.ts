@@ -4,7 +4,7 @@
  * what fences a variable's removal: once the site style is written without
  * it, no later save can bring a first use of it.
  */
-import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
+import { createBlockRegistry, DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
 import { NextlyError, type PluginFieldWrite } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
@@ -15,6 +15,9 @@ import {
 
 import type { CompositionSetup } from "./blocks-composition";
 import { blocksFieldType } from "./blocksField";
+
+/** The site's block registry these tests judge against: it holds none. */
+const blocks = createBlockRegistry();
 
 /** A page whose nodes each use the variables listed, one value apiece. */
 const page = (...variables: string[][]) => ({
@@ -90,12 +93,13 @@ function setup() {
   const composition: CompositionSetup = {
     store: { collection: "components", field: "definition" },
     limits: DEFAULT_LIMITS,
+    blocks,
     composesDocuments: false,
     siteDefinitions,
   };
   return {
     siteDefinitions,
-    field: blocksFieldType(undefined, () => composition),
+    field: blocksFieldType(undefined, () => composition, blocks),
   };
 }
 
@@ -303,6 +307,7 @@ describe("an import's judging write, counting the variables it adds", () => {
     const composition: CompositionSetup = {
       store: { collection: "components", field: "definition" },
       limits: DEFAULT_LIMITS,
+      blocks,
       composesDocuments: false,
       siteDefinitions: async () => ({
         classIds: new Set<string>(),
@@ -310,7 +315,7 @@ describe("an import's judging write, counting the variables it adds", () => {
         tokenIds: withProvisionalTokenIds(SITE_VARIABLES),
       }),
     };
-    const field = blocksFieldType(undefined, () => composition);
+    const field = blocksFieldType(undefined, () => composition, blocks);
     return (value: unknown) =>
       field.validate?.(value, {
         path: "content",

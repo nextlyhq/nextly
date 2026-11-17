@@ -179,7 +179,7 @@ async function region(page: Page, area: "header" | "footer") {
 }
 
 async function choose(page: Page, label: string | RegExp): Promise<void> {
-  await page.getByRole("combobox", { name: "Layout" }).click();
+  await page.getByRole("combobox", { name: "Header & footer" }).click();
   await page.getByRole("option", { name: label }).click();
 }
 
@@ -190,34 +190,36 @@ test("offers one Layout choice and says which Layout is in effect and why", asyn
 
   // On the entry form's Page Builder card.
   await gotoAdmin(page, `/collections/pages/${pageId}`);
-  const cardPicker = page.getByRole("combobox", { name: "Layout" });
+  const cardPicker = page.getByRole("combobox", { name: "Header & footer" });
   await expect(cardPicker).toBeVisible({ timeout: 30_000 });
-  await expect(cardPicker).toContainText(`Site default · ${MAIN}`);
+  await expect(cardPicker).toContainText(`Site default (${MAIN})`);
 
   // And in the editor's Settings.
   await openBuilder(page, pageId);
   await openSettings(page);
-  const picker = page.getByRole("combobox", { name: "Layout" });
+  const picker = page.getByRole("combobox", { name: "Header & footer" });
   await expect(picker).toBeVisible();
   await expect(
     page.getByText(
-      `Follows the site default, ${MAIN}, because this page doesn't choose its own Layout.`
+      `Follows the site default, ${MAIN}, because this page doesn't choose its own header & footer set.`
     )
   ).toBeVisible();
 
   await picker.click();
-  // The site default first, by name; published Layouts; an unpublished one
-  // marked; and no header or footer last. Other Layouts the suite's database
-  // holds sit among them, so the order is asserted between these.
+  // The site default first, by name, and not again under its own name;
+  // published Layouts; an unpublished one marked; and no header or footer
+  // last. Other Layouts the suite's database holds sit among them, so the
+  // order is asserted between these.
   const options = await page.getByRole("option").allTextContents();
-  expect(options[0]).toBe(`Site default · ${MAIN}`);
+  expect(options[0]).toBe(
+    `Site default (${MAIN}) · Follows the site if the default changes`
+  );
   expect(options.at(-1)).toBe("No header or footer");
   const unfinished = options.indexOf(
     `${UNFINISHED} (not published: the site default shows until it is)`
   );
   expect(options.indexOf(LANDING)).toBeGreaterThan(0);
-  expect(options.indexOf(MAIN)).toBeGreaterThan(0);
-  expect(unfinished).toBeGreaterThan(options.indexOf(MAIN));
+  expect(options).not.toContain(MAIN);
   expect(unfinished).toBeGreaterThan(options.indexOf(LANDING));
   await page.keyboard.press("Escape");
 
@@ -258,9 +260,9 @@ test("draws the Layout's regions locked on the canvas, with a way to open the La
   await header.click();
   expect(await selection(page)).toEqual([]);
   const tag = header.getByRole("status");
-  await expect(tag).toContainText(`Header, from Layout ${MAIN}`);
+  await expect(tag).toContainText(`Header, from header & footer set ${MAIN}`);
   const edit = header.getByRole("link", {
-    name: `Edit Layout ${MAIN} (opens in a new tab)`,
+    name: `Edit header & footer set ${MAIN} (opens in a new tab)`,
   });
   await expect(edit).toHaveAttribute("target", "_blank");
   await expect(edit).toHaveAttribute(
@@ -274,7 +276,9 @@ test("draws the Layout's regions locked on the canvas, with a way to open the La
   await page.keyboard.press("Escape");
   await expect(tag).toHaveCount(0);
   await expect(
-    header.getByRole("button", { name: `Header, from Layout ${MAIN}, locked` })
+    header.getByRole("button", {
+      name: `Header, from header & footer set ${MAIN}, locked`,
+    })
   ).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(header.getByRole("status")).toBeVisible();
@@ -282,7 +286,7 @@ test("draws the Layout's regions locked on the canvas, with a way to open the La
   // Layers: a read-only row above the page's blocks.
   await openLayers(page);
   const row = page.getByRole("button", {
-    name: `Header, from Layout ${MAIN}, locked`,
+    name: `Header, from header & footer set ${MAIN}, locked`,
   });
   await expect(row).toBeVisible();
 

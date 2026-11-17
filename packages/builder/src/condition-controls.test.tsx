@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 /**
- * "Show when" in a block's Content tab: what it shows for a block with no
+ * "Show when" in a block's Advanced tab: what it shows for a block with no
  * conditions, one AND group, groups set through the API and a condition the
  * page can't check, and what it writes.
  */
@@ -99,10 +99,18 @@ async function shown(document: BlockDocument): Promise<void> {
 }
 
 describe("Show when", () => {
-  it("says a block with no conditions is always shown, and names its entry", async () => {
+  it("says a block with no conditions is always shown, with a way to add one", async () => {
     await shown(withConditions());
-    expect(screen.getByText("Always shown.")).toBeTruthy();
-    expect(screen.getByText("This post")).toBeTruthy();
+    expect(screen.getByText("Always shown")).toBeTruthy();
+    const add = screen.getByRole("button", { name: "Add condition" });
+    // "+ Add condition": the plus drawn before the words.
+    expect(add.textContent).toBe("Add condition");
+    expect(add.querySelector("svg.lucide-plus")).not.toBeNull();
+  });
+
+  it("names no entry outside a list, where whose fields are read is plain", async () => {
+    await shown(withConditions());
+    expect(screen.queryByText("This post")).toBeNull();
   });
 
   it("draws one AND group as sentences", async () => {
@@ -115,9 +123,7 @@ describe("Show when", () => {
       ])
     );
     expect(
-      screen.getByText(
-        "Show this block only when all of these match this post."
-      )
+      screen.getByText("Show this block only when all of these are true.")
     ).toBeTruthy();
     expect(screen.getByTitle("Title contains “guide”")).toBeTruthy();
     // An older spelling reads as the operator it names.
@@ -176,7 +182,7 @@ describe("Show when", () => {
       hidden,
     ]) {
       await shown(unreadable);
-      expect(screen.queryByText("Always shown.")).toBeNull();
+      expect(screen.queryByText("Always shown")).toBeNull();
       expect(screen.getByRole("alert").textContent).toContain(
         "Visitors never see this block."
       );
@@ -295,6 +301,51 @@ describe("Show when", () => {
     expect(
       findNode(editorRef!.document.nodes, "a")?.visibility
     ).toBeUndefined();
+  });
+});
+
+describe("Show when, inside a Collection list", () => {
+  /** Block `a` inside a list of posts. */
+  const inPosts = (conditions?: unknown): BlockDocument =>
+    ({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "list",
+          type: "core/collection-loop",
+          version: 1,
+          props: { collection: "posts" },
+          slots: {
+            children: [
+              {
+                id: "a",
+                type: "core/heading",
+                version: 1,
+                props: {},
+                ...(conditions === undefined
+                  ? {}
+                  : { visibility: { conditions } }),
+              },
+            ],
+          },
+        },
+      ],
+    }) as BlockDocument;
+
+  it("names whose fields its conditions read: each item of the list", async () => {
+    await shown(inPosts());
+    expect(screen.getByText("Each post in the list")).toBeTruthy();
+    expect(screen.getByText("Always shown")).toBeTruthy();
+  });
+
+  it("says what its conditions must match", async () => {
+    await shown(inPosts([[{ field: "title", op: "exists" }]]));
+    expect(
+      screen.getByText(
+        "Show this block only when all of these match each post in the list."
+      )
+    ).toBeTruthy();
   });
 });
 

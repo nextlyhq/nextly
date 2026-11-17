@@ -35,12 +35,12 @@
  * @module transfer/import-route
  */
 import {
-  hasBlock,
   resolveSiteTokens,
   tokenIdentity,
   usableNamedClasses,
   COMPONENT_INSTANCE_TYPE,
   type BlockDocument,
+  type BlockRegistryReader,
   type BreakpointSet,
   type NamedClass,
   type SiteToken,
@@ -124,6 +124,8 @@ export interface ImportRouteSetup extends CompositionRouteSetup {
   readonly store?: ComponentStore;
   /** The site style the plugin's config declares, under the stored one. */
   readonly defaults?: SiteStyleData;
+  /** The site's block registry, which says which block types exist. */
+  readonly blocks: BlockRegistryReader;
 }
 
 const ImportBody = z.strictObject({
@@ -150,7 +152,7 @@ const MEDIA_SEARCH_PAGES = 20;
 async function importFile(
   req: Request,
   ctx: ImportContext,
-  setup: ImportRouteSetup = {}
+  setup: ImportRouteSetup
 ): Promise<Response> {
   requirePluginStore(ctx, setup);
   const body = await readBodyWith(req, ImportBody, "import");
@@ -174,7 +176,10 @@ async function importFile(
     plan = withProblems(plan, await styleProblems(plan, slugs.siteStyle));
   }
   if (plan.preview.ready) {
-    plan = withProblems(plan, await judgeWrites(ctx, file, plan, slugs));
+    plan = withProblems(
+      plan,
+      await judgeWrites(ctx, file, plan, slugs, setup.blocks)
+    );
   }
 
   if (body.dryRun === true) {
@@ -288,7 +293,9 @@ async function readSite(
     media: (await can("read", "media"))
       ? await existingMedia(ctx, file)
       : new Map(),
-    isRegistered: type => type === COMPONENT_INSTANCE_TYPE || hasBlock(type),
+    isRegistered: type =>
+      type === COMPONENT_INSTANCE_TYPE || setup.blocks.has(type),
+    mediaProps: type => registryMediaProps(setup.blocks, type),
     mayAddBreakpoints: await can("manage", "page-builder-site"),
   };
 }
@@ -447,8 +454,13 @@ async function grantProblems(
     (await ctx.caller?.can(action, resource)) === true;
   const needs: [boolean, string, string, string][] = [
     [creates(plan, "component"), "create", slugs.component, "add components"],
-    [creates(plan, "pattern"), "create", slugs.pattern, "add patterns"],
-    [creates(plan, "layout"), "create", slugs.layout, "add Layouts"],
+    [creates(plan, "pattern"), "create", slugs.pattern, "add saved sections"],
+    [
+      creates(plan, "layout"),
+      "create",
+      slugs.layout,
+      "add header & footer sets",
+    ],
     // An item the file holds published arrives published, which is a publish.
     [
       publishes(file, plan, "component"),
@@ -460,13 +472,13 @@ async function grantProblems(
       publishes(file, plan, "pattern"),
       "publish",
       slugs.pattern,
-      "publish patterns",
+      "publish saved sections",
     ],
     [
       publishes(file, plan, "layout"),
       "publish",
       slugs.layout,
-      "publish Layouts",
+      "publish header & footer sets",
     ],
     [
       plan.classes.create.length > 0 || plan.tokens.create.length > 0,
@@ -542,7 +554,9 @@ async function judgeWrites(
   ctx: ImportContext,
   file: TransferFile,
   plan: ImportPlan,
-  slugs: Collections
+  slugs: Collections,
+  /** The site's block registry, which says which props hold media. */
+  blocks: BlockRegistryReader
 ): Promise<ImportProblem[]> {
   const media = new Map<string, string>();
   for (const [fileId, fate] of plan.media) {
@@ -561,7 +575,7 @@ async function judgeWrites(
   const { withProvisionalVariables } = await import("./provisional-variables");
   try {
     await withProvisionalVariables(plan.tokens.create.map(tokenIdentity), () =>
-      writeDocuments(ctx, file, judged, slugs, media)
+      writeDocuments(ctx, file, judged, slugs, media, blocks)
     );
   } catch (error) {
     const verdict = verdictOf(error);
@@ -595,6 +609,8 @@ async function writeDocuments(
   plan: ImportPlan,
   slugs: Collections,
   media: ReadonlyMap<string, string>,
+  /** The site's block registry, which says which props hold media. */
+  blocks: BlockRegistryReader,
   commit = false
 ): Promise<Written> {
   const collections = ctx.services.collections;
@@ -622,7 +638,7 @@ async function writeDocuments(
       media,
     });
     const lookups = {
-      mediaProps: registryMediaProps,
+      mediaProps: (type: string) => registryMediaProps(blocks, type),
       imageExposures: (id: string) => images.get(id) ?? new Set<string>(),
     };
     // A judging write tells the hooks it runs, so one with an effect the
@@ -733,7 +749,15 @@ async function applyPlan(
     }
     await writeSiteStyle(ctx, plan, style);
     await requireStyleHeld(plan, style);
-    written = await writeDocuments(ctx, file, plan, slugs, media, true);
+    written = await writeDocuments(
+      ctx,
+      file,
+      plan,
+      slugs,
+      media,
+      setup.blocks,
+      true
+    );
   } catch (error) {
     await takeBack(ctx, uploaded, style);
     throw error;
@@ -1166,7 +1190,7 @@ function recordOf(value: unknown): Record<string, unknown> {
 }
 
 /** The import route declaration. */
-export function importRoute(setup: ImportRouteSetup = {}): {
+export function importRoute(setup: ImportRouteSetup): {
   method: "POST";
   checksAccess: true;
   path: string;

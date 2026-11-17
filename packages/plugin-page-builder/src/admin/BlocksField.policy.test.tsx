@@ -41,7 +41,7 @@ const seen: {
  * for. The real shell draws one at a time and this mock draws none unless
  * told, so a case about a panel's props names the panel.
  */
-let shownPanel: "classes" | null = null;
+let shownPanel: "styles" | null = null;
 
 /** What `usePluginClientConfig` answers with for the test in hand. */
 let clientConfig: Record<string, unknown> | undefined;
@@ -302,8 +302,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
   // The header's controls the bar places; drawn by the admin, not here.
-  DocumentSaveIndicator: () => null,
-  DocumentPrimaryAction: () => null,
+  DocumentSaveAndPublish: () => null,
+  useDocumentLifeStage: () => null,
   useDocumentActions: () => null,
   // `null` is a real answer the pill handles — "no status has been persisted",
   // which is what a create form and a preview both look like — so this mounts
@@ -1106,7 +1106,7 @@ describe("what the inspector is told about provenance", () => {
         },
       ],
     };
-    shownPanel = "classes";
+    shownPanel = "styles";
 
     openEditor();
 
@@ -1148,7 +1148,7 @@ describe("what the Shared styles tab says a style declares", () => {
    * say it declares.
    */
   async function summaryAsDrawn(): Promise<string> {
-    shownPanel = "classes";
+    shownPanel = "styles";
     openEditor();
     const props = seen.classes as
       | React.ComponentProps<typeof RealSharedStylesPanel>

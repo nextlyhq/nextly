@@ -376,15 +376,18 @@ function choiceOf(row: Row): LayoutChoice | null {
   const id = rowId(row);
   if (id === null) return null;
   const published = row.status === "published";
+  // The main row of a published Layout IS its published version; a pending
+  // edit lives in the working draft, which this read did not ask for. The
+  // main row of one never published holds its own areas.
+  const stored = regionsOf(row);
   return {
     id,
     title:
       typeof row.title === "string" && row.title.trim() !== "" ? row.title : id,
     published,
     draftChangesNotLive: false,
-    // The main row of a published Layout IS its published version; a pending
-    // edit lives in the working draft, which this read did not ask for.
-    regions: published ? regionsOf(row) : [],
+    regions: published ? stored : [],
+    isEmpty: stored.length === 0,
   };
 }
 
@@ -514,7 +517,7 @@ export function parseChoicesQuery(url: string | URL): LayoutChoicesQuery {
       LAYOUT_CHOICES_SEARCH_PARAM,
     ],
     choicesQuery,
-    "Layout choices route"
+    "header & footer choices route"
   );
   return {
     selected: query[LAYOUT_CHOICES_SELECTED_PARAM] ?? null,

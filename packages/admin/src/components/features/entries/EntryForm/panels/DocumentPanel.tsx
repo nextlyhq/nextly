@@ -3,12 +3,10 @@
 import { Fragment } from "react";
 import type React from "react";
 
-import { Clock, Hash } from "@admin/components/icons";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { containedContributionEvents } from "@admin/components/shared/target-slot/IsolatedContribution";
 import { PlaceContributionFallback } from "@admin/components/shared/target-slot/PlaceContributionFallback";
 import { Skeleton } from "@admin/components/ui";
-import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import type {
   DocumentPanelSectionProps,
@@ -24,9 +22,10 @@ import type { ReleaseDocumentRef } from "@admin/types/releases";
 
 import { useEntryLocale } from "../../EntryLocaleContext";
 import { DocumentLanguagePanel, hasLanguages } from "../../LanguagePanel";
-import { DocumentIdCopy } from "../DocumentIdCopy";
+import type { EntryDetails } from "../entry-details-read";
 import type { EntryData, EntryFormMode } from "../useEntryForm";
 
+import { DetailsSection } from "./DetailsSection";
 import { PanelSection } from "./PanelSection";
 import { PublishingSection } from "./PublishingSection";
 import { StatusSection, type PanelDocumentStatus } from "./StatusSection";
@@ -47,6 +46,13 @@ export interface DocumentPanelProps {
   mode: EntryFormMode;
   /** Entry data with id and timestamps. */
   entry?: EntryData | null;
+  /**
+   * The address "View API response" reads, which Details shows with a copy;
+   * absent, Details draws no API line.
+   */
+  apiAddress?: string;
+  /** Who made and changed the document, where the server says; Details names them. */
+  details?: Pick<EntryDetails, "createdBy" | "updatedBy" | "updatedAt">;
   /** Whether the collection has the Draft/Published feature enabled, which
    *  the Status and Publishing sections and the language panel read. */
   hasStatus: boolean;
@@ -106,6 +112,8 @@ const BUILT_IN_ORDER: readonly PanelOrderEntry[] = [
 export function DocumentPanel({
   mode,
   entry,
+  apiAddress,
+  details,
   hasStatus,
   documentStatus,
   releaseDocument,
@@ -162,12 +170,13 @@ export function DocumentPanel({
         );
       case "details":
         return (
-          <PanelSection title="Details">
-            <dl className="space-y-3">
-              <IdRow id={entry?.id} />
-              <TimestampRows entry={entry} />
-            </dl>
-          </PanelSection>
+          <DetailsSection
+            entry={entry}
+            apiAddress={apiAddress}
+            createdBy={details?.createdBy}
+            updatedBy={details?.updatedBy}
+            changedAt={details?.updatedAt}
+          />
         );
       default:
         return null;
@@ -311,67 +320,5 @@ function LanguageSection({ children }: { children: React.ReactNode }) {
     <PanelSection title="Language" titleHidden>
       {children}
     </PanelSection>
-  );
-}
-
-function RowIcon({ icon: Icon }: { icon: typeof Hash }) {
-  return (
-    <Icon
-      className="h-3.5 w-3.5 text-muted-foreground shrink-0"
-      aria-hidden="true"
-    />
-  );
-}
-
-function IdRow({ id }: { id?: string | null }) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <dt className="flex items-center gap-2 text-xs text-muted-foreground shrink-0">
-        <RowIcon icon={Hash} />
-        <span>ID</span>
-      </dt>
-      <dd className="flex items-center gap-1 min-w-0">
-        <DocumentIdCopy id={id} />
-      </dd>
-    </div>
-  );
-}
-
-function TimestampRows({ entry }: { entry?: EntryData | null }) {
-  const { formatDate } = useAdminDateFormatter();
-
-  const createdAt =
-    entry?.createdAt ?? (entry?.created_at as string | undefined) ?? undefined;
-  const updatedAt =
-    entry?.updatedAt ?? (entry?.updated_at as string | undefined) ?? undefined;
-
-  const formatRowDate = (dateString: string | undefined) => {
-    if (!dateString) return "—";
-    return formatDate(
-      dateString,
-      { dateStyle: "medium", timeStyle: "short" },
-      dateString
-    );
-  };
-
-  return (
-    <>
-      <TimestampRow label="Created" value={formatRowDate(createdAt)} />
-      <TimestampRow label="Updated" value={formatRowDate(updatedAt)} />
-    </>
-  );
-}
-
-function TimestampRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <dt className="flex items-center gap-2 text-xs text-muted-foreground shrink-0">
-        <RowIcon icon={Clock} />
-        <span>{label}</span>
-      </dt>
-      <dd className="text-xs text-foreground" title={value}>
-        {value}
-      </dd>
-    </div>
   );
 }

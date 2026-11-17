@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * "Show when": a block's visibility conditions, in the Content tab under
+ * "Show when": a block's visibility conditions, in the Advanced tab under
  * "Visible on". One AND group, edited as the list's filters are: one
  * sentence per condition, opening in place into its field, operator and
  * value. Only fields visitors can see are offered, since whether a block
@@ -92,7 +92,10 @@ export interface ShowWhenProps {
 interface ConditionSource {
   /** The collection read, or `null` for a page with no entry. */
   readonly collection: string | null | undefined;
-  /** "This post", "Each post in the list". */
+  /**
+   * "Each post in the list", "This post", "No entry here". The panel shows it
+   * only inside a list, or where the page has no entry.
+   */
   readonly words: string;
   /** What the conditions must match: "this post", "each post in the list". */
   readonly match: string;
@@ -614,8 +617,10 @@ function OneGroup({
     <>
       <p className="nx-inspector__note nx-list-query__hint">
         {state.rows.length === 0
-          ? "Always shown."
-          : `Show this block only when all of these match ${source.match}.`}
+          ? "Always shown"
+          : source.item
+            ? `Show this block only when all of these match ${source.match}.`
+            : "Show this block only when all of these are true."}
       </p>
       {state.rows.length === 0 ? null : (
         <ul className="nx-list-query__filters" aria-label="Conditions">
@@ -793,7 +798,27 @@ function useConditionSource(
   };
 }
 
-/** The "Show when" group of a block's Content tab. */
+/**
+ * Whose fields the conditions read, named only where it changes meaning:
+ * inside a list, each item's rather than the page's. And where the page shows
+ * no entry, which is why no condition can be added.
+ */
+function SourceChip({
+  source,
+}: {
+  source: ConditionSource;
+}): React.JSX.Element | null {
+  if (!source.item && source.collection !== null) return null;
+  const SourceIcon = source.item ? Repeat : FileText;
+  return (
+    <span className="nx-show-when__source">
+      <SourceIcon aria-hidden="true" size={12} />
+      {source.words}
+    </span>
+  );
+}
+
+/** The "Show when" group of a block's Advanced tab. */
 export function ShowWhen({
   editor,
   nodeId,
@@ -838,7 +863,6 @@ export function ShowWhen({
   );
   const writes = conditionWrites(editor, nodeId, stored, state, fields);
   const titleId = `${id}-title`;
-  const SourceIcon = source.item ? Repeat : FileText;
   return (
     <section
       className="nx-list-query__group nx-show-when"
@@ -851,10 +875,7 @@ export function ShowWhen({
         <h3 id={titleId} className="nx-list-query__title">
           Show when
         </h3>
-        <span className="nx-show-when__source">
-          <SourceIcon aria-hidden="true" size={12} />
-          {source.words}
-        </span>
+        <SourceChip source={source} />
       </div>
       {/* Red only where the page leaves the block out: a shape it reads as
           no restriction, such as `null`, is shown to everyone. */}
