@@ -117,6 +117,7 @@ import {
   type NamedVariable,
   type VariablesInUseCheck,
 } from "./site-style-storage";
+import { siteTextReasons } from "./site-text-uses";
 import { retryOnStale } from "./stale-retry";
 import { readStoredJson } from "./stored-json";
 import {
@@ -608,10 +609,17 @@ export async function removeVariables(
         read.section,
         supplied
       );
+      // A Site text row names its variables in this same section, so the
+      // refusal is read from the section the write is made from.
+      reasons.push(
+        ...siteTextReasons(removable, read.section.siteText).map(
+          reason => reason.message
+        )
+      );
       if (reasons.length > 0) {
         throw NextlyError.conflict({
           reason: "state",
-          message: `Nothing was removed. ${reasons.join(" ")}`,
+          message: `Nothing was removed. ${[...new Set(reasons)].join(" ")}`,
           logContext: { variableIds: ids },
         });
       }

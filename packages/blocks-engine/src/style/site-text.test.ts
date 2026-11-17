@@ -211,6 +211,10 @@ describe("reading a stated map", () => {
       "siteText/quote",
     ]);
     expect(issues.every(issue => issue.severity === "error")).toBe(true);
+    // A refused value names its row.
+    expect(
+      issues.find(issue => issue.path === "siteText/h1/fontSize")?.message
+    ).toMatch(/^Heading 1's size: /);
   });
 
   it("refuses a map that is not one", () => {

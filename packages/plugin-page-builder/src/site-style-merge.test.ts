@@ -501,3 +501,61 @@ describe("merging fonts", () => {
     expect(merged.value).toEqual([unreadable, loraRegular, loraBold]);
   });
 });
+
+describe("merging the site's text", () => {
+  const row = (fontSize: string, lineHeight: number) => ({
+    fontSize,
+    lineHeight,
+  });
+
+  it("keeps a row each author changed, and the rows only one of them did", () => {
+    const merged = mergeSiteStyleSection(
+      "tokens",
+      { tokens: [], siteText: { h1: row("40px", 1.1) } },
+      { tokens: [], siteText: { h1: row("44px", 1.1), h2: row("30px", 1.2) } },
+      {
+        tokens: [],
+        siteText: { h1: row("40px", 1.1), body: row("18px", 1.6) },
+      },
+      "mine"
+    );
+    expect((merged.value as { siteText: unknown }).siteText).toEqual({
+      h1: row("44px", 1.1),
+      h2: row("30px", 1.2),
+      body: row("18px", 1.6),
+    });
+    expect(merged.conflicts).toEqual([]);
+  });
+
+  it("merges a row whole, never a size from one author beside the other's line height", () => {
+    // Field by field, mine's size and theirs' line height would make a pair
+    // neither author chose.
+    const merged = mergeSiteStyleSection(
+      "tokens",
+      { tokens: [], siteText: { h1: row("40px", 1.1) } },
+      { tokens: [], siteText: { h1: row("44px", 1.1) } },
+      { tokens: [], siteText: { h1: row("40px", 1.3) } },
+      "mine"
+    );
+    expect((merged.value as { siteText: { h1: unknown } }).siteText.h1).toEqual(
+      row("44px", 1.1)
+    );
+    expect(merged.conflicts.map(conflict => conflict.key)).toContain(
+      "siteText"
+    );
+  });
+
+  it("keeps an empty row, which leaves that text to the site's own CSS", () => {
+    const merged = mergeSiteStyleSection(
+      "tokens",
+      { tokens: [], siteText: { h1: row("40px", 1.1) } },
+      { tokens: [], siteText: { h1: row("40px", 1.1), h3: {} } },
+      { tokens: [], siteText: { h1: row("41px", 1.1) } },
+      "mine"
+    );
+    expect((merged.value as { siteText: unknown }).siteText).toEqual({
+      h1: row("41px", 1.1),
+      h3: {},
+    });
+  });
+});

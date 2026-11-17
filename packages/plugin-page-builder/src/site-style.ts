@@ -45,6 +45,8 @@ import type {
   FontFaceDef,
   NamedClass,
   SiteSheetInput,
+  SiteTextMap,
+  SiteTextRole,
   SiteToken,
   SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
@@ -263,7 +265,30 @@ export function tokenOverrideOf(
       ? {}
       : { darkMode: edited.darkMode }),
     ...storedFluidRange(defaults, edited, tokens),
+    ...storedSiteText(defaults?.siteText, edited.siteText),
   };
+}
+
+/**
+ * The rows of the site's text the stored tier holds: each row that differs
+ * from the code's, an empty row included (it leaves that text to the site's
+ * own CSS). A row the edit holds as the code states it is left to the code,
+ * so the code can still change it.
+ */
+function storedSiteText(
+  defaults: SiteTextMap | undefined,
+  edited: SiteTextMap | undefined
+): Pick<SiteTokenSet, "siteText"> {
+  if (edited === undefined) return {};
+  const rows = Object.fromEntries(
+    Object.entries(edited).filter(
+      ([role, row]) =>
+        defaults === undefined ||
+        !Object.hasOwn(defaults, role) ||
+        !sameJsonValue(row, defaults[role as SiteTextRole])
+    )
+  );
+  return Object.keys(rows).length === 0 ? {} : { siteText: rows };
 }
 
 /**
@@ -436,15 +461,42 @@ function mergeTokens(
     stored?.tokens,
     tokenIdentity
   );
+  return {
+    tokens: tokens === undefined ? [] : [...tokens],
+    ...mergedSettings(defaults, stored),
+  };
+}
+
+/** The set-wide settings of two tiers: each the stored one where it states it. */
+function mergedSettings(
+  defaults: SiteTokenSet | undefined,
+  stored: SiteTokenSet | undefined
+): Omit<SiteTokenSet, "tokens"> {
   const prefix = stored?.prefix ?? defaults?.prefix;
   const darkMode = stored?.darkMode ?? defaults?.darkMode;
   const fluidRange = stored?.fluidRange ?? defaults?.fluidRange;
+  const siteText = mergedSiteText(defaults?.siteText, stored?.siteText);
   return {
-    tokens: tokens === undefined ? [] : [...tokens],
     ...(prefix === undefined ? {} : { prefix }),
     ...(darkMode === undefined ? {} : { darkMode }),
     ...(fluidRange === undefined ? {} : { fluidRange }),
+    ...(siteText === undefined ? {} : { siteText }),
   };
+}
+
+/**
+ * The site's text across the two tiers: row by row, a stored row in place of
+ * the code's. Per row rather than whole, so a site setting its Body keeps the
+ * headings its code states; per row rather than per value, so a heading
+ * pointed at another type size never keeps the code's line height beside it.
+ */
+function mergedSiteText(
+  defaults: SiteTextMap | undefined,
+  stored: SiteTextMap | undefined
+): SiteTextMap | undefined {
+  if (defaults === undefined) return stored;
+  if (stored === undefined) return defaults;
+  return { ...defaults, ...stored };
 }
 
 /**

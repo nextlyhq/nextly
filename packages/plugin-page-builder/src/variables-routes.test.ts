@@ -1337,3 +1337,60 @@ describe("the in-use check, bound to the stored documents", () => {
     }
   });
 });
+
+describe("removing a type size a Site text row uses", () => {
+  const display = {
+    name: "font-size.display",
+    label: "Display",
+    kind: "dimension",
+    values: { light: "3rem" },
+  };
+  const displayLine = {
+    name: "line-height.display",
+    kind: "number",
+    values: { light: "1.05" },
+  };
+
+  it("refuses, naming the row, and writes nothing", async () => {
+    const { store, write } = storeOf({
+      tokens: [display, displayLine],
+      siteText: {
+        h1: {
+          fontSize: { $token: "font-size.display" },
+          lineHeight: { $token: "line-height.display" },
+        },
+      },
+    });
+    const inUse = vi.fn<VariablesInUseCheck>(async () => undefined);
+    expect(
+      await refusal(
+        removeVariables(
+          post({ ids: ["font-size.display", "line-height.display"] }),
+          store,
+          new Set(),
+          checksOf(inUse)
+        )
+      )
+    ).toMatchObject({
+      code: "CONFLICT",
+      publicMessage: expect.stringContaining(
+        "Display is used by Site text: Heading 1."
+      ),
+    });
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("removes it once no row uses it", async () => {
+    const { store, write } = storeOf({
+      tokens: [display, displayLine],
+      siteText: { h1: { fontSize: "40px" } },
+    });
+    await removeVariables(
+      post({ ids: ["font-size.display", "line-height.display"] }),
+      store,
+      new Set(),
+      checksOf()
+    );
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+});

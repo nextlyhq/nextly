@@ -41,6 +41,7 @@ const SETTING_LABELS: Readonly<Record<string, string>> = {
   prefix: "the variable prefix",
   darkMode: "the dark mode setting",
   fluidRange: "the fluid range",
+  siteText: "Site text",
 };
 
 /**

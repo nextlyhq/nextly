@@ -340,3 +340,49 @@ describe("the site's fluid range across the tiers", () => {
     ).toEqual({ min: 360, max: 1280 });
   });
 });
+
+describe("the site's text across the two tiers", () => {
+  const defaults = {
+    tokens: {
+      tokens: [],
+      siteText: {
+        h1: { fontSize: "50px" },
+        body: { fontSize: "17px" },
+      },
+    },
+  };
+
+  it("lays a stored row over the code's, row by row", () => {
+    const merged = resolveSiteStyle(defaults, {
+      tokens: { tokens: [], siteText: { h1: { fontSize: "60px" } } },
+    });
+    expect(merged.tokens?.siteText).toEqual({
+      h1: { fontSize: "60px" },
+      body: { fontSize: "17px" },
+    });
+  });
+
+  it("stores only the rows that differ from the code's", () => {
+    const stored = tokenOverrideOf(defaults.tokens, {
+      tokens: [],
+      siteText: { h1: { fontSize: "60px" }, body: { fontSize: "17px" } },
+    });
+    expect(stored.siteText).toEqual({ h1: { fontSize: "60px" } });
+  });
+
+  it("stores no site text where every row is the code's", () => {
+    const stored = tokenOverrideOf(defaults.tokens, {
+      tokens: [],
+      siteText: { h1: { fontSize: "50px" }, body: { fontSize: "17px" } },
+    });
+    expect(stored).not.toHaveProperty("siteText");
+  });
+
+  it("keeps an empty row, which leaves that text to the site's own CSS", () => {
+    const stored = tokenOverrideOf(undefined, {
+      tokens: [],
+      siteText: { h3: {} },
+    });
+    expect(stored.siteText).toEqual({ h3: {} });
+  });
+});

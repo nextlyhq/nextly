@@ -37,6 +37,8 @@ import {
   newStyleIssueBudget,
   resolveSiteTokens,
   sameSiteToken,
+  SITE_TEXT_ROLES,
+  siteTextIssues,
   tokenIdentity,
   tokenLabelIssue,
   usableNamedClasses,
@@ -47,6 +49,9 @@ import {
   type FontFaceDef,
   type MayFetchUrl,
   type NamedClass,
+  type SiteTextEntry,
+  type SiteTextMap,
+  type SiteTextRole,
   type SiteToken,
   type SiteTokenSet,
   type StyleIssueBudget,
@@ -297,6 +302,9 @@ export function checkStoredTokens(
     );
   }
 
+  const siteText = storedSiteText(raw.siteText);
+  issues.push(...siteText.issues);
+
   const set: SiteTokenSet = {
     tokens,
     ...(typeof raw.prefix === "string" ? { prefix: raw.prefix } : {}),
@@ -304,9 +312,33 @@ export function checkStoredTokens(
     ...(isFluidRange(fluidRange)
       ? { fluidRange: { min: fluidRange.min, max: fluidRange.max } }
       : {}),
+    ...(siteText.value === undefined ? {} : { siteText: siteText.value }),
   };
   issues.push(...tokenEmissionIssues(set, policy));
   return { value: set, issues };
+}
+
+/**
+ * The site's text a stored token set holds: each row the engine's own check
+ * (`siteTextIssues`) finds usable, kept as written, and a sentence for each
+ * refusal, naming the row. A save is refused on any refusal; a read keeps
+ * the usable rows, so one bad row never takes the others off every page.
+ */
+function storedSiteText(raw: unknown): {
+  value: SiteTextMap | undefined;
+  issues: string[];
+} {
+  if (raw === undefined) return { value: undefined, issues: [] };
+  const found = siteTextIssues(raw);
+  const issues = found.map(issue => `Site text: ${issue.message}`);
+  if (!isPlainRecord(raw)) return { value: undefined, issues };
+  const refused = new Set(found.map(issue => issue.path.split("/")[1]));
+  const kept: Partial<Record<SiteTextRole, SiteTextEntry>> = {};
+  for (const role of SITE_TEXT_ROLES) {
+    if (!Object.hasOwn(raw, role) || refused.has(role)) continue;
+    kept[role] = raw[role] as SiteTextEntry;
+  }
+  return { value: kept, issues };
 }
 
 /**

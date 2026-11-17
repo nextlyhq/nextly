@@ -362,3 +362,50 @@ describe("a write whose shared styles name variables", () => {
     ).toBeUndefined();
   });
 });
+
+describe("a write that drops a type size a Site text row still uses", () => {
+  const display = {
+    name: "font-size.display",
+    label: "Display",
+    kind: "dimension",
+    values: { light: "3rem" },
+  };
+  const rows = {
+    h2: { fontSize: { $token: "font-size.display" } },
+  };
+
+  it("is refused, naming the row, before the in-use check is asked", async () => {
+    const check = vi.fn<VariablesInUseCheck>(async () => undefined);
+    const error = await written(
+      {
+        data: { tokens: { tokens: [], siteText: rows } },
+        originalData: { tokens: { tokens: [display], siteText: rows } },
+        user: author,
+        context: {},
+      },
+      check
+    );
+    expect(error).toBeInstanceOf(NextlyError);
+    expect(JSON.stringify(error)).toContain(
+      "Display is used by Site text: Heading 2."
+    );
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it("is let through when the same write points the row elsewhere", async () => {
+    const check = vi.fn<VariablesInUseCheck>(async () => undefined);
+    const error = await written(
+      {
+        data: {
+          tokens: { tokens: [], siteText: { h2: { fontSize: "40px" } } },
+        },
+        originalData: { tokens: { tokens: [display], siteText: rows } },
+        user: author,
+        context: {},
+      },
+      check
+    );
+    expect(error).toBeUndefined();
+    expect(check).toHaveBeenCalledTimes(1);
+  });
+});

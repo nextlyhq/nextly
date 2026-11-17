@@ -463,7 +463,12 @@ function entryIssues(
     ...JUDGED_AS.filter(
       ([key]) => entry[key] !== undefined && held.has(key)
     ).flatMap(([key, judged]) =>
-      valueIssues(entry[key], judged, `${at}/${key}`)
+      valueIssues(
+        entry[key],
+        judged,
+        `${at}/${key}`,
+        `${label}'s ${VALUE_WORDS[key] ?? key}`
+      )
     ),
   ];
 }
@@ -511,15 +516,31 @@ function underlineIssues(
   ];
 }
 
-/** The style compiler's refusals of one value, judged as `judged`. */
+/** What each value of a row is called, for a refusal naming it. */
+const VALUE_WORDS: Readonly<Record<string, string>> = {
+  fontSize: "size",
+  lineHeight: "line height",
+  color: "colour",
+  hoverColor: "colour on hover",
+};
+
+/**
+ * The style compiler's refusals of one value, judged as `judged`, each
+ * saying which row's value it is (`Heading 1's size: …`).
+ */
 function valueIssues(
   value: unknown,
   judged: string,
-  at: string
+  at: string,
+  named: string
 ): ValidationIssue[] {
   return validateStyleValues({ [judged]: value }, at, "strict")
     .filter(issue => issue.severity === "error")
-    .map(issue => ({ ...issue, path: at }));
+    .map(issue => ({
+      ...issue,
+      path: at,
+      message: `${named}: ${issue.message}`,
+    }));
 }
 
 /**
@@ -533,8 +554,9 @@ export function siteTextUses(
   if (stated === undefined) return uses;
   for (const role of SITE_TEXT_ROLES) {
     if (!Object.hasOwn(stated, role)) continue;
-    const entry = stated[role];
-    if (entry === undefined) continue;
+    // Read whether or not anything validated it: a stored map is site data.
+    const entry: unknown = stated[role];
+    if (!isPlainRecord(entry)) continue;
     const values = [
       entry.fontSize,
       entry.lineHeight,

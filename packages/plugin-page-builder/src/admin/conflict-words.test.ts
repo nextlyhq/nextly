@@ -306,6 +306,21 @@ describe("naming an entry", () => {
       "Sam changed the fluid range while you were editing. Your value was kept. Undo puts theirs back."
     );
   });
+
+  it("names the site's text as the panel does", () => {
+    const rows: EntryConflict = {
+      key: "siteText",
+      setting: true,
+      kind: "changed",
+      kept: "mine",
+      base: undefined,
+      mine: { h1: { fontSize: "40px" } },
+      theirs: { h1: { fontSize: "44px" } },
+    };
+    expect(conflictWords("tokens", bySam(rows))).toBe(
+      "Sam changed Site text while you were editing. Your value was kept. Undo puts theirs back."
+    );
+  });
 });
 
 describe("an entry renamed on either side", () => {
