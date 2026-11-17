@@ -1,7 +1,7 @@
 /**
  * The page's header & footer in the editor: one menu with pictures, the same
  * on the entry page and in Settings, which set is in effect and why, and the
- * set's regions drawn locked on the canvas with a way to open the set.
+ * set's regions drawn on the canvas around the page.
  *
  * Seeded through the admin API: two components, a published Layout made the
  * site's default, a second published Layout and an unpublished one, and a
@@ -280,10 +280,10 @@ test("offers one menu with pictures, the same on the entry page and in Settings,
   await expect(picker.locator('[data-slot="hf-name"]')).toHaveText(LANDING);
 });
 
-test("draws the Layout's regions locked on the canvas, with a way to open the Layout", async ({
+test("draws the set's regions on the canvas around the page, selected as a whole", async ({
   page,
 }) => {
-  const { pageId, main } = await seed(page);
+  const { pageId } = await seed(page);
   await openBuilder(page, pageId);
 
   const header = await region(page, "header");
@@ -295,39 +295,19 @@ test("draws the Layout's regions locked on the canvas, with a way to open the La
     .boundingBox();
   expect(box !== null && body !== null && box.y < body.y).toBe(true);
 
-  // A click selects nothing and shows where the region comes from.
+  // A click selects it, never a block of the page (the card it shows is
+  // `builder-region-selection.spec.ts`'s).
   await header.click();
   expect(await selection(page)).toEqual([]);
-  const tag = header.getByRole("status");
-  await expect(tag).toContainText(`Header, from header & footer set ${MAIN}`);
-  const edit = header.getByRole("link", {
-    name: `Edit header & footer set ${MAIN} (opens in a new tab)`,
-  });
-  await expect(edit).toHaveAttribute("target", "_blank");
-  await expect(edit).toHaveAttribute(
-    "href",
-    `/admin/collections/layouts/${main}`
-  );
+  await expect(header).toHaveAttribute("aria-pressed", "true");
 
-  // By keyboard: Escape closes the tag and returns to the region's lock, its
-  // one focus stop; Enter opens it again.
-  await edit.focus();
-  await page.keyboard.press("Escape");
-  await expect(tag).toHaveCount(0);
-  await expect(
-    header.getByRole("button", {
-      name: `Header, from header & footer set ${MAIN}, locked`,
-    })
-  ).toBeFocused();
-  await page.keyboard.press("Enter");
-  await expect(header.getByRole("status")).toBeVisible();
-
-  // Layers: a read-only row above the page's blocks.
+  // Layers: its own row above the page's blocks, pressed while it is
+  // selected.
   await openLayers(page);
   const row = page.getByRole("button", {
-    name: `Header, from header & footer set ${MAIN}, locked`,
+    name: `Site header, ${MAIN} header & footer`,
   });
-  await expect(row).toBeVisible();
+  await expect(row).toHaveAttribute("aria-pressed", "true");
 
   // Changing the set redraws the canvas at once, before anything is saved.
   await openSettings(page);

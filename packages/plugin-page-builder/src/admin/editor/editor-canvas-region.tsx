@@ -400,7 +400,9 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
               siteStyles={siteSheet(canvasSiteStyle)}
               selectedId={editor.selectedId}
               selectedIds={editor.selection.ids}
-              onSelect={editor.select}
+              // A block selected on the canvas, or none on its ground, clears
+              // a selected header or footer.
+              onSelect={view.selectedRegion.selectOnCanvas}
               // A list note's "Choose a field": the list selected and the
               // author taken to its first sort row.
               onListSortField={editor.askSortField}
@@ -409,9 +411,11 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
               // render.
               render={canvasRender}
               dragHandlers={drag.handlers}
-              // The regions of the page's Layout, drawn locked around it from
-              // the published Layout, as a visitor gets them.
+              // The regions of the page's layout, drawn around it from the
+              // published set, as a visitor gets them, and the one selected.
               regions={view.canvasRegions}
+              selectedRegion={view.selectedRegion.selection.area}
+              onSelectRegion={view.selectedRegion.selection.select}
               // The conditioned blocks visitors never see, because the page
               // can't check their conditions: badged in red on the canvas.
               conditionsUnchecked={view.conditionsUnchecked}
