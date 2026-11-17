@@ -325,6 +325,9 @@ function tabbablesIn(root: ParentNode): HTMLElement[] {
     element =>
       element.tabIndex >= 0 &&
       !element.hidden &&
+      // `:disabled` also matches a control disabled by its `<fieldset disabled>`, which carries no
+      // `disabled` of its own for the selector above to see, and takes no focus.
+      !element.matches(":disabled") &&
       // Radix's focus guards sit in the tab order at the page's edges, and are no control.
       !element.hasAttribute("data-radix-focus-guard") &&
       element.closest('[aria-hidden="true"], [inert]') === null &&

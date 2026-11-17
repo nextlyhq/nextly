@@ -103,6 +103,34 @@ describe("a sheet that is not modal and holds nothing to focus", () => {
     fireEvent.keyDown(sheet, { key: "Tab" });
     expect(document.activeElement).toBe(after);
   });
+
+  it("counts controls disabled by their fieldset as nothing to focus", () => {
+    // A control inside `<fieldset disabled>` takes no focus though it carries no `disabled` of its
+    // own: counted as a stop, Tab would be sent to it and stay on the sheet.
+    render(
+      <>
+        <button type="button">In the page</button>
+        <Sheet open modal={false}>
+          <SheetContent side="right">
+            <SheetTitle>History</SheetTitle>
+            <SheetDescription>Read only</SheetDescription>
+            <fieldset disabled>
+              <button type="button">Restore</button>
+            </fieldset>
+          </SheetContent>
+        </Sheet>
+      </>
+    );
+    const after = document.createElement("button");
+    after.id = "after-the-sheet";
+    after.type = "button";
+    after.textContent = "After the sheet";
+    document.body.appendChild(after);
+    const sheet = screen.getByRole("dialog");
+    sheet.focus();
+    fireEvent.keyDown(sheet, { key: "Tab" });
+    expect(document.activeElement).toBe(after);
+  });
 });
 
 describe("a modal sheet", () => {
