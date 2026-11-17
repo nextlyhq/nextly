@@ -1234,7 +1234,7 @@ describe("Save as shared style…", () => {
   it("is dimmed with the save rule's own reason", () => {
     const offer = { library: [card], mayChange: true };
     expect(save(documentOf([node("a")]), ["a"], offer)?.reason).toBe(
-      "This block has no styles of its own yet."
+      "Change a style first, then save it to reuse it."
     );
     expect(
       save(

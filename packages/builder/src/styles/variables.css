@@ -556,6 +556,19 @@
   pointer-events: none;
 }
 
+/* A duration: its number, then its unit menu, ms or s. */
+.nx-vars-editor__duration {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.nx-vars-editor__duration-unit {
+  min-width: 3.5rem;
+  font-size: var(--text-xs);
+}
+
 /* The offer of pixels under a line height whose number reads as them. */
 .nx-vars-editor__hint {
   display: flex;

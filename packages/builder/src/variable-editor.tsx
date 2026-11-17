@@ -51,6 +51,7 @@ import {
   LineHeightInput,
   SizeInput,
   useDraft,
+  unwritableValue,
   valueFieldFor,
   variableCss,
 } from "./variable-value-controls";
@@ -235,6 +236,15 @@ function useValueWrites(
     const next = value.trim();
     if (tokens.tokens[at]?.values[mode] === next) {
       refuse(at, mode);
+      return;
+    }
+    // Refused where it is typed when the site's stylesheet would not write
+    // it, a value that would load a file among them, rather than at the save.
+    const token = tokens.tokens[at];
+    const unwritable =
+      token === undefined ? undefined : unwritableValue(tokens, token, next);
+    if (unwritable !== undefined) {
+      refuse(at, mode, unwritable);
       return;
     }
     const written = writeTokenValue(tokens, at, mode, next);
