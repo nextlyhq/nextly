@@ -665,17 +665,11 @@
  */
 .nx-style-inspector
   [data-section]
-  > [data-slot="accordion-content"][data-state="open"],
-.nx-block-style
-  [data-section]
   > [data-slot="accordion-content"][data-state="open"] {
   animation: nx-section-open 150ms ease-out;
 }
 
 .nx-style-inspector
-  [data-section]
-  > [data-slot="accordion-content"][data-state="closed"],
-.nx-block-style
   [data-section]
   > [data-slot="accordion-content"][data-state="closed"] {
   animation: nx-section-close 150ms ease-out;
@@ -723,8 +717,7 @@
 @media (prefers-reduced-motion: reduce) {
   .nx-style-inspector
     [data-section]
-    > [data-slot="accordion-content"][data-state],
-  .nx-block-style [data-section] > [data-slot="accordion-content"][data-state] {
+    > [data-slot="accordion-content"][data-state] {
     animation: none;
   }
 

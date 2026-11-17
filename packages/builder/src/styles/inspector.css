@@ -273,6 +273,28 @@
   margin-block-end: 0.5rem;
 }
 
+/*
+ * The section opens and closes as the Style sections under the bar do, and
+ * an open one shows its overflow, so a tile's focus ring is not cut off at
+ * the section's edge; clipped only while it moves.
+ */
+.nx-block-style [data-section] > [data-slot="accordion-content"][data-state] {
+  animation: nx-section-close 150ms ease-out;
+}
+
+.nx-block-style
+  [data-section]
+  > [data-slot="accordion-content"][data-state="open"] {
+  overflow: visible;
+  animation-name: nx-section-open;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-block-style [data-section] > [data-slot="accordion-content"][data-state] {
+    animation: none;
+  }
+}
+
 .nx-look-tiles {
   display: grid;
   gap: 0.5rem;

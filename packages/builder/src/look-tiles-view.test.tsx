@@ -13,6 +13,7 @@ import {
   blockLooks,
   clearBlocks,
   DOCUMENT_FORMAT_VERSION,
+  MAX_CLASSES_PER_NODE,
   registerBlocks,
   type BlockDocument,
   type BlockNode,
@@ -39,6 +40,7 @@ import {
 
 import type { EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";
+import { NoticeSinkProvider } from "./shell/builder-notices";
 
 beforeAll(() => {
   // Radix measures and scrolls; jsdom provides neither.
@@ -113,14 +115,17 @@ function editorFor(node: BlockNode): EditorState {
 /** The panel on the Style tab, with the block selected. */
 function mountStyle(
   node: BlockNode,
-  onEditBlockStyles?: (blockType: string) => void
+  onEditBlockStyles?: (blockType: string) => void,
+  raise: (message: string) => void = () => {}
 ): HTMLElement {
   render(
-    <InspectorPanel
-      editor={editorFor(node)}
-      classLibrary={LIBRARY}
-      {...(onEditBlockStyles === undefined ? {} : { onEditBlockStyles })}
-    />
+    <NoticeSinkProvider raise={raise}>
+      <InspectorPanel
+        editor={editorFor(node)}
+        classLibrary={LIBRARY}
+        {...(onEditBlockStyles === undefined ? {} : { onEditBlockStyles })}
+      />
+    </NoticeSinkProvider>
   );
   fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
   return screen.getByRole("tabpanel", { name: "Style" });
@@ -230,6 +235,22 @@ describe("the Block style section", () => {
     expect(
       screen.queryByRole("radiogroup", { name: "Block style" })
     ).toBeNull();
+  });
+});
+
+describe("a block style the block can't take", () => {
+  it("says why in plain words, without naming classes", () => {
+    const raise = vi.fn();
+    // As many shared styles as a block may list: no room for Hero.
+    const full = Array.from(
+      { length: MAX_CLASSES_PER_NODE },
+      (_, index) => `c-${index}`
+    );
+    mountStyle(nodeOf("core/section", full), undefined, raise);
+    fireEvent.click(within(tiles()).getByRole("radio", { name: /^Hero/ }));
+    expect(raise).toHaveBeenCalledWith(
+      "Hero could not be applied to this block: it already wears as many styles as a block can."
+    );
   });
 });
 

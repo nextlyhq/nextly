@@ -154,10 +154,10 @@ export function LookTiles({
     const choice = lookChoice(node.classes, removable, tile.id);
     if (choice.kind === "unchanged") return;
     // A refused choice leaves the radio where it was: said, so the click does
-    // not read as ignored.
+    // not read as ignored, in the panel's words for what a block wears.
     if (choice.kind === "full") {
       onRefused(
-        `${tile.name} could not be applied to this block: it already lists the most classes a block can.`
+        `${tile.name} could not be applied to this block: it already wears as many styles as a block can.`
       );
       return;
     }

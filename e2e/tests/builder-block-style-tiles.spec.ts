@@ -178,7 +178,8 @@ test.describe("the Block style section", () => {
     ).toHaveAccessibleName("Editing: This block");
 
     const opacity = inspector(page).getByRole("textbox", { name: /^Opacity/ });
-    await opacity.fill("0.5");
+    // Opacity is typed in percent.
+    await opacity.fill("50");
     await opacity.press("Enter");
     await expect.poll(() => drawn(page, FIRST, "opacity")).toBe("0.5");
 
