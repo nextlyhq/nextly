@@ -15,7 +15,7 @@ import { test } from "./support/test";
 
 test.describe.configure({ lock: [LOCK.homepage] });
 
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
 
 const recent = (page: Page): Locator =>
   page.getByRole("group", { name: "Recent colours" });

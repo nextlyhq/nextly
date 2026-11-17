@@ -36,7 +36,7 @@ const RING_OUTSIDE = 4;
 // The canvas reads the site's tokens, which the Site Style single holds.
 test.describe.configure({ lock: [LOCK.homepage, LOCK.siteStyle] });
 
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
 const HOMEPAGE_API = "/admin/api/singles/homepage";
 const HEADING = "Canvas colours";
 const PARAGRAPH = "The canvas draws this page the way a visitor sees it.";

@@ -242,6 +242,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
   // The media library, drawn as nothing: these cases never open it.
   MediaPickerDialog: () => null,
+  // The media library's upload, which an Image's empty state offers: these
+  // cases upload nothing.
+  useUploadMedia: () => ({ mutateAsync: () => new Promise<never>(() => {}) }),
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   // No preview here: the surrounding editor offers none.
   useDocumentPreview: () => null,
@@ -635,7 +638,7 @@ describe("a colleague taking the document over", () => {
     // which the card says in words of its own, and the edit holds a block, so
     // the card offers its preview instead.
     await waitFor(() =>
-      expect(container.textContent).toContain("Live preview")
+      expect(container.textContent).toMatch(/Sections \(\d+\)/)
     );
     expect(container.textContent).not.toContain("Nothing here yet");
     // Into this browser\'s form only. Nothing left the editor through its

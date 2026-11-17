@@ -84,7 +84,7 @@ script edits and publishes them.
 - **Publish** is timed from the click on the editor's primary action to the
   save request leaving the page, and to the editor showing the page saved
   with nothing left to save, after that request was answered.
-- **Open the builder** is timed from the click on "Open Page Builder" on the
+- **Open the builder** is timed from the click on "Open in builder" on the
   page's edit screen (an in-app navigation, with the admin's code already
   loaded, as an author usually arrives) to the canvas drawing the first
   block, with 150 ms added to every request (CDP's network emulation). The

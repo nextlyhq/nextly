@@ -16,6 +16,7 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import type { RegisteredDocumentView } from "@admin/lib/plugins/document-view-registry";
 
 import {
+  createDialogOf,
   documentAddress,
   rowWaysIn,
   viewsToOpenIn,
@@ -115,4 +116,12 @@ export function useRowWaysIn(): WaysInOf {
 /** The views a document open as its form may be opened in, worded by each view. */
 export function useViewsToOpenIn(): WaysInOf {
   return useRuleReading(viewsToOpenIn);
+}
+
+/** The create dialog "+ New" opens on a collection, for the signed-in reader. */
+export function useCreateDialogOf(): (
+  document: OpenedDocument,
+  options?: OpenOptions
+) => string | undefined {
+  return useRuleReading(createDialogOf);
 }

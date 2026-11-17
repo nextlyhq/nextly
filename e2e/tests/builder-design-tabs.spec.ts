@@ -110,11 +110,14 @@ test("names its four tabs in order, each holding its own kind", async ({
   await expect(
     panel.getByRole("button", { name: /^Type scale, \d+$/ })
   ).toBeVisible();
-  // Spacing: spacing, radius and shadows.
+  // Spacing: spacing, radius, shadows and the content width, each its own
+  // group.
   await switchTo(page, "Spacing");
-  await expect(
-    panel.getByRole("button", { name: /^Spacing, radius & shadows, \d+$/ })
-  ).toBeVisible();
+  for (const heading of ["Spacing", "Radius", "Shadows", "Content width"]) {
+    await expect(
+      panel.getByRole("button", { name: new RegExp(`^${heading}, \\d+$`) })
+    ).toBeVisible();
+  }
   await expect(
     panel.getByRole("button", { name: /^Colours, \d+$/ })
   ).toHaveCount(0);
