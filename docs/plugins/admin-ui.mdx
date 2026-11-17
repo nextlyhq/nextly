@@ -1021,6 +1021,28 @@ reader who may not update the entry, on an entry opened in a language other
 than the default, or on a Single. Startup is refused when `openLabel` isn't
 text with words in it.
 
+#### A create dialog for "+ New"
+
+> **Experimental.** `createDialog` and `DocumentCreateDialogProps` may change
+> before they are marked stable.
+
+A view can offer its own short create dialog: declare `createDialog`, a
+component path like `component`, on the view. On a collection whose entries
+open in that view (by the rule above), the list's "+ New" opens your component
+over the list instead of going to the create form. It draws its whole dialog,
+creates the entry through its own route or the REST API, and receives
+`DocumentCreateDialogProps` from `@nextlyhq/plugin-sdk/admin`: the
+`collection` (its `slug` and `labels`) and `close(createdId?)`. Call
+`close(id)` with the new entry's id and the admin opens it where its
+collection opens entries; call `close()` to leave the list as it was.
+
+The dialog opens only where "+ New" is offered at all, and only for a reader
+whose entries open in the view (one who may update them, in the default
+language). A collection that opens as the form, a view without a
+`createDialog`, or a dialog component the admin can't load keeps the create
+form, whose address, `/admin/collections/<slug>/create`, keeps working.
+Startup is refused when `createDialog` names no component.
+
 #### The header's controls in your view
 
 > **Experimental.** These may change before they are marked stable.
