@@ -147,6 +147,35 @@ describe("a Turnstile form", () => {
   });
 });
 
+describe("a Turnstile token that expires", () => {
+  it("is cleared, so a send made before the next token is held, not posted stale", async () => {
+    document.body.innerHTML = `<form><input type="hidden" name="cf-turnstile-response" value="" data-forms-bot-check="turnstile" data-forms-site-key="site-1"></form>`;
+    const form = document.querySelector("form") as HTMLFormElement;
+    const input = document.querySelector("input") as HTMLInputElement;
+    vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(
+      () => undefined
+    );
+    let options: Record<string, (token?: string) => void> = {};
+    (window as unknown as Record<string, unknown>).turnstile = {
+      render: (_box: HTMLElement, given: typeof options) => {
+        options = given;
+      },
+    };
+    run();
+    document.head.querySelector("script")?.dispatchEvent(new Event("load"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    options.callback?.("token-1");
+    expect(input.value).toBe("token-1");
+    // The token lapses: it must not be posted, since the server refuses it
+    // and keeps the send as spam.
+    options["expired-callback"]?.();
+    expect(input.value).toBe("");
+    const send = new Event("submit", { cancelable: true });
+    form.dispatchEvent(send);
+    expect(send.defaultPrevented).toBe(true);
+  });
+});
+
 describe("a form with a field named submit", () => {
   it("still sends, through the form's own submit, not the field", async () => {
     const send = vi

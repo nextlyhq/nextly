@@ -65,6 +65,15 @@ function turnstile(input, siteKey) {
           HTMLFormElement.prototype.submit.call(form);
         }
       },
+      // A lapsed or failed token is cleared, so a send made before the
+      // widget's next one is held rather than posted with a token the
+      // server refuses and keeps as spam.
+      "expired-callback": () => {
+        input.value = "";
+      },
+      "error-callback": () => {
+        input.value = "";
+      },
     });
   });
 }
