@@ -31,10 +31,10 @@ import {
 import * as React from "react";
 
 import { BlockIconMark } from "./block-icon";
+import type { ToolbarActionId } from "./canvas/toolbar-actions";
 import { layersLockChangeable, type BlockLockStatus } from "./inspector";
 import type { SharedBlockVerbs } from "./keyboard-actions";
 import { useAskedSharedVerbs } from "./selection-offer";
-import type { ToolbarActionId } from "./toolbar-actions";
 
 /**
  * The block verbs the card's menu runs, handed in by the host: the SAME verbs

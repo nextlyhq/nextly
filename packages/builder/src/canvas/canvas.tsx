@@ -49,6 +49,9 @@
 import { cn } from "@nextlyhq/ui/utils";
 import { type JSX, useCallback, useEffect, useMemo, useRef } from "react";
 
+import { usePreviewedCollection } from "../previewed-entry";
+import { CANVAS_ROOT_CLASS } from "../shell-state";
+
 import {
   conditionMarksOf,
   entryContentMarksOf,
@@ -72,8 +75,6 @@ import {
   useAppliedDrawing,
   useEntryContentDrawing,
 } from "./entry-content-canvas";
-import { usePreviewedCollection } from "./previewed-entry";
-import { CANVAS_ROOT_CLASS } from "./shell-state";
 import { useCanvasMarkers } from "./use-canvas-markers";
 
 /**

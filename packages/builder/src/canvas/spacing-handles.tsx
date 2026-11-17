@@ -66,20 +66,31 @@ import {
 import * as React from "react";
 import { createPortal } from "react-dom";
 
-import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE } from "./canvas";
-import { useCanvasFrame } from "./canvas-frame-context";
-// The one test of two rectangles sharing pixels the canvas's chrome uses.
-import { overlaps } from "./canvas-tab-places";
-import type { EditorState } from "./editor-state";
-import type { Rect } from "./geometry";
-import { canvasPointerPoints, overlaySpaceOf } from "./geometry-dom";
+import type { EditorState } from "../editor-state";
+import type { Rect } from "../geometry";
 import {
   followScrub,
   scrubModifiersOf,
   type ScrubSession,
   type ScrubTravel,
-} from "./scrub-gesture";
-import type { SideOrientation } from "./side-orientation";
+} from "../scrub-gesture";
+import type { SideOrientation } from "../side-orientation";
+import {
+  scrubCommitOps,
+  scrubPreviewCss,
+  type ScrubTarget,
+} from "../style-scrub";
+import {
+  readStyleValue,
+  type StyleAddress,
+  type StyleWrite,
+} from "../style-values";
+
+import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE } from "./canvas";
+import { useCanvasFrame } from "./canvas-frame-context";
+// The one test of two rectangles sharing pixels the canvas's chrome uses.
+import { overlaps } from "./canvas-tab-places";
+import { canvasPointerPoints, overlaySpaceOf } from "./geometry-dom";
 import type {
   EdgeLengths,
   SpacingBand,
@@ -99,16 +110,6 @@ import {
   type SpacingModifiers,
   type SpacingScales,
 } from "./spacing-drag";
-import {
-  scrubCommitOps,
-  scrubPreviewCss,
-  type ScrubTarget,
-} from "./style-scrub";
-import {
-  readStyleValue,
-  type StyleAddress,
-  type StyleWrite,
-} from "./style-values";
 
 /** Everything about the measured block a gesture needs, taken once. */
 export interface SpacingSubject {

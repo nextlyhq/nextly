@@ -14,10 +14,11 @@ import type {
 } from "@nextlyhq/blocks-engine";
 import type * as React from "react";
 
+import type { EditorState } from "../editor-state";
+import type { SlotSource } from "../inserter";
+import type { LockDropRefusal } from "../lock-refusal";
+
 import type { DropRefusal, DropTarget } from "./drop-targets";
-import type { EditorState } from "./editor-state";
-import type { SlotSource } from "./inserter";
-import type { LockDropRefusal } from "./lock-refusal";
 
 /**
  * How far the pointer travels before a press becomes a drag.

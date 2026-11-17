@@ -25,7 +25,7 @@ import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CanvasFrameProvider } from "./canvas-frame-context";
-import type { EditorState } from "./editor-state";
+import type { EditorState } from "../editor-state";
 import { useInlineRichText } from "./use-inline-rich-text";
 import { useInlineText } from "./use-inline-text";
 

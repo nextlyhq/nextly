@@ -55,7 +55,7 @@ import {
   NODE_ID_ATTRIBUTE,
 } from "@nextlyhq/blocks-react";
 
-import { markedElementOf } from "./style-subject";
+import { markedElementOf } from "../style-subject";
 
 import {
   CANVAS_ROOT_CLASS,

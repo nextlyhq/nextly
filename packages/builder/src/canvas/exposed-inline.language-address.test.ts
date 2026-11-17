@@ -30,7 +30,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { composedTextAt, exposedTextOp } from "./exposed-inline";
-import { applyOps } from "./ops";
+import { applyOps } from "../ops";
 
 beforeEach(() => {
   registerBlocks(

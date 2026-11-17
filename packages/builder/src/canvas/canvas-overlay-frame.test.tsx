@@ -36,15 +36,15 @@ import {
 } from "./canvas-frame";
 import { CanvasFrameProvider } from "./canvas-frame-context";
 import { CanvasMarks } from "./canvas-marks";
-import { useEditorState, type EditorState } from "./editor-state";
+import { useEditorState, type EditorState } from "../editor-state";
 import {
   framePointInHost,
   frameViewportOf,
   hostPointInFrame,
   overlaySpaceOf,
 } from "./geometry-dom";
-import { BlockKeyboardActions } from "./keyboard-actions";
-import { CANVAS_ROOT_CLASS } from "./shell-state";
+import { BlockKeyboardActions } from "../keyboard-actions";
+import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 const PAGE_MARKER = "data-test-page";
 const TEST_SOURCE: CanvasFrameSource = {

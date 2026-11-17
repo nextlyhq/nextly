@@ -51,6 +51,11 @@
 import { findNode } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import { placementTypesOf } from "../inserter";
+import { layersLockFacts } from "../lock-refusal";
+import { lockBlockingMove } from "../locking";
+import type { OpPosition } from "../op-vocabulary";
+
 import {
   AUTOSCROLL_MAX_STEP_PX,
   AUTOSCROLL_ZONE_PX,
@@ -101,10 +106,6 @@ import {
   containerEdges,
   type CanvasPointerPoints,
 } from "./geometry-dom";
-import { placementTypesOf } from "./inserter";
-import { layersLockFacts } from "./lock-refusal";
-import { lockBlockingMove } from "./locking";
-import type { OpPosition } from "./op-vocabulary";
 import { nextTargetSwitchState, NO_TARGET } from "./target-switch";
 
 // The public shapes, one gesture's record and the drop line live in modules of

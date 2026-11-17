@@ -40,12 +40,12 @@ import {
 
 import { BlockToolbar } from "./block-toolbar";
 import { Canvas } from "./canvas";
-import type { EditorState } from "./editor-state";
+import type { EditorState } from "../editor-state";
 import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
-import { BlockKeyboardActions } from "./keyboard-actions";
+import { BlockKeyboardActions } from "../keyboard-actions";
 import { toolbarActions } from "./toolbar-actions";
 import { EDITING_ATTRIBUTE } from "./use-inline-text";
-import { VisitorUnreadableBadges } from "./visitor-unreadable-badges";
+import { VisitorUnreadableBadges } from "../visitor-unreadable-badges";
 
 afterEach(() => {
   cleanup();

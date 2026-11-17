@@ -38,8 +38,9 @@ import {
   type PlacementRefused,
 } from "@nextlyhq/blocks-engine";
 
+import { blockLabel } from "../inserter";
+
 import type { DropRefusal } from "./drop-targets";
-import { blockLabel } from "./inserter";
 
 /**
  * The two facts a refusal's wording is built from.

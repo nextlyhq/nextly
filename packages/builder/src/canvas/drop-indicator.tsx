@@ -11,10 +11,11 @@
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import * as React from "react";
 
+import type { Rect } from "../geometry";
+
 import { CANVAS_ROOT_CLASS } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
 import type { DropTarget } from "./drop-targets";
-import type { Rect } from "./geometry";
 import { overlaySpaceOf } from "./geometry-dom";
 
 export interface DropIndicatorProps {

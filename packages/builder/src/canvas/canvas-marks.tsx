@@ -21,6 +21,11 @@ import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { AlertCircle, CircleCheck, Split } from "lucide-react";
 import * as React from "react";
 
+import type { Rect } from "../geometry";
+import { UNNAMED_COMPONENT } from "../layers";
+import { LOOK_REACH_ATTRIBUTE } from "../look-reach";
+import { deviceLabel } from "../shell/breakpoint-switcher";
+
 import {
   outsetCornerRadii,
   scaleCornerRadii,
@@ -53,7 +58,6 @@ import {
   type TabPlacement,
 } from "./canvas-tab-places";
 import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
-import type { Rect } from "./geometry";
 import {
   canvasContentRect,
   CHROME_BLEED,
@@ -66,9 +70,6 @@ import {
   type OverlaySpace,
 } from "./geometry-dom";
 import { useHoveredBlock } from "./hovered-block";
-import { UNNAMED_COMPONENT } from "./layers";
-import { LOOK_REACH_ATTRIBUTE } from "./look-reach";
-import { deviceLabel } from "./shell/breakpoint-switcher";
 import {
   TOOLBAR_GAP_PX,
   toolbarPlacement,

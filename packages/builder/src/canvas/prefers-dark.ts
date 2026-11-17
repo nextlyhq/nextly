@@ -9,9 +9,10 @@
 import { DARK_MODE_ATTRIBUTE, type TokenMode } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import { CANVAS_ROOT_CLASS } from "../shell-state";
+
 import { useCanvasFrame } from "./canvas-frame-context";
 import { nearestThemeMode } from "./nearest-theme";
-import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 /**
  * Whether the viewer's system asks for a dark colour scheme.

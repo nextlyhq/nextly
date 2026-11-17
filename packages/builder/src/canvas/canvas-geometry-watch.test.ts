@@ -20,7 +20,7 @@ import {
   watchCanvasFor,
   watchScreenBand,
 } from "./canvas-geometry-watch";
-import { CANVAS_ROOT_CLASS } from "./shell-state";
+import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 function canvas(): {
   root: HTMLElement;

@@ -6,7 +6,7 @@ import {
   type TargetId,
   type TargetSwitchState,
 } from "./target-switch";
-import type { Point } from "./geometry";
+import type { Point } from "../geometry";
 
 /**
  * Far enough that a hand tremor cannot reach it and short enough that a

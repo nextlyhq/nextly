@@ -32,6 +32,8 @@
  * @module spacing-bands
  */
 
+import type { EdgeLengths, Rect, Scale } from "../geometry";
+
 import type { CornerRadii, RoundedShape } from "./border-radii";
 import {
   insetCornerRadii,
@@ -39,14 +41,13 @@ import {
   roundedShapeIn,
   scaleCornerRadii,
 } from "./border-radii";
-import type { EdgeLengths, Rect, Scale } from "./geometry";
 
 /*
  * Re-exported rather than moved outright because both are the vocabulary this
  * module's callers already speak, while `border-radii.ts` needs them too and a
  * type imported FROM here would make the two modules import each other.
  */
-export type { EdgeLengths, Scale } from "./geometry";
+export type { EdgeLengths, Scale } from "../geometry";
 
 /** The four physical sides, in the order a CSS shorthand writes them. */
 export type SpacingSide = "top" | "right" | "bottom" | "left";

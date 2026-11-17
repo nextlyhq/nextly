@@ -30,8 +30,8 @@ import {
   type DropRefusal,
   type DropRegion,
 } from "./drop-targets";
-import type { Rect } from "./geometry";
-import { registrySlotSource } from "./inserter";
+import type { Rect } from "../geometry";
+import { registrySlotSource } from "../inserter";
 
 const base = {
   version: 1,

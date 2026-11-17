@@ -7,8 +7,8 @@
  */
 import * as React from "react";
 
+import { boxInFrameViewport } from "./canvas/geometry-dom";
 import type { Rect } from "./geometry";
-import { boxInFrameViewport } from "./geometry-dom";
 
 /**
  * Where a tile's card is anchored: a point on the panel's right edge, as

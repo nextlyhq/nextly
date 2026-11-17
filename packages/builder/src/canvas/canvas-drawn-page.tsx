@@ -30,10 +30,11 @@ import { useEffect, useMemo, useState } from "react";
 import {
   revealedForCanvas,
   type AppliedConditions,
-} from "./applied-conditions";
+} from "../applied-conditions";
+import { withConditionHiddenBlock } from "../condition-hidden-block";
+
 import { useLayoutParts, type LayoutParts } from "./canvas-layout-parts";
 import type { CanvasRegion } from "./canvas-regions";
-import { withConditionHiddenBlock } from "./condition-hidden-block";
 
 /**
  * The definitions a page reaches, the components it places and those they

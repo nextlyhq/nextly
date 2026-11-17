@@ -46,7 +46,7 @@
  * @module border-radii
  */
 
-import type { EdgeLengths, Rect, Scale } from "./geometry";
+import type { EdgeLengths, Rect, Scale } from "../geometry";
 
 /**
  * One corner, as its two half-axes.

@@ -9,8 +9,8 @@
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { useCanvasFrame } from "../canvas-frame-context";
-import { CANVAS_FRAME_BOX_ATTRIBUTE } from "../geometry-dom";
+import { useCanvasFrame } from "../canvas/canvas-frame-context";
+import { CANVAS_FRAME_BOX_ATTRIBUTE } from "../canvas/geometry-dom";
 import { CANVAS_GUTTER } from "../shell-state";
 
 /**

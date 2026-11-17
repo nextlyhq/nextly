@@ -37,8 +37,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BlockContextMenu } from "./block-context-menu";
 import { Canvas } from "./canvas";
-import type { EditorState } from "./editor-state";
-import { BlockKeyboardActions } from "./keyboard-actions";
+import type { EditorState } from "../editor-state";
+import { BlockKeyboardActions } from "../keyboard-actions";
 import { depthMoveActions, toolbarActions } from "./toolbar-actions";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 

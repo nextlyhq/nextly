@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { SideOrientation } from "./side-orientation";
+import type { SideOrientation } from "../side-orientation";
 import type { SpacingBox, SpacingSide } from "./spacing-bands";
 import {
   logicalSideFor,
@@ -13,8 +13,8 @@ import {
   spacingStart,
   spacingValue,
 } from "./spacing-drag";
-import { measurementOf } from "./style-numeric";
-import type { LogicalSide } from "./style-sides";
+import { measurementOf } from "../style-numeric";
+import type { LogicalSide } from "../style-sides";
 
 const SIDES: readonly SpacingSide[] = ["top", "right", "bottom", "left"];
 

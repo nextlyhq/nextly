@@ -19,6 +19,11 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
+import type { EditorState } from "../editor-state";
+import type { Point, Rect } from "../geometry";
+import type { LockDropRefusal, LockRefusalFacts } from "../lock-refusal";
+import type { OpPosition } from "../op-vocabulary";
+
 import { isOutermostForAddress, nodeAddressOf } from "./canvas";
 import type { DragSubject } from "./canvas-drag-types";
 import type { CanvasFrame } from "./canvas-frame-context";
@@ -29,15 +34,11 @@ import type {
   RectSource,
   RegionVerdicts,
 } from "./drop-targets";
-import type { EditorState } from "./editor-state";
-import type { Point, Rect } from "./geometry";
 import {
   canvasContentRect,
   framePaintedScale,
   hostPointInFrame,
 } from "./geometry-dom";
-import type { LockDropRefusal, LockRefusalFacts } from "./lock-refusal";
-import type { OpPosition } from "./op-vocabulary";
 import type { TargetSwitchState } from "./target-switch";
 
 /**

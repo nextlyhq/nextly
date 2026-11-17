@@ -37,15 +37,16 @@
  * @module canvas-geometry-watch
  */
 
+import { isElement, isFormField } from "../dom-kind";
+import { CANVAS_ROOT_CLASS } from "../shell-state";
+
 import { isEditableText, isTextEntry } from "./canvas-escape";
-import { isElement, isFormField } from "./dom-kind";
 import {
   overlaySpaceOf,
   screenScrollers,
   scrollEventTarget,
 } from "./geometry-dom";
 import { nodeElements, nodeElementsIn } from "./rendered-nodes";
-import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 /**
  * Marks a layer the editor draws OVER the page — absolutely positioned and

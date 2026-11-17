@@ -27,7 +27,9 @@ import { getBlock, findNode } from "@nextlyhq/blocks-engine";
 import { INSTANCE_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { useCallback, useSyncExternalStore } from "react";
 
-import type { EditorState } from "./editor-state";
+import type { EditorState } from "../editor-state";
+import type { OpenPassages } from "../open-passages";
+
 import { composedTextAt } from "./exposed-inline";
 import {
   INLINE_EDIT_UNCHANGED,
@@ -35,7 +37,6 @@ import {
 } from "./inline-edit-outcome";
 import { inlinePropKind, type InlinePropKind } from "./inline-prop-kind";
 import { firstInlineProp } from "./inline-target";
-import type { OpenPassages } from "./open-passages";
 import {
   useInlineRichText,
   type CaretPoint,

@@ -69,6 +69,24 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import { isHTMLElement } from "../dom-kind";
+import type { EditorState } from "../editor-state";
+import type { Rect } from "../geometry";
+import {
+  layersLockChangeable,
+  lockOp,
+  lockStatusOf,
+  lockViewOf,
+} from "../inspector";
+import {
+  useBlockActionsContext,
+  useToolbarFocusSlot,
+} from "../keyboard-actions";
+import { layerLabel, pathTo } from "../layers";
+import { lockBlockingEdit } from "../locking";
+import { useSelectionActions } from "../selection-actions";
+import { blockActionRunners } from "../shell/builder-commands";
+
 import {
   CANVAS_ROOT_CLASS,
   CHROME_ATTRIBUTE,
@@ -79,9 +97,6 @@ import { BLOCK_TOOLBAR_CLASS } from "./canvas-chrome";
 import { useCanvasFrame, type CanvasFrame } from "./canvas-frame-context";
 import { watchScreenBand } from "./canvas-geometry-watch";
 import { useTabPost } from "./canvas-tab-places";
-import { isHTMLElement } from "./dom-kind";
-import type { EditorState } from "./editor-state";
-import type { Rect } from "./geometry";
 import {
   canvasContentRect,
   canvasScroller,
@@ -90,21 +105,7 @@ import {
   overlaySpaceOf,
 } from "./geometry-dom";
 import { useHoveredBlock } from "./hovered-block";
-import {
-  layersLockChangeable,
-  lockOp,
-  lockStatusOf,
-  lockViewOf,
-} from "./inspector";
-import {
-  useBlockActionsContext,
-  useToolbarFocusSlot,
-} from "./keyboard-actions";
-import { layerLabel, pathTo } from "./layers";
-import { lockBlockingEdit } from "./locking";
 import { clearanceWith } from "./scroll-clearance";
-import { useSelectionActions } from "./selection-actions";
-import { blockActionRunners } from "./shell/builder-commands";
 import {
   TOOLBAR_GAP_PX,
   type ToolbarAction,

@@ -31,14 +31,15 @@
  */
 import * as React from "react";
 
-import type { EditorState } from "./editor-state";
-import { observeRenderedTree } from "./rendered-tree";
+import type { EditorState } from "../editor-state";
 import {
   orientationOfElement,
   siteOrientationOf,
   type SideOrientation,
-} from "./side-orientation";
-import { markedElementOf } from "./style-subject";
+} from "../side-orientation";
+import { markedElementOf } from "../style-subject";
+
+import { observeRenderedTree } from "./rendered-tree";
 
 /**
  * What the panel knows that can change the answer without moving an element.

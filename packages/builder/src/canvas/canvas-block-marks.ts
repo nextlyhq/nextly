@@ -24,16 +24,20 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
-import type { AppliedConditions } from "./applied-conditions";
-import { isOutermostForAddress, nodeAddressOf } from "./canvas-addressing";
-import { CANVAS_REGION_CLASS } from "./canvas-regions";
+import type { AppliedConditions } from "../applied-conditions";
 import {
   asStoredDefinitions,
   gatedAsDrawn,
   gatedAsStored,
-} from "./condition-gate";
-import { isLocked } from "./locking";
-import { entryContentLabel, type PreviewedCollection } from "./previewed-entry";
+} from "../condition-gate";
+import { isLocked } from "../locking";
+import {
+  entryContentLabel,
+  type PreviewedCollection,
+} from "../previewed-entry";
+
+import { isOutermostForAddress, nodeAddressOf } from "./canvas-addressing";
+import { CANVAS_REGION_CLASS } from "./canvas-regions";
 
 /**
  * Marks the selected block's own element.

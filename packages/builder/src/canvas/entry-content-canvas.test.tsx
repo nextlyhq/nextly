@@ -27,7 +27,7 @@ import {
   PreviewedEntryProvider,
   type PreviewedCollection,
   type PreviewedEntry,
-} from "./previewed-entry";
+} from "../previewed-entry";
 
 const template: BlockDocument = {
   formatVersion: 1,

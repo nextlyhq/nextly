@@ -30,8 +30,8 @@ import {
   type DropTarget,
   type RectSource,
 } from "./drop-targets";
-import type { Rect } from "./geometry";
-import type { SlotSource } from "./inserter";
+import type { Rect } from "../geometry";
+import type { SlotSource } from "../inserter";
 
 /** Rectangles from a literal map, and a canvas that holds all of them. */
 function rectsOf(

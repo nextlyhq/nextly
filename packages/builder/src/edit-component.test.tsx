@@ -31,7 +31,7 @@ import { ComponentBanner, reachSentence } from "./component-banner";
 import { InspectorPanel } from "./inspector-panel";
 import { useEditorState } from "./editor-state";
 import { useBlockKeyboardActions } from "./keyboard-actions";
-import { toolbarActions } from "./toolbar-actions";
+import { toolbarActions } from "./canvas/toolbar-actions";
 import type { SharedBlockVerbs } from "./keyboard-actions";
 
 /** Verbs as a host shares them: the menu's locked answers are the same list. */

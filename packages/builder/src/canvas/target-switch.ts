@@ -32,7 +32,7 @@
  *
  * @module target-switch
  */
-import type { Point } from "./geometry";
+import type { Point } from "../geometry";
 
 /**
  * A drop target's identity, or `null` for "the pointer is over none".

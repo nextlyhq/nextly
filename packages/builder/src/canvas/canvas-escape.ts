@@ -55,7 +55,8 @@
  * @module canvas-escape
  */
 
-import { isElement, isInput, isTextArea } from "./dom-kind";
+import { isElement, isInput, isTextArea } from "../dom-kind";
+
 import { CANVAS_FRAME_BOX_ATTRIBUTE } from "./geometry-dom";
 
 /** The priority that puts the editor's claim above a host page's bindings. */

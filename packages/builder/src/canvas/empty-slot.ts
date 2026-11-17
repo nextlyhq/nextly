@@ -19,8 +19,8 @@
 import type { BlockNode } from "@nextlyhq/blocks-engine";
 import { SLOTS_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
-import type { SlotSource } from "./inserter";
-import { BUILDER_CHROME_CLASS, CANVAS_ROOT_CLASS } from "./shell-state";
+import type { SlotSource } from "../inserter";
+import { BUILDER_CHROME_CLASS, CANVAS_ROOT_CLASS } from "../shell-state";
 
 /**
  * The rendered element an empty-container affordance may be drawn on.

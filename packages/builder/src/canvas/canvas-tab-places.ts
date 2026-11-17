@@ -28,7 +28,7 @@
 
 import * as React from "react";
 
-import type { Rect } from "./geometry";
+import type { Rect } from "../geometry";
 
 /** Where a tab stands on its outline: on the top edge, the bottom, or inside the top. */
 export type TabAt = "above" | "below" | "inside";

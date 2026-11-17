@@ -65,13 +65,19 @@
 import { registeredBlocks, type BlockResolver } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
+import { BASE_BREAKPOINT } from "../breakpoints";
+import type { EditorState } from "../editor-state";
+import type { Scale } from "../geometry";
+import { designIsWritable, lockViewOf } from "../inspector";
+import {
+  orientationOfElement,
+  type SideOrientation,
+} from "../side-orientation";
+
 import { clipPathOf, scaleCornerRadii } from "./border-radii";
-import { BASE_BREAKPOINT } from "./breakpoints";
 import { CANVAS_ROOT_CLASS, nodeElement } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
-import type { EditorState } from "./editor-state";
-import type { Scale } from "./geometry";
 import {
   canvasContentRect,
   canvasPaintedScale,
@@ -84,8 +90,6 @@ import {
   viewportPositioned,
   type RenderedScale,
 } from "./geometry-dom";
-import { designIsWritable, lockViewOf } from "./inspector";
-import { orientationOfElement, type SideOrientation } from "./side-orientation";
 import {
   applicableEdges,
   overlayEscape,

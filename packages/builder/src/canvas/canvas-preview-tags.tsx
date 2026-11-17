@@ -19,7 +19,7 @@ import type { TokenMode } from "@nextlyhq/blocks-engine";
 import { Moon, Sun } from "lucide-react";
 import * as React from "react";
 
-import { VariantPreviewTag } from "./variant-preview";
+import { VariantPreviewTag } from "../variant-preview";
 
 /** @experimental Settles with the canvas's mode preview. */
 export interface CanvasPreviewTagsProps {

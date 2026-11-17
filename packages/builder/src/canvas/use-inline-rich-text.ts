@@ -37,8 +37,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import type { EditorState } from "../editor-state";
+
 import { useCanvasFrame } from "./canvas-frame-context";
-import type { EditorState } from "./editor-state";
 import {
   INLINE_EDIT_DISCARDED,
   INLINE_EDIT_UNAVAILABLE,

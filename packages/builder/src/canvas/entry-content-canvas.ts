@@ -45,7 +45,7 @@ import {
   usePreviewedEntry,
   type PreviewedCollection,
   type PreviewedEntry,
-} from "./previewed-entry";
+} from "../previewed-entry";
 
 /** What the canvas draws a page with, less what is the page's alone. */
 type CanvasRender = Omit<PageRendererProps, "document" | "siteStyles">;

@@ -54,12 +54,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CANVAS_ROOT_CLASS, Canvas } from "./canvas";
 import { EMPTY_CONTAINER_SELECTOR } from "./empty-slot";
-import { BUILDER_CHROME_CLASS } from "./shell-state";
+import { BUILDER_CHROME_CLASS } from "../shell-state";
 import {
   centeredControlRect,
   EmptyContainerAppenders,
 } from "./empty-container-appender";
-import { registrySlotSource } from "./inserter";
+import { registrySlotSource } from "../inserter";
 
 /**
  * The `checkVisibility` the RUNTIME brought, read before any case can replace

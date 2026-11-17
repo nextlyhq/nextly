@@ -27,7 +27,7 @@ import {
   exposedRichOp,
   exposedTextOp,
 } from "./exposed-inline";
-import { applyOps } from "./ops";
+import { applyOps } from "../ops";
 
 beforeEach(() => {
   registerBlocks(

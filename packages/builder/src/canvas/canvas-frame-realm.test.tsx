@@ -29,7 +29,7 @@ import type { CanvasDragState } from "./canvas-drag";
 import { CanvasFrameProvider } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
 import { observeRenderedTree } from "./rendered-tree";
-import { CANVAS_ROOT_CLASS } from "./shell-state";
+import { CANVAS_ROOT_CLASS } from "../shell-state";
 import { useCanvasReading } from "./use-canvas-reading";
 
 afterEach(() => {

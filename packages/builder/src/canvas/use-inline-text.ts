@@ -42,9 +42,11 @@
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { isElement } from "../dom-kind";
+import type { EditorState } from "../editor-state";
+import type { BuilderOp } from "../op-vocabulary";
+
 import { useCanvasFrame } from "./canvas-frame-context";
-import { isElement } from "./dom-kind";
-import type { EditorState } from "./editor-state";
 import {
   composedTextAt,
   exposedTextOp,
@@ -57,7 +59,6 @@ import {
 } from "./inline-edit-outcome";
 import { namedTarget } from "./inline-target";
 import { inlineTarget, inlineTargets, inlineTextOp } from "./inline-text";
-import type { BuilderOp } from "./op-vocabulary";
 
 /** The attribute naming the element an author is currently typing into. */
 export const EDITING_ATTRIBUTE = "data-nx-editing";

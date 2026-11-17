@@ -57,7 +57,8 @@ import {
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
 
-import { isUsableWidth } from "./breakpoints";
+import { isUsableWidth } from "../breakpoints";
+
 import { usableScale, type CanvasZoom } from "./canvas-zoom";
 
 /**

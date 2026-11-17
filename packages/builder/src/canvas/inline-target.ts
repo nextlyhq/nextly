@@ -27,8 +27,9 @@ import {
   type PropSchema,
 } from "@nextlyhq/blocks-engine";
 
+import { lockBlockingEdit } from "../locking";
+
 import { inlinePropKind, type InlinePropKind } from "./inline-prop-kind";
-import { lockBlockingEdit } from "./locking";
 
 /** A node and the values on it a given surface may edit. */
 export interface InlineProps {

@@ -13,6 +13,8 @@
  */
 import type { BlockDocument, SlotDefaultSource } from "@nextlyhq/blocks-engine";
 
+import type { BuilderOp } from "../op-vocabulary";
+
 import {
   exposedPassage,
   exposedRichOp,
@@ -25,7 +27,6 @@ import {
   richTextMovedOn,
   type InlineRichTextTarget,
 } from "./inline-rich-text";
-import type { BuilderOp } from "./op-vocabulary";
 
 /** Where a passage being edited lives. */
 export interface RichPassageAddress {

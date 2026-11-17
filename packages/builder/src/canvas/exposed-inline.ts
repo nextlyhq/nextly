@@ -34,12 +34,13 @@ import {
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
-import { composedHolds } from "./component-holds";
+import { composedHolds } from "../component-holds";
+import { setOverrideOp } from "../instance-inspector";
+import { lockBlockingEdit } from "../locking";
+import type { BuilderOp } from "../op-vocabulary";
+
 import { inlinePropKind } from "./inline-prop-kind";
 import { richTextChanged } from "./inline-rich-text";
-import { setOverrideOp } from "./instance-inspector";
-import { lockBlockingEdit } from "./locking";
-import type { BuilderOp } from "./op-vocabulary";
 
 /** An exposed value the canvas may edit in place, addressed through its placement. */
 export interface ExposedTextTarget {

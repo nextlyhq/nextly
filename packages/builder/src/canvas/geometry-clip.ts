@@ -12,6 +12,8 @@
  * @module geometry-clip
  */
 
+import type { Scale } from "../geometry";
+
 import type { CornerRadii, EdgeBounds } from "./border-radii";
 import {
   insetCornerRadii,
@@ -20,7 +22,6 @@ import {
   scaleCornerRadii,
   usedCornerRadii,
 } from "./border-radii";
-import type { Scale } from "./geometry";
 import { edgeWidth, type RenderedScale } from "./geometry-transform";
 
 /**

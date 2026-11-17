@@ -23,9 +23,10 @@ import {
   type RichTextValue,
 } from "@nextlyhq/blocks-engine";
 
+import { propPatch } from "../inspector";
+import type { BuilderOp } from "../op-vocabulary";
+
 import { inlinePropsOfKind } from "./inline-target";
-import { propPatch } from "./inspector";
-import type { BuilderOp } from "./op-vocabulary";
 
 /** One passage a canvas may let an author edit in place. */
 export interface InlineRichTextTarget {

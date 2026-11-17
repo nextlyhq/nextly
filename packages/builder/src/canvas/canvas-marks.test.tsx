@@ -21,7 +21,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
-import { appliedConditionsOf } from "./applied-conditions";
+import { appliedConditionsOf } from "../applied-conditions";
 import {
   CANVAS_ROOT_CLASS,
   CONDITIONED_ATTRIBUTE,
@@ -31,12 +31,12 @@ import {
   SELECTED_ATTRIBUTE,
 } from "./canvas";
 import { CanvasMarks } from "./canvas-marks";
-import { conditionFieldsOfShapes } from "./condition-model";
+import { conditionFieldsOfShapes } from "../condition-model";
 import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
-import { markLookReach } from "./look-reach";
+import { markLookReach } from "../look-reach";
 import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
-import { PreviewedEntryProvider } from "./previewed-entry";
-import { VisitorUnreadableBadges } from "./visitor-unreadable-badges";
+import { PreviewedEntryProvider } from "../previewed-entry";
+import { VisitorUnreadableBadges } from "../visitor-unreadable-badges";
 
 /**
  * The selection ring and its halo are drawn for EVERY selected rendering, by

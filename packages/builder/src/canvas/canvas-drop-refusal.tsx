@@ -11,6 +11,9 @@ import { findNode, type BlockDocument } from "@nextlyhq/blocks-engine";
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import { type JSX, useRef, useState } from "react";
 
+import { lockRefusalWording } from "../lock-refusal";
+import { CANVAS_ROOT_CLASS } from "../shell-state";
+
 import { ownedNodeElement } from "./canvas-addressing";
 import type { CanvasDragState } from "./canvas-drag";
 import { useCanvasFrame } from "./canvas-frame-context";
@@ -22,9 +25,7 @@ import {
   scrollEventTarget,
   visibleBandOf,
 } from "./geometry-dom";
-import { lockRefusalWording } from "./lock-refusal";
 import { RefusalNotice } from "./refusal-notice";
-import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 /**
  * The refusal a canvas should DRAW, which is not every refusal it is given.

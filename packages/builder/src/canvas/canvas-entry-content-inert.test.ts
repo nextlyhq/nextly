@@ -12,7 +12,7 @@ import {
   markEntryContentInert,
   observeEntryContentInertOwnership,
 } from "./canvas";
-import { CANVAS_ROOT_CLASS } from "./shell-state";
+import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 /** A canvas holding one Entry content wrapper with the two blocks in it. */
 function drawn() {

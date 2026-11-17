@@ -28,7 +28,7 @@ import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CANVAS_ROOT_CLASS, Canvas } from "./canvas";
-import type { EditorState } from "./editor-state";
+import type { EditorState } from "../editor-state";
 import { probeScale, SpacingOverlay } from "./spacing-overlay";
 
 afterEach(() => {

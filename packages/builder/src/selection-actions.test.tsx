@@ -22,7 +22,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { EditorState } from "./editor-state";
 import { BlockKeyboardActions } from "./keyboard-actions";
 import { useSelectionActions } from "./selection-actions";
-import { toolbarActions, type ToolbarAction } from "./toolbar-actions";
+import { toolbarActions, type ToolbarAction } from "./canvas/toolbar-actions";
 
 function node(id: string): BlockNode {
   return { id, type: "acme/text", version: 1, props: {} } as BlockNode;

@@ -52,6 +52,8 @@ import {
   type RefObject,
 } from "react";
 
+import { CANVAS_ROOT_CLASS } from "../shell-state";
+
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import {
   inputDocuments,
@@ -71,7 +73,6 @@ import {
   screenScrollers,
   scrollEventTarget,
 } from "./geometry-dom";
-import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 /**
  * The class on a Layout region's frame. Its blocks are a document of their

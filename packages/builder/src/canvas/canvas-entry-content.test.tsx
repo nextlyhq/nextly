@@ -26,14 +26,17 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { ENTRY_CONTENT_DRAWN_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
-import { appliedConditionsOf, conditionedBlocksIn } from "./applied-conditions";
+import {
+  appliedConditionsOf,
+  conditionedBlocksIn,
+} from "../applied-conditions";
 import { Canvas } from "./canvas";
-import { conditionFieldsOfShapes } from "./condition-model";
+import { conditionFieldsOfShapes } from "../condition-model";
 import {
   PreviewedEntryProvider,
   type PreviewedCollection,
   type PreviewedEntry,
-} from "./previewed-entry";
+} from "../previewed-entry";
 
 const BODY_WORDS = "A content model is the set of collections you build on.";
 

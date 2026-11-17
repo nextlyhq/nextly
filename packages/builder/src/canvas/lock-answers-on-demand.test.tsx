@@ -48,8 +48,8 @@ import {
 
 const trials = vi.hoisted(() => ({ count: 0 }));
 
-vi.mock("./op-vocabulary", async importOriginal => {
-  const real = await importOriginal<typeof import("./op-vocabulary")>();
+vi.mock("../op-vocabulary", async importOriginal => {
+  const real = await importOriginal<typeof import("../op-vocabulary")>();
   return {
     ...real,
     applyOps: (...args: Parameters<typeof real.applyOps>) => {
@@ -62,14 +62,14 @@ vi.mock("./op-vocabulary", async importOriginal => {
 import { BlockContextMenu } from "./block-context-menu";
 import { BlockToolbar } from "./block-toolbar";
 import { Canvas } from "./canvas";
-import { useEditorState, type EditorState } from "./editor-state";
+import { useEditorState, type EditorState } from "../editor-state";
 import {
   BlockKeyboardActions,
   type SharedBlockVerbs,
-} from "./keyboard-actions";
-import { LayerRowMenu } from "./layer-row-menu";
-import { lockRefusalWording } from "./lock-refusal";
-import type { BuilderOp } from "./op-vocabulary";
+} from "../keyboard-actions";
+import { LayerRowMenu } from "../layer-row-menu";
+import { lockRefusalWording } from "../lock-refusal";
+import type { BuilderOp } from "../op-vocabulary";
 
 const base = {
   version: 1,

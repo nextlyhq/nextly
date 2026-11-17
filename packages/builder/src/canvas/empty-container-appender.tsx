@@ -200,11 +200,14 @@ import {
   type ReactElement,
 } from "react";
 
+import type { Rect } from "../geometry";
+import type { SlotSource } from "../inserter";
+import { authoredName } from "../layers";
+
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
 import { EMPTY_CONTAINER_SELECTOR, emptySlotOf } from "./empty-slot";
-import type { Rect } from "./geometry";
 import {
   canvasContentRect,
   clippedByAncestorRect,
@@ -213,8 +216,6 @@ import {
   renderSkips,
   viewportPositioned,
 } from "./geometry-dom";
-import type { SlotSource } from "./inserter";
-import { authoredName } from "./layers";
 
 /**
  * The one property this component ever reads off a block's definition.

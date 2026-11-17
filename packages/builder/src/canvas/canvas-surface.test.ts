@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest";
 
 import { CANVAS_FRAME_SHEET } from "./canvas-frame-sheet";
 import { EMPTY_CONTAINER_SELECTOR } from "./empty-slot";
-import { CANVAS_ROOT_CLASS } from "./shell-state";
-import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
+import { CANVAS_ROOT_CLASS } from "../shell-state";
+import { chromeStylesheetSource } from "../styles/chrome-stylesheet";
 
 /**
  * The canvas is drawn on the PAGE's surface, not on the editor's.

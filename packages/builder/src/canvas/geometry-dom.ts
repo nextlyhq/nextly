@@ -25,9 +25,7 @@
  * @module geometry-dom
  */
 
-import type { CornerRadii } from "./border-radii";
-import { SQUARE_CORNERS, usedCornerRadii } from "./border-radii";
-import { isHTMLElement, isIFrame } from "./dom-kind";
+import { isHTMLElement, isIFrame } from "../dom-kind";
 import {
   frameContentOrigin,
   pointToCanvas,
@@ -38,7 +36,10 @@ import {
   type Point,
   type Rect,
   type Scale,
-} from "./geometry";
+} from "../geometry";
+
+import type { CornerRadii } from "./border-radii";
+import { SQUARE_CORNERS, usedCornerRadii } from "./border-radii";
 import {
   anyAncestorCuts,
   type AncestorClipContext,

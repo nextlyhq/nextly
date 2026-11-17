@@ -50,6 +50,10 @@ import { cn } from "@nextlyhq/ui/utils";
 import * as React from "react";
 import { createPortal } from "react-dom";
 
+import { isHTMLElement } from "../dom-kind";
+import { frameContentOrigin, pointToHost } from "../geometry";
+import { BUILDER_CHROME_CLASS, CANVAS_ROOT_CLASS } from "../shell-state";
+
 import {
   CanvasFrameProvider,
   useFrameRegistration,
@@ -67,8 +71,6 @@ import {
   type FrameSize,
 } from "./canvas-width";
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
-import { isHTMLElement } from "./dom-kind";
-import { frameContentOrigin, pointToHost } from "./geometry";
 import {
   CANVAS_FRAME_BOX_ATTRIBUTE,
   CANVAS_LAYER_ATTRIBUTE,
@@ -78,7 +80,6 @@ import {
   frameViewportOf,
   rootInFrameViewport,
 } from "./geometry-dom";
-import { BUILDER_CHROME_CLASS, CANVAS_ROOT_CLASS } from "./shell-state";
 import { SiteChromeCues } from "./site-chrome-cues";
 import { pageSchemeOf } from "./site-ground";
 

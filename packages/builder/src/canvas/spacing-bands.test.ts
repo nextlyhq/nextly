@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { RoundedShape } from "./border-radii";
 import { SQUARE_CORNERS } from "./border-radii";
-import type { Rect } from "./geometry";
+import type { Rect } from "../geometry";
 import {
   overlayEscape,
   sameBands,

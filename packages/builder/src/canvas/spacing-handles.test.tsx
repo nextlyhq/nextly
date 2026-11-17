@@ -38,7 +38,7 @@ import * as React from "react";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { CANVAS_ROOT_CLASS } from "./canvas";
-import { useEditorState, type EditorState } from "./editor-state";
+import { useEditorState, type EditorState } from "../editor-state";
 import type { SpacingBand } from "./spacing-bands";
 import {
   placeHandles,
@@ -46,7 +46,7 @@ import {
   type SpacingScrubContext,
   type SpacingSubject,
 } from "./spacing-handles";
-import { readStyleValue } from "./style-values";
+import { readStyleValue } from "../style-values";
 
 beforeAll(() => {
   // Absent from jsdom entirely, as `canvas-drag.test.tsx` records. Without them

@@ -9,9 +9,10 @@
 
 import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
-import { isElement } from "./dom-kind";
+import { isElement } from "../dom-kind";
+import { CANVAS_ROOT_CLASS } from "../shell-state";
+
 import { nodeElements } from "./rendered-nodes";
-import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 /**
  * How a pointer event on the canvas resolves to a node id, or to nothing.

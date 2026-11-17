@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import { tabsApart, type TabDraft } from "./canvas-tab-places";
-import type { Rect } from "./geometry";
+import type { Rect } from "../geometry";
 
 /** A 120px-wide, 22px-high tab on `edge` that may only stand above it. */
 const aboveOnly = (edge: Rect, leftmost: number): TabDraft => ({

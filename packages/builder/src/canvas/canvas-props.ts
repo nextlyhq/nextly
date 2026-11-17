@@ -7,10 +7,11 @@
 import type { BlockDocument, StyleState } from "@nextlyhq/blocks-engine";
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
 
-import type { AppliedConditions } from "./applied-conditions";
+import type { AppliedConditions } from "../applied-conditions";
+import type { SelectionMode } from "../selection";
+
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
 import type { CanvasRegion } from "./canvas-regions";
-import type { SelectionMode } from "./selection";
 
 export interface CanvasProps {
   /** The document being edited. */

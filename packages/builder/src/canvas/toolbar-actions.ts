@@ -48,45 +48,46 @@ import {
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
 
-import { compositionRefusalReason } from "./composition-refusal";
-import { blockDeletion } from "./delete-block";
-import type { RefusalWording } from "./drag-refusal";
-import { CONVERSION_WORDS } from "./editor-words";
+import { compositionRefusalReason } from "../composition-refusal";
+import { blockDeletion } from "../delete-block";
+import { CONVERSION_WORDS } from "../editor-words";
 import {
   compositionEntryContentRefusal,
   duplicationRefusal,
-} from "./entry-content-rules";
-import type { Rect } from "./geometry";
-import { placedComponentId } from "./instance-inspector";
+} from "../entry-content-rules";
+import type { Rect } from "../geometry";
+import { placedComponentId } from "../instance-inspector";
 import {
   keyboardMovePosition,
   type KeyboardMove,
   type MoveDirection,
-} from "./keyboard-move";
-import { pathTo } from "./layers";
+} from "../keyboard-move";
+import { pathTo } from "../layers";
 import {
   lockedBlockWording,
   lockRefusalWording,
   type LockedVerb,
   type LockRefusalFacts,
-} from "./lock-refusal";
+} from "../lock-refusal";
 import {
   lockBlockingDelete,
   lockBlockingEdit,
   lockBlockingMove,
-} from "./locking";
-import { refusalAnnouncement } from "./move-refusal";
-import type { BuilderOp, OpPosition } from "./op-vocabulary";
+} from "../locking";
+import { refusalAnnouncement } from "../move-refusal";
+import type { BuilderOp, OpPosition } from "../op-vocabulary";
 import {
   isRefusal,
   selectionDeletion,
   selectionDuplication,
   selectionMove,
-} from "./selection-ops";
+} from "../selection-ops";
 import {
   saveAsSharedStyleRefusal,
   type SharedStyleOffer,
-} from "./shared-style-target";
+} from "../shared-style-target";
+
+import type { RefusalWording } from "./drag-refusal";
 
 /** The editor's own lock question, asked of the ops a verb would apply. */
 type LockQuestion = (ops: readonly BuilderOp[]) => LockRefusalFacts | undefined;

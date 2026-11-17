@@ -22,9 +22,9 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
-import { compositionRefusalReason } from "./composition-refusal";
-import { layersLockRefusalFor } from "./lock-refusal";
-import { selectionDuplication } from "./selection-ops";
+import { compositionRefusalReason } from "../composition-refusal";
+import { layersLockRefusalFor } from "../lock-refusal";
+import { selectionDuplication } from "../selection-ops";
 
 import {
   depthMoveActions,

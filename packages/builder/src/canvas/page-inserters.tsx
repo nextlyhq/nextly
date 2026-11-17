@@ -36,6 +36,10 @@ import { TooltipProvider } from "@nextlyhq/ui";
 import { Plus } from "lucide-react";
 import * as React from "react";
 
+import { ChromeTooltip } from "../chrome-tooltip";
+import type { Point, Rect } from "../geometry";
+import { blockNameOf, type ComponentTitleOf } from "../layers";
+
 import {
   CANVAS_ROOT_CLASS,
   CHROME_ATTRIBUTE,
@@ -43,8 +47,6 @@ import {
 } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor, watchScreenBand } from "./canvas-geometry-watch";
-import { ChromeTooltip } from "./chrome-tooltip";
-import type { Point, Rect } from "./geometry";
 import {
   canvasContentPoint,
   canvasContentRect,
@@ -52,7 +54,6 @@ import {
   onScreenOf,
   overlaySpaceOf,
 } from "./geometry-dom";
-import { blockNameOf, type ComponentTitleOf } from "./layers";
 import { startWords } from "./page-start-words";
 import { unionRect } from "./toolbar-actions";
 

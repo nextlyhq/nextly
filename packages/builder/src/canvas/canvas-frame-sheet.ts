@@ -32,8 +32,9 @@ import {
   ENTRY_CONTENT_NOTE_ATTRIBUTE,
 } from "@nextlyhq/blocks-react";
 
+import { CANVAS_ROOT_CLASS } from "../shell-state";
+
 import { EMPTY_CONTAINER_SELECTOR, EMPTY_TEXT_SELECTOR } from "./empty-slot";
-import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 const ROOT = `.${CANVAS_ROOT_CLASS}`;
 

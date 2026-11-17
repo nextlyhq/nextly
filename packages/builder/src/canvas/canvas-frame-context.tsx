@@ -34,8 +34,9 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
+import type { Point } from "../geometry";
+
 import type { FrameSize } from "./canvas-width";
-import type { Point } from "./geometry";
 import { framePointInHost, hostPointInFrame } from "./geometry-dom";
 
 /**

@@ -45,9 +45,9 @@ import {
   CanvasFrameProvider,
   CanvasFrameShortcuts,
 } from "./canvas-frame-context";
-import type { EditorState } from "./editor-state";
-import { BlockKeyboardActions } from "./keyboard-actions";
-import { StyleInspectorPanel } from "./style-inspector-panel";
+import type { EditorState } from "../editor-state";
+import { BlockKeyboardActions } from "../keyboard-actions";
+import { StyleInspectorPanel } from "../style-inspector-panel";
 
 afterEach(() => {
   cleanup();

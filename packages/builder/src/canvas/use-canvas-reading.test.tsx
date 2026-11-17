@@ -20,7 +20,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { RichText } from "@nextlyhq/blocks-react";
 
-import type { EditorState } from "./editor-state";
+import type { EditorState } from "../editor-state";
 import { useCanvasReading } from "./use-canvas-reading";
 
 afterEach(cleanup);

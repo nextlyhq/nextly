@@ -35,7 +35,8 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
-import { layerLabel } from "./layers";
+import { layerLabel } from "../layers";
+
 import type { SpacingSide } from "./spacing-bands";
 
 /** The physical side a block's `margin-block-start` lands on. */
