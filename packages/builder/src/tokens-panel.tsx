@@ -57,9 +57,10 @@ import {
   useListedGroups,
   useViewSearch,
 } from "./design-group-toggle";
-import { isHTMLElement } from "./dom-kind";
+import { commitFocusedField } from "./editor-field-commit";
 import { FluidRangeFields } from "./fluid-popover";
 import { ShowMore, withOpenRow } from "./panel-actions";
+import { SiteTextSection } from "./site-text-panel";
 import {
   addVariable,
   duplicateVariable,
@@ -377,6 +378,14 @@ function VariablesView({
         }
         overlays={placedOverlays(placed, header)}
       >
+        <TypeTabSiteText
+          groups={hosted.groups}
+          tokens={tokens}
+          onChange={onChange}
+          readOnly={readOnly}
+          mode={mode}
+          supplied={supplied?.siteText}
+        />
         <TypeTabRange
           groups={hosted.groups}
           tokens={tokens}
@@ -408,6 +417,20 @@ function VariablesView({
       </ViewBody>
     </div>
   );
+}
+
+/**
+ * The site's text, first where the view lists the type scale: what every
+ * page's headings, body text, links, buttons and captions look like.
+ */
+function TypeTabSiteText({
+  groups,
+  ...section
+}: React.ComponentProps<typeof SiteTextSection> & {
+  groups: readonly VariableGroup[] | undefined;
+}): React.JSX.Element | null {
+  if (groups !== undefined && !groups.includes("type")) return null;
+  return <SiteTextSection {...section} />;
 }
 
 /**
@@ -1014,17 +1037,6 @@ function useOpenVariable({
     commitFrom,
     focus: setFocusKey,
   };
-}
-
-/**
- * Commits the variable editor's field that has focus, by leaving it, as Tab
- * would: each field commits on blur, synchronously.
- */
-function commitFocusedField(document: Document | undefined): void {
-  const active = document?.activeElement;
-  if (isHTMLElement(active) && active.closest(".nx-vars-editor")) {
-    active.blur();
-  }
 }
 
 /**

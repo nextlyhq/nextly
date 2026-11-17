@@ -633,7 +633,6 @@ describe("the root entry", () => {
       // route given no `maxQueries` renders under.
       "SITE_PAGE_DATA_LIMIT_SERVICE",
       "SLOTS_ATTRIBUTE",
-      "TYPOGRAPHY_DEFAULTS",
       "UNPREVIEWABLE_CONTAINER",
       // Added deliberately: binding sources read on a server, carried to the
       // editor's canvas and read back there, by one pair of functions.

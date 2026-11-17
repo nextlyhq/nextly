@@ -938,11 +938,27 @@ const staleRefusal = () =>
   NextlyError.staleVersion({ data: { currentVersion: "9" } });
 
 /** A store over the stored tokens section, recording each write. */
-function storeOf(section: Record<string, unknown>, rev?: string) {
+function storeOf(
+  section: Record<string, unknown>,
+  rev?: string,
+  /** Site text rows the site's code supplies, under the section's own. */
+  codeText?: Record<string, unknown>
+) {
+  // The site's variables as a write leaves them: the engine's, with the
+  // section's Site text rows over the code's, row by row, as the merge does.
+  const variablesWith = (after: Record<string, unknown>): SiteTokenSet => {
+    const rows = {
+      ...codeText,
+      ...(after.siteText as Record<string, unknown> | undefined),
+    };
+    return Object.keys(rows).length === 0
+      ? SITE
+      : { ...SITE, siteText: rows as SiteTokenSet["siteText"] };
+  };
   const read: VariableRead = {
     section,
     classes: [styleNaming("c-card", "Card", "color.other")],
-    variablesWith: () => SITE,
+    variablesWith,
     rev,
   };
   // Each write answers the document it left, with the next version.
@@ -1385,6 +1401,112 @@ describe("the in-use check, bound to the stored documents", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("removing a type size a Site text row uses", () => {
+  const display = {
+    name: "font-size.display",
+    label: "Display",
+    kind: "dimension",
+    values: { light: "3rem" },
+  };
+  const displayLine = {
+    name: "line-height.display",
+    kind: "number",
+    values: { light: "1.05" },
+  };
+
+  it("refuses, naming the row, and writes nothing", async () => {
+    const { store, write } = storeOf({
+      tokens: [display, displayLine],
+      siteText: {
+        h1: {
+          fontSize: { $token: "font-size.display" },
+          lineHeight: { $token: "line-height.display" },
+        },
+      },
+    });
+    const inUse = vi.fn<VariablesInUseCheck>(async () => undefined);
+    expect(
+      await refusal(
+        removeVariables(
+          post({ ids: ["font-size.display", "line-height.display"] }),
+          store,
+          new Set(),
+          checksOf(inUse)
+        )
+      )
+    ).toMatchObject({
+      code: "CONFLICT",
+      publicMessage: expect.stringContaining(
+        "Display is used by Site text: Heading 1."
+      ),
+    });
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("refuses where the site's code supplies the row using it", async () => {
+    const { store, write } = storeOf(
+      { tokens: [display, displayLine] },
+      undefined,
+      { h1: { fontSize: { $token: "font-size.display" } } }
+    );
+    const inUse = vi.fn<VariablesInUseCheck>(async () => undefined);
+    expect(
+      await refusal(
+        removeVariables(
+          post({ ids: ["font-size.display"] }),
+          store,
+          new Set(),
+          checksOf(inUse)
+        )
+      )
+    ).toMatchObject({
+      code: "CONFLICT",
+      publicMessage: expect.stringContaining(
+        "Display is used by Site text: Heading 1."
+      ),
+    });
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("refuses where a row names it through var() of its custom property", async () => {
+    const { store, write } = storeOf({
+      tokens: [display, displayLine],
+      siteText: { h2: { fontSize: "var(--site-font-size-display)" } },
+    });
+    const inUse = vi.fn<VariablesInUseCheck>(async () => undefined);
+    expect(
+      await refusal(
+        removeVariables(
+          post({ ids: ["font-size.display"] }),
+          store,
+          new Set(),
+          checksOf(inUse)
+        )
+      )
+    ).toMatchObject({
+      code: "CONFLICT",
+      publicMessage: expect.stringContaining(
+        "Display is used by Site text: Heading 2."
+      ),
+    });
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("removes it once no row uses it", async () => {
+    const { store, write } = storeOf({
+      tokens: [display, displayLine],
+      siteText: { h1: { fontSize: "40px" } },
+    });
+    await removeVariables(
+      post({ ids: ["font-size.display", "line-height.display"] }),
+      store,
+      new Set(),
+      checksOf()
+    );
+    expect(write).toHaveBeenCalledTimes(1);
   });
 });
 

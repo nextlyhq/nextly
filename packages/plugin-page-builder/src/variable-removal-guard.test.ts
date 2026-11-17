@@ -64,10 +64,11 @@ type Hook = {
 /** Run the Single's own before-validate hooks, as a write would. */
 async function written(
   hook: Hook,
-  check: VariablesInUseCheck | undefined
+  check: VariablesInUseCheck | undefined,
+  defaults: SiteStyleData = DEFAULTS
 ): Promise<unknown> {
   const hooks =
-    siteStyleSingle({ defaults: DEFAULTS }, undefined, () => check).hooks
+    siteStyleSingle({ defaults }, undefined, () => check).hooks
       ?.beforeValidate ?? [];
   try {
     for (const run of hooks) await run(hook as never);
@@ -384,5 +385,76 @@ describe("a write whose shared styles name variables", () => {
         check
       )
     ).toBeUndefined();
+  });
+});
+
+describe("a write that drops a type size a Site text row still uses", () => {
+  const display = {
+    name: "font-size.display",
+    label: "Display",
+    kind: "dimension",
+    values: { light: "3rem" },
+  };
+  const rows = {
+    h2: { fontSize: { $token: "font-size.display" } },
+  };
+
+  it("is refused, naming the row, before the in-use check is asked", async () => {
+    const check = vi.fn<VariablesInUseCheck>(async () => undefined);
+    const error = await written(
+      {
+        data: { tokens: { tokens: [], siteText: rows } },
+        originalData: { tokens: { tokens: [display], siteText: rows } },
+        user: author,
+        context: {},
+      },
+      check
+    );
+    expect(error).toBeInstanceOf(NextlyError);
+    expect(JSON.stringify(error)).toContain(
+      "Display is used by Site text: Heading 2."
+    );
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it("is refused where the site's code supplies the row using it", async () => {
+    const check = vi.fn<VariablesInUseCheck>(async () => undefined);
+    const error = await written(
+      {
+        data: { tokens: { tokens: [] } },
+        originalData: { tokens: { tokens: [display] } },
+        user: author,
+        context: {},
+      },
+      check,
+      {
+        ...DEFAULTS,
+        tokens: {
+          tokens: [...(DEFAULTS.tokens?.tokens ?? [])],
+          siteText: rows,
+        },
+      }
+    );
+    expect(JSON.stringify(error)).toContain(
+      "Display is used by Site text: Heading 2."
+    );
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it("is let through when the same write points the row elsewhere", async () => {
+    const check = vi.fn<VariablesInUseCheck>(async () => undefined);
+    const error = await written(
+      {
+        data: {
+          tokens: { tokens: [], siteText: { h2: { fontSize: "40px" } } },
+        },
+        originalData: { tokens: { tokens: [display], siteText: rows } },
+        user: author,
+        context: {},
+      },
+      check
+    );
+    expect(error).toBeUndefined();
+    expect(check).toHaveBeenCalledTimes(1);
   });
 });

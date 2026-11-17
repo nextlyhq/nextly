@@ -64,6 +64,11 @@ let savedFrom: unknown;
  * editor hosting it registers it. Called here the way that host calls it.
  */
 let beforeAction: ((action: string) => void | Promise<void>) | undefined;
+/**
+ * Every mounted caller's handler, as the admin keeps them: each runs before
+ * an action, in turn, not only the one that registered last.
+ */
+const actionHandlers = new Set<(action: string) => void | Promise<void>>();
 
 /** The save-as-pattern verb the editor published, so a test can run it. */
 let offeredSaveVerb: (() => void) | undefined;
@@ -313,8 +318,23 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   useReportUnsavedWork: () => {},
   // The form's storing gate, which site style writes are tracked with.
   useTrackedWrite: () => () => {},
-  useBeforeDocumentAction: (handler: (action: string) => void) => {
-    beforeAction = handler;
+  useBeforeDocumentAction: (
+    handler: (action: string) => void | Promise<void>
+  ) => {
+    const latest = React.useRef(handler);
+    React.useEffect(() => {
+      latest.current = handler;
+    });
+    React.useEffect(() => {
+      const run = (action: string) => latest.current(action);
+      actionHandlers.add(run);
+      return () => {
+        actionHandlers.delete(run);
+      };
+    }, []);
+    beforeAction = async action => {
+      for (const run of actionHandlers) await run(action);
+    };
   },
   // The header's controls the bar places; drawn by the admin, not here.
   DocumentSaveAndPublish: () => null,

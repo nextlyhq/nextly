@@ -12,6 +12,7 @@ import {
   type DocumentLimits,
   type SiteSheetArtifact,
   type SiteSheetInput,
+  type SiteTextMap,
   type StyleCompileContext,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
@@ -370,6 +371,14 @@ type ResolvedShared = {
   [K in ReconciledHere as ContextKey<K>]:
     | NonNullable<Required<SiteSheetInput>[K]>
     | undefined;
+} & {
+  /**
+   * The site's text, which the sheet's token set carries and the page compile
+   * reads: its element tier and the blocks drawing a button or a caption are
+   * compiled from it. Reconciled here although `tokens` is the sheet's,
+   * because only this one part of the set is read by both compiles.
+   */
+  siteText: SiteTextMap | undefined;
 };
 
 /**
@@ -454,6 +463,7 @@ export function withoutStatedNulls(
     tokenPrefix: shared.tokenPrefix ?? undefined,
     previewContainer: shared.previewContainer ?? undefined,
     previewStates: shared.previewStates ?? undefined,
+    siteText: shared.siteText ?? undefined,
   };
 }
 
@@ -544,6 +554,10 @@ export function sharedStyleInputs(
     // stored tier describes the site. A site record has no business turning
     // forceable states on for a published page.
     previewStates: firstStated(route.previewStates, stored.previewStates),
+    // The site's own text first, as its stored bases are: the rows describe
+    // the site, and a route context's map is the fallback for a host that
+    // states its text in code rather than on a token set.
+    siteText: firstStated(stored.tokens?.siteText, route.siteText),
   });
 }
 
