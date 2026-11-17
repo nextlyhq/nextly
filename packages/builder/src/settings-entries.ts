@@ -35,12 +35,20 @@ function writesOf(schema: Pick<PropSchema, "code">): readonly string[] {
   return typeof code === "string" ? [code] : Object.values(code);
 }
 
+/** An option's label, where the schema names one. */
+function optionLabelOf(schema: PropSchema, option: string): string {
+  const labels = (schema as { optionLabels?: Readonly<Record<string, string>> })
+    .optionLabels;
+  return labels?.[option] ?? option;
+}
+
 /** A drawn prop as an index row. */
 function propRow(row: EditableProp): IndexedRow {
   return {
     id: row.name,
     label: propLabel(row.name, row.schema),
-    options: row.options,
+    // As the author reads them: a select's labels, not its stored values.
+    options: row.options.map(option => optionLabelOf(row.schema, option)),
     css: writesOf(row.schema),
     set: row.value !== undefined,
   };
