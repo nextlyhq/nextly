@@ -58,8 +58,15 @@ function asMade(
   if (listed === undefined) return undefined;
   const listedNames = new Set(listed.fields.map(field => field.name));
   const declaredNames = new Set(declared.fields.map(field => field.name));
+  // Compound indexes are the declaration's own: the template lists none, so
+  // each one declared has been added since.
+  const asDeclared: MinimalConfigEntity = { ...declared };
+  delete asDeclared.indexes;
   return {
-    ...declared,
+    ...asDeclared,
+    // Untranslated, every column on the one table, as a template's migration
+    // makes it: translation turned on since moves columns it has yet to move.
+    localized: false,
     // The table the template made, where the file names it: a declaration
     // that has since moved the entity to another table has changed it.
     tableName: listed.tableName ?? declared.tableName,
