@@ -231,6 +231,38 @@ describe("the Colours tab's usage filter", () => {
     });
   });
 
+  it("reads the counts again on choosing Unused after a colour changed under All", async () => {
+    const counted = access();
+    let reads = 0;
+    const usage: VariablesAccess = {
+      ...counted,
+      usage: async (ids, signal) => {
+        reads += 1;
+        return counted.usage(ids, signal);
+      },
+    };
+    const view = render(<Panel usage={usage} />);
+    await waitFor(() => expect(reads).toBeGreaterThan(0));
+    view.rerender(
+      <Panel
+        usage={usage}
+        site={{
+          ...SITE,
+          tokens: SITE.tokens.map(token =>
+            token.name === "color.spare"
+              ? { ...token, values: { light: "var(--site-color-button)" } }
+              : token
+          ),
+        }}
+      />
+    );
+    const before = reads;
+    fireEvent.click(option("Unused"));
+    await waitFor(() => expect(reads).toBeGreaterThan(before), {
+      timeout: 3000,
+    });
+  });
+
   it("moves between the choices with the arrow keys", () => {
     render(<Panel usage={access()} />);
     option("All").focus();

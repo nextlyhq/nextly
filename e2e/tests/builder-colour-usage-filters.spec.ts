@@ -52,6 +52,9 @@ test("Used on this page lists a colour as soon as a block on the page takes it",
     "aria-checked",
     "true"
   );
+  // The control: under All, Primary is listed, so its absence below is the
+  // filter's doing and not an empty list.
+  await expect.poll(() => listed(panel)).toContain("Primary");
   await filter.getByRole("radio", { name: "Used on this page" }).click();
   await expect.poll(() => listed(panel)).not.toContain("Primary");
 

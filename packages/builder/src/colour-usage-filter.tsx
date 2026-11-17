@@ -53,11 +53,7 @@ export function useColourFilter<G extends Listed>({
 }): { shown: readonly G[]; control: React.ReactNode } {
   const [filter, setFilter] = React.useState<ColourFilter>("all");
   const colours = shown.find(group => group.group === "colours");
-  useCountsAfterChange(
-    filter === "unused" ? usage : undefined,
-    tokens,
-    colours
-  );
+  useCountsAfterChange(filter === "unused", usage, tokens, colours);
   if (colours === undefined) return { shown, control: null };
   const stateOf = (entry: VariableEntry): UsageState =>
     usageState(usage?.reachOf(entry.row.identity));
@@ -92,28 +88,33 @@ const RECOUNT_AFTER_MS = 800;
 
 /**
  * Reads the colours' counts again a moment after the site's variables change,
- * while Unused is chosen: an edit that names a colour through another
+ * once Unused is chosen: an edit that names a colour through another
  * variable, or stops naming it, changes whether it is used, and the counts
- * say so once the change is saved.
+ * say so once the change is saved. A change made under another filter is
+ * kept as owed, and read when Unused is chosen.
  */
 function useCountsAfterChange(
+  unused: boolean,
   usage: VariableUsageHere | undefined,
   tokens: SiteTokenSet | undefined,
   colours: Listed | undefined
 ): void {
   const seen = React.useRef(tokens);
+  const owed = React.useRef(false);
   const latest = React.useRef({ usage, colours });
   latest.current = { usage, colours };
   React.useEffect(() => {
-    if (seen.current === tokens) return undefined;
+    if (seen.current !== tokens) owed.current = true;
     seen.current = tokens;
     const { usage: read, colours: listed } = latest.current;
-    if (read === undefined || listed === undefined) return undefined;
+    const due = unused && owed.current;
+    if (!due || read === undefined || listed === undefined) return undefined;
     const timer = window.setTimeout(() => {
+      owed.current = false;
       void read.readAgain(listed.entries.map(entry => entry.row.identity));
     }, RECOUNT_AFTER_MS);
     return () => window.clearTimeout(timer);
-  }, [tokens]);
+  }, [tokens, unused]);
 }
 
 /** The pills, a radio group the arrow keys move through, and its note. */
