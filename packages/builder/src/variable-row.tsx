@@ -66,12 +66,11 @@ export interface VariableRowProps {
   /** Adds a copy right below, and opens it. */
   onDuplicate: () => void;
   /**
-   * Just added and shown though the search does not match it, until its
-   * editor closes: marked "New", so its place in a narrowed list is clear.
+   * Just added or copied and never saved, while its editor is open: its
+   * editor's code name follows its name as it is typed. `marked` while a
+   * search would hide it, so it shows marked "New" in a narrowed list.
    */
-  marked?: boolean;
-  /** Never saved: its editor's code name follows its name as it is typed. */
-  isNew: boolean;
+  fresh?: { readonly marked: boolean } | undefined;
   /** How widely it is used, where the host reads it. */
   usage: VariableUsageHere | undefined;
   /** Every variable the row stands for, together, once read. */
@@ -95,8 +94,7 @@ export function VariableRow({
   onChange,
   onRemoved,
   onDuplicate,
-  marked = false,
-  isNew,
+  fresh,
   usage,
   reach,
 }: VariableRowProps): React.JSX.Element {
@@ -138,7 +136,7 @@ export function VariableRow({
                 tokens={tokens}
                 mode={mode}
                 reach={reach}
-                marked={marked}
+                marked={fresh?.marked === true}
                 open={open}
                 quiet={open || menuOpen}
                 button={button}
@@ -176,7 +174,7 @@ export function VariableRow({
           onChange={onChange}
           onRemoved={onRemoved}
           removing={removing}
-          isNew={isNew}
+          isNew={fresh !== undefined}
           usage={usage}
           handOff={handOff}
         />

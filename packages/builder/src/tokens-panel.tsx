@@ -504,8 +504,11 @@ function VariableGroups({
                 onOpenChange={open => rows.toggle(entry.row.key, open)}
                 onChange={rows.commitFrom(entry.row.key)}
                 onDuplicate={() => rows.duplicate(entry)}
-                marked={rows.held === entry.row.key}
-                isNew={rows.fresh === entry.row.key}
+                fresh={
+                  rows.fresh === entry.row.key
+                    ? { marked: rows.held === entry.row.key }
+                    : undefined
+                }
                 usage={rows.usage}
                 reach={rowReach(entry, rows.usage)}
                 onRemoved={() => rows.onRemoved(entry.row.key)}
