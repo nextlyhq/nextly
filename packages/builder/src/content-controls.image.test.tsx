@@ -380,6 +380,37 @@ describe("what a screen reader is given for an image", () => {
     expect(written(editor)).toEqual({ mediaId: "m-1", alt: "Typed first" });
   });
 
+  it("keeps words being typed when the library's arrive", async () => {
+    let settle: (summary: { alt: string }) => void = () => undefined;
+    const editor = mount(
+      { mediaId: "m-1" },
+      {
+        services: {
+          ...SERVICES,
+          readMedia: () =>
+            new Promise(resolve => {
+              settle = resolve;
+            }),
+        },
+      }
+    );
+    fireEvent.focus(field());
+    fireEvent.change(field(), { target: { value: "Still typing" } });
+    await act(async () => {
+      settle({ alt: "The team at launch" });
+    });
+    expect(field().value).toBe("Still typing");
+    fireEvent.blur(field());
+    expect(written(editor)).toEqual({ mediaId: "m-1", alt: "Still typing" });
+  });
+
+  it("gives way to the document while words are being typed, as an undo", () => {
+    const editor = mount({ mediaId: "m-1", alt: "Before" });
+    fireEvent.change(field(), { target: { value: "Half typed" } });
+    editor.storeNow({ mediaId: "m-1", alt: "Undone to this" });
+    expect(field().value).toBe("Undone to this");
+  });
+
   it("is held by a lock", () => {
     mount({ mediaId: "m-1", alt: "Words" }, { locked: true });
     expect(field().hasAttribute("disabled")).toBe(true);

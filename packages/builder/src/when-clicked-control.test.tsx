@@ -45,23 +45,45 @@ afterEach(() => {
   clearBlocks();
 });
 
+/** A frame whose slot lets only content change, as a template's area does. */
+const FRAME = {
+  name: "acme/frame",
+  version: 1,
+  description: "A frame.",
+  editor: { label: "Frame" },
+  props: {},
+  example: { props: {} },
+  slots: { body: { allow: ["core/image"], lock: "contentOnly" } },
+  render: () => null,
+};
+
 function mount(
   props: Record<string, unknown>,
-  bindings?: Record<string, unknown>
+  bindings?: Record<string, unknown>,
+  { contentOnly = false }: { contentOnly?: boolean } = {}
 ) {
-  registerBlocks([image] as never, { source: "when-clicked-test" });
+  registerBlocks([image, FRAME] as never, { source: "when-clicked-test" });
+  const picture = {
+    id: "a",
+    type: "core/image",
+    version: 1,
+    props,
+    ...(bindings === undefined ? {} : { bindings }),
+  } as BlockNode;
   const document = {
     formatVersion: 1,
     kind: "page",
-    nodes: [
-      {
-        id: "a",
-        type: "core/image",
-        version: 1,
-        props,
-        ...(bindings === undefined ? {} : { bindings }),
-      } as BlockNode,
-    ],
+    nodes: contentOnly
+      ? [
+          {
+            id: "f",
+            type: "acme/frame",
+            version: 1,
+            props: {},
+            slots: { body: [picture] },
+          } as BlockNode,
+        ]
+      : [picture],
   } as BlockDocument;
   const editor = {
     document,
@@ -154,6 +176,18 @@ describe("an Image's When clicked", () => {
       href: "/about",
       whenClicked: "nothing",
     });
+  });
+
+  it("stays a choice an author can make where only content may change", () => {
+    // Picking Link is how a link is added; a content-only area allows links.
+    const editor = mount({ src: "https://example.test/a.png" }, undefined, {
+      contentOnly: true,
+    });
+    const link = within(choices()).getByRole("radio", { name: "Link" });
+    expect(link.hasAttribute("disabled")).toBe(false);
+    expect(link.closest("fieldset[disabled]")).toBeNull();
+    fireEvent.click(link);
+    expect(editor.apply).toHaveBeenCalledTimes(1);
   });
 
   it("draws Caption in a section of its own after When clicked", () => {

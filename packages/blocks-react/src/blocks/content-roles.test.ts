@@ -30,6 +30,8 @@ const CONTENT: Record<string, readonly string[]> = {
     "href",
     "entryCollection",
     "entryId",
+    // Whether a click follows the link: chosen where the link is.
+    "whenClicked",
   ],
   "core/button": ["label", "href", "entryCollection", "entryId", "ariaLabel"],
   "core/icon": ["icon", "label", "href", "entryCollection", "entryId"],

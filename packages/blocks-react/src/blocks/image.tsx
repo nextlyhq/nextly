@@ -86,8 +86,22 @@ export interface ImageProps extends LinkProps {
  * an image with neither, which the render draws as nothing and links
  * nowhere, reads no link.
  */
-export function imageMayDraw(has: (prop: string) => boolean): boolean {
+function imageMayDraw(has: (prop: string) => boolean): boolean {
   return has("mediaId") || has("src");
+}
+
+/**
+ * Whether an image, drawn with `props`, follows its link: it may draw a
+ * picture to wrap ({@link imageMayDraw}), and a click on it follows its link
+ * (`whenClickedOf`), the reading its render makes before it reads the link.
+ * Set to Nothing or Enlarge, it keeps its link stored and reads none, so a
+ * list reading its links ahead reads none for it either.
+ */
+export function imageFollowsLink(
+  has: (prop: string) => boolean,
+  props: Readonly<Record<string, unknown>>
+): boolean {
+  return imageMayDraw(has) && whenClickedOf(props) === "link";
 }
 
 /**
@@ -790,8 +804,11 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
     // What a click does, with the link it follows beside it in the same
     // section: the editor draws the link's settings only while Link is
     // chosen. Stored as chosen; a new Image stores none (see `whenClickedOf`).
+    // Content, as the link it gates is: where only content may change, an
+    // author still chooses Link to add one.
     whenClicked: {
       label: "When clicked",
+      role: "content",
       section: WHEN_CLICKED_SECTION,
       type: "select",
       options: [...WHEN_CLICKED],

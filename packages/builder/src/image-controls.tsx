@@ -61,7 +61,6 @@ import {
 } from "./image-group";
 import { propLabel, type EditableProp } from "./inspector";
 import type { BindableWrapper } from "./prop-groups";
-import { useStoredDraft } from "./stored-draft";
 import { useVisitorUnreadable } from "./visitor-unreadable-context";
 
 /** What both image controls are given. */
@@ -415,10 +414,18 @@ export function ImageSourceField({
 /**
  * A text field one line tall that grows with its words, committed on blur
  * so an edit is one step to undo.
+ *
+ * Its words follow `value`, with one exception: while the author is typing,
+ * a new `value` that only changes what is shown (the library's words
+ * arriving for a field that held none yet) leaves their words alone. A move
+ * of what the document stores (`stored`: an undo, an edit elsewhere) is
+ * followed whatever is being typed, as every inspector field gives way to
+ * the document.
  */
 function GrowingText({
   id,
   value,
+  stored,
   placeholder,
   disabled,
   describedBy,
@@ -426,13 +433,30 @@ function GrowingText({
 }: {
   /** The field's id, which its label names it by. */
   id: string;
+  /** The words shown while nothing is being typed. */
   value: string;
+  /** What the document stores for the field, which a draft gives way to. */
+  stored: string;
   placeholder: string;
   disabled: boolean;
   describedBy: string | undefined;
   onCommit: (text: string) => void;
 }): React.JSX.Element {
-  const [draft, setDraft] = useStoredDraft(value);
+  const [draft, setDraft] = React.useState(value);
+  // Whether the author has typed since the words last followed `value`.
+  const typing = React.useRef(false);
+  const lastStored = React.useRef(stored);
+  React.useEffect(() => {
+    const documentMoved = lastStored.current !== stored;
+    lastStored.current = stored;
+    if (!documentMoved && typing.current) return;
+    typing.current = false;
+    setDraft(value);
+  }, [value, stored]);
+  const commit = (): void => {
+    typing.current = false;
+    if (draft !== value) onCommit(draft);
+  };
   const field = React.useRef<HTMLTextAreaElement>(null);
   // Fitted to its words after each change, up to the six lines the style
   // caps it at, past which it scrolls.
@@ -454,17 +478,18 @@ function GrowingText({
         : { "aria-describedby": describedBy })}
       disabled={disabled}
       value={draft}
-      onChange={event => setDraft(event.target.value)}
-      onBlur={() => {
-        if (draft !== value) onCommit(draft);
+      onChange={event => {
+        typing.current = true;
+        setDraft(event.target.value);
       }}
+      onBlur={commit}
       // Enter commits rather than breaking the line: alt text is read out as
       // one run, so a line break in it means nothing, and Enter is what an
       // author presses to say they are done.
       onKeyDown={event => {
         if (event.key !== "Enter") return;
         event.preventDefault();
-        if (draft !== value) onCommit(draft);
+        commit();
       }}
     />
   );
@@ -719,6 +744,9 @@ export function ImageAltField({
                 // empty alt included, which the block draws as none), else
                 // the library's.
                 value={ownStored ? own : (libraryAlt ?? "")}
+                // The page's own words, or none: the library's arriving is
+                // not the document moving.
+                stored={ownStored ? `own:${own}` : "library"}
                 placeholder="Describe the picture"
                 disabled={altHeld || mode === "decorative"}
                 describedBy={noteId}
@@ -739,20 +767,13 @@ export function ImageAltField({
                 libraryAlt={libraryAlt}
                 read={summary !== undefined}
               />
-              {ownStored &&
-              libraryAlt !== undefined &&
-              mode !== "decorative" ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className="nx-image-alt__reset"
-                  disabled={altHeld}
-                  onClick={() => write({ [group.alt]: undefined })}
-                >
-                  Use the media library&apos;s alt text
-                </Button>
-              ) : null}
+              <UseLibraryAlt
+                offered={
+                  ownStored && libraryAlt !== undefined && mode !== "decorative"
+                }
+                held={altHeld}
+                onUse={() => write({ [group.alt]: undefined })}
+              />
             </div>
           </HeldByLock>
           <DecorativeBox
@@ -797,6 +818,35 @@ function AltNote({
     <p className="nx-inspector__note" id={id}>
       Empty: screen readers skip this image.
     </p>
+  );
+}
+
+/**
+ * "Use the media library's alt text": where the page stores words of its own
+ * and the library has some, the way back to the library's, which removes the
+ * page's own.
+ */
+function UseLibraryAlt({
+  offered,
+  held,
+  onUse,
+}: {
+  offered: boolean;
+  held: boolean;
+  onUse: () => void;
+}): React.JSX.Element | null {
+  if (!offered) return null;
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      className="nx-image-alt__reset"
+      disabled={held}
+      onClick={onUse}
+    >
+      Use the media library&apos;s alt text
+    </Button>
   );
 }
 
