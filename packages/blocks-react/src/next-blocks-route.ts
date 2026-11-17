@@ -30,7 +30,6 @@ import { listEntryCount, listPagesOf, listWillRead } from "./blocks/list-read";
 import {
   createQueryBudget,
   createStandaloneContext,
-  DEFAULT_MAX_QUERIES,
   isBindingIssue,
 } from "./context";
 import type {
@@ -77,6 +76,7 @@ import {
 import {
   readerFor,
   dataFor,
+  routeMaxQueries,
   siteBlocks,
   siteBoundConfig,
 } from "./next-readers";
@@ -432,7 +432,7 @@ export function blocksRouteConfig(
     // invocations, so sharing one counter would let the page's reads
     // starve the preview image, or the reverse. Shared BETWEEN the two
     // reads this invocation makes, because they are one page's cost.
-    const budget = createQueryBudget(config.maxQueries ?? DEFAULT_MAX_QUERIES);
+    const budget = createQueryBudget(routeMaxQueries(config));
     // The same reads, in the same order, as the render: the
     // components the page inlines (without them every instance would
     // be a placeholder, and a page built from components would publish
@@ -540,9 +540,7 @@ export function blocksRouteConfig(
       // days by, then the list's own read. A page whose allowance runs out
       // before the list (`maxQueries: 0`, or spent on those reads) has no
       // later pages, since its list draws none.
-      const budget = createQueryBudget(
-        config.maxQueries ?? DEFAULT_MAX_QUERIES
-      );
+      const budget = createQueryBudget(routeMaxQueries(config));
       const terms = readTermsOf(config, resolver);
       const sources = routeReadSources({
         config,
@@ -640,10 +638,9 @@ export function blocksRouteConfig(
         () => drawnPage.number,
         config.cacheScope
       );
-      const budget = createQueryBudget(
-        config.maxQueries ?? DEFAULT_MAX_QUERIES,
-        { onRefused: () => overrun.refused(budget) }
-      );
+      const budget = createQueryBudget(routeMaxQueries(config), {
+        onRefused: () => overrun.refused(budget),
+      });
       const media = mediaResolver(
         inRequestLanguage(config, context),
         readerFor(config),

@@ -264,7 +264,12 @@ const SOURCE_MODULES: ReadonlyArray<{
     ],
   },
   { name: "page-style-trace", module: pageStyleTraceModule, internal: [] },
-  { name: "resolver", module: resolverModule, internal: [] },
+  {
+    name: "resolver",
+    module: resolverModule,
+    // Read by `next.ts`'s routes alone, through the instance.
+    internal: ["offeredSitePageDataLimit"],
+  },
   {
     name: "sanitize",
     module: sanitizeModule,
@@ -595,6 +600,9 @@ describe("the root entry", () => {
       // Whether site-bound blocks or queries started in this module copy.
       "SITE_COPY",
       "SITE_NAMED_QUERIES_SERVICE",
+      // Where the page builder offers the site's page data limit, which a
+      // route given no `maxQueries` renders under.
+      "SITE_PAGE_DATA_LIMIT_SERVICE",
       "SLOTS_ATTRIBUTE",
       "TYPOGRAPHY_DEFAULTS",
       "UNPREVIEWABLE_CONTAINER",
