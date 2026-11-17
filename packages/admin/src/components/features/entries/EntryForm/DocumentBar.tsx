@@ -8,8 +8,9 @@
  * At the left, what the document IS: its status in the language being edited,
  * its save state, and the language code when that language is not the default.
  * At the right, what can be DONE, in one order: a feature's toolbar controls,
- * History, Preview, the document's own verbs (Save draft, the primary action,
- * More), and the panel toggle at the far end.
+ * the ways into the document's other views ("Open in builder"), History,
+ * Preview, the document's own verbs (Save draft, the primary action, More),
+ * and the panel toggle at the far end.
  *
  * The title is not here. It is the first thing in the editor's column, under
  * the bar and its banners, so no action ever takes its width; and the way back
@@ -36,6 +37,7 @@ import {
   History,
   PanelRight,
   PanelRightClose,
+  PanelsTopLeft,
 } from "@admin/components/icons";
 import { barFolds } from "@admin/components/layout/header/bar-fold";
 import {
@@ -43,8 +45,12 @@ import {
   useInTopBar,
   useTopBarWidth,
 } from "@admin/components/layout/header/TopBarPlaces";
+import { Link } from "@admin/components/ui/link";
 import { useCan } from "@admin/hooks/useCan";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import { navigateTo } from "@admin/lib/navigation";
+import type { WayIn } from "@admin/lib/navigation/document-address";
+import { useViewsToOpenIn } from "@admin/lib/navigation/useDocumentAddress";
 import { cn } from "@admin/lib/utils";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
 
@@ -298,8 +304,8 @@ export function DocumentBar(props: DocumentBarProps): JSX.Element | null {
       />
 
       {/* Every action, right-aligned, in the bar's one order: a feature's
-        controls, History, Preview, the document's own verbs, then the panel
-        toggle at the far end.
+        controls, the ways into its views, History, Preview, the document's
+        own verbs, then the panel toggle at the far end.
 
         On a phone (the panel's sheet mode) History, the preview and the
         panel toggle fold into the document's menu as rows, so the actions
@@ -440,8 +446,14 @@ function DocumentBarActions({
   // What the preview control is given, once: the control draws from it on a
   // wide screen, and the menu lists the same choices on a narrow one.
   const previewProps = previewPropsFor(props, () => onShareOpenChange(true));
+  const viewsToOpenIn = useBarViewsToOpenIn(props);
   return (
     <>
+      {folded
+        ? null
+        : viewsToOpenIn.map(way => (
+            <OpenInViewButton key={way.address} way={way} />
+          ))}
       {historyOffered && !folded ? (
         <HistoryButton open={historyOpen} onOpen={onOpenHistory} />
       ) : null}
@@ -460,6 +472,7 @@ function DocumentBarActions({
           narrowItems={
             folded
               ? narrowItemsFor(
+                  viewsToOpenIn,
                   historyOffered ? onOpenHistory : undefined,
                   previewProps,
                   panel
@@ -544,16 +557,60 @@ function previewPropsFor(
 }
 
 /**
+ * The views the document, open here as its form, may be opened in, as the bar
+ * offers them beside History: worded by each view, by the admin's one rule.
+ * None while creating, which has no saved entry to open, or on a Single, which
+ * opens as its form for now.
+ */
+function useBarViewsToOpenIn(props: DocumentBarProps): WayIn[] {
+  const viewsToOpenIn = useViewsToOpenIn();
+  const entryLocale = useEntryLocale();
+  const id = props.entry?.id;
+  if (props.mode !== "edit" || props.scope === "single" || id == null) {
+    return [];
+  }
+  return viewsToOpenIn(
+    { kind: "collection", slug: props.collectionSlug, id: String(id) },
+    // A view edits the default language only, so the rule offers none in
+    // another one.
+    entryLocale.isNonDefaultLocale ? { locale: entryLocale.locale } : {}
+  );
+}
+
+/**
+ * A way into one of the document's views, beside History: a link, so a
+ * middle or modified click opens it in a new tab as a list row's does.
+ */
+function OpenInViewButton({ way }: { way: WayIn }) {
+  return (
+    <Button asChild variant="outline" size="sm" className="gap-1.5">
+      {/* Named for a pointer once its words have stepped aside for the icon. */}
+      <Link href={way.address} title={way.label}>
+        <PanelsTopLeft className="h-4 w-4" aria-hidden="true" />
+        {/* Gives way at the same bar width as History's word. */}
+        <ToolbarLabel priority="secondary">{way.label}</ToolbarLabel>
+      </Link>
+    </Button>
+  );
+}
+
+/**
  * The bar's own controls as menu rows, for an editor too narrow to keep them
- * beside the document's verbs: History when it is offered, then the preview's
- * choices, then the panel toggle.
+ * beside the document's verbs: the ways into the document's views, History
+ * when it is offered, then the preview's choices, then the panel toggle.
  */
 function narrowItemsFor(
+  viewsToOpenIn: readonly WayIn[],
   openHistory: (() => void) | undefined,
   previewProps: PreviewActionsProps,
   panel: { collapsed: boolean; toggle: () => void } | undefined
 ): NarrowMenuItem[] {
   return [
+    ...viewsToOpenIn.map((way, index) => ({
+      id: `open-in-view-${index}`,
+      label: way.label,
+      onSelect: () => navigateTo(way.address),
+    })),
     ...(openHistory
       ? [{ id: "history", label: "History", onSelect: openHistory }]
       : []),
