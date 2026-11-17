@@ -18,6 +18,7 @@ import { MoreHorizontal } from "lucide-react";
 import * as React from "react";
 
 import { commitOnEnter } from "./commit-on-enter";
+import { useFieldDescription } from "./css-hint";
 import { FocalFrame } from "./focal-frame";
 import { InheritedValue } from "./inherited-value";
 import { commitRawCss } from "./raw-css";
@@ -126,6 +127,8 @@ export function FocalPointField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   const { picture, fit, position } = React.useContext(FocalFrame);
   const inherited = React.useContext(InheritedValue);
   const text = typeof stored === "string" ? stored : undefined;
@@ -141,7 +144,7 @@ export function FocalPointField({
   const grid = React.useRef<HTMLDivElement>(null);
   // One tab stop: the chosen point, else the one shown, else the middle.
   const focusable = chosen ?? inheritedPoint ?? POINTS[4];
-  const invalid = describedBy === undefined ? undefined : true;
+  const invalid = refusedBy(describedBy);
 
   const choose = (point: (typeof POINTS)[number]) =>
     onCommit(point === chosen ? null : point.value);
@@ -190,7 +193,7 @@ export function FocalPointField({
           id={id}
           role="radiogroup"
           aria-labelledby={labelledBy}
-          aria-describedby={describedBy}
+          aria-describedby={described}
           className="nx-focal__points"
         >
           {POINTS.map(point => {
@@ -255,6 +258,8 @@ function FocalCss({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   const [text, setText] = React.useState(stored ?? "");
   // A stored change moves the draft with it, so leaving the field never
   // writes back the value that change replaced.
@@ -268,8 +273,8 @@ function FocalCss({
     <Input
       className="nx-focal__css"
       aria-label={`${actionName} as CSS`}
-      aria-describedby={describedBy}
-      aria-invalid={describedBy === undefined ? undefined : true}
+      aria-describedby={described}
+      aria-invalid={refusedBy(describedBy)}
       placeholder="30% 70%"
       value={text}
       onChange={event => setText(event.target.value)}
@@ -277,4 +282,9 @@ function FocalCss({
       onKeyDown={event => commitOnEnter(event, commit)}
     />
   );
+}
+
+/** `true` while a refusal describes the field, which is what invalidates it. */
+function refusedBy(describedBy: string | undefined): true | undefined {
+  return describedBy === undefined ? undefined : true;
 }
