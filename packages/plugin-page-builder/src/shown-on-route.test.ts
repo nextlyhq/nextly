@@ -231,6 +231,39 @@ describe("readShownOn", () => {
     ]);
   });
 
+  it("counts draft-only places past its reads as unchecked, not as ones the reader can't open", async () => {
+    const uses = Array.from({ length: 25 }, (_, index) =>
+      use(`d${String(index).padStart(2, "0")}`, "hero", { version: "draft" })
+    );
+    const { deps, draftReads } = depsFor({ uses });
+    const answer = await readShownOn("homepage", true, ctx, deps);
+    expect(draftReads).toHaveLength(20);
+    expect(answer.places).toHaveLength(20);
+    expect(answer.unchecked).toBe(5);
+    expect(answer.hidden).toBe(0);
+  });
+
+  it("says its counts are at least those where the index's read reached its bound", async () => {
+    const reached = Array.from({ length: 2000 }, (_, index) =>
+      use("busy", `n${String(index)}`)
+    );
+    expect(
+      (
+        await readShownOn(
+          "homepage",
+          false,
+          ctx,
+          depsFor({ uses: reached }).deps
+        )
+      ).floor
+    ).toBe(true);
+    const under = reached.slice(0, 1999);
+    expect(
+      (await readShownOn("homepage", false, ctx, depsFor({ uses: under }).deps))
+        .floor
+    ).toBe(false);
+  });
+
   it("lists only the places the reader may open, and counts the others as a number", async () => {
     const { deps } = depsFor({
       uses: [use("home", "hero"), use("secret", "a"), use("secret", "b")],
@@ -283,10 +316,24 @@ describe("readShownOn", () => {
         ctx,
         depsFor({ uses: [], filled: false }).deps
       )
-    ).toEqual({ checking: true, places: [], more: 0, hidden: 0 });
+    ).toEqual({
+      checking: true,
+      places: [],
+      more: 0,
+      hidden: 0,
+      unchecked: 0,
+      floor: false,
+    });
     expect(
       await readShownOn("homepage", false, ctx, depsFor({ uses: [] }).deps)
-    ).toEqual({ checking: false, places: [], more: 0, hidden: 0 });
+    ).toEqual({
+      checking: false,
+      places: [],
+      more: 0,
+      hidden: 0,
+      unchecked: 0,
+      floor: false,
+    });
     // Before the plugin's tables are ready: still checking, and no read.
     expect(
       await readShownOn(
@@ -295,7 +342,14 @@ describe("readShownOn", () => {
         ctx,
         depsFor({ uses: [], installed: false }).deps
       )
-    ).toEqual({ checking: true, places: [], more: 0, hidden: 0 });
+    ).toEqual({
+      checking: true,
+      places: [],
+      more: 0,
+      hidden: 0,
+      unchecked: 0,
+      floor: false,
+    });
   });
 
   it("refuses a reader who may not read the Single, before reading the index", async () => {
