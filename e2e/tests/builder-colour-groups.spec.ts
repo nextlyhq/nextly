@@ -10,7 +10,7 @@
  */
 import { expect, type Locator, type Page } from "@playwright/test";
 
-import { openEditorWith } from "./canvas/editor-driver";
+import { clickBlock, openEditorWith } from "./canvas/editor-driver";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 import { countEveryPage } from "./support/usage-count";
@@ -158,6 +158,7 @@ test("colours sit in named groups an author adds to, moves between and removes, 
     }
 
     // A block's colour picker lists colours in the same order.
+    await clickBlock(page, "groups-text");
     const inspector = page.getByTestId("inspector");
     await inspector.getByRole("tab", { name: "Style" }).click();
     const text = inspector.getByRole("button", { name: /^(Text|Typography)$/ });

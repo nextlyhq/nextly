@@ -1158,10 +1158,7 @@ function Group({
   const id = React.useId();
   // A search opens every group it matches in and folds none; the folds come
   // back as they were once it is cleared.
-  const foldKey = named === undefined ? group : colourGroupFoldKey(named.name);
-  // A colour dropped on a named group's heading goes to its end.
-  const dropOnHead = useColourGroupDrop(named?.name ?? "");
-  const folded = folds !== undefined && !searching && folds.folded.has(foldKey);
+  const { foldKey, folded } = foldOf(group, named, folds, searching);
   return (
     <section
       className="nx-vars__group"
@@ -1171,23 +1168,16 @@ function Group({
       data-colour-group={named?.name}
       data-folded={folded ? "" : undefined}
     >
-      <div
-        className="nx-vars__group-head"
-        {...(named === undefined ? {} : dropOnHead)}
-      >
-        <ColourGroupHeadIf name={named?.name}>
-          <h3 className="nx-vars__group-name" id={id}>
-            <GroupHeading
-              group={foldKey}
-              heading={heading}
-              count={entries.length}
-              folds={folds}
-              folded={folded}
-              searching={searching}
-            />
-          </h3>
-        </ColourGroupHeadIf>
-      </div>
+      <GroupHead
+        id={id}
+        name={named?.name}
+        foldKey={foldKey}
+        heading={heading}
+        count={entries.length}
+        folds={folds}
+        folded={folded}
+        searching={searching}
+      />
       {folded ? null : (
         <GroupRows
           entries={entries}
@@ -1198,20 +1188,105 @@ function Group({
           {children}
         </GroupRows>
       )}
-      {/* At the end of the list, so a new row is added where it is. A
-          folded group opens for what is added to it, so the new row and
-          its editor are drawn. */}
-      {readOnly || folded || named?.last === false ? null : (
-        <AddRows
+      {readOnly || folded ? null : (
+        <GroupEnd
           group={group}
+          named={named}
           onAdd={(what, from) => {
             openFold(folds, foldKey);
             onAdd(what, from);
           }}
         />
       )}
-      {named?.last === true ? <NewGroupButton /> : null}
     </section>
+  );
+}
+
+/**
+ * What a group's fold is kept under, and whether it is folded: a search
+ * opens every group it matches in and folds none, and the folds come back
+ * as they were once it is cleared.
+ */
+function foldOf(
+  group: VariableGroup,
+  named: { readonly name: string } | undefined,
+  folds: GroupFolds | undefined,
+  searching: boolean
+): { foldKey: string; folded: boolean } {
+  const foldKey = named === undefined ? group : colourGroupFoldKey(named.name);
+  return {
+    foldKey,
+    folded: folds !== undefined && !searching && folds.folded.has(foldKey),
+  };
+}
+
+/**
+ * A group's heading: its name, folding where the group folds; a named group
+ * of colours with its name field, its ⋯ and a drop for a dragged colour.
+ */
+function GroupHead({
+  id,
+  name,
+  foldKey,
+  heading,
+  count,
+  folds,
+  folded,
+  searching,
+}: {
+  id: string;
+  /** A named group of colours' name. */
+  name: string | undefined;
+  foldKey: string;
+  heading: string;
+  count: number;
+  folds: GroupFolds | undefined;
+  folded: boolean;
+  searching: boolean;
+}): React.JSX.Element {
+  // A colour dropped on a named group's heading goes to its end.
+  const dropOnHead = useColourGroupDrop(name ?? "");
+  return (
+    <div
+      className="nx-vars__group-head"
+      {...(name === undefined ? {} : dropOnHead)}
+    >
+      <ColourGroupHeadIf name={name}>
+        <h3 className="nx-vars__group-name" id={id}>
+          <GroupHeading
+            group={foldKey}
+            heading={heading}
+            count={count}
+            folds={folds}
+            folded={folded}
+            searching={searching}
+          />
+        </h3>
+      </ColourGroupHeadIf>
+    </div>
+  );
+}
+
+/**
+ * What ends an open group's list, so a new row is added where it is: its
+ * add row, and under the last named group of colours, "+ New group". A named
+ * group before the last ends with neither.
+ */
+function GroupEnd({
+  group,
+  named,
+  onAdd,
+}: {
+  group: VariableGroup;
+  named: { readonly name: string; readonly last: boolean } | undefined;
+  onAdd: OnAdd;
+}): React.JSX.Element | null {
+  if (named?.last === false) return null;
+  return (
+    <>
+      <AddRows group={group} onAdd={onAdd} />
+      {named === undefined ? null : <NewGroupButton />}
+    </>
   );
 }
 

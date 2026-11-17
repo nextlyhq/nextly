@@ -34,6 +34,7 @@ import { useColourRowDrag } from "./colour-group-ui";
 import { moveColour } from "./colour-groups";
 import { markOf } from "./design-group-toggle";
 import { fluidRange, pxAtWidth } from "./fluid-size";
+import { useInPlaceField } from "./in-place-field";
 import { colourHexOf } from "./style-colour";
 import { lengthInPx, variableValueText } from "./style-variables";
 import {
@@ -108,24 +109,14 @@ export function VariableRow({
   const shown = shownName(entry);
   const changing = !readOnly && token !== undefined;
   const onKeyDown = rowKeys(changing, {
-    rename: () => setRenaming(true),
-    menu: () => setMenuOpen(true),
-    // A colour moves within the site's colour order; no other kind is ordered.
-    ...(entry.row.kind === "color"
-      ? {
-          move: (by: -1 | 1) =>
-            onChange(moveColour(tokens, entry.row.identity, by)),
-        }
-      : {}),
+    rename: setRenaming,
+    menu: setMenuOpen,
+    move: colourMoveOf(entry, tokens, onChange),
   });
   // A colour row can be dragged to another place in the colour order.
-  const drag = useColourRowDrag(entry.row.identity);
+  const drag = useColourRowDrag(entry.row);
   return (
-    <li
-      className="nx-vars__item"
-      data-open={markOf(open)}
-      {...(entry.row.kind === "color" ? drag : {})}
-    >
+    <li className="nx-vars__item" data-open={markOf(open)} {...drag}>
       <Popover open={open} onOpenChange={opened} modal>
         {/* The editor opens beside the whole row, the ⋯ with it. */}
         <PopoverAnchor asChild>
@@ -153,27 +144,26 @@ export function VariableRow({
                 onKeyDown={onKeyDown}
               />
             )}
-            {changing ? (
-              <RowMenu
-                entry={entry}
-                token={token}
-                tokens={tokens}
-                suppliedOf={suppliedOf}
-                usage={usage}
-                label={shown}
-                open={menuOpen}
-                onOpenChange={setMenuOpen}
-                onChange={onChange}
-                actions={{
-                  onRename: () => setRenaming(true),
-                  onDuplicate,
-                  onEdit: startRemove => {
-                    setRemoving(startRemove);
-                    onOpenChange(true);
-                  },
-                }}
-              />
-            ) : null}
+            <RowActions
+              changing={changing}
+              entry={entry}
+              token={token}
+              tokens={tokens}
+              suppliedOf={suppliedOf}
+              usage={usage}
+              label={shown}
+              open={menuOpen}
+              onOpenChange={setMenuOpen}
+              onChange={onChange}
+              actions={{
+                onRename: () => setRenaming(true),
+                onDuplicate,
+                onEdit: startRemove => {
+                  setRemoving(startRemove);
+                  onOpenChange(true);
+                },
+              }}
+            />
           </div>
         </PopoverAnchor>
         <RowEditor
@@ -191,6 +181,19 @@ export function VariableRow({
       </Popover>
     </li>
   );
+}
+
+/** The row's ⋯ menu, where its variable can be changed; nothing otherwise. */
+function RowActions({
+  changing,
+  token,
+  ...menu
+}: Omit<React.ComponentProps<typeof RowMenu>, "token"> & {
+  changing: boolean;
+  token: SiteToken | undefined;
+}): React.JSX.Element | null {
+  if (!changing || token === undefined) return null;
+  return <RowMenu token={token} {...menu} />;
 }
 
 /**
@@ -288,8 +291,10 @@ function RowEditor({
 function rowKeys(
   changing: boolean,
   on: {
-    rename: () => void;
-    menu: () => void;
+    /** Starts renaming in place; called with `true`. */
+    rename: (renaming: true) => void;
+    /** Opens the row's ⋯ menu; called with `true`. */
+    menu: (open: true) => void;
     /** A colour's move one place up or down, by Alt+Up and Alt+Down. */
     move?: ((by: -1 | 1) => void) | undefined;
   }
@@ -306,9 +311,22 @@ function rowKeys(
       event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey);
     if (event.key !== "F2" && !menu) return;
     event.preventDefault();
-    if (menu) on.menu();
-    else on.rename();
+    if (menu) on.menu(true);
+    else on.rename(true);
   };
+}
+
+/**
+ * A colour's move one place up or down the site's colour order; nothing for
+ * any other kind, which is not ordered.
+ */
+function colourMoveOf(
+  entry: VariableEntry,
+  tokens: SiteTokenSet,
+  onChange: (tokens: SiteTokenSet) => void
+): ((by: -1 | 1) => void) | undefined {
+  if (entry.row.kind !== "color") return undefined;
+  return by => onChange(moveColour(tokens, entry.row.identity, by));
 }
 
 /** Which way Alt+Up or Alt+Down moves a row, or nothing for any other key. */
@@ -412,12 +430,7 @@ function RenameField({
   const [issue, setIssue] = React.useState<string | undefined>();
   // Once: Enter's own close takes the field away, and the blur that follows
   // must not keep or cancel a second time.
-  const done = React.useRef(false);
-  const field = React.useRef<HTMLInputElement>(null);
-  React.useEffect(() => {
-    field.current?.focus();
-    field.current?.select();
-  }, []);
+  const { field, done } = useInPlaceField();
   const finish = (refocus: boolean): void => {
     done.current = true;
     onDone();

@@ -28,6 +28,7 @@ import {
   removeColourGroup,
   renameColourGroup,
 } from "./colour-groups";
+import { useInPlaceField } from "./in-place-field";
 
 /** What the Colours tab's groups share: the set, its writes, and the drafts. */
 export interface ColourGroupHost {
@@ -125,11 +126,14 @@ function groupOf(tokens: SiteTokenSet, identity: string): string | undefined {
  * A colour row's drag: it can be picked up, and a colour dropped on it lands
  * before it, in its group. Nothing where the colours are read-only.
  */
-export function useColourRowDrag(
-  identity: string
-): React.LiHTMLAttributes<HTMLLIElement> {
+export function useColourRowDrag(row: {
+  readonly identity: string;
+  /** A colour's row is dragged; any other kind is not ordered. */
+  readonly kind: string;
+}): React.LiHTMLAttributes<HTMLLIElement> {
   const host = React.useContext(ColourGroupHostContext);
-  if (host === undefined || host.readOnly) return {};
+  const { identity } = row;
+  if (row.kind !== "color" || host === undefined || host.readOnly) return {};
   return {
     draggable: true,
     onDragStart: event => {
@@ -260,12 +264,7 @@ function GroupNameField({
   name: string;
 }): React.JSX.Element {
   const [draft, setDraft] = React.useState(name);
-  const done = React.useRef(false);
-  const field = React.useRef<HTMLInputElement>(null);
-  React.useEffect(() => {
-    field.current?.focus();
-    field.current?.select();
-  }, []);
+  const { field, done } = useInPlaceField();
   const finish = (keep: boolean): void => {
     if (done.current) return;
     done.current = true;

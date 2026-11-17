@@ -100,7 +100,7 @@ test("names its four tabs in order, each holding its own kind", async ({
   await expect(panel.getByRole("tab")).toHaveText([...TABS]);
   // Colours: the colour variables.
   await expect(
-    panel.getByRole("button", { name: /^Colours, \d+$/ })
+    panel.getByRole("button", { name: /^Text and surfaces, \d+$/ })
   ).toBeVisible();
   // Type: the site's fonts, then the type sizes.
   await switchTo(page, "Type");
@@ -119,7 +119,7 @@ test("names its four tabs in order, each holding its own kind", async ({
     ).toBeVisible();
   }
   await expect(
-    panel.getByRole("button", { name: /^Colours, \d+$/ })
+    panel.getByRole("button", { name: /^Text and surfaces, \d+$/ })
   ).toHaveCount(0);
 });
 
@@ -131,7 +131,9 @@ test("keeps a folded group folded across a reload, and opens every group on a fr
   await openEditorWith(page, NODES, "tabs-text");
   await openDesign(page);
   const panel = page.getByRole("region", { name: "Design panel" });
-  const colours = panel.getByRole("button", { name: /^Colours, \d+$/ });
+  const colours = panel.getByRole("button", {
+    name: /^Text and surfaces, \d+$/,
+  });
   await expect(colours).toHaveAttribute("aria-expanded", "true");
   await colours.click();
   await expect(colours).toHaveAttribute("aria-expanded", "false");
@@ -140,7 +142,7 @@ test("keeps a folded group folded across a reload, and opens every group on a fr
   await page.reload();
   await openDesign(page);
   await expect(
-    panel.getByRole("button", { name: /^Colours, \d+$/ })
+    panel.getByRole("button", { name: /^Text and surfaces, \d+$/ })
   ).toHaveAttribute("aria-expanded", "false");
 
   // A fresh profile: nothing remembered, every group open.
@@ -164,13 +166,13 @@ test("keeps a folded group folded across a reload, and opens every group on a fr
     await expect(
       other
         .getByRole("region", { name: "Design panel" })
-        .getByRole("button", { name: /^Colours, \d+$/ })
+        .getByRole("button", { name: /^Text and surfaces, \d+$/ })
     ).toHaveAttribute("aria-expanded", "true");
   } finally {
     await fresh.close();
   }
   // Put it back for the specs after this one.
-  await panel.getByRole("button", { name: /^Colours, \d+$/ }).click();
+  await panel.getByRole("button", { name: /^Text and surfaces, \d+$/ }).click();
 });
 
 test("keeps the rows' columns where they were across all four tabs, at the default width and the narrowest", async ({
