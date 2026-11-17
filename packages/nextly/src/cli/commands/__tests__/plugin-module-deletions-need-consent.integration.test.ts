@@ -13,14 +13,21 @@
  * - a module dropping one of the plugin's own columns;
  * - a module removing rows from one of the plugin's own tables;
  * - a module whose DOWN drops a column, rolled back;
- * - a module removing rows a cascading key carries into a second table.
+ * - a module removing rows a cascading key carries into a second table;
+ * - a module that deletes nothing, pending before one that drops a column.
  *
  * Without consent each road refuses before anything changes, naming the
- * plugin, the module and the deletion: no module runs, and the values and
- * rows are kept. With consent naming the deletion, the module runs.
+ * plugin, the module, the deletion and the consent that would cover it: no
+ * module runs, not even a harmless one pending before the refused one, and
+ * the values and rows are kept. With consent naming the deletion, the module
+ * runs.
  *
- * Only the config loader and the command's connection are faked; the adapter
- * is a real one over a throwaway database.
+ * `nextly migrate` and `migrate:down` are driven through the commands' own
+ * entry points, so the flag and the environment are read as a person's run
+ * reads them. Only the config loader and the command's connection are faked;
+ * the adapter is a real one over a throwaway database, and every statement
+ * sent through it is recorded, so a refusal is shown to come before the
+ * deleting statement and not after it was run and rolled back.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,12 +40,9 @@ import {
   destroyRegisteredPlugins,
   registerServices,
 } from "../../../di/register";
-import { newestEventsByFilename } from "../../../domains/schema/events/newest-event";
-import { ensureSchemaEventsTable } from "../../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { buildExtensionSchema } from "../../../domains/schema/extension/build-extension-schema";
 import { col, defineTable } from "../../../domains/schema/extension/dsl";
-import { compileExtensionSchema } from "../../../domains/schema/extension/publish";
 import { buildPluginMigration } from "../../../domains/schema/migrate-create/generate-plugin";
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
 import {
@@ -51,11 +55,7 @@ import {
   qualifiedFilename,
   type PluginMigration,
 } from "../../../domains/schema/migrate/plugin/plugin-migration";
-import {
-  appliedPluginShas,
-  pluginMigrationArgs,
-} from "../../../domains/schema/migrate/plugin/run-plugin-migrations";
-import { withMigrateLock } from "../../../domains/schema/pipeline/locks";
+import { appliedPluginShas } from "../../../domains/schema/migrate/plugin/run-plugin-migrations";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   getHookRegistry,
@@ -77,10 +77,9 @@ import { _resetEnvCache } from "../../../shared/lib/env";
 import { getImageProcessor } from "../../../storage/image-processor";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
-import { migrateCore } from "../migrate";
-import { downDatabaseDeps, migrateDownCore } from "../migrate-down";
+import { runMigrate } from "../migrate";
+import { runMigrateDown } from "../migrate-down";
 import { runPluginInstall } from "../plugin-lifecycle-runner";
-import { pluginModuleDown } from "../plugin-module-rollback";
 
 const ALL = ["postgresql", "mysql", "sqlite"] as const;
 type Dialect = (typeof ALL)[number];
@@ -89,16 +88,24 @@ const run = vi.hoisted(() => ({
   dialect: "sqlite" as string,
   adapter: undefined as unknown,
   plugin: undefined as unknown,
+  /** The app's migrations folder: empty, since the app ships no files. */
+  migrationsDir: "",
 }));
 
-// The app's config the install command reads. `run.plugin` is replaced as a
-// case ships its second module.
+// The app's config the commands read. `run.plugin` is replaced as a case
+// ships its next release.
 vi.mock("../../utils/config-loader", async () => {
   const { sanitizeConfig } = await import("../../../shared/types/config");
   return {
     loadConfig: async () => {
       const config = {
-        db: sanitizeConfig({ db: { runMigrationsOnBoot: true } }).db,
+        ...sanitizeConfig({
+          db: {
+            runMigrationsOnBoot: true,
+            migrationsDir: run.migrationsDir,
+            uiSchemaFile: `${run.migrationsDir}/ui-schema.json`,
+          },
+        }),
         plugins: [run.plugin],
       };
       return { config, appConfig: config, pluginConsent: undefined };
@@ -106,19 +113,28 @@ vi.mock("../../utils/config-loader", async () => {
   };
 });
 
-vi.mock("../../utils/adapter", () => ({
-  validateDatabaseEnv: () => ({
-    valid: true,
-    dialect: run.dialect,
-    databaseUrl: "unused",
-  }),
+vi.mock("../../utils/adapter", async importOriginal => {
+  const original = await importOriginal<typeof import("../../utils/adapter")>();
   // The test's adapter, kept connected after the command so the test can
   // read the database.
-  createCliAdapter: async () =>
+  const open = async () =>
     Object.assign(Object.create(run.adapter as object) as object, {
       disconnect: async () => {},
+    });
+  return {
+    ...original,
+    validateDatabaseEnv: () => ({
+      valid: true,
+      dialect: run.dialect,
+      databaseUrl: "unused",
     }),
-}));
+    createCliAdapter: open,
+    openCommandAdapter: open,
+  };
+});
+
+/** The variable a run reads its data-loss consent from when no flag gives it. */
+const CONSENT_ENV = "NEXTLY_ACCEPT_DATA_LOSS";
 
 const PLUGIN = "@acme/mc";
 const PREFIX = "mc";
@@ -140,6 +156,11 @@ const notesWithoutSummary = defineTable("notes", noteColumns);
 const notesWithExtra = defineTable("notes", {
   ...noteColumns,
   summary: col.shortText({ nullable: true }),
+  extra: col.shortText({ nullable: true }),
+});
+/** The same table once `extra` is added and `summary` dropped. */
+const notesWithExtraWithoutSummary = defineTable("notes", {
+  ...noteColumns,
   extra: col.shortText({ nullable: true }),
 });
 /** A second table whose rows go when the note they point at goes. */
@@ -188,6 +209,7 @@ const quoteFor = (dialect: Dialect) => (name: string) =>
  */
 async function handWritten(args: {
   name: string;
+  /** The module before it, whose tables it starts from. */
   base: PluginMigration;
   /** The plugin's tables once the module has run. */
   after: Tables;
@@ -204,7 +226,7 @@ async function handWritten(args: {
     >;
   const content = {
     name: `20261117_120000_${args.name}`,
-    schemaVersion: 2,
+    schemaVersion: args.base.schemaVersion + 1,
     dialects: perDialect(dialect => args.statements(quoteFor(dialect))),
     snapshot: perDialect(dialect => ({ tables: after[dialect] })),
     before: args.base.snapshot,
@@ -214,7 +236,10 @@ async function handWritten(args: {
 
 /** What a case ships after the plugin's first module, and the tables it declares then. */
 interface Shipped {
+  /** The module the case is about: the last one shipped. */
   module: PluginMigration;
+  /** Modules shipped between the first and `module`, which delete nothing. */
+  earlier?: PluginMigration[];
   tables: Tables;
 }
 
@@ -229,6 +254,8 @@ interface Modules {
   cascades: Shipped;
   /** Adds `mc__notes.extra`; its DOWN drops it. */
   addsColumn: Shipped;
+  /** `addsColumn`'s module, then one dropping `mc__notes.summary`. */
+  addsThenDrops: Shipped;
 }
 
 async function buildModules(): Promise<Modules> {
@@ -292,12 +319,27 @@ async function buildModules(): Promise<Modules> {
       }),
     },
     addsColumn: { tables: [notesWithExtra, replies], module: added.module },
+    addsThenDrops: {
+      tables: [notesWithExtraWithoutSummary, replies],
+      earlier: [added.module],
+      module: await handWritten({
+        name: "drop_summary_after_extra",
+        base: added.module,
+        after: [notesWithExtraWithoutSummary, replies],
+        statements: q => ({
+          up: [`ALTER TABLE ${q(NOTES)} DROP COLUMN ${q("summary")}`],
+          down: [
+            `ALTER TABLE ${q(NOTES)} ADD COLUMN ${q("summary")} varchar(255)`,
+          ],
+        }),
+      }),
+    },
   };
 }
 
 let modules: Modules | undefined;
 
-/** The consent `--accept-data-loss=<targets>` gives. */
+/** The consent `--accept-data-loss=<targets>` gives, as `plugins install` resolves it. */
 const consentFor = (targets: string): DataLossConsent =>
   resolveDataLossConsent({ flag: targets, env: {} });
 
@@ -346,13 +388,69 @@ describe.each(getConfiguredTestDialects())(
 
     /** Ships `next` after the first module, as the plugin's next release. */
     function ship(next: Shipped): void {
-      run.plugin = pluginWith([shipped.base, next.module], next.tables);
+      run.plugin = pluginWith(
+        [shipped.base, ...(next.earlier ?? []), next.module],
+        next.tables
+      );
     }
+
+    /** Every statement sent through the adapter since `issued` was last emptied. */
+    const issued: string[] = [];
+
+    /**
+     * Records each statement the adapter is handed, on its own connection
+     * and inside its transactions, before it runs. The record is outside any
+     * transaction, so a statement run and then rolled back still shows.
+     */
+    function recordStatements(target: TestNextly["adapter"]): void {
+      type Run = (...args: unknown[]) => Promise<unknown>;
+      const patched = target as unknown as {
+        executeQuery: Run;
+        transaction: Run;
+      };
+      const record = (statement: unknown) => {
+        if (typeof statement === "string") issued.push(statement);
+      };
+      const executeQuery = patched.executeQuery.bind(target);
+      patched.executeQuery = (...args) => {
+        record(args[0]);
+        return executeQuery(...args);
+      };
+      const transaction = patched.transaction.bind(target);
+      patched.transaction = (work, ...rest) =>
+        transaction(
+          (ctx: object) =>
+            (work as (ctx: object) => Promise<unknown>)(
+              new Proxy(ctx, {
+                get(inner, property) {
+                  const value: unknown = Reflect.get(inner, property, inner);
+                  if (typeof value !== "function") return value;
+                  const method = (value as Run).bind(inner);
+                  if (property !== "execute") return method;
+                  return (...args: unknown[]) => {
+                    record(args[0]);
+                    return method(...args);
+                  };
+                },
+              })
+            ),
+          ...rest
+        );
+    }
+
+    /** The recorded statements that change or empty one of the plugin's tables. */
+    const changesIssued = () =>
+      issued.filter(statement =>
+        /^\s*(ALTER\s+TABLE|DROP\s+TABLE|DELETE\s+FROM|TRUNCATE)\b[^;]*\bmc__/i.test(
+          statement
+        )
+      );
 
     beforeEach(async () => {
       modules ??= await buildModules();
       shipped = modules;
       migrationsDir = mkdtempSync(join(tmpdir(), "nextly-module-consent-"));
+      run.migrationsDir = migrationsDir;
       rebootProcessState();
       handle = await createTestNextly(dialect === "sqlite" ? {} : { dialect });
       await reconcileCore({
@@ -371,6 +469,7 @@ describe.each(getConfiguredTestDialects())(
       await adapter().executeQuery(
         `INSERT INTO ${q(REPLIES)} (${q("id")}, ${q("note_id")}) VALUES ('r-old', 'n-old'), ('r-new', 'n-new')`
       );
+      recordStatements(handle.adapter);
     }, 120_000);
 
     afterEach(async () => {
@@ -397,7 +496,7 @@ describe.each(getConfiguredTestDialects())(
     const key = (module: PluginMigration) =>
       qualifiedFilename(PLUGIN, module.name);
 
-    /** The values `column` of `mc__notes` holds, or undefined once it is gone. */
+    /** The values `column` of `mc__notes` holds, or undefined where it has no such column. */
     async function noteValues(column: string): Promise<string[] | undefined> {
       const listed = (await adapter().executeQuery(
         dialect === "sqlite"
@@ -433,37 +532,45 @@ describe.each(getConfiguredTestDialects())(
         }
       );
 
-    /** `nextly migrate`'s run over the shipped plugin. */
-    async function migrate(consent: DataLossConsent): Promise<Outcome> {
-      const plugins = [run.plugin] as Parameters<typeof pluginMigrationArgs>[0];
-      const extensionSchema = await compileExtensionSchema({
-        dialect,
-        plugins,
-        config: { db: { migrationsDir }, plugins },
-        server: adapter().getCapabilities(),
-        logger: { warn: () => {} },
-      } as Parameters<typeof compileExtensionSchema>[0]);
+    /**
+     * The environment's consent for the run that follows: `targets`, or none.
+     * None is set, not left as found, so a consent the shell running the
+     * suite carries never stands for a run meant to have none.
+     */
+    function consentInEnvironment(targets: string | undefined): void {
+      vi.stubEnv(CONSENT_ENV, targets);
+    }
+
+    /** The `nextly migrate` command, with `--accept-data-loss=<targets>` or without it. */
+    function migrate(targets: string | undefined): Promise<Outcome> {
+      consentInEnvironment(undefined);
+      issued.length = 0;
       return refusalOf(
-        migrateCore({
-          extensionSchema,
-          dialect,
-          db: db(),
-          adapter: adapter() as never,
-          migrationsDir,
-          logger: quiet,
-          lockMode: "wait",
-          lockWaitMs: 30_000,
-          consent,
-          interactive: false,
-          ...(await pluginMigrationArgs(plugins)),
-          ensureLedger: () => ensureSchemaEventsTable(adapter()),
-        })
+        runMigrate(
+          {
+            acceptDataLoss: targets,
+            cwd: migrationsDir,
+            quiet: true,
+            // The command's failure, thrown where the command line would exit.
+            throwOnFailure: true,
+          },
+          context
+        )
       );
     }
 
-    /** `plugins install`, run again over the installed plugin's new module. */
-    const install = (consent: DataLossConsent): Promise<Outcome> =>
-      refusalOf(runPluginInstall(PLUGIN, { consent }, context));
+    /** `plugins install`, run again over the installed plugin's new modules. */
+    function install(targets: string | undefined): Promise<Outcome> {
+      consentInEnvironment(undefined);
+      issued.length = 0;
+      return refusalOf(
+        runPluginInstall(
+          PLUGIN,
+          { consent: targets === undefined ? NO_CONSENT : consentFor(targets) },
+          context
+        )
+      );
+    }
 
     /**
      * A production start that runs its migrations, with the consent the
@@ -478,10 +585,9 @@ describe.each(getConfiguredTestDialects())(
       rebootProcessState();
       vi.stubEnv("NODE_ENV", "production");
       vi.stubEnv("NEXT_PUBLIC_APP_URL", "http://localhost:3000");
-      if (targets !== undefined) {
-        vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", targets);
-      }
+      consentInEnvironment(targets);
       _resetEnvCache();
+      issued.length = 0;
       const errors: string[] = [];
       const stopped: unknown = await registerServices({
         adapter: run.adapter,
@@ -515,80 +621,83 @@ describe.each(getConfiguredTestDialects())(
       return refusal.join("\n");
     }
 
-    /** `migrate:down --plugin`, over the plugin's newest applied module. */
-    async function migrateDown(
-      migrations: PluginMigration[],
-      consent: DataLossConsent
-    ): Promise<Outcome> {
-      const repo = new SchemaEventsRepository(db(), dialect);
+    /** The `migrate:down --plugin` command, over the plugin's newest applied module. */
+    function migrateDown(targets: string | undefined): Promise<Outcome> {
+      consentInEnvironment(undefined);
+      issued.length = 0;
       return refusalOf(
-        migrateDownCore({
-          ...(await downDatabaseDeps({
-            adapter: adapter(),
-            dialect,
-            plugin: { name: PLUGIN, migrations },
-          })),
-          nodeEnv: "test",
-          logger: quiet,
-          options: { step: 1, yes: true, consent, plugin: PLUGIN },
-          fileExists: () => Promise.resolve(true),
-          readDownSql: async filename =>
-            pluginModuleDown({
-              pluginName: PLUGIN,
-              migrations,
-              filename,
-              recordedSha: newestEventsByFilename(
-                await repo.listFileApplies()
-              ).get(filename)?.sha256,
-              dialect,
-            }),
-          withLock: withMigrateLock,
-        })
+        runMigrateDown(
+          {
+            step: 1,
+            yes: true,
+            plugin: PLUGIN,
+            acceptDataLoss: targets,
+            cwd: migrationsDir,
+            quiet: true,
+          },
+          context
+        )
       );
     }
 
-    /** Each road that applies a module, with no consent and with consent naming `targets`. */
+    /**
+     * Each road that applies a module, run with consent naming `targets` or
+     * with none. `flag` is whether the road is a command taking
+     * `--accept-data-loss`, which its refusal then names.
+     */
     const ROADS = [
-      {
-        road: "nextly migrate",
-        refused: () => migrate(NO_CONSENT),
-        consented: (targets: string) => migrate(consentFor(targets)),
-      },
+      { road: "nextly migrate", run: migrate, flag: true },
       {
         road: "the migrations a production start runs",
-        refused: () => start(undefined),
-        consented: (targets: string) => start(targets),
+        run: start,
+        flag: false,
       },
-      {
-        road: "plugins install",
-        refused: () => install(NO_CONSENT),
-        consented: (targets: string) => install(consentFor(targets)),
-      },
+      { road: "plugins install", run: install, flag: true },
     ] as const;
 
-    /** The refusal names the plugin, the module and the deletion. */
-    function expectNames(
+    /**
+     * The refusal names the plugin, the module, the deletion and the consent
+     * that would cover it, and came before any statement changing the
+     * plugin's tables was sent.
+     */
+    function expectRefusal(
       refusal: Outcome,
-      module: PluginMigration,
-      deletion: string
+      expected: {
+        module: PluginMigration;
+        deletion: string;
+        /** The consent the refusal tells the operator to give. */
+        consent: string;
+        flag: boolean;
+      }
     ): void {
       expect(refusal).toBeDefined();
-      expect(refusal).toContain(key(module));
+      expect(changesIssued()).toEqual([]);
+      expect(refusal).toContain(key(expected.module));
       expect(refusal).toContain(PLUGIN);
-      expect(refusal).toContain(module.name);
-      expect(refusal).toContain(deletion);
+      expect(refusal).toContain(expected.module.name);
+      expect(refusal).toContain(expected.deletion);
+      expect(refusal).toContain(`${CONSENT_ENV}=${expected.consent}`);
+      if (expected.flag) {
+        expect(refusal).toContain(`--accept-data-loss=${expected.consent}`);
+      }
     }
 
-    describe.each(ROADS)("through $road", ({ refused, consented }) => {
+    describe.each(ROADS)("through $road", ({ run: road, flag }) => {
       it("refuses a module dropping its own column, keeping its values, and applies it with consent naming the column", async () => {
         const { module } = shipped.dropsColumn;
+        const consent = `${NOTES}.summary`;
         ship(shipped.dropsColumn);
 
-        expectNames(await refused(), module, `${NOTES}.summary`);
+        expectRefusal(await road(undefined), {
+          module,
+          deletion: consent,
+          consent,
+          flag,
+        });
         expect(await noteValues("summary")).toEqual(["kept", "kept"]);
         expect(await appliedKeys()).toEqual([key(shipped.base)]);
 
-        expect(await consented(`${NOTES}.summary`)).toBeUndefined();
+        expect(await road(consent)).toBeUndefined();
         expect(await noteValues("summary")).toBeUndefined();
         expect(await noteValues("body")).toEqual(["b", "a"]);
         expect(await appliedKeys()).toEqual(
@@ -600,41 +709,70 @@ describe.each(getConfiguredTestDialects())(
         const { module } = shipped.removesRows;
         ship(shipped.removesRows);
 
-        expectNames(await refused(), module, REPLIES);
+        expectRefusal(await road(undefined), {
+          module,
+          deletion: REPLIES,
+          consent: REPLIES,
+          flag,
+        });
         expect(await ids(REPLIES)).toEqual(["r-new", "r-old"]);
         expect(await appliedKeys()).toEqual([key(shipped.base)]);
 
-        expect(await consented(REPLIES)).toBeUndefined();
+        expect(await road(REPLIES)).toBeUndefined();
         expect(await ids(REPLIES)).toEqual(["r-new"]);
         expect(await appliedKeys()).toEqual(
           [key(shipped.base), key(module)].sort()
+        );
+      }, 180_000);
+
+      it("runs no module pending before the one it refuses, and runs both with consent", async () => {
+        const { module, earlier = [] } = shipped.addsThenDrops;
+        const consent = `${NOTES}.summary`;
+        ship(shipped.addsThenDrops);
+
+        expectRefusal(await road(undefined), {
+          module,
+          deletion: consent,
+          consent,
+          flag,
+        });
+        // The module before it adds `extra` and deletes nothing: it did not
+        // run either, and the ledger records neither.
+        expect(await noteValues("extra")).toBeUndefined();
+        expect(await noteValues("summary")).toEqual(["kept", "kept"]);
+        expect(await appliedKeys()).toEqual([key(shipped.base)]);
+
+        expect(await road(consent)).toBeUndefined();
+        expect(await noteValues("extra")).toEqual([null, null]);
+        expect(await noteValues("summary")).toBeUndefined();
+        expect(await appliedKeys()).toEqual(
+          [key(shipped.base), ...earlier.map(key), key(module)].sort()
         );
       }, 180_000);
     });
 
     it("refuses migrate:down over a module whose DOWN drops a column, keeping its values, and rolls it back with consent naming the column", async () => {
       const { module } = shipped.addsColumn;
-      const migrations = [shipped.base, module];
+      const consent = `${NOTES}.extra`;
       ship(shipped.addsColumn);
       // Adding a column deletes nothing, so the module applies with no consent.
-      expect(await migrate(NO_CONSENT)).toBeUndefined();
+      expect(await migrate(undefined)).toBeUndefined();
       await adapter().executeQuery(
         `UPDATE ${q(NOTES)} SET ${q("extra")} = 'kept'`
       );
 
-      expectNames(
-        await migrateDown(migrations, NO_CONSENT),
+      expectRefusal(await migrateDown(undefined), {
         module,
-        `${NOTES}.extra`
-      );
+        deletion: consent,
+        consent,
+        flag: true,
+      });
       expect(await noteValues("extra")).toEqual(["kept", "kept"]);
       expect(await appliedKeys()).toEqual(
         [key(shipped.base), key(module)].sort()
       );
 
-      expect(
-        await migrateDown(migrations, consentFor(`${NOTES}.extra`))
-      ).toBeUndefined();
+      expect(await migrateDown(consent)).toBeUndefined();
       expect(await noteValues("extra")).toBeUndefined();
       expect(await appliedKeys()).toEqual([key(shipped.base)]);
     }, 180_000);
@@ -643,21 +781,27 @@ describe.each(getConfiguredTestDialects())(
       const { module } = shipped.cascades;
       ship(shipped.cascades);
 
-      const refusal = await migrate(consentFor(NOTES));
-      expectNames(refusal, module, REPLIES);
+      const refusal = await migrate(NOTES);
       expect(await ids(NOTES)).toEqual(["n-new", "n-old"]);
       expect(await ids(REPLIES)).toEqual(["r-new", "r-old"]);
       expect(await appliedKeys()).toEqual([key(shipped.base)]);
       if (dialect === "sqlite") {
         // The runner applies a SQLite module with foreign keys off, so no
-        // cascade fires and consent names the parent alone: the reply left
-        // pointing at a note that is gone then refuses the module, which is
-        // rolled back whole.
+        // cascade fires and consent names the parent alone: the module runs,
+        // the reply left pointing at a note that is gone refuses it, and it
+        // is rolled back whole.
+        expect(refusal).toContain(key(module));
         expect(refusal).toContain("referencing rows that do not exist");
         return;
       }
+      expectRefusal(refusal, {
+        module,
+        deletion: REPLIES,
+        consent: `${NOTES},${REPLIES}`,
+        flag: true,
+      });
 
-      expect(await migrate(consentFor(`${NOTES},${REPLIES}`))).toBeUndefined();
+      expect(await migrate(`${NOTES},${REPLIES}`)).toBeUndefined();
       expect(await ids(NOTES)).toEqual(["n-new"]);
       expect(await ids(REPLIES)).toEqual(["r-new"]);
       expect(await appliedKeys()).toEqual(
