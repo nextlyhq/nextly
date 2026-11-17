@@ -26,7 +26,7 @@ import type {
 } from "nextly/runtime";
 
 import { readWasRefused } from "./blocks/list-read-refusal";
-import { createDefaultDataProvider } from "./context";
+import { createDefaultDataProvider, DEFAULT_MAX_QUERIES } from "./context";
 import type {
   BlocksDataProvider,
   BlocksDataProviderFactory,
@@ -36,6 +36,7 @@ import type {
 import type { BlocksPageConfig } from "./next-page-config";
 import {
   offeredSiteBlocks,
+  offeredSitePageDataLimit,
   SITE_BLOCKS_SERVICE,
   SITE_NAMED_QUERIES_SERVICE,
   siteCopyOf,
@@ -115,6 +116,26 @@ export function siteBoundConfig<T extends BlocksPageConfig>(config: T): T {
           },
         }),
   };
+}
+
+/**
+ * How many reads one render of this route may make: its own `maxQueries`,
+ * else the site's page data limit (`pageBuilder({ maxQueries })`), which the
+ * editor's meter counts against too, else {@link DEFAULT_MAX_QUERIES}.
+ *
+ * Read per render, after the route has read its entry, which starts the site.
+ * A process with no instance registered (a route reading through its own
+ * `nextly` only) has no site limit to take, and takes the default.
+ */
+export function routeMaxQueries(config: BlocksPageConfig): number {
+  if (config.maxQueries !== undefined) return config.maxQueries;
+  let plugins: Parameters<typeof offeredSitePageDataLimit>[0];
+  try {
+    plugins = requireNextly().plugins;
+  } catch {
+    return DEFAULT_MAX_QUERIES;
+  }
+  return offeredSitePageDataLimit(plugins) ?? DEFAULT_MAX_QUERIES;
 }
 
 /** The started site's named queries, or `undefined` where none is offered. */

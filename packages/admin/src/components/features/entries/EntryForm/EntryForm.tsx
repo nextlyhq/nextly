@@ -781,6 +781,8 @@ export function EntryForm({
     slugFieldName: slugField?.name ?? "slug",
     enabled: !!titleField && !!slugField,
     frozen: hasPublicAddress,
+    // A restore that puts back the title leaves an unchosen slug as it is.
+    restore: formRestore,
   });
 
   // A link names one saved document, so there is nothing to mint against until

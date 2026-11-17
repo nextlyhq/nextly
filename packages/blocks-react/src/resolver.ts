@@ -67,6 +67,42 @@ export const SITE_NAMED_QUERIES_SERVICE: {
 };
 
 /**
+ * Where a started page builder offers the site's page data limit on the
+ * instance: `pageBuilder({ maxQueries })`, the reads one page render may
+ * make, which a route given no `maxQueries` of its own renders under, so the
+ * editor's meter and the published page count against one number.
+ *
+ * @experimental Settles with the editor's page data meter.
+ */
+export const SITE_PAGE_DATA_LIMIT_SERVICE: {
+  readonly plugin: typeof SITE_BLOCKS_SERVICE.plugin;
+  readonly service: "site-page-data-limit";
+} = {
+  plugin: SITE_BLOCKS_SERVICE.plugin,
+  service: "site-page-data-limit",
+};
+
+/**
+ * The limit a started page builder offers under
+ * {@link SITE_PAGE_DATA_LIMIT_SERVICE}, or `undefined` where it offers none
+ * or one that is not a count: a whole number from 0, or `Infinity`.
+ */
+export function offeredSitePageDataLimit(
+  plugins: Readonly<Record<string, Readonly<Record<string, unknown>>>>
+): number | undefined {
+  const offered: unknown =
+    plugins[SITE_PAGE_DATA_LIMIT_SERVICE.plugin]?.[
+      SITE_PAGE_DATA_LIMIT_SERVICE.service
+    ];
+  if (typeof offered !== "object" || offered === null) return undefined;
+  const limit = (offered as { maxQueries?: unknown }).maxQueries;
+  return typeof limit === "number" &&
+    (limit === Infinity || (Number.isInteger(limit) && limit >= 0))
+    ? limit
+    : undefined;
+}
+
+/**
  * The mark a site's own blocks or named queries carry when they are bound to
  * one page builder (`blocksOf`, `namedQueriesOf`): whether that page builder
  * started in this module copy. A production build bundles the plugin into

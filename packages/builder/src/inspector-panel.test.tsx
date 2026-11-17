@@ -152,7 +152,11 @@ describe("what InspectorPanel forwards to the style tab", () => {
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
 
-    expect(screen.getByRole("button", { name: "Hero" })).toBeDefined();
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Editing: This block" }),
+      { button: 0, ctrlKey: false }
+    );
+    expect(screen.getByRole("menuitemradio", { name: /^Hero/ })).toBeDefined();
   });
 
   it("names Content and Style for the inspector's own tab rules", () => {
@@ -178,8 +182,12 @@ describe("what InspectorPanel forwards to the style tab", () => {
     );
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Editing: This block" }),
+      { button: 0, ctrlKey: false }
+    );
 
-    expect(screen.queryByRole("button", { name: /hero/i })).toBeNull();
+    expect(screen.queryByRole("menuitemradio", { name: /hero/i })).toBeNull();
   });
 
   it("offers the state switcher when the host can act on the choice", () => {

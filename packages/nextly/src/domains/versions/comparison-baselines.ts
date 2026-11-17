@@ -22,6 +22,7 @@
 import { getService } from "../../di";
 import { NextlyError } from "../../errors";
 
+import { isComparisonBaselineName } from "./comparison-baseline-name";
 import {
   recordsServedContent,
   type RecordedVersionStatus,
@@ -119,8 +120,6 @@ export interface ComparisonBaseline {
   ): string | Promise<string>;
 }
 
-const BASELINE_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
-
 const registry = new Map<string, ComparisonBaseline>();
 
 /**
@@ -131,7 +130,8 @@ const registry = new Map<string, ComparisonBaseline>();
  * whichever registered last.
  */
 export function registerComparisonBaseline(baseline: ComparisonBaseline): void {
-  if (!BASELINE_NAME.test(baseline.name)) {
+  // The one grammar a baseline's name has, which the admin reads names by.
+  if (!isComparisonBaselineName(baseline.name)) {
     throw NextlyError.invalidInput({
       message: `Comparison baseline name "${baseline.name}" must be kebab-case, such as "since-approved".`,
       logContext: { name: baseline.name },
@@ -236,6 +236,10 @@ registerComparisonBaseline({
   label: "Previous version",
   resolve: ({ versions, target }) =>
     versions.find(v => v.versionNo < target)?.versionNo ?? null,
+  // Every reason here is a sentence about the document, never the baseline's
+  // name in quotes: a reader opened a comparison, and did not type the name.
+  unavailable: ({ target }) =>
+    `Version ${target} is the earliest version kept of this part of the document, so there is nothing before it to compare with.`,
 });
 
 registerComparisonBaseline({
@@ -244,10 +248,14 @@ registerComparisonBaseline({
   // Nothing is currently published in a part that has been withdrawn.
   resolve: ({ versions, live, lifecycle }) =>
     live ? (latestPublished(versions, lifecycle)?.versionNo ?? null) : null,
-  unavailable: ({ live, target }) =>
-    live
-      ? `Version ${target} has no "published" version to compare with.`
-      : "Nothing is published in this language now, so there is no published version to compare with.",
+  // `found` is the target itself when the version compared is what is
+  // published; otherwise nothing published is kept for the part.
+  unavailable: ({ live }, found) =>
+    !live
+      ? "Nothing is published in this language now, so there is no published version to compare with."
+      : found !== null
+        ? "This is the version that is published, so there is nothing else published to compare it with."
+        : "No published version of this part of the document is kept, so there is nothing published to compare with.",
 });
 
 registerComparisonBaseline({
@@ -255,6 +263,14 @@ registerComparisonBaseline({
   label: "Current draft",
   resolve: ({ versions, lifecycle }) =>
     currentDraft(versions, lifecycle)?.versionNo ?? null,
+  // `found` is the target itself when the version compared is the current
+  // draft. Without the lifecycle nothing is ever a draft.
+  unavailable: ({ lifecycle }, found) =>
+    !lifecycle
+      ? "This document keeps no drafts, so there is no current draft to compare with."
+      : found !== null
+        ? "This is the current draft, so there is no other draft to compare it with."
+        : "This part of the document has no draft saved since it was last published, so there is no current draft to compare with.",
 });
 
 registerComparisonBaseline({
@@ -442,16 +458,21 @@ function defaultBaseline(
     : "previous";
 }
 
-/** Why a baseline has nothing to compare with, in its own words if it has them. */
+/**
+ * Why a baseline has nothing to compare with, in its own words if it has them,
+ * else by its label as a reader would say it, never by its name in a request.
+ */
 async function unavailableMessage(
   name: string,
   context: BaselineContext,
   found: BaselineChoice | null
 ): Promise<string> {
   const baseline = requireBaseline(name);
+  const label =
+    baseline.label.charAt(0).toLowerCase() + baseline.label.slice(1);
   return baseline.unavailable
     ? baseline.unavailable(narrowToPart(context), found)
-    : `Version ${context.target} has no "${name}" version to compare with.`;
+    : `Version ${context.target} has no version to compare with for ${label}.`;
 }
 
 /** The part a request compares: its target's own, or the one it names. */
