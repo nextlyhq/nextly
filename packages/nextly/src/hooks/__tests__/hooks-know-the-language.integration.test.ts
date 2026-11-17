@@ -22,6 +22,8 @@ const POSTS = "hkl_posts";
 const SITE = "hkl_site";
 /** Held changes: a save to a published entry waits as a pending change. */
 const DRAFTED = "hkl_drafted";
+/** A Single whose saves to a published document wait as pending changes. */
+const DRAFTED_SITE = "hkl_drafted_site";
 
 /** What one hook was told. */
 interface Told {
@@ -142,6 +144,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           text({ name: "body" }),
           text({ name: "code", localized: false }),
         ],
+      }),
+      defineSingle({
+        slug: DRAFTED_SITE,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        hooks: everyHook("drafted-site"),
+        fields: [text({ name: "title" })],
       }),
     ],
     localization: { locales: ["en", "es"], defaultLocale: "en" },
@@ -425,6 +435,46 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(published.success, JSON.stringify(published)).toBe(true);
       const after = toldBy("drafted:afterChange");
+      expect(after.map(e => e.locale).sort()).toEqual(["en", "es"]);
+      for (const entry of after) {
+        expect(entry.locales, String(entry.locale)).toEqual([entry.locale]);
+      }
+    }, 90_000);
+
+    it("tells each after-hook run of a Single's publish of every language its own language", async () => {
+      const t = await boot(dialect);
+      const singles = t.getService("singleEntryService") as unknown as {
+        update(
+          slug: string,
+          data: Record<string, unknown>,
+          options: Record<string, unknown>
+        ): Promise<{ success: boolean }>;
+        publishAllLocales(
+          slug: string,
+          options: Record<string, unknown>
+        ): Promise<{ success: boolean }>;
+      };
+      // Live in both languages, then a change held in each.
+      for (const [locale, data] of [
+        ["en", { title: "Site", status: "published" }],
+        ["es", { title: "Sitio", status: "published" }],
+        ["en", { title: "Site again" }],
+        ["es", { title: "Sitio otra vez" }],
+      ] as const) {
+        const saved = await singles.update(
+          DRAFTED_SITE,
+          { ...data, _overwrite: true },
+          { locale, overrideAccess: true }
+        );
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+      }
+      told.length = 0;
+      const published = await singles.publishAllLocales(DRAFTED_SITE, {
+        overrideAccess: true,
+        data: { _overwrite: true },
+      });
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      const after = toldBy("drafted-site:afterChange");
       expect(after.map(e => e.locale).sort()).toEqual(["en", "es"]);
       for (const entry of after) {
         expect(entry.locales, String(entry.locale)).toEqual([entry.locale]);

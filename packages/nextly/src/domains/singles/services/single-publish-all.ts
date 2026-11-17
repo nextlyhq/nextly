@@ -24,7 +24,10 @@ import {
   ownDatabaseVisitor,
   visitorWithoutAccessService,
 } from "../../../auth/access/own-database-visitor";
-import { askEachLanguage } from "../../../auth/access/rule-language";
+import {
+  askEachLanguage,
+  withRuleLanguage,
+} from "../../../auth/access/rule-language";
 import { actorForWrite } from "../../../auth/request-actor";
 import type { FieldConfig } from "../../../collections/fields/types";
 import {
@@ -314,9 +317,11 @@ interface PublishOutcome {
    * the update hooks run once it commits. Absent where none will run.
    */
   hookDocuments?: {
+    /** The language a run is for: one whose pending change went live. */
+    locale?: string;
     data: Record<string, unknown>;
     previous: Record<string, unknown>;
-  };
+  }[];
 }
 
 /**
@@ -545,9 +550,20 @@ export class SinglePublishAllService extends BaseService {
       // back. A hook's failure is recorded, not thrown: the publish stands.
       const hookDocuments = outcome.hookDocuments;
       if (hookDocuments !== undefined) {
-        await this.afterCommit(() =>
-          this.runUpdateHooks(hookCall, hookDocuments)
-        );
+        await this.afterCommit(async () => {
+          for (const documents of hookDocuments) {
+            const run = () => this.runUpdateHooks(hookCall, documents);
+            // A run for one language's pending change is told that language,
+            // as a publish of that language alone is; a move of statuses alone
+            // is told every language it moved.
+            await (documents.locale === undefined
+              ? run()
+              : withRuleLanguage(
+                  { locale: documents.locale, locales: [documents.locale] },
+                  run
+                ));
+          }
+        });
       }
 
       return {
@@ -1470,15 +1486,42 @@ export class SinglePublishAllService extends BaseService {
     // as the in-transaction phase and the events read it: in the default
     // language, as the publish committed it. Read again rather than shared
     // with those, which hand theirs to code that may change it.
-    const hookDocuments = plan.runsUpdateHooks
-      ? await this.publishDocuments(tx, {
-          plan,
-          lockedRow,
-          publishedRow: written.publishedRow,
-          priorComponents,
-          priorCompanionValues,
-        })
-      : undefined;
+    // One document for each language whose pending change went live, as a
+    // publish of that language alone hands its update hooks; otherwise one, in
+    // the default language, for a move of statuses alone.
+    const promotedLanguages = [
+      ...new Set(
+        pending.flatMap(change =>
+          change.locale === null ? [] : [change.locale]
+        )
+      ),
+    ];
+    let hookDocuments:
+      | {
+          locale?: string;
+          data: Record<string, unknown>;
+          previous: Record<string, unknown>;
+        }[]
+      | undefined;
+    if (plan.runsUpdateHooks) {
+      const documentArgs = {
+        plan,
+        lockedRow,
+        publishedRow: written.publishedRow,
+        priorComponents,
+        priorCompanionValues,
+      };
+      hookDocuments = [];
+      if (promotedLanguages.length === 0) {
+        hookDocuments.push(await this.publishDocuments(tx, documentArgs));
+      }
+      for (const locale of promotedLanguages) {
+        hookDocuments.push({
+          locale,
+          ...(await this.publishDocuments(tx, { ...documentArgs, locale })),
+        });
+      }
+    }
 
     return {
       documentVanished: false,
@@ -2611,13 +2654,16 @@ export class SinglePublishAllService extends BaseService {
       publishedRow: Record<string, unknown>;
       priorComponents: Map<string, Record<string, unknown>>;
       priorCompanionValues: Map<string, Record<string, unknown>>;
+      /** The language the documents are read in; the default language when absent. */
+      locale?: string;
     }
   ): Promise<{
     data: Record<string, unknown>;
     previous: Record<string, unknown>;
   }> {
     const { plan, lockedRow, publishedRow } = args;
-    const defaultLocale = this.localization?.defaultLocale;
+    // Named for the default language it reads when no language is asked.
+    const defaultLocale = args.locale ?? this.localization?.defaultLocale;
     const defaultCompanionValues =
       plan.companion && plan.companionPublishable && defaultLocale !== undefined
         ? await readCompanionLocaleValues(
