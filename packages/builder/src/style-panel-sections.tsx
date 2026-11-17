@@ -308,25 +308,11 @@ function SectionBody({
     onChooseForm,
     breakpoints,
   };
-  const reading = useArrangeReading(
+  const { shown, more, arrange } = useSectionRows(
+    section,
     surroundings,
-    section.key === "layout" &&
-      section.properties.some(
-        // Offered, not only kept: a block that no longer has layout keeps a
-        // stored Display clear-only, as a raw row.
-        property => property.property === "display" && property.offered
-      )
+    isRevealed
   );
-  const arranged = arrangedSection(section.properties, reading);
-  const arrange = arranged.arrange;
-  // "Inside its parent" leaves out the rows its Fill / Fit / Fixed draw.
-  const childDrawn = useDrawnChildRows(surroundings);
-  const listed =
-    section.key === "inside-parent"
-      ? arranged.listed.filter(property => !childDrawn.has(property.property))
-      : arranged.listed;
-  const match = useSettingsMatch();
-  const { shown, more } = shownProperties(listed, isRevealed, match);
   return (
     <>
       <SectionFields
@@ -347,6 +333,49 @@ function SectionBody({
       )}
     </>
   );
+}
+
+/**
+ * A section's rows drawn at once and behind "+ More", with Layout's Arrange:
+ * the rows a section's plain controls draw leave (Arrange's, and Inside its
+ * parent's Fill / Fit / Fixed), and the panel's filter keeps what it keeps.
+ */
+function useSectionRows(
+  section: StyleSection,
+  surroundings: StyleFieldSurroundings,
+  isRevealed: (property: string) => boolean
+): {
+  shown: readonly InspectedStyleProperty[];
+  more: readonly InspectedStyleProperty[];
+  arrange: ArrangedSection["arrange"];
+} {
+  const reading = useArrangeReading(
+    surroundings,
+    section.key === "layout" &&
+      section.properties.some(
+        // Offered, not only kept: a block that no longer has layout keeps a
+        // stored Display clear-only, as a raw row.
+        property => property.property === "display" && property.offered
+      )
+  );
+  const drawn = useDrawnChildRows(surroundings);
+  const match = useSettingsMatch();
+  const arranged = arrangedSection(section.properties, reading);
+  const listed = withoutDrawn(section.key, arranged.listed, drawn);
+  return {
+    ...shownProperties(listed, isRevealed, match),
+    arrange: arranged.arrange,
+  };
+}
+
+/** "Inside its parent"'s rows, less those its Fill / Fit / Fixed draw. */
+function withoutDrawn(
+  key: InspectorSectionKey,
+  listed: readonly InspectedStyleProperty[],
+  drawn: ReadonlySet<string>
+): readonly InspectedStyleProperty[] {
+  if (key !== "inside-parent") return listed;
+  return listed.filter(property => !drawn.has(property.property));
 }
 
 /** A Layout section's raw rows, and the Arrange drawn above them. */
@@ -404,6 +433,38 @@ function NothingSetNote({
   );
 }
 
+/**
+ * What a section draws above its rows: Layout's Content width and Arrange,
+ * Inside its parent's Width and Height, Size's shortcuts.
+ */
+function SectionLead({
+  sectionKey,
+  surroundings,
+  arrange,
+  minHeightDrawn,
+}: {
+  sectionKey: InspectorSectionKey;
+  surroundings: StyleFieldSurroundings;
+  arrange: ArrangedSection["arrange"];
+  minHeightDrawn: boolean;
+}): React.JSX.Element | null {
+  if (sectionKey === "layout") {
+    return <LayoutLead surroundings={surroundings} arrange={arrange} />;
+  }
+  if (sectionKey === "inside-parent") {
+    return <InsideParentFields surroundings={surroundings} />;
+  }
+  if (sectionKey !== "size") return null;
+  return (
+    <SettingSlot tab="style" ids={SHORTCUTS}>
+      <BlockShortcutsFields
+        surroundings={surroundings}
+        minHeightDrawn={minHeightDrawn}
+      />
+    </SettingSlot>
+  );
+}
+
 /** What leads a Layout section: Content width, then a container's Arrange. */
 function LayoutLead({
   surroundings,
@@ -454,22 +515,14 @@ function SectionFields({
   return (
     <fieldset className="nx-inspector__fields" disabled={readOnly}>
       <SectionHeld.Provider value={readOnly}>
-        {sectionKey === "layout" ? (
-          <LayoutLead surroundings={surroundings} arrange={arrange} />
-        ) : null}
-        {sectionKey === "inside-parent" ? (
-          <InsideParentFields surroundings={surroundings} />
-        ) : null}
-        {sectionKey === "size" ? (
-          <SettingSlot tab="style" ids={SHORTCUTS}>
-            <BlockShortcutsFields
-              surroundings={surroundings}
-              minHeightDrawn={(rings?.rest ?? shown).some(
-                property => property.property === "minHeight"
-              )}
-            />
-          </SettingSlot>
-        ) : null}
+        <SectionLead
+          sectionKey={sectionKey}
+          surroundings={surroundings}
+          arrange={arrange}
+          minHeightDrawn={(rings?.rest ?? shown).some(
+            property => property.property === "minHeight"
+          )}
+        />
         {rings === undefined ? null : (
           <SettingSlot tab="style" ids={SPACING_IDS}>
             <SpacingBox

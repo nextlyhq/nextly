@@ -476,12 +476,19 @@ function parentArrangementOf(
 ): ParentArrangement | undefined {
   const box = parentBoxOf(document, node, at, options);
   if (box === undefined) return undefined;
-  const display = keywordIdentity(box.read("display", "display")) ?? IN_FLOW;
+  return arrangementOf(
+    keywordIdentity(box.read("display", "display")) ?? IN_FLOW,
+    keywordIdentity(box.read("flex-direction", "flexDirection"))
+  );
+}
+
+/** The arrangement a display and a direction lay a box's children out in. */
+function arrangementOf(
+  display: string,
+  direction: string | undefined
+): ParentArrangement | undefined {
   if (display === "grid" || display === "inline-grid") return "grid";
   if (display === "flex" || display === "inline-flex") {
-    const direction = keywordIdentity(
-      box.read("flex-direction", "flexDirection")
-    );
     return direction?.startsWith("column") === true ? "column" : "row";
   }
   return display === "block" || display === "flow-root" ? "flow" : undefined;
