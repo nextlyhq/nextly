@@ -507,7 +507,7 @@ button.nx-font-roles__row:focus-visible {
 }
 
 .nx-font-roles__specimen {
-  font-size: 20px;
+  font-size: var(--text-xl);
   line-height: 1;
   text-align: center;
 }
@@ -528,6 +528,7 @@ button.nx-font-roles__row:focus-visible {
   overflow: hidden;
   color: var(--nx-muted-foreground);
   font-size: var(--text-xs);
+  line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

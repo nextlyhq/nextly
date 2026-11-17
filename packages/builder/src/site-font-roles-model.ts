@@ -36,7 +36,7 @@ import { drawsBold, roleStack, siteFamilies } from "./font-library";
 export type FontRole = "body" | "heading";
 
 /** The variable each role's font is held in, by identity. */
-export const FONT_ROLE_TOKEN: Readonly<Record<FontRole, string>> = {
+const FONT_ROLE_TOKEN: Readonly<Record<FontRole, string>> = {
   body: "font.body",
   heading: "font.heading",
 };
