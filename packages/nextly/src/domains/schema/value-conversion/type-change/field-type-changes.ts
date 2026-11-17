@@ -9,6 +9,9 @@
  */
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
+import { resolveLocalizedFieldNames } from "../../../i18n/classify-fields";
+import { storesPerLanguage } from "../../../i18n/per-language-storage";
+import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import {
   type ColumnOrigin,
   getColumnDescriptor,
@@ -101,7 +104,9 @@ export interface JudgedFieldTypeChange extends FieldTypeChange {
 /**
  * Each change judged over its column: on the entity's table, or on its translations table for a
  * field translated before the save, where each language's value is its own row. Each kept or
- * changed value is asked of the new field's own validation too.
+ * changed value is asked of the new field's own validation too. A change whose old column the
+ * table does not have holds no value to judge, as where a save refused part-way already took it
+ * (SQLite rebuilds a table to change a column), and is left out.
  *
  * @param translated the names of the fields kept per language before the save
  */
@@ -115,6 +120,7 @@ export async function judgeFieldTypeChanges(args: {
   changes: readonly FieldTypeChange[];
 }): Promise<JudgedFieldTypeChange[]> {
   const judged: JudgedFieldTypeChange[] = [];
+  const columnsOf = liveColumnReader(args.db, args.dialect);
   for (const change of args.changes) {
     const column = getColumnDescriptor(
       change.from,
@@ -128,6 +134,7 @@ export async function judgeFieldTypeChanges(args: {
     const table = perLanguage
       ? (args.translationsTable ?? args.table)
       : args.table;
+    if (!(await columnsOf(table)).has(column.toLowerCase())) continue;
     const result = await judgeStoredTypeChange({
       db: args.db,
       dialect: args.dialect,
@@ -141,6 +148,31 @@ export async function judgeFieldTypeChanges(args: {
     judged.push({ ...change, table, column, result });
   }
   return judged;
+}
+
+/** Each table's column names, lower-cased, read from the database once per table. */
+function liveColumnReader(
+  db: unknown,
+  dialect: SupportedDialect
+): (table: string) => Promise<ReadonlySet<string>> {
+  const read = new Map<string, Promise<ReadonlySet<string>>>();
+  return table => {
+    let columns = read.get(table);
+    if (columns === undefined) {
+      columns = introspectLiveSnapshot(db, dialect, [table]).then(
+        live =>
+          new Set(
+            (
+              live.tables.find(
+                t => t.name.toLowerCase() === table.toLowerCase()
+              )?.columns ?? []
+            ).map(c => c.name.toLowerCase())
+          )
+      );
+      read.set(table, columns);
+    }
+    return columns;
+  };
 }
 
 /** One refusal of a save's field type change, as a validation error lists it. */
@@ -203,6 +235,38 @@ export function pendingMigrationRefusal(
   };
 }
 
+/** How a refusal names each kind of entity a save changes. */
+const KIND_LABEL = {
+  collection: "Collection",
+  single: "Single",
+  fieldGroup: "Field group",
+} as const;
+
+/** How a refusal names an entity: "Collection 'products'", "Single 'home'". */
+export function entityLabel(
+  kind: keyof typeof KIND_LABEL,
+  slug: string
+): string {
+  return `${KIND_LABEL[kind]} '${slug}'`;
+}
+
+/**
+ * Where an entity's fields kept per language before a save have their values: its companion table,
+ * for an entity stored per language (`storesPerLanguage`), with the fields its old definition
+ * translates. Nothing for one that keeps every value on its main table.
+ */
+export function perLanguageBefore(
+  entity: { localized?: unknown },
+  table: string,
+  previous: readonly FieldDefinition[]
+): Pick<EntityTypeChangeInput, "translationsTable" | "translatedBefore"> {
+  if (!storesPerLanguage(entity)) return {};
+  return {
+    translationsTable: `${table}_locales`,
+    translatedBefore: new Set(resolveLocalizedFieldNames([...previous], true)),
+  };
+}
+
 /** One entity a save changes, as the precondition reads it. */
 export interface EntityTypeChangeInput {
   /** How a refusal names the entity: "Collection 'products'", "Single 'home'". */
@@ -225,10 +289,65 @@ export interface EntityTypeChangeInput {
 }
 
 /**
+ * Every refusal of `entity`'s field type changes: each blocked one, each lossy one with no consent
+ * naming its field, or the one refusal of any type change while the entity's definition still
+ * awaits its migration. A save with no field type change reads no row.
+ */
+export async function fieldTypeChangeRefusals(
+  db: unknown,
+  dialect: SupportedDialect,
+  entity: EntityTypeChangeInput
+): Promise<TypeChangeRefusal[]> {
+  const changes = fieldTypeChangesOf({
+    previous: entity.previous,
+    next: entity.next,
+    ...(entity.renamed !== undefined ? { renamed: entity.renamed } : {}),
+    dialect,
+    builtBy: entity.builtBy,
+  });
+  if (changes.length === 0) return [];
+  const pending =
+    entity.migrationStatus === undefined
+      ? null
+      : pendingMigrationRefusal(entity.label, entity.migrationStatus, changes);
+  if (pending !== null) return [pending];
+  return typeChangeRefusals(
+    entity.label,
+    await judgeFieldTypeChanges({
+      db,
+      dialect,
+      builtBy: entity.builtBy,
+      table: entity.table,
+      ...(entity.translationsTable !== undefined
+        ? { translationsTable: entity.translationsTable }
+        : {}),
+      ...(entity.translatedBefore !== undefined
+        ? { translated: entity.translatedBefore }
+        : {}),
+      changes,
+    }),
+    entity.acknowledged
+  );
+}
+
+/** A refusal as a validation error lists it: by the field's path under `fields`. */
+export function typeChangeError(refusal: TypeChangeRefusal): {
+  path: string;
+  code: string;
+  message: string;
+} {
+  return {
+    path: `fields.${refusal.path}`,
+    code: refusal.code,
+    message: refusal.message,
+  };
+}
+
+/**
  * Refuse, before any statement of the save runs, every field type change of `entity` that is
  * blocked, or lossy with no consent naming its field, and any type change while the entity's
- * definition still awaits its migration. Every refusal is named at once, so the owner sees them all
- * in one save. A save with no field type change reads no row.
+ * definition still awaits its migration (`fieldTypeChangeRefusals`). Every refusal is named at
+ * once, so the owner sees them all in one save.
  *
  * @throws {NextlyError} a validation error listing each refusal by its field
  */
@@ -237,45 +356,10 @@ export async function refuseFieldTypeChanges(
   dialect: SupportedDialect,
   entity: EntityTypeChangeInput
 ): Promise<void> {
-  const changes = fieldTypeChangesOf({
-    previous: entity.previous,
-    next: entity.next,
-    ...(entity.renamed !== undefined ? { renamed: entity.renamed } : {}),
-    dialect,
-    builtBy: entity.builtBy,
-  });
-  if (changes.length === 0) return;
-  const pending =
-    entity.migrationStatus === undefined
-      ? null
-      : pendingMigrationRefusal(entity.label, entity.migrationStatus, changes);
-  const refusals =
-    pending !== null
-      ? [pending]
-      : typeChangeRefusals(
-          entity.label,
-          await judgeFieldTypeChanges({
-            db,
-            dialect,
-            builtBy: entity.builtBy,
-            table: entity.table,
-            ...(entity.translationsTable !== undefined
-              ? { translationsTable: entity.translationsTable }
-              : {}),
-            ...(entity.translatedBefore !== undefined
-              ? { translated: entity.translatedBefore }
-              : {}),
-            changes,
-          }),
-          entity.acknowledged
-        );
+  const refusals = await fieldTypeChangeRefusals(db, dialect, entity);
   if (refusals.length === 0) return;
   throw NextlyError.validation({
-    errors: refusals.map(refusal => ({
-      path: `fields.${refusal.path}`,
-      code: refusal.code,
-      message: refusal.message,
-    })),
+    errors: refusals.map(typeChangeError),
     logContext: {
       entity: entity.label,
       fields: refusals.map(refusal => refusal.path),

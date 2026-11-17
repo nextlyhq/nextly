@@ -12,14 +12,14 @@
  * @module domains/schema/pipeline/ui-type-changes
  */
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
-import { storesPerLanguage } from "../../i18n/per-language-storage";
 import {
   getColumnDescriptor,
   type SupportedDialect,
 } from "../services/field-column-descriptor";
 import {
+  entityLabel,
   type EntityTypeChangeInput,
+  perLanguageBefore,
   refuseFieldTypeChanges,
 } from "../value-conversion/type-change/field-type-changes";
 
@@ -31,14 +31,7 @@ import type {
   DesiredSingle,
 } from "./types";
 
-/** How a refusal names each kind of entity. */
-const KIND_LABEL = {
-  collection: "Collection",
-  single: "Single",
-  fieldGroup: "Field group",
-} as const;
-
-type EntityKind = keyof typeof KIND_LABEL;
+type EntityKind = "collection" | "single" | "fieldGroup";
 
 interface SavedEntity {
   kind: EntityKind;
@@ -85,17 +78,10 @@ function entityInput(
 ): Omit<EntityTypeChangeInput, "previous" | "next" | "renamed"> {
   const { kind, entity, previous } = saved;
   return {
-    label: `${KIND_LABEL[kind]} '${entity.slug}'`,
+    label: entityLabel(kind, entity.slug),
     table: entity.tableName,
     // A field translated before the save keeps each language's value in the companion table.
-    ...(storesPerLanguage(entity)
-      ? {
-          translationsTable: `${entity.tableName}_locales`,
-          translatedBefore: new Set(
-            resolveLocalizedFieldNames(previous, true)
-          ),
-        }
-      : {}),
+    ...perLanguageBefore(entity, entity.tableName, previous),
     builtBy: builtByFor(kind, entity.builderOwned),
   };
 }
