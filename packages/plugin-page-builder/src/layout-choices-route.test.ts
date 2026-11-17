@@ -607,6 +607,48 @@ describe("readLayoutChoices", () => {
     expect(Object.keys(meta.regionDefinitions).sort()).toEqual(["h0", "h7"]);
   });
 
+  it("discovers each picture under its own node bound, reading a shared component once", async () => {
+    // Eleven header-only sets, more regions than one page's bound of ten
+    // nodes: each picture fits its bound, so each is answered for. Every
+    // header places the same shared logo, read once for all of them.
+    const instance = (id: string, componentId: string) => ({
+      id,
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId },
+    });
+    const layouts = Array.from({ length: 11 }, (_, i) =>
+      layoutRow(`l${i}`, `Layout ${i}`, `h${i}`)
+    );
+    const components: Record<string, unknown> = { logo: component([]) };
+    for (let i = 0; i < 11; i += 1) {
+      components[`h${i}`] = component([instance(`n${i}`, "logo")]);
+    }
+    const { nextly, calls } = fake({
+      ...store,
+      layouts,
+      components,
+      defaultLayout: "l0",
+    });
+    const { meta } = await readLayoutChoices(
+      context(),
+      nextly,
+      asked(null, DEFAULT_COMPONENT_STORE, {
+        pictures: true,
+        limits: { ...DEFAULT_LIMITS, maxNodes: 10 },
+      })
+    );
+    expect(Object.keys(meta.regionDefinitions).sort()).toEqual(
+      ["logo", ...Array.from({ length: 11 }, (_, i) => `h${i}`)].sort()
+    );
+    const logoReads = calls.filter(
+      call =>
+        call.collection === "components" &&
+        JSON.stringify(call.where ?? {}).includes('"logo"')
+    );
+    expect(logoReads.length).toBeLessThanOrEqual(2);
+  });
+
   it("sends every listed published set's definitions when asked for pictures", async () => {
     const layouts = [
       ...Array.from({ length: 3 }, (_, i) =>

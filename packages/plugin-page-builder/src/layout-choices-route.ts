@@ -246,6 +246,9 @@ export async function readLayoutChoices(
   // pictures draw every listed set, so asked for them, every one's is sent,
   // the two the page is drawn inside first. An unpublished set lists no
   // regions, so nothing of it is read.
+  // Each picture is one set's own drawing, so each is discovered under its own
+  // node bound: one bound across the whole menu would leave the sets past it
+  // with no definitions, and their pictures drawn as broken.
   const regionDefinitions = await publishedDefinitions(
     nextly,
     {
@@ -254,11 +257,11 @@ export async function readLayoutChoices(
       locale: request.locale,
     },
     [
-      ...focused.flatMap(item => item.regions),
+      focused.flatMap(item => item.regions),
       ...(request.pictures === true
         ? items
             .filter(item => !focus.includes(item.id))
-            .flatMap(item => item.regions)
+            .map(item => item.regions)
         : []),
     ],
     { reading: asUser, limits: request.limits }
@@ -489,20 +492,25 @@ async function pendingDrafts(
 async function publishedDefinitions(
   nextly: LayoutChoicesDirectApi,
   store: { collection: string; field: string; locale: string | undefined },
-  regions: readonly LayoutRegion[],
+  drawings: readonly (readonly LayoutRegion[])[],
   read: { reading: AsUser; limits: DocumentLimits }
 ): Promise<Record<string, BlockDocument>> {
-  if (regions.length === 0) return {};
+  const groups = drawings.filter(regions => regions.length > 0);
+  if (groups.length === 0) return {};
   const source = publishedStoreSource(nextly, {
     ...store,
     reading: read.reading,
   });
-  const found = await definitionsFor(
-    regionDocument(regions),
-    async ids => {
-      try {
-        return await source(ids);
-      } catch (error) {
+  // One answer per id across every drawing, kept as it is asked for, so a
+  // component that many sets place (a shared logo) is read once, and two
+  // drawings asking for it at the same moment share that read.
+  const asked = new Map<string, Promise<BlockDocument | undefined>>();
+  const readOnce = async (
+    ids: readonly string[]
+  ): Promise<Map<string, BlockDocument>> => {
+    const fresh = ids.filter(id => !asked.has(id));
+    if (fresh.length > 0) {
+      const batch = source(fresh).catch((error: unknown) => {
         // Refused: the caller may not read these, and the regions draw as
         // missing, which is what they are to this caller. Anything else is a
         // failure, not an answer, and fails the request, so the picker says
@@ -511,11 +519,30 @@ async function publishedDefinitions(
           return new Map<string, BlockDocument>();
         }
         throw error;
-      }
-    },
-    read.limits
+      });
+      for (const id of fresh)
+        asked.set(
+          id,
+          batch.then(found => found.get(id))
+        );
+    }
+    const answers = await Promise.all(
+      ids.map(async id => [id, await asked.get(id)] as const)
+    );
+    return new Map(
+      answers.filter(
+        (answer): answer is readonly [string, BlockDocument] =>
+          answer[1] !== undefined
+      )
+    );
+  };
+  // Each drawing discovered under its own bound, as the renderer draws it.
+  const found = await Promise.all(
+    groups.map(regions =>
+      definitionsFor(regionDocument(regions), readOnce, read.limits)
+    )
   );
-  return Object.fromEntries(found);
+  return Object.fromEntries(found.flatMap(definitions => [...definitions]));
 }
 
 /** An optional text parameter, where an empty value is none. */
