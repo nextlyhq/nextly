@@ -3,7 +3,8 @@
  * page": read from the editor's document, so an edit not yet saved counts at
  * once, with every component inlined as the canvas draws it (a placement's
  * override or variant included), the shared styles and block looks its
- * blocks wear, and each variable a used variable names through `var()`.
+ * blocks wear, the site's text (which every page takes), and each variable
+ * a used variable names through `var()`.
  *
  * Each part is read by the walk the site's usage index records with
  * (`documentTokenUsage`, `classUsageOf`, `variablesAsked`, `variablesUsing`),
@@ -14,6 +15,7 @@
 import {
   documentTokenUsage,
   resolveComponentInstances,
+  siteTextUses,
   styleEnvelopeProperties,
   styleEnvelopeTokens,
   tokenIdentity,
@@ -51,6 +53,11 @@ export function usedOnPage(
     if (!worn.has(style.id)) continue;
     styleEnvelopeTokens(style.styles, ids);
     styleEnvelopeProperties(style.styles, properties);
+  }
+  // The site's text, which every page's body, headings, links, buttons and
+  // captions take: a row's reference by identity, or its `var()` by property.
+  for (const key of siteTextUses(tokens?.siteText).keys()) {
+    (key.startsWith("--") ? properties : ids).add(key);
   }
   const asked = variablesAsked(
     (tokens?.tokens ?? []).map(tokenIdentity),

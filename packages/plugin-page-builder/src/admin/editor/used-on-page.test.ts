@@ -108,6 +108,26 @@ describe("the variables the open page uses", () => {
     ).toEqual(["color.accent", "shadow.lift"]);
   });
 
+  it("reads the colours the site's text gives every page", () => {
+    const site: SiteTokenSet = {
+      ...TOKENS,
+      siteText: {
+        link: { color: { $token: "color.primary" } },
+        caption: { color: "var(--site-color-muted)" },
+      },
+    };
+    expect(
+      [
+        ...usedOnPage(
+          document([coloured("p1", "#111111")]),
+          new Map(),
+          DEFAULT_LIMITS,
+          site
+        ),
+      ].sort()
+    ).toEqual(["color.muted", "color.primary"]);
+  });
+
   it("reads a component placed inside itself once", () => {
     const components = new Map<string, BlockDocument>([
       [
