@@ -171,29 +171,18 @@ function useSettingsTabs({
   place: SettingsPlace | null;
   onOpenChange: (open: boolean) => void;
 }) {
-  const fields = usePageFields(fieldName);
-  const showsFields = page && fields !== null;
+  const pageFields = usePageFields(fieldName);
+  const fields = page ? pageFields : null;
   const tabs = useChosenTab();
-  const placeTabs = usePlaceTabs({
-    place: PAGE_BUILDER_SETTINGS_PLACE,
-    context: place?.context ?? null,
-    ...(place === null
-      ? {}
-      : {
-          tabProps: {
-            ...place.tabProps,
-            openGeneral: () => tabs.choose(GENERAL_TAB),
-          },
-        }),
-  });
+  const placeTabs = usePlaceTabs(
+    placeTabsOf(place, () => tabs.choose(GENERAL_TAB))
+  );
   const ids = [
     GENERAL_TAB,
-    ...(showsFields ? [FIELDS_TAB] : []),
+    ...(fields === null ? [] : [FIELDS_TAB]),
     ...placeTabs.map(tab => tab.id),
   ];
-  // The page's content is on Fields; a document that is not a page keeps it
-  // on General; a page with nothing left for Fields shows none of it here.
-  const contentTab = page ? (showsFields ? FIELDS_TAB : null) : GENERAL_TAB;
+  const contentTab = contentTabOf(page, fields !== null);
   useShowMe({
     contentTab,
     placeTabs,
@@ -203,7 +192,7 @@ function useSettingsTabs({
     },
   });
   return {
-    fields: showsFields ? fields : null,
+    fields,
     placeTabs,
     shown: ids.includes(tabs.chosen) ? tabs.chosen : GENERAL_TAB,
     choose: tabs.choose,
@@ -351,8 +340,39 @@ function SettingsBody({
 }
 
 /**
+ * Where the page's own content is shown here: on Fields for a page, on
+ * General for a document that is not one, and nowhere for a page with
+ * nothing left for Fields.
+ */
+function contentTabOf(page: boolean, showsFields: boolean): string | null {
+  if (!page) return GENERAL_TAB;
+  return showsFields ? FIELDS_TAB : null;
+}
+
+/**
+ * What the place's tabs are read with: the document's context, and the
+ * page's props with a way back to General; none for a document that offers
+ * no place.
+ */
+function placeTabsOf(
+  place: SettingsPlace | null,
+  openGeneral: () => void
+): Parameters<typeof usePlaceTabs>[0] {
+  if (place === null) {
+    return { place: PAGE_BUILDER_SETTINGS_PLACE, context: null };
+  }
+  return {
+    place: PAGE_BUILDER_SETTINGS_PLACE,
+    context: place.context,
+    tabProps: { ...place.tabProps, openGeneral },
+  };
+}
+
+/**
  * The site's settings read, while Page settings is open, and whether Site
- * settings is open over it: offered to a role that may change them.
+ * settings is open over it: offered to a role that may change them. Closed
+ * with Page settings, from wherever that closes (the editor giving way to
+ * its narrow-window notice among them), so it never comes back by itself.
  */
 function useSiteSettingsEntry(open: boolean) {
   const read = usePluginRoute<SiteSettingsRead>({
@@ -362,6 +382,7 @@ function useSiteSettingsEntry(open: boolean) {
     enabled: open,
   });
   const [siteOpen, setOpen] = useState(false);
+  if (!open && siteOpen) setOpen(false);
   return {
     read,
     open: siteOpen,

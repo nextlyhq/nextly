@@ -1046,6 +1046,37 @@ describe("Site settings", () => {
     );
   });
 
+  it("closes with Page settings, and stays closed when Page settings opens again", async () => {
+    const element = (isOpen: boolean): ReactElement => (
+      <SettingsDialog
+        open={isOpen}
+        onOpenChange={vi.fn()}
+        returnFocus={() => null}
+        kind="page"
+        pageTitle="Pricing"
+        fieldName="layout"
+        place={PAGE_PLACE}
+        share={{ title: "Who we are" }}
+        seoFields
+        breakpoints={{
+          value: { viewport: [], container: [] },
+          onSave: vi.fn(),
+          status: "ready",
+          refresh: vi.fn(),
+        }}
+      />
+    );
+    const view = render(element(true));
+    await openSite();
+    // The editor gives way to its narrow-window notice: Page settings closes.
+    view.rerender(element(false));
+    view.rerender(element(true));
+    expect(
+      screen.getByRole("dialog", { name: "Page settings · Pricing" })
+    ).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Site settings" })).toBeNull();
+  });
+
   it("closes, and its way in goes, when the permission goes away", async () => {
     siteRead = undefined;
     siteError = new Error("Network down");
