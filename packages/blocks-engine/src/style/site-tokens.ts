@@ -138,6 +138,12 @@ export interface SiteToken {
    */
   fluid?: { readonly small: number; readonly large: number };
   /**
+   * The named group a colour is listed under in the Design panel ("Brand",
+   * "Text and surfaces"). Display-only, as `label` is: never emitted, and a
+   * group never changes the code name, so moving a colour moves no CSS.
+   */
+  group?: string;
+  /**
    * Fields found under THIS system's own extension key that this build does not
    * read, kept so it can write them back out.
    *
@@ -181,6 +187,13 @@ export interface SiteTokenSet {
    * remakes those values.
    */
   fluidRange?: { readonly min: number; readonly max: number };
+  /**
+   * The site's colours in the order its authors put them, by identity.
+   * Colours it does not name follow in the set's own order, so a site that
+   * never reorders stores nothing. Display-only: the Design panel and every
+   * colour picker list colours in this order, and nothing is emitted from it.
+   */
+  order?: readonly string[];
 }
 
 /**
@@ -726,6 +739,8 @@ export function resolveSiteTokens(override?: SiteTokenSet): SiteTokenSet {
     ...(override?.fluidRange === undefined
       ? {}
       : { fluidRange: override.fluidRange }),
+    // Site-wide as well: the order the site's colours are listed in.
+    ...(override?.order === undefined ? {} : { order: override.order }),
   };
 }
 
@@ -737,20 +752,25 @@ export function defaultSiteTokens(): SiteToken[] {
       values: { light: "72rem" },
       description: "How wide a centred container may grow.",
     },
+    // The brand colour first: the Design panel lists the site's colours in
+    // this order, and "Brand" comes before "Text and surfaces".
+    {
+      name: "color.primary",
+      kind: "color",
+      group: "Brand",
+      values: { light: "#2563eb", dark: "#60a5fa" },
+    },
     {
       name: "color.text",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#111827", dark: "#f9fafb" },
     },
     {
       name: "color.background",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#ffffff", dark: "#0b0f19" },
-    },
-    {
-      name: "color.primary",
-      kind: "color",
-      values: { light: "#2563eb", dark: "#60a5fa" },
     },
     /**
      * A raised surface: a card, a panel, a table header. DISTINCT from
@@ -772,6 +792,7 @@ export function defaultSiteTokens(): SiteToken[] {
     {
       name: "color.surface",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#f9fafb", dark: "#151b2b" },
     },
     /**
@@ -793,6 +814,7 @@ export function defaultSiteTokens(): SiteToken[] {
     {
       name: "color.border",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#e5e7eb", dark: "#1f2937" },
     },
     /**
@@ -822,6 +844,7 @@ export function defaultSiteTokens(): SiteToken[] {
     {
       name: "color.border-strong",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#6b7280", dark: "#9ca3af" },
     },
     /**
@@ -835,6 +858,7 @@ export function defaultSiteTokens(): SiteToken[] {
     {
       name: "color.muted",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#6b7280", dark: "#9ca3af" },
     },
     { name: "font.body", kind: "fontFamily", values: { light: "system-ui" } },

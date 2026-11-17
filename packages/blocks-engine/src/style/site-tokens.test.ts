@@ -1083,6 +1083,32 @@ describe("stored data reaching the stylesheet", () => {
 });
 
 describe("resolveSiteTokens", () => {
+  it("keeps the site's colour order, a site-wide setting like the prefix", () => {
+    const resolved = resolveSiteTokens({
+      tokens: [],
+      order: ["color.text", "color.primary"],
+    });
+    expect(resolved.order).toEqual(["color.text", "color.primary"]);
+    expect(resolveSiteTokens({ tokens: [] })).not.toHaveProperty("order");
+  });
+
+  it("starts a site's colours in two groups: Brand, and Text and surfaces", () => {
+    const groups = Object.fromEntries(
+      resolveSiteTokens()
+        .tokens.filter(token => token.kind === "color")
+        .map(token => [token.name, token.group])
+    );
+    expect(groups).toEqual({
+      "color.primary": "Brand",
+      "color.text": "Text and surfaces",
+      "color.muted": "Text and surfaces",
+      "color.background": "Text and surfaces",
+      "color.surface": "Text and surfaces",
+      "color.border": "Text and surfaces",
+      "color.border-strong": "Text and surfaces",
+    });
+  });
+
   it("keeps the site's fluid range, a site-wide setting like the prefix", () => {
     // Dropped here, a reopened editor read the default range while the stored
     // sizes were made across the site's own, and the next "Make fluid" used
