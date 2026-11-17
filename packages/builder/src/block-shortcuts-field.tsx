@@ -7,6 +7,7 @@
  */
 import {
   findNode,
+  type BlockNode,
   type BreakpointId,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
@@ -237,27 +238,8 @@ export function BlockShortcutsControl({
     if (op !== null) editor.apply(op);
   };
   if (node.type === ICON_BLOCK) {
-    const iconSize = iconSizeOf(node, at, reaching);
     return (
-      <div className="nx-block-shortcuts" data-control="icon-size">
-        <SettingSlot tab="style" ids={[SHORTCUT_IDS.size]}>
-          <ChoiceRow
-            label="Size"
-            options={["small", "medium", "large"] as const}
-            on={iconSize}
-            labels={SIZE_LABELS}
-            writes={ICON_SIZE_WRITES}
-            hint={
-              iconSize === undefined
-                ? "Custom: the font size below is set another way."
-                : "Sets the icon's font size, which its glyph is drawn at."
-            }
-            onChoose={choice =>
-              apply(planIconSize(node, choice, at, reaching))
-            }
-          />
-        </SettingSlot>
-      </div>
+      <IconSizeRow node={node} at={at} reaching={reaching} apply={apply} />
     );
   }
   if (node.type !== BUTTON_BLOCK) return null;
@@ -297,6 +279,40 @@ export function BlockShortcutsControl({
         <p className="nx-inspector__note">
           As wide as its container, here and below.
         </p>
+      </SettingSlot>
+    </div>
+  );
+}
+
+/** An Icon's Size, at the top of its Size section: the font size its glyph is drawn at. */
+function IconSizeRow({
+  node,
+  at,
+  reaching,
+  apply,
+}: {
+  node: BlockNode;
+  at: ShortcutAt;
+  reaching: Reaching | undefined;
+  apply: (op: BuilderOp | null) => void;
+}): React.JSX.Element {
+  const iconSize = iconSizeOf(node, at, reaching);
+  return (
+    <div className="nx-block-shortcuts" data-control="icon-size">
+      <SettingSlot tab="style" ids={[SHORTCUT_IDS.size]}>
+        <ChoiceRow
+          label="Size"
+          options={["small", "medium", "large"] as const}
+          on={iconSize}
+          labels={SIZE_LABELS}
+          writes={ICON_SIZE_WRITES}
+          hint={
+            iconSize === undefined
+              ? "Custom: the font size below is set another way."
+              : "Sets the icon's font size, which its glyph is drawn at."
+          }
+          onChoose={choice => apply(planIconSize(node, choice, at, reaching))}
+        />
       </SettingSlot>
     </div>
   );

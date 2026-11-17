@@ -18,7 +18,7 @@ import type { BuilderOp } from "./op-vocabulary";
 import { readStyleValue } from "./style-values";
 
 /** The block a marker note belongs to. */
-export const LIST_BLOCK = "core/list";
+const LIST_BLOCK = "core/list";
 
 /** The style property a List's own marker is stored under. */
 const MARKER = "listStyleType";
