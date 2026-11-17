@@ -137,7 +137,10 @@ test("keeps a folded group folded across a reload, and opens every group on a fr
   await expect(colours).toHaveAttribute("aria-expanded", "true");
   await colours.click();
   await expect(colours).toHaveAttribute("aria-expanded", "false");
-  await expect(panel.locator(".nx-vars__row")).toHaveCount(0);
+  // Its own rows are gone; the other named groups of colours keep theirs.
+  await expect(
+    panel.locator('[data-colour-group="Text and surfaces"] .nx-vars__row')
+  ).toHaveCount(0);
 
   await page.reload();
   await openDesign(page);
