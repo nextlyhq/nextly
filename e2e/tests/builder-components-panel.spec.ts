@@ -344,25 +344,29 @@ test.describe("the Components panel", () => {
     expect(await shape(page.request, id)).toEqual([`component:${component}`]);
   });
 
-  test("starts an empty page from the start card on it", async ({ page }) => {
+  test("starts an empty page from the start area on it", async ({ page }) => {
     const title = `Start ${stamp()}`;
     const component = await createComponent(page.request, title);
     const id = await createPage(page.request, true);
     await openBuilder(page, id);
 
-    await expect(page.getByText("Start your page")).toBeVisible();
-    await page.getByRole("button", { name: "Add section" }).click();
-    await page.getByRole("combobox", { name: "Insert a block" }).fill(title);
-    await tile(page, title).click();
+    const start = page.locator(".nx-page-start");
+    await expect(start.getByRole("heading")).toHaveText(/^Start building /);
+    await start.getByRole("button", { name: "Add a block" }).click();
+    // The in-place picker's search finds components too.
+    const picker = page.getByRole("dialog", { name: "Add a block" });
+    await picker.getByRole("combobox", { name: "Search blocks" }).fill(title);
+    await picker.getByRole("option", { name: new RegExp(title) }).click();
     await saveDraft(page);
 
     expect(await shape(page.request, id)).toEqual([`component:${component}`]);
-    await expect(page.locator(".nx-page-inserters__start")).toHaveCount(0);
+    await expect(start).toHaveCount(0);
   });
 
   test("takes a drag anywhere on an empty page", async ({ page }) => {
-    // The start card promises "drag one here": aimed low on the page, well
-    // clear of the card, the drop still lands, as the page's one section.
+    // The start area promises "or drag a block here": aimed low on the page,
+    // well clear of the area, the drop still lands, as the page's one
+    // section.
     const title = `Dropped ${stamp()}`;
     const component = await createComponent(page.request, title);
     const id = await createPage(page.request, true);
@@ -381,8 +385,12 @@ test.describe("the Components panel", () => {
     await page.mouse.move(x + 24, y, { steps: 4 });
     await page.mouse.move(x + 24, aimY, { steps: 8 });
     await page.mouse.move(to.x + to.width / 2, aimY, { steps: 12 });
-    // The start card goes while the drag is under way.
-    await expect(page.locator(".nx-page-inserters__start")).toHaveCount(0);
+    // The start area stays while the drag is under way, drawn as where it
+    // drops.
+    await expect(page.locator(".nx-page-start")).toHaveAttribute(
+      "data-drop-target",
+      ""
+    );
     await page.mouse.up();
     await saveDraft(page);
 
