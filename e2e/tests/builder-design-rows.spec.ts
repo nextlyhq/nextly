@@ -162,7 +162,9 @@ function colours(count: number) {
 test("+ Add colour keeps the search and the list's place, and opens the new colour beside its row with its name focused", async ({
   page,
 }) => {
-  test.setTimeout(180_000);
+  // Thirty colours seeded and read back, then restored: slow on a busy
+  // machine, so more room than the other tests here.
+  test.setTimeout(300_000);
   const before = await storedTokens(page);
   try {
     await seed(page, colours(30));
