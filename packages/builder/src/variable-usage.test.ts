@@ -109,8 +109,8 @@ describe("what Remove may do", () => {
     expect(variableRemoval(reach(1, [], false))).toBe("in-use");
   });
 
-  it("waits while a zero is not counted whole", () => {
-    expect(variableRemoval(reach(0, [], false))).toBe("not-whole");
+  it("goes ahead while a zero is not counted whole: the save counts and decides", () => {
+    expect(variableRemoval(reach(0, [], false))).toBe("free");
   });
 
   it("is unread before the usage is read", () => {
@@ -130,11 +130,10 @@ describe("the editor's status line", () => {
     );
   });
 
-  it("says it is unused, or that the uses are still being counted", () => {
+  it("says it is unused, or that it is not counted yet", () => {
     expect(variableStatus(reach(0))).toBe("Not used anywhere");
-    expect(variableStatus(reach(0, [], false))).toBe(
-      "Counting where it's used…"
-    );
+    // Not "counting": nothing may be.
+    expect(variableStatus(reach(0, [], false))).toBe("Not counted yet");
   });
 
   it("says nothing before the usage is read", () => {

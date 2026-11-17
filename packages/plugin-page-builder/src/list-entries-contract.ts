@@ -98,9 +98,10 @@ export interface ListEntriesNamedRequest {
     readonly node?: string;
     /**
      * The reads the canvas's draw has left: the run may spend no more, so a
-     * page of many lists shares one allowance across their runs.
+     * page of many lists shares one allowance across their runs. `null` is
+     * no limit, for a site that sets none.
      */
-    readonly allowance?: number;
+    readonly allowance?: number | null;
   };
 }
 

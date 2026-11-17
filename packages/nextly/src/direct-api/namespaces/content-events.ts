@@ -9,7 +9,6 @@
  * server code (`overrideAccess`, the default) reads without one.
  *
  * @module direct-api/namespaces/content-events
- * @experimental Until the content-history feature is complete.
  */
 import {
   readSubjectEvents,
@@ -27,7 +26,6 @@ import { accessOptions, mergeConfig, runAsCaller } from "./helpers";
 export type ContentEventsListArgs = DirectAPIConfig &
   SubjectEventsQuery & { subject: ContentEventSubject };
 
-/** @experimental */
 export interface ContentEventsNamespace {
   /**
    * A page of a subject's events, newest first, as `{ items, meta }`. The next

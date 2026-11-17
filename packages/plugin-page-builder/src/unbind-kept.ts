@@ -22,7 +22,6 @@ import {
   DOCUMENT_FORMAT_VERSION,
   ENTRY_LINK_PROPS,
   findNode,
-  getBlock,
   imageValueOf,
   isPlainRecord,
   LIST_ENTRY_SLOT,
@@ -37,6 +36,7 @@ import {
   type BindingScope,
   type BlockDocument,
   type BlockNode,
+  type BlockRegistryReader,
   type BoundValue,
   type PropSchema,
 } from "@nextlyhq/blocks-engine";
@@ -326,6 +326,8 @@ export interface UnbindSource {
   readonly locale?: string;
   /** The collection a template draws its entries from, for a template. */
   readonly templateTarget?: string;
+  /** The site's block registry, whose blocks the page is drawn with. */
+  readonly blocks: BlockRegistryReader;
 }
 
 /** Why the visitor's value can't be read here, and what to give instead. */
@@ -475,11 +477,7 @@ async function visitorRun(
   });
   if (bindings === undefined) return undefined;
   return {
-    run: react.pageBindingRun(
-      bindings,
-      source.locale,
-      react.registeredBlocks()
-    ),
+    run: react.pageBindingRun(bindings, source.locale, source.blocks),
     reader,
     alone,
   };
@@ -737,7 +735,7 @@ export async function planUnbind(
   if (binding === undefined) {
     return { refusal: `"${prop}" of block "${nodeId}" is not bound.` };
   }
-  const declared = getBlock(node.type)?.props;
+  const declared = source.blocks.get(node.type)?.props;
   if (typeof keep === "object" && "value" in keep) {
     return pairedBindingRefusal(
       node,

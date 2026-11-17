@@ -99,7 +99,7 @@ async function openFonts(page: Page): Promise<void> {
       .getByRole("button", { name: "Design", exact: true })
       .click();
   }
-  await panel.getByRole("tab", { name: "Fonts" }).click();
+  await panel.getByRole("tab", { name: "Type" }).click();
   await expect(
     panel.getByRole("heading", { name: "On this site" })
   ).toBeVisible();
@@ -199,7 +199,9 @@ test("a Google font added in Design is previewed, picked in the inspector, and l
       .click();
     const font = page.getByRole("button", { name: /^Font,/ });
     if (!(await font.isVisible())) {
-      await page.getByRole("button", { name: /^Typography/ }).click();
+      await page
+        .getByRole("button", { name: /^Text(\s?has changes)?$/ })
+        .click();
     }
     await font.click();
     const list = page.getByRole("listbox");

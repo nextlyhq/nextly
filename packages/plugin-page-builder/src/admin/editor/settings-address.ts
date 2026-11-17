@@ -5,9 +5,15 @@
  *
  * @module admin/editor/settings-address
  */
-import { useRef } from "react";
+import { usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import { useEffect, useRef } from "react";
 
-import type { PageReference } from "../../pages-search-contract";
+import { PAGE_BUILDER_PLUGIN_NAME } from "../../library-contract";
+import {
+  pageAddressPath,
+  type PageAddressResponse,
+  type PageReference,
+} from "../../pages-search-contract";
 
 /**
  * The page whose address Settings shows, and how its slug stands: the address
@@ -65,4 +71,41 @@ export function useSavedRevision(saved: unknown): number {
     seen.current = { saved, revision: seen.current.revision + 1 };
   }
   return seen.current.revision;
+}
+
+/** The address a page is saved at, as the server answers it. */
+export interface SavedAddressRead {
+  /** The answer, or undefined while it is read, has failed, or is not asked. */
+  data: PageAddressResponse | undefined;
+  /** Why the read failed, or null. */
+  error: unknown;
+}
+
+/**
+ * The address the page is saved at, read where it is shown (Settings, the
+ * right panel), and read again after each save, whichever field it changed:
+ * the host's path can name more than the slug, and the query's own key would
+ * not move. Not asked for a page never saved, or while `enabled` is false.
+ */
+export function useSavedAddress(
+  address: SettingsAddress | null,
+  enabled: boolean
+): SavedAddressRead {
+  const read = usePluginRoute<PageAddressResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path:
+      address === null ? "" : pageAddressPath(address.page, address.locale),
+    staleTime: 0,
+    enabled: enabled && address !== null,
+  });
+  const { refetch } = read;
+  const revision = address?.savedRevision;
+  const asked = address !== null;
+  const seen = useRef(revision);
+  useEffect(() => {
+    if (seen.current === revision) return;
+    seen.current = revision;
+    if (asked) void refetch();
+  }, [revision, asked, refetch]);
+  return { data: read.data, error: read.error };
 }

@@ -123,6 +123,10 @@
   min-height: 0;
   padding: 0.5rem 0.75rem 0.75rem;
   overflow-y: auto;
+  /* The scrollbar's room is kept whether a list scrolls or not, so the rows
+     keep their width as a tab's list grows past the panel or a classic
+     scrollbar comes and goes. */
+  scrollbar-gutter: stable;
 }
 
 .nx-vars__note {
@@ -451,10 +455,72 @@
   min-width: 0;
 }
 
+/* A size or a line height in a dark cell takes the room left of its way
+   back to light. */
+.nx-vars-editor__cell > .nx-vars-editor__size,
+.nx-vars-editor__cell > .nx-vars-editor__times {
+  flex: 1;
+}
+
 .nx-vars-editor__cell-action {
   flex: none;
   width: 24px;
   height: 24px;
+}
+
+/* A size: the block panel's number and unit menu, filling its cell. */
+.nx-vars-editor__size {
+  min-width: 0;
+}
+
+.nx-vars-editor__size > .nx-style-inspector__numeric {
+  width: 100%;
+}
+
+/* A line height read as a multiple of the text size: "×" at the end of the
+   field, inside it, so the pair's columns stay as wide as before. */
+.nx-vars-editor__times {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.nx-vars-editor__times > input {
+  min-width: 0;
+  padding-inline-end: 1.5rem;
+}
+
+.nx-vars-editor__times-mark {
+  position: absolute;
+  inset-inline-end: 0.5rem;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+  pointer-events: none;
+}
+
+/* A duration: its number, then its unit menu, ms or s. */
+.nx-vars-editor__duration {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.nx-vars-editor__duration-unit {
+  min-width: 3.5rem;
+  font-size: var(--text-xs);
+}
+
+/* The offer of pixels under a line height whose number reads as them. */
+.nx-vars-editor__hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.375rem;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
 }
 
 .nx-vars-editor__inline-action {
@@ -516,9 +582,12 @@
   line-height: 1.5;
 }
 
-/* A row whose usage is read takes a fourth column, its count. */
+/* A row whose usage is read takes a fourth column, its count, held at least
+   as wide as a count of three figures: the counts arrive after the rows, and
+   a column sized only to them would move every value beside it when they do.
+   Words wider than that ("Not counted yet") still get their room. */
 .nx-vars__row[data-counted] {
-  grid-template-columns: 22px minmax(0, 1fr) auto auto;
+  grid-template-columns: 22px minmax(0, 1fr) auto minmax(2rem, max-content);
 }
 
 /* The count of places: a bare number, right-aligned in figures of one
@@ -691,4 +760,77 @@
   padding-left: 1rem;
   font-size: var(--text-xs);
   color: var(--nx-muted-foreground);
+}
+
+/* A colour field holding text that is not a colour: an empty swatch crossed
+   by a line in the destructive colour, never a colour it does not hold. */
+.nx-vars__swatch[data-invalid] {
+  border-color: var(--nx-destructive);
+  background: linear-gradient(
+    to top right,
+    transparent calc(50% - 1px),
+    var(--nx-destructive) calc(50% - 1px),
+    var(--nx-destructive) calc(50% + 1px),
+    transparent calc(50% + 1px)
+  );
+}
+
+/* A Design group's heading as the button that folds it: its name, how many
+   it holds, and a chevron that turns while it is folded. */
+.nx-vars__group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.nx-vars__group-toggle:hover {
+  color: var(--nx-foreground);
+}
+.nx-vars__group-toggle:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+.nx-vars__group-toggle[aria-disabled="true"] {
+  cursor: default;
+}
+.nx-vars__group-chevron {
+  flex: none;
+  transition: transform 120ms ease;
+}
+.nx-vars__group-toggle[aria-expanded="false"] .nx-vars__group-chevron {
+  transform: rotate(-90deg);
+}
+.nx-vars__group-count {
+  font-weight: 400;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nx-vars__group-chevron {
+    transition: none;
+  }
+}
+
+/* The adds of groups hidden while they hold nothing, worded, at the end of
+   a tab, so the first such variable can still be made. */
+.nx-vars__hidden-adds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 0.5rem 0;
+}
+.nx-vars__worded-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }

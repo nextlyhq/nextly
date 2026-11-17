@@ -129,6 +129,7 @@ import {
 } from "./database/seeders/sample-content";
 import { container } from "./di/container";
 import { readServiceConfig } from "./dispatcher/dispatcher";
+import { handleEmailDeliveryRequest } from "./dispatcher/handlers/email-dispatcher";
 import {
   roleChangeCallerFor,
   runAsRoleChangeCaller,
@@ -440,6 +441,8 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "schema",
   "contentEvents",
   "rolesScreen",
+  // The Email hub's Activity reads (`/api/email-deliveries`).
+  "email",
 ]);
 
 /** Delegate a languages request to its handler, which manages its own auth and body. */
@@ -1684,6 +1687,13 @@ async function serveServiceRequest(
       message: `Unknown jobs operation: ${method}`,
       logContext: { service: "jobs", method },
     });
+  }
+
+  // ==================== EMAIL DELIVERIES DIRECT DISPATCH ====================
+  // The Email hub's Activity reads. The handler asks `read-email-deliveries`
+  // itself, from the system read policy, and reads its filters from the URL.
+  if (service === "email") {
+    return handleEmailDeliveryRequest(req, method);
   }
 
   // ==================== PREVIEW LINKS DIRECT DISPATCH ====================

@@ -31,6 +31,8 @@ vi.mock("@admin/hooks/queries/useVersions", async importOriginal => {
     useVersions: (...a: unknown[]) => useVersionsMock(...a),
     useBaselineDiff: actual.useBaselineDiff,
     useVersionDiff: (...a: unknown[]) => versionDiffMock(...a),
+    // Read only for a version a refused baseline names; none is refused here.
+    useVersion: () => ({ data: undefined }),
     scopeKey: actual.scopeKey,
   };
 });
@@ -246,7 +248,9 @@ describe("VersionComparePage, a baseline comparison it marks as seen", () => {
 
     rerender(baselinePage(other, "published"));
     await waitFor(() =>
-      expect(baselineDiffMock).toHaveBeenCalledWith(other, "published", 5)
+      expect(baselineDiffMock).toHaveBeenCalledWith(other, "published", {
+        to: 5,
+      })
     );
 
     expect(screen.queryByText(/Comparing version/)).toBeNull();

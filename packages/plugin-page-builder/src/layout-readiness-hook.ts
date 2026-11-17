@@ -31,11 +31,11 @@ export const LAYOUT_NOT_PUBLISHED_CODE = "LAYOUT_NOT_PUBLISHED";
 
 /** What the author reads when the site's default Layout shows meanwhile. */
 export const LAYOUT_NOT_PUBLISHED_MESSAGE =
-  "This page names a Layout that is not published, so it is shown inside the site's default Layout until that Layout is published.";
+  "This page names a header & footer set that is not published, so it is shown inside the site's default header & footer set until that header & footer set is published.";
 
 /** What the author reads when the site has no usable default to show. */
 export const LAYOUT_NOT_PUBLISHED_NO_DEFAULT_MESSAGE =
-  "This page names a Layout that is not published, so it is shown with no header or footer until that Layout is published.";
+  "This page names a header & footer set that is not published, so it is shown with no header or footer until that header & footer set is published.";
 
 /**
  * What the author reads when the page names a Layout their own reads do not
@@ -43,11 +43,11 @@ export const LAYOUT_NOT_PUBLISHED_NO_DEFAULT_MESSAGE =
  * promised about publishing it, since it may not exist.
  */
 export const LAYOUT_UNKNOWN_MESSAGE =
-  "This page names a Layout you can't view, or one that no longer exists. If it no longer exists, the site's default Layout shows instead.";
+  "This page names a header & footer set you can't view, or one that no longer exists. If it no longer exists, the site's default header & footer set shows instead.";
 
 /** The same, when the site has no usable default to show. */
 export const LAYOUT_UNKNOWN_NO_DEFAULT_MESSAGE =
-  "This page names a Layout you can't view, or one that no longer exists. If it no longer exists, the page shows no header or footer.";
+  "This page names a header & footer set you can't view, or one that no longer exists. If it no longer exists, the page shows no header or footer.";
 
 /** The publishing phases a page's write passes through. */
 const PUBLISHING_PHASES = ["afterCreate", "afterUpdate"] as const;

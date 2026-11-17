@@ -86,6 +86,18 @@ fieldset.nx-inspector__fields {
   color: var(--nx-destructive);
 }
 
+/* The class names a block's CSS classes field did not add, one per line. */
+.nx-css-classes__refused {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* "+ Add attribute": an edged button sized to its words, not a full row. */
+.nx-attributes__add {
+  gap: 0.375rem;
+}
+
 .nx-inspector__hint {
   margin: 0.25rem 0 0;
   font-size: var(--text-xs);
@@ -119,9 +131,9 @@ fieldset.nx-inspector__fields {
  *
  * Deliberately named by SLOT rather than by ramp step. Both resolve to a
  * different step per mode — amber-700 and cyan-600 on the light surface here,
- * the 500s on the dark one — because this inspector's background is
- * `--nx-builder-surface`, an alias of `--nx-muted`, and a 6px dot has to clear
- * the non-text minimum against it in both. Writing the step into the prose is
+ * the 500s on the dark one — because this inspector's background is the
+ * panel surface (`--nx-builder-panel`), and a 6px dot has to clear the
+ * non-text minimum against it in both. Writing the step into the prose is
  * what made this comment wrong the first time the two modes diverged.
  */
 .nx-style-inspector__provenance {

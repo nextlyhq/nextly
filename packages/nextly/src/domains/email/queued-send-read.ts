@@ -102,7 +102,7 @@ const STORED_FAILURE = z.object({
 });
 
 /** A stored failure as the row keeps it, or undefined for none or garbage. */
-function storedFailureOf(text: unknown): EmailFailure | undefined {
+export function storedFailureOf(text: unknown): EmailFailure | undefined {
   if (typeof text !== "string") return undefined;
   try {
     const parsed = STORED_FAILURE.safeParse(JSON.parse(text));
@@ -123,7 +123,9 @@ interface QueueRow {
 }
 
 /** How a row's state reads to its caller. */
-function standingOf(row: QueueRow): QueuedEmailStanding {
+export function standingOf(
+  row: Pick<QueueRow, "state" | "failure">
+): QueuedEmailStanding {
   if (row.state === "waiting" && row.failure !== null) return "retrying";
   return row.state as QueuedEmailStanding;
 }

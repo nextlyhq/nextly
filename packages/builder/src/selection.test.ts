@@ -18,7 +18,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
 
-import { layersOf, type LayerNode } from "./layers";
+import { layersOf, type LayerNode } from "./panels/layers/layers";
 import {
   EMPTY_SELECTION,
   applySelection,

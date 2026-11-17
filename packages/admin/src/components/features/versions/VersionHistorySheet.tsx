@@ -691,6 +691,8 @@ export function VersionHistorySheet({
         <SheetContent
           side="right"
           className="p-0 flex flex-col"
+          // Where the history panel is, for a check that reads it alone.
+          data-history-panel=""
           // Width from the same constant the reservation is made with, so the
           // space kept clear cannot drift from the space taken. Capped at the
           // window because the panel is wider than a phone.

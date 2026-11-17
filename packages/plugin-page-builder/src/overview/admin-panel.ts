@@ -124,14 +124,14 @@ function libraryItem(
  * page give one number, and none at all while nothing needs fixing.
  */
 export const PAGE_BUILDER_MENU: PluginMenuItem[] = [
-  libraryItem("Patterns", PATTERNS_SLUG, "LayoutTemplate"),
+  libraryItem("Saved sections", PATTERNS_SLUG, "LayoutTemplate"),
   libraryItem("Components", COMPONENTS_SLUG, "Component"),
   // A frame beside the content: the framed page with a header row is the
   // admin's icon for a Single.
-  libraryItem("Layouts", LAYOUTS_SLUG, "PanelRight"),
+  libraryItem("Header & footer", LAYOUTS_SLUG, "PanelRight"),
   // The designs collections' entries are drawn with, and where each
   // collection's entries are served.
-  libraryItem("Templates", TEMPLATES_SLUG, "LayoutDashboard"),
+  libraryItem("Collection templates", TEMPLATES_SLUG, "LayoutDashboard"),
   {
     label: "Bindings to fix",
     to: BINDINGS_TO_FIX_PAGE_HREF,

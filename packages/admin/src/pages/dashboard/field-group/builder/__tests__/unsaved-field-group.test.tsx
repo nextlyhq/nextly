@@ -28,12 +28,19 @@ vi.mock("@admin/hooks/queries/useFieldGroups", async importOriginal => ({
 }));
 
 const usedBy = vi.fn();
-vi.mock("@admin/components/features/schema-builder/FieldGroupUsedBy", () => ({
-  FieldGroupUsedBy: (props: { slug: string }) => {
-    usedBy(props.slug);
-    return null;
-  },
-}));
+vi.mock(
+  "@admin/components/features/schema-builder/FieldGroupUsedBy",
+  async importOriginal => ({
+    // The page counts places by the module's own rule; only the view is stood in for.
+    ...(await importOriginal<
+      typeof import("@admin/components/features/schema-builder/FieldGroupUsedBy")
+    >()),
+    FieldGroupUsedBy: (props: { slug: string }) => {
+      usedBy(props.slug);
+      return null;
+    },
+  })
+);
 
 const check = vi.fn();
 vi.mock("@admin/services/addressCheckApi", () => ({

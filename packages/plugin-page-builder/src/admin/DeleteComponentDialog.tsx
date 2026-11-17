@@ -642,11 +642,13 @@ function refusedFace(
         {layoutCount > 0 ? (
           <>
             {layoutCount === 1
-              ? "A Layout uses "
-              : `${String(layoutCount)} Layouts use `}
+              ? "A header & footer set uses "
+              : `${String(layoutCount)} header & footer sets use `}
             <Named name={name} />
             {". Choose a different component in "}
-            {layoutCount === 1 ? "that Layout" : "those Layouts"}
+            {layoutCount === 1
+              ? "that header & footer set"
+              : "those header & footer sets"}
             {" first."}
           </>
         ) : (
@@ -662,7 +664,7 @@ function refusedFace(
     body: (
       <div className="space-y-3">
         {layouts !== undefined && layoutCount > 0 ? (
-          <DocumentLinks list={layouts} label="Layouts" />
+          <DocumentLinks list={layouts} label="Header & footer sets" />
         ) : null}
         <LeftDocuments
           left={left}

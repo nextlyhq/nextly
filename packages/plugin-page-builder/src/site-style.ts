@@ -397,8 +397,28 @@ export function siteBreakpoints(style?: SiteStyleData): BreakpointSet {
  * block defaults: a wrong preview is trusted, an unstyled one is questioned.
  * `blockBases` is never part of site style — a block type's default look
  * belongs to the block's definition, not to a site's stored edits.
+ *
+ * The same style answers the same sheet object. The canvas, the Layout's
+ * header and footer around it and the entry page's small preview each keep
+ * what they drew while their inputs keep their identity, and the renderer
+ * keeps the compiled site sheet the same way; a new sheet object per render
+ * made every one of them draw and compile again for a selection or a
+ * keystroke. A style is read as a value: a new style is a new object.
  */
 export function siteSheet(style?: SiteStyleData): SiteSheetInput {
+  if (style === undefined) return NO_STYLE_SHEET;
+  const kept = SHEETS.get(style);
+  if (kept !== undefined) return kept;
+  const sheet = sheetOf(style);
+  SHEETS.set(style, sheet);
+  return sheet;
+}
+
+/** The sheets answered, per style, weakly: a sheet goes with its style. */
+const SHEETS = new WeakMap<SiteStyleData, SiteSheetInput>();
+
+/** {@link siteSheet}'s answer, made. */
+function sheetOf(style?: SiteStyleData): SiteSheetInput {
   return {
     ...(style?.tokens === undefined ? {} : { tokens: style.tokens }),
     ...(style?.fonts === undefined ? {} : { fonts: style.fonts }),
@@ -406,3 +426,6 @@ export function siteSheet(style?: SiteStyleData): SiteSheetInput {
     breakpoints: siteBreakpoints(style),
   };
 }
+
+/** The sheet for no style: breakpoints alone, the empty set. */
+const NO_STYLE_SHEET: SiteSheetInput = sheetOf();

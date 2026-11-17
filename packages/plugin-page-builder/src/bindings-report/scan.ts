@@ -34,6 +34,7 @@ import {
   walkNodes,
   type BindingSchemaRef,
   type BlockDocument,
+  type BlockRegistryReader,
   type DocumentLimits,
   type ResolvedBlockNode,
   type NamedQuerySource,
@@ -97,6 +98,8 @@ export interface BindingReportDeps {
   readonly kick?: () => void;
   /** The site's named queries, whose rows a list's item bindings read. */
   readonly namedQueries?: NamedQuerySource;
+  /** The site's block registry, whose definitions the bindings are read by. */
+  readonly blocks: BlockRegistryReader;
   /**
    * Whether a document of `collection` may hold blocks at all, known
    * without a read; absent, every collection may. A write to one that may
@@ -169,7 +172,10 @@ async function composedWith(
 async function valueRows(
   entryOf: Pick<HostAddress, "kind" | "slug">,
   value: unknown,
-  deps: Pick<BindingReportDeps, "shapesOf" | "limits" | "namedQueries">,
+  deps: Pick<
+    BindingReportDeps,
+    "shapesOf" | "limits" | "namedQueries" | "blocks"
+  >,
   components: ComponentSource | undefined
 ): Promise<{
   readonly rows: BindingReportRow[];
@@ -185,6 +191,7 @@ async function valueRows(
     {
       shapesOf: deps.shapesOf,
       maxNodes: deps.limits().maxNodes,
+      blocks: deps.blocks,
       ...(deps.namedQueries === undefined
         ? {}
         : { namedQueries: deps.namedQueries }),
@@ -222,7 +229,10 @@ function valueOf(read: ReadValue | null): unknown {
 async function documentRows(
   at: Pick<HostAddress, "kind" | "slug" | "id">,
   hosts: readonly HostCandidate[],
-  deps: Pick<BindingReportDeps, "shapesOf" | "limits" | "namedQueries">,
+  deps: Pick<
+    BindingReportDeps,
+    "shapesOf" | "limits" | "namedQueries" | "blocks"
+  >,
   reading: DocumentReading
 ): Promise<{
   readonly rows: BindingReportRow[];
@@ -255,7 +265,10 @@ async function documentRows(
 async function hostRows(
   { host, access, maybeShared }: HostCandidate,
   shared: Set<string>,
-  deps: Pick<BindingReportDeps, "shapesOf" | "limits" | "namedQueries">,
+  deps: Pick<
+    BindingReportDeps,
+    "shapesOf" | "limits" | "namedQueries" | "blocks"
+  >,
   reading: DocumentReading
 ): Promise<{
   readonly rows: BindingReportRow[];

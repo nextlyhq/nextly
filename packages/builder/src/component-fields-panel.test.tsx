@@ -250,6 +250,8 @@ describe("a prop row in a component's view", () => {
 
   it("lets each page hide the block, from the same icon on its Shown row", () => {
     const editor = mount(component(), "c1");
+    // Whether the block shows is one of Advanced's Visibility settings.
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
     fireEvent.click(
       screen.getByRole("button", { name: "Let each page hide Card" })
     );
@@ -409,6 +411,7 @@ describe("the icon's words, in plain terms", () => {
 
   it("words the Shown row's icon the same way", () => {
     mount(component(), "c1");
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
     const toggle = screen.getByRole("button", {
       name: "Let each page hide Card",
     });
@@ -543,6 +546,8 @@ describe("the component's fields, with nothing selected", () => {
     }
     render(<Host />);
     expect(screen.queryByRole("region", { name: "Fields" })).toBeNull();
-    expect(screen.getByText("Select a block to edit it.")).toBeTruthy();
+    expect(
+      document.querySelector('[data-empty="no-selection"]')
+    ).not.toBeNull();
   });
 });

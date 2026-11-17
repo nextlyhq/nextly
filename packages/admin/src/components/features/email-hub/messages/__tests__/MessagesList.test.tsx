@@ -23,6 +23,7 @@ vi.mock("@admin/hooks/queries/useEmailTemplates", () => ({
   useEmailTemplates: () => useEmailTemplates(),
   useDeleteEmailTemplate: () => ({ mutate: vi.fn(), isPending: false }),
   usePreviewEmailTemplate: () => ({ mutate: vi.fn(), isPending: false }),
+  useTemplateSenders: () => ({ data: undefined, isLoading: false }),
 }));
 
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
@@ -88,6 +89,10 @@ const EMAILS = [
     name: "Password reset",
     owner: { kind: "core" },
     description: "Someone asks to reset their password",
+    sentBy: {
+      declared: ["Someone asks to reset their password"],
+      referenced: [],
+    },
   }),
   email({
     slug: "welcome",
@@ -191,6 +196,31 @@ describe("MessagesList", () => {
     render(<MessagesList />);
     expect(
       within(table()).getByText("Someone asks to reset their password")
+    ).toBeTruthy();
+    expect(
+      within(table()).getAllByText("Not known: may be sent from code").length
+    ).toBeGreaterThan(0);
+    expect(
+      within(table()).getAllByText("Not sent by anything yet").length
+    ).toBeGreaterThan(0);
+  });
+
+  it("says the senders couldn't all be checked when references are incomplete", () => {
+    useEmailTemplates.mockReturnValue({
+      data: [
+        email({
+          slug: "contact",
+          name: "Contact",
+          referencesComplete: false,
+        }),
+      ],
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+    render(<MessagesList />);
+    expect(
+      within(table()).getByText("Senders couldn't all be checked")
     ).toBeTruthy();
   });
 

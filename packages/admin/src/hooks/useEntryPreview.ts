@@ -428,11 +428,41 @@ function settle(
   if (outcome.kind === "report") onUnavailable?.(outcome.reason);
 }
 
+/**
+ * Runs the step a preview was asked to take in its claimed tab, answering
+ * whether to open; with no step it goes on. On `false`, or a throw, the
+ * claimed tab is closed, for the reason {@link settle} closes one. The step
+ * changes what is saved, never what the route is handed: the preview still
+ * renders the saved row only.
+ */
+async function stepGoesOn(
+  before: (() => Promise<boolean>) | undefined,
+  target: Window | null
+): Promise<boolean> {
+  if (before === undefined) return true;
+  let goOn = false;
+  try {
+    goOn = await before();
+  } finally {
+    if (!goOn) target?.close();
+  }
+  return goOn;
+}
+
 export interface UseEntryPreviewResult {
   /** Whether to offer the button at all. Known without a round trip. */
   isPreviewAvailable: boolean;
-  /** Resolve and open. Asynchronous: the URL comes from the server. */
-  openPreview: () => Promise<void>;
+  /**
+   * Resolve and open. Asynchronous: the URL comes from the server.
+   *
+   * `before`, when given, runs once the tab is claimed and before the address
+   * is asked for: a save that brings the stored row up to what the author
+   * sees. It answers whether to go on; on `false`, or when it throws, the
+   * claimed tab closes and nothing opens. It has said why itself, so nothing
+   * is reported here. It never runs when the popup is blocked, since nothing
+   * could open on its account.
+   */
+  openPreview: (before?: () => Promise<boolean>) => Promise<void>;
   /** Label for the preview button, defaulted where none was declared. */
   label: string;
   /**
@@ -490,30 +520,37 @@ export function useEntryPreview({
    * Three steps, each its own question: may this open at all, what context
    * does it open in, and what did the server say to do with it.
    */
-  const openPreview = useCallback(async () => {
-    const target = previewTarget(entry);
-    if (target === null) {
-      onUnavailable?.("unavailable");
-      return;
-    }
+  const openPreview = useCallback(
+    async (before?: () => Promise<boolean>) => {
+      const target = previewTarget(entry);
+      if (target === null) {
+        onUnavailable?.("unavailable");
+        return;
+      }
 
-    // Claimed before anything is awaited; see `claimTab`.
-    const claimed = claimTab(previewConfig?.openInNewTab !== false);
-    if (claimed === "blocked") {
-      onUnavailable?.("popupBlocked");
-      return;
-    }
+      // Claimed before anything is awaited; see `claimTab`.
+      const claimed = claimTab(previewConfig?.openInNewTab !== false);
+      if (claimed === "blocked") {
+        onUnavailable?.("popupBlocked");
+        return;
+      }
 
-    settle(
-      claimed.target,
-      await mintSelfPreview({
-        collection: collection.name,
-        entryId: target.entryId,
-        ...(locale === undefined ? {} : { locale }),
-      }),
-      onUnavailable
-    );
-  }, [collection.name, entry, locale, onUnavailable, previewConfig]);
+      // After the claim, so a step that awaits a round trip (a save) does not
+      // cost the click its gesture and get the popup blocked.
+      if (!(await stepGoesOn(before, claimed.target))) return;
+
+      settle(
+        claimed.target,
+        await mintSelfPreview({
+          collection: collection.name,
+          entryId: target.entryId,
+          ...(locale === undefined ? {} : { locale }),
+        }),
+        onUnavailable
+      );
+    },
+    [collection.name, entry, locale, onUnavailable, previewConfig]
+  );
 
   return {
     isPreviewAvailable,
