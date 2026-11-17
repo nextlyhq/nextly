@@ -49,6 +49,8 @@ import {
 import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import * as React from "react";
 
+import { propWrites } from "./code-hints";
+import { CssHint } from "./css-hint";
 import { CollectionControl, SortControl } from "./collection-loop-controls";
 import {
   CONTENT_CONTROL_TYPES,
@@ -392,9 +394,12 @@ function SelectControl({
         value={stored}
         onValueChange={next => onCommit(prop.name, next)}
       >
-        <SelectTrigger id={id}>
-          <SelectValue placeholder="Choose" />
-        </SelectTrigger>
+        {/* What the chosen option writes, on hover or keyboard focus. */}
+        <CssHint writes={propWrites(prop.schema, stored)}>
+          <SelectTrigger id={id}>
+            <SelectValue placeholder="Choose" />
+          </SelectTrigger>
+        </CssHint>
         <SelectContent>
           {prop.options.map((option, index) => {
             const written = shownCode(prop.schema, option, labels[index]);

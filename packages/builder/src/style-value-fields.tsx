@@ -26,6 +26,7 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { CssHint } from "./css-hint";
 import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
 import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { commitOnEnter } from "./commit-on-enter";
@@ -872,8 +873,9 @@ function ToggleField({
       {options.map(option => {
         const pressed = stored === option;
         return (
+          // What this option writes, on hover or keyboard focus.
+          <CssHint key={option} writes={`${cssProperty}: ${option}`}>
           <button
-            key={option}
             type="button"
             aria-pressed={pressed}
             // Marked on the BUTTONS rather than on the group, which carries the
@@ -887,10 +889,10 @@ function ToggleField({
             // which is the only way a group of options can reach unset without
             // spending a button on "neither".
             onClick={() => onCommit(pressed ? null : option)}
-            title={option}
           >
             {keywordLabel(cssProperty, option)}
           </button>
+          </CssHint>
         );
       })}
     </div>

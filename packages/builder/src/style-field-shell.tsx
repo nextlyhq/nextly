@@ -17,6 +17,8 @@ import { Label, TooltipProvider } from "@nextlyhq/ui";
 import { RotateCcw } from "lucide-react";
 import * as React from "react";
 
+import { leafWrites } from "./code-hints";
+import { CssHint, CssNamesLine, useDescribedWithNames } from "./css-hint";
 import { ChromeTooltip } from "./chrome-tooltip";
 import type { EditorState } from "./editor-state";
 import { InheritedValue } from "./inherited-value";
@@ -34,6 +36,7 @@ import {
   type ProvenanceAnswer,
   type ProvenanceOf,
   NamedAbove,
+  TokenPrefixContext,
   type EditedAddress,
 } from "./style-field-surroundings";
 import { targetKey, useFieldTarget } from "./style-field-target";
@@ -235,7 +238,12 @@ export function StyleControlField({
   // Computed once and used by both the control and its message: two spellings
   // of "is there an error" is the shape that drifts into a control described by
   // a message it is not marked invalid for.
-  const describedBy = issue === null ? undefined : errorId;
+  const namesId = `${id}-css`;
+  const describedBy = useDescribedWithNames(
+    issue === null ? undefined : errorId,
+    namesId
+  );
+  const tokenPrefix = React.useContext(TokenPrefixContext);
 
   if (!control.supported) {
     return (
@@ -252,6 +260,11 @@ export function StyleControlField({
   }
 
   return (
+    // What it writes, on hover or keyboard focus anywhere in the field.
+    <CssHint
+      summary={summary}
+      writes={leafWrites(control.leaf, stored, tokenPrefix)}
+    >
     <div
       className="nx-inspector__field"
       data-control={control.kind}
@@ -268,7 +281,7 @@ export function StyleControlField({
           htmlFor={id}
           readOnly={readOnly}
           focusOnly={labelFocusOnly(control.leaf, stored)}
-          title={summary}
+          title={undefined}
           label={label}
           answer={answer}
           editing={editing}
@@ -291,6 +304,7 @@ export function StyleControlField({
           />
         </InheritedValue.Provider>
       </LabelScrubRow>
+      <CssNamesLine id={namesId} names={[control.leaf.cssProperty]} />
       <BreakpointAction
         answer={answer}
         label={actionName}
@@ -313,6 +327,7 @@ export function StyleControlField({
       />
       <FieldIssue id={errorId} issue={issue} />
     </div>
+    </CssHint>
   );
 }
 
