@@ -72,6 +72,7 @@ const flows = vi.hoisted(() => ({
     entryId: string | null;
     published: boolean;
     leave: (action: "delete" | "unpublish", moved: readonly string[]) => void;
+    afterStoppedMove?: (mayHaveMoved: readonly string[]) => void;
   }>,
 }));
 vi.mock("../make-default-action", () => ({
@@ -82,6 +83,7 @@ vi.mock("../RemoveLayoutAction", () => ({
     entryId: string | null;
     published: boolean;
     leave: (action: "delete" | "unpublish", moved: readonly string[]) => void;
+    afterStoppedMove?: (mayHaveMoved: readonly string[]) => void;
   }) => {
     flows.removeArgs.push(args);
     return { open: () => flows.remove(args.entryId), dialog: null };
@@ -462,8 +464,16 @@ describe("a set's menu", () => {
       act(() => landing?.leave("delete", ["other"]));
       expect(reload).not.toHaveBeenCalled();
       // The page being edited moved: it is read again.
+      refetch.mockClear();
       act(() => landing?.leave("delete", ["other", "current"]));
       expect(reload).toHaveBeenCalledTimes(1);
+      // Read again before the reload, so a cancelled one leaves nothing stale.
+      expect(refetch).toHaveBeenCalled();
+      // A move stopped part way, which may have moved the page being edited.
+      act(() => landing?.afterStoppedMove?.(["current"]));
+      expect(reload).toHaveBeenCalledTimes(2);
+      act(() => landing?.afterStoppedMove?.(["other"]));
+      expect(reload).toHaveBeenCalledTimes(2);
     } finally {
       Object.defineProperty(window, "location", {
         configurable: true,

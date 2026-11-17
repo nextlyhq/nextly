@@ -342,6 +342,14 @@ function SetRow({
   onWritten: () => void;
 }): React.JSX.Element {
   const [renaming, setRenaming] = React.useState(false);
+  // The panel's sets and the canvas's choices are read again first, so a
+  // reload the author then cancels leaves nothing stale.
+  const readAgain = (moved: readonly string[]): void => {
+    onWritten();
+    if (currentPageId !== null && moved.includes(currentPageId)) {
+      window.location.reload();
+    }
+  };
   // The set's own Remove dialog, as its form opens it; the panel stays.
   const removal = useRemoveLayout({
     entryId: set.id,
@@ -349,13 +357,9 @@ function SetRow({
     // A removal that moved the page being edited onto the site default has
     // changed that page on the server: the editor reads it again (asking
     // first if it holds unsaved work), so it draws the default it now uses.
-    leave: (_action, moved) => {
-      if (currentPageId !== null && moved.includes(currentPageId)) {
-        window.location.reload();
-        return;
-      }
-      onWritten();
-    },
+    leave: (_action, moved) => readAgain(moved),
+    // A move stopped part way leaves the pages it moved on the default.
+    afterStoppedMove: readAgain,
     closeOnLeave: true,
   });
   const write = (run: () => Promise<unknown>) => {

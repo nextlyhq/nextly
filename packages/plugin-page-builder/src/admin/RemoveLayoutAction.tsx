@@ -222,6 +222,7 @@ export function useRemoveLayout({
   published,
   leave,
   closeOnLeave = false,
+  afterStoppedMove,
 }: {
   readonly entryId: string | null;
   readonly published: boolean;
@@ -238,6 +239,12 @@ export function useRemoveLayout({
    * Pages panel). On the set's own form it stays up while the page goes.
    */
   readonly closeOnLeave?: boolean;
+  /**
+   * When a move that began closes before the set was removed (stopped,
+   * refused or failed), with the pages it may have moved, by id: those
+   * already moved stay moved.
+   */
+  readonly afterStoppedMove?: (mayHaveMoved: readonly string[]) => void;
 }): { readonly open: () => void; readonly dialog: JSX.Element | null } {
   const [state, setState] = useState<DialogState>({ kind: "closed" });
   // Each opening of the dialog, numbered: an answer that arrives for an
@@ -247,6 +254,8 @@ export function useRemoveLayout({
   const movedAway = useRef<"delete" | "unpublish" | null>(null);
   // The pages that move took off the Layout, by id, for what follows.
   const movedPages = useRef<readonly string[]>([]);
+  // The pages a begun move may have changed, until it removes the set.
+  const moveBegun = useRef<readonly string[] | null>(null);
   // Nothing to remove while a Layout is being created.
   if (entryId === null || entryId === "" || entryId === "create") {
     return { open: () => undefined, dialog: null };
@@ -260,6 +269,9 @@ export function useRemoveLayout({
   const close = (): void => {
     opening.current += 1;
     setState({ kind: "closed" });
+    const begun = moveBegun.current;
+    moveBegun.current = null;
+    if (begun !== null) afterStoppedMove?.(begun);
   };
 
   const open = (): void => {
@@ -292,6 +304,7 @@ export function useRemoveLayout({
 
   /** What follows a removal, closing the dialog where the author stays. */
   const finish = (action: "delete" | "unpublish"): void => {
+    moveBegun.current = null;
     if (closeOnLeave) setState({ kind: "closed" });
     leave(action, movedPages.current);
   };
@@ -357,6 +370,9 @@ export function useRemoveLayout({
             onRemoved={action => {
               movedAway.current = action;
               movedPages.current = state.check.pages.map(page => page.id);
+            }}
+            onStarted={() => {
+              moveBegun.current = state.check.pages.map(page => page.id);
             }}
             onFinished={finish}
           />
