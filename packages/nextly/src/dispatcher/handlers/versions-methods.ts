@@ -426,7 +426,16 @@ export async function getVersionForDocument(
  * none) is the version's own, never the request's. Idempotent within a visit.
  */
 export async function markVersionSeenForDocument(
-  args: VersionMethodArgs & { versionNo: number }
+  args: VersionMethodArgs & {
+    versionNo: number;
+    /**
+     * A trusted server call: the server showed the version under its own
+     * bypass, so the person's read rules are not asked. The person, the
+     * document and the version must still exist, as the mark's own locks and
+     * lookup establish.
+     */
+    trusted?: boolean;
+  }
 ): Promise<{ versionNo: number; locale: string | null }> {
   if (!Number.isInteger(args.versionNo) || args.versionNo < 1) {
     throw NextlyError.validation({
@@ -450,13 +459,18 @@ export async function markVersionSeenForDocument(
     });
   }
 
-  await assertVersionDocumentReadable(
-    args.scopeKind,
-    args.slug,
-    args.entryId,
-    args.user,
-    args.authenticatedScope
-  );
+  // A checked call is judged by the document's read gate, which asks the read
+  // rule as the person; a trusted one is not, since the server, not the
+  // person's own rules, decided what was shown.
+  if (args.trusted !== true) {
+    await assertVersionDocumentReadable(
+      args.scopeKind,
+      args.slug,
+      args.entryId,
+      args.user,
+      args.authenticatedScope
+    );
+  }
 
   const ref = {
     scopeKind: args.scopeKind,
@@ -467,10 +481,13 @@ export async function markVersionSeenForDocument(
     NextlyError.notFound({
       logContext: { reason, ...ref, versionNo: args.versionNo },
     });
-  // The version's language is asked about before anything is written. A
-  // version's language never changes, so the mark below records the part
-  // judged here.
-  if ((await assertVersionLanguageReadable(args, args.versionNo)) === undefined)
+  // The version's language is asked about before anything is written, on a
+  // checked call. A version's language never changes, so the mark below
+  // records the part judged here; a missing version is refused below too.
+  if (
+    args.trusted !== true &&
+    (await assertVersionLanguageReadable(args, args.versionNo)) === undefined
+  )
     throw notFound("mark-seen-version-missing");
   // One transaction holding the locks the sweeps of markers take: the
   // person's account row (account deletion), then the entity's registry row

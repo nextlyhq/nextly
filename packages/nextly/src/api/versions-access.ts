@@ -32,7 +32,6 @@ import { storesPerLanguage } from "../domains/i18n/per-language-storage";
 import {
   resolveSingleDocumentId,
   singleDocumentEditable,
-  singleDocumentReadable,
 } from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
 import { resolveComparisonPair } from "../domains/versions/comparison-baselines";
@@ -60,16 +59,16 @@ import {
   type VersionRef,
 } from "../domains/versions/versions-repository";
 import type { VersionListOptions } from "../domains/versions/versions-service";
-import {
-  errorFromServiceEnvelope,
-  type ServiceErrorEnvelope,
-} from "../errors/from-service-envelope";
 import { NextlyError } from "../errors/nextly-error";
 import { rethrowIfRuleCouldNotRun } from "../errors/rule-could-not-run";
 import type {
   ResolvedVersionsConfig,
   VersionScopeKind,
 } from "../schemas/versions/types";
+import {
+  documentReadableIn,
+  type DocumentReadHookInputs,
+} from "../services/lib/document-readable-in";
 import { resolveRoleSlugs } from "../services/lib/permissions";
 import {
   applyFieldReadAccess,
@@ -140,15 +139,11 @@ export async function requireRouteVersionReadAccess(
 }
 
 /**
- * What the document's read hooks are handed besides the caller: the request
- * behind the read and the context its caller passed. A hook that narrows reads
- * by either must see the same values here as on the caller's own document read,
- * or the probe answers a different caller than the one asking.
+ * What the document's read hooks are handed besides the caller. Declared
+ * beside the per-language document check that hands them on, and re-exported
+ * here for the history gates' callers.
  */
-export interface DocumentReadHookInputs {
-  request?: Request;
-  context?: Record<string, unknown>;
-}
+export type { DocumentReadHookInputs };
 
 /**
  * Confirm a caller may see this document's history, assuming they are already
@@ -362,7 +357,9 @@ export async function assertVersionLanguageReadable(
  * The languages of a document the caller may read its history in.
  *
  * Asked of the document's read in each language, because a read rule or hook
- * may answer differently per language: it is handed that language's values.
+ * may answer differently per language: it is handed that language's values,
+ * and the collection's or Single's own read rule is asked in that language
+ * rather than taken as answered by the route's allow.
  * A language no longer configured is never readable here. A read in it would
  * resolve to the default language and answer for that instead, which is not
  * an answer about the entries written in it. That includes every language
@@ -504,15 +501,21 @@ async function canUpdateLiveSingle(
 }
 
 /**
- * Whether the caller can read the live document, using the same service the
- * normal read path uses so the collection's own gate applies identically.
+ * Whether the caller can read the live document, in `locale` (the default
+ * language where it names none), for its history in that language.
  *
- * A denial (403) and a missing document (404) both mean "no history for you".
- * Any other failure is the read failing rather than refusing — a database not
- * migrated for the collection, a component/relationship load error, a throwing
- * afterRead hook — and is re-thrown with the read's own error, so the route
- * answers what the document read would instead of disguising it as missing
- * content.
+ * Asked of {@link documentReadableIn}, the one per-language document check
+ * the workflow notices' Single rows ask too, with nothing attested: the
+ * collection's or Single's own read rule is asked in the language its history
+ * is about, so a language the rule refuses this caller has no readable
+ * history. That check keeps what this gate needs: `status: "all"` so a draft
+ * still has history, a scoped API key judged on its own grant, the read's own
+ * report of the row it loaded for a collection, and for a Single its live id
+ * resolved without materializing it. A refusal and a missing document both
+ * answer `false`; any other failure is thrown with the read's own error.
+ *
+ * A history scope other than a Single is read as a collection, as it always
+ * has been.
  */
 async function canReadLiveDocument(
   scopeKind: VersionScopeKind,
@@ -524,88 +527,19 @@ async function canReadLiveDocument(
   // The language to read the document in; absent reads the default one.
   locale?: string
 ): Promise<boolean> {
-  if (scopeKind === "single") {
-    return canReadLiveSingle(
+  return documentReadableIn(
+    {
+      kind: scopeKind === "single" ? "single" : "collection",
       slug,
       entryId,
+    },
+    {
       user,
-      authenticatedScope,
-      hookInputs,
-      locale
-    );
-  }
-
-  const collections = getService("collectionsHandler");
-  const result = await collections.getEntry({
-    collectionName: slug,
-    entryId,
-    user,
-    overrideAccess: false,
-    // The route already authenticated and authorized the caller, so skip only
-    // the redundant RBAC re-check (which would reject a scoped API key by
-    // resolving its creator's stored roles). Document-level rules still run.
-    routeAuthorized: true,
-    // A scoped API key is judged on its OWN read grant, so a super-admin-owned
-    // key does not skip the collection's read gate.
-    authenticatedScope,
-    // Match the authenticated read path: without this, a status-enabled
-    // collection filters to published only, and a draft would report no
-    // history — exactly when an author needs it most.
-    status: "all",
-    // The request and context the caller's own read would carry, for hooks
-    // that narrow reads by them.
-    ...hookInputs,
-    // The read rules and hooks are handed this language's values.
-    ...(locale === undefined ? {} : { locale }),
-  });
-  if (!interpretReadResult(result)) return false;
-  // The read must be of the document asked about. A `beforeOperation` hook may
-  // rewrite the id a read resolves, and a read that passed on another document
-  // would authorize this one's history by that document's rules. The id is the
-  // read's own report of the row it loaded, not `data.id`: an `afterRead` hook
-  // may project the output without it.
-  return result.resolvedEntryId === entryId;
-}
-
-/**
- * Single variant. Reads the backing row directly first, because
- * `SingleEntryService.get` MATERIALIZES a missing Single (creating the default
- * document, and for a versioned Single capturing an initial version). A version
- * request is a read, so it must never write; skipping straight to 404 when no
- * row exists is also correct, since an unmaterialized Single has no history.
- *
- * The row's id is then compared with the requested `entryId`: version rows
- * outlive the document they came from, so a Single recreated under a new id
- * must not expose the previous document's snapshots.
- */
-async function canReadLiveSingle(
-  slug: string,
-  entryId: string,
-  user: UserContext,
-  authenticatedScope: AuthenticatedScope | undefined,
-  hookInputs: DocumentReadHookInputs,
-  locale: string | undefined
-): Promise<boolean> {
-  const registry = getService("singleRegistryService");
-  const record = await registry.getSingleBySlug(slug);
-  if (!record?.tableName) return false;
-
-  // Not materialized yet, or the live document is a different one than the
-  // requested history belongs to.
-  const liveId = await resolveSingleDocumentId(slug);
-  if (liveId === null || liveId !== entryId) return false;
-
-  // Shared with draft preview for the reason the update gate above gives.
-  return singleDocumentReadable(slug, {
-    user,
-    // The version route gates on `read` before reaching here, so the coarse
-    // read check has run and re-running it would reject a scoped API key by
-    // resolving its creator's roles.
-    routeAuthorized: true,
-    ...(authenticatedScope === undefined ? {} : { actor: authenticatedScope }),
-    ...hookInputs,
-    ...(locale === undefined ? {} : { locale }),
-  });
+      ...(authenticatedScope === undefined ? {} : { authenticatedScope }),
+    },
+    locale,
+    hookInputs
+  );
 }
 
 /**
@@ -615,28 +549,6 @@ async function canReadLiveSingle(
  * and `domains/` must not import from `api/`.
  */
 export { resolveSingleDocumentId };
-
-/**
- * Collapse a live-read result into "may the caller see this document".
- * Only 403/404 mean no; anything else non-successful is a genuine fault.
- *
- * The fault keeps the code and status the read gave it, rebuilt through the
- * shared converter: a database not migrated for the collection answers
- * ENTITY_NOT_MIGRATED, as the caller's own read of the document does, rather
- * than an opaque 500, and a rule that could not run answers RULE_COULD_NOT_RUN
- * rather than an internal error. The read ran as the caller, so its answer
- * names only what the caller may be told.
- */
-function interpretReadResult(
-  read: ServiceErrorEnvelope & { success: boolean; statusCode: number }
-): boolean {
-  if (read.success) return true;
-  if (read.statusCode === 403 || read.statusCode === 404) return false;
-  throw errorFromServiceEnvelope(read, {
-    reason: "version-live-read-failed",
-    statusCode: read.statusCode,
-  });
-}
 
 /** An entity's current schema, as redaction reads it. */
 export interface RedactionSchema {
