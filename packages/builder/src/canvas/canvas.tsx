@@ -263,6 +263,8 @@ export function Canvas({
   conditionsUnchecked,
   conditionsApplied,
   composed,
+  // The selected region and the way to select one, for the regions alone.
+  ...regionSelection
 }: CanvasProps): JSX.Element {
   const root = useRef<HTMLDivElement | null>(null);
   usePublishedRoot(root, rootRef, onRoot);
@@ -446,7 +448,7 @@ export function Canvas({
         drawn={drawn}
         rendered={render}
         environment={environment}
-        selection={marked}
+        selection={regionSelection}
       >
         {page}
       </RegionsAround>

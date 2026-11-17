@@ -53,7 +53,7 @@ import type { Control, FieldValues } from "react-hook-form";
 
 import type { ComponentLibraryRead } from "../component-library-client";
 import { lazyPart } from "../lazy-part";
-import { usePageLayoutRegions, usePageLayoutSettings } from "../page-layout";
+import { usePageLayoutSettings } from "../page-layout";
 import {
   usePatternLibrary,
   type LibraryReadState,
@@ -89,10 +89,12 @@ import {
   useSectionPictures,
   type SectionPictureInputs,
 } from "./section-pictures";
+import { usePageRegions, type SelectedRegion } from "./selected-region";
 import type { FontRolesTab as FontRolesTabPart } from "./site-font-roles-tab";
 import type { FontsPanelWithUpload as FontsPanelWithUploadPart } from "./site-style-fonts";
 import {
   offerableFaces,
+  ColoursTab,
   offerableTokens,
   renderedTokens,
   SharedStylesStudio,
@@ -583,8 +585,14 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   // The Layout section for the Settings dialog's "This page" tab, or null for
   // a form that is not a page's.
   const pageLayout = usePageLayoutSettings(page.control);
-  // From the form's unsaved values, so a change of Layout redraws at once.
-  const layoutRegions = usePageLayoutRegions(page.control, page.canvasRoot);
+  // From the form's unsaved values, so a change of Layout redraws at once,
+  // with the header or footer selected on the canvas or in Layers.
+  const layoutRegions = usePageRegions(
+    page.control,
+    page.canvasRoot,
+    editor,
+    useLookEditing(editor)
+  );
   /*
    * The entry's other fields, ALREADY DRAWN, or null when there are none.
    *
@@ -633,8 +641,9 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   // The Pages panel, and the request its rows send to open Settings.
   const pages = usePagesPanel(mount.initialDocument.kind === "page");
   // Which look the inspector edits on its own: chosen in the Design panel,
-  // left by selecting a block, by the bar's Back, or by Esc.
-  const lookEditing = useLookEditing(editor);
+  // left by selecting a block or a header or footer, by the bar's Back, or
+  // by Esc. Choosing one leaves a selected header or footer.
+  const { lookEditing } = layoutRegions;
   const { previewMode, pictureSession } = useDrawnLook(page.siteTokens);
   return {
     entryFields,
@@ -650,7 +659,8 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     availablePanels: AVAILABLE_PANELS,
     pageLayout,
     canvasRegions: layoutRegions.canvas,
-    layersRegions: layoutRegions.layers,
+    layersRegions: layoutRegions.selectedRegion.layers,
+    selectedRegion: layoutRegions.selectedRegion,
     ...library,
     ...requests,
   };
@@ -813,8 +823,10 @@ export type EditorPanels = OfferedLibrary &
     pageLayout: ReactNode | null;
     /** The regions of the page's Layout, drawn locked around the page. */
     canvasRegions: readonly CanvasRegion[];
-    /** The same regions, as read-only rows in Layers. */
+    /** The same regions, as rows in Layers that select them. */
     layersRegions: readonly LayersRegionRow[];
+    /** The header or footer selected, and what reads it. */
+    selectedRegion: SelectedRegion;
     availablePanels: typeof AVAILABLE_PANELS;
     search: { open: boolean; setOpen: (open: boolean) => void };
     pages: PagesPanelMount;
@@ -843,10 +855,12 @@ export type EditorPanels = OfferedLibrary &
  */
 export function editorPanelRenderer({
   editor,
+  documentLimits,
   componentLibrary,
   componentVerbs,
   componentView,
   layersRegions,
+  canvasRegions,
   drag,
   offered,
   offerablePatterns,
@@ -877,7 +891,10 @@ export function editorPanelRenderer({
   designReveal,
   onDesignRevealed,
   pictureSession,
-}: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
+}: Pick<
+  EditorMount,
+  "editor" | "componentLibrary" | "componentVerbs" | "documentLimits"
+> & {
   /** The look edited on its own, which the Design panel's Block looks choose. */
   lookEditing?: LookEditingState;
   /**
@@ -930,6 +947,7 @@ export function editorPanelRenderer({
     | "pages"
     | "designFolds"
     | "pictureSession"
+    | "canvasRegions"
   > &
   Partial<
     Pick<EditorPanels, "designReveal" | "onDesignRevealed">
@@ -1113,7 +1131,14 @@ export function editorPanelRenderer({
             </>
           )}
           tabs={{
-            colours: () => <VariablesTab tab="colours" />,
+            colours: () => (
+              <ColoursTab
+                document={editor.document}
+                components={componentLibrary.definitions}
+                regions={canvasRegions}
+                limits={documentLimits}
+              />
+            ),
             // Type: the Body and Headings fonts, the site's fonts, then the
             // type sizes and the font and weight variables.
             type: () => (
