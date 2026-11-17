@@ -43,7 +43,7 @@ import {
   drawsIcons,
   type Flow,
 } from "./style-alignment-icons";
-import { foldedLeaf } from "./style-colour";
+import { foldedLeaf, type SiteVariable } from "./style-colour";
 import type { StyleControl } from "./style-controls";
 import type { CommitOutcome } from "./style-field-surroundings";
 import {
@@ -66,7 +66,13 @@ import { textNumber, UnitWords, NumericField } from "./style-numeric-field";
 import { BOX_SHADOW, drawsShadow, ShadowField } from "./style-shadow-field";
 import { useDraft, arrowStep, storedText } from "./style-text-field";
 import { tokenForTypedName } from "./style-variables";
-import { VariableChoice } from "./variable-choice";
+import {
+  focusVariableAfterPick,
+  pickedVariable,
+  useOfferedVariables,
+  VariableChoice,
+  VariableSelectItems,
+} from "./variable-choice";
 
 /**
  * The leaf a field's variables are offered for: the control's own, or, for a
@@ -207,19 +213,13 @@ function FoldedField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
-  // The site's variables for this property, at the field's end: a fold has
-  // no unit menu to hold them.
-  const variables = (
-    <VariableChoice
-      leaf={leaf}
-      tokens={tokens}
-      bound={false}
-      empty={stored === undefined}
-      current={undefined}
-      label={actionName}
-      onPick={identity => onCommit({ $token: identity })}
-    />
-  );
+  // The site's variables for this property: first in the list a weight is
+  // chosen from, and behind a menu of its own at a typed field's end, which
+  // has no unit menu to hold them.
+  const offered = useOfferedVariables(leaf, tokens);
+  const pick = (identity: string): void => {
+    onCommit({ $token: identity });
+  };
   if (fold.kind === "number-or-length") {
     return (
       <div className="nx-style-inspector__numeric">
@@ -231,7 +231,13 @@ function FoldedField({
           describedBy={describedBy}
           onCommit={onCommit}
         />
-        {variables}
+        <VariableChoice
+          leaf={leaf}
+          tokens={tokens}
+          current={undefined}
+          label={actionName}
+          onPick={pick}
+        />
       </div>
     );
   }
@@ -242,7 +248,8 @@ function FoldedField({
       stored={stored}
       describedBy={describedBy}
       onCommit={onCommit}
-      after={variables}
+      variables={offered}
+      onPickVariable={pick}
     />
   );
 }
@@ -268,15 +275,17 @@ function OptionSelect({
   stored,
   describedBy,
   onCommit,
-  after,
+  variables,
+  onPickVariable,
 }: {
   id: string;
   options: readonly FoldedOption[];
   stored: StyleValue | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
-  /** What follows the list in its row: the site's variables, where offered. */
-  after?: React.ReactNode;
+  /** The site's variables the property takes, listed before the options. */
+  variables: readonly SiteVariable[];
+  onPickVariable: (identity: string) => void;
 }): React.JSX.Element {
   // The refusal, and the CSS names while they are shown.
   const described = useFieldDescription(describedBy);
@@ -289,6 +298,13 @@ function OptionSelect({
       <Select
         value={current}
         onValueChange={key => {
+          const identity = pickedVariable(key);
+          if (identity !== undefined) {
+            // The list becomes the variable's chip; focus follows to it.
+            focusVariableAfterPick(document.getElementById(id));
+            onPickVariable(identity);
+            return;
+          }
           const chosen = options.find(option => option.key === key);
           if (chosen !== undefined) onCommit(chosen.value);
         }}
@@ -301,6 +317,7 @@ function OptionSelect({
           <SelectValue placeholder={hint} />
         </SelectTrigger>
         <SelectContent>
+          <VariableSelectItems offered={variables} before />
           {options.map(option => (
             <SelectItem key={option.key} value={option.key}>
               {option.label}
@@ -308,7 +325,6 @@ function OptionSelect({
           ))}
         </SelectContent>
       </Select>
-      {after}
     </div>
   );
 }

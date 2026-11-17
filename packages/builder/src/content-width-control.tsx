@@ -236,8 +236,15 @@ function OwnWidthField({
           tokens={tokens}
           identity={width.$token}
           label="Width"
-          onClear={() => onWidth(undefined)}
           onPick={pick}
+          // The width the variable gives now, kept as the container's own
+          // through the rule a typed width meets; "Use site default" above is
+          // what removes it.
+          onUnlink={value => {
+            const kept =
+              typeof value === "string" ? typedWidth(value) : undefined;
+            if (kept !== undefined) onWidth(kept);
+          }}
         />
       ) : (
         <span className="nx-content-width__entry">
@@ -261,8 +268,6 @@ function OwnWidthField({
             <VariableChoice
               leaf={WIDTH_LEAF}
               tokens={tokens}
-              bound={false}
-              empty={draft === ""}
               current={undefined}
               label="Width"
               onPick={pick}

@@ -24,7 +24,6 @@ import {
   fontFamilyShowable,
   type FontChoices,
 } from "./font-family-field";
-import { CompactSides } from "./spacing-box";
 import { BASELINE_WITHHELD_HINT } from "./style-baseline";
 import { colourShowable } from "./style-colour";
 import { ColourField } from "./style-colour-field";
@@ -32,7 +31,7 @@ import type { StyleControl } from "./style-controls";
 import type { CommitOutcome } from "./style-field-surroundings";
 import { displayText, editableText } from "./style-text-field";
 import { variableLeafOf, FoldedUnion, ValueField } from "./style-value-fields";
-import { VariableChip, VariableChoice } from "./variable-choice";
+import { VariableChip } from "./variable-choice";
 
 /** No faces, as one value, so the Font control's list is not rebuilt each render. */
 const NO_FACES: readonly FontFaceDef[] = Object.freeze([]);
@@ -135,10 +134,8 @@ function ControlValue({
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   // Read before any branch, as hooks must be: a folded union offers the
-  // variables either of its arms takes, and a side of the spacing box has
-  // room for a held variable's name and its clear, not a ◇ as well.
+  // variables either of its arms takes.
   const fold = React.useContext(FoldedUnion);
-  const compact = React.useContext(CompactSides);
   if (clearOnly) {
     return (
       <RetainedValue
@@ -189,10 +186,11 @@ function ControlValue({
     );
   }
   /*
-   * A held variable, by name in place of the typed value, with the ◇ beside it
-   * to choose another. Every reference reaches this, including one at a leaf
+   * A held variable, by name in place of the typed value, the name the way to
+   * choose another. Every reference reaches this, including one at a leaf
    * that takes no variable or to a variable the site no longer has: the chip
-   * still names it and removes it, and the ◇ draws only where a choice exists.
+   * still names it, the name opens a list only where a choice exists, and the
+   * row's Reset removes it.
    * Typing over a reference is not offered, because the text would store the
    * variable's NAME as a literal, which compiles to nothing.
    */
@@ -206,7 +204,6 @@ function ControlValue({
         times={stored.times}
         actionName={actionName}
         tokens={tokens}
-        compact={compact}
         onCommit={onCommit}
       />
     );
@@ -242,11 +239,6 @@ function ControlValue({
 }
 
 /**
- * A field holding a variable: the chip naming it, and the ◇ to choose
- * another, or, in a side of the spacing box, where there is no room for both,
- * the chip alone with its name as the way to choose.
- */
-/**
  * The reference a chip commits when another variable replaces its own: the
  * new variable at the held one's scale, which is the size it was set to (a
  * Small button's padding), not a property of the variable.
@@ -260,6 +252,11 @@ export function pickedReference(
   return tokenRef(picked, times);
 }
 
+/**
+ * A field holding a variable: the green chip naming it, its name the way to
+ * choose another, and its Unlink, which puts the typed field back holding the
+ * variable's value.
+ */
 function HeldVariable({
   id,
   labelledBy,
@@ -268,7 +265,6 @@ function HeldVariable({
   times,
   actionName,
   tokens,
-  compact,
   onCommit,
 }: {
   /** The id the typed field takes again once the variable is cleared. */
@@ -281,18 +277,18 @@ function HeldVariable({
   times?: number | undefined;
   actionName: string;
   tokens: SiteTokenSet | undefined;
-  compact: boolean;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   // A scaled variable stays scaled when another replaces it: the factor is
   // the size it was set to (a Small button's padding), not the variable's.
   const pick = (picked: string): CommitOutcome =>
     onCommit(pickedReference(picked, times));
-  const clear = (): void => {
-    // Removing the variable puts the typed field back in the chip's place, and
-    // the ✕ that held focus is gone: focus goes to that field once it is
-    // drawn, rather than falling to the page.
-    if (onCommit(null) === "refused") return;
+  const unlink = (value: StyleValue): void => {
+    // Unlinking puts the typed field back in the chip's place, holding the
+    // value, and the Unlink that held focus is gone: focus goes to that field
+    // once it is drawn, rather than falling to the page. One commit, so one
+    // undo puts the variable back.
+    if (onCommit(value) === "refused") return;
     requestAnimationFrame(() => {
       document.getElementById(id)?.focus();
     });
@@ -300,26 +296,15 @@ function HeldVariable({
   return (
     <div className="nx-style-inspector__numeric">
       <VariableChip
-        // In a side the name itself opens the list.
-        {...(compact ? { onPick: pick } : {})}
         leaf={leaf}
         tokens={tokens}
         identity={identity}
         times={times}
         label={actionName}
         labelledBy={labelledBy}
-        onClear={clear}
+        onPick={pick}
+        onUnlink={unlink}
       />
-      {compact ? null : (
-        <VariableChoice
-          leaf={leaf}
-          tokens={tokens}
-          bound
-          current={identity}
-          label={actionName}
-          onPick={pick}
-        />
-      )}
     </div>
   );
 }

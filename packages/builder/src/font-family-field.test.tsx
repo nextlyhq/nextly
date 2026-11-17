@@ -11,6 +11,7 @@ import type {
   StyleValue,
 } from "@nextlyhq/blocks-engine";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -254,5 +255,29 @@ describe("FontFamilyField", () => {
         .getAllByRole("option")
         .map(o => o.textContent)
     ).toEqual(["Face C"]);
+  });
+});
+
+describe("a font variable chosen", () => {
+  it("shows in green, says what it is in the trigger's tooltip, and unlinks to its family", async () => {
+    const onCommit = mount({ stored: { $token: "font.heading" } });
+    const pick = document.querySelector(".nx-font-pick") as HTMLElement;
+    // Green is the stylesheet's, for this mark: see variable-choice-styles.test.
+    expect(pick.hasAttribute("data-bound")).toBe(true);
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    act(() => trigger().focus());
+    expect((await screen.findAllByRole("tooltip"))[0]?.textContent).toBe(
+      "Font variable Heading font · Georgia, serif · --site-font-heading"
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Unlink Font" }));
+    // One commit, the family as a plain value.
+    expect(onCommit.mock.calls).toEqual([["Georgia, serif"]]);
+  });
+
+  it("is not green and offers no Unlink for a family chosen as itself", () => {
+    mount({ stored: '"Inter", sans-serif' });
+    const pick = document.querySelector(".nx-font-pick") as HTMLElement;
+    expect(pick.hasAttribute("data-bound")).toBe(false);
+    expect(screen.queryByRole("button", { name: "Unlink Font" })).toBeNull();
   });
 });

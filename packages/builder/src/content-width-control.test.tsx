@@ -344,3 +344,37 @@ describe("a typed width", () => {
     expect(typedWidth(text)).toBe(stored);
   });
 });
+
+describe("a site variable as the width", () => {
+  it("is chosen from the width field's own menu, a chevron at its end", () => {
+    const editor = mount([node("s", "core/section", { contained: true })], "s");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Change for this section" })
+    );
+    const menu = screen.getByRole("button", { name: "Variables for Width" });
+    expect(menu.querySelector(".lucide-chevron-down")).not.toBeNull();
+    expect(menu.querySelector(".lucide-diamond")).toBeNull();
+    fireEvent.click(menu);
+    fireEvent.click(screen.getByRole("option", { name: /1600px$/ }));
+    expect(written(editor)).toMatchObject({
+      contentWidth: { $token: "content.wide" },
+    });
+  });
+
+  it("shows as a green chip, and Unlink keeps its width as the container's own", () => {
+    const editor = mount(
+      [
+        node("s", "core/section", {
+          contained: true,
+          contentWidth: { $token: "content.wide" },
+        }),
+      ],
+      "s"
+    );
+    const chip = screen.getByRole("group", { name: "Width" });
+    expect(chip.classList.contains("nx-variable-chip")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Unlink Width" }));
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(written(editor)).toMatchObject({ contentWidth: "1600px" });
+  });
+});

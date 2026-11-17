@@ -158,21 +158,80 @@ const written = (editor: ReturnType<typeof mount>): string =>
 
 describe("a field whose property takes a variable", () => {
   it.each([
-    ["font size", { typography: true }, "fontSize", "Font size"],
-    ["line height", { typography: true }, "lineHeight", "Line height"],
-    ["a spacing side", { spacing: true }, "padding", "Padding block start"],
-    ["a radius", { border: { radius: true } }, "borderRadius", "Border radius"],
+    [
+      "font size",
+      { typography: true },
+      "fontSize",
+      "Font size",
+      "Display 48px",
+    ],
+    [
+      "a spacing side",
+      { spacing: true },
+      "padding",
+      "Padding block start",
+      "Sm 8px",
+    ],
+    [
+      "a radius",
+      { border: { radius: true } },
+      "borderRadius",
+      "Border radius",
+      "Pill 12px",
+    ],
   ] as const)(
-    "offers the site's variables on %s",
-    (_, supports, property, label) => {
+    "lists the site's variables first in the unit menu of %s, with no button of their own",
+    (_, supports, property, label, variable) => {
       mount(supports);
+      const field = fieldsOf(property);
       expect(
-        fieldsOf(property).getByRole("button", {
-          name: `Variables for ${label}`,
-        })
-      ).toBeDefined();
+        field.queryByRole("button", { name: /^Variables for/ })
+      ).toBeNull();
+      fireEvent.click(
+        field.getByRole("combobox", { name: `Unit for ${label}` })
+      );
+      const options = screen
+        .getAllByRole("option")
+        .map(option => option.textContent);
+      expect(options).toContain(variable);
+      expect(options).toContain("px");
+      // Every variable before the first unit.
+      expect(options.indexOf(variable)).toBeLessThan(options.indexOf("px"));
     }
   );
+
+  it('heads the spacing steps "Your spacing" and other lengths "Your sizes"', () => {
+    mount({ spacing: true });
+    fireEvent.click(
+      fieldsOf("padding").getByRole("combobox", {
+        name: "Unit for Padding block start",
+      })
+    );
+    const spacing = screen.getByRole("group", { name: "Your spacing" });
+    expect(
+      within(spacing).getByRole("option", { name: "Sm 8px" })
+    ).toBeDefined();
+    cleanup();
+    clearBlocks();
+    mount({ typography: true });
+    fireEvent.click(
+      fieldsOf("fontSize").getByRole("combobox", { name: "Unit for Font size" })
+    );
+    const sizes = screen.getByRole("group", { name: "Your sizes" });
+    expect(
+      within(sizes).getByRole("option", { name: "Display 48px" })
+    ).toBeDefined();
+  });
+
+  it("offers a line height's variables from a menu at its end, as it has no unit menu", () => {
+    mount({ typography: true });
+    const menu = fieldsOf("lineHeight").getByRole("button", {
+      name: "Variables for Line height",
+    });
+    // A chevron, never a ◇.
+    expect(menu.querySelector(".lucide-chevron-down")).not.toBeNull();
+    expect(menu.querySelector(".lucide-diamond")).toBeNull();
+  });
 
   it("offers none on a field whose kind the site defines no variable of", () => {
     // Opacity takes a number variable; this site, defaults included, has none.
@@ -185,14 +244,20 @@ describe("a field whose property takes a variable", () => {
   it("offers none anywhere when the host supplied no variables", () => {
     mount({ typography: true }, {}, null);
     expect(screen.queryByRole("button", { name: /^Variables for/ })).toBeNull();
+    // The unit menu holds its units alone.
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "Unit for Font size" })
+    );
+    expect(screen.getAllByRole("option")[0]?.textContent).toBe("px");
+    expect(screen.queryByRole("group", { name: /^Your / })).toBeNull();
   });
 
   it("lists the type size in a font size field, not its line height", () => {
     mount({ typography: true });
     fireEvent.click(
-      screen.getByRole("button", { name: "Variables for Font size" })
+      screen.getByRole("combobox", { name: "Unit for Font size" })
     );
-    const list = screen.getByRole("listbox", { name: "Variables" });
+    const list = screen.getByRole("listbox");
     expect(
       within(list).getAllByRole("option", { name: /^Display/ })
     ).toHaveLength(1);
@@ -204,7 +269,7 @@ describe("a field whose property takes a variable", () => {
   it("stores a reference to the variable picked", () => {
     const editor = mount({ typography: true });
     fireEvent.click(
-      screen.getByRole("button", { name: "Variables for Font size" })
+      screen.getByRole("combobox", { name: "Unit for Font size" })
     );
     fireEvent.click(screen.getByRole("option", { name: "Display 48px" }));
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
@@ -224,34 +289,50 @@ describe("a field whose property takes a variable", () => {
     );
   });
 
-  it("keeps the hint short, and shows an empty field's ◇ at rest instead", () => {
-    // "16 or a variable" was cut off in the field; the ◇ on an empty field is
-    // what says a variable can be chosen now.
+  it("keeps the hint short, the unit menu being where a variable is chosen", () => {
+    // "16 or a variable" was cut off in the field.
     mount({ typography: true });
     expect(
       (screen.getByLabelText("Font size") as HTMLInputElement).placeholder
     ).toBe("16");
     expect(
-      screen
-        .getByRole("button", { name: "Variables for Font size" })
-        .hasAttribute("data-empty")
-    ).toBe(true);
+      screen.getByRole("combobox", { name: "Unit for Font size" })
+    ).toBeDefined();
   });
 
-  it("does not show the ◇ at rest on a field that holds a value", () => {
-    mount({ typography: true }, { fontSize: "20px" });
+  it("offers the variables on a field that holds a value, and a pick replaces it", () => {
+    const editor = mount({ typography: true }, { fontSize: "20px" });
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "Unit for Font size" })
+    );
+    fireEvent.click(screen.getByRole("option", { name: "Display 48px" }));
+    expect(written(editor)).toContain(
+      '"fontSize":{"$token":"font-size.display"}'
+    );
+  });
+
+  it("opens on the variables alone over a value no unit can act on", () => {
+    // A unit choice over `calc()` would do nothing, so no unit is listed; the
+    // menu stays, as the way to the variables.
+    mount({ typography: true }, { fontSize: "calc(1rem + 2px)" });
     expect(
-      screen
-        .getByRole("button", { name: "Variables for Font size" })
-        .hasAttribute("data-empty")
-    ).toBe(false);
+      screen.queryByRole("combobox", { name: "Unit for Font size" })
+    ).toBeNull();
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "Variables for Font size" })
+    );
+    const options = screen
+      .getAllByRole("option")
+      .map(option => option.textContent);
+    expect(options).toContain("Display 48px");
+    expect(options).not.toContain("px");
   });
 
   it("offers a spacing side the spacing steps, not the radii", () => {
     mount({ spacing: true });
     fireEvent.click(
-      screen.getByRole("button", {
-        name: "Variables for Padding block start",
+      screen.getByRole("combobox", {
+        name: "Unit for Padding block start",
       })
     );
     const spacing = screen
@@ -264,16 +345,19 @@ describe("a field whose property takes a variable", () => {
   it("offers a radius the radii, not the spacing steps", () => {
     mount({ border: { radius: true } });
     fireEvent.click(
-      screen.getByRole("button", { name: "Variables for Border radius" })
+      screen.getByRole("combobox", { name: "Unit for Border radius" })
     );
     expect(
-      screen.getAllByRole("option").map(option => option.textContent)
+      within(screen.getByRole("group", { name: "Your sizes" }))
+        .getAllByRole("option")
+        .map(option => option.textContent)
     ).toEqual(["Pill 12px"]);
+    expect(screen.queryByRole("group", { name: "Your spacing" })).toBeNull();
   });
 });
 
 describe("a field holding a variable", () => {
-  it("shows the variable by name in place of the text, and ✕ removes it", () => {
+  it("shows the variable by name in a green chip in place of the text, and Unlink keeps its value", async () => {
     const editor = mount(
       { typography: true },
       { fontSize: { $token: "font-size.display" } }
@@ -281,30 +365,63 @@ describe("a field holding a variable", () => {
     const fontSize = fieldsOf("fontSize");
     expect(fontSize.queryByRole("textbox")).toBeNull();
     const chip = fontSize.getByRole("group", { name: "Font size" });
-    expect(chip.textContent).toBe("Display 48px");
-    // The name the author gave it, never the code path it is stored under,
-    // and the whole name and value on hover where the field cuts them short.
+    expect(chip.classList.contains("nx-variable-chip")).toBe(true);
+    expect(chip.textContent).toBe("Display 48pxUnlink");
+    // The name the author gave it, never the code path it is stored under;
+    // the whole of what it is in the name's tooltip, never a title.
     expect(fontSize.queryByText(/font-size\.display/)).toBeNull();
-    expect(chip.title).toBe("Display 48px");
-    fireEvent.click(
-      within(chip).getByRole("button", {
-        name: "Clear Font size",
-      })
+    expect(chip.getAttribute("title")).toBeNull();
+    const name = within(chip).getByRole("button", {
+      name: "Variables for Font size: Display",
+    });
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    name.focus();
+    expect((await screen.findAllByRole("tooltip"))[0]?.textContent).toBe(
+      "Type size variable Display · 48px · --site-font-size-display"
     );
+    // No ✕: removing the value is the row's Reset.
+    expect(
+      within(chip).queryByRole("button", { name: "Clear Font size" })
+    ).toBeNull();
+    fireEvent.click(
+      within(chip).getByRole("button", { name: "Unlink Font size" })
+    );
+    // One commit, writing the value as a plain one.
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(written(editor)).toContain('"fontSize":"48px"');
     expect(written(editor)).not.toContain("font-size.display");
   });
 
-  it("keeps the ◇ beside the chip, to choose another", () => {
+  it("unlinks a scaled reference to the value it draws", () => {
+    const editor = mount(
+      { spacing: true },
+      { padding: { blockStart: { $token: "space.sm", times: 0.75 } } }
+    );
+    fireEvent.click(
+      fieldsOf("padding").getByRole("button", {
+        name: "Unlink Padding block start",
+      })
+    );
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(written(editor)).toContain('"blockStart":"6px"');
+  });
+
+  it("chooses another variable from the chip's name", () => {
     const editor = mount(
       { spacing: true },
       { padding: { blockStart: { $token: "space.sm" } } }
     );
-    const choose = fieldsOf("padding").getByRole("button", {
-      name: "Variables for Padding block start",
-    });
-    expect(choose.hasAttribute("data-bound")).toBe(true);
-    fireEvent.click(choose);
+    const padding = fieldsOf("padding");
+    expect(
+      padding.queryByRole("button", {
+        name: /^Variables for Padding block start$/,
+      })
+    ).toBeNull();
+    fireEvent.click(
+      padding.getByRole("button", {
+        name: "Variables for Padding block start: Sm",
+      })
+    );
     expect(
       screen
         .getByRole("option", { name: "Sm 8px" })
@@ -392,32 +509,39 @@ function LivePanel({
 }
 
 describe("where focus goes as a field changes shape", () => {
-  it("lands on the field's ◇ once a pick turns the field into the chip", async () => {
+  it("lands on the chip's name once a pick from the unit menu turns the field into the chip", async () => {
     register({ typography: true });
     render(<LivePanel values={{}} />);
     fireEvent.click(
-      screen.getByRole("button", { name: "Variables for Font size" })
+      screen.getByRole("combobox", { name: "Unit for Font size" })
     );
     fireEvent.click(screen.getByRole("option", { name: "Display 48px" }));
     const chip = await screen.findByRole("group", { name: "Font size" });
     await waitFor(() =>
       expect(document.activeElement).toBe(
         fieldsOf("fontSize").getByRole("button", {
-          name: "Variables for Font size",
+          name: "Variables for Font size: Display",
         })
       )
     );
-    expect(chip.textContent).toBe("Display 48px");
+    expect(chip.textContent).toBe("Display 48pxUnlink");
   });
 
-  it("lands on the typed field once ✕ removes the variable", async () => {
+  it("lands on the typed field, holding the value, once Unlink keeps it", async () => {
     register({ typography: true });
     render(
       <LivePanel values={{ fontSize: { $token: "font-size.display" } }} />
     );
-    fireEvent.click(screen.getByRole("button", { name: "Clear Font size" }));
-    const field = await screen.findByLabelText("Font size");
+    fireEvent.click(screen.getByRole("button", { name: "Unlink Font size" }));
+    const field = (await screen.findByLabelText(
+      "Font size"
+    )) as HTMLInputElement;
     await waitFor(() => expect(document.activeElement).toBe(field));
+    // Shown beside its unit, as any typed length is.
+    expect(field.value).toBe("48");
+    expect(
+      screen.getByRole("combobox", { name: "Unit for Font size" }).textContent
+    ).toContain("px");
   });
 });
 
@@ -483,12 +607,17 @@ describe("the mode a field's variables are read in", () => {
     deviceIsDark(true);
     const editor = mount({ spacing: true }, {}, NIGHT);
     const field = fieldsOf("padding").getByLabelText("Block start");
-    // Let the device's preference arrive, as it does after mount.
-    await waitFor(() =>
-      expect(
-        fieldsOf("padding").getAllByRole("button", { name: /^Variables for/ })
-      ).not.toHaveLength(0)
+    // Let the device's preference arrive, as it does after mount: the unit
+    // menu offers the dark-only variable once it has.
+    fireEvent.click(
+      fieldsOf("padding").getByRole("combobox", {
+        name: "Unit for Padding block start",
+      })
     );
+    expect(
+      await screen.findByRole("option", { name: "Night 12px" })
+    ).toBeDefined();
+    fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
     fireEvent.change(field, { target: { value: "night" } });
     fireEvent.blur(field);
     expect(written(editor)).toContain('{"$token":"space.night"}');
@@ -502,7 +631,7 @@ describe("the mode a field's variables are read in", () => {
     deviceIsDark(true);
     mount({ typography: true }, {}, NIGHT);
     fireEvent.click(
-      screen.getByRole("button", { name: "Variables for Font size" })
+      screen.getByRole("combobox", { name: "Unit for Font size" })
     );
     expect(
       await screen.findByRole("option", { name: "Mode 24px" })
@@ -513,7 +642,7 @@ describe("the mode a field's variables are read in", () => {
     deviceIsDark(false);
     const unpin = canvasPinnedTo("dark");
     try {
-      mount(
+      const editor = mount(
         { typography: true },
         { fontSize: { $token: "font-size.mode" } },
         NIGHT
@@ -521,11 +650,15 @@ describe("the mode a field's variables are read in", () => {
       const chip = fieldsOf("fontSize").getByRole("group", {
         name: "Font size",
       });
-      await waitFor(() => expect(chip.textContent).toBe("Mode 24px"));
+      await waitFor(() => expect(chip.textContent).toBe("Mode 24pxUnlink"));
       fireEvent.click(
-        screen.getByRole("button", { name: "Variables for Font size" })
+        screen.getByRole("button", { name: "Variables for Font size: Mode" })
       );
       expect(screen.getByRole("option", { name: "Mode 24px" })).toBeDefined();
+      fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
+      // Unlink keeps the value the canvas shows, the dark one.
+      fireEvent.click(screen.getByRole("button", { name: "Unlink Font size" }));
+      expect(written(editor)).toContain('"fontSize":"24px"');
     } finally {
       unpin();
     }
@@ -537,7 +670,7 @@ describe("the mode a field's variables are read in", () => {
     try {
       mount({ typography: true }, {}, NIGHT);
       fireEvent.click(
-        screen.getByRole("button", { name: "Variables for Font size" })
+        screen.getByRole("combobox", { name: "Unit for Font size" })
       );
       // Given time for the device's dark answer to arrive, the pin still wins.
       await new Promise(resolve => setTimeout(resolve, 0));
@@ -595,15 +728,15 @@ describe("a held variable whose name another shares", () => {
     const chip = fieldsOf("fontSize").getByRole("group", {
       name: "Font size",
     });
-    expect(chip.textContent).toBe("Big (font-size.hero) 48px");
+    expect(chip.textContent).toBe("Big (font-size.hero) 48pxUnlink");
     expect(
       within(chip).getByRole("button", {
-        name: "Clear Font size",
+        name: "Unlink Font size",
       })
     ).toBeDefined();
     fireEvent.click(
       fieldsOf("fontSize").getByRole("button", {
-        name: "Variables for Font size",
+        name: "Variables for Font size: Big (font-size.hero)",
       })
     );
     expect(
@@ -653,11 +786,13 @@ describe("a spacing side holding a variable", () => {
     fireEvent.click(side);
     const presets = screen.getByRole("radiogroup", { name: "Presets" });
     expect(
-      within(presets).getByRole("radio", { name: "Sm 8px" }).getAttribute(
-        "aria-checked"
-      )
+      within(presets)
+        .getByRole("radio", { name: "Sm 8px" })
+        .getAttribute("aria-checked")
     ).toBe("true");
-    fireEvent.click(within(presets).getByRole("radio", { name: "Space 4 1rem" }));
+    fireEvent.click(
+      within(presets).getByRole("radio", { name: "Space 4 1rem" })
+    );
     expect(written(editor)).toContain('{"$token":"space.4"}');
   });
 });
@@ -671,7 +806,7 @@ describe("the source caption after a variable is picked", () => {
         '[data-property="fontSize"] .nx-inspector__field'
       ) as HTMLElement;
     fireEvent.click(
-      screen.getByRole("button", { name: "Variables for Font size" })
+      screen.getByRole("combobox", { name: "Unit for Font size" })
     );
     fireEvent.click(screen.getByRole("option", { name: "Display 48px" }));
     await screen.findByRole("group", { name: "Font size" });
@@ -687,7 +822,7 @@ describe("the source caption after a variable is picked", () => {
     });
     elsewhere.focus();
     fireEvent.focusIn(
-      within(field()).getByRole("button", { name: "Clear Font size" }),
+      within(field()).getByRole("button", { name: "Unlink Font size" }),
       { relatedTarget: elsewhere }
     );
     expect(field().hasAttribute("data-provenance-quiet")).toBe(false);
@@ -711,9 +846,10 @@ describe("one reading of the canvas's mode for the whole panel", () => {
       value: asked,
     });
     mount({ typography: true, spacing: true, border: { radius: true } });
-    // Many fields, each with a ◇ or a typed-name match that reads the mode.
+    // Many fields, each with a value menu or a typed-name match that reads
+    // the mode.
     expect(
-      screen.getAllByRole("button", { name: /^Variables for/ }).length
+      screen.getAllByRole("combobox", { name: /^Unit for/ }).length
     ).toBeGreaterThan(4);
     await waitFor(() => expect(asked).toHaveBeenCalled());
     const scheme = asked.mock.calls.filter(([query]) =>
@@ -748,7 +884,7 @@ describe("one reading of the canvas's mode for the whole panel", () => {
         }
       );
       fireEvent.click(
-        screen.getByRole("button", { name: "Variables for Font size" })
+        screen.getByRole("combobox", { name: "Unit for Font size" })
       );
       expect(
         await screen.findByRole("option", { name: "Mode 24px" })
@@ -760,8 +896,8 @@ describe("one reading of the canvas's mode for the whole panel", () => {
 });
 
 describe("a folded field in the panel", () => {
-  it("offers a font weight only the number variables its number form takes", () => {
-    mount(
+  it("offers a font weight only the number variables its number form takes, first in its list", () => {
+    const editor = mount(
       { typography: true },
       {},
       {
@@ -771,14 +907,16 @@ describe("a folded field in the panel", () => {
         ],
       }
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Variables for Font weight" })
-    );
+    const weight = fieldsOf("fontWeight");
+    expect(weight.queryByRole("button", { name: /^Variables for/ })).toBeNull();
+    fireEvent.click(weight.getByRole("combobox"));
     const names = screen
       .getAllByRole("option")
       .map(option => option.textContent);
-    expect(names).toContain("Heavy 700");
+    expect(names[0]).toBe("Heavy 700");
     expect(names.some(text => text?.startsWith("Over"))).toBe(false);
+    fireEvent.click(screen.getByRole("option", { name: "Heavy 700" }));
+    expect(written(editor)).toContain('"fontWeight":{"$token":"weight.heavy"}');
   });
 });
 

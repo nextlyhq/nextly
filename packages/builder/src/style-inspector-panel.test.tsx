@@ -1916,9 +1916,11 @@ describe("controls", () => {
     ).toBeDefined();
   });
 
-  it("names a token's clear action for its property, not just 'Clear'", () => {
+  it("names a held token's Reset for its property, not just the side", () => {
     // Several token-valued properties on one panel would otherwise be a column
     // of identical buttons, and the label pointed at an id nothing carried.
+    // A token the site lacks has no value to unlink to, so Reset is the way
+    // to remove it.
     const styles = {
       base: {
         [BASE_BREAKPOINT]: {
@@ -1929,19 +1931,16 @@ describe("controls", () => {
     } as NodeStyles;
     mount({ spacing: true }, styles);
 
-    // Each names the PROPERTY it clears, not just the side: `padding` and
+    // Each names the PROPERTY it resets, not just the side: `padding` and
     // `margin` both have a block start, so a name built from the side alone
     // says the same thing twice.
     expect(
-      screen.getByRole("button", {
-        name: "Clear Padding block start",
-      })
+      screen.getByRole("button", { name: /^Reset Padding block start at / })
     ).toBeDefined();
     expect(
-      screen.getByRole("button", {
-        name: "Clear Margin block start",
-      })
+      screen.getByRole("button", { name: /^Reset Margin block start at / })
     ).toBeDefined();
+    expect(screen.queryByRole("button", { name: /^Clear / })).toBeNull();
   });
 
   it("names every reset for its own property", () => {
@@ -2048,10 +2047,9 @@ describe("controls", () => {
     expect(padding.getByText("space.4")).toBeDefined();
     expect(padding.queryByDisplayValue("space.4")).toBeNull();
 
+    // The row's Reset removes it.
     fireEvent.click(
-      padding.getByRole("button", {
-        name: "Clear Padding block start",
-      })
+      padding.getByRole("button", { name: /^Reset Padding block start at / })
     );
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
@@ -5400,7 +5398,6 @@ describe("a per-side property is drawn as a box", () => {
     );
   });
 
-
   it("marks each side with WHICH side it is, not with its position", () => {
     /*
      * The property the stylesheet places on. The heading, a form selector and
@@ -5525,7 +5522,6 @@ describe("a per-side property is drawn as a box", () => {
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
-
   it("goes round the box mirrored on a right-to-left element", () => {
     // The order is the sides' logical one: top, inline end, bottom, inline
     // start, which on a right-to-left element is top, left, bottom, right.
@@ -5638,7 +5634,6 @@ describe("a per-side property is drawn as a box", () => {
       within(box as HTMLElement).getByLabelText("Inline start")
     ).toBeDefined();
   });
-
 
   it("resolves the axes from the CANVAS, through the panel that owns it", () => {
     /*
