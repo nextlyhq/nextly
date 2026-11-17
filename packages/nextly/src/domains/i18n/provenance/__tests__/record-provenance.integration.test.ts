@@ -24,6 +24,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { CollectionService } from "../../../collections/services/collection-service";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
+import type { SingleEntryService } from "../../../../services/singles/single-entry-service";
 import { SOURCE_FINGERPRINT_MOVED } from "../../../../schemas/translation-provenance";
 import { teardownEntityI18n } from "../../migration/teardown-entity-i18n";
 import { valueFingerprint } from "../record-provenance";
@@ -102,6 +103,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
     ],
     singles: [
+      // Drafts on a Single: a publish over a held draft may give values of its own.
+      defineSingle({
+        slug: "ticker",
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        fields: [text({ name: "headline", localized: true })],
+      }),
       defineSingle({
         slug: "banner",
         localized: true,
@@ -1015,6 +1024,43 @@ describe.each(getConfiguredTestDialects())(
         success: true,
       });
       expect(await livePaths()).toEqual(["tracks", "tracks#a"]);
+    });
+    it("records a value a publish gives over its held draft's", async () => {
+      // A Single's held draft goes live with a publish that gives a field a value of its own: the
+      // published value is that one, and so is the live record, not the draft's it replaced.
+      await boot(dialect);
+      const singles = container.get<SingleEntryService>("singleEntryService");
+      const write = (locale: string, data: Record<string, unknown>) =>
+        singles.update(
+          "ticker",
+          { ...data, _overwrite: true },
+          { overrideAccess: true, locale }
+        );
+      await write("en", { headline: "Hi", status: "published" });
+      await write("es", { headline: "Hola", status: "published" });
+      await write("es", { headline: "Hola 2" });
+      const published = await write("es", {
+        headline: "Hola 3",
+        status: "published",
+      });
+      expect(published, JSON.stringify(published)).toMatchObject({
+        success: true,
+      });
+      const spanish = await singles.get("ticker", {
+        overrideAccess: true,
+        locale: "es",
+      });
+      expect((spanish.data as Record<string, unknown>).headline).toBe("Hola 3");
+      const id = String((spanish.data as Record<string, unknown>).id);
+      const liveRows = (
+        (await rowsOf(id, { kind: "single", slug: "ticker" })).es ?? []
+      ).filter(row => row.partState === "live");
+      expect(liveRows, JSON.stringify(liveRows)).toEqual([
+        expect.objectContaining({
+          fieldPath: "headline",
+          valueFingerprint: valueFingerprint("Hola 3"),
+        }),
+      ]);
     });
   }
 );

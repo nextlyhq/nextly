@@ -492,22 +492,22 @@ export interface ProvenancePromotion {
 /**
  * Puts a language's working draft's provenance live, on `db`, the publish's own transaction: each
  * drafted field's live row gives way to the draft's, which keeps the origin the draft was saved
- * with, so a value claimed on a held save keeps its claim once it is published. Answers the fields
- * it moved: a value going live that its draft recorded nothing for is the caller's to record.
+ * with, so a value claimed on a held save keeps its claim once it is published. A value going live
+ * that no record then describes is the caller's to record.
  *
  * @experimental
  */
 async function promoteDraftProvenance(
   db: ProvenanceDb,
   promotion: ProvenancePromotion
-): Promise<ReadonlySet<string>> {
+): Promise<void> {
   const drafted = (
     await db.select<{ fieldPath: string }>(TRANSLATION_PROVENANCE_TABLE, {
       columns: ["fieldPath"],
       where: documentWhere(promotion, promotion.locale, "draft"),
     })
   ).map(row => row.fieldPath);
-  if (drafted.length === 0) return new Set();
+  if (drafted.length === 0) return;
   // Each drafted field's live records give way, its rows' records included: a row the draft no
   // longer has has no record in the draft, and its live one would outlive the row.
   const draftedFields = new Set(
@@ -537,7 +537,6 @@ async function promoteDraftProvenance(
     { partState: "live" },
     documentWhere(promotion, promotion.locale, "draft")
   );
-  return new Set(drafted);
 }
 
 /**
@@ -587,16 +586,17 @@ export async function recordWrittenValues(
 ): Promise<void> {
   let values = write.values;
   if (write.promotesDraft === true) {
-    const moved = await promoteDraftProvenance(db, write);
-    // The draft's values are the whole language, untouched fields included: a field the draft
-    // recorded nothing for keeps the live record it has while its value is the one that record
-    // describes. A value the draft changed with no record of its own (a draft held before
-    // recording began) is recorded as this write's, so the live record never describes the value
-    // it replaced; a blank one never is.
+    await promoteDraftProvenance(db, write);
+    // The draft's values are the whole language, untouched fields included, and the publish may
+    // give a field a value of its own over the draft's. Read once the draft's records are live: a
+    // field keeps its live record (the draft's, with its claim, or the one it had) while its value
+    // is the one that record describes. A value no record describes (one the publish gave, or one
+    // a draft held before recording began changed) is recorded as this write's, so a live record
+    // never describes a value it replaced; a blank one never is.
     const live = await liveFingerprints(db, write, write.locale);
     values = Object.fromEntries(
       Object.entries(values).filter(([field, value]) => {
-        if (moved.has(field) || isBlankValue(value)) return false;
+        if (isBlankValue(value)) return false;
         const recorded = live.get(field);
         return (
           recorded === undefined ||
