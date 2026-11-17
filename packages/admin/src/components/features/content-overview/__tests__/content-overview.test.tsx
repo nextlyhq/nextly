@@ -118,7 +118,18 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
     content: state.content,
     retry: vi.fn(),
     hasPermission: (permission: string) => state.permissions.has(permission),
+    // What the admin's "open this document" rule asks of a row's Single.
+    canAccessCollection: (slug: string, action: string) =>
+      action === "updateInDefaultLanguage"
+        ? state.caps[slug]?.canUpdate === true
+        : state.caps[slug]?.canRead === true,
   }),
+}));
+// The rule reads a Single the row holds, so the admin's list of every Single
+// is never needed here.
+vi.mock("@admin/hooks/queries/useSingles", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  useEverySingle: () => ({ data: undefined }),
 }));
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => state.branding,
@@ -320,6 +331,48 @@ describe("the Content overview", () => {
       within(footer).getByRole("link", { name: "View Footer" })
     ).toHaveAttribute("href", "/admin/singles/footer");
     expect(replaceTo).not.toHaveBeenCalled();
+  });
+
+  it("opens a Homepage whose main field is a page layout in the builder, as the sidebar does", async () => {
+    // The Page Builder's view, asking to open first on a blocks main field.
+    state.branding = {
+      plugins: [
+        {
+          name: "@acme/builder",
+          documentViews: [
+            {
+              fieldType: "blocks",
+              path: "builder",
+              component: "@acme/builder#View",
+              opensFirst: "mainField",
+            },
+          ],
+        },
+      ],
+    } as unknown as AdminBranding;
+    const layout = [
+      { name: "title", type: "text" },
+      { name: "layout", type: "blocks" },
+    ];
+    state.singles = [
+      { id: "s1", slug: "homepage", label: "Homepage", fields: layout },
+      { id: "s2", slug: "footer", label: "Footer", fields: layout },
+    ];
+    await draw("all");
+    const homepage = rowOf("Singles", "Homepage");
+    const builder = "/admin/singles/homepage/builder?field=layout";
+    expect(
+      within(homepage).getByRole("link", { name: "Homepage" })
+    ).toHaveAttribute("href", builder);
+    expect(
+      within(homepage).getByRole("link", { name: "Edit Homepage" })
+    ).toHaveAttribute("href", builder);
+    // A reader who may only read it gets its form, read-only.
+    expect(
+      within(rowOf("Singles", "Footer")).getByRole("link", {
+        name: "View Footer",
+      })
+    ).toHaveAttribute("href", "/admin/singles/footer");
   });
 
   it("names one draft in the singular and more in the plural", async () => {

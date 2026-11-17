@@ -228,6 +228,36 @@ export const LINK_PROPS = {
 } as const;
 
 /**
+ * What a click on a picture can do: nothing, follow its link, or show it
+ * full size. Stored as the author chose it; unset, it is read by
+ * {@link whenClickedOf}.
+ */
+export const WHEN_CLICKED = ["nothing", "link", "enlarge"] as const;
+
+/** One of the things a click on a picture can do. @experimental */
+export type WhenClicked = (typeof WHEN_CLICKED)[number];
+
+/**
+ * What a click on a picture does, read from its props: the stored choice
+ * where it is one, else Link while a link is set (an address the page would
+ * follow, or an entry), else Nothing.
+ *
+ * The one reading the Image's render, its content model and the editor's
+ * panel ask, so the three cannot disagree. Unset is how every Image stored
+ * before the choice existed reads, and how a new one is placed, so a linked
+ * one still links and a new one waits for the author's choice.
+ *
+ * @experimental
+ */
+export function whenClickedOf(
+  props: Readonly<LinkProps & { whenClicked?: unknown }>
+): WhenClicked {
+  const stored = WHEN_CLICKED.find(choice => choice === props.whenClicked);
+  if (stored !== undefined) return stored;
+  return canLink(props) ? "link" : "nothing";
+}
+
+/**
  * The claim a block's own reads are made with, naming it, so a page past its
  * allowance names the block among those drawn without their data. A block
  * drawn from inside a placed component is named by that placement

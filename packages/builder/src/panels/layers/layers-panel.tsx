@@ -75,6 +75,8 @@ import {
   findNode,
   hiddenOnDevice,
   registryNestingSource,
+  walkNodes,
+  type BlockDocument,
   type BreakpointSet,
   type ComponentLookup,
   type NestingSource,
@@ -84,7 +86,6 @@ import {
   Input,
   TreeView,
   detectApplePlatform,
-  useShortcuts,
   type TreeNode,
 } from "@nextlyhq/ui";
 import {
@@ -101,7 +102,6 @@ import { BlockIconMark } from "../../block-icon";
 import { DRAG_SOURCE_ATTRIBUTE } from "../../canvas/canvas";
 import { useHoveredBlockSetter } from "../../canvas/hovered-block";
 import { revealNode } from "../../canvas/reveal-node";
-import { isElement } from "../../dom-kind";
 import type { EditorState } from "../../editor-state";
 import { EDITOR_WORDS } from "../../editor-words";
 import {
@@ -127,10 +127,13 @@ import {
 import {
   ROW_KEYS,
   rowKeyAction,
+  hiddenDeviceNames,
+  listedNames,
   toggleOnDeviceOp,
   type RowKeyAction,
 } from "./layer-row-actions";
 import { LayerRowMenu, type RowMenuItem } from "./layer-row-menu";
+import { rowIdOf, RowShortcuts } from "./layer-row-shortcuts";
 import {
   ancestorIds,
   filterLayers,
@@ -254,16 +257,20 @@ function Badge({
   icon,
   text,
   lock,
+  tooltip = false,
 }: {
   icon: React.ReactNode;
   text: string;
   /** For a lock badge: the block's own lock, or one it is held by. */
   lock?: "own" | "inherited";
+  /** Whether a pointer resting on the icon is told the words too. */
+  tooltip?: boolean;
 }): React.JSX.Element {
   return (
     <span
       className="nx-layer-row__badge"
       {...(lock === undefined ? {} : { "data-lock": lock })}
+      {...(tooltip ? { title: text } : {})}
     >
       {/*
         The icon is decorative and the word is the fact. A title attribute would
@@ -327,6 +334,8 @@ interface RowView {
   readonly onAct: (id: string, action: RowKeyAction) => void;
   /** Each Entry content block's field, and whether it is gone, by id. */
   readonly entryContent: ReadonlyMap<string, EntryContentRowFacts>;
+  /** The devices each block hidden somewhere is hidden on, by id: "Tablet and Mobile". */
+  readonly hiddenOn: ReadonlyMap<string, string>;
 }
 
 /**
@@ -542,7 +551,7 @@ function LayerRow({
       )}
       <ComponentTag node={node} />
       <EntryContentRowFact facts={view.entryContent.get(node.id)} />
-      <RowFacts node={node} />
+      <RowFacts node={node} hiddenOn={view.hiddenOn.get(node.id)} />
       <NotQuotedFact node={node} />
       <RowActions node={node} view={view} />
     </span>
@@ -563,20 +572,78 @@ function NotQuotedFact({
   ) : null;
 }
 
+/**
+ * Whether the block is hidden on the device shown, or with the block around
+ * it, in words on screen and read out.
+ */
+function HiddenFact({
+  node,
+  hiddenOn,
+}: {
+  node: LayerNode;
+  hiddenOn: string | undefined;
+}): React.JSX.Element | null {
+  if (node.hiddenHere === true) {
+    // A word, on screen and read out: hidden on the device shown. A pointer
+    // resting on it is told every device it is hidden on.
+    return (
+      <span
+        className="nx-layer-row__hidden"
+        {...(hiddenOn === undefined ? {} : { title: `Hidden on ${hiddenOn}` })}
+      >
+        Hidden
+      </span>
+    );
+  }
+  if (node.hiddenWith === undefined) return null;
+  // Hidden because the block around it is, which is where it is shown again:
+  // named, as an inherited lock names its block.
+  return (
+    <span className="nx-layer-row__hidden" data-inherited="">
+      Hidden with {node.hiddenWith}
+    </span>
+  );
+}
+
+/**
+ * The eye-slash of a block hidden on a device other than the one shown,
+ * naming the devices: the same reading Hide on and the canvas's stripes take.
+ * None where the row already says it is hidden here or with its parent.
+ */
+function DeviceHiddenFact({
+  node,
+  hiddenOn,
+}: {
+  node: LayerNode;
+  hiddenOn: string | undefined;
+}): React.JSX.Element | null {
+  if (!node.breakpointHidden) return null;
+  if (node.hiddenHere === true || node.hiddenWith !== undefined) return null;
+  return (
+    <Badge
+      icon={<EyeOff size={12} />}
+      text={
+        hiddenOn === undefined
+          ? "Hidden at some screen sizes"
+          : `Hidden on ${hiddenOn}`
+      }
+      tooltip
+    />
+  );
+}
+
 /** What is true about a block, each in words a screen reader reads. */
-function RowFacts({ node }: { node: LayerNode }): React.JSX.Element {
+function RowFacts({
+  node,
+  hiddenOn,
+}: {
+  node: LayerNode;
+  /** The devices the block is hidden on, "Tablet and Mobile", if any. */
+  hiddenOn: string | undefined;
+}): React.JSX.Element {
   return (
     <>
-      {node.hiddenHere === true ? (
-        // A word, on screen and read out: hidden on the device shown.
-        <span className="nx-layer-row__hidden">Hidden</span>
-      ) : node.hiddenWith === undefined ? null : (
-        // Hidden because the block around it is, which is where it is shown
-        // again: named, as an inherited lock names its block.
-        <span className="nx-layer-row__hidden" data-inherited="">
-          Hidden with {node.hiddenWith}
-        </span>
-      )}
+      <HiddenFact node={node} hiddenOn={hiddenOn} />
       {/* Both locks in the row's own ink, so each reads against the row in
           every state it can be in. A lock held from a block around it is
           quieter by weight, a thinner stroke, never by a fainter colour; both
@@ -594,11 +661,7 @@ function RowFacts({ node }: { node: LayerNode }): React.JSX.Element {
           lock="inherited"
         />
       )}
-      {node.breakpointHidden &&
-      node.hiddenHere !== true &&
-      node.hiddenWith === undefined ? (
-        <Badge icon={<EyeOff size={12} />} text="Hidden at some screen sizes" />
-      ) : null}
+      <DeviceHiddenFact node={node} hiddenOn={hiddenOn} />
       {node.conditional ? (
         <Badge
           icon={<SlidersHorizontal size={12} />}
@@ -717,16 +780,6 @@ function draggingState(drag: LayersDrag): string | undefined {
   return drag.drawn?.result.kind === "refused" ? "refused" : "";
 }
 
-/** The block of the row an event happened in, or `null` off the rows. */
-function rowIdOf(target: EventTarget | null): string | null {
-  // Asked by node kind, so a row in another document still answers.
-  if (!isElement(target)) return null;
-  const row = target.closest('[role="treeitem"]');
-  return (
-    row?.querySelector("[data-nx-layer]")?.getAttribute("data-nx-layer") ?? null
-  );
-}
-
 /**
  * The handlers the element around the tree carries for the rows: the row
  * under the pointer outlines its block on the canvas, the row's verbs by
@@ -766,63 +819,6 @@ function rowBodyHandlers({
   };
 }
 
-/** What each row keystroke does, as Help lists it. */
-const ROW_KEY_DESCRIPTIONS: Readonly<Record<RowKeyAction, string>> = {
-  rename: "Rename the block of the focused Layers row",
-  "toggle-hidden":
-    "Hide or show the block of the focused Layers row on the device being edited",
-  "toggle-lock": "Lock or unlock the block of the focused Layers row",
-};
-
-const ROW_KEY_ACTIONS: readonly RowKeyAction[] = [
-  "rename",
-  "toggle-hidden",
-  "toggle-lock",
-];
-
-/**
- * The row keystrokes, registered with the editor's shortcut manager so Help
- * lists them with every other binding. Each acts on the row that has focus,
- * and only while one of this panel's rows has it: the same keys elsewhere,
- * or in a rename's field, are left alone.
- */
-function RowShortcuts({
-  scope,
-  act,
-}: {
-  scope: React.RefObject<HTMLElement | null>;
-  act: (id: string, action: RowKeyAction) => void;
-}): null {
-  const focusedRow = (): string | null => {
-    const root = scope.current;
-    const active = root?.ownerDocument.activeElement;
-    if (
-      root === null ||
-      root === undefined ||
-      active === null ||
-      active === undefined ||
-      !root.contains(active) ||
-      active.getAttribute("role") !== "treeitem"
-    ) {
-      return null;
-    }
-    return rowIdOf(active);
-  };
-  useShortcuts(
-    ROW_KEY_ACTIONS.map(action => ({
-      keys: ROW_KEYS[action],
-      description: ROW_KEY_DESCRIPTIONS[action],
-      when: () => focusedRow() !== null,
-      run: () => {
-        const id = focusedRow();
-        if (id !== null) act(id, action);
-      },
-    })),
-    { name: "builder-layers-rows" }
-  );
-  return null;
-}
-
 /**
  * The name of the nearest block around `id` hidden on the device being
  * edited, or `undefined` when none is.
@@ -860,6 +856,87 @@ function useRevealChosen(
       if (root !== null && root !== undefined) revealNode(root, id);
     });
   }, []);
+}
+
+/**
+ * The devices each block hidden somewhere is hidden on, by id, as one
+ * phrase: "Tablet and Mobile". Read ONCE per document, not per row.
+ */
+function hiddenOnByBlock(
+  document: BlockDocument,
+  breakpoints: BreakpointSet | undefined
+): ReadonlyMap<string, string> {
+  const hidden = new Map<string, string>();
+  walkNodes(document.nodes, node => {
+    if (node.visibility?.devices === undefined) return;
+    const names = hiddenDeviceNames(node.visibility, breakpoints);
+    if (names.length > 0) hidden.set(node.id, listedNames(names));
+  });
+  return hidden;
+}
+
+/**
+ * The tree's rows, built again only when what a row draws changes: the
+ * blocks shown, the drag, the row being renamed, the device, and each
+ * block's Entry content field and the devices it is hidden on.
+ */
+function useTreeRows(
+  roots: readonly LayerNode[],
+  {
+    document,
+    device,
+    draggingId,
+    rows,
+  }: {
+    document: BlockDocument;
+    device: LayersPanelProps["device"];
+    draggingId: string | null;
+    rows: ReturnType<typeof useRowVerbs>;
+  }
+): TreeNode[] {
+  const icons = React.useMemo(iconsByType, []);
+  const entryContent = useEntryContentRows(document);
+  const hiddenOn = useHiddenOn(document, device);
+  const deviceName = deviceNameOf(device);
+  const { renamingId, onRenamed, act } = rows;
+  return React.useMemo(
+    () =>
+      roots.map(root =>
+        rowOf(root, {
+          icons,
+          draggingId,
+          renamingId,
+          deviceName,
+          onRenamed,
+          onAct: act,
+          entryContent,
+          hiddenOn,
+        })
+      ),
+    [
+      roots,
+      icons,
+      entryContent,
+      hiddenOn,
+      draggingId,
+      renamingId,
+      deviceName,
+      onRenamed,
+      act,
+    ]
+  );
+}
+
+/** {@link hiddenOnByBlock}, read again only when the page or the breakpoints change. */
+function useHiddenOn(
+  document: BlockDocument,
+  device: LayersPanelProps["device"]
+): ReadonlyMap<string, string> {
+  const breakpoints = device?.breakpoints;
+  return React.useMemo(
+    () => hiddenOnByBlock(document, breakpoints),
+    [document, breakpoints]
+  );
 }
 
 /** The device the eye acts on, by the name the device buttons give it. */
@@ -1183,34 +1260,12 @@ export function LayersPanel({
     [opened, search.expand]
   );
 
-  const icons = React.useMemo(iconsByType, []);
-  const entryContent = useEntryContentRows(editor.document);
-  const deviceName = deviceNameOf(device);
-  const { renamingId, onRenamed, act } = rows;
-  const nodes = React.useMemo(
-    () =>
-      search.roots.map(root =>
-        rowOf(root, {
-          icons,
-          draggingId: drag.draggingId,
-          renamingId,
-          deviceName,
-          onRenamed,
-          onAct: act,
-          entryContent,
-        })
-      ),
-    [
-      search.roots,
-      icons,
-      entryContent,
-      drag.draggingId,
-      renamingId,
-      deviceName,
-      onRenamed,
-      act,
-    ]
-  );
+  const nodes = useTreeRows(search.roots, {
+    document: editor.document,
+    device,
+    draggingId: drag.draggingId,
+    rows,
+  });
 
   /*
    * Which keyboard is in front of the author, resolved AFTER mounting.
@@ -1284,7 +1339,7 @@ export function LayersPanel({
                 // Not during a drag, whose own marks say where it will land.
                 setHovered(drag.draggingId === null ? id : null),
               apple: apple ?? false,
-              act,
+              act: rows.act,
               // Read by the shortcut manager instead where the host has one.
               keys: !shortcuts,
             })}
@@ -1360,7 +1415,7 @@ export function LayersPanel({
         {drag.announcement === "" ? rows.notice : drag.announcement}
       </div>
 
-      {shortcuts ? <RowShortcuts scope={body} act={act} /> : null}
+      {shortcuts ? <RowShortcuts scope={body} act={rows.act} /> : null}
 
       {/*
         What a row's verb did, or why it could not, on screen: a refused eye or

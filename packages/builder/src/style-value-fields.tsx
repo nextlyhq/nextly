@@ -29,6 +29,8 @@ import {
 import * as React from "react";
 
 import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
+import { BackgroundPositionField } from "./background-fields";
+import { BackgroundImageField } from "./background-image-control";
 import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { commitOnEnter } from "./commit-on-enter";
 import { CssHint, OptionWrites, useFieldDescription } from "./css-hint";
@@ -63,6 +65,7 @@ import {
   toggleShows,
 } from "./style-numeric";
 import { textNumber, UnitWords, NumericField } from "./style-numeric-field";
+import { BOX_SHADOW, drawsShadow, ShadowField } from "./style-shadow-field";
 import { useDraft, arrowStep, storedText } from "./style-text-field";
 import { tokenForTypedName } from "./style-variables";
 import { VariableChoice } from "./variable-choice";
@@ -425,9 +428,21 @@ const OWN_FIELDS: Readonly<
     string,
     {
       draws: (stored: StyleValue | undefined) => boolean;
-      Field: typeof AspectRatioField;
+      /** Given the control and the site's variables too, for a field that offers them. */
+      Field: (
+        props: Parameters<typeof AspectRatioField>[0] & {
+          control: StyleControl;
+          tokens: SiteTokenSet | undefined;
+        }
+      ) => React.JSX.Element;
       /** Whether its tab stop is a button a label's `for` would click. */
       buttons: boolean;
+      /**
+       * The kind of value it draws, where one CSS property is written by
+       * several: `background-image` is both an image's address and a
+       * gradient, and only the address is a file to choose.
+       */
+      leaf?: StyleControl["leaf"]["kind"];
     }
   >
 > = {
@@ -441,13 +456,47 @@ const OWN_FIELDS: Readonly<
     Field: DecorationField,
     buttons: true,
   },
+  // A shadow is built with the shadow control, as a shadow variable is; a
+  // held shadow variable keeps its chip.
+  [BOX_SHADOW]: {
+    draws: drawsShadow,
+    Field: ShadowField,
+    buttons: false,
+  },
   // Any position: the nine points, or one written as CSS beside them.
   "object-position": {
     draws: stored => stored === undefined || typeof stored === "string",
     Field: FocalPointField,
     buttons: true,
   },
+  // The background's image: the Media library, an upload or a link, rather
+  // than an address typed as CSS.
+  "background-image": {
+    draws: stored => stored === undefined || typeof stored === "string",
+    Field: BackgroundImageField,
+    buttons: false,
+    leaf: "url",
+  },
+  // Where the background image sits, as the object position does.
+  "background-position": {
+    draws: stored => stored === undefined || typeof stored === "string",
+    Field: BackgroundPositionField,
+    buttons: true,
+  },
 };
+
+/**
+ * The field of its own a control is drawn with, if any: found by the CSS
+ * property it writes, and by the kind of value where an entry names one.
+ */
+function ownFieldFor(
+  leaf: StyleControl["leaf"]
+): (typeof OWN_FIELDS)[string] | undefined {
+  const own = OWN_FIELDS[leaf.cssProperty];
+  return own === undefined || (own.leaf !== undefined && own.leaf !== leaf.kind)
+    ? undefined
+    : own;
+}
 
 /**
  * Whether a field's label only moves focus: where the control drawn is a
@@ -459,7 +508,7 @@ export function labelFocusOnly(
   stored: StyleValue | undefined
 ): boolean {
   if (drawsIcons(leaf)) return true;
-  const own = OWN_FIELDS[leaf.cssProperty];
+  const own = ownFieldFor(leaf);
   return own !== undefined && own.buttons && own.draws(stored);
 }
 
@@ -563,14 +612,16 @@ export function ValueField({
   }
   // A property with a field of its own, where the stored value is one that
   // field can draw; any other spelling keeps the text field.
-  const own = OWN_FIELDS[control.leaf.cssProperty];
+  const own = ownFieldFor(control.leaf);
   if (own !== undefined && own.draws(stored)) {
     return (
       <own.Field
         id={id}
         labelledBy={labelledBy}
+        control={control}
         stored={stored}
         actionName={actionName}
+        tokens={tokens}
         describedBy={describedBy}
         onCommit={onCommit}
       />

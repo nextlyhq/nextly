@@ -53,8 +53,15 @@ export { unitCategory } from "./css-value-types";
 export { checkUrlValue } from "./css-value-urls";
 export {
   checkCssValue,
+  customPropertiesReferenced,
   isOverlongValue,
   referencesCustomProperty,
 } from "./css-value-check";
 export { checkDimensionValue } from "./css-value-dimensions";
 export { checkColorValue } from "./css-value-colors";
+export {
+  shadowIssue,
+  shadowLayerParts,
+  type ShadowPart,
+  type ShadowPartKind,
+} from "./css-value-shadow";

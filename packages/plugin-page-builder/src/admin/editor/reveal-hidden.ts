@@ -1,17 +1,17 @@
 /**
- * Which hidden blocks the canvas draws anyway: a selected block the page
- * hides on the device being edited, and every hidden block around it, since
- * a block is drawn only if the blocks holding it are.
+ * Which selected blocks the page hides on the device being edited, itself or
+ * by a hidden block around it, which the canvas's ring tags as hidden; and
+ * which hidden blocks that takes, since a block is drawn only if the blocks
+ * holding it are.
  *
  * Pure, so what is lifted for which selection is asserted without a canvas.
- * The canvas then draws the document with those blocks' device hiding lifted,
- * and the editor saves its own, so nothing here reaches what is stored.
+ * The canvas itself draws every block hidden on the device it shows, and
+ * the editor saves its own document, so nothing here reaches what is stored.
  *
  * @module reveal-hidden
  */
 import {
   hiddenOnDevice,
-  revealDeviceHidden,
   type BlockDocument,
   type BlockNode,
   type BreakpointSet,
@@ -73,13 +73,14 @@ export interface Reveal {
 }
 
 /**
- * A selected block the page hides on the device shown is drawn anyway, while
- * it is selected, so the author can see and edit what they chose in Layers.
+ * The selected blocks the page hides on the device being edited, which the
+ * canvas's marks tag as hidden on their ring.
  *
- * Editor-only by construction: the canvas draws the derived document and the
- * editor saves its own, so nothing lifted here reaches what is stored or
- * published. Derived again only when the document, the selection or the
- * device changes, so the canvas keeps its rendered tree otherwise.
+ * The document is handed on as it is: the canvas draws every block hidden on
+ * the device it shows, striped and tagged from the hiding it reads there, so
+ * lifting that hiding here, around the selection, would leave the selected
+ * block and the hidden blocks around it drawn without their stripes. Derived
+ * again only when the document, the selection or the device changes.
  */
 export function useReveal(
   document: BlockDocument,
@@ -87,29 +88,18 @@ export function useReveal(
   breakpoints: BreakpointSet | undefined,
   device: string
 ): Reveal {
-  // Derived only when what it reads changes: the document, the selection,
-  // the breakpoints or the device. The selection is keyed by value, as JSON,
-  // which spells any id unambiguously, so a host handing a new array of the
-  // same ids derives nothing again.
+  // The selection is keyed by value, as JSON, which spells any id
+  // unambiguously, so a host handing a new array of the same ids derives
+  // nothing again.
   const selectedKey = JSON.stringify(selected);
   const key = React.useMemo(() => {
     const ids = JSON.parse(selectedKey) as string[];
-    const { lifted, shown } = revealedHidden(
-      document,
-      ids,
-      breakpoints,
-      device
+    return JSON.stringify(
+      revealedHidden(document, ids, breakpoints, device).shown
     );
-    return JSON.stringify([lifted, shown]);
   }, [document, selectedKey, breakpoints, device]);
-  return React.useMemo(() => {
-    const [liftedIds, shownIds] = JSON.parse(key) as [string[], string[]];
-    return {
-      document:
-        liftedIds.length === 0
-          ? document
-          : revealDeviceHidden(document, liftedIds),
-      ids: shownIds,
-    };
-  }, [document, key]);
+  return React.useMemo(
+    () => ({ document, ids: JSON.parse(key) as string[] }),
+    [document, key]
+  );
 }

@@ -54,6 +54,14 @@ export {
   // here than it does in a browser.
   decodeIdentifier,
   referencesCustomProperty,
+  // The custom properties a value reads through `var()`, by the same walk:
+  // what counts a site's variable as used where CSS text names it, as a
+  // shadow's colour does.
+  customPropertiesReferenced,
+  // A shadow's layers and their parts, as the token check reads them: the
+  // builder's shadow fields read a shadow the same way, so the fields and
+  // the check agree on what a part is.
+  shadowLayerParts,
   // The other direction, public for the same reason. A caller that decoded a
   // name to compare it has to escape it again before writing it back, or a name
   // holding a space or a quote is emitted as tokens the parser reads apart.
@@ -74,7 +82,12 @@ export {
   // contains stops reading where the compiler does.
   MAX_VALUE_LENGTH,
 } from "../style/css-value";
-export type { CssValueRejection, MayFetchUrl } from "../style/css-value";
+export type {
+  CssValueRejection,
+  MayFetchUrl,
+  ShadowPart,
+  ShadowPartKind,
+} from "../style/css-value";
 export type { StyleValueOptions } from "../style/validate-style-value";
 export {
   validateStyleValues,

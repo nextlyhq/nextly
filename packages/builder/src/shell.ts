@@ -482,6 +482,15 @@ export type { EmptyContainerAppendersProps } from "./canvas/empty-container-appe
 export { ImageStates } from "./canvas/image-states";
 export type { ImageStatesProps } from "./canvas/image-states";
 /**
+ * The chooser a block just added asks for, drawn over it on the canvas while
+ * the editor's first-add step holds: the Columns layouts with Skip. A canvas
+ * overlay composed like the ones above, from the editor alone.
+ *
+ * @experimental
+ */
+export { FirstAddChoosers } from "./canvas/first-add-choosers";
+export type { FirstAddChoosersProps } from "./canvas/first-add-choosers";
+/**
  * The badge on a block whose bound value a visitor will not see, drawn in the
  * canvas's overlay from the host's `visitorUnreadableBindings` answer.
  */
@@ -736,6 +745,9 @@ export {
 // and the way a host hands the tab its search.
 export { stylesTabMatches } from "./styles-tab-matches";
 export { SharedStylesHostSearch } from "./shared-styles-panel";
+// Where a block type's styles sit in the Styles tab, so a host sending the
+// author there ("Edit block styles") reveals the group the tab draws.
+export { blockStyleFoldId } from "./block-looks-group";
 // The site's fonts, for every Font control the host draws: the block panel's
 // and a font variable's in Design.
 export { FontChoicesContext } from "./font-family-field";

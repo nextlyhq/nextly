@@ -35,6 +35,7 @@ import {
   type MiniatureSession,
   useMiniatureSession,
   type VariablesPreview,
+  blockStyleFoldId,
 } from "@nextlyhq/builder/shell";
 import {
   useDocumentIdentity,
@@ -70,6 +71,7 @@ import {
   DesignReveal,
   ReportStylesMatches,
   SITE_FONTS_GROUP,
+  type DesignRevealRequest,
   type DesignView,
 } from "./design-panel";
 import {
@@ -351,6 +353,15 @@ type PanelRequests = {
   addSummon: number | undefined;
   /** Told by Add each press it has answered. */
   onAddSummoned: (count: number) => void;
+  /**
+   * Opens Design on its Styles tab with one block type's Block styles opened
+   * and brought into view: the block panel's "Edit block styles".
+   */
+  openBlockStyles: (blockType: string) => void;
+  /** The group Design has yet to reveal, or `undefined` once it has. */
+  designReveal: DesignRevealRequest | undefined;
+  /** Told by Design each reveal request it has answered. */
+  onDesignRevealed: (count: number) => void;
 };
 
 /**
@@ -444,6 +455,7 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
   const [addPresses, setAddPresses] = useState(0);
   const [answeredPress, setAnsweredPress] = useState(0);
   const [pressTab, setPressTab] = useState<AddTab | undefined>(undefined);
+  const reveals = useDesignReveals(requestPanel);
   const openInsertPanel = useCallback(
     (place?: InsertPlaceRequest, tab?: AddTab): void => {
       setPlaceRequest(place);
@@ -482,6 +494,42 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
     addSummonTab: addPresses > answeredPress ? pressTab : undefined,
     onAddSummoned: setAnsweredPress,
     openAddUnlessHidden,
+    ...reveals,
+  };
+}
+
+/**
+ * "Edit block styles": Design asked for its Styles tab, and the type's group
+ * asked to be revealed there. Counted, as Add's presses are, and answered by
+ * the panel once its tab is open, so the panel opened later from the rail
+ * replays nothing.
+ */
+function useDesignReveals(
+  requestPanel: RequestPanel
+): Pick<
+  PanelRequests,
+  "openBlockStyles" | "designReveal" | "onDesignRevealed"
+> {
+  const [asked, setAsked] = useState<DesignRevealRequest | undefined>(
+    undefined
+  );
+  const [answered, setAnswered] = useState(0);
+  const openBlockStyles = useCallback(
+    (blockType: string): void => {
+      setAsked(current => ({
+        view: "styles",
+        group: blockStyleFoldId(blockType),
+        count: (current?.count ?? 0) + 1,
+      }));
+      requestPanel("design", "styles");
+    },
+    [requestPanel]
+  );
+  return {
+    openBlockStyles,
+    designReveal:
+      asked !== undefined && asked.count > answered ? asked : undefined,
+    onDesignRevealed: setAnswered,
   };
 }
 
@@ -814,6 +862,8 @@ export function editorPanelRenderer({
   lookEditing,
   previewMode,
   designFolds,
+  designReveal,
+  onDesignRevealed,
   pictureSession,
 }: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
   /** The look edited on its own, which the Design panel's Block looks choose. */
@@ -867,6 +917,9 @@ export function editorPanelRenderer({
     | "pages"
     | "designFolds"
     | "pictureSession"
+  > &
+  Partial<
+    Pick<EditorPanels, "designReveal" | "onDesignRevealed">
   >): React.ComponentProps<typeof BuilderShell>["renderPanel"] {
   return (panel, view) => {
     /*
@@ -985,6 +1038,14 @@ export function editorPanelRenderer({
         <DesignPanel
           view={view}
           {...(designFolds === undefined ? {} : { foldStore: designFolds })}
+          // A block type's styles asked for by "Edit block styles", shown
+          // once the Styles tab is open.
+          {...(designReveal === undefined
+            ? {}
+            : { revealRequest: designReveal })}
+          {...(onDesignRevealed === undefined
+            ? {}
+            : { onRevealed: onDesignRevealed })}
           // The studio surrounds every tab, so the header it draws stays the
           // same whichever is open.
           frame={designTabs => (

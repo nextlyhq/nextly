@@ -13,8 +13,8 @@ import { useId, type JSX } from "react";
 import { Link } from "@admin/components/ui/link";
 import { DataTableView } from "@admin/components/ui/table/data-table";
 import type { NextlyColumn } from "@admin/components/ui/table/data-table";
-import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { useDocumentAddress } from "@admin/lib/navigation/useDocumentAddress";
 import {
   searchSidebarSingles,
   singleDisplayName,
@@ -31,8 +31,30 @@ import {
 } from "./overview-cells";
 import { useSingleLastEdit } from "./overview-rows";
 
-function editHref(single: ApiSingle): string {
-  return buildRoute(ROUTES.SINGLE_EDIT, { slug: single.slug });
+/**
+ * Where a row opens its Single: where the admin's one rule opens it, as the
+ * sidebar does, read from the Single the table holds. A Homepage whose main
+ * field is a page layout opens in the Page Builder; a reader who may only
+ * read it gets its form.
+ */
+function useOpenHref(single: ApiSingle): string {
+  const addressOf = useDocumentAddress();
+  return addressOf(
+    { kind: "single", slug: single.slug },
+    { collection: single }
+  );
+}
+
+/** The row's name, linking where the Single opens. */
+function SingleName({ single }: { single: ApiSingle }): JSX.Element {
+  return (
+    <RowName
+      kind="single"
+      icon={single.admin?.icon}
+      label={singleDisplayName(single)}
+      href={useOpenHref(single)}
+    />
+  );
 }
 
 /** Who or what edited it last, as the activity feed names them. */
@@ -55,17 +77,15 @@ function LastEditedCell({ single }: { single: ApiSingle }): JSX.Element {
   return at === undefined ? <NoValue label="Never edited" /> : <When at={at} />;
 }
 
-/** Edit where the reader may change it, else View: both open its editor. */
+/** Edit where the reader may change it, else View: both open it as the row does. */
 function EditAction({ single }: { single: ApiSingle }): JSX.Element {
   const { capabilities } = useCurrentUserPermissions();
+  const href = useOpenHref(single);
   const verb =
     capabilities.collections[single.slug]?.canUpdate === true ? "Edit" : "View";
   return (
     <Button asChild size="sm" variant="outline">
-      <Link
-        href={editHref(single)}
-        aria-label={`${verb} ${singleDisplayName(single)}`}
-      >
+      <Link href={href} aria-label={`${verb} ${singleDisplayName(single)}`}>
         {verb}
       </Link>
     </Button>
@@ -76,14 +96,7 @@ const COLUMNS: NextlyColumn<ApiSingle>[] = [
   {
     name: "name",
     header: "Single",
-    cell: ({ row }) => (
-      <RowName
-        kind="single"
-        icon={row.admin?.icon}
-        label={singleDisplayName(row)}
-        href={editHref(row)}
-      />
-    ),
+    cell: ({ row }) => <SingleName single={row} />,
   },
   {
     name: "editedBy",

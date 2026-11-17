@@ -7,6 +7,7 @@
 import type { CssNode } from "css-tree";
 
 import {
+  decodeIdentifier,
   identifierOf,
   parseValue,
   trimCssWhitespace,
@@ -54,26 +55,84 @@ import {
  * exists to catch.
  */
 export function referencesCustomProperty(value: string): boolean {
-  const parsed = parseValue(value);
-  if (parsed === null) return true;
-  return walkForVarCall(parsed, 0);
+  const reading = readVarCalls(value);
+  return reading === undefined || reading.calls > 0;
 }
 
-function walkForVarCall(node: CssNode, depth: number): boolean {
-  // Depth-bounded for the reason the URL walk is: parsing and walking are both
-  // recursive, so a deeply nested value exhausts the stack. Answering TRUE at
-  // the cap keeps the refusal fail-closed rather than declaring a value clean
-  // because it was too deep to read.
-  if (depth >= MAX_VALUE_NESTING) return true;
+/**
+ * The custom properties a value reads through `var()`, by the names CSS reads
+ * them as, or `undefined` where the value cannot be read whole: it does not
+ * parse, or it nests deeper than {@link MAX_VALUE_NESTING}.
+ *
+ * The same walk {@link referencesCustomProperty} asks, so the two cannot
+ * disagree about what a reference is: a fallback is read as the raw text the
+ * parser hands back, and a name is read DECODED, so `var(--site-colo\72)`
+ * names `--site-color` as a browser reads it. A name keeps its case, since a
+ * custom property's name is case-sensitive. A `var()` whose head is not a
+ * custom property names nothing, and the browser drops it.
+ *
+ * `undefined` is a value the style compiler does not emit: `checkCssValue`
+ * refuses one that does not parse, and its nesting bound counts the brackets
+ * this walk counts, so a value this cannot read whole is refused there as
+ * too deeply nested. A caller asking what a stored value makes the page read
+ * may therefore take `undefined` as naming nothing.
+ */
+export function customPropertiesReferenced(
+  value: string
+): readonly string[] | undefined {
+  return readVarCalls(value)?.names;
+}
+
+/** What one walk of a value found: how many `var()` calls, and their names. */
+interface VarCalls {
+  calls: number;
+  readonly names: string[];
+}
+
+/** The value's `var()` calls, or `undefined` where it cannot be read whole. */
+function readVarCalls(value: string): VarCalls | undefined {
+  const parsed = parseValue(value);
+  if (parsed === null) return undefined;
+  const found: VarCalls = { calls: 0, names: [] };
+  return collectVarCalls(parsed, 0, found) ? found : undefined;
+}
+
+/**
+ * Record each `var()` under `node`, answering whether it was read whole.
+ *
+ * Depth-bounded for the reason the URL walk is: parsing and walking are both
+ * recursive, so a deeply nested value exhausts the stack. The depth is the
+ * bracket nesting, counted as `checkCssValue` counts it (each function,
+ * parenthesis and square bracket opens one level, and a fallback's raw text
+ * sits inside its `var()`'s level), so a value read in part here is one the
+ * compiler refuses, and every value it emits is read whole. Past the bound
+ * the answer is "not read whole", which {@link referencesCustomProperty}
+ * reads as a reference, keeping it fail-closed.
+ */
+function collectVarCalls(
+  node: CssNode,
+  depth: number,
+  found: VarCalls
+): boolean {
+  if (depth > MAX_VALUE_NESTING) return false;
   // A fallback arrives as raw text rather than as parsed children, so a
-  // reference nested inside one — `var(--a, v\61 r(--b))` — is invisible to a
-  // walk that only descends `children`.
-  if (node.type === "Raw") return rawCarriesVarCall(node.value, depth);
-  if (isVarCall(node)) return true;
-  for (const child of childrenOf(node)) {
-    if (walkForVarCall(child, depth + 1)) return true;
+  // reference nested inside one (`var(--a, v\61 r(--b))`) is invisible to a
+  // walk that only descends `children`. One that does not parse names
+  // nothing, as before.
+  if (node.type === "Raw") {
+    const inner = parseValue(node.value);
+    return inner === null || collectVarCalls(inner, depth, found);
   }
-  return false;
+  if (isVarCall(node)) {
+    found.calls += 1;
+    const name = customPropertyNameOf(node);
+    if (name !== undefined) found.names.push(name);
+  }
+  const inner = opensLevel(node) ? depth + 1 : depth;
+  for (const child of childrenOf(node)) {
+    if (!collectVarCalls(child, inner, found)) return false;
+  }
+  return true;
 }
 
 /** Whether THIS node is the substitution, as CSS reads its name. */
@@ -81,10 +140,21 @@ function isVarCall(node: CssNode): boolean {
   return node.type === "Function" && identifierOf(node) === "var";
 }
 
-/** A `var()` fallback, which the parser hands back as unparsed text. */
-function rawCarriesVarCall(text: string, depth: number): boolean {
-  const inner = parseValue(text);
-  return inner !== null && walkForVarCall(inner, depth + 1);
+/** Whether a node's children sit one bracket deeper than the node. */
+function opensLevel(node: CssNode): boolean {
+  return (
+    node.type === "Function" ||
+    node.type === "Parentheses" ||
+    node.type === "Brackets"
+  );
+}
+
+/** The decoded custom property a `var()` names, or none where its head is not one. */
+function customPropertyNameOf(node: CssNode): string | undefined {
+  const [head] = childrenOf(node);
+  if (head?.type !== "Identifier") return undefined;
+  const name = decodeIdentifier(head.name);
+  return name.startsWith("--") ? name : undefined;
 }
 
 /**
