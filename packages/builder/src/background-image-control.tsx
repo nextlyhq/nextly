@@ -19,7 +19,11 @@ import {
   IMAGE_STATE_WORDS,
 } from "./canvas/image-states-model";
 import { commitOnEnter } from "./commit-on-enter";
-import { ContentServicesContext, type PickedMedia } from "./content-services";
+import {
+  ContentServicesContext,
+  type ContentServices,
+  type PickedMedia,
+} from "./content-services";
 import { useFieldDescription } from "./css-hint";
 import { refusedBy } from "./focal-point-field";
 import { InheritedValue } from "./inherited-value";
@@ -58,32 +62,13 @@ function imageName(address: string): string {
   }
 }
 
-export function BackgroundImageField({
-  id,
-  labelledBy,
-  stored,
-  describedBy,
-  onCommit,
-}: {
-  id: string;
-  labelledBy: string;
-  stored: StyleValue | undefined;
-  actionName: string;
-  describedBy: string | undefined;
-  onCommit: (value: StyleValue | null) => CommitOutcome;
-}): React.JSX.Element {
-  const services = React.useContext(ContentServicesContext);
-  const described = useFieldDescription(describedBy);
-  const read = readStored(stored);
-  const image = read !== undefined && "image" in read ? read.image : undefined;
-  const keyword =
-    read !== undefined && "keyword" in read ? read.keyword : undefined;
-  // What reaches the field from elsewhere (an earlier state or a wider
-  // device), said when nothing is set here.
-  const inherited = readStored(React.useContext(InheritedValue));
+/** The image's writes, and what this field says about them. */
+function useImageWrites(
+  services: ContentServices | undefined,
+  onCommit: (value: StyleValue | null) => CommitOutcome
+) {
   const [issue, setIssue] = React.useState<string | null>(null);
   const [uploading, setUploading] = React.useState(false);
-  const fileInput = React.useRef<HTMLInputElement>(null);
   // Counts the writes started here, so an upload that finishes after a later
   // choice (a pasted link) does not overwrite it.
   const writes = React.useRef(0);
@@ -120,7 +105,6 @@ export function BackgroundImageField({
       setUploading(false);
     }
   };
-
   // A pasted link is written as it is; the field empties once it holds.
   const commitLink = (input: HTMLInputElement) => {
     const link = input.value.trim();
@@ -129,6 +113,114 @@ export function BackgroundImageField({
     setIssue(null);
     if (onCommit(link) === "applied") input.value = "";
   };
+  const remove = () => {
+    setIssue(null);
+    onCommit(null);
+  };
+  return { issue, uploading, writePicked, upload, commitLink, remove };
+}
+
+/**
+ * What the field says is set: a keyword set here, the image reaching it
+ * from elsewhere while nothing is set here, or the image's thumbnail.
+ */
+function ImageSummary({
+  read,
+  inherited,
+}: {
+  read: ReturnType<typeof readStored>;
+  inherited: ReturnType<typeof readStored>;
+}): React.JSX.Element | null {
+  if (read !== undefined && "keyword" in read) {
+    // `none` clears an earlier image: said, and removable, rather than
+    // looking like nothing is set.
+    return (
+      <p className="nx-inspector__note">No image here ({read.keyword}).</p>
+    );
+  }
+  if (read === undefined) {
+    return inherited !== undefined && "image" in inherited ? (
+      <p className="nx-inspector__note" title={inherited.image}>
+        Inherits {imageName(inherited.image)}
+      </p>
+    ) : null;
+  }
+  return (
+    <div className="nx-inspector__media-chosen">
+      <img
+        className="nx-inspector__media-thumb"
+        src={read.image}
+        alt=""
+        aria-hidden="true"
+      />
+      <div className="nx-inspector__media-text">
+        <p className="nx-inspector__media-name" title={read.image}>
+          {imageName(read.image)}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/** Upload, with the hidden file chooser it opens. */
+function UploadButton({
+  uploading,
+  onFiles,
+}: {
+  uploading: boolean;
+  onFiles: (files: FileList | null) => void;
+}): React.JSX.Element {
+  const fileInput = React.useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={uploading}
+        onClick={() => fileInput.current?.click()}
+      >
+        {uploading ? "Uploading…" : "Upload"}
+      </Button>
+      <input
+        ref={fileInput}
+        type="file"
+        accept="image/*"
+        hidden
+        onChange={event => {
+          onFiles(event.currentTarget.files);
+          event.currentTarget.value = "";
+        }}
+      />
+    </>
+  );
+}
+
+export function BackgroundImageField({
+  id,
+  labelledBy,
+  stored,
+  describedBy,
+  onCommit,
+}: {
+  id: string;
+  labelledBy: string;
+  stored: StyleValue | undefined;
+  actionName: string;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  const services = React.useContext(ContentServicesContext);
+  const described = useFieldDescription(describedBy);
+  const read = readStored(stored);
+  const image = read !== undefined && "image" in read ? read.image : undefined;
+  // What reaches the field from elsewhere (an earlier state or a wider
+  // device), said when nothing is set here.
+  const inherited = readStored(React.useContext(InheritedValue));
+  const { issue, uploading, writePicked, upload, commitLink, remove } =
+    useImageWrites(services, onCommit);
+  const Picker = services?.MediaPicker;
+  const canUpload = image === undefined && services?.uploadMedia !== undefined;
 
   return (
     <div
@@ -137,35 +229,11 @@ export function BackgroundImageField({
       aria-labelledby={labelledBy}
       className="nx-background-image"
     >
-      {keyword === undefined ? null : (
-        // A keyword set here (`none` clears an earlier image): said, and
-        // removable, rather than looking like nothing is set.
-        <p className="nx-inspector__note">No image here ({keyword}).</p>
-      )}
-      {read === undefined && inherited !== undefined && "image" in inherited ? (
-        <p className="nx-inspector__note" title={inherited.image}>
-          Inherits {imageName(inherited.image)}
-        </p>
-      ) : null}
-      {image === undefined ? null : (
-        <div className="nx-inspector__media-chosen">
-          <img
-            className="nx-inspector__media-thumb"
-            src={image}
-            alt=""
-            aria-hidden="true"
-          />
-          <div className="nx-inspector__media-text">
-            <p className="nx-inspector__media-name" title={image}>
-              {imageName(image)}
-            </p>
-          </div>
-        </div>
-      )}
+      <ImageSummary read={read} inherited={inherited} />
       <div className="nx-background-image__actions">
-        {services?.MediaPicker === undefined ? null : (
+        {Picker === undefined ? null : (
           <MediaChoice
-            Picker={services.MediaPicker}
+            Picker={Picker}
             label="Background image"
             // The library is asked for files, not addresses, so nothing is
             // preselected; the button reads "Replace" once an image is set.
@@ -175,40 +243,19 @@ export function BackgroundImageField({
             onChoose={writePicked}
           />
         )}
-        {image === undefined && services?.uploadMedia !== undefined ? (
-          <>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={uploading}
-              onClick={() => fileInput.current?.click()}
-            >
-              {uploading ? "Uploading…" : "Upload"}
-            </Button>
-            <input
-              ref={fileInput}
-              type="file"
-              accept="image/*"
-              hidden
-              onChange={event => {
-                const files = event.currentTarget.files;
-                void upload(files);
-                event.currentTarget.value = "";
-              }}
-            />
-          </>
+        {canUpload ? (
+          <UploadButton
+            uploading={uploading}
+            onFiles={files => void upload(files)}
+          />
         ) : null}
-        {image === undefined && keyword === undefined ? null : (
+        {read === undefined ? null : (
           <Button
             type="button"
             size="sm"
             variant="outline"
             aria-label="Remove background image"
-            onClick={() => {
-              setIssue(null);
-              onCommit(null);
-            }}
+            onClick={remove}
           >
             Remove
           </Button>

@@ -108,7 +108,7 @@ async function openStyle(
     timeout: 60_000,
   });
   await canvasFrame(page)
-    .locator(`.nx-canvas [data-nx-node="${node}"]`)
+    .locator(`[data-nx-node="${node}"]`)
     .first()
     .click({ position: { x: 6, y: 6 } });
   await expect(page.locator("[data-block-card]")).toBeVisible();
@@ -166,9 +166,7 @@ test.describe("a Section's overlay and Height, a Button's Size", () => {
     );
     await openStyle(page, id, OUTER, "Size");
     await page.getByRole("radio", { name: "Full screen" }).click();
-    const drawn = canvasFrame(page).locator(
-      `.nx-canvas [data-nx-node="${OUTER}"]`
-    );
+    const drawn = canvasFrame(page).locator(`[data-nx-node="${OUTER}"]`);
     await expect
       .poll(async () =>
         drawn.evaluate(element => {
@@ -208,9 +206,7 @@ test.describe("a Section's overlay and Height, a Button's Size", () => {
       "draft"
     );
     await openStyle(page, id, BUTTON, "Size");
-    const drawn = canvasFrame(page).locator(
-      `.nx-canvas [data-nx-node="${BUTTON}"]`
-    );
+    const drawn = canvasFrame(page).locator(`[data-nx-node="${BUTTON}"]`);
     const paddingTop = () =>
       drawn.evaluate(element =>
         Number.parseFloat(getComputedStyle(element).paddingTop)

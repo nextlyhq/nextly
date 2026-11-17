@@ -107,6 +107,11 @@ function readoutOf(
   return inheritedPoint?.label ?? inherited ?? `${fallback.label} by default`;
 }
 
+/** The point of the nine a fallback names. */
+function pointNamed(fallback: FocalFallback): (typeof POINTS)[number] {
+  return POINTS.find(point => point.value === fallback) ?? POINTS[4];
+}
+
 /**
  * The point CSS places at when nothing is set: the middle for an image's
  * object position, the top left for a background's position.
@@ -153,8 +158,7 @@ export function FocalPointField({
   /** Where CSS places it when nothing is set; the middle unless said. */
   fallback?: FocalFallback;
 }): React.JSX.Element {
-  const fallbackPoint =
-    POINTS.find(point => point.value === fallback) ?? POINTS[4];
+  const fallbackPoint = pointNamed(fallback);
   // The refusal, and the CSS names while they are shown.
   const described = useFieldDescription(describedBy);
   // What each point writes, from the field it is drawn in: its tooltip.

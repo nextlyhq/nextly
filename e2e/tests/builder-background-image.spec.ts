@@ -74,10 +74,13 @@ async function openBackground(page: Page, id: string): Promise<void> {
   }
 }
 
+/**
+ * The Section as the canvas draws it, by its node id alone: with the site's
+ * header and footer drawn around the page, the page's blocks sit in its own
+ * part of the frame.
+ */
 function sectionOnCanvas(page: Page) {
-  return canvasFrame(page)
-    .locator(`.nx-canvas [data-nx-node="${SECTION}"]`)
-    .first();
+  return canvasFrame(page).locator(`[data-nx-node="${SECTION}"]`).first();
 }
 
 /** The Section's computed background, as the canvas draws it. */
