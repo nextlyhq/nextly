@@ -40,6 +40,24 @@ export function ModeIcon({ mode }: { mode: TokenMode }): React.JSX.Element {
   );
 }
 
+/**
+ * What the variable is for, in a line under its name: a built-in's own
+ * description ("The space a container puts between the blocks it holds."),
+ * kept from the site's code where a stored override carries none.
+ */
+export function VariableDescription({
+  token,
+  supplied,
+}: {
+  token: SiteToken | undefined;
+  supplied: SiteToken | undefined;
+}): React.JSX.Element | null {
+  const description = token?.description ?? supplied?.description;
+  return description === undefined ? null : (
+    <p className="nx-vars-editor__description">{description}</p>
+  );
+}
+
 /** How long "Copied" shows after the code name is copied. */
 const COPIED_FOR_MS = 2000;
 

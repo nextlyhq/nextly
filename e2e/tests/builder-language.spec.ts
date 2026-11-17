@@ -16,7 +16,7 @@ import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import { canvasFrame } from "./support/canvas-frame";
 
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
 const ENTRIES = "/admin/api/collections/translated-pages/entries";
 
 function page_(id: string, text: string) {
