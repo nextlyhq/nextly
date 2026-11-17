@@ -36,6 +36,7 @@ import {
   startFormProviders,
 } from "./forms/providers";
 import { FORM_SEND_LIMITS, formReceiverRoute } from "./forms/route";
+import { SITE_FORMS_SERVICE_NAME, siteForms } from "./forms/site-forms";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
 import { registerNamedQueriesAtBoot } from "./named-queries";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
@@ -141,6 +142,11 @@ export const pageBuilder = (
   const def = createDefinition(opts);
   // The form providers other plugins register, read by the form receiver.
   const formProviders = createFormProviders();
+  // What a routed page's forms need: where they post, and its providers' forms.
+  const pageForms = siteForms({
+    providers: formProviders,
+    componentStore: componentStoreOf(opts),
+  });
   const { state, templateAddresses, configStyle, configClassIds, fonts } = def;
   const { pagesCountOf, uncoveredPagesOf, usageSourceOf, countPlacements } =
     usageParts(def);
@@ -268,6 +274,7 @@ export const pageBuilder = (
       // Starts this boot's form providers, so the last boot's are forgotten
       // even when no plugin registers one.
       startFormProviders(ctx.services);
+      pageForms.start(ctx.self);
       // The site's named queries and the ones plugins declare, into a
       // registry emptied for this boot.
       state.namedQueries = registerNamedQueriesAtBoot(ctx, opts.namedQueries);
@@ -393,6 +400,7 @@ export const pageBuilder = (
       services: {
         ...pluginServices(def, { removalService, readRetiredFor }),
         [FORM_SERVICE]: () => formProviders.start(),
+        [SITE_FORMS_SERVICE_NAME]: () => pageForms.service(),
       },
       // The form receiver's send limit per visitor address.
       limits: FORM_SEND_LIMITS,
@@ -504,6 +512,7 @@ export const pageBuilder = (
         formReceiverRoute({
           providers: formProviders,
           componentStore: componentStoreOf(opts),
+          ...(opts.limits === undefined ? {} : { limits: opts.limits }),
         }),
       ],
       // The grant that lets a role change the site's settings in the editor's
