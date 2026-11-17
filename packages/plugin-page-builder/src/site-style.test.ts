@@ -316,4 +316,27 @@ describe("the site's fluid range across the tiers", () => {
       ).tokens?.fluidRange
     ).toEqual({ min: 320, max: 1440 });
   });
+
+  it("is stored with a size made with Fluid…, whatever the code's is, so the stored sizes say what they were made across", () => {
+    // A merge of two authors' saves writes a fluid size again from its sizes
+    // and the range. It reads the stored tier alone, so that tier holds the
+    // range its fluid sizes were made across rather than leave it implied.
+    const lead = {
+      name: "font-size.lead",
+      kind: "dimension" as const,
+      values: { light: "clamp(1rem, 0.9167rem + 0.3704vw, 1.25rem)" },
+      fluid: { small: 16, large: 20 },
+    };
+    const coded = { tokens: [], fluidRange: { min: 320, max: 1440 } };
+    expect(
+      tokenOverrideOf(coded, {
+        tokens: [lead],
+        fluidRange: { min: 320, max: 1440 },
+      }).fluidRange
+    ).toEqual({ min: 320, max: 1440 });
+    // Neither tier sets one: the range it was made across is the default.
+    expect(
+      tokenOverrideOf({ tokens: [] }, { tokens: [lead] }).fluidRange
+    ).toEqual({ min: 360, max: 1280 });
+  });
 });

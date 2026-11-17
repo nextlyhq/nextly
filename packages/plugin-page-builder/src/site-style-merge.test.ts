@@ -285,6 +285,28 @@ describe("merging sizes made with Fluid… and the fluid range", () => {
     );
   });
 
+  it("rewrites nothing where no tier stores a range to write a size across", () => {
+    // Made across the code's own range, which the stored tier does not hold:
+    // writing it across the default would move every fluid size.
+    const coded = lead(16, 20, NEW);
+    const brand = {
+      name: "color.brand",
+      kind: "color",
+      values: { light: "#111" },
+    };
+    const merged = mergeSiteStyleSection(
+      "tokens",
+      { tokens: [coded, brand] },
+      { tokens: [coded, { ...brand, label: "Brand" }] },
+      { tokens: [coded, { ...brand, values: { light: "#222" } }] },
+      "mine"
+    );
+    const value = merged.value as { tokens: { values: { light: string } }[] };
+    expect(value.tokens[0]?.values.light).toBe(
+      fluidValue({ small: 16, large: 20 }, NEW)
+    );
+  });
+
   it("leaves a size written by hand as it is", () => {
     const typed = {
       name: "space.stack",

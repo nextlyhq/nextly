@@ -34,6 +34,7 @@
  * @module @nextlyhq/plugin-page-builder/site-style
  */
 import {
+  DEFAULT_FLUID_RANGE,
   isLook,
   sameJsonValue,
   sameSiteToken,
@@ -261,11 +262,29 @@ export function tokenOverrideOf(
     ...(edited.darkMode === undefined || edited.darkMode === defaults?.darkMode
       ? {}
       : { darkMode: edited.darkMode }),
-    ...(edited.fluidRange === undefined ||
-    sameJsonValue(edited.fluidRange, defaults?.fluidRange)
-      ? {}
-      : { fluidRange: edited.fluidRange }),
+    ...storedFluidRange(defaults, edited, tokens),
   };
+}
+
+/**
+ * The fluid range the stored tier holds: where it differs from the code's,
+ * and wherever the tier holds a size made with Fluid…, so the stored sizes
+ * say what they were made across. A merge of two authors' saves writes
+ * those sizes again from the stored tier alone.
+ */
+function storedFluidRange(
+  defaults: SiteTokenSet | undefined,
+  edited: SiteTokenSet,
+  stored: readonly SiteToken[]
+): Pick<SiteTokenSet, "fluidRange"> {
+  const range =
+    edited.fluidRange ?? defaults?.fluidRange ?? DEFAULT_FLUID_RANGE;
+  if (stored.some(token => token.fluid !== undefined))
+    return { fluidRange: range };
+  return edited.fluidRange === undefined ||
+    sameJsonValue(edited.fluidRange, defaults?.fluidRange)
+    ? {}
+    : { fluidRange: edited.fluidRange };
 }
 
 /**

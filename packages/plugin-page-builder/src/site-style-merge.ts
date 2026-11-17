@@ -33,7 +33,6 @@
  * @module site-style-merge
  */
 import {
-  DEFAULT_FLUID_RANGE,
   fluidValue,
   isPlainRecord,
   isTokenRef,
@@ -484,21 +483,23 @@ function mergedTokenSet(
   // the merge keeps each of the three on its own: one author's range beside
   // another's sizes. Written again from what was kept, the stored value is
   // the one "Fluid…" shows.
+  // Only across a range the tier stores, which it does wherever it holds a
+  // fluid size: one it leaves to the code is not known here, and the default
+  // is no stand-in for it.
   const range = fluidRangeIn(merged.fluidRange);
-  return {
-    ...merged,
-    tokens: tokens.map(token => withFluidValue(token, range)),
-  };
+  return range === undefined
+    ? { ...merged, tokens }
+    : { ...merged, tokens: tokens.map(token => withFluidValue(token, range)) };
 }
 
-/** A stored fluid range, or the default where none, or none readable, is set. */
-function fluidRangeIn(value: unknown): FluidRangeWidths {
+/** A stored fluid range, or `undefined` where none, or none readable, is set. */
+function fluidRangeIn(value: unknown): FluidRangeWidths | undefined {
   return isPlainRecord(value) &&
     typeof value.min === "number" &&
     typeof value.max === "number" &&
     value.min < value.max
     ? { min: value.min, max: value.max }
-    : DEFAULT_FLUID_RANGE;
+    : undefined;
 }
 
 /** A token with its light value written from its two sizes, where it has them. */
