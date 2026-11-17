@@ -163,6 +163,29 @@ describe("pending changes", () => {
     });
   });
 
+  // A rename the same save makes required cannot keep its values in one save (the save converts the
+  // pair as a rename, without the new not-null), so the rename says so for the save to refuse.
+  it("a rename says whether the same save makes the field required", () => {
+    const current = structuredClone(saved);
+    current[1] = text("summary", {
+      name: "excerpt",
+      validation: { required: true },
+    });
+    const renamed = pendingChanges(saved, current).find(
+      change => change.kind === "renamed"
+    );
+    expect(renamed).toMatchObject({
+      previousName: "summary",
+      madeRequired: true,
+    });
+
+    const alone = structuredClone(saved);
+    alone[1] = text("summary", { name: "excerpt" });
+    expect(
+      pendingChanges(saved, alone).find(change => change.kind === "renamed")
+    ).toMatchObject({ madeRequired: false });
+  });
+
   it("a type change is a type change, with the type it had", () => {
     const current = structuredClone(saved);
     current[1] = text("summary", { type: "textarea" });

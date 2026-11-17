@@ -489,10 +489,15 @@ describe("a rename the Builder made", () => {
     preservesValues: true,
     defaultSuggestion: "rename",
   });
-  const rename = (previousName: string, name: string): DraftRename => ({
+  const rename = (
+    previousName: string,
+    name: string,
+    madeRequired = false
+  ): DraftRename => ({
     label: "Summary",
     previousName,
     name,
+    madeRequired,
   });
 
   it("is answered as a rename, whatever the dialog chose, on every table holding it", async () => {
@@ -669,6 +674,29 @@ describe("a rename the Builder made", () => {
       "Summary was renamed from summary to abstract"
     );
     expect(onNoChanges).not.toHaveBeenCalled();
+    expect(confirmation.request).not.toHaveBeenCalled();
+  });
+
+  // The save answers the pair as a rename without the field's new not-null, so a rename the same
+  // save makes required would be saved required while its column stays nullable.
+  it("saves nothing for a rename the same save makes required", async () => {
+    const confirmation = confirmationStub();
+    const { result } = setup({
+      confirmation,
+      previewFn: vi.fn(() =>
+        Promise.resolve(
+          preview({ renamed: [candidate("summary", "abstract")] })
+        )
+      ),
+      draftRenames: [rename("summary", "abstract", true)],
+    });
+
+    await act(async () => result.current.handleSave());
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
+    expect(toastError.mock.calls[0][0]).toContain(
+      "Save the rename on its own, then make the field required."
+    );
     expect(confirmation.request).not.toHaveBeenCalled();
   });
 
