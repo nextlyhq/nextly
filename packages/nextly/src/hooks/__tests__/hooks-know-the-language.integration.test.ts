@@ -370,6 +370,64 @@ describe.each(getConfiguredTestDialects())(
       }
     }, 90_000);
 
+    // A Single's publish of every language runs the user hooks a
+    // collection's does, told what a collection's are: its before-hooks
+    // once, told every language and the shared part, and so its after-hooks.
+    it("runs a Single's hooks for a publish of every language, as a collection's", async () => {
+      const t = await boot(dialect);
+      const singles = t.getService("singleEntryService") as unknown as {
+        update(
+          slug: string,
+          data: Record<string, unknown>,
+          options: Record<string, unknown>
+        ): Promise<{ success: boolean }>;
+        publishAllLocales(
+          slug: string,
+          options: Record<string, unknown>
+        ): Promise<{ success: boolean }>;
+      };
+      for (const [locale, data] of [
+        ["en", { title: "Site", code: "a" }],
+        ["es", { title: "Sitio" }],
+      ] as const) {
+        const saved = await singles.update(
+          SITE,
+          { ...data, _overwrite: true },
+          { locale, overrideAccess: true }
+        );
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+      }
+      told.length = 0;
+      const published = await singles.publishAllLocales(SITE, {
+        overrideAccess: true,
+        data: { _overwrite: true },
+      });
+      expect(published.success, JSON.stringify(published)).toBe(true);
+
+      // A Single declares `beforeValidate` and `beforeChange` before a write
+      // (it has no `beforeOperation` of its own).
+      const before = toldBy("site:").filter(e =>
+        ["site:beforeValidate", "site:beforeChange"].includes(e.hook)
+      );
+      expect(
+        before.map(e => e.hook),
+        "the before-hooks run once"
+      ).toEqual(["site:beforeValidate", "site:beforeChange"]);
+      for (const entry of before) {
+        expect(entry.locale, entry.hook).toBeUndefined();
+        expect(entry, entry.hook).toMatchObject({
+          locales: ["en", "es"],
+          shared: true,
+        });
+      }
+      // A publish that moves the statuses puts no pending change live, so its
+      // after-hooks run once, as a collection's do, told every language.
+      const after = toldBy("site:afterChange");
+      expect(after).toHaveLength(1);
+      expect(after[0].locale).toBeUndefined();
+      expect(after[0]).toMatchObject({ locales: ["en", "es"], shared: true });
+    }, 90_000);
+
     it("tells a Single's update hooks its language and whether it moves the shared part", async () => {
       const t = await boot(dialect);
       const singles = t.getService("singleEntryService") as unknown as {

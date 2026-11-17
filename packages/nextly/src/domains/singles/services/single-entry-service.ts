@@ -25,11 +25,13 @@ import {
 } from "../../../auth/access/rule-language";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import type { RetentionRunner } from "../../../domains/retention/runner";
+import { withWriteParts } from "../../../hooks/hook-language";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import type { CacheRevalidator } from "../../../revalidation/types";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
+import { movesShared } from "../../collections/services/all-locales-lifecycle";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
   type LocalizationSource,
@@ -371,9 +373,15 @@ export class SingleEntryService extends BaseService {
     slug: string,
     options?: PublishAllSingleLocalesOptions
   ): Promise<SingleResult<PublishAllSingleResult>> {
+    // Its hooks are told whether it moves the shared part, by the rule a
+    // collection's publish of every language follows: a Single's chooses no
+    // parts, so it moves the shared part with every language.
     const result = await withRuleLanguage(
       everyLanguageOf(this.localization),
-      () => this.publishAllService.publishAllLocales(slug, options)
+      () =>
+        withWriteParts({ shared: movesShared(undefined) }, () =>
+          this.publishAllService.publishAllLocales(slug, options)
+        )
     );
     await this.afterWrite(result, options?.disableRevalidate === true);
     return result;
