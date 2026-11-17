@@ -332,7 +332,7 @@ export function StyleControlField({
               fieldId={id}
               onReset={() => commit(null)}
               stored={stored}
-              readOnly={readOnly}
+              readOnly={clearsItself(readOnly, stored)}
               resetByKey={sideKeys.resetByKey}
             />
             {sideKeys.hint}
@@ -416,6 +416,19 @@ function drawnAsSide(
 ): boolean {
   if (clearOnly || control.leaf.kind !== "dimension") return false;
   return isTokenRef(stored) || editableText(control, stored) !== undefined;
+}
+
+/**
+ * Whether a field's own surface removes its value, so its row offers no Reset
+ * as well: a value shown only to be cleared, with a Clear of its own. A held
+ * variable's chip has none, its Unlink keeping the value instead, so its row
+ * offers Reset as any set row does.
+ */
+function clearsItself(
+  readOnly: boolean,
+  stored: StyleValue | undefined
+): boolean {
+  return readOnly && !isTokenRef(stored);
 }
 
 /** The id a field's refusal is said under, or none while nothing is refused. */
