@@ -747,6 +747,43 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
+    it("puts Mine's newest pins first, at most the card's rows less two while there are saves, and says how many there are", async () => {
+      const t = await boot(dialect);
+      const saved: string[] = [];
+      for (let i = 0; i < 3; i++) {
+        saved.push(
+          await create(t, ANA, NOTES, { title: `Saved ${i}` }, at(60 - i))
+        );
+      }
+      const pinned: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        pinned.push(
+          await create(t, BEN, NOTES, { title: `Pin ${i}` }, at(50 - i))
+        );
+      }
+      // Pinned one after another, Pin 0 first: Pin 4 is the newest pin.
+      for (const id of pinned) {
+        await dashboardPinsService().pin(as(ANA), {
+          targetType: "collection",
+          targetSlug: NOTES,
+          entryId: id,
+        });
+        // Apart in time on every dialect's clock.
+        await new Promise(resolve => setTimeout(resolve, 15));
+      }
+      // As the card of five rows asks: its rows and one more.
+      const answer = await asked(as(ANA), "mine", { limit: 6 });
+      const items = answer.op === "list" ? answer.items : [];
+      expect(items.map(row => [row.entryId, row.group, row.pinCount])).toEqual([
+        [pinned[4], "pinned", 5],
+        [pinned[3], "pinned", 5],
+        [pinned[2], "pinned", 5],
+        [saved[2], "recent", null],
+        [saved[1], "recent", null],
+        [saved[0], "recent", null],
+      ]);
+    });
+
     it("leaves out, title and all, an entry the reader may no longer read, and one that is deleted", async () => {
       const t = await boot(dialect);
       const gated = await create(

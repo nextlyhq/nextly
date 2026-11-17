@@ -8,13 +8,14 @@
  * What a reader is shown is decided by the read rules at the moment of
  * reading, never when the pin was made: a pin of something they may no longer
  * read is left out of the list, with no title and no placeholder, and kept
- * stored, so it comes back if their access does. Pinning needs read access to
+ * stored, so it comes back if their access does. It still counts toward their
+ * limit, so the reader is told which of their own pins those are (only what
+ * the pin itself names, never a title) and may remove them. Pinning needs read access to
  * the target, so a reader cannot learn that an entry exists by pinning it. A
  * pin whose target no longer exists is removed when the pins are read, so it
  * never costs the reader one of their pins.
  *
  * @module services/dashboard/dashboard-pins-service
- * @experimental Until the dashboard's pins are drawn on it.
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -49,6 +50,17 @@ export interface ShownPin extends DocumentHeading {
   /** The pinned entry's id; "" for a Single. */
   entryId: string;
   pinnedAt: string;
+}
+
+/** The reader's pins: those they may read, and those they no longer may. */
+export interface ReaderPins {
+  /** The pins they may read, newest first, each with its heading. */
+  shown: ShownPin[];
+  /**
+   * Their pins of documents that exist but they may not read now, newest
+   * first: only what each pin names, for them to remove.
+   */
+  unreadable: PinTarget[];
 }
 
 /** The document a stored pin names, as the headings are keyed. */
@@ -87,27 +99,43 @@ class DashboardPinsService {
    * longer exists, so they are neither shown nor counted against the limit.
    */
   async list(caller: ReadCaller): Promise<ShownPin[]> {
+    return (await this.read(caller)).shown;
+  }
+
+  /**
+   * The reader's pins they may read, newest first, each with its heading, and
+   * their pins of documents they may no longer read, by what each names. One
+   * read per collection, as {@link list}.
+   *
+   * 🔴 An unreadable pin answers only the target its own reader stored: no
+   * title, status or time is read for it. A pin whose target is gone is never
+   * one of them: it is removed first ({@link livePins}).
+   */
+  async read(caller: ReadCaller): Promise<ReaderPins> {
     const pins = await this.livePins(caller.user.id);
-    if (pins.length === 0) return [];
+    if (pins.length === 0) return { shown: [], unreadable: [] };
     const headings = await readableHeadings(
       pins.map(refOf),
       caller,
       this.registries
     );
-    return pins.flatMap(pin => {
+    const shown: ShownPin[] = [];
+    const unreadable: PinTarget[] = [];
+    for (const pin of pins) {
       const heading = headings.get(headingKey(refOf(pin)));
-      return heading === undefined
-        ? []
-        : [
-            {
-              targetType: pin.targetType,
-              targetSlug: pin.targetSlug,
-              entryId: pin.entryId,
-              ...heading,
-              pinnedAt: new Date(pin.pinnedAt).toISOString(),
-            },
-          ];
-    });
+      if (heading === undefined) {
+        unreadable.push(targetOf(pin));
+        continue;
+      }
+      shown.push({
+        targetType: pin.targetType,
+        targetSlug: pin.targetSlug,
+        entryId: pin.entryId,
+        ...heading,
+        pinnedAt: new Date(pin.pinnedAt).toISOString(),
+      });
+    }
+    return { shown, unreadable };
   }
 
   /**

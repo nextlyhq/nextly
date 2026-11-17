@@ -4,8 +4,12 @@
  *
  * Two tabs, chosen by the query's `where.tab`:
  *
- * - **Mine** (the default): the reader's pins they may read, in the order they
- *   pinned them, then the documents they saved most recently, newest first.
+ * - **Mine** (the default): the reader's pins they may read, newest pin first
+ *   (group `pinned`), then the documents they saved most recently, newest
+ *   first (group `recent`). While there are saves to show, the pins take at
+ *   most the card's rows less two, and at least one, so recent work stays in
+ *   sight; each pinned row says how many pins the reader may read in all, for
+ *   the card's "View all pins (N)".
  * - **Team**: the documents other people saved most recently, newest first,
  *   each with who saved it.
  *
@@ -84,6 +88,8 @@ const CONTINUE_FIELDS = [
     label: "Changes not published",
   },
   { name: "pinned", type: "boolean" as const, label: "Pinned" },
+  { name: "group", type: "string" as const, label: "Group" },
+  { name: "pinCount", type: "number" as const, label: "Pins in all" },
 ];
 
 /**
@@ -188,6 +194,10 @@ interface ContinueRow {
   status: string | null;
   pendingChanges: boolean | null;
   pinned: boolean;
+  /** Which of Mine's two groups the row is in; `null` on Team, which has none. */
+  group: "pinned" | "recent" | null;
+  /** How many pins the reader may read in all, on a pinned row; `null` on any other. */
+  pinCount: number | null;
 }
 
 /** The document a pin names. */
@@ -221,8 +231,11 @@ function editRef(edit: RecentEdit): DocumentRef {
   return { ...documentOf(edit), locale: edit.locale };
 }
 
-/** A pin as a row: its heading as read now, edited when the document last was. */
-function pinRow(pin: ShownPin): ContinueRow {
+/**
+ * A pin as a row of `pinCount` pins: its heading as read now, edited when the
+ * document last was.
+ */
+function pinRow(pin: ShownPin, pinCount: number): ContinueRow {
   return {
     id: `pin:${headingKey(pinRef(pin))}`,
     entryId: pin.entryId,
@@ -239,6 +252,8 @@ function pinRow(pin: ShownPin): ContinueRow {
     status: pin.status ?? null,
     pendingChanges: null,
     pinned: true,
+    group: "pinned",
+    pinCount,
   };
 }
 
@@ -246,7 +261,8 @@ function pinRow(pin: ShownPin): ContinueRow {
 function editRow(
   edit: RecentEdit,
   heading: DocumentHeading,
-  pinned: boolean
+  pinned: boolean,
+  group: ContinueRow["group"]
 ): ContinueRow {
   const ref = documentOf(edit);
   return {
@@ -265,6 +281,8 @@ function editRow(
     status: heading.status ?? null,
     pendingChanges: null,
     pinned,
+    group,
+    pinCount: null,
   };
 }
 
@@ -297,7 +315,8 @@ async function recentEdits(
 async function editRows(
   edits: readonly RecentEdit[],
   caller: ReadCaller,
-  pinned: ReadonlySet<string>
+  pinned: ReadonlySet<string>,
+  group: ContinueRow["group"]
 ): Promise<ContinueRow[]> {
   const headings = await readableHeadings(
     edits.map(editRef),
@@ -308,24 +327,55 @@ async function editRows(
     const heading = headings.get(headingKey(editRef(edit)));
     return heading === undefined
       ? []
-      : [editRow(edit, heading, pinned.has(headingKey(documentOf(edit))))];
+      : [
+          editRow(
+            edit,
+            heading,
+            pinned.has(headingKey(documentOf(edit))),
+            group
+          ),
+        ];
   });
 }
 
-/** The reader's pins they may read, in the order pinned; none for a caller who is not a person. */
+/**
+ * The reader's pins they may read, newest pin first (a stable sort, so pins
+ * of one instant keep the order the pins service read them in); none for a
+ * caller who is not a person.
+ */
 async function readerPins(
   caller: ReadCaller,
   person: string | undefined
 ): Promise<ShownPin[]> {
   if (person === undefined) return [];
   const pins = await dashboardPinsService().list(caller);
-  return [...pins].sort((a, b) => a.pinnedAt.localeCompare(b.pinnedAt));
+  return [...pins].sort((a, b) => b.pinnedAt.localeCompare(a.pinnedAt));
 }
 
 /**
- * Mine: the pins first, in the order pinned, then the reader's own latest
- * saves of documents not pinned, newest first, at most `limit` rows. Enough
- * saves are asked for that the pins they also name cannot leave Mine short.
+ * How many of Mine's rows its pins take, of `limit`, with `pins` pins and
+ * saves to show or not.
+ *
+ * The card asks its "Number of entries" and one more (`listEntries(…) + 1`
+ * in `core-widgets/continue.ts`), so its rows are `limit - 1`. While there
+ * are saves to show, the pins take at most those rows less two, and at least
+ * one, so recent work stays in sight: three of the default five. With no
+ * saves to show, the pins take every row.
+ */
+function pinnedRowCount(
+  limit: number,
+  pins: number,
+  hasSaves: boolean
+): number {
+  const cardRows = Math.max(1, limit - 1);
+  return Math.min(pins, hasSaves ? Math.max(1, cardRows - 2) : limit);
+}
+
+/**
+ * Mine: the newest pins first, as many as {@link pinnedRowCount} gives them,
+ * then the reader's own latest saves of documents not pinned, newest first,
+ * filling the rest of the `limit` rows. Enough saves are asked for that the
+ * pins they also name cannot leave Mine short.
  */
 async function mineRows(
   caller: ReadCaller,
@@ -342,9 +392,14 @@ async function mineRows(
   const saved = await editRows(
     edits.filter(edit => !pinned.has(headingKey(documentOf(edit)))),
     caller,
-    pinned
+    pinned,
+    "recent"
   );
-  return [...pins.map(pinRow), ...saved].slice(0, limit);
+  const shownPins = pinnedRowCount(limit, pins.length, saved.length > 0);
+  return [
+    ...pins.slice(0, shownPins).map(pin => pinRow(pin, pins.length)),
+    ...saved.slice(0, limit - shownPins),
+  ];
 }
 
 /**
@@ -362,7 +417,7 @@ async function teamRows(
     limit,
     ...(person === undefined ? {} : { notSavedBy: person }),
   });
-  return editRows(edits, caller, pinned);
+  return editRows(edits, caller, pinned, null);
 }
 
 /** The rows that name a document id, grouped by their collection or Single. */
