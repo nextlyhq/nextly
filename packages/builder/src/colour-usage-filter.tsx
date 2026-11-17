@@ -11,10 +11,9 @@
  *
  * @module colour-usage-filter
  */
-import type { SiteTokenSet } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import { keepsColour, namedBySite, type ColourFilter } from "./colour-usage";
+import { keepsColour, type ColourFilter } from "./colour-usage";
 import type { VariableEntry, VariableGroup } from "./tokens-studio";
 import { usageState, type UsageState } from "./variable-usage";
 import type { VariableUsageHere } from "./variable-usage-view";
@@ -38,27 +37,21 @@ interface Listed {
  */
 export function useColourFilter<G extends Listed>({
   shown,
-  tokens,
   usage,
   usedOnPage,
   openKey,
 }: {
   shown: readonly G[];
-  tokens: SiteTokenSet | undefined;
   usage: VariableUsageHere | undefined;
   usedOnPage: ReadonlySet<string> | undefined;
   /** The row whose editor is open, listed whatever the filter. */
   openKey: string | null;
 }): { shown: readonly G[]; control: React.ReactNode } {
   const [filter, setFilter] = React.useState<ColourFilter>("all");
-  const named = React.useMemo(() => namedBySite(tokens), [tokens]);
   const colours = shown.find(group => group.group === "colours");
   if (colours === undefined) return { shown, control: null };
   const stateOf = (entry: VariableEntry): UsageState =>
-    usageState(
-      usage?.reachOf(entry.row.identity),
-      named.has(entry.row.identity)
-    );
+    usageState(usage?.reachOf(entry.row.identity));
   const keeps = (entry: VariableEntry): boolean =>
     entry.row.key === openKey ||
     keepsColour(

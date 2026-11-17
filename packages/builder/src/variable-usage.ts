@@ -49,6 +49,12 @@ export interface VariableReach {
    * a place, though there is no document to open.
    */
   readonly blockDefaults: readonly string[];
+  /**
+   * The site's variables whose own values name it through `var()`, by
+   * identity: a shadow variable keeps its colour that way. Absent where the
+   * host does not say.
+   */
+  readonly variables?: readonly string[];
   /** False makes `documents`, and so the places, a floor: "at least". */
   readonly complete: boolean;
 }
@@ -248,19 +254,18 @@ export function variableRemoval(
  * site's documents are all counted, since an absence proves nothing before.
  *
  * Used means something the site stores names it: a document, a shared or
- * block style, or (`namedHere`, read from the set itself) another variable
- * or a Site text row. A block type's own built-in look does not count: a
- * built-in colour only a core block uses is one the site never chose.
+ * block style, or another variable through `var()`. A block type's own
+ * built-in look does not count: a built-in colour only a core block uses is
+ * one the site never chose.
  */
 export type UsageState = "used" | "unused" | "counting";
 
-export function usageState(
-  reach: VariableReach | undefined,
-  namedHere: boolean
-): UsageState {
-  if (namedHere) return "used";
+export function usageState(reach: VariableReach | undefined): UsageState {
   if (reach === undefined) return "counting";
-  if (reach.documents > 0 || reach.sharedStyles.length > 0) return "used";
+  const named = (reach.variables?.length ?? 0) > 0;
+  if (named || reach.documents > 0 || reach.sharedStyles.length > 0) {
+    return "used";
+  }
   return reach.complete ? "unused" : "counting";
 }
 

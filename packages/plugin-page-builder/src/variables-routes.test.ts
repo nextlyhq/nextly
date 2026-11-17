@@ -241,6 +241,7 @@ describe("how widely variables are used", () => {
           // In id order, whatever order the site style lists them in.
           sharedStyles: ["c-card", "c-hero"],
           blockDefaults: [],
+          variables: [],
           complete: true,
         },
         "color.brand": {
@@ -249,6 +250,7 @@ describe("how widely variables are used", () => {
           sharedStyles: ["c-quote"],
           // In type order, whatever order the registry lists them in.
           blockDefaults: ["acme/button", "acme/card"],
+          variables: [],
           complete: true,
         },
         "color.unused": {
@@ -256,6 +258,7 @@ describe("how widely variables are used", () => {
           byKind: { pages: 0, components: 0, patterns: 0, layouts: 0 },
           sharedStyles: [],
           blockDefaults: [],
+          variables: [],
           complete: true,
         },
       },
@@ -1635,5 +1638,19 @@ describe("a variable named through var(), as a shadow names its colour", () => {
       complete: true,
     });
     expect(batches).toEqual([["t-accent", "var:--site-t-accent"]]);
+  });
+
+  it("names the variables that name a colour through var(), for the usage filter", async () => {
+    const { source } = usageOf(WHOLE, {});
+    const site = siteWith([accent, lift("--site-t-accent")]);
+    const answer = await readVariableUsage(
+      usageRequest("t-accent", "t-lift"),
+      holding("read-site_style"),
+      source,
+      async () => ({ classes: [], variables: site }),
+      NO_BLOCKS
+    );
+    expect(answer.variables["t-accent"]?.variables).toEqual(["t-lift"]);
+    expect(answer.variables["t-lift"]?.variables).toEqual([]);
   });
 });

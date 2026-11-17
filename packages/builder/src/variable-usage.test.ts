@@ -85,29 +85,27 @@ describe("how widely a row's variable is used, in words", () => {
 
 describe("whether a variable is used, for the usage filter", () => {
   it("is used by a page, a component or any other document", () => {
-    expect(usageState(reach(1), false)).toBe("used");
+    expect(usageState(reach(1))).toBe("used");
   });
 
   it("is used by a shared style or a block style", () => {
-    expect(usageState(reach(0, ["card"]), false)).toBe("used");
+    expect(usageState(reach(0, ["card"]))).toBe("used");
   });
 
-  it("is used where another variable or a Site text row names it", () => {
-    expect(usageState(reach(0), true)).toBe("used");
-    // Known before any count is read.
-    expect(usageState(undefined, true)).toBe("used");
-  });
-
-  it("is unused where only a core block's built-in look names it", () => {
-    expect(usageState(reach(0, [], true, ["core/button"]), false)).toBe(
-      "unused"
+  it("is used where another variable names it through var()", () => {
+    expect(usageState({ ...reach(0), variables: ["shadow.lift"] })).toBe(
+      "used"
     );
   });
 
+  it("is unused where only a core block's built-in look names it", () => {
+    expect(usageState(reach(0, [], true, ["core/button"]))).toBe("unused");
+  });
+
   it("is unused only once every document is counted", () => {
-    expect(usageState(reach(0), false)).toBe("unused");
-    expect(usageState(reach(0, [], false), false)).toBe("counting");
-    expect(usageState(undefined, false)).toBe("counting");
+    expect(usageState(reach(0))).toBe("unused");
+    expect(usageState(reach(0, [], false))).toBe("counting");
+    expect(usageState(undefined)).toBe("counting");
   });
 });
 

@@ -1214,6 +1214,12 @@ export interface VariableUsage {
    * (`baseStyles`) name it, in type order.
    */
   readonly blockDefaults: readonly string[];
+  /**
+   * The site's variables whose own values name it through `var()`, by
+   * identity, in the site's order: a shadow variable keeps its colour that
+   * way. Absent from an older server.
+   */
+  readonly variables?: readonly string[];
   /** False makes `documents` and `byKind` floors: "at least". */
   readonly complete: boolean;
 }

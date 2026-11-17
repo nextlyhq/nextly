@@ -523,6 +523,9 @@ export async function readVariableUsage(
   ).documentsUsingEach(ids, health);
   const styles = sharedStylesUsing(site.classes, asked);
   const defaults = blockDefaultsUsing(blocks(), asked);
+  // The variables whose own values name each one through `var()`: the
+  // relation a removal is refused by, so the filter and the refusal agree.
+  const naming = variablesUsing(site.variables, asked);
   // Built from entries, so an identity like `__proto__` is an own key.
   const variables: Record<string, VariableUsage> = Object.fromEntries(
     ids.map(id => [
@@ -534,6 +537,7 @@ export async function readVariableUsage(
         sharedStyles: (styles.get(id) ?? []).map(style => style.id).sort(),
         // In type order already, as the walk reads the registry.
         blockDefaults: (defaults.get(id) ?? []).map(block => block.type),
+        variables: (naming.get(id) ?? []).map(variable => variable.id),
       },
     ])
   );

@@ -77,7 +77,8 @@ const reach = (
 function access(complete = true): VariablesAccess {
   const reaches: Record<string, VariableReach> = {
     "color.brand": reach(2, complete),
-    "color.accent": reach(0, complete),
+    // Named by the Lift shadow, as the host's count says.
+    "color.accent": { ...reach(0, complete), variables: ["shadow.lift"] },
     "color.spare": reach(0, complete),
     "color.button": reach(0, complete, ["core/button"]),
     "shadow.lift": reach(0, complete),

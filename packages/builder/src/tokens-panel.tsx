@@ -352,7 +352,6 @@ function VariablesView({
   // The Colours tab's usage filter, over what the search matched.
   const colourFilter = useColourFilter({
     shown: matched,
-    tokens,
     usage,
     usedOnPage: hosted.usedOnPage,
     openKey,
