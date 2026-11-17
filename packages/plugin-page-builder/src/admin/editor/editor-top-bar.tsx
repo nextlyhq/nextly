@@ -17,7 +17,7 @@ import { OwnDesignsChip } from "../TemplateOwnDesigns";
 import { SearchButton } from "./editor-search";
 import type { EditorView } from "./editor-view";
 import { HistoryButtons } from "./history-buttons";
-import { PageReadMeter } from "./page-read-meter";
+import { PageReadMeter, type PageDataCount } from "./page-read-meter";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton, type VisitorPreview } from "./preview-button";
 import { siteStyleStatus } from "./site-style-studios";
@@ -60,7 +60,8 @@ export function editorTopBar(
    * The page's title as the form has it now, the field being edited by its
    * address, where that field sits in words when below the top level, and
    * the canvas, which a binding's Select brings its block into view in,
-   * and "Preview as visitor", which Preview's menu holds.
+   * and "Preview as visitor", which Preview's menu holds, and the page's
+   * data count, which the bar shows only near the limit.
    */
   page: {
     title: string | undefined;
@@ -68,6 +69,7 @@ export function editorTopBar(
     location?: string | undefined;
     canvas: HTMLElement | null;
     visitor: VisitorPreview;
+    pageData: PageDataCount | null;
   }
 ): {
   topBar: React.JSX.Element;
@@ -122,7 +124,7 @@ export function editorTopBar(
             column that shortens first: shown only once the page nears its
             limit, and only on a page, since a component is read as part of
             each page placing it. */}
-        <PageReadMeter />
+        <PageReadMeter count={page.pageData} />
       </>
     ),
     topBarCenter: (

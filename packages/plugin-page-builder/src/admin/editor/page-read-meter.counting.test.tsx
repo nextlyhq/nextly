@@ -100,20 +100,21 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   },
 }));
 
-import { PageReadMeter, PageReadsProvider } from "./page-read-meter";
+import {
+  PageReadMeter,
+  usePageDataCount,
+  type PageDataCountInputs,
+} from "./page-read-meter";
 
 /**
  * The page counted, as Page settings shows it: at every level, counting
  * included, so each step of the count can be read off it.
  */
 function Counted(
-  props: Omit<React.ComponentProps<typeof PageReadsProvider>, "children">
-): React.JSX.Element {
-  return (
-    <PageReadsProvider {...props}>
-      <PageReadMeter place="settings" />
-    </PageReadsProvider>
-  );
+  props: Omit<PageDataCountInputs, "counts">
+): React.JSX.Element | null {
+  const count = usePageDataCount({ ...props, counts: true });
+  return <PageReadMeter count={count} place="settings" />;
 }
 
 const counted: PageReadReport = {
@@ -693,5 +694,24 @@ describe("a meter that closes", () => {
     view.unmount();
     await wait(5000);
     expect(countWithStages).not.toHaveBeenCalled();
+  });
+});
+
+describe("a document that is not a page", () => {
+  it("is never counted, and draws no meter", async () => {
+    countWithStages.mockResolvedValue(counted);
+    function NotCounted(): React.JSX.Element | null {
+      const count = usePageDataCount({
+        counts: false,
+        editor,
+        drawnWith,
+        regions: NO_REGIONS,
+      });
+      return <PageReadMeter count={count} place="settings" />;
+    }
+    const view = render(<NotCounted />);
+    await wait(5000);
+    expect(countWithStages).not.toHaveBeenCalled();
+    expect(view.container.innerHTML).toBe("");
   });
 });

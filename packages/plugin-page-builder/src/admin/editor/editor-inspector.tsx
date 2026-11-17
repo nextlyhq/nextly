@@ -20,7 +20,7 @@ import { DocumentSettingsPanel } from "./document-settings-panel";
 import { servicesFor } from "./editor-services";
 import { pageAddressOf, type PageFacts } from "./editor-settings";
 import type { CardVerbs, EditorView } from "./editor-view";
-import { PageReadMeter } from "./page-read-meter";
+import { PageReadMeter, type PageDataCount } from "./page-read-meter";
 import {
   offerableFaces,
   offerableTokens,
@@ -31,6 +31,8 @@ import {
 interface EntryForm<TFieldValues extends FieldValues> {
   control: Control<TFieldValues>;
   page: PageFacts;
+  /** The page's data count, which Page settings shows at every level. */
+  pageData: PageDataCount | null;
 }
 
 /** The inspector, given the same readings the canvas draws with. */
@@ -171,7 +173,7 @@ export function editorInspector<TFieldValues extends FieldValues>(
           // the page's form.
           seoEditsPage={form.page.seo !== undefined}
           // The page's data at every level, so it can always be found.
-          pageData={<PageReadMeter place="settings" />}
+          pageData={<PageReadMeter count={form.pageData} place="settings" />}
         />
       )}
     />

@@ -61,15 +61,12 @@ import {
   type DocumentIdentity,
 } from "@nextlyhq/plugin-sdk/admin";
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
   type ReactElement,
-  type ReactNode,
 } from "react";
 
 import {
@@ -474,7 +471,9 @@ function usePageReads(
   document: BlockDocument,
   regions: readonly CountedRegion[],
   /** The site's page data limit; the default where it sets none. */
-  cap: number | undefined
+  cap: number | undefined,
+  /** Whether to count at all: a page is counted, nothing else is. */
+  counts: boolean
 ): PageReads {
   const [shown, setShown] = useState<ShownCount>(NOT_COUNTED);
   // The entry the canvas is drawn as, and the person reading it, so the
@@ -502,13 +501,14 @@ function usePageReads(
     };
   }, []);
   useEffect(() => {
+    if (!counts) return;
     scheduler.current?.changed(signal =>
       countPageReads(drawnWith, document, regions, cap, {
         ...readsNow.current,
         signal,
       })
     );
-  }, [drawnWith, document, regions, reader, cap]);
+  }, [drawnWith, document, regions, reader, cap, counts]);
   const retry = useCallback(() => scheduler.current?.retry(), []);
   return { report: shown.report, retry: shown.failed ? retry : undefined };
 }
@@ -529,18 +529,21 @@ export function readPageDataLimit(
 }
 
 /** The page's count, made once, for the top bar's meter and Page settings'. */
-interface PageReadsShown
+export interface PageDataCount
   extends Pick<ReadBudgetMeterProps, "editor" | "componentTitle"> {
   readonly report: PageReadReport | undefined;
   readonly retry: (() => void) | undefined;
   readonly regions: NonNullable<ReadBudgetMeterProps["regions"]>;
 }
 
-const PageReadsContext = createContext<PageReadsShown | null>(null);
-
 /** What the page's count is made with. */
-export interface PageReadsProps
+export interface PageDataCountInputs
   extends Pick<ReadBudgetMeterProps, "editor" | "componentTitle"> {
+  /**
+   * Whether the open document is counted: a page is; a component or a
+   * Layout is read as part of each page placing it, so it has no count.
+   */
+  readonly counts: boolean;
   /** What the canvas draws the page with. */
   readonly drawnWith: CountedDrawing;
   /**
@@ -551,73 +554,50 @@ export interface PageReadsProps
   readonly regions: NonNullable<ReadBudgetMeterProps["regions"]>;
   /** The site's page data limit (`readPageDataLimit`); 500 when unset. */
   readonly cap?: number | undefined;
-  readonly children: ReactNode;
 }
 
 /**
- * Counts the page, once, for every meter drawn inside it: the top bar's and
+ * Counts the page, once, for every meter that draws it: the top bar's and
  * Page settings' read the same count, so they cannot disagree, and the page
  * is not drawn twice to count it. The count runs while the bar's meter is
- * hidden, since the bar must know when to show it.
+ * hidden, since the bar must know when to show it. `null` where the open
+ * document is not counted.
  */
-export function PageReadsProvider({
+export function usePageDataCount({
+  counts,
   editor,
   drawnWith,
   regions,
   componentTitle,
   cap,
-  children,
-}: PageReadsProps): React.JSX.Element {
+}: PageDataCountInputs): PageDataCount | null {
   const { report, retry } = usePageReads(
     drawnWith,
     editor.document,
     regions,
-    cap
+    cap,
+    counts
   );
-  const shown = useMemo<PageReadsShown>(
-    () => ({ report, retry, editor, regions, componentTitle }),
-    [report, retry, editor, regions, componentTitle]
-  );
-  return (
-    <PageReadsContext.Provider value={shown}>
-      {children}
-    </PageReadsContext.Provider>
+  return useMemo(
+    () => (counts ? { report, retry, editor, regions, componentTitle } : null),
+    [counts, report, retry, editor, regions, componentTitle]
   );
 }
 
 /**
- * Counts the open document where it is a page, and passes its children on
- * alone otherwise: a component or a Layout is read as part of each page
- * placing it, so it has no count of its own. The document's kind is fixed
- * while it is open.
- */
-export function PageReads({
-  counts,
-  children,
-  ...made
-}: PageReadsProps & { readonly counts: boolean }): React.JSX.Element {
-  return counts ? (
-    <PageReadsProvider {...made}>{children}</PageReadsProvider>
-  ) : (
-    <>{children}</>
-  );
-}
-
-/**
- * The page data meter, from the count of the {@link PageReadsProvider} it
- * is drawn in: in the top bar (the default), shown from 80% of the limit or
- * when the count fails; in Page settings, at every level. Nothing outside a
- * provider, as for a component or a Layout, which is read as part of each
- * page placing it.
+ * The page data meter, drawing `count`: in the top bar (the default), shown
+ * from 80% of the limit or when the count fails; in Page settings, at every
+ * level. Nothing for a document that is not counted.
  */
 export function PageReadMeter({
+  count,
   place = "bar",
 }: {
+  readonly count: PageDataCount | null;
   readonly place?: "bar" | "settings";
 }): React.JSX.Element | null {
-  const shown = useContext(PageReadsContext);
-  if (shown === null) return null;
-  const { report, retry, editor, regions, componentTitle } = shown;
+  if (count === null) return null;
+  const { report, retry, editor, regions, componentTitle } = count;
   return (
     <ReadBudgetMeter
       report={report}
