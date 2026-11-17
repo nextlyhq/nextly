@@ -25,7 +25,11 @@ import type {
   PublishGateQuestion,
 } from "../../collections/services/publish-gate";
 import { readReviewState, type ReviewPart } from "../review-state-repository";
-import { takeWorkflowStep, type WorkflowCaller } from "../steps";
+import {
+  assignWorkflowParts,
+  takeWorkflowStep,
+  type WorkflowCaller,
+} from "../steps";
 
 import { apiKey, bootSteps, person, stateDb } from "./helpers/step-harness";
 
@@ -79,6 +83,37 @@ async function take(step: string, caller: WorkflowCaller) {
   });
 }
 
+/** The Banner sent to Legal check by `sender`: its id and the part's review revision there. */
+async function bannerInLegal(
+  sender: WorkflowCaller
+): Promise<{ id: string; revision: number }> {
+  await take("send", sender);
+  const { id } = await bannerWith("Hello");
+  const state = await readReviewState(stateDb(app()), bannerPart(id));
+  if (state?.stage !== "legal") throw new Error("the Banner is not in Legal");
+  return { id, revision: state.revision };
+}
+
+/** Assigns the Banner's part, at `revision`, to the person `assignee`, as `caller`. */
+function assignBanner(
+  caller: WorkflowCaller,
+  id: string,
+  revision: number,
+  assignee: string
+) {
+  return assignWorkflowParts(app().adapter, {
+    caller,
+    assignments: [
+      {
+        document: { scopeKind: "single", scopeSlug: single, entryId: id },
+        part: null,
+        revision,
+        assignee: { kind: "user", id: assignee },
+      },
+    ],
+  });
+}
+
 describe.each(getConfiguredTestDialects())(
   "steps on a Single (%s)",
   dialect => {
@@ -107,6 +142,58 @@ describe.each(getConfiguredTestDialects())(
         container.get<PublishGate>("publishGate").judge(tx, question)
       );
       expect(verdict.refusals).toEqual([]);
+    });
+
+    it("assigns a Single's part to a person who may take its stage's primary step", async () => {
+      current = await bootSteps(dialect);
+      const alice = await person(app(), "alice", [["update", single]]);
+      const dave = await person(app(), "dave", [["update", single]]);
+      await person(app(), "rita", [["sign-off", single]]);
+      const { id, revision } = await bannerInLegal(alice);
+
+      await assignBanner(dave, id, revision, "rita");
+
+      const state = await readReviewState(stateDb(app()), bannerPart(id));
+      expect(state?.assignee).toEqual({ kind: "user", id: "rita" });
+      expect(state?.revision).toBe(revision + 1);
+    });
+
+    it("refuses to assign a Single's part to a person who may not take its stage's primary step", async () => {
+      current = await bootSteps(dialect);
+      const alice = await person(app(), "alice", [["update", single]]);
+      const dave = await person(app(), "dave", [["update", single]]);
+      await person(app(), "paula", [["read", single]]);
+      const { id, revision } = await bannerInLegal(alice);
+
+      await expect(
+        assignBanner(dave, id, revision, "paula")
+      ).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "WORKFLOW_ASSIGNEE_LACKS_STEP",
+            }),
+          ],
+        },
+      });
+      const state = await readReviewState(stateDb(app()), bannerPart(id));
+      expect(state?.assignee).toBeNull();
+      expect(state?.revision).toBe(revision);
+    });
+
+    it("refuses an assignment by a person who may not edit the Single", async () => {
+      current = await bootSteps(dialect);
+      const alice = await person(app(), "alice", [["update", single]]);
+      const paula = await person(app(), "paula", [["read", single]]);
+      await person(app(), "rita", [["sign-off", single]]);
+      const { id, revision } = await bannerInLegal(alice);
+
+      await expect(
+        assignBanner(paula, id, revision, "rita")
+      ).rejects.toMatchObject({ statusCode: 403 });
+      const state = await readReviewState(stateDb(app()), bannerPart(id));
+      expect(state?.assignee).toBeNull();
     });
 
     it("refuses a submit to a person who may not edit the Single", async () => {
