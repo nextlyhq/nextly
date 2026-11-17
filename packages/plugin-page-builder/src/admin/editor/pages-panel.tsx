@@ -58,6 +58,7 @@ import {
 } from "../pages-client";
 
 import { builderAddress } from "./builder-address";
+import { CollectionTemplatesGroup } from "./collection-templates-group";
 import { pagesFoldsStoreFor } from "./editor-preference-stores";
 import { useGroupFolds } from "./group-folds";
 import { HeaderFooterGroup } from "./header-footer-group";
@@ -218,7 +219,8 @@ function PagesPanel({
           </>
         ) : null}
       </section>
-      <HeaderFooterGroup folds={folds} />
+      <HeaderFooterGroup folds={folds} currentPageId={current?.id ?? null} />
+      <CollectionTemplatesGroup folds={folds} />
       <DeletePageDialog
         page={deleting}
         onCancel={() => setDeleting(null)}

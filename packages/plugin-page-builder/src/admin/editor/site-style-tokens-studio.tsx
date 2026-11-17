@@ -15,13 +15,13 @@ import {
   type DocumentLimits,
   type NamedClass,
   type SiteTokenSet,
+  type TokenMode,
 } from "@nextlyhq/blocks-engine";
 import {
   DESIGN_TAB_GROUPS,
   TokensPanel,
   type DesignTab,
   type TokensPanelProps,
-  type VariablesPreview,
   useVariablesHeader,
   variableMatchesByTab,
 } from "@nextlyhq/builder/shell";
@@ -74,10 +74,10 @@ import { usedOnPage } from "./used-on-page";
  * panel goes away, or the page is saved.
  *
  * It is the Design panel's FRAME rather than its Variables tab, because the
- * panel's header belongs to every tab: the preview switch and the
- * import-and-export menu are drawn into it from here, and an import made from
- * the Fonts tab writes through the same edits the Variables tab shows. The tab
- * reads the studio through {@link VariablesTab}.
+ * panel's header belongs to every tab: the import-and-export menu is drawn
+ * into it from here, and an import made from the Fonts tab writes through the
+ * same edits the Variables tab shows. The tab reads the studio through
+ * {@link VariablesTab}.
  */
 export function TokensStudio({
   merged,
@@ -85,7 +85,7 @@ export function TokensStudio({
   pending,
   classes,
   opens,
-  preview,
+  mode,
   children,
 }: {
   /** The site's tokens as the canvas compiles them: config under stored. */
@@ -102,11 +102,10 @@ export function TokensStudio({
   /** Where a shared style or a block look using a variable opens. */
   opens?: StyleOpeners;
   /**
-   * The preview mode the editor holds, which it draws the canvas in too, so
-   * the header's switch previews the canvas as well as the swatches. Absent,
-   * the switch keeps its mode itself and previews the swatches alone.
+   * The mode the editor draws the canvas in, which the swatches show too.
+   * Absent, they show the mode the canvas draws by itself.
    */
-  preview?: VariablesPreview;
+  mode?: TokenMode;
   /** The Design panel's tabs. */
   children: React.ReactNode;
 }): React.JSX.Element {
@@ -152,7 +151,7 @@ export function TokensStudio({
     onChange: commit,
     currentTokens,
     readOnly: !mayChange,
-    preview,
+    ...(mode === undefined ? {} : { mode }),
   });
   useReportVariableMatches(edits ?? editable);
   const studio: TokensPanelProps = {

@@ -22,13 +22,16 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
   toast,
 } from "@nextlyhq/ui";
+import { useQueryClient } from "@tanstack/react-query";
 import { MoreHorizontal, Plus } from "lucide-react";
 import * as React from "react";
 
 import {
+  LAYOUT_CHOICES_ROUTE_PATH,
   layoutChoicesPath,
   type LayoutChoice,
   type LayoutChoicesResponse,
@@ -38,10 +41,19 @@ import {
   type LayoutPageCount,
   type LayoutPageCountsResponse,
 } from "../../layout-counts-contract";
-import { PAGE_BUILDER_PLUGIN_NAME } from "../../library-contract";
+import {
+  PAGE_BUILDER_PLUGIN_NAME,
+  SITE_SETTINGS_ROUTE_PATH,
+  type SiteSettingsRead,
+} from "../../library-contract";
 import { useSetPictures } from "../header-footer-pictures";
 import { duplicateLayout, renameLayout } from "../layout-writes-client";
+import {
+  useMakeDefaultFlow,
+  type MakeDefaultAsked,
+} from "../make-default-action";
 import { useRefreshOnReturn } from "../refresh-on-return";
+import { useRemoveLayout } from "../RemoveLayoutAction";
 
 import { RenameField } from "./rename-field";
 
@@ -78,6 +90,20 @@ function setNote(
   return parts.join(" · ");
 }
 
+/**
+ * Whether a cached read is one of this plugin's set choices reads, by the
+ * key the admin keeps a plugin route's read under: `["plugin-route", path]`.
+ */
+function isChoicesRead(key: readonly unknown[]): boolean {
+  const path = key[1];
+  return (
+    key[0] === "plugin-route" &&
+    typeof path === "string" &&
+    path.includes(PAGE_BUILDER_PLUGIN_NAME) &&
+    path.includes(LAYOUT_CHOICES_ROUTE_PATH)
+  );
+}
+
 /** Whether a failed read was the author being refused the sets. */
 function refused(error: unknown): boolean {
   return (error as { status?: unknown } | null)?.status === 403;
@@ -98,8 +124,11 @@ function formHref(collection: string, id?: string): string {
  */
 export function HeaderFooterGroup({
   folds,
+  currentPageId = null,
 }: {
   readonly folds: GroupFolds;
+  /** The page being edited, by id, or null where none is saved yet. */
+  readonly currentPageId?: string | null;
 }): React.JSX.Element | null {
   const choices = usePluginRoute<LayoutChoicesResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
@@ -124,6 +153,16 @@ export function HeaderFooterGroup({
     refetchCounts();
   }, [refetchChoices, refetchCounts]);
   useRefreshOnReturn(true, refresh);
+  // After a write here, every set choices read is asked again too, the
+  // canvas's own among them: a new default, a removed set or a published one
+  // changes the header and footer the page being edited is drawn inside.
+  const queryClient = useQueryClient();
+  const afterWrite = React.useCallback(() => {
+    refresh();
+    void queryClient.invalidateQueries({
+      predicate: query => isChoicesRead(query.queryKey),
+    });
+  }, [refresh, queryClient]);
   const picture = useSetPictures(
     choices.data?.meta.regionDefinitions ?? {},
     choices.data !== undefined
@@ -143,9 +182,10 @@ export function HeaderFooterGroup({
       {open ? (
         <GroupBody
           read={choices}
+          currentPageId={currentPageId}
           counts={counts.data}
           picture={picture}
-          reread={refresh}
+          reread={afterWrite}
         />
       ) : null}
     </section>
@@ -158,8 +198,10 @@ function GroupBody({
   counts,
   picture,
   reread,
+  currentPageId,
 }: {
   read: ReturnType<typeof usePluginRoute<LayoutChoicesResponse>>;
+  currentPageId: string | null;
   counts: LayoutPageCountsResponse | undefined;
   picture: ReturnType<typeof useSetPictures>;
   /** Reads the sets and their counts again, after a write here. */
@@ -171,6 +213,15 @@ function GroupBody({
   const [renamed, setRenamed] = React.useState<ReadonlyMap<string, string>>(
     () => new Map()
   );
+  // Who may choose the site default, as the Header & footer list asks it.
+  const settings = usePluginRoute<SiteSettingsRead>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: SITE_SETTINGS_ROUTE_PATH,
+    staleTime: 0,
+  });
+  // The list's own Make site default flow, its question included, so both
+  // places ask the same and write the same; the panel reads its sets again.
+  const makeDefault = useMakeDefaultFlow({ published: reread, made: reread });
   if (read.error !== null) {
     return (
       <div className="grid justify-items-start gap-2 text-sm text-muted-foreground">
@@ -189,51 +240,59 @@ function GroupBody({
   if (read.data === undefined) return null;
   const { items, meta } = read.data;
   return (
-    <ul aria-label="Header & footer sets" className="grid gap-0.5">
-      {items.map(set => (
-        <SetRow
-          key={set.id}
-          set={set}
-          href={formHref(meta.layoutsCollection, set.id)}
-          note={setNote(set, meta.defaultLayout, counts?.[set.id])}
-          picture={picture(set.regions)}
-          may={{
-            rename: meta.canUpdateAnyLayout ?? meta.canUpdateLayouts,
-            duplicate: meta.canCreateLayouts === true,
-          }}
-          shownTitle={renamed.get(set.id) ?? set.title}
-          onRenamed={title => {
-            setRenamed(current => new Map(current).set(set.id, title));
-          }}
-          onWritten={reread}
-        />
-      ))}
-      {meta.more ? (
+    <>
+      {makeDefault.dialog}
+      <ul aria-label="Header & footer sets" className="grid gap-0.5">
+        {items.map(set => (
+          <SetRow
+            key={set.id}
+            set={set}
+            href={formHref(meta.layoutsCollection, set.id)}
+            note={setNote(set, meta.defaultLayout, counts?.[set.id])}
+            picture={picture(set.regions)}
+            isDefault={set.id === meta.defaultLayout}
+            may={{
+              rename: meta.canUpdateAnyLayout ?? meta.canUpdateLayouts,
+              duplicate: meta.canCreateLayouts === true,
+              makeDefault: settings.data?.mayChooseDefaultLayout === true,
+              remove: meta.canDeleteAnyLayout === true,
+            }}
+            onMakeDefault={makeDefault.start}
+            currentPageId={currentPageId}
+            shownTitle={renamed.get(set.id) ?? set.title}
+            onRenamed={title => {
+              setRenamed(current => new Map(current).set(set.id, title));
+            }}
+            onWritten={reread}
+          />
+        ))}
+        {meta.more ? (
+          <li>
+            <a
+              href={`/admin/collections/${encodeURIComponent(meta.layoutsCollection)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block rounded-md px-1.5 py-1 text-xs text-muted-foreground underline-offset-4 hover:underline"
+            >
+              Showing the first {items.length}. See every header & footer set
+              <span className="sr-only"> (opens in a new tab)</span>
+            </a>
+          </li>
+        ) : null}
         <li>
           <a
-            href={`/admin/collections/${encodeURIComponent(meta.layoutsCollection)}`}
+            href={formHref(meta.layoutsCollection)}
             target="_blank"
             rel="noopener noreferrer"
-            className="block rounded-md px-1.5 py-1 text-xs text-muted-foreground underline-offset-4 hover:underline"
+            className="flex items-center gap-2 rounded-md px-1.5 py-1 text-sm text-muted-foreground hover:bg-[color:var(--nx-builder-hover)] hover:text-[color:var(--nx-builder-text)]"
           >
-            Showing the first {items.length}. See every header & footer set
+            <Plus aria-hidden="true" className="size-3.5" />
+            New header & footer
             <span className="sr-only"> (opens in a new tab)</span>
           </a>
         </li>
-      ) : null}
-      <li>
-        <a
-          href={formHref(meta.layoutsCollection)}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-2 rounded-md px-1.5 py-1 text-sm text-muted-foreground hover:bg-[color:var(--nx-builder-hover)] hover:text-[color:var(--nx-builder-text)]"
-        >
-          <Plus aria-hidden="true" className="size-3.5" />
-          New header & footer
-          <span className="sr-only"> (opens in a new tab)</span>
-        </a>
-      </li>
-    </ul>
+      </ul>
+    </>
   );
 }
 
@@ -251,6 +310,9 @@ function refusalOf(error: unknown): string {
  */
 function SetRow({
   set,
+  currentPageId,
+  isDefault,
+  onMakeDefault,
   shownTitle,
   href,
   note,
@@ -260,19 +322,46 @@ function SetRow({
   onWritten,
 }: {
   set: LayoutChoice;
+  /** The page being edited, by id, so a removal that moved it reloads it. */
+  currentPageId: string | null;
+  /** Whether this set is the site default. */
+  isDefault: boolean;
+  onMakeDefault: (asked: MakeDefaultAsked) => void;
   /** The name the row shows: the saved one after a rename here. */
   shownTitle: string;
   href: string;
   note: string;
   picture: React.ReactNode;
-  may: { readonly rename: boolean; readonly duplicate: boolean };
+  may: {
+    readonly rename: boolean;
+    readonly duplicate: boolean;
+    readonly makeDefault: boolean;
+    readonly remove: boolean;
+  };
   onRenamed: (title: string) => void;
   onWritten: () => void;
 }): React.JSX.Element {
   const [renaming, setRenaming] = React.useState(false);
-  // Rename starts once the menu has CLOSED, as a page's does: started while
-  // it closes, the menu's focus return would end the rename at once.
-  const renameAfterClose = React.useRef(false);
+  // The panel's sets and the canvas's choices are read again first, so a
+  // reload the author then cancels leaves nothing stale.
+  const readAgain = (moved: readonly string[]): void => {
+    onWritten();
+    if (currentPageId !== null && moved.includes(currentPageId)) {
+      window.location.reload();
+    }
+  };
+  // The set's own Remove dialog, as its form opens it; the panel stays.
+  const removal = useRemoveLayout({
+    entryId: set.id,
+    published: set.published,
+    // A removal that moved the page being edited onto the site default has
+    // changed that page on the server: the editor reads it again (asking
+    // first if it holds unsaved work), so it draws the default it now uses.
+    leave: (_action, moved) => readAgain(moved),
+    // A move stopped part way leaves the pages it moved on the default.
+    afterStoppedMove: readAgain,
+    closeOnLeave: true,
+  });
   const write = (run: () => Promise<unknown>) => {
     void run().then(onWritten, (error: unknown) =>
       toast.error(refusalOf(error))
@@ -314,56 +403,134 @@ function SetRow({
           <span className="sr-only"> (opens in a new tab)</span>
         </a>
       )}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            aria-label={`More for ${shownTitle}`}
-            className="mr-1 shrink-0 rounded p-0.5 text-muted-foreground opacity-0 focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
-          >
-            <MoreHorizontal aria-hidden="true" className="size-4" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="start"
-          onCloseAutoFocus={event => {
-            if (!renameAfterClose.current) return;
-            renameAfterClose.current = false;
-            event.preventDefault();
-            setRenaming(true);
+      <SetMenu
+        set={set}
+        shownTitle={shownTitle}
+        href={href}
+        isDefault={isDefault}
+        may={may}
+        onMakeDefault={onMakeDefault}
+        onRename={() => setRenaming(true)}
+        onDuplicate={() =>
+          write(async () => {
+            const copy = await duplicateLayout(set.id);
+            toast.success(`${copy.title} was made.`);
+          })
+        }
+        onDelete={removal.open}
+      />
+      {removal.dialog}
+    </li>
+  );
+}
+
+/** A set row's ⋯ menu: each item offered only by the right it needs. */
+function SetMenu({
+  set,
+  shownTitle,
+  href,
+  isDefault,
+  may,
+  onMakeDefault,
+  onRename,
+  onDuplicate,
+  onDelete,
+}: {
+  set: LayoutChoice;
+  shownTitle: string;
+  href: string;
+  isDefault: boolean;
+  may: {
+    readonly rename: boolean;
+    readonly duplicate: boolean;
+    readonly makeDefault: boolean;
+    readonly remove: boolean;
+  };
+  onMakeDefault: (asked: MakeDefaultAsked) => void;
+  onRename: () => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+}): React.JSX.Element {
+  // Rename starts once the menu has CLOSED, as a page's does: started while
+  // it closes, the menu's focus return would end the rename at once.
+  const renameAfterClose = React.useRef(false);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`More for ${shownTitle}`}
+          className="mr-1 shrink-0 rounded p-0.5 text-muted-foreground opacity-0 focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
+        >
+          <MoreHorizontal aria-hidden="true" className="size-4" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        onCloseAutoFocus={event => {
+          if (!renameAfterClose.current) return;
+          renameAfterClose.current = false;
+          event.preventDefault();
+          onRename();
+        }}
+      >
+        <DropdownMenuItem
+          onSelect={() => {
+            window.open(href, "_blank", "noopener,noreferrer");
           }}
         >
+          Open
+        </DropdownMenuItem>
+        {may.makeDefault && !isDefault ? (
+          <DropdownMenuItem
+            onSelect={() =>
+              onMakeDefault({
+                id: set.id,
+                title: shownTitle,
+                published: set.published,
+              })
+            }
+          >
+            {set.published
+              ? "Make site default"
+              : "Publish it, then make default"}
+          </DropdownMenuItem>
+        ) : null}
+        {may.rename ? (
           <DropdownMenuItem
             onSelect={() => {
-              window.open(href, "_blank", "noopener,noreferrer");
+              renameAfterClose.current = true;
             }}
           >
-            Open
+            Rename
           </DropdownMenuItem>
-          {may.rename ? (
+        ) : null}
+        {may.duplicate ? (
+          <DropdownMenuItem onSelect={onDuplicate}>Duplicate</DropdownMenuItem>
+        ) : null}
+        {may.remove ? (
+          <>
+            <DropdownMenuSeparator />
             <DropdownMenuItem
+              className="text-destructive focus:text-destructive"
               onSelect={() => {
-                renameAfterClose.current = true;
+                // The default is taken down only once another set is the
+                // default: said here, before any check is asked.
+                if (isDefault) {
+                  toast.error(
+                    `${shownTitle} is the site default. Make another set the default before deleting it.`
+                  );
+                  return;
+                }
+                onDelete();
               }}
             >
-              Rename
+              Delete…
             </DropdownMenuItem>
-          ) : null}
-          {may.duplicate ? (
-            <DropdownMenuItem
-              onSelect={() =>
-                write(async () => {
-                  const copy = await duplicateLayout(set.id);
-                  toast.success(`${copy.title} was made.`);
-                })
-              }
-            >
-              Duplicate
-            </DropdownMenuItem>
-          ) : null}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </li>
+          </>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

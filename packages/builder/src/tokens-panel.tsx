@@ -14,13 +14,20 @@
  *
  * ## The header is the Design panel's
  *
- * The preview switch and the import-and-export menu belong in the Design
- * panel's own header, beside its title, and stay there whichever of its tabs
- * is open. A host that draws that header holds them with
- * {@link useVariablesHeader} and hands the result in as `header`; this view
- * then takes its preview mode from it and draws no controls of its own.
- * Without one, the view holds them itself: drawn into `headerActions` when
- * the host gives that element, else at the top of this view.
+ * The import-and-export menu belongs in the Design panel's own header,
+ * beside its title, and stays there whichever of its tabs is open. A host
+ * that draws that header holds it with {@link useVariablesHeader} and hands
+ * the result in as `header`; this view then takes its mode from it and draws
+ * no controls of its own. Without one, the view holds them itself: drawn into
+ * `headerActions` when the host gives that element, else at the top of this
+ * view.
+ *
+ * ## The mode shown is the canvas's
+ *
+ * Swatches and specimens show the values of the mode the canvas is drawn in.
+ * The panel has no light and dark switch of its own: the host that draws the
+ * canvas offers the preview (the editor's, in its top bar) and hands the mode
+ * in, so the panel and the canvas never show different modes.
  *
  * ## Edits are lifted, not saved here
  *
@@ -134,14 +141,13 @@ export interface TokensPanelProps {
    */
   notice?: TokensPanelNotice;
   /**
-   * Which mode the preview opens on.
+   * Which mode's values the swatches and specimens show, for a view that
+   * holds its header itself.
    *
    * - `true`: Dark, whatever the device prefers.
    * - `false`: Light, whatever the device prefers.
    * - omitted: the mode the canvas draws, followed live: the page's own
    *   theme marker where it states one, else the device's scheme.
-   *
-   * Either way the author can switch it afterwards.
    */
   prefersDark?: boolean;
   /** Why there are no variables to show: a read in flight, or one that failed. */
@@ -207,77 +213,51 @@ export interface GroupFolds {
   readonly onFold: (group: string, folded: boolean) => void;
 }
 
-/** The Design panel's header controls, and the preview mode they choose. */
+/** The Design panel's header controls, and the mode its views show. */
 export interface VariablesHeader {
   /** Which mode's values the swatches and specimens show. */
   readonly mode: TokenMode;
-  /** The preview switch and the import-and-export menu. */
+  /** The import-and-export menu. */
   readonly controls: React.JSX.Element;
   /** What an import or an export reports, and the import's preview. */
   readonly overlays: React.JSX.Element;
 }
 
 /**
- * The preview mode held by a host rather than by the header, for a host that
- * draws its canvas in the mode the author picks too, so the switch and the
- * canvas cannot disagree.
- */
-export interface VariablesPreview {
-  /**
-   * The mode the author picked, or `null` while nothing is picked and the
-   * switch shows the mode the canvas draws by itself.
-   */
-  readonly picked: TokenMode | null;
-  /** The author picked a mode on the switch. */
-  readonly onPick: (mode: TokenMode) => void;
-}
-
-/**
  * The header controls and their state, for a host that keeps them while the
- * Design panel's tabs change under them: the preview mode, the switch that
- * chooses it, and the import-and-export menu with what it reports.
+ * Design panel's tabs change under them: the mode its views show, and the
+ * import-and-export menu with what it reports.
  *
- * `prefersDark` is as {@link TokensPanelProps.prefersDark} reads it. Given
- * `preview`, the host holds the picked mode and `prefersDark` is not read;
- * without it, the header holds the mode itself.
+ * The mode is the host's `mode` where it hands one in: the mode it draws its
+ * canvas in, so the swatches show what the canvas shows. Without one,
+ * `prefersDark` as {@link TokensPanelProps.prefersDark} reads it, else the
+ * mode the canvas draws by itself.
  */
 export function useVariablesHeader({
   onChange,
   currentTokens,
   readOnly,
   prefersDark,
-  preview,
+  mode: hosted,
 }: {
   onChange: (tokens: SiteTokenSet) => void;
   currentTokens: () => SiteTokenSet | undefined;
   readOnly: boolean;
   prefersDark?: boolean;
-  preview?: VariablesPreview;
+  mode?: TokenMode;
 }): VariablesHeader {
   /*
-   * Until a mode is picked, the one the canvas actually draws: the marker on
+   * Without a host's mode, the one the canvas actually draws: the marker on
    * the page it shows, which a site's own page may state, else the device's
    * scheme. The bare device setting would name the wrong mode on a page that
    * states its own.
    */
   const drawn = useCanvasTokenModeAt(null);
-  const [own, setOwn] = React.useState<TokenMode | null>(() =>
-    statedPreview(prefersDark)
-  );
-  const picked = preview === undefined ? own : preview.picked;
-  const mode: TokenMode = picked ?? drawn;
+  const mode: TokenMode = hosted ?? statedMode(prefersDark) ?? drawn;
   const transfer = useVariablesTransfer({ onChange, currentTokens, readOnly });
   return {
     mode,
-    controls: (
-      <div className="nx-vars__controls">
-        <PreviewSwitch
-          mode={mode}
-          onMode={preview === undefined ? setOwn : preview.onPick}
-        />
-        {transfer.menu}
-      </div>
-    ),
+    controls: <div className="nx-vars__controls">{transfer.menu}</div>,
     overlays: transfer.overlays,
   };
 }
@@ -1169,46 +1149,12 @@ function searched<
 }
 
 /**
- * The mode a host asked the preview to open on, or `null` to follow the
- * device: `false` is an explicit choice of light, not an absence.
+ * The mode a host asked the view to show, or `null` to follow the canvas:
+ * `false` is an explicit choice of light, not an absence.
  */
-function statedPreview(prefersDark: boolean | undefined): TokenMode | null {
+function statedMode(prefersDark: boolean | undefined): TokenMode | null {
   if (prefersDark === undefined) return null;
   return prefersDark ? "dark" : "light";
-}
-
-/**
- * The preview switch: which mode's values the swatches and specimens show,
- * and, where the host holds the mode (see {@link VariablesPreview}), the mode
- * the canvas draws the page in as well. It changes nothing that is stored, so
- * a published page is untouched; each variable's editor shows both values.
- */
-function PreviewSwitch({
-  mode,
-  onMode,
-}: {
-  mode: TokenMode;
-  onMode: (mode: TokenMode) => void;
-}): React.JSX.Element {
-  return (
-    <div className="nx-vars__preview" role="group" aria-label="Preview">
-      <span className="nx-vars__preview-label" aria-hidden="true">
-        Preview
-      </span>
-      <div className="nx-vars__seg">
-        {(["light", "dark"] as const).map(candidate => (
-          <button
-            key={candidate}
-            type="button"
-            aria-pressed={mode === candidate}
-            onClick={() => onMode(candidate)}
-          >
-            {candidate === "light" ? "Light" : "Dark"}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
 }
 
 /** One group: its heading, its "+", and its rows, a page at a time. */

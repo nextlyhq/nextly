@@ -278,6 +278,13 @@ chips says where it's used and that changes there change all of them. While a st
 other than Normal is chosen, the settings below are tinted and say which look you're
 editing. This line and the tabs stay in view as you scroll the panel.
 
+A Divider's **Border** section names its line as a line: **Line colour**,
+**Thickness** and **Line style**, since the line is the divider's top border.
+
+A Spacer's **Size** section offers your spacing variables as **Presets** over its
+**Height**, smallest first, as a side of the spacing box does: pick one, and the space
+follows your scale as it changes.
+
 In Content, a link reads the same on every block that has one: **Link**, then **Open in
 a new tab** once a link is set. A Heading links to a page, an entry or an address, as a
 Button does. A List's **List as** picks Bullets or Numbers, and **Start at** shows only
@@ -520,7 +527,9 @@ With an Image selected, its **Content** tab holds:
   colour are set in **Style**, under **Text**.
 
 In **Advanced**, **Load right away** fetches the picture as the page opens rather than
-as it nears the screen: turn it on for an image near the top of the page.
+as it nears the screen: turn it on for an image near the top of the page. In **Style**,
+**Effects** has a **Shadow**, which falls on the picture in its own shape: round on a
+Circle, never around the caption.
 
 The shapes **Square**, **Rounded** and **Circle** are block styles, at the top of the
 **Style** tab. **Circle** crops the picture to a square first, so a wide picture is a
@@ -586,10 +595,32 @@ pages show it: **Site default · 11 pages** for the default, **1 page**, **4 pag
 apply. Choose a set to open its form in a new tab; **New header & footer** opens a new
 one. You see this group only if you may read header & footer sets.
 
-Each set's **⋯** menu offers **Open**, **Rename**, in place (<kbd>Enter</kbd> keeps the
-new name, <kbd>Escape</kbd> leaves it), and **Duplicate**, which makes a draft copy,
-"Copy of …". Rename needs the right to change header & footer sets, and Duplicate the
-right to make them; without it, the item isn't shown.
+Each set's **⋯** menu offers:
+
+- **Open**, its form in a new tab.
+- **Make site default**, as the Header & footer list does: a set whose header or footer
+  uses components that aren't published asks first. A set that isn't published offers
+  **Publish it, then make default** instead. Shown if you may choose the site default.
+- **Rename**, in place: <kbd>Enter</kbd> keeps the new name, <kbd>Escape</kbd> leaves it.
+- **Duplicate**, which makes a draft copy, "Copy of …".
+- **Delete…**, which opens the same checks as **Remove header & footer set…** on the
+  set's form: pages that use it are moved to the site default first. The site default
+  itself can't be deleted: make another set the default first.
+
+Each item is shown only if you have the right it needs.
+
+### Collection templates
+
+Below the header & footer sets, **Collection templates** lists the site's collection
+templates. Each shows a small picture of its published design, its collection's name
+(**Blog post**) and how many entries it draws: **Used by 10 entries**, counting the
+collection's entries that don't have a design of their own, with **Draft** where it
+isn't published. Choose one to open it in the editor.
+
+**New collection template** lists the collections that have no template yet. Choose one
+to make its template and open it. You see it only if you may make templates, and only
+while some collection has none. With no template yet, the group says what one is for.
+You see this group only if you may read templates.
 
 Each group folds from its heading, and stays folded for you the next time you open the
 editor on this site.

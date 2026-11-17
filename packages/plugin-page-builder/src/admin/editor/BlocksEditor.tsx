@@ -88,6 +88,7 @@ import {
   StyleRevisionContext,
   useSiteStyleHistory,
 } from "./site-style-history";
+import { offerableTokens } from "./site-style-studios";
 import { documentFrom } from "./stored-document";
 import {
   TemplatePreviewScope,
@@ -404,6 +405,11 @@ function EditorBody<TFieldValues extends FieldValues>({
   const panels = useEditorPanels(mount, name, {
     control,
     canvasRoot: canvas.canvasElement,
+    siteTokens: offerableTokens(
+      style.canvasSiteStyle,
+      style.siteStylePending,
+      style.siteStyleError
+    ),
   });
   // The Settings dialog's place for other plugins' tabs, for a page or a
   // design: what is being edited, and its own metadata as one undoable edit.
