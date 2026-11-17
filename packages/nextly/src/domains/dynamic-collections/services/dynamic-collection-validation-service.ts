@@ -12,7 +12,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { reservedSystemFieldNames } from "../../../lib/system-columns";
-import { addressSchema } from "../../../shared/address-rule";
+import { addressSchema, isAddressSpelling } from "../../../shared/address-rule";
 import {
   BUILDER_RESERVED_COLLECTION_NAMES,
   BUILDER_SQL_KEYWORDS,
@@ -135,6 +135,36 @@ export const fieldsArraySchema = z
   .min(0)
   .max(100, "Collection cannot have more than 100 fields");
 
+/**
+ * Whether a relationship names the collection it links to, as the schema can
+ * keep it.
+ *
+ * - A many-to-many keeps its links in a junction table, which is made only for
+ *   a target named in `options.target`, so it must name its target there: a
+ *   `relationTo` target alone would leave it nowhere to keep them.
+ * - Otherwise `relationTo` first, one collection or several, each spelled as
+ *   an address is (`isAddressSpelling`).
+ * - Else the earlier Builder's `options.target`, read as every other reader of
+ *   a stored relationship reads it (`relationshipTargetSlug`).
+ */
+function namesItsTarget(
+  field: FieldDefinition,
+  relationType: unknown
+): boolean {
+  if (relationType === "manyToMany") {
+    const target = field.options?.target;
+    return typeof target === "string" && target !== "";
+  }
+  const { relationTo } = field;
+  if (Array.isArray(relationTo)) {
+    return relationTo.length > 0 && relationTo.every(isAddressSpelling);
+  }
+  if (typeof relationTo === "string" && relationTo !== "") {
+    return isAddressSpelling(relationTo);
+  }
+  return relationshipTargetSlug(field) !== null;
+}
+
 export class DynamicCollectionValidationService {
   /**
    * @throws Error if the name is invalid
@@ -236,24 +266,10 @@ export class DynamicCollectionValidationService {
     this.validateCardinalityRules(field, field.options);
   }
 
-  /**
-   * The collection it links to, and the cardinality the earlier shape must
-   * give. A link to several collections names each by its address. A
-   * many-to-many keeps its links in a junction table, which is made only for
-   * a target named in `options.target`, so it must name its target there: a
-   * `relationTo` target alone would leave it nowhere to keep them.
-   */
+  /** The collection it links to, and the cardinality the earlier shape must give. */
   private validateRelationshipTarget(field: FieldDefinition): void {
     const relationType = field.options?.relationType;
-    const named = (value: unknown) => typeof value === "string" && value !== "";
-    const linksSeveral =
-      Array.isArray(field.relationTo) &&
-      field.relationTo.length > 0 &&
-      field.relationTo.every(named);
-    const hasTarget =
-      relationType === "manyToMany"
-        ? named(field.options?.target)
-        : relationshipTargetSlug(field) !== null || linksSeveral;
+    const hasTarget = namesItsTarget(field, relationType);
     if (!hasTarget) {
       throw new Error(
         `Relationship field "${field.name}" must specify a target collection`
@@ -281,18 +297,24 @@ export class DynamicCollectionValidationService {
     field: FieldDefinition,
     options: NonNullable<FieldDefinition["options"]>
   ): void {
-    if (options.onDelete) {
+    // Sent as a request sends it, a value may be any type: one that is not a
+    // string is refused as an unknown action, never read as one.
+    const actionOf = (value: unknown) =>
+      typeof value === "string" ? value.toLowerCase() : undefined;
+    if (options.onDelete !== undefined) {
       const validActions = ["cascade", "set null", "restrict", "no action"];
-      if (!validActions.includes(options.onDelete.toLowerCase())) {
+      const action = actionOf(options.onDelete);
+      if (action === undefined || !validActions.includes(action)) {
         throw new Error(
           `Invalid onDelete action "${options.onDelete}" for field "${field.name}". Must be one of: ${validActions.join(", ")}`
         );
       }
     }
 
-    if (options.onUpdate) {
+    if (options.onUpdate !== undefined) {
       const validActions = ["cascade", "set null", "restrict", "no action"];
-      if (!validActions.includes(options.onUpdate.toLowerCase())) {
+      const action = actionOf(options.onUpdate);
+      if (action === undefined || !validActions.includes(action)) {
         throw new Error(
           `Invalid onUpdate action "${options.onUpdate}" for field "${field.name}". Must be one of: ${validActions.join(", ")}`
         );

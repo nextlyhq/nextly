@@ -53,6 +53,32 @@ describe("a relationship's create check", () => {
     );
   });
 
+  it("takes a relationTo target only when it is spelled as a collection's address", () => {
+    expect(check({ relationTo: "blog-posts" })).not.toThrow();
+    // A system collection may be linked to, though no new one may take its address.
+    expect(check({ relationTo: "users" })).not.toThrow();
+    for (const relationTo of [
+      " ",
+      "Bad Slug",
+      "a".repeat(51),
+      ["authors", "Bad Slug"],
+    ]) {
+      expect(check({ relationTo })).toThrow(/must specify a target/);
+    }
+  });
+
+  it("refuses an action on delete or update that is not a string, as a refusal and not a crash", () => {
+    expect(
+      check({ relationTo: "authors", options: { onDelete: 123 } })
+    ).toThrow(/Invalid onDelete action "123"/);
+    expect(
+      check({ relationTo: "authors", options: { onUpdate: true } })
+    ).toThrow(/Invalid onUpdate action "true"/);
+    expect(
+      check({ relationTo: "authors", options: { onDelete: "Cascade" } })
+    ).not.toThrow();
+  });
+
   it("takes a many-to-many only with its target in options, where its junction table is made from", () => {
     expect(
       check({ relationTo: "tags", options: { relationType: "manyToMany" } })
