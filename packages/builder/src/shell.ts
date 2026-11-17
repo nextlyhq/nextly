@@ -251,6 +251,25 @@ export type {
   InsertPanelProps,
   LibraryTierState,
 } from "./panels/add/insert-panel";
+/**
+ * The in-place picker: a small dialog that adds a block where the author is
+ * looking, from the Add panel's own offers. A host keeps its state with
+ * `useInsertPicker`, opens it with an anchor (`elementAnchor` for a control,
+ * `selectionAnchor` for "/"), and provides where insert counts are kept with
+ * `InsertUsageContext`. @experimental
+ */
+export { InsertPicker, useInsertPicker } from "./panels/add/insert-picker";
+export type { InsertPickerState } from "./panels/add/insert-picker";
+export type {
+  InsertPickerProps,
+  InsertPickerTarget,
+  InsertPlace,
+} from "./panels/add/insert-picker-types";
+export {
+  elementAnchor,
+  selectionAnchor,
+} from "./panels/add/insert-picker-anchor";
+export { InsertUsageContext } from "./panels/add/insert-usage";
 export { ComponentsPanel } from "./components-panel";
 export type { ComponentsPanelProps } from "./components-panel";
 // The shape a host hands the panel for the pattern tier. Published beside the

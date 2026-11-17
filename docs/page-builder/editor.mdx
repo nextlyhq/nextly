@@ -312,6 +312,29 @@ the end of the page". Each tile tells a screen reader where it goes, and after a
 a screen reader hears what was added and where ("Heading added inside Hero, at the
 end"). The new block is selected, so the next one goes after it.
 
+## Adding a block where you are
+
+Press <kbd>/</kbd> on the canvas, with a block selected or nothing selected, and a small
+picker opens beside the block (or at the end of the page), so you can add a block
+without going to the Add panel. It holds:
+
+- **Search blocks**, with the cursor in it. Typing lists the blocks, saved sections and
+  components that can go there, from the same list and words as the Add panel.
+- **The six blocks you add most**, in a grid. Until you have added any they are Heading,
+  Text, Image, Button, Box and Columns. They are counted for you in this browser, and a
+  block that can't go there is skipped for the next one.
+- **Browse all blocks and sections →**, which opens the Add panel instead.
+
+A line at the top says where the block will go, by the same rule as the Add panel's
+(see [Where a clicked block lands](#where-a-clicked-block-lands)). Arrow keys move
+through the blocks, <kbd>Enter</kbd> adds the highlighted one, and <kbd>Tab</kbd> moves
+to **Browse all**. The new block is selected; a block with text, such as a Heading,
+opens for typing, and anything else leaves you on the canvas. <kbd>Escape</kbd> or a
+click outside closes the picker without adding anything and puts you back where you
+were.
+
+While you are typing in a block's text, <kbd>/</kbd> is just a character.
+
 ## Pages
 
 **Pages** in the rail lists the site's pages, grouped by the kind of page when the
@@ -775,6 +798,7 @@ On a Mac, <kbd>⌘</kbd> replaces <kbd>Ctrl</kbd>.
 | <kbd>Ctrl</kbd>+<kbd>D</kbd>                                                                | Duplicate the selected block                                                                                                      |
 | <kbd>Delete</kbd> or <kbd>Backspace</kbd>                                                   | Delete the selected block                                                                                                         |
 | <kbd>Enter</kbd>                                                                            | Edit the selected block's text                                                                                                    |
+| <kbd>/</kbd>                                                                                | Add a block here: open the small picker beside the selected block, or at the end of the page                                      |
 | <kbd>Escape</kbd>                                                                           | Select the block holding this one, or clear the selection at the top of the page                                                  |
 | <kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>Alt</kbd>+<kbd>↓</kbd>                                   | Move the selected block up or down                                                                                                |
 | <kbd>Alt</kbd>+<kbd>→</kbd> / <kbd>Alt</kbd>+<kbd>←</kbd>                                   | Move the selected block into the container above it, or out of its container                                                      |
