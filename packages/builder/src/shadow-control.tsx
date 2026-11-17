@@ -399,6 +399,7 @@ function LayerFields({
       </div>
       <Hinted writes={writes}>
         <LayerColour
+          layer={name.toLowerCase()}
           colour={layer.colour}
           tokens={tokens}
           readOnly={readOnly}
@@ -489,11 +490,14 @@ function LayerActions({
  * colour variables first, then a colour of its own.
  */
 function LayerColour({
+  layer,
   colour,
   tokens,
   readOnly,
   onColour,
 }: {
+  /** The layer's name, which the picker's controls are named for. */
+  layer: string;
   colour: ShadowColour | undefined;
   tokens: SiteTokenSet | undefined;
   readOnly: boolean;
@@ -519,7 +523,7 @@ function LayerColour({
           labelledBy={`${id}-label`}
           control={SHADOW_COLOUR_CONTROL}
           stored={stored}
-          actionName="Colour"
+          actionName={layer}
           tokens={tokens}
           prefersDark={false}
           pairedColour={undefined}

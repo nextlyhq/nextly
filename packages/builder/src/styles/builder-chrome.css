@@ -72,6 +72,8 @@
 
 @import "./variables.css";
 
+@import "./shadow.css";
+
 @import "./field-rows.css";
 
 @import "./inserters.css";
