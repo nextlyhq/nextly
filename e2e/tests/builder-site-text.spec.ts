@@ -18,7 +18,13 @@
  */
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
-import { block, openEditorWith, selection } from "./canvas/editor-driver";
+import {
+  block,
+  OPEN_BUILDER_ACTION,
+  openEditorWith,
+  PAGE_BUILDER_CARD,
+  selection,
+} from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
 import { signInAsLimitedUser } from "./support/limited-user";
@@ -289,9 +295,8 @@ test("at the panel's narrowest the rows fit, and the last row's popup stays in t
       if (theme === "dark") {
         await gotoAdmin(page, "/singles/homepage", "dark");
         await page
-          .getByRole("link", {
-            name: /^(?:Build this page|Open Page Builder|Open in builder)$/,
-          })
+          .locator(PAGE_BUILDER_CARD)
+          .getByRole("link", { name: OPEN_BUILDER_ACTION })
           .click();
       }
       const section = await openType(page);
@@ -302,11 +307,15 @@ test("at the panel's narrowest the rows fit, and the last row's popup stays in t
       await expect
         .poll(async () => Math.round((await panel.boundingBox())?.width ?? 0))
         .toBeLessThanOrEqual(240);
+      // Text cut short with an ellipsis is cut by design, its whole text
+      // in the row's name or tooltip; anything else wider than its box would
+      // scroll.
       const sideways = await section.evaluate(element => {
         const scrolled = [element, ...element.querySelectorAll("*")].find(
           each =>
             each.scrollWidth > each.clientWidth + 1 &&
-            getComputedStyle(each).overflowX !== "visible"
+            getComputedStyle(each).overflowX !== "visible" &&
+            getComputedStyle(each).textOverflow !== "ellipsis"
         );
         return scrolled === undefined ? null : scrolled.className;
       });
