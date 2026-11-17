@@ -30,6 +30,13 @@ type Props = {
   locked?: boolean;
   /** A save is on its way, its preview included. */
   saving?: boolean;
+  /**
+   * The fields the save would refuse, by id, in the outline's order: counted beside the pending
+   * changes, and keeping Save unavailable while any stands.
+   */
+  errorIds?: readonly string[];
+  /** Brings a field into view and opens it, as a click on its row does. */
+  onShowError?: (fieldId: string) => void;
   /** Opens the field picker for a field at the end of the list. */
   onAddField: () => void;
   onOpenSettings: () => void;
@@ -64,6 +71,22 @@ const KIND_LIST_ROUTE: Record<BuilderConfig["kind"], string> = {
   single: ROUTES.BUILDER_SINGLES,
   "field-group": ROUTES.BUILDER_FIELD_GROUPS,
 };
+
+/**
+ * Why Save is unavailable, as its title: an entity managed in code takes no edits here, and a
+ * field the save would refuse must be fixed first. Undefined when neither holds.
+ */
+function saveBlockedTitle(
+  kind: BuilderConfig["kind"],
+  locked: boolean,
+  errorCount: number
+): string | undefined {
+  if (locked) {
+    return `This ${BUILDER_KIND_NOUN[kind]} is managed in code. Update its definition in code to make changes.`;
+  }
+  if (errorCount === 0) return undefined;
+  return `Fix the ${errorCount === 1 ? "error" : `${errorCount} errors`} before saving.`;
+}
 
 /**
  * Why Save waits, said where Save is, so a held Save is never a button that
@@ -105,11 +128,21 @@ export function BuilderToolbar({
   onSave,
   saveHeld,
   pageBuilderHref,
+  errorIds = [],
+  onShowError,
 }: Props): JSX.Element {
-  const saveDisabled = unsavedCount === 0 || locked || saveHeld !== undefined;
-  const lockedSaveTitle = locked
-    ? `This ${BUILDER_KIND_NOUN[config.kind]} is managed in code. Update its definition in code to make changes.`
-    : undefined;
+  // A field the save would refuse keeps Save from saving, as the save itself would; so does a
+  // Save held while an address move is checked.
+  const saveDisabled =
+    unsavedCount === 0 ||
+    locked ||
+    saveHeld !== undefined ||
+    errorIds.length > 0;
+  const lockedSaveTitle = saveBlockedTitle(
+    config.kind,
+    locked,
+    errorIds.length
+  );
 
   return (
     <div className="flex items-center gap-3 px-6 py-3 border-b border-border sticky top-0 z-30 bg-background">
@@ -149,6 +182,8 @@ export function BuilderToolbar({
           count={unsavedCount}
           locked={locked}
           saving={saving}
+          errorIds={errorIds}
+          onShowError={onShowError}
           held={saveHeld !== undefined}
         />
         {/* Adding is an edit, so a read-only entity has no add here. */}
