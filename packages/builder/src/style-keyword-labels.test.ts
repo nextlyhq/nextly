@@ -49,6 +49,13 @@ describe("a style keyword's words", () => {
     expect(keywordLabel("overflow", "auto")).toBe("Scroll when needed");
   });
 
+  it("says what an outline's auto style draws: the browser's own focus ring", () => {
+    // `auto` on `outline-style` is not "Auto" in the sense of a size: it is
+    // the ring the browser draws, in its own colour and shape.
+    expect(keywordLabel("outline-style", "auto")).toBe("Browser's focus ring");
+    expect(keywordLabel("outline-style", "dashed")).toBe("Dashed");
+  });
+
   it("keeps the words the alignment icons already use, one source for both", () => {
     expect(keywordLabel("flex-direction", "row-reverse")).toBe("Row, reversed");
     expect(keywordLabel("flex-wrap", "nowrap")).toBe("No wrap");

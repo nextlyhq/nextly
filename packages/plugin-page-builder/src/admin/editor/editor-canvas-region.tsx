@@ -28,6 +28,7 @@ import { siteSheet } from "../../site-style";
 import type { LibraryReadState } from "../pattern-library-client";
 
 import { previewedCanvas } from "./canvas-preview-mode";
+import { DoubleHeaderNotice } from "./double-header-notice";
 import type { EditorView } from "./editor-view";
 import { SiteLayoutNote } from "./site-canvas";
 
@@ -149,6 +150,9 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
     canvasFallback,
     onCanvasFallback,
     canvasDir,
+    siteChrome,
+    onSiteChrome,
+    siteHeaderFooter,
     visitorUnreadable,
     readMedia,
   } = view;
@@ -198,6 +202,15 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
         from the published page.
       */}
       <SiteLayoutNote fallback={canvasFallback} />
+      {/*
+        Visitors may see two headers: the site's own layout draws around the
+        page and a header & footer set draws inside it. Said once a session.
+      */}
+      <DoubleHeaderNotice
+        siteChrome={siteChrome}
+        setDrawn={(view.canvasRegions ?? []).length > 0}
+        siteHeaderFooter={siteHeaderFooter}
+      />
       {siteStylePending ||
       siteStyleError !== null ||
       componentLibrary.state === "pending" ? (
@@ -229,6 +242,9 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
             // is drawn inside the site's own layout and stylesheets.
             source={canvasSource}
             onSourceFallback={onCanvasFallback}
+            // Where the site's own layout draws around the page, for the
+            // notice that visitors may see two headers.
+            onSiteChrome={onSiteChrome}
             // The site mode the author picked, on the frame's document and
             // the frame element only; nothing picked draws the page's own.
             theme={previewed.theme}
@@ -304,17 +320,19 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                   hidden={dragging}
                   onAppend={nodeId => {
                     // Select the container and open Add to add INSIDE it,
-                    // said explicitly: selecting a container never implies
-                    // inside, so a click on a selected block adds after it.
+                    // said explicitly: a layout block added with a container
+                    // selected goes after it, while this "+" means inside
+                    // for every block.
                     editor.select(nodeId);
-                    openInsertPanel(nodeId);
+                    openInsertPanel({ inside: nodeId });
                   }}
                 />
                 {/*
                   The empty page's start card and the "+" between sections.
-                  The "+" selects the section above its gap and opens Add,
-                  which adds after the selected block and names the place;
-                  the start card opens Add on a page with nothing to select.
+                  The "+" selects the section above its gap and opens Add to
+                  add IN THE GAP, said explicitly: with a section selected a
+                  content block would otherwise go inside it. The start card
+                  opens Add on a page with nothing to select.
                   Hidden mid-drag, when the drag's own line says where a block
                   lands.
                 */}
@@ -325,7 +343,7 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                   onStart={() => openInsertPanel()}
                   onAddAfter={nodeId => {
                     editor.select(nodeId);
-                    openInsertPanel();
+                    openInsertPanel({ after: nodeId });
                   }}
                 />
               </>

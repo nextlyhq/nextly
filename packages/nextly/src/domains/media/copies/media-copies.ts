@@ -40,6 +40,7 @@ import { mediaIdOfRouteAddress } from "../media-route-address";
 import {
   copyFormatsOf,
   copyPathOf,
+  MEDIA_COPY_WIDTHS,
   mediaCopyAddress,
   nearestMediaCopyWidth,
   negotiateCopyFormat,
@@ -160,6 +161,36 @@ export async function copyOfMedia(
   if (!keepsCopies(deps.storage)) return null;
   if (!(await deps.processor.canProcess())) return null;
   return { url: mediaCopyAddress(item, snapped), width: snapped };
+}
+
+/**
+ * Every copy of `item` up to `upTo` wide, narrowest first: one per allowed
+ * width no wider than `upTo` or than the original, or none where no copy can
+ * be had (an image type that is not resized, a storage that cannot keep
+ * copies, an install without the image library). What `copyOfMedia` answers
+ * for each of those widths, with the item judged once.
+ *
+ * Addresses only: nothing is resized or stored here. A copy is made the first
+ * time its address is fetched, as one `copyOfMedia` names is.
+ *
+ * @experimental
+ */
+export async function copiesOfMedia(
+  item: CopySource,
+  upTo: number,
+  deps: CopyDeps
+): Promise<MediaCopy[]> {
+  if (copyFormatsOf(item.mimeType).length === 0) return [];
+  if (!keepsCopies(deps.storage)) return [];
+  if (!(await deps.processor.canProcess())) return [];
+  const copies: MediaCopy[] = [];
+  for (const width of MEDIA_COPY_WIDTHS) {
+    if (width > upTo) break;
+    const snapped = copyWidthOf(item, width);
+    if (snapped === null) break;
+    copies.push({ url: mediaCopyAddress(item, snapped), width: snapped });
+  }
+  return copies;
 }
 
 /** A copy's bytes, or word to serve the original instead. */

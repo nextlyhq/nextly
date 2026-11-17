@@ -330,7 +330,7 @@ export function SavePatternDialog({
           className="flex min-h-0 flex-col"
         >
           <DialogHeader>
-            <DialogTitle>Save as pattern</DialogTitle>
+            <DialogTitle>Save as section</DialogTitle>
             <DialogDescription>
               {subject} will be copied into your library. The page is not
               changed.
@@ -455,7 +455,7 @@ export function SavePatternDialog({
               // at the form.
               <Alert variant="destructive" role="alert">
                 <AlertDescription>
-                  {error ?? "The pattern could not be saved. Try again."}
+                  {error ?? "The section could not be saved. Try again."}
                 </AlertDescription>
               </Alert>
             ) : null}
@@ -473,7 +473,7 @@ export function SavePatternDialog({
               Cancel
             </Button>
             <Button type="submit" disabled={!complete || saving}>
-              {saving ? "Saving…" : "Save pattern"}
+              {saving ? "Saving…" : "Save section"}
             </Button>
           </DialogFooter>
         </form>

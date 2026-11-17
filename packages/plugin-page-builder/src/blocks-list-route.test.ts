@@ -11,7 +11,10 @@
  * - The route is contributed, signed-in only (not public, no permission),
  *   reads the allow-list from its query, and answers the list envelope.
  */
-import type { AnyBlockDefinition } from "@nextlyhq/blocks-engine";
+import {
+  createBlockRegistry,
+  type AnyBlockDefinition,
+} from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import { BLOCKS_LIST_ROUTE_PATH } from "./blocks-list-contract";
@@ -156,7 +159,8 @@ describe("agreeing with the blocks field's validator", () => {
       },
       "content",
       "Content",
-      { allow }
+      { allow },
+      createBlockRegistry()
     ).some(issue => issue.code === "DISALLOWED_BLOCK_TYPE");
 
   // Every type here is namespaced, as a registered block's name must be: a

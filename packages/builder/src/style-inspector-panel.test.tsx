@@ -35,7 +35,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "./editor-state";
 import { applyOps, type BuilderOp } from "./ops";
-import { NoticeSinkProvider } from "./builder-notices";
+import { NoticeSinkProvider } from "./shell/builder-notices";
 import { FocalFrame } from "./focal-frame";
 import { InspectorPanel } from "./inspector-panel";
 import {
@@ -47,6 +47,27 @@ import {
 import { keywordLabel } from "./style-keyword-labels";
 import type { SharedStylesHost } from "./style-target";
 import type { StylePolicy } from "./style-values";
+
+/**
+ * What a field's tooltip says, as an author hovering it reads it: what the
+ * control does in words, then what it writes.
+ */
+async function hintOf(label: string): Promise<string> {
+  const field = screen.getByText(label).closest(".nx-inspector__field");
+  if (field === null) throw new Error(`no field for ${label}`);
+  fireEvent.pointerMove(field);
+  const tip = await screen.findByRole("tooltip", {}, { timeout: 2000 });
+  return tip.textContent ?? "";
+}
+
+/**
+ * Open a section of the panel unless it is open already: sections fold on
+ * their own, and one holding a value, or the first, starts open.
+ */
+function openSection(name: RegExp): void {
+  const header = screen.getByRole("button", { name });
+  if (header.getAttribute("aria-expanded") !== "true") fireEvent.click(header);
+}
 
 afterEach(() => {
   cleanup();
@@ -218,7 +239,9 @@ describe("the Style tab beside Content", () => {
     render(<InspectorPanel editor={editorFor(documentOf(), null)} />);
 
     expect(screen.queryByRole("tab", { name: "Style" })).toBeNull();
-    expect(screen.getByText("Select a block to edit it.")).toBeDefined();
+    expect(
+      document.querySelector('[data-empty="no-selection"]')
+    ).not.toBeNull();
   });
 });
 
@@ -226,8 +249,8 @@ describe("when there is nothing to style", () => {
   it("says to select a block, rather than rendering an empty panel", () => {
     /*
      * Not covered by the wrapper's own no-selection case: that one renders
-     * `InspectorPanel`, which says "Select a block to edit it." This panel says
-     * "style", and a query matching one does not match the other.
+     * `InspectorPanel`, which shows the document's own settings. This panel
+     * says "style", and draws alone, so it says what to do.
      */
     register({ spacing: true });
     const { container } = render(
@@ -580,7 +603,7 @@ describe("the shared style target", () => {
     fireEvent.change(side, { target: { value: "12px" } });
     fireEvent.blur(side);
     // The second edit is made before the first has been stored and read back.
-    fireEvent.click(screen.getByRole("button", { name: /^Effects/ }));
+    openSection(/^Effects/);
     const opacity = screen.getByRole("textbox", { name: "Opacity" });
     fireEvent.change(opacity, { target: { value: "80" } });
     fireEvent.blur(opacity);
@@ -627,7 +650,7 @@ describe("the shared style target", () => {
         }),
     });
     fireEvent.click(chip("Card"));
-    fireEvent.click(screen.getByRole("button", { name: /^Effects/ }));
+    openSection(/^Effects/);
     fireEvent.click(
       screen.getByRole("button", { name: "Move Opacity to Card" })
     );
@@ -1122,21 +1145,38 @@ describe("the shared style target", () => {
 });
 
 describe("sections", () => {
-  it("opens one section at a time", () => {
+  it("opens the first section and folds each on its own", () => {
     mount({ spacing: true, effects: true });
 
     // The first section is open and the second is not, without either being
-    // clicked: an accordion that opened nothing would show a block's style
+    // clicked: a panel that opened nothing would show a block's style
     // surface as a column of headings.
     const spacing = screen.getByRole("button", { name: /Spacing/ });
     const effects = screen.getByRole("button", { name: /Effects/ });
     expect(spacing.getAttribute("aria-expanded")).toBe("true");
     expect(effects.getAttribute("aria-expanded")).toBe("false");
 
+    // Opening one leaves the other as it was: both can be open together.
     fireEvent.click(effects);
+    expect(spacing.getAttribute("aria-expanded")).toBe("true");
+    expect(effects.getAttribute("aria-expanded")).toBe("true");
 
+    // And closing one leaves the other open.
+    fireEvent.click(spacing);
     expect(spacing.getAttribute("aria-expanded")).toBe("false");
     expect(effects.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("opens a section that holds a value, whatever its place", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { opacity: 0.5 } },
+    } as NodeStyles;
+    mount({ spacing: true, effects: true }, styles);
+    expect(
+      screen
+        .getByRole("button", { name: /Effects/ })
+        .getAttribute("aria-expanded")
+    ).toBe("true");
   });
 
   it("marks each section that holds values, in words as well as a dot", () => {
@@ -1149,8 +1189,8 @@ describe("sections", () => {
     // which sections they have touched without opening each one.
     const spacing = screen.getByRole("button", { name: /Spacing/ });
     const effects = screen.getByRole("button", { name: /Effects/ });
-    expect(spacing.textContent).toContain("has values");
-    expect(effects.textContent).not.toContain("has values");
+    expect(spacing.textContent).toContain("has changes");
+    expect(effects.textContent).not.toContain("has changes");
   });
 
   it("draws a section's dot beside its name, in a heading the panel styles as its own", () => {
@@ -1560,7 +1600,7 @@ describe("controls", () => {
     } as NodeStyles;
     const editor = mount({ spacing: true, typography: false }, styles);
 
-    fireEvent.click(screen.getByRole("button", { name: /Typography/ }));
+    openSection(/^Text(has changes)?$/);
     const fontSize = fieldsOf("fontSize");
 
     expect(fontSize.queryByRole("textbox")).toBeNull();
@@ -1704,7 +1744,7 @@ describe("controls", () => {
     expect(fieldsOf("color").getByPlaceholderText("Name or hex")).toBeDefined();
   });
 
-  it("sets alignment with icons that follow the container's direction", () => {
+  it("sets alignment with icons that follow the container's direction", async () => {
     // A column's main axis runs down the page, so "start" points up, not left.
     const styles = {
       base: {
@@ -1716,9 +1756,7 @@ describe("controls", () => {
     // "Justify", its CSS name in the label's tooltip: "Justify content" was cut
     // short in the 7rem label column.
     const group = screen.getByRole("radiogroup", { name: "Justify" });
-    expect(screen.getByText("Justify").closest("label")?.title).toMatch(
-      /^Justify content/
-    );
+    expect(await hintOf("Justify")).toMatch(/^Justify content/);
     const start = within(group).getByRole("radio", { name: "Start" });
     expect(start.getAttribute("data-icon")).toBe("AlignVerticalJustifyStart");
 
@@ -5024,7 +5062,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
         : ({ base: { [BASE_BREAKPOINT]: { fontStyle: stored } } } as NodeStyles)
     );
     // Behind Typography's More until it holds a value.
-    if (stored === undefined) reveal("typography", "Font style");
+    if (stored === undefined) reveal("text", "Font style");
     return editor;
   };
 
@@ -5043,9 +5081,9 @@ describe("a segmented keyword control behaves as a toggle", () => {
       mountWith(stored);
 
       for (const button of allOptions()) {
-        // The button's keyword is its tooltip; its words are its text.
+        // The button's words are the keyword's plain name.
         expect(button.getAttribute("aria-pressed")).toBe(
-          String(button.getAttribute("title") === stored)
+          String(button.textContent === keywordLabel("font-style", stored))
         );
       }
     }
@@ -5114,7 +5152,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
      * reading as valid parts of a control that is not.
      */
     const editor = mount({ typography: true });
-    reveal("typography", "Font style");
+    reveal("text", "Font style");
 
     // The positive control, BEFORE the refusal. Without it an implementation
     // that marks every button invalid unconditionally passes — and that
@@ -5163,7 +5201,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
         <StyleInspectorPanel editor={editor} />
       </form>
     );
-    reveal("typography", "Font style");
+    reveal("text", "Font style");
 
     fireEvent.click(optionButton("italic"));
 
@@ -5720,10 +5758,10 @@ describe("opacity in percent", () => {
     expect(submitted).not.toHaveBeenCalled();
   });
 
-  it("says in its label's tooltip that it is in percent", () => {
+  it("says in its label's tooltip that it is in percent", async () => {
     // The catalog's summary reads "0 to 1", which the field no longer takes.
     mount({ effects: true });
-    const title = screen.getByText("Opacity").closest("label")?.title ?? "";
+    const title = await hintOf("Opacity");
     expect(title).toMatch(/percent/);
     expect(title).not.toMatch(/0 to 1/);
   });
@@ -5798,12 +5836,15 @@ describe("an image's focal point", () => {
     }
   });
 
-  it("waits behind More where the fit stretches the picture, or none is set", () => {
+  it("shows on an image whatever its fit, as anything an image uses does", () => {
+    // Where it shows is the engine's answer, which is about the element: a
+    // replaced one takes an object position. The fit decides only what the
+    // point says it does.
     for (const fit of ["fill", undefined]) {
       mountImage(fit);
       expect(
-        screen.queryByRole("radiogroup", { name: "Focal point" })
-      ).toBeNull();
+        screen.getByRole("radiogroup", { name: "Focal point" })
+      ).toBeDefined();
       cleanup();
       clearBlocks();
     }
@@ -5829,7 +5870,7 @@ describe("an image's focal point", () => {
 });
 
 describe("an image's fit", () => {
-  it("is named Fit, its CSS name in the label's tooltip", () => {
+  it("is named Fit, its CSS name in the label's tooltip", async () => {
     // "Object fit" is how CSS names it. Plain "Fit", since the same row fits
     // a video, an embed or a canvas as well as an image.
     mount(
@@ -5837,9 +5878,7 @@ describe("an image's fit", () => {
       { base: { [BASE_BREAKPOINT]: { objectFit: "cover" } } }
     );
     expect(screen.getByRole("radiogroup", { name: "Fit" })).toBeDefined();
-    expect(screen.getByText("Fit").closest("label")?.title).toMatch(
-      /^Object fit/
-    );
+    expect(await hintOf("Fit")).toMatch(/^Object fit/);
   });
 });
 
@@ -5934,16 +5973,14 @@ describe("text decoration", () => {
 });
 
 describe("letter case", () => {
-  it("is named in plain words, its CSS name in the label's tooltip", () => {
+  it("is named in plain words, its CSS name in the label's tooltip", async () => {
     // "Text transform" says how CSS does it; "Letter case" says what it is.
     mount(
       { typography: true },
       { base: { [BASE_BREAKPOINT]: { textTransform: "uppercase" } } }
     );
     const group = screen.getByRole("radiogroup", { name: "Letter case" });
-    expect(screen.getByText("Letter case").closest("label")?.title).toMatch(
-      /^Text transform/
-    );
+    expect(await hintOf("Letter case")).toMatch(/^Text transform/);
     expect(
       within(group).getByRole("radio", { name: "Uppercase" })
     ).toBeDefined();
@@ -6106,10 +6143,14 @@ describe("a read-only design", () => {
 describe("which elements count as media for the fit controls", () => {
   const fitShown = (renderedTag: string) => {
     register({ dimensions: true });
+    const editor = editorFor(documentOf());
+    // With the page's cascade, as the canvas reads it: before that, what the
+    // block draws is not known and nothing is hidden for it.
     const { unmount } = render(
       <StyleInspectorPanel
-        editor={editorFor(documentOf())}
+        editor={editor}
         renderedTag={renderedTag}
+        cascade={{ nodes: editor.document.nodes, entries: [] } as never}
       />
     );
     const shown =
@@ -6124,6 +6165,14 @@ describe("which elements count as media for the fit controls", () => {
     // A `<picture>` only chooses a source; the image inside it is what fits.
     expect(fitShown("picture")).toBe(false);
     expect(fitShown("div")).toBe(false);
+  });
+
+  it("shows them before the canvas has said what the block draws", () => {
+    register({ dimensions: true });
+    render(<StyleInspectorPanel editor={editorFor(documentOf())} />);
+    expect(
+      document.querySelector('[data-property="objectFit"]')
+    ).not.toBeNull();
   });
 });
 
@@ -6214,9 +6263,7 @@ describe("the Font control", () => {
     fireEvent.click(
       fieldsOf("fontFamily").getByRole("button", { name: /^Font, / })
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Add or manage fonts…" })
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Manage fonts…" }));
     expect(onManageFonts).toHaveBeenCalledTimes(1);
   });
 });

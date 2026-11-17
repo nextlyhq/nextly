@@ -276,6 +276,51 @@ export type StyleShape =
   | ObjectShape
   | UnionShape;
 
+/**
+ * When a property has an effect: a fact about CSS, not about any editor.
+ *
+ * - `always`: on any box.
+ * - `flex-container`, `grid-container`, `flex-or-grid-container`: on a block
+ *   that lays its children out as that kind of container.
+ * - `wrapping-flex-or-grid`: on a grid container, or a flex container whose
+ *   children wrap onto more than one line (`align-content` has nothing to
+ *   distribute on a single flex line).
+ * - `block-container`: on a block whose children lay out in block flow, such
+ *   as `display: block` or `flow-root` (an inline box is not one).
+ * - `flex-child`, `grid-child`, `flex-or-grid-child`: on a block whose parent
+ *   is that kind of container.
+ * - `positioned`: on a block whose `position` is anything but `static`.
+ * - `replaced`: on a block that renders a replaced element: an image, a video
+ *   or an embed.
+ */
+export type AppliesWhen =
+  | "always"
+  | "flex-container"
+  | "grid-container"
+  | "flex-or-grid-container"
+  | "wrapping-flex-or-grid"
+  | "block-container"
+  | "flex-child"
+  | "grid-child"
+  | "flex-or-grid-child"
+  | "positioned"
+  | "replaced";
+
+/** Every {@link AppliesWhen} answer, so a test and a tool can list them. */
+export const APPLIES_WHEN: readonly AppliesWhen[] = [
+  "always",
+  "flex-container",
+  "grid-container",
+  "flex-or-grid-container",
+  "wrapping-flex-or-grid",
+  "block-container",
+  "flex-child",
+  "grid-child",
+  "flex-or-grid-child",
+  "positioned",
+  "replaced",
+];
+
 /** One catalog row: a legal key inside a `StyleValues` record. */
 export interface StyleProperty {
   /** The storage key as it appears in a document's style values. */
@@ -295,6 +340,22 @@ export interface StyleProperty {
   shape: StyleShape;
   /** One line describing the property, for the generated reference docs. */
   summary: string;
+  /**
+   * When the property has an effect: any one of these is enough. Absent means
+   * `always`, though every row in this package's catalog states its answer, and
+   * a test holds it to that, so a new row cannot be added without deciding.
+   *
+   * Read through `applies` rather than directly: that is the one place that
+   * also knows a context it cannot read answers true.
+   */
+  appliesWhen?: readonly AppliesWhen[];
+  /**
+   * Answers for single fields of an object property, where one field has an
+   * effect in fewer places than the property as a whole: a position's offsets
+   * act only on a positioned block, while its type always does. A field named
+   * here takes this answer; any other field takes {@link appliesWhen}.
+   */
+  fieldAppliesWhen?: Readonly<Record<string, readonly AppliesWhen[]>>;
 }
 
 /** True when a shape is a leaf rather than a container. */

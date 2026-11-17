@@ -82,8 +82,8 @@ const PLACE_WORDS: Record<RemovalPlace, readonly [string, string]> = {
   pages: ["page", "pages"],
   singles: ["single", "singles"],
   components: ["component", "components"],
-  patterns: ["pattern", "patterns"],
-  layouts: ["Layout", "Layouts"],
+  patterns: ["saved section", "saved sections"],
+  layouts: ["header & footer set", "header & footer sets"],
   entries: ["other entry", "other entries"],
 };
 
@@ -409,7 +409,7 @@ export function removingWords(labels: readonly string[]): {
     title: one
       ? `Removing ${names}'s styles`
       : `Removing the styles of ${names}`,
-    body: `${names} ${one ? "is" : "are"} gone from the site's breakpoints. ${one ? "Its" : "Their"} styles are being removed from each page, component and pattern.`,
+    body: `${names} ${one ? "is" : "are"} gone from the site's breakpoints. ${one ? "Its" : "Their"} styles are being removed from each page, component and saved section.`,
     hint: "On a large site this takes a few minutes. You can close Settings; it carries on in the background.",
   };
 }

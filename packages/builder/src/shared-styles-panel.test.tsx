@@ -19,6 +19,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -29,6 +30,7 @@ import {
   type SharedStyleUsesPage,
 } from "./shared-style-library";
 import {
+  SharedStylesHostSearch,
   SharedStylesPanel,
   USAGE_RECOUNT_MS,
   USAGE_RECOUNT_IDLE_MAX,
@@ -1941,5 +1943,83 @@ describe("a role that may not change the site's design", () => {
     expect(
       within(details).queryByRole("button", { name: "Remove" })
     ).toBeNull();
+  });
+});
+
+describe("a search the host keeps", () => {
+  it("lists what the host's search matches, and draws no search box of its own", async () => {
+    // The Design panel keeps one search across its tabs.
+    render(
+      <SharedStylesHostSearch.Provider
+        value={{ query: "old", onQuery: () => undefined }}
+      >
+        <SharedStylesPanel
+          library={[CARD, HERO, OLD]}
+          pageBlocks={NO_BLOCKS}
+          onRename={async () => ({ ok: true })}
+        />
+      </SharedStylesHostSearch.Provider>
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(
+      screen.queryByRole("searchbox", { name: "Search shared styles" })
+    ).toBeNull();
+    const shown = screen
+      .queryAllByRole("button")
+      .filter(button => button.hasAttribute("data-shared-style"))
+      .map(button => button.getAttribute("data-shared-style"));
+    expect(shown).toEqual(["c-old"]);
+  });
+});
+
+describe("a removal under a search the host keeps", () => {
+  it("hands focus to the host's search box once the style is gone", async () => {
+    // The host stores the removal, and the style leaves the list.
+    let drop: (ids: readonly string[]) => void = () => undefined;
+    const { access } = accessOf({
+      remove: async ids => {
+        drop(ids);
+      },
+    });
+    function Host(): React.JSX.Element {
+      const searchRef = React.useRef<HTMLInputElement>(null);
+      const [library, setLibrary] = React.useState([CARD, HERO, OLD]);
+      drop = ids => setLibrary(all => all.filter(c => !ids.includes(c.id)));
+      return (
+        <>
+          <input ref={searchRef} aria-label="Search Design" />
+          <SharedStylesHostSearch.Provider
+            value={{ query: "", onQuery: () => undefined, searchRef }}
+          >
+            <SharedStylesPanel
+              library={library}
+              pageBlocks={NO_BLOCKS}
+              access={access}
+              onRename={async () => ({ ok: true })}
+            />
+          </SharedStylesHostSearch.Provider>
+        </>
+      );
+    }
+    render(<Host />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const details = await open(/^Old note/, "Old note");
+    fireEvent.click(within(details).getByRole("button", { name: "Remove" }));
+    await act(async () => {
+      fireEvent.click(
+        within(details).getByRole("button", { name: "Remove Old note" })
+      );
+    });
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByLabelText("Search Design")
+      )
+    );
   });
 });

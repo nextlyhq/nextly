@@ -261,6 +261,7 @@ async function judgeComposedLists(args: {
       shapesOf: bindingShapes,
       storedForms: site.storedForms,
       maxNodes: site.maxNodes,
+      blocks: args.setup.blocks,
       onUnjudged: (bindings: number) =>
         args.setup.onBindingsUnjudged?.({ ...args.unjudged, bindings }),
       // A placed list's item bindings, against its query's rows.

@@ -14,7 +14,7 @@ import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BreakpointSet } from "./breakpoints";
-import { CanvasFrameProvider } from "./canvas-frame-context";
+import { CanvasFrameProvider } from "./canvas/canvas-frame-context";
 import type { EditorState } from "./editor-state";
 import { StyleInspectorPanel } from "./style-inspector-panel";
 

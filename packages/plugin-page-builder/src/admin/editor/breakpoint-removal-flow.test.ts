@@ -164,7 +164,7 @@ describe("the confirm step's words", () => {
     expect(summary?.rows).toEqual([
       { label: "Pages", count: 14, drafts: 3 },
       { label: "Components", count: 2 },
-      { label: "Patterns", count: 1 },
+      { label: "Saved sections", count: 1 },
       { label: "Shared styles", count: 4 },
     ]);
     expect(summary?.totals).toBe(
@@ -200,7 +200,7 @@ describe("the confirm step's words", () => {
       "Pages",
       "Singles",
       "Components",
-      "Patterns",
+      "Saved sections",
       "Other entries",
       "Shared styles",
     ]);
@@ -350,7 +350,7 @@ describe("the other steps' words", () => {
   it("says what the removal took, from the dry run", () => {
     expect(doneWords(["Mobile"], [PROTOTYPE])).toEqual({
       title: "Mobile was removed",
-      hint: "Its styles are gone from 14 pages, 2 components, 1 pattern and 4 shared styles.",
+      hint: "Its styles are gone from 14 pages, 2 components, 1 saved section and 4 shared styles.",
     });
     expect(doneWords(["Mobile"], [removed()]).hint).toBe(
       "Nothing was styled for it."
@@ -383,7 +383,7 @@ describe("the other steps' words", () => {
   it("says a removal is going, and what holds the breakpoints meanwhile", () => {
     expect(removingWords(["Mobile"])).toEqual({
       title: "Removing Mobile's styles",
-      body: "Mobile is gone from the site's breakpoints. Its styles are being removed from each page, component and pattern.",
+      body: "Mobile is gone from the site's breakpoints. Its styles are being removed from each page, component and saved section.",
       hint: "On a large site this takes a few minutes. You can close Settings; it carries on in the background.",
     });
     expect(resumedWords(["Mobile"])).toEqual({

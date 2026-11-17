@@ -34,8 +34,8 @@ import {
 import { Diamond, X } from "lucide-react";
 import * as React from "react";
 
+import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { ChoiceList } from "./choice-list";
-import { useCanvasTokenMode } from "./prefers-dark";
 import {
   variableFor,
   variableLabel,

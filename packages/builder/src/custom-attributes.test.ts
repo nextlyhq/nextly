@@ -164,7 +164,30 @@ describe("what the author is told", () => {
   });
 
   it("tells the author where an id belongs", () => {
-    expect(problemMessage({ kind: "use-css-id-field" })).toContain("CSS id");
+    expect(problemMessage({ kind: "use-css-id-field" })).toContain(
+      "Anchor (ID)"
+    );
+  });
+});
+
+describe("a class in the bag, with a field for it above", () => {
+  it("points the author at CSS classes, in any capitals", () => {
+    // Refused as an attribute either way; the author is told where it goes.
+    expect(rowProblem([row("class", "promo")], 0)).toEqual({
+      kind: "use-css-classes-field",
+    });
+    expect(rowProblem([row(" CLASS ", "promo")], 0)).toEqual({
+      kind: "use-css-classes-field",
+    });
+    expect(problemMessage({ kind: "use-css-classes-field" })).toBe(
+      "Use CSS classes above."
+    );
+  });
+
+  it("is not stored, as no refused row is", () => {
+    expect(
+      storedAttributes([row("class", "promo"), row("data-a", "1")], "")
+    ).toEqual({ "data-a": "1" });
   });
 });
 

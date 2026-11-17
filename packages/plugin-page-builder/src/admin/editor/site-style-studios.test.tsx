@@ -96,15 +96,16 @@ function Studio({
         </TokensStudio>
       )}
       tabs={{
-        variables: () => <VariablesTab />,
-        classes: () => <p>Shared styles content</p>,
-        fonts: () => <p>Fonts content</p>,
+        colours: () => <VariablesTab tab="colours" />,
+        type: () => <VariablesTab tab="type" />,
+        spacing: () => <VariablesTab tab="spacing" />,
+        styles: () => <p>Styles content</p>,
       }}
     />
   );
 }
 
-function renderStudio(start = "variables"): void {
+function renderStudio(start = "colours"): void {
   render(<Studio start={start} />);
 }
 
@@ -156,7 +157,7 @@ describe("the space between blocks", () => {
     renderStudio();
     // The Variables tab is drawn, so a choice above its spacing variables
     // would be on screen if one were offered.
-    expect(screen.getByRole("tab", { name: "Variables" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Colours" })).toBeTruthy();
     expect(
       screen.queryByRole("radiogroup", { name: "Space between blocks" })
     ).toBeNull();
@@ -185,10 +186,10 @@ describe("the Design panel's header", () => {
     fireEvent.click(
       await within(header()).findByRole("button", { name: "Dark" })
     );
-    openTab("Fonts");
-    expect(await screen.findByText("Fonts content")).toBeTruthy();
+    openTab("Styles");
+    expect(await screen.findByText("Styles content")).toBeTruthy();
     expect(dark()).toHaveProperty("ariaPressed", "true");
-    openTab("Variables");
+    openTab("Colours");
     // The Variables tab draws the mode the header chose.
     const swatch = (
       await screen.findByRole("button", { name: /^Brand/ })

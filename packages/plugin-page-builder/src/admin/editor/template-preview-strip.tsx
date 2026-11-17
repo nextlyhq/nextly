@@ -372,7 +372,7 @@ function useSwitchKeys(preview: TemplatePreview): void {
         run: () => switchBy(-1),
       },
     ],
-    { name: "Template preview" }
+    { name: "Collection template preview" }
   );
 }
 

@@ -27,6 +27,44 @@ const lookups = {
 };
 
 describe("rewriteDocument", () => {
+  it("maps the variable a container names as its own content width", () => {
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "pattern",
+      nodes: [
+        {
+          id: "band",
+          type: "core/section",
+          version: 1,
+          props: { contained: true, contentWidth: { $token: "color.src" } },
+        },
+        {
+          id: "img",
+          type: "core/image",
+          version: 1,
+          props: { mediaId: "m-src", contentWidth: { $token: "color.src" } },
+        },
+        {
+          id: "typed",
+          type: "core/section",
+          version: 1,
+          props: { contained: true, contentWidth: "1400px" },
+        },
+      ],
+    };
+    const [band, img, typed] = rewriteDocument(document, maps, lookups).nodes;
+    expect(band?.props).toEqual({
+      contained: true,
+      contentWidth: { $token: "color.dst" },
+    });
+    // Beside a mapped media prop, both are mapped.
+    expect(img?.props).toEqual({
+      mediaId: "m-dst",
+      contentWidth: { $token: "color.dst" },
+    });
+    expect(typed?.props).toEqual({ contained: true, contentWidth: "1400px" });
+  });
+
   it("maps every reference and drops what sits under a breakpoint not kept", () => {
     const document: BlockDocument = {
       formatVersion: 1,

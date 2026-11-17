@@ -93,7 +93,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
             : `${openPanelRequest.panel}:${openPanelRequest.view ?? ""}`}
         </div>
         <div data-testid="panel">
-          {renderPanel?.("design", { current: "fonts", choose: () => {} })}
+          {renderPanel?.("design", { current: "type", choose: () => {} })}
         </div>
       </div>
     ),
@@ -328,11 +328,15 @@ describe("the fonts panel reaching an author", () => {
     expect(panel.textContent).toContain("Ghost");
   });
 
-  it("sends an author from a typeface the site lacks to Design's Variables tab", async () => {
-    // The fix is to edit the variable, and the fonts are a tab of the same
-    // panel: a request naming only the panel would reopen Design on the tab
-    // the author is already on, which is Fonts, and the button would do
-    // nothing visible.
+  it("sends an author from a typeface the site lacks to the font variables, in the same tab", async () => {
+    // The fix is to edit the variable, and the font variables are in Type
+    // with the fonts: the button opens their group, folded or not, and
+    // brings it into view with focus on its heading, rather than asking for
+    // the tab already open, which would do nothing visible.
+    const scroll = vi.fn();
+    (
+      window.Element.prototype as unknown as Record<string, unknown>
+    ).scrollIntoView = scroll;
     storedRead = {
       data: {
         fonts: [],
@@ -350,8 +354,15 @@ describe("the fonts panel reaching an author", () => {
       error: null,
     };
     await openEditor();
-    fireEvent.click(screen.getByRole("button", { name: "Edit in Variables" }));
-    expect(screen.getByTestId("request").textContent).toBe("design:variables");
+    fireEvent.click(screen.getByRole("button", { name: "Edit this variable" }));
+    await waitFor(() =>
+      expect(document.activeElement?.getAttribute("aria-label")).toMatch(
+        /^Fonts and weights, \d+$/
+      )
+    );
+    expect(scroll).toHaveBeenCalled();
+    // No panel is asked for: the variables are in the tab already open.
+    expect(screen.getByTestId("request").textContent).toBe("");
   });
 
   it("draws a read still in flight as loading rather than as a site with no fonts", async () => {
