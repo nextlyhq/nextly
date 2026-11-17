@@ -34,6 +34,8 @@
 import {
   type BlockDefinition,
   defineBlock,
+  DISCLOSURE_ICON_CLASS,
+  DISCLOSURE_TITLE_CLASS,
   RICH_TEXT_PROP_TYPE,
   type RichTextValue,
 } from "@nextlyhq/blocks-engine";
@@ -172,9 +174,17 @@ export function renderTableOfContents({
     return (
       <nav className={className} aria-label={title}>
         <details open>
-          {/* The browser's own marker and keyboard: it folds with no script. */}
-          <summary className={titleClass} {...markProp?.("title")}>
-            {title}
+          {/*
+           * The browser's own marker and keyboard: it folds with no script.
+           * Beside the title, the empty icon an Accordion's sections draw,
+           * which Style › Icon paints and places; with no icon chosen it is
+           * nothing, and the browser's marker shows.
+           */}
+          <summary className={titleClass}>
+            <span className={DISCLOSURE_ICON_CLASS} aria-hidden="true" />
+            <span className={DISCLOSURE_TITLE_CLASS} {...markProp?.("title")}>
+              {title}
+            </span>
           </summary>
           {body}
         </details>
@@ -350,6 +360,8 @@ export const tableOfContents: BlockDefinition<
     border: true,
     effects: true,
     position: true,
+    // The icon its folding title shows, and where, as an Accordion's.
+    disclosure: true,
   },
   // A navigation landmark of links, folded in a `<details>` by default: flow
   // content that is interactive while it draws a link or the disclosure.

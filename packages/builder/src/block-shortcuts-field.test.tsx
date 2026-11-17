@@ -74,6 +74,10 @@ function mount(
         supports: { dimensions: true, spacing: true },
         baseStyles: { base: { base: { padding } } },
       }),
+      block("core/icon", {
+        supports: { dimensions: true, typography: true },
+        baseStyles: { base: { base: { fontSize: "1.5rem" } } },
+      }),
     ] as never,
     { source: "block-shortcuts-field-test" }
   );
@@ -254,6 +258,39 @@ describe("a Button's Size and Full width", () => {
     expect(
       screen.getAllByText("button.padding-y × 0.75").length
     ).toBeGreaterThan(0);
+  });
+});
+
+describe("an Icon's Size", () => {
+  it("is in Size, Medium at the icon's own font size", () => {
+    mount("core/icon");
+    open("Size");
+    expect(
+      screen.getByRole("radio", { name: "Medium" }).getAttribute("aria-checked")
+    ).toBe("true");
+  });
+
+  it("writes the font size Large draws the glyph at", () => {
+    const editor = mount("core/icon");
+    open("Size");
+    fireEvent.click(screen.getByRole("radio", { name: "Large" }));
+    expect(JSON.stringify(editor.apply.mock.calls[0]?.[0])).toContain(
+      '"fontSize"'
+    );
+    expect(JSON.stringify(editor.apply.mock.calls[0]?.[0])).toContain(
+      '"2rem"'
+    );
+  });
+
+  it("says Custom for a font size set another way, choosing none", () => {
+    mount("core/icon", { base: { [BASE_BREAKPOINT]: { fontSize: "3rem" } } });
+    open("Size");
+    for (const name of ["Small", "Medium", "Large"]) {
+      expect(
+        screen.getByRole("radio", { name }).getAttribute("aria-checked")
+      ).toBe("false");
+    }
+    expect(screen.getByText(/^Custom:/)).toBeDefined();
   });
 });
 
