@@ -13,10 +13,14 @@
  *
  * ## Who to tell
  *
- * The row also names who published the component, until they have been told:
- * the screen they published from asks for what is waiting for them, and the
- * first ask takes it, in one conditional statement, so a second tab or a
- * second ask is told nothing.
+ * A claim names only the component: while the fill is still writing the set,
+ * there is nothing to tell, and nothing an ask could take. Once the set is
+ * written, the row is changed to name who published it too (`announce`), until
+ * they have been told: the screen they published from asks for what is
+ * waiting for them, and the first ask takes it, in one conditional statement,
+ * so a second tab or a second ask is told nothing. A fill that fails is
+ * released before it is ever announced, so an ask can never change the row a
+ * release has to find.
  *
  * @module default-layout/fill-mark
  */
@@ -57,12 +61,15 @@ export interface FillMarkStore {
   /** Both areas' marks. */
   read(): Promise<FillMarks>;
   /**
-   * Mark `area` as filled by `mark.component`. False, writing nothing, when
-   * the area is already marked: another fill got there first.
+   * Mark `area` as being filled by `component`, with nobody to tell yet.
+   * False, writing nothing, when the area is already marked: another fill got
+   * there first.
    */
-  claim(area: StarterArea, mark: FillMark): Promise<boolean>;
-  /** Remove `area`'s mark, only while it is still `mark`. */
-  release(area: StarterArea, mark: FillMark): Promise<void>;
+  claim(area: StarterArea, component: string): Promise<boolean>;
+  /** Remove `area`'s claim for `component`, only while it is not announced. */
+  release(area: StarterArea, component: string): Promise<void>;
+  /** Name `user` as the one to tell about `area`'s fill by `component`. */
+  announce(area: StarterArea, component: string, user: string): Promise<void>;
   /** Take the fills waiting to be told to `user`: each is answered once. */
   take(user: string): Promise<readonly FillToTell[]>;
 }
@@ -111,11 +118,11 @@ export function fillMarkStore(
   };
   return {
     read,
-    claim: async (area, mark) => {
+    claim: async (area, component) => {
       try {
         await db.insert(siteOptions, {
           name: FILL_MARK_OPTION[area],
-          value: encodeFillMark(mark),
+          value: encodeFillMark({ component, tell: null }),
         });
         return true;
       } catch (error) {
@@ -123,8 +130,17 @@ export function fillMarkStore(
         throw error;
       }
     },
-    release: async (area, mark) => {
-      await db.delete(siteOptions).where(holding(area, mark));
+    release: async (area, component) => {
+      await db
+        .delete(siteOptions)
+        .where(holding(area, { component, tell: null }));
+    },
+    announce: async (area, component, user) => {
+      await db
+        .update(siteOptions, {
+          value: encodeFillMark({ component, tell: user }),
+        })
+        .where(holding(area, { component, tell: null }));
     },
     take: async user => {
       const taken: FillToTell[] = [];

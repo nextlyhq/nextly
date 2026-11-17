@@ -17,21 +17,35 @@ import { starterFingerprint } from "./starter-record";
 
 const STARTER_HEADER = { nodes: [{ id: "n1", type: "core/heading" }] };
 
-/** The marks, in memory, with the same claim rule as the table's. */
+/** The marks, in memory, with the same claim and take rules as the table's. */
 function memoryMarks(): FillMarkStore & { marks: Record<string, FillMark> } {
   const marks: Record<string, FillMark> = {};
+  const holds = (area: string, component: string, tell: string | null) =>
+    marks[area]?.component === component && marks[area]?.tell === tell;
   return {
     marks,
     read: async () => ({ ...marks }) as FillMarks,
-    claim: async (area, mark) => {
+    claim: async (area, component) => {
       if (marks[area] !== undefined) return false;
-      marks[area] = mark;
+      marks[area] = { component, tell: null };
       return true;
     },
-    release: async (area, mark) => {
-      if (marks[area] === mark) delete marks[area];
+    release: async (area, component) => {
+      if (holds(area, component, null)) delete marks[area];
     },
-    take: async () => [],
+    announce: async (area, component, user) => {
+      if (holds(area, component, null)) marks[area] = { component, tell: user };
+    },
+    take: async user => {
+      const taken: { area: "header" | "footer"; component: string }[] = [];
+      for (const area of ["header", "footer"] as const) {
+        const mark = marks[area];
+        if (mark === undefined || mark.tell !== user) continue;
+        marks[area] = { component: mark.component, tell: null };
+        taken.push({ area, component: mark.component });
+      }
+      return taken;
+    },
   };
 }
 
@@ -122,6 +136,20 @@ describe("the fill of the default by a first published header", () => {
     expect(deps.marks.marks.header).toBeUndefined();
   });
 
+  it("tells nobody while the set is being written, and still lets go of a claim whose write fails", async () => {
+    let asked: readonly unknown[] = ["not asked"];
+    const deps = depsOver(freshSite(), async () => {
+      // The publisher's other tab asks while the set is being written.
+      asked = await deps.marks.take("u1");
+      throw new Error("the set refused");
+    });
+    await expect(fillDefaultOnFirstPublish(deps, NEW_HEADER)).rejects.toThrow(
+      "the set refused"
+    );
+    expect(asked).toEqual([]);
+    expect(deps.marks.marks.header).toBeUndefined();
+  });
+
   it("reads the seed again and writes on what is stored then, when its write is refused as stale", async () => {
     const stored = freshSite();
     let writes = 0;
@@ -161,8 +189,8 @@ describe("the fill of the default by a first published header", () => {
     const stored = freshSite();
     const deps = depsOver(stored, async () => ({}));
     const claim = deps.marks.claim.bind(deps.marks);
-    deps.marks.claim = async (area, mark) => {
-      const landed = await claim(area, mark);
+    deps.marks.claim = async (area, component) => {
+      const landed = await claim(area, component);
       // A make-default lands right after the claim.
       stored.settings = { defaultLayout: "own", seededLayout: "main" };
       return landed;

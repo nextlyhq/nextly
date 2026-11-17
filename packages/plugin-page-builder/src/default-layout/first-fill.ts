@@ -32,7 +32,8 @@
  * so a header's fill and a footer's landing together each keep the other's
  * row: a write refused as stale is made again on what is stored then. A
  * failure after the claim removes the mark again, so a later publish can
- * still fill the area.
+ * still fill the area. Only once the set is written is the publisher named
+ * to be told, so nobody is told of a fill that has not happened.
  *
  * The starter component is kept, published: it can be chosen again.
  *
@@ -48,7 +49,7 @@
 import { withVersionFrom } from "../document-version";
 import { retryOnStale } from "../stale-retry";
 
-import type { FillMark, FillMarkStore } from "./fill-mark";
+import type { FillMarkStore } from "./fill-mark";
 import type { StarterArea } from "./seed-names";
 import {
   untouchedStarterArea,
@@ -119,41 +120,47 @@ export async function fillDefaultOnFirstPublish(
     return false;
   }
 
-  const mark: FillMark = { component: published.id, tell: published.by };
-  if (!(await deps.marks.claim(area, mark))) return false;
+  if (!(await deps.marks.claim(area, published.id))) return false;
+  let filled: boolean;
   try {
-    if ((await seededDefault(deps)) !== seed) {
-      await deps.marks.release(area, mark);
-      return false;
-    }
-    const filled = await retryOnStale(
-      async () => readSeed(deps, seed),
-      async read => {
-        if (read === null || !(await isOpen(deps, read, area, starter))) {
-          return false;
-        }
-        await deps.nextly.update({
-          collection: deps.slugs.layouts,
-          id: seed,
-          data: withVersionFrom(
-            {
-              areas: withArea(read.areas, area, published.id),
-              status: "published",
-            },
-            read.rev
-          ),
-          overrideAccess: true,
-        });
-        return true;
-      },
-      { read: first }
-    );
-    if (!filled) await deps.marks.release(area, mark);
-    return filled;
+    filled =
+      (await seededDefault(deps)) === seed &&
+      (await retryOnStale(
+        async () => readSeed(deps, seed),
+        async read => {
+          if (read === null || !(await isOpen(deps, read, area, starter))) {
+            return false;
+          }
+          await deps.nextly.update({
+            collection: deps.slugs.layouts,
+            id: seed,
+            data: withVersionFrom(
+              {
+                areas: withArea(read.areas, area, published.id),
+                status: "published",
+              },
+              read.rev
+            ),
+            overrideAccess: true,
+          });
+          return true;
+        },
+        { read: first }
+      ));
   } catch (error) {
-    await deps.marks.release(area, mark).catch(() => undefined);
+    await deps.marks.release(area, published.id).catch(() => undefined);
     throw error;
   }
+  if (!filled) {
+    await deps.marks.release(area, published.id);
+    return false;
+  }
+  // Only now is there something to tell. The fill stands whether or not the
+  // publisher can be named: a failure here costs the notice, never the fill.
+  await deps.marks
+    .announce(area, published.id, published.by)
+    .catch(() => undefined);
+  return true;
 }
 
 /** The seeded set's id while it is the default, or null. */

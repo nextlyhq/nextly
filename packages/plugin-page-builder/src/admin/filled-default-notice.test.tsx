@@ -20,6 +20,8 @@ import type { FillNoticesResult } from "../default-layout/fill-notice-contract";
 
 type Status = { status: string; hasWorkingDraft: boolean } | null;
 let status: Status = null;
+/** When the document was last stored, as the editor's save state says. */
+let storedAt = new Date(1_000);
 const writes: Array<{ path: string }> = [];
 let answer: { item?: FillNoticesResult } | undefined;
 const navigateTo = vi.fn();
@@ -27,6 +29,7 @@ const navigateTo = vi.fn();
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   navigateTo: (href: string) => navigateTo(href),
   useDocumentStatus: () => status,
+  useDocumentActions: () => ({ saveState: { kind: "saved", at: storedAt } }),
   writePluginRoute: async (write: { path: string }) => {
     writes.push(write);
     return answer;
@@ -67,6 +70,7 @@ function Screen({ isComponent }: { isComponent: boolean }) {
 
 beforeEach(() => {
   status = null;
+  storedAt = new Date(1_000);
   writes.length = 0;
   answer = undefined;
   navigateTo.mockClear();
@@ -170,6 +174,32 @@ describe("the notice that a first header now fills the default", () => {
     expect(
       screen.getAllByText("Acme header now shows on every page.")
     ).toHaveLength(1);
+  });
+
+  it("asks again after publishing changes to a component that stays live", async () => {
+    status = { status: "published", hasWorkingDraft: false };
+    const view = render(
+      <>
+        <Toaster />
+        <Screen isComponent />
+      </>
+    );
+    await waitFor(() => expect(writes).toHaveLength(1));
+
+    // "Use as: Header" chosen and published directly: still live, stored
+    // again, and this time the server has a fill to tell.
+    answer = { item: filled("header", "Acme header") };
+    storedAt = new Date(2_000);
+    view.rerender(
+      <>
+        <Toaster />
+        <Screen isComponent />
+      </>
+    );
+    expect(
+      await screen.findByText("Acme header now shows on every page.")
+    ).toBeTruthy();
+    expect(writes).toHaveLength(2);
   });
 
   it("never asks for a page", () => {

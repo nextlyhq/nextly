@@ -22,8 +22,10 @@
  */
 import {
   navigateTo,
+  useDocumentActions,
   useDocumentStatus,
   writePluginRoute,
+  type DocumentSaveState,
 } from "@nextlyhq/plugin-sdk/admin";
 import { toast } from "@nextlyhq/ui";
 import { useEffect, useRef } from "react";
@@ -92,9 +94,13 @@ async function takeFillNotices(): Promise<FillNoticesResult | undefined> {
 }
 
 /**
- * Ask for, and say, the fills waiting for the author, each time the component
- * this screen shows becomes live with nothing unpublished: on opening a live
- * one, and right after a publish. Nothing for any other kind of document.
+ * Ask for, and say, the fills waiting for the author whenever the component
+ * this screen shows is live with nothing unpublished and has just been
+ * stored: on opening a live one, and right after each publish, including a
+ * publish of changes to a component that was live already (marking a live
+ * component "Use as: Header" and publishing it directly keeps it live
+ * throughout, so only the store's time says a publish landed). Nothing for
+ * any other kind of document.
  */
 export function useFilledDefaultNotice(
   documentKind: string,
@@ -108,6 +114,7 @@ export function useFilledDefaultNotice(
   const status = useDocumentStatus();
   const live =
     status !== null && status.status === "published" && !status.hasWorkingDraft;
+  const stored = storedAtOf(useDocumentActions()?.saveState);
   useEffect(() => {
     if (!isComponent || !live) return;
     // Said even when this screen has closed by the time the answer comes:
@@ -115,5 +122,12 @@ export function useFilledDefaultNotice(
     void takeFillNotices().then(result => {
       if (result !== undefined) showFillNotices(result, setsRef.current);
     });
-  }, [isComponent, live]);
+  }, [isComponent, live, stored]);
+}
+
+/** When the document was last stored, as a number a dependency compares. */
+function storedAtOf(state: DocumentSaveState | undefined): number | null {
+  return state?.kind === "saved" && state.at !== null
+    ? state.at.getTime()
+    : null;
 }
