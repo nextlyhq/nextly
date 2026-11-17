@@ -134,7 +134,7 @@ describe("ReviewSection", () => {
     );
   });
 
-  it("assigns the part to a role it waits for, and unassigns it", async () => {
+  it("assigns the part to a role it waits for", async () => {
     fetchSpy.mockResolvedValue(answer(part()));
     render(<ReviewSection document={post} />);
     const section = await screen.findByRole("region", { name: "Review" });
@@ -146,7 +146,9 @@ describe("ReviewSection", () => {
         expect.objectContaining({ assignee: { kind: "role", id: "r-ed" } }),
       ])
     );
+  });
 
+  it("unassigns a part assigned to the person, offering it to no one else", async () => {
     fetchSpy.mockResolvedValue(
       answer(
         part({
@@ -155,15 +157,16 @@ describe("ReviewSection", () => {
         })
       )
     );
-    render(<ReviewSection document={{ ...post, entryId: "e2" }} />);
-    const sections = await screen.findAllByRole("region", { name: "Review" });
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+    expect(
+      within(section).queryByRole("button", { name: "Assign to me" })
+    ).not.toBeInTheDocument();
     await userEvent.click(
-      within(sections[1] as HTMLElement).getByRole("button", {
-        name: "Unassign",
-      })
+      within(section).getByRole("button", { name: "Unassign" })
     );
     await waitFor(() =>
-      expect(assignSpy).toHaveBeenLastCalledWith([
+      expect(assignSpy).toHaveBeenCalledWith([
         expect.objectContaining({ assignee: null }),
       ])
     );
