@@ -1,8 +1,9 @@
 /**
- * The shared "open this document" rule (`documentAddress`) with what it needs
- * read from the signed-in admin: each collection as the admin lists it, whether
- * the reader may update it, the site's default language and the published
- * document views.
+ * The shared "open this document" rule (`documentAddress`), and the other ways
+ * into a document derived from it (`rowWaysIn`, `viewsToOpenIn`), with what
+ * they need read from the signed-in admin: each collection as the admin lists
+ * it, whether the reader may update it, the site's default language and the
+ * published document views.
  *
  * @module lib/navigation/useDocumentAddress
  */
@@ -12,11 +13,17 @@ import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useEveryNavCollection } from "@admin/hooks/queries/useCollections";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import type { RegisteredDocumentView } from "@admin/lib/plugins/document-view-registry";
 
 import {
+  createDialogOf,
   documentAddress,
+  rowWaysIn,
+  viewsToOpenIn,
   type OpenableCollection,
   type OpenedDocument,
+  type OpenRequest,
+  type WayIn,
 } from "./document-address";
 
 /** What a link may add to the document it opens. */
@@ -36,7 +43,24 @@ export type DocumentAddressOf = (
   options?: OpenOptions
 ) => string;
 
-export function useDocumentAddress(): DocumentAddressOf {
+/** The other ways into a document, for the signed-in reader. */
+export type WaysInOf = (
+  document: OpenedDocument,
+  options?: OpenOptions
+) => WayIn[];
+
+/** One of the rule's readings of a document, from what the admin holds. */
+type RuleReading<T> = (
+  document: OpenedDocument,
+  collection: OpenableCollection | undefined,
+  request: OpenRequest,
+  views: readonly RegisteredDocumentView[]
+) => T;
+
+/** `reading` with what it needs read from the signed-in admin. */
+function useRuleReading<T>(
+  reading: RuleReading<T>
+): (document: OpenedDocument, options?: OpenOptions) => T {
   const { data } = useEveryNavCollection();
   const { canAccessCollection } = useCurrentUserPermissions();
   // The default language whenever the site names one, multilingual or not: on
@@ -58,7 +82,7 @@ export function useDocumentAddress(): DocumentAddressOf {
   );
   return useCallback(
     (document, options = {}) =>
-      documentAddress(
+      reading(
         document,
         options.collection ?? bySlug.get(document.slug),
         {
@@ -72,6 +96,32 @@ export function useDocumentAddress(): DocumentAddressOf {
         },
         views
       ),
-    [bySlug, canAccessCollection, defaultLocale, views]
+    [reading, bySlug, canAccessCollection, defaultLocale, views]
   );
+}
+
+export function useDocumentAddress(): DocumentAddressOf {
+  return useRuleReading(documentAddress);
+}
+
+/**
+ * The other ways into a document a list row offers beside its own link:
+ * "Edit details" where its entries open in a view, else the views it may be
+ * opened in.
+ */
+export function useRowWaysIn(): WaysInOf {
+  return useRuleReading(rowWaysIn);
+}
+
+/** The views a document open as its form may be opened in, worded by each view. */
+export function useViewsToOpenIn(): WaysInOf {
+  return useRuleReading(viewsToOpenIn);
+}
+
+/** The create dialog "+ New" opens on a collection, for the signed-in reader. */
+export function useCreateDialogOf(): (
+  document: OpenedDocument,
+  options?: OpenOptions
+) => string | undefined {
+  return useRuleReading(createDialogOf);
 }

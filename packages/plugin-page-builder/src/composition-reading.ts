@@ -89,14 +89,19 @@ export const MOST_COMPONENTS_READ = 100;
  * come back differently — a concurrent write committing between the two —
  * and a graph assembled from two readings of one component is a graph no reader
  * ever receives.
+ *
+ * The source is asked as soon as a read is, without waiting on the reads
+ * already asked, so the reads a walk asks together reach the source together:
+ * a source that reads several components in one query (`storedComponentSource`)
+ * reads each round of a walk in one go.
  */
 export function documentReader(
   source: ComponentSource,
   draft: boolean
 ): BoundedReader {
-  const held = new Map<string, ReadDocument>();
+  const held = new Map<string, Promise<ReadDocument>>();
   let exhausted = false;
-  const read: DocumentReader = async id => {
+  const read: DocumentReader = id => {
     const seen = held.get(id);
     if (seen !== undefined) return seen;
     // The budget is charged HERE, at the one place every read passes through,
@@ -112,10 +117,13 @@ export function documentReader(
     // entry here would spend the budget on remembering that it had run out.
     if (held.size >= MOST_COMPONENTS_READ) {
       exhausted = true;
-      return { kind: "unreadable" };
+      return Promise.resolve({ kind: "unreadable" });
     }
-    const answer = await source(id, draft);
+    // Held while it is read, so a second ask for it waits on the first; a read
+    // that fails is forgotten, as one never answered.
+    const answer = source(id, draft);
     held.set(id, answer);
+    void answer.catch(() => held.delete(id));
     return answer;
   };
   return Object.assign(read, { exhausted: () => exhausted });
@@ -294,15 +302,19 @@ function stillWanted(
  * something nobody supplied as missing, and so does every reader. An unreadable
  * one is recorded the same way, so the composition matches what a reader is
  * drawn, and reported, because nothing established that it is absent.
+ *
+ * Every wanted definition is asked for at once, so a source that reads several
+ * in one query reads the round in one go.
  */
 async function supply(
   wanted: readonly string[],
   read: DocumentReader,
   library: HeldLibrary
 ): Promise<boolean> {
+  const answers = await Promise.all(wanted.map(id => read(id)));
   let unreadable = false;
-  for (const id of wanted) {
-    const answer = await read(id);
+  for (const [at, id] of wanted.entries()) {
+    const answer = answers[at] ?? { kind: "unreadable" };
     if (answer.kind === "document") {
       library.held.set(id, answer.document);
       continue;

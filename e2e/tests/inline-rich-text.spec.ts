@@ -34,7 +34,7 @@ import { LOCK } from "./support/locks";
  * because this suite is deliberately black box and imports no product code;
  * the source of both strings is `PageBuilderCard`.
  */
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
 
 const HOMEPAGE = "/admin/api/singles/homepage";
 

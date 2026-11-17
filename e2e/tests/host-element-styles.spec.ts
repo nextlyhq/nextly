@@ -204,7 +204,7 @@ test("the admin's dashboard looks the same in a site that styles bare elements",
 const HOMEPAGE_API = "/admin/api/singles/homepage";
 
 /** The homepage form's action that opens the Page Builder. */
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
 
 /** An element rule in the admin's document, which no block style sets. */
 const SITE_HEADING_RULE = "h2 { text-transform: uppercase; }";

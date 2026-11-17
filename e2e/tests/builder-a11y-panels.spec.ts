@@ -125,13 +125,11 @@ const SURFACES: ReadonlyArray<{
     },
   })),
   {
-    name: "the Spacing add menu",
+    name: "the Add value menu",
     open: async page => {
       await railButton(page, "Design").click();
       await page.getByRole("tab", { name: "Spacing", exact: true }).click();
-      await page
-        .getByRole("button", { name: "Add spacing, radius or shadow" })
-        .click();
+      await page.getByRole("button", { name: "Add value" }).click();
       await expect(page.getByRole("menu")).toBeVisible();
     },
   },

@@ -1,0 +1,187 @@
+/**
+ * Which document defines a form, as a post names it, and that form's node as
+ * the document is published.
+ *
+ * A form is defined in exactly one document: a page, a collection's template,
+ * a component, or the component a published header & footer set places in
+ * one of its areas. The post names that document and the node's id; the
+ * receiver reads the document's PUBLISHED form and takes the node from it,
+ * so a field list, an address or a message is never taken from the browser,
+ * and a node that is only in a draft is not found.
+ *
+ * Each document is read the way the live page reads it: a page and a
+ * template as the public, with the collection's access rules applied; a
+ * component, and a header & footer set, as the system, which is how the
+ * renderer reads what a visitor's page embeds.
+ *
+ * @module forms/defining-document
+ */
+import {
+  findNode,
+  regionsOf,
+  REGION_AREAS,
+  type BlockNode,
+  type RegionArea,
+} from "@nextlyhq/blocks-engine";
+
+import { PAGES_CONTENT_FIELD } from "../collections/pages";
+import { TEMPLATE_CONTENT_FIELD } from "../collections/templates";
+import {
+  AS_THE_SYSTEM,
+  asDocument,
+  publishedStoreSource,
+  type StoreSourceDirectApi,
+  type SystemReading,
+} from "../component-store-source";
+
+/** The document a post names as the one defining its form. */
+export type DefiningDocument =
+  | { readonly kind: "page" | "template" | "component"; readonly id: string }
+  | { readonly kind: "layout"; readonly id: string; readonly area: RegionArea };
+
+/** An id as a post may name it; anything else names nothing. */
+const ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+/**
+ * Read the hidden field naming the defining document: `page:<id>`,
+ * `template:<id>`, `component:<id>` or `layout:<id>:<area>`. `null` for
+ * anything else, which the receiver refuses.
+ */
+export function parseDefiningDocument(
+  raw: string | undefined
+): DefiningDocument | null {
+  if (raw === undefined) return null;
+  const parts = raw.split(":");
+  const [kind, id, area] = parts;
+  if (id === undefined || !ID.test(id)) return null;
+  if (kind === "layout") {
+    if (parts.length !== 3) return null;
+    const known = REGION_AREAS.find(candidate => candidate === area);
+    return known === undefined ? null : { kind, id, area: known };
+  }
+  if (parts.length !== 2) return null;
+  if (kind === "page" || kind === "template" || kind === "component") {
+    return { kind, id };
+  }
+  return null;
+}
+
+/** The hidden field's value naming `document`: the inverse of {@link parseDefiningDocument}. */
+export function definingDocumentValue(document: DefiningDocument): string {
+  return document.kind === "layout"
+    ? `layout:${document.id}:${document.area}`
+    : `${document.kind}:${document.id}`;
+}
+
+/** A published read through the Direct API, as the public or as the system. */
+export interface PublishedReadApi extends StoreSourceDirectApi<SystemReading> {
+  find(args: { readonly collection: string }): Promise<{ items: unknown[] }>;
+}
+
+/** Where each kind of defining document is stored on this site. */
+export interface DefiningStores {
+  readonly pages: string;
+  readonly templates: string;
+  readonly layouts: string;
+  /** The component store: its collection and the field holding a document. */
+  readonly components: { readonly collection: string; readonly field: string };
+}
+
+/**
+ * The node `nodeId` in the published form of `document`, or `null` when the
+ * document is not published, cannot be read as a document, or holds no such
+ * node.
+ */
+export async function publishedNode(
+  api: PublishedReadApi,
+  stores: DefiningStores,
+  document: DefiningDocument,
+  nodeId: string,
+  locale: string | undefined
+): Promise<BlockNode | null> {
+  const nodes = await publishedNodes(api, stores, document, locale);
+  return nodes === null ? null : (findNode(nodes, nodeId) ?? null);
+}
+
+/** The published node list of `document`, or `null`. */
+async function publishedNodes(
+  api: PublishedReadApi,
+  stores: DefiningStores,
+  document: DefiningDocument,
+  locale: string | undefined
+): Promise<BlockNode[] | null> {
+  const language = locale === undefined ? {} : { locale };
+  switch (document.kind) {
+    case "page":
+    case "template": {
+      const collection =
+        document.kind === "page" ? stores.pages : stores.templates;
+      const field =
+        document.kind === "page" ? PAGES_CONTENT_FIELD : TEMPLATE_CONTENT_FIELD;
+      const row = await onePublished(api, collection, document.id, {
+        overrideAccess: false,
+        ...language,
+      });
+      return nodesOf(row?.[field]);
+    }
+    case "component":
+      return componentNodes(api, stores, document.id, locale);
+    case "layout": {
+      const row = await onePublished(api, stores.layouts, document.id, {
+        ...AS_THE_SYSTEM,
+        ...language,
+      });
+      if (row === null) return null;
+      const region = regionsOf(row).find(
+        candidate => candidate.area === document.area
+      );
+      return region === undefined
+        ? null
+        : componentNodes(api, stores, region.componentId, locale);
+    }
+  }
+}
+
+/** The published row `id` of `collection`, read as `reading` says, or `null`. */
+async function onePublished(
+  api: PublishedReadApi,
+  collection: string,
+  id: string,
+  reading: Record<string, unknown>
+): Promise<Record<string, unknown> | null> {
+  const args: { readonly collection: string } & Record<string, unknown> = {
+    ...reading,
+    collection,
+    where: { id: { equals: id } },
+    status: "published",
+    limit: 1,
+    depth: 0,
+  };
+  const { items } = await api.find(args);
+  const row = items[0] as Record<string, unknown> | undefined;
+  // Compared again exactly, and by the id asked for: a database may compare
+  // text loosely, and an `afterRead` hook may rewrite what it returns.
+  return row !== undefined && row.id === id ? row : null;
+}
+
+/** A published component's node list, read as the renderer reads it. */
+async function componentNodes(
+  api: PublishedReadApi,
+  stores: DefiningStores,
+  id: string,
+  locale: string | undefined
+): Promise<BlockNode[] | null> {
+  const read = publishedStoreSource(api, {
+    collection: stores.components.collection,
+    field: stores.components.field,
+    locale,
+    reading: AS_THE_SYSTEM,
+  });
+  const found = await read([id]);
+  return nodesOf(found.get(id));
+}
+
+/** A stored blocks value's node list, or `null` when it is not a document. */
+function nodesOf(value: unknown): BlockNode[] | null {
+  return asDocument(value)?.nodes ?? null;
+}
