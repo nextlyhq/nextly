@@ -74,6 +74,7 @@ import {
   type DefaultLayoutSlugs,
   type LayoutSettings,
 } from "./store";
+import { takenNames } from "./taken-names";
 
 /** The job that runs the repair: queued by the guards and kept as a sweep. */
 const DEFAULT_LAYOUT_JOB = "page-builder:default-layout";
@@ -83,9 +84,6 @@ const DEFAULT_LAYOUT_JOB = "page-builder:default-layout";
  * the default unusable leaves one repair waiting rather than one per write.
  */
 const REPAIR_DEDUPE_KEY = `${DEFAULT_LAYOUT_JOB}:repair`;
-
-/** How many Layouts one page of the name scan reads. */
-const NAME_SCAN_PAGE_SIZE = 100;
 
 /**
  * How many slugs the seed tries when the database refuses one the scan saw as
@@ -250,68 +248,105 @@ async function reseed(
     return "kept";
   }
 
-  const starter = await starterToMake(deps, settings);
-  const made =
-    starter === null
-      ? null
-      : await createStarterComponents({ ...deps, starter });
-  const undoStarter = async (): Promise<void> => {
-    if (starter === null || made === null) return;
-    await removeStarterComponents({ ...deps, starter }, [
-      made.header.id,
-      made.footer.id,
-    ]);
-  };
-
+  const starter = await seedStarter(deps, settings);
   let created: string | null;
   try {
-    created = await createSeed(deps, settings.seededLayout, areasOf(made));
+    created = await createSeed(deps, settings.seededLayout, starter.areas);
   } catch (error) {
-    await undoStarter();
+    await starter.undo();
     throw error;
   }
   // Another run's seed landed while this one was creating: it is the seed.
   if (created === null) {
-    await undoStarter();
+    await starter.undo();
     return "kept";
   }
-  if (starter !== null && made !== null) {
-    const claimed = await claimStarter(deps, starter, made, created);
-    if (!claimed) {
-      // Another process made the site's starter first, and its seed is the
-      // one to keep: this run removes what it made and stops.
-      await removeSeed(deps, created);
-      await undoStarter();
-      return "kept";
-    }
+  if (!(await starter.claim(created))) {
+    // Another process made the site's starter first, and its seed is the
+    // one to keep: this run removes what it made and stops.
+    await removeSeed(deps, created);
+    await starter.undo();
+    return "kept";
   }
   await recordSeed(deps, created, settings.defaultLayout, async () => {
-    if (starter !== null && made !== null) {
-      await starter.record.release(made).catch((error: unknown) => {
+    await starter.release();
+    await starter.undo();
+  });
+  deps.warn(seedWords(settings, starter.made), {
+    previous: settings.defaultLayout,
+    previousSeed: settings.seededLayout,
+    seededLayout: created,
+    ...(starter.made === null
+      ? {}
+      : {
+          starterHeader: starter.made.header.id,
+          starterFooter: starter.made.footer.id,
+        }),
+  });
+  return "seeded";
+}
+
+/** What a seed makes beside its set: the starter, or nothing. */
+interface SeedStarter {
+  /** The starter's two components, or null when this seed makes none. */
+  readonly made: StarterRecord | null;
+  /** The set's areas: the starter's header and footer, or none. */
+  readonly areas: readonly { area: string; component: string }[];
+  /** Record the starter as the site's one; false when another run did first. */
+  claim(created: string): Promise<boolean>;
+  /** Remove the starter's record, best effort. */
+  release(): Promise<void>;
+  /** Remove the starter's components, best effort. */
+  undo(): Promise<void>;
+}
+
+/** Nothing beside the set: a re-seed, or a site drawing its own. */
+const NO_STARTER: SeedStarter = {
+  made: null,
+  areas: [],
+  claim: () => Promise.resolve(true),
+  release: () => Promise.resolve(),
+  undo: () => Promise.resolve(),
+};
+
+/**
+ * Make the starter's components when this seed is to have them, answering
+ * what to name in the set and how to record or undo them.
+ */
+async function seedStarter(
+  deps: EnsureDefaultDeps,
+  settings: LayoutSettings
+): Promise<SeedStarter> {
+  const starter = await starterToMake(deps, settings);
+  if (starter === null) return NO_STARTER;
+  const made = await createStarterComponents({ ...deps, starter });
+  const ids = [made.header.id, made.footer.id];
+  return {
+    made,
+    areas: areasOf(made),
+    claim: created => claimStarter(deps, starter, made, created),
+    release: () =>
+      starter.record.release(made).catch((error: unknown) => {
         deps.warn(
           "[page-builder] the starter's record from a seed that did not finish could not be removed",
           { error: error instanceof Error ? error.message : String(error) }
         );
-      });
-    }
-    await undoStarter();
-  });
-  deps.warn(
-    settings.seededLayout === null
-      ? made === null
-        ? "[page-builder] the site had no usable default header & footer set, so an empty set called 'Main' was created and made the default"
-        : "[page-builder] the site had no usable default header & footer set, so a set called 'Main' with a starter header and footer was created and made the default"
-      : "[page-builder] the seeded default header & footer set no longer exists, so an empty one was created and made the default",
-    {
-      previous: settings.defaultLayout,
-      previousSeed: settings.seededLayout,
-      seededLayout: created,
-      ...(made === null
-        ? {}
-        : { starterHeader: made.header.id, starterFooter: made.footer.id }),
-    }
-  );
-  return "seeded";
+      }),
+    undo: () => removeStarterComponents({ ...deps, starter }, ids),
+  };
+}
+
+/** What the log says a seed did. */
+function seedWords(
+  settings: LayoutSettings,
+  made: StarterRecord | null
+): string {
+  if (settings.seededLayout !== null) {
+    return "[page-builder] the seeded default header & footer set no longer exists, so an empty one was created and made the default";
+  }
+  return made === null
+    ? "[page-builder] the site had no usable default header & footer set, so an empty set called 'Main' was created and made the default"
+    : "[page-builder] the site had no usable default header & footer set, so a set called 'Main' with a starter header and footer was created and made the default";
 }
 
 /**
@@ -328,16 +363,14 @@ async function starterToMake(
   return (await starter.record.read()) === null ? starter : null;
 }
 
-/** The seed's areas: the starter's header and footer, or none. */
+/** The seed's areas: the starter's header and footer. */
 function areasOf(
-  made: StarterRecord | null
+  made: StarterRecord
 ): readonly { area: string; component: string }[] {
-  return made === null
-    ? []
-    : [
-        { area: "header", component: made.header.id },
-        { area: "footer", component: made.footer.id },
-      ];
+  return [
+    { area: "header", component: made.header.id },
+    { area: "footer", component: made.footer.id },
+  ];
 }
 
 /**
@@ -468,7 +501,7 @@ async function createSeed(
   observedSeed: string | null,
   areas: readonly { area: string; component: string }[]
 ): Promise<string | null> {
-  const { titles, slugs } = await takenNames(deps);
+  const { titles, slugs } = await takenNames(deps.nextly, deps.slugs.layouts);
   for (let attempt = 1; ; attempt += 1) {
     const slug = seedSlug(slugs);
     try {
@@ -503,35 +536,6 @@ async function anotherRunSeeded(
 ): Promise<boolean> {
   const { seededLayout } = await readLayoutSettings(deps.nextly, deps.slugs);
   return seededLayout !== null && seededLayout !== observedSeed;
-}
-
-/** Every stored Layout's title and slug, read as the only columns asked for. */
-async function takenNames(
-  deps: EnsureDefaultDeps
-): Promise<{ titles: Set<string>; slugs: Set<string> }> {
-  const titles = new Set<string>();
-  const slugs = new Set<string>();
-  for (let page = 1; ; page += 1) {
-    const found = await deps.nextly.find({
-      collection: deps.slugs.layouts,
-      status: "all",
-      limit: NAME_SCAN_PAGE_SIZE,
-      page,
-      // A fixed order, so the pages partition the rows. Sorting by id needs
-      // no id in the selection.
-      sort: "id",
-      depth: 0,
-      // The scan compares names and nothing else.
-      select: { title: true, slug: true },
-      overrideAccess: true,
-    });
-    for (const row of found.items) {
-      const { title, slug } = row as { title?: unknown; slug?: unknown };
-      if (typeof title === "string") titles.add(title);
-      if (typeof slug === "string") slugs.add(slug);
-    }
-    if (!found.meta.hasNext) return { titles, slugs };
-  }
 }
 
 /** Create the seed Layout under one title and slug, answering its id. */

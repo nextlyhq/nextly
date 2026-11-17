@@ -85,23 +85,23 @@ as the footer), so the first page anyone opens already looks like a website:
 - the footer shows the site's name, a **Pages** column with links to up to four pages, and
   "© <current year> <site name>".
 
-The starter is built only from core blocks, and its colours and spacing come from your design
-variables, so it follows your site's light and dark colours. Edit it like any component, or
-replace it. In the builder it is tagged **Starter header · edit or replace** and **Starter
-footer** until you publish a change to it. The **Contact us** button goes to your site's 404 page
+The starter header and footer are built only from core blocks, and their colours and spacing come
+from your design variables, so they follow your site's light and dark colours. Edit them like any
+component, or replace them. In the builder it is tagged **Starter header · edit or replace** and **Starter
+footer** until you publish a change to them. The **Contact us** button goes to your site's 404 page
 until you add a `/contact` page or change its link.
 
-The starter is created once, on a new site only. A site that already had a default when it
-upgraded keeps it, and gets no starter. If the default is lost later and the plugin re-creates it,
+The starter header and footer are created once, on a new site only. A site that already had a
+default when it upgraded keeps it, and gets no starter header and footer. If the default is lost later and the plugin re-creates it,
 the new set is empty. A site that draws its header and footer in code
-(`pageBuilder({ siteHeaderFooter: "code" })`) gets an empty Main and no starter.
+(`pageBuilder({ siteHeaderFooter: "code" })`) gets an empty Main and no starter header and footer.
 
 A site set up on an earlier version keeps the name it was given then, such as **Site layout** or
 **Default (site)**; the plugin never renames it.
 
 If you already have a header & footer set called "Main", or one at the address `main`, the plugin
 never takes it over. It gives its own header & footer set the next free name or address instead,
-such as "Main 2" or `main-2`. The starter components do the same with "Starter header 2" and
+such as "Main 2" or `main-2`. The starter header and footer do the same with "Starter header 2" and
 `starter-header-2`.
 
 ### Make another header & footer set the default

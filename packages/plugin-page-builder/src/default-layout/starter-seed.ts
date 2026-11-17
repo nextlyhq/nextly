@@ -19,9 +19,7 @@ import {
   type StarterRecordStore,
 } from "./starter-record";
 import { relationId, type DefaultLayoutDirectApi } from "./store";
-
-/** How many components one page of the name scan reads. */
-const NAME_SCAN_PAGE_SIZE = 100;
+import { takenNames } from "./taken-names";
 
 /**
  * How many slugs a starter component tries when the database refuses one the
@@ -60,7 +58,7 @@ export interface StarterSeedDeps {
 export async function createStarterComponents(
   deps: StarterSeedDeps
 ): Promise<StarterRecord> {
-  const taken = await takenComponentNames(deps);
+  const taken = await takenNames(deps.nextly, deps.starter.components);
   const header = await createStarterComponent(deps, "header", taken);
   try {
     const footer = await createStarterComponent(deps, "footer", taken);
@@ -135,31 +133,5 @@ async function createStarterComponent(
       if (attempt >= SLUG_ATTEMPTS) throw error;
       taken.slugs.add(slug);
     }
-  }
-}
-
-/** Every stored component's title and slug, read as the only columns asked for. */
-async function takenComponentNames(
-  deps: StarterSeedDeps
-): Promise<{ titles: Set<string>; slugs: Set<string> }> {
-  const titles = new Set<string>();
-  const slugs = new Set<string>();
-  for (let page = 1; ; page += 1) {
-    const found = await deps.nextly.find({
-      collection: deps.starter.components,
-      status: "all",
-      limit: NAME_SCAN_PAGE_SIZE,
-      page,
-      sort: "id",
-      depth: 0,
-      select: { title: true, slug: true },
-      overrideAccess: true,
-    });
-    for (const row of found.items) {
-      const { title, slug } = row as { title?: unknown; slug?: unknown };
-      if (typeof title === "string") titles.add(title);
-      if (typeof slug === "string") slugs.add(slug);
-    }
-    if (!found.meta.hasNext) return { titles, slugs };
   }
 }
