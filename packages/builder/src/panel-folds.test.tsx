@@ -31,7 +31,7 @@ import {
   vi,
 } from "vitest";
 
-import { BuilderShell } from "./builder-shell";
+import { BuilderShell } from "./shell/builder-shell";
 import type { EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";
 import {

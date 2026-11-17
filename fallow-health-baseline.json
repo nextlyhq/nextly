@@ -1535,7 +1535,7 @@
         "count": 1
       }
     },
-    "packages/builder/src/shell-regions.tsx": {
+    "packages/builder/src/shell/shell-regions.tsx": {
       "complexity_moderate": {
         "count": 1
       }
@@ -4197,7 +4197,7 @@
     "packages/admin/src/components/features/auth-login/index.tsx:complexity",
     "packages/admin/src/components/features/versions/VersionComparePage.tsx:hidden coupling",
     "packages/nextly/src/auth/handlers/unknown-source.ts:hidden coupling",
-    "packages/builder/src/builder-shell.tsx:dead code",
+    "packages/builder/src/shell/builder-shell.tsx:dead code",
     "packages/adapter-postgres/src/index.ts:hidden coupling",
     "packages/admin/src/components/features/versions/diff/VersionDiffView.tsx:complexity",
     "packages/admin/src/components/features/entries/EntryForm/EntryForm.tsx:complexity",
@@ -4441,7 +4441,7 @@
     "packages/nextly/src/route-handler/__tests__/route-parser.versions.test.ts:hidden coupling",
     "packages/admin/src/lib/rich-text/__tests__/inline-editor.test.ts:hidden coupling",
     "packages/ui/src/styles/__tests__/comments-describe-code.test.ts:complexity",
-    "packages/builder/src/breakpoint-switcher.test.tsx:hidden coupling",
+    "packages/builder/src/shell/breakpoint-switcher.test.tsx:hidden coupling",
     "e2e/tests/canvas/spacing-overlay.spec.ts:hidden coupling"
   ]
 }

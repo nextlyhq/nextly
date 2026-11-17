@@ -28,7 +28,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { ComponentsPanel } from "./components-panel";
-import { EditorRail } from "./editor-rail";
+import { EditorRail } from "./shell/editor-rail";
 import type { EditorState } from "./editor-state";
 import { InsertPanel } from "./insert-panel";
 import { EMPTY_SELECTION } from "./selection";
