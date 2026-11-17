@@ -134,15 +134,16 @@ describe("the tabs a selected block has", () => {
     expect(screen.queryByRole("tabpanel", { name: "Content" })).toBeNull();
   });
 
-  it("follow the Section's settings: Content holds the two it still places there", () => {
-    // The Section's HTML tag and content width are placed in Content today,
-    // so it has a Content tab holding exactly those; it loses the tab when
-    // they are placed in Advanced and Style.
+  it("follow the Section's settings: Content holds the one it still places there", () => {
+    // The Section's HTML tag is placed in Content today, so it has a Content
+    // tab holding only that; its content width is drawn in Style › Layout.
+    // It loses the tab when the HTML tag is placed in Advanced.
     mount("section");
     expect(tabNames()).toEqual(["Content", "Style", "Advanced"]);
     const content = screen.getByRole("tabpanel", { name: "Content" });
     expect(within(content).getByText("HTML tag")).toBeTruthy();
-    expect(within(content).getByText("Constrain content width")).toBeTruthy();
+    expect(within(content).queryByText("Content width")).toBeNull();
+    expect(within(content).queryByText("Constrain content width")).toBeNull();
   });
 });
 
