@@ -1026,7 +1026,7 @@ export interface LinkGroupFieldProps {
  * where its field says, so it is a link to qualify even with no address of
  * its own stored.
  */
-function isLinkBound(
+export function isLinkBound(
   group: LinkGroup,
   bound: Readonly<Record<string, unknown>> | undefined
 ): boolean {

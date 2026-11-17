@@ -157,6 +157,42 @@ describe("a list's read-ahead", () => {
     // routed page, which has the pass, reads it (`next.read-budget.test.ts`).
     expect(reads.entryPaths).not.toHaveBeenCalled();
   });
+
+  it("reads an image's entry link ahead only while a click follows it", async () => {
+    // One image per template: a list reads nothing more ahead past its
+    // first image, so each case is a list of its own.
+    const asked = async (whenClicked?: string): Promise<boolean> => {
+      const reads: ListBatchReads = {
+        related: vi.fn(async () => new Map()),
+        entryPaths: vi.fn(async () => undefined),
+      };
+      const picture = node("pic", "core/image", {
+        mediaId: "m1",
+        entryCollection: "pages",
+        entryId: "about",
+        ...(whenClicked === undefined ? {} : { whenClicked }),
+      });
+      await readListAhead(
+        [{ id: "p1" }],
+        [picture],
+        createStandaloneContext({ listReads: reads }),
+        {
+          nodeId: "list",
+          collection: "posts",
+          contextOf: item =>
+            createStandaloneContext({ listReads: reads, item }),
+        }
+      );
+      return vi.mocked(reads.entryPaths).mock.calls.length > 0;
+    };
+    // Stored before the choice existed, or set to Link: it links, so its
+    // path is read ahead, as it always was.
+    expect(await asked()).toBe(true);
+    expect(await asked("link")).toBe(true);
+    // Set to Nothing or Enlarge, it keeps its link stored and draws none.
+    expect(await asked("nothing")).toBe(false);
+    expect(await asked("enlarge")).toBe(false);
+  });
 });
 
 describe("a host's own list reads", () => {

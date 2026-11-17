@@ -52,6 +52,9 @@ import {
   url,
   type LinkAttributes,
   type LinkProps,
+  WHEN_CLICKED,
+  type WhenClicked,
+  whenClickedOf,
 } from "./props";
 
 /** How the browser should schedule the image. */
@@ -70,6 +73,8 @@ export interface ImageProps extends LinkProps {
   loading?: "lazy" | "eager";
   /** A caption rendered under the image, inside a figure. */
   caption?: string;
+  /** What a click on the picture does; unset, see `whenClickedOf`. */
+  whenClicked?: WhenClicked;
 }
 
 /**
@@ -81,8 +86,22 @@ export interface ImageProps extends LinkProps {
  * an image with neither, which the render draws as nothing and links
  * nowhere, reads no link.
  */
-export function imageMayDraw(has: (prop: string) => boolean): boolean {
+function imageMayDraw(has: (prop: string) => boolean): boolean {
   return has("mediaId") || has("src");
+}
+
+/**
+ * Whether an image, drawn with `props`, follows its link: it may draw a
+ * picture to wrap ({@link imageMayDraw}), and a click on it follows its link
+ * (`whenClickedOf`), the reading its render makes before it reads the link.
+ * Set to Nothing or Enlarge, it keeps its link stored and reads none, so a
+ * list reading its links ahead reads none for it either.
+ */
+export function imageFollowsLink(
+  has: (prop: string) => boolean,
+  props: Readonly<Record<string, unknown>>
+): boolean {
+  return imageMayDraw(has) && whenClickedOf(props) === "link";
 }
 
 /**
@@ -174,10 +193,15 @@ export async function renderImage({
       : (usable?.alt ?? "");
   const caption = text(props.caption);
   // Where the picture links, read as the button reads it; the alt text is
-  // what names the link.
-  const link = await linkFor(props, (collection, id) =>
-    ctx.resolveEntryPath(collection, id, claim)
-  );
+  // what names the link. Only while a click follows it: an Image set to
+  // Nothing or Enlarge keeps its link stored for when the author switches
+  // back, and draws none, so no entry path is read for it either.
+  const link =
+    whenClickedOf(props) === "link"
+      ? await linkFor(props, (collection, id) =>
+          ctx.resolveEntryPath(collection, id, claim)
+        )
+      : undefined;
 
   const image = (
     <img
@@ -696,6 +720,39 @@ const IMAGE_PARTS = {
   },
 } as const;
 
+/** The Content section a click's choice and its link are drawn in. */
+const WHEN_CLICKED_SECTION = "When clicked";
+
+/**
+ * The shared link props, each placed in the When clicked section, where the
+ * editor draws them under the choice that uses them.
+ */
+function whenClickedLinkProps(): {
+  readonly [Name in keyof typeof LINK_PROPS]: (typeof LINK_PROPS)[Name] & {
+    readonly section: string;
+  };
+} {
+  return {
+    href: { ...LINK_PROPS.href, section: WHEN_CLICKED_SECTION },
+    entryCollection: {
+      ...LINK_PROPS.entryCollection,
+      section: WHEN_CLICKED_SECTION,
+    },
+    entryId: { ...LINK_PROPS.entryId, section: WHEN_CLICKED_SECTION },
+    target: { ...LINK_PROPS.target, section: WHEN_CLICKED_SECTION },
+    rel: { ...LINK_PROPS.rel, section: WHEN_CLICKED_SECTION },
+  };
+}
+
+/**
+ * Whether a click on the picture does something a visitor can reach: it
+ * follows a link it has, or it enlarges the picture.
+ */
+function clickable(props: ImageProps): boolean {
+  const click = whenClickedOf(props);
+  return click === "enlarge" || (click === "link" && canLink(props));
+}
+
 export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
   name: IMAGE_BLOCK,
   version: 1,
@@ -729,7 +786,7 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
     },
     src: { label: "Image address", role: "content", type: "url" },
     alt: { label: "Alt text", role: "content", type: "text" },
-    decorative: { label: "Decorative (no alt text)", type: "checkbox" },
+    decorative: { label: "Decorative, no alt text", type: "checkbox" },
     loading: {
       label: "Loading",
       optionLabels: {
@@ -744,10 +801,28 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
       type: "select",
       options: [...IMAGE_LOADING],
     },
-    caption: { label: "Caption", role: "content", type: "text" },
+    // What a click does, with the link it follows beside it in the same
+    // section: the editor draws the link's settings only while Link is
+    // chosen. Stored as chosen; a new Image stores none (see `whenClickedOf`).
+    // Content, as the link it gates is: where only content may change, an
+    // author still chooses Link to add one.
+    whenClicked: {
+      label: "When clicked",
+      role: "content",
+      section: WHEN_CLICKED_SECTION,
+      type: "select",
+      options: [...WHEN_CLICKED],
+      optionLabels: { nothing: "Nothing", link: "Link", enlarge: "Enlarge" },
+    },
     // The button's link props, by the same names, so the inspector draws the
     // one link control for both and the renderer follows both the same way.
-    ...LINK_PROPS,
+    ...whenClickedLinkProps(),
+    caption: {
+      label: "Caption",
+      role: "content",
+      type: "text",
+      section: "Caption",
+    },
   },
   // No `alt`: an image placed with none takes its library file's alt text,
   // which is what an author picking a described file expects. A stored `""`
@@ -789,10 +864,11 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
     effects: true,
     position: true,
   },
-  // Interactive content while it links, so a link (a linked box or card)
-  // cannot hold it, which would nest one link in another.
+  // Interactive content while it links or enlarges, so a link (a linked box
+  // or card) cannot hold it, which would nest a link or a button in another.
+  // Link chosen with nothing to follow draws no link, so it is not.
   contentModel: (props: ImageProps) => ({
-    is: canLink(props) ? ["flow", "interactive"] : ["flow"],
+    is: clickable(props) ? ["flow", "interactive"] : ["flow"],
   }),
   render: renderImage,
   // No `rendersNothing`. An Image with no picture draws nothing on a page a
