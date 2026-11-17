@@ -983,7 +983,8 @@ export async function introspectTableNames(
 
 /**
  * Which of `names` a relation of any kind already holds (a table, a view, and on PostgreSQL a
- * sequence or any other `pg_class` relation), each lower-cased: a `CREATE TABLE IF NOT EXISTS`
+ * sequence or any other `pg_class` relation; a TEMP one on the connection included), each
+ * lower-cased: a `CREATE TABLE IF NOT EXISTS`
  * of such a name does nothing. Read where the run's statements land, as `introspectTableNames`.
  */
 export async function introspectRelationNames(
@@ -1013,9 +1014,14 @@ export async function introspectRelationNames(
       )
     );
   } else {
+    // A TEMP table or view on the connection holds the name an unqualified statement reaches
+    // before `main`'s, so both schemas are read.
     const sqliteRows: unknown = await Promise.resolve(
       (db as { all(query: unknown): unknown }).all(
         sql`SELECT name FROM sqlite_master
+            WHERE type IN ('table', 'view') AND lower(name) IN (${namesIn})
+            UNION ALL
+            SELECT name FROM sqlite_temp_master
             WHERE type IN ('table', 'view') AND lower(name) IN (${namesIn})`
       )
     );

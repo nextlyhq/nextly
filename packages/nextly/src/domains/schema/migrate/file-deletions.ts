@@ -500,13 +500,14 @@ function nameHeldByCreate(tokens: readonly Token[]): string | undefined {
   return heldNameAt(tokens, at + 1);
 }
 
-/** The name an `ALTER [MATERIALIZED] VIEW | SEQUENCE | INDEX … RENAME TO` gives one. */
+/** The name an `ALTER [MATERIALIZED] VIEW | SEQUENCE | INDEX | FOREIGN TABLE … RENAME TO` gives one. */
 function nameHeldByAlter(tokens: readonly Token[]): string | undefined {
   const altered = tokens[1];
+  const foreignTable = altered === "FOREIGN" && tokens[2] === "TABLE";
   if (
     tokens[0] !== "ALTER" ||
     typeof altered !== "string" ||
-    !(HOLDING_KINDS.has(altered) || altered === "MATERIALIZED")
+    !(HOLDING_KINDS.has(altered) || altered === "MATERIALIZED" || foreignTable)
   ) {
     return undefined;
   }

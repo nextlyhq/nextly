@@ -280,6 +280,10 @@ describe("tables dropped", () => {
     ["an index", "CREATE UNIQUE INDEX CONCURRENTLY recent ON posts (id)"],
     ["a view renamed onto it", "ALTER VIEW older RENAME TO recent"],
     [
+      "a foreign table renamed onto it",
+      "ALTER FOREIGN TABLE archive RENAME TO recent",
+    ],
+    [
       "a foreign table",
       "CREATE FOREIGN TABLE IF NOT EXISTS recent (id integer) SERVER elsewhere",
     ],

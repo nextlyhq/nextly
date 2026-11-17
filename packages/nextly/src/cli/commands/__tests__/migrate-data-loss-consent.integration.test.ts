@@ -395,6 +395,31 @@ describe.each(LOCK_DIALECTS)("a migration that deletes data on %s", dialect => {
     ).toBe(1);
   }, 180_000);
 
+  // SQLite resolves an unqualified name to a TEMP relation on the connection before `main`, so a
+  // TEMP table there holds the name a CREATE TABLE IF NOT EXISTS of it would otherwise make.
+  it.runIf(dialect === "sqlite")(
+    "still refuses a removal from a TEMP table of the name the file creates a table of IF NOT EXISTS",
+    async () => {
+      const scratch = `${P}_scratch`;
+      await adapter.executeQuery(
+        `CREATE TEMP TABLE ${scratch} (id integer PRIMARY KEY, title varchar(64))`
+      );
+      await adapter.executeQuery(
+        `INSERT INTO ${scratch} (id, title) VALUES (1, 'a'), (2, 'b')`
+      );
+      file(
+        [
+          `CREATE TABLE IF NOT EXISTS ${scratch} (id integer PRIMARY KEY, title varchar(64))`,
+          `DELETE FROM ${scratch} WHERE id = 1`,
+        ],
+        []
+      );
+      const message = await refusedUnchanged(() => migrate());
+      expect(message.toLowerCase()).toContain(scratch);
+    },
+    180_000
+  );
+
   it("names a live table an earlier file of the run renames by its live name, for what a later file deletes", async () => {
     const renamed = `${P}_renamed`;
     file([`ALTER TABLE ${posts} RENAME TO ${renamed}`], []);
