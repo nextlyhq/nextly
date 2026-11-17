@@ -472,6 +472,7 @@ export const pageBuilder = (
         templates.templateCollectionRetarget,
         templates.templateCollectionChoices,
         templates.entryDesigns,
+        templates.templatesPanel,
         components.manifest,
         ...components.componentActions,
         pages.entries,
