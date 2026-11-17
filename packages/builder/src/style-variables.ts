@@ -18,8 +18,8 @@ import type {
   TokenMode,
 } from "@nextlyhq/blocks-engine";
 
-import { variableLabel, variablesFor, type SiteVariable } from "./style-colour";
 import { lengthInPx } from "./fluid-size";
+import { variableLabel, variablesFor, type SiteVariable } from "./style-colour";
 import { typeScaleProperty } from "./tokens-studio";
 
 /**
