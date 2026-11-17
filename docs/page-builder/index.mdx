@@ -394,9 +394,10 @@ breakpoint has a `maxWidth`, and the values a block is given for it apply at tha
 and below, as an `@media (max-width: …)` rule.
 
 In the editor, the device buttons choose which breakpoint you are styling. The base
-breakpoint is named **Desktop**. The chosen device shows the width the canvas lays the
-page out at: Desktop at 1280px (or one pixel past your widest breakpoint, if that is
-wider), and every other breakpoint at its own `maxWidth`, so "Tablet · 1024px". The Style
+breakpoint is named **Desktop**. The width the canvas lays the page out at is shown beside
+the buttons: Desktop at 1280px (or one pixel past your widest breakpoint, if that is
+wider), and every other breakpoint at its own `maxWidth`, so "1024px" for a Tablet at
+1024px. Each button's tooltip names its device with that width and the widths it styles. The Style
 tab edits the values for that breakpoint. The breakpoint manager beside the buttons adds,
 changes and removes the site's breakpoints.
 
@@ -899,12 +900,12 @@ of a passage of rich text, each linking to its heading. On a collection's templa
 bind its **Content** to the same field as the article's Rich text block, and every
 entry gets contents drawn from its own body:
 
-- **Headings listed**: H2 only, H2 and H3 (the default), or H2 to H4. An H1 is the
+- **Headings**: H2 only, H2 and H3 (the default), or H2 to H4. An H1 is the
   page's title and is never listed. Each heading sits inside the heading above it, in a
   nested list, so a screen reader announces the structure as well as the words.
 - **Title**: the label above the list (On this page by default), which also names the
   block's navigation landmark.
-- **Can be folded away**: on by default, so the list starts open under its title and a
+- **Can be folded**: on by default, so the list starts open under its title and a
   reader can close it, with no script.
 
 Every heading a Rich text block draws carries an id, made from its words: lower-cased,

@@ -27,6 +27,7 @@
 
 import type { StyleState } from "../document";
 
+import { SITE_TEXT_ROOT } from "./site-text";
 import type { StyleTraceEntry } from "./style-trace";
 
 /**
@@ -103,12 +104,16 @@ function weightOf(entry: StyleTraceEntry): readonly [number, number, number] {
   switch (origin.kind) {
     // Anchored to one class, everything else inside `:where()`. A descendant
     // adds nothing, which is the whole point of the wrapper.
+    // The page root's own text (Site text's Body) lands on the root, so a
+    // block reads it by inheritance, on the single root class: below the
+    // page's values, which are written on the doubled one.
     case "element":
+      return origin.tag === SITE_TEXT_ROOT ? [INHERITED, 1, 0] : [DIRECT, 1, 0];
     case "blockType":
       return [DIRECT, 1, 0];
     case "page":
       return entry.descendant === undefined
-        ? [INHERITED, 0, 0]
+        ? [INHERITED, 2, 0]
         : [DIRECT, ...descendantWeight(entry.descendant, 2)];
     // The doubled root plus the node's or class's own class.
     case "node":
@@ -225,8 +230,13 @@ function reachesNode(entry: StyleTraceEntry, subject: StyleSubject): boolean {
     // is wearing it. A subject that does not state its tag gets `false`: the
     // tag lives in a block's render, and a caller that cannot say is answered
     // quietly rather than told a heading's baseline styles its paragraph.
+    //
+    // The page root's own text is the exception: every node sits under it.
     case "element":
-      return subject.tag !== undefined && origin.tag === subject.tag;
+      return (
+        origin.tag === SITE_TEXT_ROOT ||
+        (subject.tag !== undefined && origin.tag === subject.tag)
+      );
   }
 }
 

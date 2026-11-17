@@ -80,28 +80,44 @@ const html = (element: ReactElement | null): string =>
   element === null ? "" : renderToStaticMarkup(element);
 
 describe("core/heading", () => {
-  it("renders the stored level rather than one derived from nesting", () => {
+  it("renders the stored level rather than one derived from nesting", async () => {
     // A level computed from depth changes when a block is dragged, which is the
     // accessibility failure headings exist to prevent.
-    expect(html(renderHeading(args({ text: "Title", level: "h3" })))).toBe(
+    expect(html(await renderHeading(args({ text: "Title", level: "h3" })))).toBe(
       '<h3 class="nx-n1">Title</h3>'
     );
   });
 
-  it("falls back to h2 for a level nothing recognises", () => {
+  it("falls back to h2 for a level nothing recognises", async () => {
     const stored = { text: "Title", level: "h9" } as never;
-    expect(html(renderHeading(args(stored)))).toContain("<h2");
+    expect(html(await renderHeading(args(stored)))).toContain("<h2");
   });
 
-  it("puts the link inside the heading, not around it", () => {
+  it("puts the link inside the heading, not around it", async () => {
     // Around it, a screen reader announces the whole heading as a link.
-    const out = html(renderHeading(args({ text: "Title", href: "/docs" })));
+    const out = html(await renderHeading(args({ text: "Title", href: "/docs" })));
     expect(out).toBe('<h2 class="nx-n1"><a href="/docs">Title</a></h2>');
   });
 
-  it("adds noopener noreferrer to a new-tab link", () => {
+  it("links to an entry through the shared link, as a button does", async () => {
+    // The heading's link is the one every linking block declares: a page on
+    // this site is linked by its entry, followed to its current address.
     const out = html(
-      renderHeading(args({ text: "T", href: "/x", target: "_blank" }))
+      await renderHeading(
+        args(
+          { text: "Read more", entryCollection: "posts", entryId: "p1" },
+          context({ resolveEntryPath: () => Promise.resolve("/posts/current") })
+        )
+      )
+    );
+    expect(out).toBe(
+      '<h2 class="nx-n1"><a href="/posts/current">Read more</a></h2>'
+    );
+  });
+
+  it("adds noopener noreferrer to a new-tab link", async () => {
+    const out = html(
+      await renderHeading(args({ text: "T", href: "/x", target: "_blank" }))
     );
     expect(out).toContain('target="_blank"');
     expect(out).toContain("noopener");
@@ -258,10 +274,10 @@ describe("executable urls", () => {
     }
   });
 
-  it("refuses them on a heading link", () => {
+  it("refuses them on a heading link", async () => {
     for (const href of hostile) {
       expect(
-        html(renderHeading(args({ text: "t", href }))),
+        html(await renderHeading(args({ text: "t", href }))),
         href
       ).not.toContain("href=");
     }

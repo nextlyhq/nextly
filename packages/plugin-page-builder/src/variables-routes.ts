@@ -122,6 +122,7 @@ import {
   type NamedVariable,
   type VariablesInUseCheck,
 } from "./site-style-storage";
+import { siteTextReasons, siteTextRowsUsing } from "./site-text-uses";
 import { retryOnStale } from "./stale-retry";
 import { readStoredJson } from "./stored-json";
 import {
@@ -523,6 +524,11 @@ export async function readVariableUsage(
   ).documentsUsingEach(ids, health);
   const styles = sharedStylesUsing(site.classes, asked);
   const defaults = blockDefaultsUsing(blocks(), asked);
+  // The variables whose own values name each one through `var()`: the
+  // relation a removal is refused by, so the filter and the refusal agree.
+  const naming = variablesUsing(site.variables, asked);
+  // The Site text rows using each, by the reading a removal is refused by.
+  const rowsUsing = siteTextRowsUsing(site.variables);
   // Built from entries, so an identity like `__proto__` is an own key.
   const variables: Record<string, VariableUsage> = Object.fromEntries(
     ids.map(id => [
@@ -534,6 +540,8 @@ export async function readVariableUsage(
         sharedStyles: (styles.get(id) ?? []).map(style => style.id).sort(),
         // In type order already, as the walk reads the registry.
         blockDefaults: (defaults.get(id) ?? []).map(block => block.type),
+        variables: (naming.get(id) ?? []).map(variable => variable.id),
+        siteText: rowsUsing(id),
       },
     ])
   );
@@ -759,17 +767,23 @@ export async function removeVariables(
         read.section,
         supplied
       );
+      const after = withoutVariables(read.section, gone);
+      // The site's variables as the write leaves them: the code's Site text
+      // rows with the stored ones over them, as every page draws them.
+      const merged = read.variablesWith(after);
+      reasons.push(
+        ...siteTextReasons(removable, merged).map(reason => reason.message)
+      );
       if (reasons.length > 0) {
         throw NextlyError.conflict({
           reason: "state",
-          message: `Nothing was removed. ${reasons.join(" ")}`,
+          message: `Nothing was removed. ${[...new Set(reasons)].join(" ")}`,
           logContext: { variableIds: ids },
         });
       }
-      const after = withoutVariables(read.section, gone);
-      // Judged against the site's variables as the write leaves them, so a
-      // variable removed beside the one its value names is not its use.
-      await checks.inUse(removable, read.classes, read.variablesWith(after));
+      // Judged against the same set, so a variable removed beside the one
+      // its value names is not its use.
+      await checks.inUse(removable, read.classes, merged);
       await store.write(after, read);
     }
   );

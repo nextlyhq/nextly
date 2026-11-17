@@ -7,7 +7,10 @@
  * matters to a reader: every contents link reaches the heading it names.
  */
 import {
+  compileStyleValues,
+  DISCLOSURE_ICON_CLASS,
   DOCUMENT_FORMAT_VERSION,
+  stylePropertiesForSupports,
   type BindingFieldShape,
   type BlockDocument,
   type RichTextNode,
@@ -162,7 +165,7 @@ describe("the contents of a passage", () => {
       renderTableOfContents(args({ content: BODY, title: "In this post" }))
     );
     expect(markup).toMatch(
-      /^<nav class="nx-toc" aria-label="In this post"><details open=""><summary class="nx-toc-title">In this post<\/summary><ol role="list" class="nx-toc-list">/
+      /^<nav class="nx-toc" aria-label="In this post"><details open=""><summary class="nx-toc-title"><span class="nx-pb-disclosure-icon" aria-hidden="true"><\/span><span class="nx-pb-disclosure-title">In this post<\/span><\/summary><ol role="list" class="nx-toc-list">/
     );
   });
 
@@ -181,7 +184,7 @@ describe("the contents of a passage", () => {
       renderTableOfContents(args({ content: BODY, title: "   " }))
     );
     expect(markup).toContain('aria-label="On this page"');
-    expect(markup).toContain(">On this page</summary>");
+    expect(markup).toContain(">On this page</span></summary>");
   });
 });
 
@@ -384,5 +387,42 @@ describe("a contents block beside its passage, on a page", () => {
     });
     expect(markup).not.toContain("<nav");
     expect(markup).toContain("Just words.");
+  });
+});
+
+describe("a contents block's folding icon", () => {
+  const supports = coreBlocks.find(
+    block => block.name === "core/table-of-contents"
+  )?.supports;
+
+  it("is offered in Style › Icon, with where it sits", () => {
+    const offered = stylePropertiesForSupports(supports as never).map(
+      entry => entry.property
+    );
+    expect(offered).toContain("disclosureIcon");
+    expect(offered).toContain("disclosurePosition");
+  });
+
+  it("is drawn in the folding title, where the icon's styles reach it", () => {
+    const markup = html(renderTableOfContents(args({ content: BODY })));
+    // The icon's rules are written from the block's element down: a nav
+    // holding the details, its summary, and the icon first in it.
+    expect(markup).toMatch(
+      new RegExp(
+        `^<nav[^>]*><details open=""><summary[^>]*><span class="${DISCLOSURE_ICON_CLASS}" aria-hidden="true"></span>`
+      )
+    );
+    const written = compileStyleValues(
+      { disclosureIcon: "chevron", disclosurePosition: "before" },
+      "/s"
+    ).declarations.map(each => each.descendant ?? "");
+    expect(written).toContain(`> details > summary > .${DISCLOSURE_ICON_CLASS}`);
+  });
+
+  it("is not drawn on a list that does not fold", () => {
+    const markup = html(
+      renderTableOfContents(args({ content: BODY, collapsible: false }))
+    );
+    expect(markup).not.toContain(DISCLOSURE_ICON_CLASS);
   });
 });

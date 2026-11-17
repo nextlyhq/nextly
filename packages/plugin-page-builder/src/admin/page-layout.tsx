@@ -25,7 +25,7 @@ import {
   usePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Button, Label } from "@nextlyhq/ui";
-import { useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
+import { useEffect, useId, useMemo, useState, type JSX } from "react";
 import {
   useController,
   useWatch,
@@ -56,6 +56,7 @@ import {
   type LayoutPickerView,
   type PickerOption,
 } from "./layout-choice-view";
+import { useRefreshOnReturn } from "./refresh-on-return";
 
 /** The page's stored Layout reference, as the pages collection names it. */
 const LAYOUT_FIELD = "layout";
@@ -122,33 +123,6 @@ function useLayoutChoices(
   const stale =
     read.data === undefined && read.error === null && held !== undefined;
   return { state, stale, retry: read.refetch };
-}
-
-/**
- * Ask again when the author returns to this tab: on window focus, and when
- * the page becomes visible. The admin turns refetch-on-focus off for every
- * read, so this one read asks for it itself.
- */
-function useRefreshOnReturn(enabled: boolean, refetch: () => void): void {
-  // The newest `refetch`, without re-attaching the listeners on each render:
-  // the read hands out a new function every time.
-  const latest = useRef(refetch);
-  useEffect(() => {
-    latest.current = refetch;
-  });
-  useEffect(() => {
-    if (!enabled) return;
-    const onFocus = () => latest.current();
-    const onVisible = () => {
-      if (document.visibilityState !== "hidden") latest.current();
-    };
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [enabled]);
 }
 
 /**
@@ -564,9 +538,31 @@ function WhyLine({
   );
 }
 
-/** The area's name, as a region is called in the editor. */
-function areaName(area: RegionArea): string {
-  return area === "header" ? "Header" : "Footer";
+/**
+ * What the sidebar card for a selected header or footer is drawn from: the
+ * component the region places, the set it comes from, whether it is the
+ * site's untouched starter, and which part has changes a visitor does not
+ * see yet.
+ */
+export interface RegionCardFacts {
+  readonly area: RegionArea;
+  readonly componentId: string;
+  /** The title of the header & footer set the region comes from. */
+  readonly setTitle: string;
+  readonly starter: boolean;
+  readonly note?: string;
+}
+
+/** The regions drawn around the page, their Layers rows and their cards. */
+export interface PageLayoutRegions {
+  readonly canvas: readonly CanvasRegion[];
+  readonly layers: readonly LayersRegionRow[];
+  readonly cards: readonly RegionCardFacts[];
+}
+
+/** What a header or footer is called in the editor. */
+export function siteRegionName(area: RegionArea): string {
+  return area === "header" ? "Site header" : "Site footer";
 }
 
 /**
@@ -579,7 +575,7 @@ function areaName(area: RegionArea): string {
 export function usePageLayoutRegions<T extends FieldValues>(
   control: Control<T>,
   canvasRoot: HTMLElement | null
-): { canvas: readonly CanvasRegion[]; layers: readonly LayersRegionRow[] } {
+): PageLayoutRegions {
   const stored = useStoredLayout(control);
   const { state, stale } = useLayoutChoices(
     stored !== undefined,
@@ -600,23 +596,18 @@ export function usePageLayoutRegions<T extends FieldValues>(
 }
 
 /** What is drawn before any answer has arrived. */
-const NOTHING_DRAWN: {
-  canvas: readonly CanvasRegion[];
-  layers: readonly LayersRegionRow[];
-} = { canvas: [], layers: [] };
+const NOTHING_DRAWN: PageLayoutRegions = { canvas: [], layers: [], cards: [] };
 
-/** The regions to draw for `stored`, and their Layers rows. */
+/** The regions to draw for `stored`, their Layers rows and their cards. */
 function regionsOf(
   stored: { layout: unknown; noHeaderFooter: boolean } | undefined,
   state: LayoutChoicesState,
   canvasRoot: HTMLElement | null
-): { canvas: readonly CanvasRegion[]; layers: readonly LayersRegionRow[] } {
-  if (stored === undefined || state.kind !== "ready") {
-    return { canvas: NO_REGIONS, layers: NO_ROWS };
-  }
+): PageLayoutRegions {
+  if (stored === undefined || state.kind !== "ready") return NOTHING_DRAWN;
   const effective = layoutPickerView(stored, state).effective;
   if (effective === null || effective.regions.length === 0) {
-    return { canvas: NO_REGIONS, layers: NO_ROWS };
+    return NOTHING_DRAWN;
   }
   const { meta } = state.choices;
   const definitions = new Map<string, BlockDocument>(
@@ -629,16 +620,15 @@ function regionsOf(
       definitions,
       ...regionWords(effective, region, meta),
       ...editOf(effective, meta),
-      ...noteOf(effective, region, meta),
     })
   );
   const layers = effective.regions.map(
     (region): LayersRegionRow => ({
       area: region.area,
-      name: areaName(region.area),
-      origin: `from header & footer set ${effective.title}`,
+      name: regionWords(effective, region, meta).name,
+      origin: `${effective.title} header & footer`,
       onActivate: () => {
-        // Shown and focused on the canvas, where its tag says the rest.
+        // Shown and focused on the canvas, where it is selected.
         const drawn = canvasRoot?.querySelector<HTMLElement>(
           `[data-nx-region="${region.area}"]`
         );
@@ -647,7 +637,24 @@ function regionsOf(
       },
     })
   );
-  return { canvas, layers };
+  const cards = effective.regions.map(
+    (region): RegionCardFacts => ({
+      area: region.area,
+      componentId: region.componentId,
+      setTitle: effective.title,
+      starter: starterOf(region, meta) === region.area,
+      ...noteOf(effective, region, meta),
+    })
+  );
+  return { canvas, layers, cards };
+}
+
+/** The area the region's component is the untouched starter for, if any. */
+function starterOf(
+  region: EffectiveLayout["regions"][number],
+  meta: LayoutChoicesResponse["meta"]
+): RegionArea | undefined {
+  return meta.regionComponents[region.componentId]?.untouchedStarter;
 }
 
 /**
@@ -659,18 +666,21 @@ function regionWords(
   effective: EffectiveLayout,
   region: EffectiveLayout["regions"][number],
   meta: LayoutChoicesResponse["meta"]
-): Pick<CanvasRegion, "label" | "badge"> {
-  const from = `from header & footer set ${effective.title}`;
-  const starter = meta.regionComponents[region.componentId]?.untouchedStarter;
+): Pick<CanvasRegion, "label" | "badge" | "name"> {
+  const from = `from the ${effective.title} header & footer`;
+  const starter = starterOf(region, meta);
   if (starter === region.area) {
     return {
       label: `${STARTER_NAMES[starter]}, ${from}`,
       badge: STARTER_BADGES[starter],
+      name: STARTER_NAMES[starter],
     };
   }
+  const name = siteRegionName(region.area);
   return {
-    label: `${areaName(region.area)}, ${from}`,
-    badge: `${areaName(region.area)} · from header & footer set`,
+    label: `${name}, ${from}`,
+    badge: `${name} · ${effective.title}`,
+    name,
   };
 }
 
@@ -706,7 +716,7 @@ function noteOf(
   effective: EffectiveLayout,
   region: EffectiveLayout["regions"][number],
   meta: LayoutChoicesResponse["meta"]
-): Pick<CanvasRegion, "note"> {
+): Pick<RegionCardFacts, "note"> {
   if (effective.draftChangesNotLive) {
     return {
       note: `Draft changes not live: header & footer set ${effective.title}`,
@@ -716,6 +726,3 @@ function noteOf(
     ? { note: `Draft changes not live: ${region.area} component` }
     : {};
 }
-
-const NO_REGIONS: readonly CanvasRegion[] = [];
-const NO_ROWS: readonly LayersRegionRow[] = [];

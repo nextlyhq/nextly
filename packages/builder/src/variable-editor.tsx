@@ -31,6 +31,7 @@ import * as React from "react";
 
 import { FluidButton, type FluidHook } from "./fluid-popover";
 import { useRecentColours } from "./recent-colours";
+import { siteTextUseWords } from "./site-text-rows";
 import { colourHexOf } from "./style-colour";
 import {
   clearDarkValue,
@@ -769,7 +770,7 @@ function fieldFor(
  * Its picker lists the author's Recent colours, as a block's does; a colour
  * written here, typed or picked, joins them.
  */
-function ColourValue({
+export function ColourValue({
   label,
   value,
   readOnly,
@@ -1082,8 +1083,25 @@ function Actions({
     partsOf(entry, token, tokens, suppliedOf),
     usage
   );
-  const { step, setStep, remove } = useRemoveStep(plan, removing);
+  // A Site text row pointing at what Remove takes away holds it: the row
+  // would lose its size on every page, so the removal is refused here as
+  // the server refuses it, naming the row.
+  const heldBy = siteTextUseWords(
+    tokens,
+    plan.removable.map(part => part.identity)
+  );
+  const { step, setStep, remove } = useRemoveStep(plan, removing, heldBy);
   const shown = shownStep(step, plan.removal);
+  if (shown === "held" && heldBy !== undefined) {
+    return (
+      <HeldRemoval
+        plan={plan}
+        heldBy={heldBy}
+        onReset={() => onChange(resetParts(tokens, plan.changed))}
+        onRemove={remove}
+      />
+    );
+  }
   if (shown === "confirm" && plan.removable.length > 0) {
     return (
       <ConfirmRemove
@@ -1117,6 +1135,36 @@ function Actions({
           usage={plan.gate}
         />
       ) : null}
+    </>
+  );
+}
+
+/**
+ * Remove refused because a Site text row uses what it takes away: the row
+ * named, and what to do first.
+ */
+function HeldRemoval({
+  plan,
+  heldBy,
+  onReset,
+  onRemove,
+}: {
+  plan: RemovalPlan;
+  heldBy: string;
+  onReset: () => void;
+  onRemove: () => void;
+}): React.JSX.Element {
+  return (
+    <>
+      <ActionRow
+        plan={plan}
+        checking={false}
+        onReset={onReset}
+        onRemove={onRemove}
+      />
+      <p className="nx-vars-editor__issue" role="status">
+        {`${plan.named} is used by ${heldBy}, so it can't be removed. Point that row at another type size first.`}
+      </p>
     </>
   );
 }
@@ -1172,7 +1220,7 @@ function ActionRow({
  * Where Remove has got to: nothing yet, reading where it is used again, its
  * confirm, or why it cannot.
  */
-type RemoveStep = "idle" | "checking" | "confirm" | "refused";
+type RemoveStep = "idle" | "checking" | "confirm" | "refused" | "held";
 
 /**
  * Remove's steps. Counts read earlier may say a variable is used when it no
@@ -1183,7 +1231,9 @@ type RemoveStep = "idle" | "checking" | "confirm" | "refused";
  */
 function useRemoveStep(
   plan: RemovalPlan,
-  removing: boolean
+  removing: boolean,
+  /** The Site text rows holding what Remove takes away, in words, if any. */
+  heldBy: string | undefined
 ): {
   step: RemoveStep;
   setStep: (step: RemoveStep) => void;
@@ -1192,6 +1242,10 @@ function useRemoveStep(
   const [step, setStep] = React.useState<RemoveStep>("idle");
   const { gate, removal, removable } = plan;
   const remove = (): void => {
+    if (heldBy !== undefined) {
+      setStep("held");
+      return;
+    }
     if (!refuses(removal) || gate === undefined) {
       setStep("confirm");
       return;

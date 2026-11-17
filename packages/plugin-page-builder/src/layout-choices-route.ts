@@ -23,9 +23,9 @@ import {
   type DocumentLimits,
   type LayoutRegion,
 } from "@nextlyhq/blocks-engine";
-import { definitionsFor } from "@nextlyhq/blocks-react";
 import {
   NextlyError,
+  PENDING_CHANGE_KEY,
   type PluginRouteContext,
   type PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
@@ -35,7 +35,6 @@ import { COMPONENTS_SLUG } from "./collections/components";
 import { LAYOUTS_SLUG } from "./collections/layouts";
 import { PAGES_SLUG } from "./collections/pages";
 import { TEMPLATES_SLUG } from "./collections/templates";
-import { publishedStoreSource } from "./component-store-source";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
 import {
   starterRecordStore,
@@ -46,7 +45,9 @@ import {
   readLayoutSettings,
   type DefaultLayoutDirectApi,
 } from "./default-layout/store";
+import { idsKeptByWorkflowKey } from "./entry-reads";
 import {
+  LAYOUT_CHOICES_DRAFTS_PARAM,
   LAYOUT_CHOICES_LOCALE_PARAM,
   LAYOUT_CHOICES_PICTURES_PARAM,
   LAYOUT_CHOICES_ROUTE_PATH,
@@ -72,6 +73,7 @@ import {
   readingAsUser,
   type ComponentStore,
 } from "./library-route";
+import { publishedDefinitionsOf } from "./published-definitions";
 import { parseRouteQuery } from "./route-query";
 
 /**
@@ -119,6 +121,11 @@ export interface LayoutChoicesRequest {
    * listed published set's regions, not only the two a page is drawn inside.
    */
   readonly pictures?: boolean;
+  /**
+   * Whether every listed published set's "changes not published" is asked
+   * for, not only the two a page is drawn inside.
+   */
+  readonly drafts?: boolean;
   /**
    * The starter header and footer the site was seeded with, as recorded.
    * Absent, no region is told it shows the starter.
@@ -226,6 +233,13 @@ export async function readLayoutChoices(
     defaultLayout !== null && items.some(item => item.id === defaultLayout);
 
   const canUpdateLayouts = (await ctx.caller?.can("update", layouts)) === true;
+  const canCreateLayouts = (await ctx.caller?.can("create", layouts)) === true;
+  // Asked of any row, so a rule that lets an author update only some sets
+  // still offers Rename; which ones is the write's to judge.
+  const canUpdateAnyLayout =
+    (await ctx.caller?.can("update", layouts, { anyEntry: true })) === true;
+  const canDeleteAnyLayout =
+    (await ctx.caller?.can("delete", layouts, { anyEntry: true })) === true;
   const focused = items.filter(item => focus.includes(item.id));
   // Asked of each focused row as this author, whatever the collection-wide
   // answer: a rule may let them update this Layout and not others, and only
@@ -283,6 +297,31 @@ export async function readLayoutChoices(
     { ...asUser, ...inLocale }
   );
 
+  // Asked for every listed set: one read of core's workflow filter, the
+  // versions domain's one statement of a working draft with changes not yet
+  // published, read as the caller, rather than a read by id per set.
+  // Only for a caller who may update sets: a working draft is overlaid for
+  // one who may change it, so one who may not learns nothing of a draft.
+  const listedDrafts =
+    request.drafts === true && canUpdateLayouts
+      ? await idsKeptByWorkflowKey(
+          async args => {
+            const found = await nextly.find({
+              collection: args.collection,
+              ...(args.where === undefined ? {} : { where: args.where }),
+              select: args.select,
+              limit: args.limit,
+              ...asUser,
+              ...inLocale,
+            });
+            return { items: rowsOf(found), meta: found.meta };
+          },
+          layouts,
+          items.filter(item => item.published).map(item => item.id),
+          PENDING_CHANGE_KEY
+        )
+      : new Set<string>();
+
   const fenced =
     (await request.fence?.removalStates(items.map(item => item.id))) ??
     new Map<string, FencedLayoutState>();
@@ -296,7 +335,7 @@ export async function readLayoutChoices(
       const removal = fenced.get(item.id);
       return {
         ...item,
-        draftChangesNotLive: drafts.has(item.id),
+        draftChangesNotLive: drafts.has(item.id) || listedDrafts.has(item.id),
         ...(removal === undefined ? {} : { removal }),
       };
     }),
@@ -305,6 +344,9 @@ export async function readLayoutChoices(
       defaultUnreadable: defaultLayout !== null && !defaultReadable,
       layoutsCollection: layouts,
       canUpdateLayouts,
+      canCreateLayouts,
+      canUpdateAnyLayout,
+      canDeleteAnyLayout,
       more:
         (listing as { meta?: { hasNext?: unknown } }).meta?.hasNext === true,
       // The rows the list read itself returned, which for a search are the
@@ -480,14 +522,9 @@ async function pendingDrafts(
 }
 
 /**
- * The PUBLISHED definitions the regions reach, nested ones included.
- *
- * Discovered by the render's own discovery (`definitionsFor`) under the
- * renderer's own bounds, through the store read the readiness notice shares
- * with it, in the language being edited, so the canvas draws the graph the
- * published page draws. Read as the caller: a caller who may not read
- * components gets none, and each region then draws the marker a missing
- * component draws.
+ * The PUBLISHED definitions the regions reach, nested ones included: each
+ * drawing (one set's regions) discovered under its own bound, by the shared
+ * discovery the Pages panel's template pictures use too.
  */
 async function publishedDefinitions(
   nextly: LayoutChoicesDirectApi,
@@ -495,85 +532,14 @@ async function publishedDefinitions(
   drawings: readonly (readonly LayoutRegion[])[],
   read: { reading: AsUser; limits: DocumentLimits }
 ): Promise<Record<string, BlockDocument>> {
-  const groups = drawings.filter(regions => regions.length > 0);
-  if (groups.length === 0) return {};
-  const source = publishedStoreSource(nextly, {
-    ...store,
-    reading: read.reading,
-  });
-  // The ids every drawing asks for in the same turn, read together: the
-  // drawings start at once, so their reads coalesce into one batched read
-  // rather than one store query per set.
-  let gathering: {
-    ids: string[];
-    read: Promise<ReadonlyMap<string, BlockDocument>>;
-  } | null = null;
-  const gather = (
-    ids: readonly string[]
-  ): Promise<ReadonlyMap<string, BlockDocument>> => {
-    let current = gathering;
-    if (current === null) {
-      const batch: string[] = [];
-      const read = new Promise<void>(resolve => {
-        setTimeout(resolve, 0);
-      }).then(() => {
-        gathering = null;
-        return source(batch).catch(
-          (error: unknown): ReadonlyMap<string, BlockDocument> => {
-            // Refused: the caller may not read these, and the regions draw as
-            // missing, which is what they are to this caller. Anything else is
-            // a failure, not an answer, and fails the request, so the picker
-            // says it could not load rather than calling the components missing.
-            if (
-              NextlyError.isForbidden(error) ||
-              NextlyError.isNotFound(error)
-            ) {
-              return new Map<string, BlockDocument>();
-            }
-            throw error;
-          }
-        );
-      });
-      current = { ids: batch, read };
-      gathering = current;
-    }
-    current.ids.push(...ids);
-    return current.read;
-  };
-  // One answer per id across every drawing, kept as it is asked for, so a
-  // component that many sets place (a shared logo) is read once, and two
-  // drawings asking for it at the same moment share that read.
-  const asked = new Map<string, Promise<BlockDocument | undefined>>();
-  const readOnce = async (
-    ids: readonly string[]
-  ): Promise<Map<string, BlockDocument>> => {
-    const fresh = [...new Set(ids.filter(id => !asked.has(id)))];
-    if (fresh.length > 0) {
-      const batch = gather(fresh);
-      for (const id of fresh) {
-        asked.set(
-          id,
-          batch.then(found => found.get(id))
-        );
-      }
-    }
-    const answers = await Promise.all(
-      ids.map(async id => [id, await asked.get(id)] as const)
-    );
-    return new Map(
-      answers.filter(
-        (answer): answer is readonly [string, BlockDocument] =>
-          answer[1] !== undefined
-      )
-    );
-  };
-  // Each drawing discovered under its own bound, as the renderer draws it.
-  const found = await Promise.all(
-    groups.map(regions =>
-      definitionsFor(regionDocument(regions), readOnce, read.limits)
-    )
+  return publishedDefinitionsOf(
+    nextly,
+    store,
+    drawings
+      .filter(regions => regions.length > 0)
+      .map(regions => regionDocument(regions)),
+    read
   );
-  return Object.fromEntries(found.flatMap(definitions => [...definitions]));
 }
 
 /** An optional text parameter, where an empty value is none. */
@@ -602,6 +568,7 @@ const choicesQuery = z.object({
   // "1" or nothing: the one value the admin sends, so a typo is refused
   // rather than read as "no pictures".
   [LAYOUT_CHOICES_PICTURES_PARAM]: z.literal("1").optional(),
+  [LAYOUT_CHOICES_DRAFTS_PARAM]: z.literal("1").optional(),
 });
 
 /** What the request asks, as the route reads it. */
@@ -610,6 +577,7 @@ export interface LayoutChoicesQuery {
   readonly locale: string | undefined;
   readonly search: string | undefined;
   readonly pictures: boolean;
+  readonly drafts: boolean;
 }
 
 /**
@@ -624,6 +592,7 @@ export function parseChoicesQuery(url: string | URL): LayoutChoicesQuery {
       LAYOUT_CHOICES_LOCALE_PARAM,
       LAYOUT_CHOICES_SEARCH_PARAM,
       LAYOUT_CHOICES_PICTURES_PARAM,
+      LAYOUT_CHOICES_DRAFTS_PARAM,
     ],
     choicesQuery,
     "header & footer choices route"
@@ -633,6 +602,7 @@ export function parseChoicesQuery(url: string | URL): LayoutChoicesQuery {
     locale: query[LAYOUT_CHOICES_LOCALE_PARAM],
     search: query[LAYOUT_CHOICES_SEARCH_PARAM],
     pictures: query[LAYOUT_CHOICES_PICTURES_PARAM] === "1",
+    drafts: query[LAYOUT_CHOICES_DRAFTS_PARAM] === "1",
   };
 }
 

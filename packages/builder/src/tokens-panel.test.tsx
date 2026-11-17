@@ -26,7 +26,6 @@ import {
   TokensPanel,
   useVariablesHeader,
   type TokensPanelProps,
-  type VariablesPreview,
 } from "./tokens-panel";
 import type { VariableGroup } from "./tokens-studio";
 
@@ -111,7 +110,9 @@ describe("the rows", () => {
     const headings = screen
       .getAllByRole("heading", { level: 3 })
       .map(h => h.textContent);
+    // Site text leads the type groups, in a view of every group.
     expect(headings).toEqual([
+      "Site text",
       "Colours",
       "Type scale",
       "Spacing",
@@ -130,7 +131,12 @@ describe("the rows", () => {
     render(<Hosted tokens={SITE} {...stale} />);
     const spacing = screen.getByRole("region", { name: "Spacing" });
     expect(screen.queryByText("Space between blocks")).toBeNull();
-    expect(screen.queryByRole("radiogroup")).toBeNull();
+    // The colours' usage filter is the only choice of its kind drawn.
+    expect(
+      screen
+        .queryAllByRole("radiogroup")
+        .map(group => group.getAttribute("aria-label"))
+    ).toEqual(["Show colours"]);
     expect(screen.queryByText(/classic/i)).toBeNull();
     // The spacing variables are listed as before.
     expect(
@@ -372,25 +378,23 @@ describe("the rows", () => {
     expect(document.body.textContent).not.toMatch(/token/i);
   });
 
-  it("previews dark values when the header switch says Dark", () => {
-    render(<Hosted tokens={PREVIEWED} />);
+  it("previews dark values when its host asks for dark", () => {
+    const { rerender } = render(
+      <Hosted tokens={PREVIEWED} prefersDark={false} />
+    );
     expect(previewed()).toBe("8px");
-    const preview = screen.getByRole("group", { name: "Preview" });
-    fireEvent.click(within(preview).getByRole("button", { name: "Dark" }));
+    rerender(<Hosted tokens={PREVIEWED} prefersDark />);
     expect(previewed()).toBe("12px");
-    expect(
-      within(preview).getByRole("button", { name: "Dark" })
-    ).toHaveProperty("ariaPressed", "true");
   });
 
-  it("draws the header controls into the element the host gives it", () => {
+  it("draws the import and export menu into the element the host gives it, and no light/dark switch", () => {
     const slot = document.createElement("div");
     document.body.append(slot);
-    render(<Hosted tokens={SITE} headerActions={slot} />);
-    expect(within(slot).getByRole("group", { name: "Preview" })).toBeDefined();
+    render(<Hosted tokens={PREVIEWED} headerActions={slot} />);
     expect(
       within(slot).getByRole("button", { name: "Import or export" })
     ).toBeDefined();
+    expectNoModeSwitch();
     slot.remove();
   });
 
@@ -402,6 +406,7 @@ describe("the rows", () => {
         onChange: () => undefined,
         currentTokens: () => PREVIEWED,
         readOnly: false,
+        mode: "dark",
       });
       return (
         <>
@@ -416,13 +421,16 @@ describe("the rows", () => {
       );
     }
     render(<Host />);
-    expect(screen.getAllByRole("group", { name: "Preview" })).toHaveLength(1);
     expect(
       screen.getAllByRole("button", { name: "Import or export" })
     ).toHaveLength(1);
-    const hosted = screen.getByTestId("host-header");
-    fireEvent.click(within(hosted).getByRole("button", { name: "Dark" }));
+    expect(
+      within(screen.getByTestId("host-header")).getByRole("button", {
+        name: "Import or export",
+      })
+    ).toBeDefined();
     expect(previewed()).toBe("12px");
+    expectNoModeSwitch();
   });
 
   it("shows one line with an Add type size action when there are no type sizes", () => {
@@ -1264,7 +1272,7 @@ describe("the type specimen's font", () => {
   });
 });
 
-describe("the preview's first mode", () => {
+describe("the mode shown with no host's mode", () => {
   it("is the device's: Dark on a device that prefers dark, and it follows a change", () => {
     let listener: ((event: { matches: boolean }) => void) | undefined;
     const original = window.matchMedia;
@@ -1277,15 +1285,10 @@ describe("the preview's first mode", () => {
       removeEventListener: () => undefined,
     })) as unknown as typeof window.matchMedia;
     try {
-      render(<Hosted tokens={SITE} />);
-      const preview = screen.getByRole("group", { name: "Preview" });
-      expect(
-        within(preview).getByRole("button", { name: "Dark" })
-      ).toHaveProperty("ariaPressed", "true");
+      render(<Hosted tokens={PREVIEWED} />);
+      expect(previewed()).toBe("12px");
       act(() => listener?.({ matches: false }));
-      expect(
-        within(preview).getByRole("button", { name: "Light" })
-      ).toHaveProperty("ariaPressed", "true");
+      expect(previewed()).toBe("8px");
     } finally {
       window.matchMedia = original;
     }
@@ -1293,16 +1296,12 @@ describe("the preview's first mode", () => {
 });
 
 /** The Design panel's header, held by a host as the editor holds it. */
-function HeaderHost({
-  preview,
-}: {
-  preview?: VariablesPreview;
-}): React.JSX.Element {
+function HeaderHost({ mode }: { mode?: "light" | "dark" }): React.JSX.Element {
   const header = useVariablesHeader({
     onChange: () => undefined,
     currentTokens: () => PREVIEWED,
     readOnly: false,
-    ...(preview === undefined ? {} : { preview }),
+    ...(mode === undefined ? {} : { mode }),
   });
   return (
     <>
@@ -1317,79 +1316,64 @@ function HeaderHost({
   );
 }
 
-const pressed = (name: "Light" | "Dark"): string | null =>
-  within(screen.getByRole("group", { name: "Preview" })).getByRole("button", {
-    name,
-  }).ariaPressed;
+/**
+ * No light/dark switch and no "Preview" label anywhere in the panel: the
+ * preview is the top bar's.
+ */
+function expectNoModeSwitch(): void {
+  expect(screen.queryByRole("group", { name: "Preview" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Light" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Dark" })).toBeNull();
+  expect(screen.queryByText("Preview")).toBeNull();
+}
 
-describe("a preview mode the host holds", () => {
-  it("shows the host's pick and hands a press to the host rather than keeping it", () => {
-    const onPick = vi.fn();
-    const { rerender } = render(
-      <HeaderHost preview={{ picked: "dark", onPick }} />
-    );
-    expect(pressed("Dark")).toBe("true");
+describe("a mode the host holds", () => {
+  it("shows the host's mode, follows it when it changes, and offers no switch", () => {
+    const { rerender } = render(<HeaderHost mode="dark" />);
     expect(previewed()).toBe("12px");
+    expectNoModeSwitch();
 
-    fireEvent.click(screen.getByRole("button", { name: "Light" }));
-    expect(onPick).toHaveBeenCalledWith("light");
-    // The host has not taken the pick yet, so nothing changed here: a header
-    // keeping the press itself would show Light already.
-    expect(pressed("Dark")).toBe("true");
-    expect(previewed()).toBe("12px");
-
-    rerender(<HeaderHost preview={{ picked: "light", onPick }} />);
-    expect(pressed("Light")).toBe("true");
+    rerender(<HeaderHost mode="light" />);
     expect(previewed()).toBe("8px");
+    expectNoModeSwitch();
   });
 
-  it("keeps a press itself when no host holds the mode", () => {
-    render(<HeaderHost />);
-    expect(pressed("Light")).toBe("true");
-    fireEvent.click(screen.getByRole("button", { name: "Dark" }));
-    expect(pressed("Dark")).toBe("true");
-    expect(previewed()).toBe("12px");
-  });
-});
-
-describe("the preview while nothing is picked", () => {
-  /**
-   * A canvas root under a page's own theme marker, on a device that prefers
-   * light (jsdom answers no media query), so the canvas draws one mode and
-   * the device names the other.
-   */
-  function canvasUnder(mode: "light" | "dark"): () => void {
-    const page = document.createElement("div");
-    page.setAttribute("data-nx-theme", mode);
-    const root = document.createElement("div");
-    root.className = "nx-canvas";
-    page.append(root);
-    document.body.append(page);
-    return () => page.remove();
-  }
-
-  it("shows the mode the canvas draws, not the device's, with a host holding none", () => {
+  it("wins over the mode the canvas draws by itself", () => {
     const remove = canvasUnder("dark");
     try {
-      render(
-        <HeaderHost preview={{ picked: null, onPick: () => undefined }} />
-      );
-      expect(pressed("Dark")).toBe("true");
-      expect(previewed()).toBe("12px");
+      render(<HeaderHost mode="light" />);
+      expect(previewed()).toBe("8px");
     } finally {
       remove();
     }
   });
+});
 
-  it("shows the mode the canvas draws on its own too, and follows the page's marker", async () => {
+/**
+ * A canvas root under a page's own theme marker, on a device that prefers
+ * light (jsdom answers no media query), so the canvas draws one mode and
+ * the device names the other.
+ */
+function canvasUnder(mode: "light" | "dark"): () => void {
+  const page = document.createElement("div");
+  page.setAttribute("data-nx-theme", mode);
+  const root = document.createElement("div");
+  root.className = "nx-canvas";
+  page.append(root);
+  document.body.append(page);
+  return () => page.remove();
+}
+
+describe("the mode shown while no host holds one", () => {
+  it("is the mode the canvas draws, not the device's, and follows the page's marker", async () => {
     const remove = canvasUnder("dark");
     try {
       render(<HeaderHost />);
-      expect(pressed("Dark")).toBe("true");
+      expect(previewed()).toBe("12px");
       const marked = document.querySelector("[data-nx-theme]");
       // Heard through a mutation observer, which answers after this task.
       marked?.setAttribute("data-nx-theme", "light");
-      await waitFor(() => expect(pressed("Light")).toBe("true"));
+      await waitFor(() => expect(previewed()).toBe("8px"));
     } finally {
       remove();
     }
@@ -1436,13 +1420,7 @@ describe("a row's name in the dark preview", () => {
             : token
       ),
     };
-    render(<Hosted tokens={site} />);
-    fireEvent.click(
-      within(screen.getByRole("group", { name: "Preview" })).getByRole(
-        "button",
-        { name: "Dark" }
-      )
-    );
+    render(<Hosted tokens={site} prefersDark />);
     expect(row(/^Space 4/).getAttribute("aria-label")).toBe("Space 4, 2rem");
     expect(row(/^Body/).getAttribute("aria-label")).toBe(
       "Body, size 16px, line height 30px"
@@ -1509,13 +1487,8 @@ describe("an explicit preview preference", () => {
       removeEventListener: () => undefined,
     })) as unknown as typeof window.matchMedia;
     try {
-      render(<Hosted tokens={SITE} prefersDark={false} />);
-      expect(
-        within(screen.getByRole("group", { name: "Preview" })).getByRole(
-          "button",
-          { name: "Light" }
-        )
-      ).toHaveProperty("ariaPressed", "true");
+      render(<Hosted tokens={PREVIEWED} prefersDark={false} />);
+      expect(previewed()).toBe("8px");
     } finally {
       window.matchMedia = original;
     }

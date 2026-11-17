@@ -82,13 +82,16 @@ import {
 import { usePageDataCount } from "./page-read-meter";
 import { useReadBack } from "./read-back";
 import { recentColoursStore } from "./recent-colours-store";
+import { regionRefusal } from "./region-card";
 import { useReveal } from "./reveal-hidden";
+import type { SelectedRegion } from "./selected-region";
 import { useSettingsPlace } from "./settings-place";
 import {
   ConnectStyleHistoryContext,
   StyleRevisionContext,
   useSiteStyleHistory,
 } from "./site-style-history";
+import { offerableTokens } from "./site-style-studios";
 import { documentFrom } from "./stored-document";
 import {
   TemplatePreviewScope,
@@ -405,6 +408,11 @@ function EditorBody<TFieldValues extends FieldValues>({
   const panels = useEditorPanels(mount, name, {
     control,
     canvasRoot: canvas.canvasElement,
+    siteTokens: offerableTokens(
+      style.canvasSiteStyle,
+      style.siteStylePending,
+      style.siteStyleError
+    ),
   });
   // The Settings dialog's place for other plugins' tabs, for a page or a
   // design: what is being edited, and its own metadata as one undoable edit.
@@ -749,8 +757,12 @@ function EditorBody<TFieldValues extends FieldValues>({
         */}
           <BlockKeyboardActions
             editor={editor}
-            // Esc with no block selected leaves a look edited on its own.
-            onEscapeWithoutSelection={panels.lookEditing.exit}
+            // Esc with no block selected clears a selected header or footer,
+            // or else leaves a look edited on its own.
+            onEscapeWithoutSelection={escapeWithoutSelection(panels)}
+            // A selected header or footer: Delete removes nothing, and says
+            // where it is changed.
+            {...selectedRegionKeys(panels.selectedRegion)}
             onEditText={componentView.preview.onEditText}
             onSaveAsPattern={savePattern.open}
             /*
@@ -846,6 +858,27 @@ function EditorBody<TFieldValues extends FieldValues>({
       </VisitorUnreadableProvider>
     </EditorFrame>
   );
+}
+
+/**
+ * What Escape with no block selected runs: clear the header or footer
+ * selected, the innermost thing, or else leave a look edited on its own.
+ */
+function escapeWithoutSelection(
+  panels: Pick<EditorPanels, "selectedRegion" | "lookEditing">
+): () => void {
+  const { selection } = panels.selectedRegion;
+  return selection.area === null ? panels.lookEditing.exit : selection.clear;
+}
+
+/** What the block keys are told of a selected header or footer. */
+function selectedRegionKeys(region: SelectedRegion): {
+  selectedRegion?: { readonly refusal: string };
+} {
+  const area = region.selection.area;
+  return area === null
+    ? {}
+    : { selectedRegion: { refusal: regionRefusal(area) } };
 }
 
 /**

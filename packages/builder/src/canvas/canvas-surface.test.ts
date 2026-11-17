@@ -117,7 +117,26 @@ describe("the canvas's frame as a sheet on the editor's surface", () => {
     expect(declared(frame, "outline")).toBe(
       "1px solid var(--nx-builder-frame-edge)"
     );
-    expect(declared(frame, "box-shadow")).toBe("var(--shadow-md)");
+  });
+
+  it("casts no shadow, so the page reads as the page and not a card", () => {
+    // The frame meets the panels' dividers, and a narrower one is told from
+    // the well by its hairline edge alone.
+    const frame = ruleFor(".nx-canvas-frame");
+    // The control: this is the frame's own rule, the one stating its edge.
+    expect(declared(frame, "outline")).toBeDefined();
+    expect(frame).not.toMatch(/(?:^|\s)box-shadow\s*:/);
+  });
+
+  it("keeps the chrome drawn past the frame from scrolling the region", () => {
+    /*
+     * The layer the editor's chrome is drawn in reaches a ring's distance
+     * past the frame. With the frame at the region's own width, that reach
+     * was content past the region's edge: the region scrolled by it and took
+     * focus as a scroller, which F6 and Tab then stopped on instead of
+     * passing into the page.
+     */
+    expect(declared(ruleFor(".nx-canvas-stage"), "overflow")).toBe("clip");
   });
 
   it("draws that edge OUTSIDE the box the frame is fitted into", () => {
@@ -511,19 +530,47 @@ describe("a canvas mounted outside the editor shell", () => {
 
 describe("a Layout region drawn in the canvas frame", () => {
   it("is styled by the frame's own sheet, in the admin's tokens, at the admin's size", () => {
-    const lock = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region__lock");
-    expect(declared(lock, "background")).toBe(
-      "var(--nx-builder-surface-raised)"
-    );
-    expect(declared(lock, "color")).toBe("var(--nx-builder-text-muted)");
-    const words = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region__mark-body");
-    expect(declared(words, "zoom")).toBe("calc(1 / var(--nx-canvas-zoom, 1))");
-    expect(declared(words, "font-family")).toBe(
-      "var(--font-sans, system-ui), sans-serif"
-    );
+    const tag = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region__tag");
+    expect(declared(tag, "background")).toBe("var(--nx-region-mark)");
+    expect(declared(tag, "color")).toBe("var(--nx-region-mark-text)");
+    expect(declared(tag, "zoom")).toBe("calc(1 / var(--nx-canvas-zoom, 1))");
+    expect(declared(tag, "font")).toContain("var(--font-sans, system-ui)");
     // One home: the editor's own sheet never reaches the frame, so it holds
     // none of these rules.
     expect(CHROME.includes(".nx-canvas-region")).toBe(false);
+  });
+
+  it("marks it in the select hue for the page's ground, its tag's words passing AA in both", () => {
+    const region = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region");
+    expect(declared(region, "--nx-region-mark")).toBe(
+      "var(--nx-builder-select-on-light)"
+    );
+    const dark = ruleIn(
+      CANVAS_FRAME_SHEET,
+      '.nx-canvas-region[data-nx-page-scheme="dark"]'
+    );
+    expect(declared(dark, "--nx-region-mark")).toBe(
+      "var(--nx-builder-select-on-dark)"
+    );
+    expect(declared(dark, "--nx-region-mark-text")).toBe(
+      "var(--nx-builder-select-text-on-dark)"
+    );
+    const constants = ruleFor(CONSTANTS);
+    for (const scheme of ["light", "dark"]) {
+      const hue = hexOf(constants, `--nx-builder-select-on-${scheme}`);
+      const text = hexOf(constants, `--nx-builder-select-text-on-${scheme}`);
+      // The tag's words on its hue (WCAG 2.2 SC 1.4.3).
+      expect(contrast(text, hue), `tag on ${scheme}`).toBeGreaterThanOrEqual(
+        4.5
+      );
+    }
+    // The outline on the ground each hue is for (SC 1.4.11).
+    expect(
+      contrast(hexOf(constants, "--nx-builder-select-on-light"), "#ffffff")
+    ).toBeGreaterThanOrEqual(3);
+    expect(
+      contrast(hexOf(constants, "--nx-builder-select-on-dark"), "#0b0f19")
+    ).toBeGreaterThanOrEqual(3);
   });
 });
 

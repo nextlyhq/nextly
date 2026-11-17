@@ -174,9 +174,14 @@ export { CanvasMarks } from "./canvas/canvas-marks";
  */
 export { useModalKeyboardHold } from "./shell/modal-keyboard-hold";
 export type { CanvasProps } from "./canvas/canvas";
-// The regions of a page's Layout, drawn locked around the page on the canvas.
+// The regions of a page's layout around the page on the canvas, and which one
+// is selected.
 export type { CanvasRegion } from "./canvas/canvas-regions";
 export { REGION_ATTRIBUTE } from "./canvas/canvas-regions";
+export {
+  useRegionSelection,
+  type RegionSelection,
+} from "./canvas/region-selection";
 
 /**
  * The inserter, behind the same client banner as the shell it fills: it holds
@@ -229,8 +234,7 @@ export type {
 // The variant open in a component's view, previewed on the host's canvas.
 export { useVariantPreview, VariantPreviewTag } from "./variant-preview";
 export type { VariantPreviewState } from "./variant-preview";
-// The one row of tags over the canvas: the variant previewed, and the site
-// mode the author picked to preview the page in.
+// The one row of tags over the canvas: the variant previewed.
 export { CanvasPreviewTags } from "./canvas/canvas-preview-tags";
 export type { CanvasPreviewTagsProps } from "./canvas/canvas-preview-tags";
 
@@ -345,6 +349,9 @@ export type { BreakpointManagerProps } from "./shell/breakpoint-manager";
  */
 export { BreakpointSwitcher } from "./shell/breakpoint-switcher";
 export type { BreakpointSwitcherProps } from "./shell/breakpoint-switcher";
+// The top bar's light and dark preview, placed by the host beside the devices.
+export { DarkPreviewSwitch } from "./shell/dark-preview-switch";
+export type { DarkPreviewSwitchProps } from "./shell/dark-preview-switch";
 
 /**
  * The canvas zoom, and the control that names it.
@@ -732,7 +739,6 @@ export type {
   GroupFolds,
   TokensPanelProps,
   VariablesHeader,
-  VariablesPreview,
 } from "./tokens-panel";
 // Which variable groups each Design tab lists, and the one variable search,
 // so a tab's count and the rows it lists come from the same rule.

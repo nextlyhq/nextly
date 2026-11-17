@@ -31,7 +31,10 @@ const circle = blockLooks(coreBlocks).find(
 ) as NamedClass;
 
 /** The published page of one Circle Image of a 16:9 library file. */
-async function page(props: Record<string, unknown>): Promise<Document> {
+async function page(
+  props: Record<string, unknown>,
+  styles?: Record<string, unknown>
+): Promise<Document> {
   const document = {
     formatVersion: DOCUMENT_FORMAT_VERSION,
     kind: "page",
@@ -42,6 +45,7 @@ async function page(props: Record<string, unknown>): Promise<Document> {
         version: 1,
         props: { mediaId: "m1", ...props },
         classes: [circle.id],
+        ...(styles === undefined ? {} : { styles: { base: { base: styles } } }),
       },
     ],
   } as unknown as BlockDocument;
@@ -105,6 +109,12 @@ describe("Circle on a 16:9 picture, on the published path", () => {
     ["captioned", { caption: "Our team" }],
     ["linked", { href: "/about" }],
     ["captioned and linked", { caption: "Our team", href: "/about" }],
+    // Inside the button that opens its lightbox, in a figure.
+    ["set to Enlarge", { whenClicked: "enlarge" }],
+    [
+      "captioned and set to Enlarge",
+      { caption: "Our team", whenClicked: "enlarge" },
+    ],
   ] as const) {
     it(`is cropped to a round square when ${name}`, async () => {
       const doc = await page(props);
@@ -124,4 +134,25 @@ describe("Circle on a 16:9 picture, on the published path", () => {
       expect(["auto", "100%"]).toContain(declared.get("height") ?? "auto");
     });
   }
+});
+
+describe("a linked Circle with a shadow, its link no longer clipping", () => {
+  it("rounds and shadows the picture itself, so no corner shows past the circle", async () => {
+    const doc = await page(
+      { href: "/about" },
+      { boxShadow: "0 4px 12px #0003" }
+    );
+    const picture = doc.querySelector(".nx-pb-page a > img");
+    const link = doc.querySelector(".nx-pb-page a");
+    if (picture === null || link === null) throw new Error("no linked picture");
+    // The picture clips its own corners: with nothing around it clipping,
+    // a picture without its own radius would show its corners.
+    const onPicture = declarationsOn(doc, picture);
+    expect(onPicture.get("border-radius")).toBe("9999px");
+    expect(onPicture.get("box-shadow")).toBe("0 4px 12px #0003");
+    // The link is no square box with a shadow of its own.
+    const onLink = declarationsOn(doc, link);
+    expect(onLink.get("box-shadow")).toBeUndefined();
+    expect(onLink.get("overflow")).toBeUndefined();
+  });
 });
