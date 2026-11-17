@@ -12,12 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ReadableDocument } from "./bindings-report/readable";
 import type { StoredUse } from "./bindings-report/uses-store";
 import { SHOWN_ON_ROUTE_PATH, shownOnPath } from "./shown-on-contract";
-import {
-  mayOpenWorkingDraft,
-  readShownOn,
-  shownOnRoute,
-  type ShownOnDeps,
-} from "./shown-on-route";
+import { readShownOn, shownOnRoute, type ShownOnDeps } from "./shown-on-route";
 
 /** A use of the Homepage Single by block `nodeId` of page `id`. */
 const use = (
@@ -56,13 +51,14 @@ interface Fixture {
   readonly singleReadable?: boolean;
   readonly installed?: boolean;
   readonly defaultLocale?: string;
-  /** Whether the reader may edit pages, so sees their working drafts. */
+  /** Whether the reader's own read of a page answers its working draft. */
   readonly editor?: boolean;
 }
 
 function depsFor(fixture: Fixture) {
   const ofSingle = vi.fn(async () => [...fixture.uses]);
   const refresh = vi.fn();
+  const draftReads: string[] = [];
   const deps: ShownOnDeps = {
     uses: () =>
       fixture.installed === false
@@ -84,14 +80,26 @@ function depsFor(fixture: Fixture) {
       return found;
     },
     mayReadSingle: async () => fixture.singleReadable !== false,
-    mayEdit: async () => fixture.editor !== false,
+    draftPlacesShown: async (_ctx, document) => {
+      draftReads.push(document.documentId ?? document.slug);
+      if (fixture.editor === false) return new Set<string>();
+      return new Set(
+        fixture.uses
+          .filter(
+            entry =>
+              entry.version === "draft" &&
+              entry.documentId === document.documentId
+          )
+          .map(entry => `${entry.blocksField}\u0000${entry.nodeId}`)
+      );
+    },
     singleLabels: async (_ctx, slugs) =>
       new Map([...slugs].map(slug => [slug, `The ${slug}`])),
     refresh,
     defaultLocale: () => fixture.defaultLocale,
     blocks,
   };
-  return { deps, ofSingle, refresh };
+  return { deps, ofSingle, refresh, draftReads };
 }
 
 const ctx = {} as PluginRouteContext;
@@ -188,6 +196,24 @@ describe("readShownOn", () => {
       "Draft only",
       "Live name",
     ]);
+  });
+
+  it("asks the reader's own read only of readable documents with places only in a draft", async () => {
+    const { deps, draftReads } = depsFor({
+      uses: [
+        use("live", "hero"),
+        use("both", "hero"),
+        use("both", "hero", { version: "draft" }),
+        use("fresh", "a", { version: "draft" }),
+        use("fresh", "b", { version: "draft" }),
+        use("secret", "c", { version: "draft" }),
+      ],
+      readable: ["live", "both", "fresh"],
+    });
+    const answer = await readShownOn("homepage", true, ctx, deps);
+    expect(draftReads).toEqual(["fresh"]);
+    expect(answer.places).toHaveLength(4);
+    expect(answer.hidden).toBe(1);
   });
 
   it("lists only the places the reader may open, and counts the others as a number", async () => {
@@ -287,27 +313,6 @@ describe("readShownOn", () => {
       title: "The landing",
       inAnotherLanguage: true,
     });
-  });
-});
-
-describe("mayOpenWorkingDraft", () => {
-  /** A caller holding these actions on every collection. */
-  const holding = (actions: readonly string[]) =>
-    ({
-      caller: { can: async (action: string) => actions.includes(action) },
-    }) as unknown as PluginRouteContext;
-
-  it("opens a working draft to a caller who may update or publish, as core does", async () => {
-    expect(
-      await mayOpenWorkingDraft(holding(["read", "update"]), "pages")
-    ).toBe(true);
-    expect(
-      await mayOpenWorkingDraft(holding(["read", "publish"]), "pages")
-    ).toBe(true);
-    expect(await mayOpenWorkingDraft(holding(["read"]), "pages")).toBe(false);
-    expect(await mayOpenWorkingDraft({ caller: null } as never, "pages")).toBe(
-      false
-    );
   });
 });
 

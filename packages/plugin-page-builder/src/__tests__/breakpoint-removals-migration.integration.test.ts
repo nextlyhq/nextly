@@ -51,6 +51,7 @@ import { describe, expect, it } from "vitest";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { migrations } from "../schema/migrations";
 import {
+  bindingReportRuns,
   bindingUses,
   breakpointRemovalFragments,
   breakpointRemovals,
@@ -72,6 +73,7 @@ const REMOVALS_TABLE = `${SCHEMA_PREFIX}__${breakpointRemovals.name}`;
 const FRAGMENTS_TABLE = `${SCHEMA_PREFIX}__${breakpointRemovalFragments.name}`;
 const OPTIONS_TABLE = `${SCHEMA_PREFIX}__${siteOptions.name}`;
 const USES_TABLE = `${SCHEMA_PREFIX}__${bindingUses.name}`;
+const RUNS_TABLE = `${SCHEMA_PREFIX}__${bindingReportRuns.name}`;
 
 /** How many modules ship before the one named `suffix`. */
 function shippedBefore(suffix: string): number {
@@ -478,10 +480,22 @@ describe.each(getConfiguredTestDialects())(
         await site.nextly(undefined, "migrate");
         opened = await openAdapter(database);
         expect(await opened.adapter.tableExists(USES_TABLE)).toBe(true);
-        await rowsOn(dialect, opened.adapter).insert(OPTIONS_TABLE, {
+        const seeded = rowsOn(dialect, opened.adapter);
+        await seeded.insert(OPTIONS_TABLE, {
           id: "kept-option",
           name: "down-probe",
           value: "kept",
+        });
+        // A site whose index was filled, and whose report's check is current.
+        await seeded.insert(OPTIONS_TABLE, {
+          id: "filled-mark",
+          name: "binding-uses-filled",
+          value: "1",
+        });
+        await seeded.insert(RUNS_TABLE, {
+          id: "full-run",
+          name: "full",
+          checked: "fingerprint-before",
         });
         await opened.close();
         opened = undefined;
@@ -498,13 +512,24 @@ describe.each(getConfiguredTestDialects())(
         opened = await openAdapter(database);
         expect(await opened.adapter.tableExists(USES_TABLE)).toBe(false);
         // The modules before it, and what they hold, are untouched.
-        expect(
-          await rowsOn(dialect, opened.adapter).column(
-            OPTIONS_TABLE,
-            "kept-option",
-            "value"
-          )
-        ).toBe("kept");
+        const rolled = rowsOn(dialect, opened.adapter);
+        expect(await rolled.column(OPTIONS_TABLE, "kept-option", "value")).toBe(
+          "kept"
+        );
+        // Forgotten with the index: the mark it was filled, and the report's
+        // current check, so a table made again is filled again.
+        expect(await rolled.column(OPTIONS_TABLE, "filled-mark", "value")).toBe(
+          "0"
+        );
+        expect(await rolled.column(RUNS_TABLE, "full-run", "checked")).toBe(
+          null
+        );
+        // Filled again, as the older release would, before migrating up.
+        await opened.adapter.executeQuery(
+          dialect === "mysql"
+            ? "UPDATE `page_builder__site_options` SET `value` = '1' WHERE `id` = 'filled-mark'"
+            : `UPDATE "page_builder__site_options" SET "value" = '1' WHERE "id" = 'filled-mark'`
+        );
         const last = migrations[migrations.length - 1]?.name ?? "";
         expect(last).toMatch(/_create_binding_uses_table$/);
         const down = await ledger(site.nextly);
@@ -518,6 +543,14 @@ describe.each(getConfiguredTestDialects())(
         expect(again.stdout).toContain("Plugin migrations: 1 applied");
         opened = await openAdapter(database);
         expect(await opened.adapter.tableExists(USES_TABLE)).toBe(true);
+        // Made again, empty: not filled until a check fills it.
+        expect(
+          await rowsOn(dialect, opened.adapter).column(
+            OPTIONS_TABLE,
+            "filled-mark",
+            "value"
+          )
+        ).toBe("0");
       } finally {
         await opened?.close();
         site.close();

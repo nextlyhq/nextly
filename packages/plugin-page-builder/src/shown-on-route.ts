@@ -14,8 +14,9 @@
  *   blocks field it is in by its whole path, read as them
  *   (`bindings-report/readable`).
  * - A place only in a document's unpublished working draft is listed only
- *   for a reader who may update or publish that document's collection or
- *   Single, the callers core shows a working draft to.
+ *   where core's own read of that document, as the reader asking for its
+ *   working draft, still shows it (`shown-on-drafts.ts`): core decides per
+ *   document who sees a working draft.
  * - The others are counted from the index, as the system, and answered as a
  *   number only: never a title, an id or an address of a document the
  *   reader may not open.
@@ -42,6 +43,7 @@ import type {
   StoredUse,
 } from "./bindings-report/uses-store";
 import { parseRouteQuery } from "./route-query";
+import type { DraftDocument } from "./shown-on-drafts";
 import {
   SHOWN_ON_FIRST,
   SHOWN_ON_ROUTE_PATH,
@@ -71,10 +73,15 @@ export interface ShownOnDeps {
     entries: readonly ReadableQuestion[]
   ) => Promise<ReadonlyMap<string, ReadableDocument>>;
   /**
-   * Whether core would show the caller the working draft of documents of
-   * this collection or Single ({@link mayOpenWorkingDraft}).
+   * The places of a document, found only in its working draft, that the
+   * caller's own read of it, its working draft asked for, shows binding the
+   * Single: `<blocks field>\0<node id>` keys (`shown-on-drafts.ts`).
    */
-  readonly mayEdit: (ctx: PluginRouteContext, slug: string) => Promise<boolean>;
+  readonly draftPlacesShown: (
+    ctx: PluginRouteContext,
+    document: DraftDocument,
+    single: string
+  ) => Promise<ReadonlySet<string>>;
   /** Whether the caller may read the Single, read as them. */
   readonly mayReadSingle: (
     ctx: PluginRouteContext,
@@ -195,37 +202,53 @@ function byTitle(a: ShownOnPlace, b: ShownOnPlace): number {
 }
 
 /**
- * Whether core would show the caller a working draft of this collection's or
- * Single's documents: to one who may update them, or, refused that, to one
- * who may publish them, as its own read decides.
+ * How many documents one answer reads as the caller, for the places found
+ * only in their working drafts; the places of any further one are counted.
  */
-export async function mayOpenWorkingDraft(
-  ctx: Pick<PluginRouteContext, "caller">,
-  slug: string
-): Promise<boolean> {
-  const caller = ctx.caller;
-  if (caller === null || caller === undefined) return false;
-  if (await caller.can("update", slug)) return true;
-  return caller.can("publish", slug);
-}
+const DRAFT_READS_MAX = 20;
 
 /**
- * The collections and Singles, of those whose places are only in a working
- * draft, whose working drafts the caller may open: asked once each.
+ * The places found only in a working draft that the caller's own read of
+ * each document shows, by place key: asked of readable documents only, one
+ * read each, at most {@link DRAFT_READS_MAX} of them.
  */
-async function editorsOf(
+async function draftsShown(
   ctx: PluginRouteContext,
+  single: string,
   places: readonly Found[],
-  deps: Pick<ShownOnDeps, "mayEdit">
+  readable: ReadonlyMap<string, ReadableDocument>,
+  deps: Pick<ShownOnDeps, "draftPlacesShown">
 ): Promise<ReadonlySet<string>> {
-  const asked = new Set(
-    places.flatMap(place => (place.published ? [] : [place.first.slug]))
-  );
-  const editors = new Set<string>();
-  for (const slug of asked) {
-    if (await deps.mayEdit(ctx, slug)) editors.add(slug);
+  const byDocument = new Map<string, { use: StoredUse; fields: Set<string> }>();
+  for (const place of places) {
+    const { documentKey, blocksField } = place.first;
+    if (place.published || !readable.has(documentKey)) continue;
+    const held = byDocument.get(documentKey);
+    if (held === undefined) {
+      if (byDocument.size >= DRAFT_READS_MAX) continue;
+      byDocument.set(documentKey, {
+        use: place.first,
+        fields: new Set([blocksField]),
+      });
+    } else {
+      held.fields.add(blocksField);
+    }
   }
-  return editors;
+  const shown = new Set<string>();
+  for (const [documentKey, { use, fields }] of byDocument) {
+    const found = await deps.draftPlacesShown(
+      ctx,
+      {
+        kind: use.kind,
+        slug: use.slug,
+        ...(use.documentId === undefined ? {} : { documentId: use.documentId }),
+        fields: [...fields],
+      },
+      single
+    );
+    for (const within of found) shown.add(`${documentKey}\u0000${within}`);
+  }
+  return shown;
 }
 
 /** Answer one Single's places, as the caller may see them. */
@@ -261,14 +284,14 @@ export async function readShownOn(
     singleDocuments.size === 0
       ? new Map<string, string>()
       : await deps.singleLabels(ctx, singleDocuments);
-  const editors = await editorsOf(ctx, places, deps);
+  const drafts = await draftsShown(ctx, slug, places, readable, deps);
   const visible: ShownOnPlace[] = [];
   for (const place of places) {
     const document = readable.get(place.first.documentKey);
     const open =
       document !== undefined &&
       document.fields.has(place.first.blocksField) &&
-      (place.published || editors.has(place.first.slug));
+      (place.published || drafts.has(place.key));
     if (open) visible.push(shownPlace(place, document, singles, deps.blocks));
   }
   visible.sort(byTitle);

@@ -46,7 +46,8 @@ import {
 import { listEntriesRoute } from "../list-entries-route";
 import { loopCollectionsRoute } from "../loop-collections-route";
 import { namedQueriesRoute } from "../named-queries";
-import { mayOpenWorkingDraft, shownOnRoute } from "../shown-on-route";
+import { draftPlacesShown } from "../shown-on-drafts";
+import { shownOnRoute } from "../shown-on-route";
 import { unbindPlanRoute } from "../unbind-plan-route";
 
 import type { InitContext } from "./install-context";
@@ -360,9 +361,15 @@ export function routesForBindings(
           : bindingUsesReader(state.bindingReportCtx.db),
       readable: (routeCtx, entries) => readableAsCaller(routeCtx, entries),
       mayReadSingle: (routeCtx, slug) => mayReadSingle(routeCtx, slug),
-      // Core shows a working draft only to a caller who may update or
-      // publish it.
-      mayEdit: (routeCtx, slug) => mayOpenWorkingDraft(routeCtx, slug),
+      // A place only in a working draft, where core's read of the document
+      // as the caller shows it.
+      draftPlacesShown: (routeCtx, document, single) =>
+        draftPlacesShown(
+          routeCtx,
+          document,
+          single,
+          (opts.limits ?? DEFAULT_LIMITS).maxNodes
+        ),
       // Until the index has been filled once, a read starts the check that
       // fills it, as the report's read does.
       refresh,
