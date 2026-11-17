@@ -256,6 +256,7 @@ export function tokenOverrideOf(
     const base = supplied.get(tokenIdentity(token));
     return base === undefined || !sameSiteToken(base, token);
   });
+  const rows = storedSiteText(defaults?.siteText, edited.siteText);
   return {
     tokens,
     ...(edited.prefix === undefined || edited.prefix === defaults?.prefix
@@ -264,13 +265,13 @@ export function tokenOverrideOf(
     ...(edited.darkMode === undefined || edited.darkMode === defaults?.darkMode
       ? {}
       : { darkMode: edited.darkMode }),
-    ...storedFluidRange(defaults, edited, tokens),
+    ...storedFluidRange(defaults, edited, tokens, rows.siteText),
     // The colour order, once the site has one of its own.
     ...(edited.order === undefined ||
     sameJsonValue(edited.order, defaults?.order)
       ? {}
       : { order: edited.order }),
-    ...storedSiteText(defaults?.siteText, edited.siteText),
+    ...rows,
   };
 }
 
@@ -305,11 +306,16 @@ function storedSiteText(
 function storedFluidRange(
   defaults: SiteTokenSet | undefined,
   edited: SiteTokenSet,
-  stored: readonly SiteToken[]
+  stored: readonly SiteToken[],
+  /** The Site text rows the tier stores, whose fluid sizes need it too. */
+  rows: SiteTextMap | undefined
 ): Pick<SiteTokenSet, "fluidRange"> {
   const range =
     edited.fluidRange ?? defaults?.fluidRange ?? DEFAULT_FLUID_RANGE;
-  if (stored.some(token => token.fluid !== undefined))
+  const fluidRow = Object.values(rows ?? {}).some(
+    row => row?.fluid !== undefined
+  );
+  if (fluidRow || stored.some(token => token.fluid !== undefined))
     return { fluidRange: range };
   return edited.fluidRange === undefined ||
     sameJsonValue(edited.fluidRange, defaults?.fluidRange)

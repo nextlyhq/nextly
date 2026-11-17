@@ -378,6 +378,24 @@ describe("the site's text across the two tiers", () => {
     expect(stored).not.toHaveProperty("siteText");
   });
 
+  it("stores the range a fluid row was made across, though no variable is fluid", () => {
+    const range = { min: 360, max: 1280 };
+    const stored = tokenOverrideOf(
+      { tokens: [], fluidRange: range },
+      {
+        tokens: [],
+        fluidRange: range,
+        siteText: {
+          h2: {
+            fontSize: "clamp(1.5rem, 1.2rem + 1.4vw, 2.5rem)",
+            fluid: { small: 24, large: 40 },
+          },
+        },
+      }
+    );
+    expect(stored.fluidRange).toEqual(range);
+  });
+
   it("keeps an empty row, which leaves that text to the site's own CSS", () => {
     const stored = tokenOverrideOf(undefined, {
       tokens: [],
