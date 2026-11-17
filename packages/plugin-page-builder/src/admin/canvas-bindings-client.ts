@@ -64,7 +64,10 @@ import {
   useCanvasEntryRead,
   type CanvasEntryRead,
 } from "./editor/canvas-entry";
-import { useCanvasSourceCheck } from "./editor/canvas-source-check";
+import {
+  firstReadsInOf,
+  useCanvasSourceCheck,
+} from "./editor/canvas-source-check";
 /**
  * What each answer's reads cost the page's allowance, by the bindings it
  * gave, so the editor's read meter adds the binding reads as the route made
@@ -350,22 +353,30 @@ function useWatchedSources(
     readonly locale: string | undefined;
   },
   userId: string | null,
-  answer: { readonly key: string; readonly bindings: PageBindings } | null
+  answer: {
+    readonly key: string;
+    readonly userId: string;
+    readonly bindings: PageBindings;
+  } | null
 ): void {
   const { request, key, drawn, identity, namedQueries, locale } = watched;
-  // This ask's own answer only: another ask's could fill a bound list with
-  // a collection the page no longer draws.
+  // This ask's own answer, read for this person: another ask's could fill a
+  // bound list with a collection the page no longer draws.
   const bound =
-    answer !== null && answer.key === key ? answer.bindings : undefined;
+    answer !== null && answer.key === key && answer.userId === userId
+      ? answer.bindings
+      : undefined;
   const asked = useMemo(
     () =>
       sourcesCheckAskOf(request, drawn, identity, namedQueries, locale, bound),
     [request, drawn, identity, namedQueries, locale, bound]
   );
-  // The canvas's first reads are in once its bindings are answered, or at
-  // once for a page that reads none: the first mark waits for that.
-  const firstReadsIn = request === undefined || bound !== undefined;
-  useCanvasSourceCheck(asked, userId, undefined, firstReadsIn);
+  useCanvasSourceCheck(
+    asked,
+    userId,
+    undefined,
+    firstReadsInOf(request, bound)
+  );
 }
 
 /** The entry an ask is made for, as the route takes it. */

@@ -30,6 +30,8 @@
 ---
 
 Opening the page builder no longer waits on its check for changes saved
-elsewhere: the first check runs once the canvas's first reads are in and the
-browser is idle, so the builder opens with one request fewer. Later checks are
-unchanged, and a change saved elsewhere after the canvas read is still seen.
+elsewhere: the first check runs just after the canvas's first reads are drawn,
+so opening from an entry's edit screen sends one request fewer before the
+canvas appears. A save made elsewhere in the moment between those reads and
+that check shows with the next save to the same source; later checks are
+unchanged, and if the first reads never answer, the minute's check still runs.

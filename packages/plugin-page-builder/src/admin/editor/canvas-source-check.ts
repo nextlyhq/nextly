@@ -8,9 +8,11 @@
  * the plugin's change check, which answers one mark for every source the
  * canvas reads:
  * - once when the canvas opens, whether or not its tab is in sight, so the
- *   mark compared with is taken with the canvas's first reads: once those
- *   are in, when the browser is next idle, so opening the builder waits on
- *   nothing for it;
+ *   mark compared with is taken with the canvas's first reads: just after
+ *   those are in and drawn, so opening the builder waits on nothing for it.
+ *   A save made elsewhere in the moment between those reads and that mark
+ *   is in the mark but not on the canvas, and shows with the next save to
+ *   the same source;
  * - once whenever what the canvas kept is dropped, for the same reason;
  * - then a minute after the last check settled while the builder's tab is
  *   visible,
@@ -47,23 +49,6 @@ import {
 /** The longest the canvas goes without asking while its tab is visible. */
 export const SOURCE_CHECK_EVERY_MS = 60_000;
 
-/** The longest the first mark waits for the browser to be idle. */
-const FIRST_MARK_IDLE_MS = 1_000;
-
-/** Runs `run` when the browser is next idle; answers how to call it off. */
-function whenIdle(run: () => void): () => void {
-  if (
-    typeof requestIdleCallback === "function" &&
-    typeof cancelIdleCallback === "function"
-  ) {
-    const handle = requestIdleCallback(run, { timeout: FIRST_MARK_IDLE_MS });
-    const cancel = cancelIdleCallback;
-    return () => cancel(handle);
-  }
-  const handle = setTimeout(run, 0);
-  return () => clearTimeout(handle);
-}
-
 /** Ask the change check for the mark of the sources `ask` names. */
 export type AskSourcesMark = (
   ask: CanvasSourcesChangedRequest
@@ -84,14 +69,40 @@ async function askRoute(ask: CanvasSourcesChangedRequest): Promise<string> {
 }
 
 /**
+ * Runs `run` once the browser has drawn the next frame, so what the commit
+ * before it rendered is on screen first; answers how to call it off.
+ */
+function afterNextPaint(run: () => void): () => void {
+  if (typeof requestAnimationFrame !== "function") {
+    const handle = setTimeout(run, 0);
+    return () => clearTimeout(handle);
+  }
+  // The second frame's callback runs after the first frame painted.
+  let handle = requestAnimationFrame(() => {
+    handle = requestAnimationFrame(run);
+  });
+  return () => cancelAnimationFrame(handle);
+}
+
+/**
+ * Whether the canvas's first reads are in: its bindings answered for this
+ * ask and this person, or at once for a page that reads none.
+ */
+export function firstReadsInOf(request: unknown, bound: unknown): boolean {
+  return request === undefined || bound !== undefined;
+}
+
+/**
  * Keep the canvas's kept reads in step with saves made elsewhere, for the
  * sources `asked` names, as `userId`. Asks nothing for a page that reads no
  * source, or while the signed-in person is not known.
  *
  * `firstReadsIn` says the canvas's first reads have answered. A fresh open
- * takes its first mark only then, and when the browser is next idle, so the
- * builder draws without waiting on the check; it is taken with those reads
- * all the same, and a save made elsewhere after them is seen by the next ask.
+ * takes its first mark just after they are drawn, so the builder draws
+ * without waiting on the check. The mark is read a moment after the reads,
+ * so a save made elsewhere in that moment shows only with the next save to
+ * the same source. If the first reads never answer, the minute's ask takes
+ * the mark instead, so the check never stops.
  */
 export function useCanvasSourceCheck(
   asked: CanvasSourcesChangedRequest | undefined,
@@ -127,6 +138,8 @@ export function useCanvasSourceCheck(
     const check = async (whenHidden: boolean) => {
       if (cancelled || inFlight) return;
       if (!whenHidden && document.visibilityState === "hidden") return;
+      // Any ask takes a mark, so the open's own first mark is no longer owed.
+      opening.current = false;
       inFlight = true;
       clearTimeout(next);
       try {
@@ -175,6 +188,9 @@ export function useCanvasSourceCheck(
       canvasSourcesChanged();
     } else if (!opening.current) {
       void check(true);
+    } else {
+      // Should the first reads never answer, the minute's ask takes the mark.
+      next = setTimeout(() => void check(false), SOURCE_CHECK_EVERY_MS);
     }
     // On a fresh open the first mark waits for the first reads (below).
     takeFirstMark.current = () => void check(true);
@@ -191,11 +207,10 @@ export function useCanvasSourceCheck(
     };
   }, [key, ask]);
   // The first mark of a fresh open, once the canvas's first reads are in and
-  // the browser is next idle; after it, the answers coming in again ask
-  // nothing on their own.
+  // drawn; after it, the answers coming in again ask nothing on their own.
   useEffect(() => {
     if (key === "" || !firstReadsIn || !opening.current) return;
-    return whenIdle(() => {
+    return afterNextPaint(() => {
       if (!opening.current) return;
       opening.current = false;
       takeFirstMark.current?.();
