@@ -533,9 +533,9 @@ export interface PluginFieldTypeDocumentView extends PluginDocumentView {
   /** The field type, one of this plugin's own `contributes.fieldTypes`. */
   fieldType: string;
   /**
-   * @experimental `"mainField"`: open a collection's entries in this view when
-   * the collection's main field is of this view's field type, unless the
-   * collection says where its entries open (`admin.opensIn`). The main field
+   * @experimental `"mainField"`: open a collection's entries, or a Single, in
+   * this view when its main field is of this view's field type, unless it
+   * says where it opens (`admin.opensIn`). The main field
    * is the first top-level field, reading into unnamed groups as the form lays
    * them out, that is not hidden, not the title and not `slug`.
    *

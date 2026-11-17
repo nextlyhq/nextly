@@ -704,6 +704,27 @@ describe("leaving a page whose collection opens in the builder", () => {
   });
 });
 
+describe("leaving a Single that opens in the builder", () => {
+  beforeEach(() => {
+    // What the admin answers for a Homepage Single whose main field is a
+    // page layout: it opens here, and is found on the Content screen.
+    opensIn = {
+      opensIn: "builder",
+      list: { label: "content", address: "/admin/content" },
+    };
+  });
+
+  it("names the arrow Back to content and goes to the Content screen, with no Exit editor", () => {
+    render(<Host />);
+    act(() => edit?.(EDITED));
+    fireEvent.click(screen.getByRole("button", { name: "Back to content" }));
+
+    expect(navigateTo).toHaveBeenCalledWith("/admin/content");
+    expect(exit).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Exit editor" })).toBeNull();
+  });
+});
+
 describe("leaving a page whose collection opens as a form", () => {
   it("keeps the arrow going to the form, and Open as form in the menu", async () => {
     // The control for the case above: the same page, with its collection

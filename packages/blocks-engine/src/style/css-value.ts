@@ -58,3 +58,9 @@ export {
 } from "./css-value-check";
 export { checkDimensionValue } from "./css-value-dimensions";
 export { checkColorValue } from "./css-value-colors";
+export {
+  shadowIssue,
+  shadowLayerParts,
+  type ShadowPart,
+  type ShadowPartKind,
+} from "./css-value-shadow";

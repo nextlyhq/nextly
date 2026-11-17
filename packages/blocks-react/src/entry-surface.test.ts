@@ -268,7 +268,11 @@ const SOURCE_MODULES: ReadonlyArray<{
     // and so is `passageHeadings`, the walk the table-of-contents block lists
     // a passage's headings by. `VIEWS_DRAWING_CHILDREN` is exported for the
     // test that holds every view to what it declares it draws.
+    // `RichTextParagraphContent` draws the Text block's one paragraph inside
+    // the block's own `<p>`, with the same views; a passage is drawn whole
+    // with `RichText`.
     internal: [
+      "RichTextParagraphContent",
       "drawsInteractive",
       "holdsBlockContent",
       "holdsInteractive",

@@ -95,9 +95,25 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", async () => {
   >("@admin/hooks/useCurrentUserPermissions");
   return {
     ...actual,
-    useCurrentUserPermissions: () => ({ hasPermission: () => true }),
+    useCurrentUserPermissions: () => ({
+      hasPermission: () => true,
+      canAccessCollection: () => true,
+    }),
   };
 });
+// What the admin's "open this document" rule reads for each Single's link:
+// with no plugin's views published, every Single opens as its form.
+vi.mock("@admin/hooks/queries/useCollections", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  useEveryNavCollection: () => ({ data: [] }),
+}));
+vi.mock("@admin/hooks/queries/useSingles", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  useEverySingle: () => ({ data: [] }),
+}));
+vi.mock("@admin/hooks/useLocalization", () => ({
+  useLocalization: () => ({ defaultLocale: "en" }),
+}));
 vi.mock("@admin/components/ui/link", () => ({
   Link: ({
     href,

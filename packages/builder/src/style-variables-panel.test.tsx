@@ -613,7 +613,7 @@ describe("a held variable whose name another shares", () => {
 });
 
 describe("a spacing side holding a variable", () => {
-  it("names it, opens the list from the name, and clears it, with no separate ◇", () => {
+  it("names it in green, marks it among the popover's presets, and changes it there", () => {
     // Drawn as the box only where the element's axes are known.
     register({ spacing: true });
     const editor = editorFor({
@@ -643,25 +643,22 @@ describe("a spacing side holding a variable", () => {
       />
     );
     const padding = fieldsOf("padding");
-    expect(document.querySelector(".nx-spacing-box")).not.toBeNull();
-    // A side of the box is named by its place on screen.
-    const chip = padding.getByRole("group", { name: "Padding top" });
-    // The name is the way to choose another, as a colour's trigger is.
-    const choose = within(chip).getByRole("button", {
-      name: /^Variables for Padding .+: Sm$/,
-    });
-    // No ◇ beside it: the side has room for the name and its clear alone.
-    const side = chip.closest("[data-side]") as HTMLElement;
+    // A side of the box is named by its place on screen, then its value.
+    const side = padding.getByRole("button", { name: "Padding top Sm" });
+    expect(side.hasAttribute("data-bound")).toBe(true);
+    // No ◇ in the box: the side's popover is the way to choose another.
     expect(
-      within(side).queryByRole("button", { name: /^Variables for [^:]+$/ })
+      padding.queryByRole("button", { name: /^Variables for / })
     ).toBeNull();
-    fireEvent.click(choose);
-    fireEvent.click(screen.getByRole("option", { name: "Space 4 1rem" }));
+    fireEvent.click(side);
+    const presets = screen.getByRole("radiogroup", { name: "Presets" });
+    expect(
+      within(presets).getByRole("radio", { name: "Sm 8px" }).getAttribute(
+        "aria-checked"
+      )
+    ).toBe("true");
+    fireEvent.click(within(presets).getByRole("radio", { name: "Space 4 1rem" }));
     expect(written(editor)).toContain('{"$token":"space.4"}');
-    fireEvent.click(
-      within(chip).getByRole("button", { name: /^Clear Padding/ })
-    );
-    expect(editor.applyAll).toHaveBeenCalledTimes(2);
   });
 });
 

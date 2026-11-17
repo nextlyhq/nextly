@@ -17,6 +17,7 @@ import {
   checkColorValue,
   decodeIdentifier,
   isCssWideKeyword,
+  shadowIssue,
   unitCategory,
 } from "./css-value";
 
@@ -71,8 +72,9 @@ export function tokenKindExample(kind: TokenKind): string | undefined {
       return "a plain number, such as 1.5";
     case "fontWeight":
       return "a weight from 1 to 1000, such as 400, or normal or bold";
-    case "fontFamily":
     case "shadow":
+      return "a shadow, such as 0 2px 4px rgba(0, 0, 0, 0.2)";
+    case "fontFamily":
     case "custom":
       return undefined;
   }
@@ -135,9 +137,10 @@ export function checkTokenKind(
       ? "opens like a number and is not one, so it is not a colour"
       : "is not a number CSS can read";
   }
-  // A family is any text, a shadow is a list this does not parse, and
-  // `custom` exists precisely so a site can hold something with no rules:
-  // those kinds have no check.
+  // A shadow is a list, read by its own reader rather than as one value.
+  if (kind === "shadow") return shadowIssue(text);
+  // A family is any text, and `custom` exists precisely so a site can hold
+  // something with no rules: those kinds have no check.
   const check = KIND_CHECKS[kind];
   return check === undefined ? undefined : check(readingOf(text, measured));
 }

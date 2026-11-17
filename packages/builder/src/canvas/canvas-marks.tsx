@@ -44,6 +44,7 @@ import {
   nodeAddressOf,
   SELECTED_ATTRIBUTE,
 } from "./canvas";
+import { DEVICE_HIDDEN_ATTRIBUTE } from "./canvas-device-hidden";
 import { useCanvasFrame } from "./canvas-frame-context";
 import {
   OVERLAY_OUTPUT_ATTRIBUTE,
@@ -88,11 +89,22 @@ const OUTLINE_MARKS = [
   [DROP_REFUSED_ATTRIBUTE, "drop-refused"],
 ] as const;
 
-/** The outline-only marks an element asks for, drawn as `box`. */
+/**
+ * The marks drawn over an element's box alone that it asks for, drawn as
+ * `box`: its outline-only marks, and the stripes and tag of a block the page
+ * hides on the device shown. Those are drawn here, over the canvas, rather
+ * than by an overlay inside the block, which would need the block to hold it
+ * and so move what its fixed or absolutely placed blocks are laid out against.
+ */
 function outlineMarksOf(marked: Element, box: Omit<Mark, "kind">): Mark[] {
-  return OUTLINE_MARKS.filter(([attribute]) =>
+  const marks: Mark[] = OUTLINE_MARKS.filter(([attribute]) =>
     marked.hasAttribute(attribute)
   ).map(([, kind]) => ({ ...box, kind }));
+  const deviceTag = marked.getAttribute(DEVICE_HIDDEN_ATTRIBUTE);
+  if (deviceTag !== null) {
+    marks.push({ ...box, kind: "device-hidden", deviceTag });
+  }
+  return marks;
 }
 
 /** One box to draw, in the chrome's coordinates. */
@@ -104,6 +116,7 @@ interface Mark {
     | "look-reach"
     | "drop-parent"
     | "drop-refused"
+    | "device-hidden"
     | "at-rest";
   /** The rest of a multi-block selection, drawn thinner than the primary. */
   readonly secondary: boolean;
@@ -118,6 +131,8 @@ interface Mark {
   readonly editing?: boolean;
   /** Another exposed part of a placement while one of its parts is edited. */
   readonly dimmed?: boolean;
+  /** A block the page hides on the device shown: the tag its stripes carry. */
+  readonly deviceTag?: string;
   /**
    * A selected block the page hides on the device shown, drawn because it is
    * selected: hatched, and tagged as hidden.
@@ -280,6 +295,7 @@ function markKey(mark: Mark): string {
     tabsAt,
     atRestSelected,
     radius,
+    deviceTag,
     rect,
   } = mark;
   return JSON.stringify([
@@ -306,6 +322,9 @@ function markKey(mark: Mark): string {
     tabsAt,
     atRestSelected === true,
     radius,
+    // The tag a hidden block's stripes carry, which a renamed device or
+    // another device of the same size changes while its box stays put.
+    deviceTag,
     rect.x,
     rect.y,
     rect.width,
@@ -708,7 +727,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): Measured {
   const copies = new Map<Element | null, number>();
   root
     .querySelectorAll(
-      `[${SELECTED_ATTRIBUTE}], [${EXPOSED_ATTRIBUTE}], [${LOOK_REACH_ATTRIBUTE}], [${DROP_PARENT_ATTRIBUTE}], [${DROP_REFUSED_ATTRIBUTE}]`
+      `[${SELECTED_ATTRIBUTE}], [${EXPOSED_ATTRIBUTE}], [${LOOK_REACH_ATTRIBUTE}], [${DROP_PARENT_ATTRIBUTE}], [${DROP_REFUSED_ATTRIBUTE}], [${DEVICE_HIDDEN_ATTRIBUTE}]`
     )
     .forEach(marked => {
       // A canvas rendered inside a block of this one marks its own elements.
@@ -771,7 +790,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): Measured {
   });
   return {
     root,
-    marks: dimmedBesideEditing(found),
+    marks: dimmedBesideEditing(stripesFirst(found)),
     hoveredFor: inputs.hovered,
     hovered: hoveredMarksOf(root, space, onScreen, inputs.hovered),
     atRest: atRestMarks(root, space, onScreen, toolbarAbove, inputs.shownLabel),
@@ -1167,6 +1186,16 @@ function editingAttributes(mark: Mark): Record<string, string> {
 }
 
 /**
+ * The stripes over hidden blocks first, so every other mark, a ring on a block
+ * inside a hidden section among them, is drawn over them rather than under.
+ */
+function stripesFirst(marks: Mark[]): Mark[] {
+  const stripes = marks.filter(mark => mark.kind === "device-hidden");
+  if (stripes.length === 0) return marks;
+  return [...stripes, ...marks.filter(mark => mark.kind !== "device-hidden")];
+}
+
+/**
  * The marks with every other exposed part dimmed while one is being edited,
  * so the passage the caret is in is the one that stands out.
  */
@@ -1354,6 +1383,7 @@ export function CanvasMarks({
           data-locked={mark.locked ? "" : undefined}
           {...editingAttributes(mark)}
           data-hidden={mark.hidden ? "" : undefined}
+          data-device-tag={mark.deviceTag}
           // The tag a hidden block's ring carries, drawn by the stylesheet
           // from this attribute; the layer is hidden from assistive
           // technology, and Layers and the inspector say it in words.
