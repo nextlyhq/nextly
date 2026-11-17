@@ -923,10 +923,13 @@ function blockStyleMarkIssues(entry: NamedClass, index: number): string[] {
  * whether it is the block's own style stay as the code states them, so a
  * block style is only ever renamed where its name is written.
  *
- * Only what the override states is compared. One that leaves a field out
- * takes the code's when the tiers merge, so it renames nothing; an edit of
- * a built-in's styles is stored that way, and an export carried into a site
- * with the same built-ins must be taken back in.
+ * The name alone may be left out, as an edit of a built-in's styles and an
+ * export taken back into a site with the same built-ins store it: it only
+ * names the style, and the merge gives it the code's. The slug, the block
+ * type and the own-style mark decide what the entry IS (whether it claims
+ * a slug, whether it may carry ★), and every reader of the stored row reads
+ * them, many without the code's defaults; so they are stated, as the code
+ * states them.
  */
 function builtInRenameIssues(
   entry: NamedClass,
@@ -936,7 +939,9 @@ function builtInRenameIssues(
   const code = policy.defaults?.classes?.find(each => each.id === entry.id);
   if (code === undefined || !isLook(code)) return [];
   const same = BUILT_IN_NAME_FIELDS.every(
-    field => entry[field] === undefined || entry[field] === code[field]
+    field =>
+      entry[field] === code[field] ||
+      (field === "label" && entry.label === undefined)
   );
   return same
     ? []

@@ -104,6 +104,7 @@ describe("marks on an override that leaves the built-in's name fields out", () =
         {
           id: outline.id,
           slug: outline.slug,
+          blockType: outline.blockType,
           orderIndex: 1,
           styles: outline.styles,
           starred: true,
@@ -130,63 +131,48 @@ describe("a built-in block style's name", () => {
     expect(issuesOf([{ ...ghost, label: "Ghost outline" }])).toEqual([]);
   });
 
-  it("is not renamed by an override that leaves it out: the code's name holds", () => {
-    // An override stores what the site changed. Its name, slug, block type
-    // and own-style mark come from the code when the tiers merge, so one
-    // that omits them, as an edit of the image's own style does, renames
-    // nothing.
+  it("is not renamed by an override that leaves its name out: the code's name holds", () => {
+    // As the image's own style is stored when only its styles change: its
+    // slug, block type and own-style mark stated, its name left to the code.
     const square = builtIn("look:core/image:square");
     const styles = { base: { base: { color: "#123456" } } };
-    // As the image's own style is stored when only its styles change.
-    expect(
-      issuesOf([{ id: square.id, slug: square.slug, orderIndex: 2, styles }])
-    ).toEqual([]);
-    // Its block type and own-style mark stated as the code states them.
-    expect(
-      issuesOf([
-        {
-          id: square.id,
-          slug: square.slug,
-          blockType: square.blockType,
-          isDefault: true,
-          orderIndex: 2,
-          styles,
-        },
-      ])
-    ).toEqual([]);
-    // And it stays the image's own style, named as the code names it, once
-    // merged: the fields it leaves out are the code's.
+    const edit = {
+      id: square.id,
+      slug: square.slug,
+      blockType: square.blockType,
+      isDefault: true,
+      orderIndex: 2,
+      styles,
+    };
+    expect(issuesOf([edit])).toEqual([]);
+    // And it stays the image's own style, named as the code names it.
     const merged = resolveSiteStyle(policy.defaults, {
-      classes: [{ id: square.id, slug: square.slug, orderIndex: 2, styles }],
+      classes: [edit],
     }).classes?.find(entry => entry.id === square.id);
     expect(merged).toMatchObject({
       label: square.label,
-      slug: square.slug,
       blockType: square.blockType,
       isDefault: true,
       styles,
     });
-    // Stated and different, it is still a rename, and refused.
+  });
+
+  it("refuses an override that leaves out what the entry is, or states it differently", () => {
+    // Its own-style mark or block type left out, a reader without the code's
+    // defaults would take it for a shared style: they are stated.
+    const square = builtIn("look:core/image:square");
+    const styles = { base: { base: { color: "#123456" } } };
+    const base = { id: square.id, slug: square.slug, orderIndex: 2, styles };
+    expect(issuesOf([base])).not.toEqual([]);
     expect(
-      issuesOf([
-        {
-          id: square.id,
-          slug: square.slug,
-          label: "Box",
-          orderIndex: 2,
-          styles,
-        },
-      ])
+      issuesOf([{ ...base, blockType: square.blockType }])
+    ).not.toEqual([]);
+    expect(
+      issuesOf([{ ...base, blockType: square.blockType, isDefault: false }])
     ).not.toEqual([]);
     expect(
       issuesOf([
-        {
-          id: square.id,
-          slug: square.slug,
-          isDefault: false,
-          orderIndex: 2,
-          styles,
-        },
+        { ...base, blockType: square.blockType, isDefault: true, label: "Box" },
       ])
     ).not.toEqual([]);
   });
