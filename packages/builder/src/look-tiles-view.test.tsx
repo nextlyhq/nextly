@@ -238,6 +238,36 @@ describe("the Block style section", () => {
   });
 });
 
+/** Whether the Style tab's section headed `label` is open. */
+function sectionOpen(tab: HTMLElement, label: string): boolean {
+  const heading = [
+    ...tab.querySelectorAll(".nx-style-inspector__section-label"),
+  ].find(each => each.firstChild?.textContent === label);
+  const section = heading?.closest("[data-section]");
+  if (section === null || section === undefined) {
+    throw new Error(`no ${label} section`);
+  }
+  return section.getAttribute("data-state") === "open";
+}
+
+describe("which section opens first", () => {
+  // With nothing remembered, only the tab's first section opens for being
+  // first: Block style, where it is drawn, and not the first under the bar.
+  it("opens Block style and leaves Layout closed on a Section", () => {
+    const tab = mountStyle(nodeOf("core/section"));
+    expect(headings(tab).slice(0, 2)).toEqual(["Block style", "Layout"]);
+    expect(sectionOpen(tab, "Block style")).toBe(true);
+    expect(sectionOpen(tab, "Layout")).toBe(false);
+  });
+
+  it("opens the first section under the bar where no Block style is drawn", () => {
+    const tab = mountStyle(nodeOf("core/heading"));
+    const first = headings(tab)[0];
+    expect(first).not.toBe("Block style");
+    expect(sectionOpen(tab, first ?? "")).toBe(true);
+  });
+});
+
 describe("a block style the block can't take", () => {
   it("says why in plain words, without naming classes", () => {
     const raise = vi.fn();

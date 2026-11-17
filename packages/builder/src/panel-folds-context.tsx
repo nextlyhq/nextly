@@ -10,16 +10,16 @@
 import * as React from "react";
 
 import {
+  sectionOpens,
+  withSectionFold,
+  type SectionFolds,
+} from "./panel-folds";
+import {
   sectionShown,
   useSearchFolds,
   useSettingsMatch,
   type SearchFold,
 } from "./settings-filter";
-import {
-  sectionOpens,
-  withSectionFold,
-  type SectionFolds,
-} from "./panel-folds";
 
 /** The folds and the way to change them. */
 export interface PanelFolds {
@@ -66,6 +66,14 @@ export function PanelFoldsProvider({
   );
 }
 
+/**
+ * Whether a section drawn above this list is the tab's first, as the Style
+ * tab's Block style is above the editing bar: the list's own first section
+ * then opens only when it holds a value, so the tab opens on one section.
+ */
+export const FirstSectionAbove: React.Context<boolean> =
+  React.createContext(false);
+
 /** One section of a tab, as its folding needs to know it. */
 export interface FoldedSection {
   /** What the accordion knows the section by. */
@@ -88,6 +96,7 @@ export function useTabFolds(
 } {
   const { folds, change } = usePanelFolds();
   const match = useSettingsMatch();
+  const firstAbove = React.useContext(FirstSectionAbove);
   // While the panel is filtered, the sections holding a match open on their
   // own, and what the author opens or closes then is kept for that search
   // alone: the folds they left come back as they were once it is cleared.
@@ -114,7 +123,7 @@ export function useTabFolds(
     .filter((section, index) =>
       sectionOpens(folds, tab, section.label, {
         holdsValue: section.holdsValue,
-        first: index === 0,
+        first: index === 0 && !firstAbove,
       })
     )
     .map(section => section.key);

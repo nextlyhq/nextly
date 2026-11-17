@@ -123,6 +123,31 @@ function lookOp(nodeId: string, next: readonly string[]) {
       };
 }
 
+/**
+ * The selected block, the block style it wears and the tiles its type offers,
+ * or nothing where no Block style section is drawn: no block, no library yet,
+ * or a type without block styles. One reading for the section and for the
+ * Style tab, which tells the sections under the bar that one came first.
+ */
+export function blockStyleTilesOf(
+  editor: EditorState,
+  library: readonly NamedClass[] | undefined
+):
+  | {
+      readonly node: NonNullable<ReturnType<typeof findNode>>;
+      readonly worn: string | null;
+      readonly tiles: readonly LookTile[];
+    }
+  | undefined {
+  const nodeId = editor.selectedId;
+  const node =
+    nodeId === null ? undefined : findNode(editor.document.nodes, nodeId);
+  if (node === undefined || library === undefined) return undefined;
+  const worn = wornLook(node.classes, looksOfType(library, node.type));
+  const tiles = lookTiles(library, node.type, ownLookName(node.type), worn);
+  return tiles.length === 0 ? undefined : { node, worn, tiles };
+}
+
 export function LookTiles({
   editor,
   library,
@@ -132,20 +157,9 @@ export function LookTiles({
   onRefused,
   onEditBlockStyles,
 }: LookTilesProps): React.JSX.Element | null {
-  const nodeId = editor.selectedId;
-  const node =
-    nodeId === null ? undefined : findNode(editor.document.nodes, nodeId);
-  const worn =
-    node === undefined || library === undefined
-      ? null
-      : wornLook(node.classes, looksOfType(library, node.type));
-  const tiles =
-    node === undefined || library === undefined
-      ? []
-      : lookTiles(library, node.type, ownLookName(node.type), worn);
-  if (node === undefined || library === undefined || tiles.length === 0) {
-    return null;
-  }
+  const offered = blockStyleTilesOf(editor, library);
+  if (offered === undefined || library === undefined) return null;
+  const { node, worn, tiles } = offered;
   // Every look of the type comes off when another is chosen, those the
   // library no longer offers included, so none is left to return later.
   const removable = boundLooksOf(library, node.type);
