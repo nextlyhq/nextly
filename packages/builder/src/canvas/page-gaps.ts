@@ -28,6 +28,7 @@ import type { Rect } from "../geometry";
 import { outermostElementsOf } from "./canvas-addressing";
 import {
   canvasContentRect,
+  clippedByAncestorRect,
   drawnBoxes,
   type OverlaySpace,
 } from "./geometry-dom";
@@ -211,10 +212,23 @@ function childGaps(
     gapsAlong(
       drawnOf(
         space,
-        children.map(child => child.id)
+        children
+          .map(child => child.id)
+          .filter(id => !clippedFromSight(space.root, id))
       )
     )
   );
+}
+
+/**
+ * Whether something the block is drawn inside cuts it: a fixed-height
+ * container with its overflow hidden or scrolled. The "+" is drawn in the
+ * chrome above the page, outside that clip, so a gap beside a child cut out
+ * of sight would float over whatever the page shows there instead.
+ */
+function clippedFromSight(root: HTMLElement, id: string): boolean {
+  const elements = outermostElementsOf(root, new Set([id])).get(id) ?? [];
+  return elements.some(element => clippedByAncestorRect(element, root));
 }
 
 /**

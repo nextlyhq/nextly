@@ -650,6 +650,34 @@ describe("the + between the selected block's children", () => {
     }
   });
 
+  it("offers no gap beside a child the selected block clips out of sight", async () => {
+    // Pricing is cut to its first 100px: Box B and Box C, stacked under Box
+    // A, are drawn outside it, and a "+" between them would float over the
+    // next section.
+    BOXES.pricing = [0, 100, 1000, 100];
+    BOXES["box-a"] = [0, 100, 1000, 100];
+    BOXES["box-b"] = [0, 200, 1000, 100];
+    BOXES["box-c"] = [0, 300, 1000, 100];
+    try {
+      mount(ROW, { selectedId: "pricing" });
+      await act(async () => undefined);
+      const pricing = document.querySelector<HTMLElement>(
+        '[data-nx-node="pricing"]'
+      );
+      if (pricing === null) throw new Error("no pricing");
+      pricing.style.overflow = "hidden";
+      pricing.append(document.createElement("span"));
+      await act(async () => undefined);
+      expect(gapNames()).not.toContain("Add a block between Box A and Box B");
+      expect(gapNames()).not.toContain("Add a block between Box B and Box C");
+    } finally {
+      BOXES.pricing = [0, 100, 1000, 200];
+      BOXES["box-a"] = [0, 120, 300, 160];
+      BOXES["box-b"] = [350, 120, 300, 160];
+      BOXES["box-c"] = [700, 120, 300, 160];
+    }
+  });
+
   it("offers no children's gaps with nothing selected", async () => {
     mount(ROW);
     await act(async () => undefined);
