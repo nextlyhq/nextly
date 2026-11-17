@@ -42,6 +42,14 @@ export const BINDINGS_TO_FIX_CARD_COMPONENT =
 export const ENTRY_DESIGN_SECTION_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#EntryDesignSection";
 
+/**
+ * "Shown on (from the builder)", a section of every Single's side panel,
+ * declared at the `single.edit` place: where the builder shows the Single's
+ * values. Here, beside the others, for the same reason.
+ */
+export const SINGLE_SHOWN_ON_SECTION_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#ShownOnSection";
+
 /** The "Own designs" section of a template's document panel. */
 export const TEMPLATE_OWN_DESIGNS_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#TemplateOwnDesigns";

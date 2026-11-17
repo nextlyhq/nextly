@@ -107,8 +107,12 @@ interface StyleLeafBase {
 
 /** One declaration a keyword writes beside its own, under a fixed descendant. */
 export interface KeywordExpansion {
-  /** The descendant selector it attaches to, as {@link StyleLeafBase.descendant}. */
-  readonly descendant: string;
+  /**
+   * The descendant selector it attaches to, as {@link StyleLeafBase.descendant},
+   * or none for the block's own element: an entrance animation's longhands sit
+   * on the block it moves.
+   */
+  readonly descendant?: string;
   readonly property: string;
   readonly value: string;
 }

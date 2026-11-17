@@ -120,6 +120,15 @@ import type { Logger } from "../../../shared/types";
 import { editsOver } from "../../audit/lifecycle-fields";
 import { willRecordSingleActivity } from "../../audit/record-activity";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
+import { publishCallerOf } from "../../collections/services/publish-gate";
+import {
+  judgeStatusSave,
+  refuseStatusSaveEarly,
+  sharedDraftPendingOn,
+  type StatusSave,
+  WITHOUT_REVIEW_KEY,
+  withoutReviewOfBody,
+} from "../../collections/services/save-door-gate";
 import * as storedFieldRead from "../../collections/services/stored-field-read";
 import {
   recordSaveEvent,
@@ -186,6 +195,7 @@ import {
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
+  type CompanionReadiness,
   companionFoundMissing,
   companionNotReadyMessage,
   resolveCompanionReadiness,
@@ -196,6 +206,7 @@ import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
 import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { NO_PART, partOfRewrittenField } from "../../versions/changed-parts";
+import type { VersionsDbApi } from "../../versions/db-api";
 import {
   bumpDocumentRevision,
   documentVersionOn,
@@ -761,6 +772,103 @@ export class SingleMutationService extends BaseService {
       dialect: this.adapter.dialect,
       status: publishesPerLanguage(singleMeta),
     });
+  }
+
+  /**
+   * The publish gate's view of a save of this Single that names a lifecycle status, or null where
+   * it names none or the Single has no lifecycle. Which parts it moves follows from its status and
+   * language, as a collection entry's save does: one language, with the shared part where that
+   * language is the default; every language and the shared part for a save to every language.
+   */
+  private statusSaveOf(
+    singleMeta: DynamicSingleRecord,
+    entryId: string,
+    save: {
+      status: unknown;
+      locale: string | undefined;
+      everyLanguage: boolean;
+      withoutReview: { reason: string } | undefined;
+      /** Whether a pending shared draft goes live with the language this save publishes. */
+      sharedDraftPending: boolean;
+      options: UpdateSingleOptions;
+    }
+  ): StatusSave | null {
+    if (!isLifecycleStatus(save.status)) return null;
+    if ((singleMeta as { status?: boolean }).status !== true) return null;
+    return {
+      scope: { kind: "single", slug: singleMeta.slug },
+      entryId,
+      status: save.status,
+      locale: save.locale,
+      everyLanguage: save.everyLanguage,
+      // Its languages move one by one only where each keeps a status of its own; otherwise the
+      // Single publishes as one document, its shared part.
+      translated: this.translationsOf(singleMeta)?.hasStatus === true,
+      configured: (this.localization?.locales ?? []).map(l => l.code),
+      defaultLocale: this.localization?.defaultLocale,
+      caller: publishCallerOf(save.options),
+      ...(save.options.actor === undefined
+        ? {}
+        : { actor: save.options.actor }),
+      ...(save.withoutReview === undefined
+        ? {}
+        : { withoutReview: save.withoutReview }),
+      sharedDraftPending: save.sharedDraftPending,
+    };
+  }
+
+  /**
+   * Whether a save that publishes this Single also puts a pending shared draft live: only where
+   * its languages keep a status of their own and its parts are kept apart, read on `reader`.
+   */
+  private async publishedSaveCarriesSharedDraft(
+    reader: VersionsDbApi,
+    singleMeta: DynamicSingleRecord,
+    entryId: string,
+    status: unknown
+  ): Promise<boolean> {
+    if (status !== "published" || !draftsKeptByPart()) return false;
+    if (this.translationsOf(singleMeta)?.hasStatus !== true) return false;
+    return sharedDraftPendingOn(reader, {
+      scopeKind: "single",
+      scopeSlug: singleMeta.slug,
+      entryId,
+    });
+  }
+
+  /**
+   * What of the Single is live, as `reader` reads it: each language whose own status is
+   * published, and whether its own status (the shared part) is. Told to the publish gate as the
+   * parts live before a save: on the pool for its early answer, on the save's transaction under
+   * the row lock for its verdict.
+   */
+  private async livePartsOn(
+    reader: Pick<TransactionContext, "getDrizzle">,
+    args: {
+      /** The translations, where their table is there to read; null otherwise. */
+      companion: CompanionSchema | null;
+      readiness: CompanionReadiness | undefined;
+      entryId: string;
+      mainStatus: unknown;
+    }
+  ): Promise<{ languages: string[]; shared: boolean }> {
+    const statuses =
+      args.companion?.hasStatus === true
+        ? await readCompanionLocaleStatusAll(
+            reader.getDrizzle<
+              Parameters<typeof readCompanionLocaleStatusAll>[0]
+            >(),
+            args.companion.table,
+            args.entryId,
+            args.readiness
+          )
+        : new Map<string, string | null>();
+    return {
+      languages: [...statuses]
+        .filter(([, status]) => status === "published")
+        .map(([locale]) => locale),
+      shared: args.mainStatus === "published",
+    };
   }
 
   /**
@@ -2235,12 +2343,17 @@ export class SingleMutationService extends BaseService {
     // with the version below: as server code stated them, or as the body's
     // `_restoredFrom` names them. Malformed, it is refused as a version is.
     let restoredFrom: FieldSources | undefined;
+    // A publish made without review, and why, read off the body here: the publish gate is told
+    // it, and it is never stored, so it is dropped with the version below. Malformed, it is
+    // refused as a version is.
+    let withoutReview: { reason: string } | undefined;
     let provenanceClaims: ProvenanceClaims | undefined;
     try {
       versionCheck = versionCheckFor(data, {
         exempt: releaseRunExemptFor({ scopeKind: "single", scopeSlug: slug }),
       });
       restoredFrom = rawOptions.restoredFrom ?? restoredFromOf(data);
+      withoutReview = withoutReviewOfBody(data);
       // What the save claims about where its translated values came from,
       // read before the key is dropped with the version below.
       provenanceClaims = provenanceClaimsOf(data);
@@ -2264,6 +2377,9 @@ export class SingleMutationService extends BaseService {
     // read, and the gate a write asks and the write itself must read the same
     // body.
     data = { ...data };
+    // Said beside the values, never one of them: taken off before the save to every language
+    // judges what its body names, and before any hook or gate reads it.
+    delete data[WITHOUT_REVIEW_KEY];
     const sweepAllLocales = rawOptions.locale === EVERY_LOCALE;
     const withSources: UpdateSingleOptions = restoredFrom
       ? { ...rawOptions, restoredFrom }
@@ -2502,6 +2618,16 @@ export class SingleMutationService extends BaseService {
         companion && this.localization
           ? resolveRequestedLocale(this.localization, options.locale)
           : undefined;
+      // The translations table this save reads and writes, named as soon as it is known: a table
+      // dropped after its `ready` verdict was remembered is then answered as not ready wherever the
+      // save first meets it, the publish gate's read of what is live before any hook included.
+      // `companion` is null when the Single isn't localized, so no table is named for it.
+      if (companion) {
+        translations = {
+          table: companion.companionTableName,
+          locale: writeLocale,
+        };
+      }
       // Probe the companion `_locales` table's existence on the POOLED adapter
       // BEFORE the write transaction opens. Two reasons it must be here and not
       // inside the transaction: with a single-connection pool the transaction
@@ -2625,6 +2751,35 @@ export class SingleMutationService extends BaseService {
         });
         if ("refusal" in answer) return answer.refusal;
         askedBeforeHooks = answer.asked;
+      }
+
+      // A save that names a status changes what readers see, so the publish gate is asked of it
+      // as a publish of chosen parts is: its early answer here, after the access the save owes and
+      // before any hook runs, and its verdict under the row lock below. A part held back refuses
+      // the save, and nothing is written.
+      const earlySave = this.statusSaveOf(singleMeta, existingDoc.id, {
+        status: data.status,
+        locale: options.locale,
+        everyLanguage: sweepAllLocales,
+        withoutReview,
+        sharedDraftPending: await this.publishedSaveCarriesSharedDraft(
+          this.adapter,
+          singleMeta,
+          existingDoc.id,
+          data.status
+        ),
+        options,
+      });
+      if (earlySave) {
+        await refuseStatusSaveEarly(
+          earlySave,
+          await this.livePartsOn(this.adapter, {
+            companion: companionPhysicallyExists ? companion : null,
+            readiness: companionReadiness,
+            entryId: existingDoc.id,
+            mainStatus: (existingDoc as { status?: unknown }).status,
+          })
+        );
       }
 
       // 3. Build shared context for hooks (seed with caller-provided context)
@@ -2753,16 +2908,6 @@ export class SingleMutationService extends BaseService {
         user: options.user,
       });
 
-      // i18n: build the companion schema + write-locale context up front so validation is
-      // language-aware and the split/upsert below reuse it. `companion` is null when the single
-      // isn't localized (unchanged path) — gate on THIS single's `localized` flag so a
-      // non-localized single in a localized app doesn't route to a companion never created.
-      if (companion) {
-        translations = {
-          table: companion.companionTableName,
-          locale: writeLocale,
-        };
-      }
       // The locale this write's content belongs to. `writeLocale` covers the
       // Single's own translations; when it has none, embedded components may
       // still be localized. Those were written at the requested locale, or at
@@ -3517,6 +3662,43 @@ export class SingleMutationService extends BaseService {
           // captured main row stays the true main-table state.
           const preRowMainStatus =
             typeof preRow?.status === "string" ? preRow.status : undefined;
+          // The publish gate's verdict on a save that names a status, on this transaction now the
+          // Single's row is locked: judged on the status its hooks left, of what is live as this
+          // lock reads it. A part held back refuses the save before anything is written; what the
+          // verdict started is settled once the save is written, below.
+          const lockedSave = this.statusSaveOf(singleMeta, existingDoc.id, {
+            status: finalStatus,
+            locale: options.locale,
+            everyLanguage: sweepAllLocales,
+            withoutReview,
+            sharedDraftPending: await this.publishedSaveCarriesSharedDraft(
+              tx,
+              singleMeta,
+              existingDoc.id,
+              finalStatus
+            ),
+            options,
+          });
+          const settleGate = lockedSave
+            ? await judgeStatusSave(
+                tx,
+                lockedSave,
+                await this.livePartsOn(tx, {
+                  companion:
+                    companion && companionPhysicallyExists ? companion : null,
+                  // Read, not resolved: a query against a missing relation on this transaction
+                  // would abort it on PostgreSQL.
+                  readiness: companion
+                    ? cachedCompanionReadiness(
+                        this.adapter,
+                        companion.companionTableName
+                      )
+                    : undefined,
+                  entryId: existingDoc.id,
+                  mainStatus: preRowMainStatus,
+                })
+              )
+            : undefined;
 
           // The first time this single becomes public, recorded on the row that is about to be
           // written so it commits with the status it describes.
@@ -3948,7 +4130,16 @@ export class SingleMutationService extends BaseService {
                 componentSlug =>
                   singleComponentSchemas?.get(componentSlug)?.fields
               );
-              mainPayload = promoted.main;
+              // The split passes the save's own values through the strip a client's values
+              // pass, which takes `updated_at` off as a column no client writes; this save's
+              // stamp is put back, as the save writes it when nothing is pending. Without it a
+              // change of translated values alone, in a language other than the default, leaves
+              // the Single's row no value to set, and the database refuses the empty update.
+              const promotedMain: Record<string, unknown> = {
+                ...promoted.main,
+                updated_at: updatePayload.updated_at,
+              };
+              mainPayload = promotedMain;
               companionData = promoted.companion;
               // The draft's component values, with the publish's own over
               // them, are written by the component save below, without the
@@ -5808,6 +5999,11 @@ export class SingleMutationService extends BaseService {
             user: options.user,
             context: sharedContext,
           });
+
+          // What the gate's verdict started is finished on this transaction, now the save is
+          // written and before it commits; a gate that finds what it judged has changed throws,
+          // and the save rolls back.
+          if (settleGate) await settleGate();
 
           return rows;
         }, versionConflictRetries());

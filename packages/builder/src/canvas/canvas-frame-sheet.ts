@@ -24,6 +24,8 @@
  */
 
 import {
+  APPEAR_LOAD_GATE,
+  APPEAR_SCROLL_GATE,
   DEFAULT_TOKEN_PREFIX,
   tokenCustomProperty,
 } from "@nextlyhq/blocks-engine";
@@ -169,6 +171,15 @@ ${BLANK} ${ROOT} > .nx-pb-page {
 }
 :where(${BLANK} ${ROOT}[data-nx-site-ground-opaque] > .nx-pb-page) {
   background-color: var(--nx-canvas-site-ground, Canvas);
+}
+
+/* Every block in its final state: an animation set to play when it appears
+   never plays here, whichever start it has, so nothing on the canvas waits
+   hidden for a scroll or a load while it is being edited. Both of the page's
+   gates closed, on every page root in the frame. */
+${ROOT} .nx-pb-page {
+  ${APPEAR_SCROLL_GATE}: none;
+  ${APPEAR_LOAD_GATE}: none;
 }
 
 /* The site's own layout around the canvas, on a page the site serves: there

@@ -571,6 +571,13 @@ function classParts(entry: unknown, reading: Reading): unknown {
     ...(entry.isDefault === undefined
       ? []
       : [["own-look", structural(entry.isDefault, reading)]]),
+    // The ★ mark writes the look again for its type's blocks that wear no
+    // look, so moving it moves the stamp: a page saved before the move is
+    // compiled again rather than served with the old default. Spread, so
+    // every class without it stamps as before.
+    ...(entry.starred === undefined
+      ? []
+      : [["starred", structural(entry.starred, reading)]]),
   ] as unknown;
 }
 

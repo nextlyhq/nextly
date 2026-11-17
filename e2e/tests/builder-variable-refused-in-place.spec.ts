@@ -17,6 +17,7 @@ import { block, openEditorWith, pressSave } from "./canvas/editor-driver";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 import { countEveryPage } from "./support/usage-count";
+import { includingHidden } from "./support/visible";
 
 test.describe.configure({ lock: [LOCK.homepage, LOCK.siteStyle] });
 
@@ -96,12 +97,15 @@ test("a value the save would refuse is refused in its field, and the page still 
       )
     ).toBeVisible();
     await expect(light).toHaveAttribute("aria-invalid", "true");
-    // A bare number becomes a length: the number in the field, its unit in
-    // the menu beside it.
+    // A bare number becomes a length: the number, in pixels by its unit menu.
     await light.fill("20");
     await light.press("Enter");
     await expect(light).toHaveValue("20");
-    await expect(editor.getByLabel("Unit for Light")).toHaveText("px");
+    await expect(editor.getByLabel("Unit for Light")).toContainText("px");
+    // The menu shows px by default, so what was written is what proves it.
+    await expect
+      .poll(() => sent.some(body => body.includes('"20px"')))
+      .toBe(true);
     await expect(light).not.toHaveAttribute("aria-invalid", "true");
     await page.keyboard.press("Escape");
     await expect(editor).toBeHidden();
@@ -123,7 +127,9 @@ test("a value the save would refuse is refused in its field, and the page still 
     await pressSave(page);
     expect((await saved).ok()).toBe(true);
     await expect(
-      page.getByText(/wasn't saved, so this page wasn't either/)
+      includingHidden(page).getByText(
+        /wasn't saved, so this page wasn't either/
+      )
     ).toHaveCount(0);
   } finally {
     await writeTokens(page, before);
