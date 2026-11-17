@@ -80,8 +80,7 @@ export function pluginServices(
     // And its named queries, for a route whose copy of the page builder
     // never started (`namedQueriesOf`).
     [SITE_NAMED_QUERIES_SERVICE.service]: () => ({
-      definitionOf: (name: string) =>
-        def.state.namedQueries.definitionOf(name),
+      definitionOf: (name: string) => def.state.namedQueries.definitionOf(name),
     }),
     // The index-wide facts behind "used on N pages", bound to the
     // installation. Offered as a service because answering needs the
