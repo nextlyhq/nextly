@@ -77,6 +77,8 @@ const answer = (patch: Partial<ShownOnAnswer>): ShownOnAnswer => ({
   places: [],
   more: 0,
   hidden: 0,
+  unchecked: 0,
+  floor: false,
   ...patch,
 });
 
@@ -177,6 +179,33 @@ describe("ShownOnSection", () => {
     onSingle();
     expect(screen.queryByText(WORDS.none)).toBeNull();
     expect(screen.getByText("and 2 you can't open")).toBeTruthy();
+  });
+
+  it("says how many places are in drafts it didn't check, apart from those hidden", () => {
+    answers.first = answer({ unchecked: 5 });
+    onSingle();
+    expect(screen.getByText("and 5 in unpublished drafts")).toBeTruthy();
+    expect(screen.queryByText(/you can't open/)).toBeNull();
+    expect(screen.queryByText(WORDS.none)).toBeNull();
+  });
+
+  it("says its counts are at least those where the read reached its bound", () => {
+    const ten = Array.from({ length: 10 }, (_, index) =>
+      place(`p${String(index)}`, `Page ${String(index)}`, "Heading")
+    );
+    answers.first = answer({ places: ten, more: 4, hidden: 2, floor: true });
+    onSingle();
+    expect(
+      screen.getByRole("button", { name: "and at least 4 more" })
+    ).toBeTruthy();
+    expect(screen.getByText("and at least 2 you can't open")).toBeTruthy();
+    cleanup();
+    answers.first = answer({
+      places: ten.slice(0, 3),
+      floor: true,
+    });
+    onSingle();
+    expect(screen.getByText("and maybe more")).toBeTruthy();
   });
 
   it("says a place only in another language without a link", () => {

@@ -58,4 +58,15 @@ export interface ShownOnAnswer {
   readonly more: number;
   /** How many places are in documents the reader may not open: a number only. */
   readonly hidden: number;
+  /**
+   * How many places, found only in working drafts of documents the reader
+   * may read, this answer didn't check they may open: past the reads one
+   * answer makes. Neither listed nor in `hidden`.
+   */
+  readonly unchecked: number;
+  /**
+   * Whether the read of the index stopped at its bound, so the counts, and
+   * the full list, are of the places it reached: "at least".
+   */
+  readonly floor: boolean;
 }

@@ -206,6 +206,8 @@ export function builderStartupRoute(parts: readonly PluginRoute[]): {
       );
       const answer: BuilderStartupResponse = {
         reads: Object.fromEntries(reads.map((read, at) => [read, answers[at]])),
+        // Whom these were read for, so the editor hands them to no one else.
+        readFor: ctx.user?.id ?? null,
       };
       return respondDoc(answer);
     },
