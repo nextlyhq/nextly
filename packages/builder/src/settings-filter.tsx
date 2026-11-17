@@ -134,7 +134,7 @@ export const SettingTabContext: React.Context<SettingTab | undefined> =
   React.createContext<SettingTab | undefined>(undefined);
 
 /** Whether any of a row's settings is kept on its tab. */
-export function useSettingShown(
+function useSettingShown(
   ids: readonly string[],
   tab?: SettingTab
 ): boolean {
@@ -282,7 +282,9 @@ export function SettingsSearchRow({
       >
         Only changed
       </button>
-      <p className="nx-sr-only" role="status" aria-live="polite">
+      {/* Polite, and a live region of its own rather than a status: the
+          panel's other status lines say what one control is doing. */}
+      <p className="nx-sr-only" aria-live="polite" aria-atomic="true">
         {announcement}
       </p>
     </div>

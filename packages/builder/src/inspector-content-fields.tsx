@@ -241,28 +241,33 @@ export function ContentFields({
     </div>
   );
 
+  /**
+   * A prop drawn inside its group: in a component's view still a prop of
+   * its own to expose, named, with its icon, as a prop the inspector leaves
+   * out is, so a placement may still set it; elsewhere nothing.
+   */
+  function exposedOnly(prop: EditableProp): React.ReactNode {
+    if (fields === undefined) return null;
+    return (
+      <div
+        key={`${inspection.nodeId}:${prop.name}`}
+        className="nx-inspector__prop"
+      >
+        <p className="nx-inspector__note">
+          {propLabel(prop.name, prop.schema)}
+        </p>
+        <PropExposeControl
+          binding={fields}
+          nodeId={inspection.nodeId}
+          prop={prop}
+        />
+      </div>
+    );
+  }
+
   function rowOf(prop: EditableProp): React.ReactNode {
     const group = leads.get(prop.name);
-    if (group === undefined && grouped.has(prop.name)) {
-      // Drawn inside its group, but in a component's view still a prop of
-      // its own to expose: named, with its icon, as a prop the inspector
-      // leaves out is, so a placement may still set it.
-      return fields === undefined ? null : (
-        <div
-          key={`${inspection.nodeId}:${prop.name}`}
-          className="nx-inspector__prop"
-        >
-          <p className="nx-inspector__note">
-            {propLabel(prop.name, prop.schema)}
-          </p>
-          <PropExposeControl
-            binding={fields}
-            nodeId={inspection.nodeId}
-            prop={prop}
-          />
-        </div>
-      );
-    }
+    if (group === undefined && grouped.has(prop.name)) return exposedOnly(prop);
     const groupField =
       group === undefined ? undefined : (
         <React.Fragment key={`${inspection.nodeId}:${prop.name}`}>

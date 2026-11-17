@@ -268,7 +268,7 @@ function htmlHoldsValue(
  * Whether the block's Visibility holds a value: a device it is hidden on, a
  * condition it shows by, or the mark that keeps it out of search previews.
  */
-export function visibilityHoldsValue(node: BlockNode | undefined): boolean {
+function visibilityHoldsValue(node: BlockNode | undefined): boolean {
   if (node === undefined) return false;
   const { visibility } = node;
   const devices = visibility?.devices;

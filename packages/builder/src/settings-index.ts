@@ -59,7 +59,7 @@ export interface SettingsFilter {
  * any word of a group finds what any other word of it would. Small and kept
  * by hand, so each pair is one an author would say.
  */
-export const SYNONYMS: readonly (readonly string[])[] = [
+const SYNONYMS: readonly (readonly string[])[] = [
   ["colour", "color"],
   ["corners", "radius", "rounded"],
   ["z-index", "layer order", "stacking"],

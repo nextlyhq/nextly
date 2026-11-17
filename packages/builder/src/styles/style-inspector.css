@@ -577,6 +577,8 @@
  * the divider rather than under it.
  */
 .nx-inspector__tab {
+  /* The match count is set over the label's end. */
+  position: relative;
   flex: none;
   height: auto;
   margin: 0 0 -1px;

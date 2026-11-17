@@ -225,9 +225,10 @@ describe("Find a setting", () => {
     act(() => {
       vi.advanceTimersByTime(700);
     });
-    expect(screen.getByRole("status").textContent).toMatch(
-      /^\d+ settings? found: /
+    const region = document.querySelector(
+      '.nx-settings-search [aria-live="polite"]'
     );
+    expect(region?.textContent).toMatch(/^\d+ settings? found: /);
   });
 });
 

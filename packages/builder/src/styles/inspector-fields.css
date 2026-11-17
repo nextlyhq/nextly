@@ -1080,10 +1080,6 @@
  * A tab's match count, set over the label's end so it arriving or going
  * moves no tab and no control.
  */
-.nx-inspector__tab {
-  position: relative;
-}
-
 .nx-inspector__tab-count {
   position: absolute;
   inset-block-start: 0.125rem;
