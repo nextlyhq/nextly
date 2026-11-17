@@ -76,9 +76,13 @@ const PINS: Readonly<Record<TestDialect, Readonly<Record<Route, number>>>> = {
  * request, by the table each reads: the stored languages (each second), the
  * stored schema version (each two) and the session's standing (each five).
  * Whether a publish pays one depends on how long ago the last was paid, so
- * they are held to a bound of their own rather than to the pin.
+ * they are held to a bound of their own rather than to the pin: each at most
+ * twice, as a publish that runs past an interval pays it again.
  */
 const TIMED_READS = ["nextly_languages", "nextly_meta", "nextly_rbac_epoch"];
+
+/** The most reads on a timer one publish sends. */
+const MOST_TIMED_READS = 2 * TIMED_READS.length;
 
 /**
  * Reads of the components the page places: one query per form, in the check
@@ -330,7 +334,7 @@ describe.each(getConfiguredTestDialects())(
           expect(sent.statements.length - timed.length, route).toBe(
             PINS[dialect][route]
           );
-          expect(timed.length, route).toBeLessThanOrEqual(TIMED_READS.length);
+          expect(timed.length, route).toBeLessThanOrEqual(MOST_TIMED_READS);
           expect(naming(sent.statements, "dc_components").length, route).toBe(
             COMPONENT_READS
           );
