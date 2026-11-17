@@ -232,6 +232,11 @@ test("the eye hides a block on the device being edited only, and the canvas draw
     // Chosen in Layers, its ring is tagged as well.
     await layerRow(page, LAST).locator(`[data-nx-layer="${LAST}"]`).click();
     await expect(await block(page, LAST)).toBeVisible();
+    // Selecting it keeps its stripes and tag: the selection lifts no hiding.
+    await expect(await block(page, LAST)).toHaveAttribute(
+      "data-nx-device-hidden",
+      TAG
+    );
     await expect(
       canvasLayer(page).locator(
         '.nx-canvas-mark[data-mark="selected"][data-hidden]'
