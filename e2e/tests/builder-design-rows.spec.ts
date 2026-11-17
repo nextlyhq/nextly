@@ -1,0 +1,145 @@
+/**
+ * The Design panel's compact rows in the browser: a variable is renamed in
+ * place in its row, by its ⋯ menu's Rename or by F2.
+ *
+ * - Enter keeps the new name, read back from the stored site style.
+ * - Leaving the field keeps it too.
+ * - Escape cancels and hands focus back to the row.
+ * - The code name stays through every rename, so CSS that uses it keeps
+ *   working.
+ */
+import { expect, type Page } from "@playwright/test";
+
+import { openEditorWith } from "./canvas/editor-driver";
+import { LOCK } from "./support/locks";
+import { test } from "./support/test";
+import { countEveryPage } from "./support/usage-count";
+
+test.describe.configure({ lock: [LOCK.homepage, LOCK.siteStyle] });
+
+const SITE_STYLE = "/admin/api/singles/site-style";
+const NODES = [
+  {
+    id: "rows-text",
+    type: "core/text",
+    version: 1,
+    props: { text: "A page beside the Design panel's rows" },
+  },
+];
+const TOKENS = [
+  {
+    name: "color.brand",
+    kind: "color",
+    values: { light: "#1d2b6b", dark: "#8fa7ff" },
+  },
+  { name: "color.text", kind: "color", values: { light: "#3b3f46" } },
+];
+
+interface StoredToken {
+  name: string;
+  label?: string;
+  values: { light: string; dark?: string };
+}
+
+async function storedTokens(page: Page): Promise<unknown> {
+  const response = await page.request.get(SITE_STYLE);
+  expect(response.ok(), `reading the site style: ${response.status()}`).toBe(
+    true
+  );
+  const body = (await response.json()) as Record<string, unknown>;
+  const item = (body.item ?? body) as Record<string, unknown>;
+  return item.tokens ?? null;
+}
+
+/** The stored variables' code names and labels, in order. */
+async function storedNames(page: Page): Promise<string[]> {
+  const tokens = (await storedTokens(page)) as {
+    tokens?: StoredToken[];
+  } | null;
+  return (tokens?.tokens ?? []).map(
+    token => `${token.name}=${token.label ?? ""}`
+  );
+}
+
+async function seed(page: Page, tokens: unknown): Promise<void> {
+  await countEveryPage(page.request);
+  const written = await page.request.patch(SITE_STYLE, {
+    data: { tokens, _overwrite: true },
+  });
+  expect(written.ok(), `writing the variables: ${written.status()}`).toBe(true);
+}
+
+async function openDesign(page: Page, tab: string): Promise<void> {
+  const panel = page.getByRole("region", { name: "Design panel" });
+  await page.getByRole("navigation", { name: "Editor panels" }).waitFor();
+  if (!(await panel.isVisible())) {
+    await page
+      .getByRole("navigation", { name: "Editor panels" })
+      .getByRole("button", { name: "Design", exact: true })
+      .click();
+  }
+  await panel.getByRole("tab", { name: new RegExp(`^${tab}`) }).click();
+}
+
+test("a colour is renamed in place: Enter and leaving the field keep the name, Escape cancels, and the code name stays", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  const before = await storedTokens(page);
+  try {
+    await seed(page, { tokens: TOKENS });
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await openEditorWith(page, NODES, "rows-text");
+    await openDesign(page, "Colours");
+    const panel = page.getByRole("region", { name: "Design panel" });
+
+    // From the ⋯ menu's Rename: the field is in the row, and Enter keeps it.
+    await panel.getByRole("button", { name: "More actions for Brand" }).click();
+    await page.getByRole("menuitem", { name: "Rename" }).click();
+    const brand = panel.getByRole("textbox", { name: "Name of Brand" });
+    await expect(brand).toBeFocused();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await brand.fill("Primary");
+    await brand.press("Enter");
+    await expect(
+      panel.getByRole("button", { name: /^Primary,/ })
+    ).toBeFocused();
+    await expect
+      .poll(() => storedNames(page))
+      .toEqual(["color.brand=Primary", "color.text="]);
+
+    // F2, then leaving the field: kept.
+    await panel.getByRole("button", { name: /^Text,/ }).focus();
+    await page.keyboard.press("F2");
+    const text = panel.getByRole("textbox", { name: "Name of Text" });
+    await expect(text).toBeFocused();
+    await text.fill("Body text");
+    await page.getByRole("tab", { name: /^Colours/ }).click();
+    await expect(
+      panel.getByRole("button", { name: /^Body text,/ })
+    ).toBeVisible();
+    await expect
+      .poll(() => storedNames(page))
+      .toEqual(["color.brand=Primary", "color.text=Body text"]);
+
+    // F2, then Escape: cancelled, focus back on the row, nothing stored.
+    const primary = panel.getByRole("button", { name: /^Primary,/ });
+    await primary.focus();
+    await page.keyboard.press("F2");
+    const field = panel.getByRole("textbox", { name: "Name of Primary" });
+    await field.fill("Gone");
+    await field.press("Escape");
+    await expect(field).toHaveCount(0);
+    await expect(
+      panel.getByRole("button", { name: /^Primary,/ })
+    ).toBeFocused();
+    // The Design panel stays open: Escape closed only the field.
+    await expect(panel).toBeVisible();
+    expect(await storedNames(page)).toEqual([
+      "color.brand=Primary",
+      "color.text=Body text",
+    ]);
+  } finally {
+    await seed(page, before);
+  }
+});

@@ -14,11 +14,7 @@
  */
 import { expect, type Page } from "@playwright/test";
 
-import {
-  clickBlock,
-  openEditorWith,
-  selection,
-} from "./canvas/editor-driver";
+import { clickBlock, openEditorWith, selection } from "./canvas/editor-driver";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 
@@ -76,7 +72,9 @@ async function firstRowColumns(page: Page) {
     return {
       row: at(element),
       name: at(element.querySelector(".nx-vars__name")),
-      values: at(element.querySelector(".nx-vars__pair")),
+      swatch: at(element.querySelector(".nx-vars__swatch")),
+      // The ⋯ beside the row, on the same line.
+      more: at(element.parentElement?.querySelector(".nx-vars__more") ?? null),
     };
   });
   return { ...columns, body };
@@ -258,8 +256,7 @@ test("F2 opens a row's editor to rename it, and Escape closes it back to the row
   expect(
     await name.evaluate(
       (input: HTMLInputElement) =>
-        input.selectionStart === 0 &&
-        input.selectionEnd === input.value.length
+        input.selectionStart === 0 && input.selectionEnd === input.value.length
     )
   ).toBe(true);
 

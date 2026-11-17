@@ -83,8 +83,8 @@ async function openDesign(page: Page): Promise<void> {
 async function firstRowColumns(page: Page) {
   const row = page.locator(".nx-vars__row").first();
   await expect(row).toBeVisible();
-  // Each column found by what it is, so a count arriving after the first
-  // measure is measured as the count rather than taken for the values.
+  // Each column found by what it is, so the row is measured the same way
+  // before and after its usage arrives.
   return row.evaluate(element => {
     const at = (box: Element | null) => {
       const rect = box?.getBoundingClientRect();
@@ -95,7 +95,9 @@ async function firstRowColumns(page: Page) {
     return {
       row: at(element),
       name: at(element.querySelector(".nx-vars__name")),
-      values: at(element.querySelector(".nx-vars__pair")),
+      swatch: at(element.querySelector(".nx-vars__swatch")),
+      // The ⋯ beside the row, on the same line.
+      more: at(element.parentElement?.querySelector(".nx-vars__more") ?? null),
     };
   });
 }
@@ -136,10 +138,12 @@ test("switching Design tabs leaves the rows' columns where they were", async ({
     for (const tab of ["Styles", "Colours", "Type", "Spacing", "Colours"]) {
       await switchTo(page, tab);
     }
-    // And once the counts are in.
-    await expect(page.locator(".nx-vars__count").first()).toBeVisible({
-      timeout: 30_000,
-    });
+    // And once the counts are in, which each row says in its name.
+    await expect(page.locator(".nx-vars__row").first()).toHaveAttribute(
+      "aria-label",
+      /(Used in|Not used|Not counted yet)/,
+      { timeout: 30_000 }
+    );
     const settled = await firstRowColumns(page);
     expect(settled).toEqual(first);
   } finally {

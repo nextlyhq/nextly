@@ -1189,6 +1189,56 @@ export function labelNewVariable(
   return { ...relabelled, tokens: next };
 }
 
+/**
+ * The set with a copy of one variable right below it, and where the copy
+ * landed: the same values, labelled "<label> copy", under a free code name
+ * made from that label. A type size's line height is copied beside it, under
+ * the same words, which is what pairs them.
+ *
+ * The copy has no `id`, as a new variable has none: nothing references it
+ * yet, so its code name can still follow its label until it is first saved.
+ */
+export function duplicateVariable(
+  tokens: SiteTokenSet,
+  at: number,
+  label: string
+): { tokens: SiteTokenSet; at: number } {
+  const token = tokens.tokens[at];
+  if (token === undefined) return { tokens, at };
+  const copyLabel = `${label} copy`;
+  const dot = token.name.indexOf(".");
+  const prefix = dot === -1 ? token.name : token.name.slice(0, dot);
+  const partner = token.name.startsWith(SIZE_PREFIX)
+    ? tokens.tokens.find(
+        other =>
+          other.name ===
+          `${LINE_HEIGHT_PREFIX}${token.name.slice(SIZE_PREFIX.length)}`
+      )
+    : undefined;
+  const words = freeWords(
+    tokens,
+    prefix,
+    slugOf(copyLabel) || "copy",
+    partner !== undefined
+  );
+  const copies: SiteToken[] = [
+    { ...withoutId(token), name: `${prefix}.${words}`, label: copyLabel },
+  ];
+  if (partner !== undefined) {
+    const { label: _label, ...line } = withoutId(partner);
+    copies.push({ ...line, name: `${LINE_HEIGHT_PREFIX}${words}` });
+  }
+  const next = [...tokens.tokens];
+  next.splice(at + 1, 0, ...copies);
+  return { tokens: { ...tokens, tokens: next }, at: at + 1 };
+}
+
+/** A token without its frozen identity, as a copy starts. */
+function withoutId(token: SiteToken): SiteToken {
+  const { id: _id, ...rest } = token;
+  return rest;
+}
+
 /** A label as code-name words: lowercase letters, digits and dashes. */
 function slugOf(label: string): string {
   return label
