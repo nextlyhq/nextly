@@ -498,6 +498,17 @@ export interface PluginDocumentView {
    * there. Refused at boot when it is not text with words in it.
    */
   openLabel?: string;
+  /**
+   * @experimental A component the admin opens over a collection's list, in
+   * place of the create form, when "+ New" is pressed on a collection whose
+   * entries open in this view. It draws its whole dialog, creates through its
+   * own route or the REST API, and is given the collection (its slug, labels
+   * and whether the reader may update its entries) and `close(createdId?)`:
+   * with an id the admin opens the new entry where its collection opens it,
+   * and without one the list stays as it was. The create form's address keeps
+   * working for everything else. Refused at boot when it names no component.
+   */
+  createDialog?: ComponentPath;
 }
 
 /**

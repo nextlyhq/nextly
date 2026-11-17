@@ -211,10 +211,14 @@ function collectAdminEntries(
       ? [entry(admin.settings.component, owner, "settings")]
       : []),
     ...collectCollectionViewPaths(admin.views).map(tagged("collection view")),
-    // Views offered wherever one of the plugin's field types is used.
-    ...(admin.documentViews ?? []).map(view =>
-      entry(view.component, owner, "document view")
-    ),
+    // Views offered wherever one of the plugin's field types is used, and
+    // the dialog each opens from a collection's "+ New".
+    ...(admin.documentViews ?? []).flatMap(view => [
+      entry(view.component, owner, "document view"),
+      ...(view.createDialog === undefined
+        ? []
+        : [entry(view.createDialog, owner, "document view")]),
+    ]),
     ...collectAdminSlotPaths(plugin).map(tagged("slot")),
     ...collectContributionPaths(admin.contributions).map(
       tagged("contribution")
@@ -405,6 +409,10 @@ function collectCollectionViewPaths(
     // Each document view is a screen the admin resolves by this string too.
     for (const documentView of view.documentViews ?? []) {
       paths.push(documentView.component);
+      // The dialog the list's "+ New" opens is resolved by its string too.
+      if (documentView.createDialog !== undefined) {
+        paths.push(documentView.createDialog);
+      }
     }
     paths.push(...documentSurfacePaths(view));
   }
