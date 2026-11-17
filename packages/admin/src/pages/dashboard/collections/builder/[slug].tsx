@@ -234,16 +234,17 @@ export default function CollectionBuilderEditPage({
 
   // A change of the settings is a step; an unsaved collection's address
   // moves it at once, outside the history.
-  const { onSettingsChange, unsavedAddress } = useBuilderSettingsChange({
-    kind: "collection",
-    unsaved,
-    settings,
-    setSettings,
-    moveAddress,
-    busy: confirmation.isBusy,
-    editRoute: address =>
-      buildRoute(ROUTES.BUILDER_COLLECTIONS_EDIT, { slug: address }),
-  });
+  const { onSettingsChange, unsavedAddress, saveHeld } =
+    useBuilderSettingsChange({
+      kind: "collection",
+      unsaved,
+      settings,
+      setSettings,
+      moveAddress,
+      busy: confirmation.isBusy,
+      editRoute: address =>
+        buildRoute(ROUTES.BUILDER_COLLECTIONS_EDIT, { slug: address }),
+    });
 
   const isLocked = collection?.locked === true;
   // Resolved once: the save hook refuses outright without a slug, so the
@@ -528,6 +529,8 @@ export default function CollectionBuilderEditPage({
         />
       }
       isSaving={isSaving || confirmation.isBusy}
+      // Save waits while an unsaved entity's new address is checked.
+      saveHeld={saveHeld}
       savingLabel="Saving collection changes…"
     >
       <BuilderSchemaChangeDialogs

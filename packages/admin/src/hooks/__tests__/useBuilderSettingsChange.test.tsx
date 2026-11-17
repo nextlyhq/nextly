@@ -3,7 +3,8 @@
  * moves: the move is asked of the server's rule once more, and it can fail or
  * be slow. A failed check moves nothing and keeps the other settings; a second
  * submit while the move is being checked is refused, so the first, finishing
- * later, cannot overwrite it.
+ * later, cannot overwrite it; and the save is held, saying why, until the move
+ * ends, so a first save cannot create the entity under the address it leaves.
  */
 import { act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -133,6 +134,36 @@ describe("an unsaved entity's address move", () => {
       expect(unsavedEntity("collection", "items")).toBeDefined()
     );
     expect(replaced).toHaveBeenCalledWith("/admin/builder/collections/items");
+  });
+
+  it("holds the save, saying why, while the move is being checked, and lets it go once the check answers", async () => {
+    let answer: (refusal: string | null) => void = () => {};
+    checkAgain.mockImplementation(
+      () => new Promise<string | null>(resolve => (answer = resolve))
+    );
+    const { result } = setup();
+    expect(result.current.saveHeld).toBeUndefined();
+
+    act(() => result.current.onSettingsChange({ ...SETTINGS, slug: "items" }));
+    expect(result.current.saveHeld).toBe(
+      "Save waits while the new address is checked."
+    );
+
+    await act(async () => {
+      answer(null);
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(result.current.saveHeld).toBeUndefined());
+    expect(unsavedEntity("collection", "items")).toBeDefined();
+  });
+
+  it("lets the save go when the move's check fails", async () => {
+    checkAgain.mockRejectedValue(new Error("network down"));
+    const { result } = setup();
+    act(() => result.current.onSettingsChange({ ...SETTINGS, slug: "items" }));
+    expect(result.current.saveHeld).toBeDefined();
+    await vi.waitFor(() => expect(result.current.saveHeld).toBeUndefined());
+    expect(unsavedEntity("collection", "products")).toBeDefined();
   });
 
   it("gives up on a final check that never answers, after the live check's wait, and takes the next change", async () => {

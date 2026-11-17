@@ -1942,6 +1942,13 @@ exports[`each code, as a command ends with it > UPGRADE_EVENTS_TABLE_TAKEN 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/upgrade-events-table-taken  (UPGRADE_EVENTS_TABLE_TAKEN)"
 `;
 
+exports[`each code, as a command ends with it > UPGRADE_LEDGER_UNREADABLE 1`] = `
+"✗ The table "nextly_migrations" holds records \`nextly upgrade\` cannot read: the record of 0001_init.sql has the status "rolled_back".
+  Why:  \`nextly upgrade\` moves the records an earlier release kept in \`nextly_migrations\` into \`nextly_schema_events\`, and reads every one before writing any. One of them it cannot read, so nothing was changed.
+  Next: Rename the table if Nextly did not create it, then run \`nextly upgrade\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-ledger-unreadable  (UPGRADE_LEDGER_UNREADABLE)"
+`;
+
 exports[`each code, as a command ends with it > WIDGET_GENERATE_CANCELLED 1`] = `
 "✗ \`nextly generate:widget\` was cancelled, and wrote no widget.
   Why:  A prompt was closed before it was answered.

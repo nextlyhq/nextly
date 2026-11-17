@@ -21,8 +21,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 const { canvasSourcesChanged, onCanvasSourcesChanged } = await import(
   "../canvas-sources"
 );
-const { SOURCE_CHECK_EVERY_MS, useCanvasSourceCheck, useDropKeptReadsOnSave } =
-  await import("./canvas-source-check");
+const {
+  SOURCE_CHECK_EVERY_MS,
+  firstReadsInOf,
+  useCanvasSourceCheck,
+  useDropKeptReadsOnSave,
+} = await import("./canvas-source-check");
 
 const ASKED = {
   source: { kind: "collection" as const, slug: "pages", id: "p1" },
@@ -41,6 +45,13 @@ function show(state: DocumentVisibilityState) {
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
+  // A frame is the next microtask here, so a case reads its asks once it
+  // awaits the clock; the one about paint takes the frames itself.
+  vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
+    queueMicrotask(() => run(0));
+    return 0;
+  });
+  vi.stubGlobal("cancelAnimationFrame", () => {});
   visibility = "visible";
   vi.spyOn(document, "visibilityState", "get").mockImplementation(
     () => visibility
@@ -53,6 +64,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   stopHearing();
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -69,6 +81,91 @@ describe("the canvas's change check", () => {
     expect(ask).toHaveBeenCalledTimes(6);
     // The same mark each time: nothing the canvas kept is dropped.
     expect(dropped).toBe(0);
+  });
+
+  it("asks nothing on a fresh open until the canvas's first reads are in, then asks once", async () => {
+    const ask = vi.fn(async () => "same");
+    const { rerender } = renderHook(
+      ({ firstReadsIn }) =>
+        useCanvasSourceCheck(ASKED, "u1", ask, firstReadsIn),
+      { initialProps: { firstReadsIn: false } }
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    // Opening the builder sends nothing for the check while the canvas reads.
+    expect(ask).not.toHaveBeenCalled();
+    rerender({ firstReadsIn: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ask).toHaveBeenCalledTimes(1);
+    // An answer that comes in again later asks nothing more on its own.
+    rerender({ firstReadsIn: false });
+    rerender({ firstReadsIn: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ask).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes the first mark only once the canvas has painted, two frames on", async () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
+      frames.push(run);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const ask = vi.fn(async () => "same");
+    const { unmount } = renderHook(() =>
+      useCanvasSourceCheck(ASKED, "u1", ask, true)
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ask).not.toHaveBeenCalled();
+    // The frame that paints what the first reads drew...
+    frames.shift()?.(0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ask).not.toHaveBeenCalled();
+    // ...and the next one, after it painted.
+    frames.shift()?.(0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ask).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it("takes the mark on the minute when the canvas's first reads never answer", async () => {
+    const ask = vi.fn(async () => "same");
+    renderHook(() => useCanvasSourceCheck(ASKED, "u1", ask, false));
+    await vi.advanceTimersByTimeAsync(SOURCE_CHECK_EVERY_MS - 1);
+    expect(ask).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ask).toHaveBeenCalledTimes(1);
+    // And goes on each minute from there.
+    await vi.advanceTimersByTimeAsync(SOURCE_CHECK_EVERY_MS);
+    expect(ask).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks once when the tab comes back before the first reads, and not again when they arrive", async () => {
+    visibility = "hidden";
+    const ask = vi.fn(async () => "same");
+    const { rerender } = renderHook(
+      ({ firstReadsIn }) =>
+        useCanvasSourceCheck(ASKED, "u1", ask, firstReadsIn),
+      { initialProps: { firstReadsIn: false } }
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    show("visible");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ask).toHaveBeenCalledTimes(1);
+    rerender({ firstReadsIn: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ask).toHaveBeenCalledTimes(1);
+  });
+
+  it("still asks at once when what was kept is dropped before the first reads are in", async () => {
+    const ask = vi.fn(async () => "same");
+    renderHook(() => useCanvasSourceCheck(ASKED, "u1", ask, false));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ask).not.toHaveBeenCalled();
+    // A save here drops what the canvas kept: it reads again now, so the mark
+    // is taken now too.
+    act(() => canvasSourcesChanged());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ask).toHaveBeenCalledTimes(1);
   });
 
   it("takes its first mark on opening in a hidden tab, then asks nothing until the tab is back", async () => {
@@ -255,5 +352,13 @@ describe("a store made in this editor", () => {
     stored.at = new Date(2_000);
     rerender();
     expect(dropped).toBe(2);
+  });
+});
+
+describe("whether the canvas's first reads are in", () => {
+  it("is so once the bindings are answered, or at once for a page that reads none", () => {
+    expect(firstReadsInOf(undefined, undefined)).toBe(true);
+    expect(firstReadsInOf({ asked: true }, undefined)).toBe(false);
+    expect(firstReadsInOf({ asked: true }, { answered: true })).toBe(true);
   });
 });

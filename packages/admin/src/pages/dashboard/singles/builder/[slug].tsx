@@ -194,16 +194,17 @@ export default function SingleBuilderEditPage({
 
   // A change of the settings is a step; an unsaved single's address
   // moves it at once, outside the history.
-  const { onSettingsChange, unsavedAddress } = useBuilderSettingsChange({
-    kind: "single",
-    unsaved,
-    settings,
-    setSettings,
-    moveAddress,
-    busy: confirmation.isBusy,
-    editRoute: address =>
-      buildRoute(ROUTES.BUILDER_SINGLES_EDIT, { slug: address }),
-  });
+  const { onSettingsChange, unsavedAddress, saveHeld } =
+    useBuilderSettingsChange({
+      kind: "single",
+      unsaved,
+      settings,
+      setSettings,
+      moveAddress,
+      busy: confirmation.isBusy,
+      editRoute: address =>
+        buildRoute(ROUTES.BUILDER_SINGLES_EDIT, { slug: address }),
+    });
 
   const isLocked = single?.locked === true;
   // Resolved once: the save hook refuses outright without a slug, so the
@@ -476,6 +477,8 @@ export default function SingleBuilderEditPage({
         />
       }
       isSaving={isSaving || confirmation.isBusy}
+      // Save waits while an unsaved entity's new address is checked.
+      saveHeld={saveHeld}
       savingLabel="Saving Single changes…"
     >
       <BuilderSchemaChangeDialogs
