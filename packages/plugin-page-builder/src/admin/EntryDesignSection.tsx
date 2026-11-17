@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * The Design section of an entry's side panel: which design the entry is
- * shown with on the site, and the way to give it a design of its own, edit
- * that design or take it away.
+ * The Design card of an entry's side panel: which design the entry is shown
+ * with on the site, a Preview of it beside the form, and the way to give it a
+ * design of its own, edit that design or take it away.
  *
  * Declared as a side panel section at the `collection.edit` place, before
  * Status, and above the form on a phone (`narrow: "above-form"`), where the
@@ -15,16 +15,23 @@
  *
  * What it shows, from the one read every own-design surface shares:
  *
- * - **Uses the template**: the template's title, and an offer to give the
- *   entry its own design, a copy of the published template.
+ * - **Uses the template**: "Design: <template>", that every entry of the
+ *   collection uses it, Preview, and an offer to give the entry its own
+ *   design, a copy of the published template.
  * - **Own design, not published**: visitors still see the template, said
- *   plainly; Edit design, and Remove own design… behind a confirmation. The
- *   confirmation runs the removal as a dry run as it opens, so a removal the
- *   site would refuse is said before it is offered; the confirmed removal is
- *   judged again by the server.
- * - **Own design, published**: visitors see it; the same two actions.
- * - **No published template yet**: the entry is not a page on the site;
- *   the template to open, or one to create where the author may.
+ *   plainly; Edit design, Preview, and Remove own design… behind a
+ *   confirmation. The confirmation runs the removal as a dry run as it opens,
+ *   so a removal the site would refuse is said before it is offered; the
+ *   confirmed removal is judged again by the server.
+ * - **Own design, published**: visitors see it; the same actions.
+ * - **No published template yet**: the entry is not a page on the site, so
+ *   there is nothing to preview; the template to open, or one to create
+ *   where the author may.
+ *
+ * Preview is the editor's own: beside the form where the editor offers that,
+ * which folds this panel as the document bar's Preview does, and otherwise in
+ * a new tab, as the bar's press does there. It is not offered where the
+ * editor offers no preview (`useDocumentPreview` answers `null`).
  *
  * Whether the entry has its own design is asked of the entry's own lookup
  * (`?entry=`), answered by its key, never read off the collection's list,
@@ -35,7 +42,10 @@
  *
  * @module admin/EntryDesignSection
  */
-import type { DocumentPanelSectionProps } from "@nextlyhq/plugin-sdk/admin";
+import {
+  useDocumentPreview,
+  type DocumentPanelSectionProps,
+} from "@nextlyhq/plugin-sdk/admin";
 import {
   Alert,
   AlertDescription,
@@ -49,7 +59,14 @@ import {
   Button,
   toast,
 } from "@nextlyhq/ui";
-import { Brush, Info, LayoutTemplate, Plus, TriangleAlert } from "lucide-react";
+import {
+  Brush,
+  Eye,
+  Info,
+  LayoutTemplate,
+  Plus,
+  TriangleAlert,
+} from "lucide-react";
 import { useMemo, useState, type JSX, type ReactNode } from "react";
 
 import type { TemplateAction } from "../templates/template-actions-contract";
@@ -198,13 +215,42 @@ function Note({ children }: { children: ReactNode }): JSX.Element {
   );
 }
 
-/** The neutral mark of the collection's template, beside its title. */
-function TemplateMark({ label }: { label: string }): JSX.Element {
+/** The card's heading: the design that draws the entry, by its name. */
+function CardHeading({ children }: { children: string }): JSX.Element {
   return (
-    <span className="inline-flex h-[22px] shrink-0 items-center gap-1.5 rounded-full bg-muted px-2 text-xs font-semibold text-muted-foreground">
-      <LayoutTemplate className="h-3 w-3" aria-hidden="true" />
-      {label}
-    </span>
+    <div className="flex min-w-0 items-center gap-2.5">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+        <LayoutTemplate className="h-4 w-4" aria-hidden="true" />
+      </span>
+      <p className="min-w-0 truncate text-sm font-semibold" title={children}>
+        {children}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * The card's Preview: the editor's own, beside the form where it offers
+ * that, else in a new tab; nothing where the editor offers no preview.
+ */
+function PreviewButton(): JSX.Element | null {
+  const preview = useDocumentPreview();
+  if (preview === null) return null;
+  const show = (): void => {
+    if (preview.openBeside !== undefined) preview.openBeside();
+    else void preview.open();
+  };
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="flex-1"
+      onClick={show}
+    >
+      <Eye className="h-4 w-4" aria-hidden="true" />
+      {WORDS.preview}
+    </Button>
   );
 }
 
@@ -245,20 +291,18 @@ function UsesTemplate({
 
   return (
     <DesignCard>
-      <div className="flex min-w-0 items-center gap-2">
-        <TemplateMark label="Collection template" />
-        <span className="truncate text-sm font-semibold">{title}</span>
-      </div>
+      <CardHeading>{WORDS.heading(title)}</CardHeading>
       <p className="text-xs leading-relaxed text-muted-foreground">
-        {WORDS.usesTemplate(meta.names.singular, title)}
+        {WORDS.everyUses(meta.names.singular, meta.names.plural)}
       </p>
-      {meta.mayGiveDesign ? (
-        <>
+      <div className="flex flex-wrap gap-2">
+        <PreviewButton />
+        {meta.mayGiveDesign ? (
           <Button
             type="button"
             variant="outline"
             size="sm"
-            className="w-full"
+            className="flex-1"
             disabled={busy || held}
             {...(held ? { title: HELD_REASON } : {})}
             onClick={give}
@@ -266,9 +310,9 @@ function UsesTemplate({
             <Brush className="h-4 w-4" aria-hidden="true" />
             {busy ? WORDS.giving : WORDS.give(meta.names.singular)}
           </Button>
-          <Note>{WORDS.givenNote}</Note>
-        </>
-      ) : null}
+        ) : null}
+      </div>
+      {meta.mayGiveDesign ? <Note>{WORDS.givenNote}</Note> : null}
       {template === null ? null : (
         <Button
           type="button"
@@ -362,17 +406,20 @@ function OwnDesign({
           </AlertDescription>
         </Alert>
       )}
-      <Button
-        type="button"
-        size="sm"
-        className="w-full"
-        onClick={() =>
-          openInAdmin(builderHref(meta.templatesCollection, design.id))
-        }
-      >
-        <Brush className="h-4 w-4" aria-hidden="true" />
-        {WORDS.edit}
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          size="sm"
+          className="flex-1"
+          onClick={() =>
+            openInAdmin(builderHref(meta.templatesCollection, design.id))
+          }
+        >
+          <Brush className="h-4 w-4" aria-hidden="true" />
+          {WORDS.edit}
+        </Button>
+        <PreviewButton />
+      </div>
       {/* The admin's destructive text pairing: the base red is lighter
         than the 4.5:1 text minimum on a light card, so light mode reads its
         darker shade and dark mode the base, which passes there. */}
@@ -482,11 +529,13 @@ function NoPublishedTemplate({
 
   return (
     <DesignCard>
-      <div className="flex min-w-0 items-center">
-        <TemplateMark label={WORDS.noTemplate} />
-      </div>
+      <CardHeading>{WORDS.noDesignHeading}</CardHeading>
       <p className="text-xs leading-relaxed text-muted-foreground">
-        {WORDS.noPublishedTemplate(meta.names.singular, meta.names.plural)}
+        {WORDS.noPublishedTemplate(
+          meta.names.singular,
+          meta.names.plural,
+          template?.title ?? null
+        )}
       </p>
       {template !== null ? (
         <Button

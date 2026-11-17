@@ -210,8 +210,11 @@ export const OWN_DESIGN_WORDS = {
     `Own design created as a copy of ${template}`,
   givenNote:
     "It starts as a copy of the published template. Later changes to the template won't reach it.",
-  usesTemplate: (singular: string, template: string): string =>
-    `This ${inSentence(singular)} is shown with the ${template} template, like every ${inSentence(singular)} without its own design.`,
+  /** The Design card's heading, naming the collection template that draws the entry. */
+  heading: (template: string): string => `Design: ${template}`,
+  everyUses: (singular: string, plural: string): string =>
+    `Every ${inSentence(singular)} uses it. Edit the template to change all ${inSentence(plural)}.`,
+  preview: "Preview",
   openTemplate: (template: string): string => `Open the ${template} template`,
   edit: "Edit design",
   remove: "Remove own design…",
@@ -225,10 +228,18 @@ export const OWN_DESIGN_WORDS = {
       : `Visitors see this ${inSentence(singular)}'s own design. Changes to the ${template} template don't reach it.`,
   goesWithEntry: (singular: string): string =>
     `Deleting this ${inSentence(singular)} deletes its own design too.`,
-  noTemplate: "No template",
-  noPublishedTemplate: (singular: string, plural: string): string =>
-    `${plural} have no published template yet, so this ${inSentence(singular)} isn't shown as a page on the site.`,
-  createTemplate: (plural: string): string => `Create a template for ${plural}`,
+  /** The Design card's heading while no published template draws the entry. */
+  noDesignHeading: "Design: none yet",
+  noPublishedTemplate: (
+    singular: string,
+    plural: string,
+    template: string | null
+  ): string =>
+    template === null
+      ? `${plural} have no collection template yet, so this ${inSentence(singular)} isn't shown as a page on the site.`
+      : `The ${template} template isn't published yet, so this ${inSentence(singular)} isn't shown as a page on the site.`,
+  createTemplate: (plural: string): string =>
+    `Create a collection template for ${inSentence(plural)}`,
   creatingTemplate: "Creating the template…",
   removeTitle: (singular: string): string =>
     `Remove this ${inSentence(singular)}'s own design?`,

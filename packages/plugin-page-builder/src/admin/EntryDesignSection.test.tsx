@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 
 /**
- * The Design section of an entry's side panel: what it says in each state
- * the read can answer, which template action each control runs, that it
- * draws nothing where it does not apply, so the panel leaves no heading, and
- * that removing an own design is offered only once its dry run says the
- * site would accept it.
+ * The Design card of an entry's side panel: what it says in each state the
+ * read can answer, which template action each control runs, that its Preview
+ * opens the document's preview beside the form where the editor offers that,
+ * that it draws nothing where it does not apply, so the panel leaves no
+ * heading, and that removing an own design is offered only once its dry run
+ * says the site would accept it.
  *
  * The read and the route are replaced by recorders; what the route answers
  * on a real site is the integration suite's.
@@ -49,6 +50,12 @@ const toasts = { success: vi.fn(), error: vi.fn() };
 
 const asked: string[] = [];
 
+/** The surrounding editor's preview, as `useDocumentPreview` answers it. */
+let documentPreview: {
+  open: ReturnType<typeof vi.fn>;
+  openBeside?: ReturnType<typeof vi.fn>;
+} | null = null;
+
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   usePluginRoute: ({ path }: { path: string }) => {
     asked.push(path);
@@ -70,6 +77,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   },
   apiErrorMessage: (error: Error, fallback: string) =>
     error.message === "" ? fallback : error.message,
+  useDocumentPreview: () => documentPreview,
 }));
 
 vi.mock("@nextlyhq/ui", async importOriginal => {
@@ -154,6 +162,7 @@ beforeEach(() => {
   toasts.success.mockReset();
   toasts.error.mockReset();
   writeAnswer = () => Promise.resolve({ message: "", item: {} });
+  documentPreview = { open: vi.fn(), openBeside: vi.fn() };
 });
 
 afterEach(() => {
@@ -180,11 +189,13 @@ describe("the entry's Design section", () => {
     read = { data: answer(), error: null };
     section();
 
+    expect(screen.getByText("Design: Blog post")).toBeTruthy();
     expect(
       screen.getByText(
-        "This post is shown with the Blog post template, like every post without its own design."
+        "Every post uses it. Edit the template to change all posts."
       )
     ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Preview" })).toBeTruthy();
     expect(
       screen.getByText(
         "It starts as a copy of the published template. Later changes to the template won't reach it."
@@ -273,6 +284,9 @@ describe("the entry's Design section", () => {
         "Visitors still see the Blog post template until you publish this design."
       )
     ).toBeTruthy();
+    // Not the template's card: it names no template as the design.
+    expect(screen.queryByText("Design: Blog post")).toBeNull();
+    expect(screen.getByRole("button", { name: "Preview" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Edit design" }));
     expect(navigated).toEqual(["/admin/collections/templates/d1/builder"]);
@@ -362,11 +376,14 @@ describe("the entry's Design section", () => {
       error: null,
     };
     section();
+    expect(screen.getByText("Design: none yet")).toBeTruthy();
     expect(
       screen.getByText(
-        "Posts have no published template yet, so this post isn't shown as a page on the site."
+        "The Blog post template isn't published yet, so this post isn't shown as a page on the site."
       )
     ).toBeTruthy();
+    // Not a page on the site yet, so there is nothing of it to preview.
+    expect(screen.queryByRole("button", { name: "Preview" })).toBeNull();
     fireEvent.click(
       screen.getByRole("button", { name: "Open the Blog post template" })
     );
@@ -381,8 +398,16 @@ describe("the entry's Design section", () => {
         item: { template: { id: "t7", title: "Post template" } },
       });
     section();
+    expect(screen.getByText("Design: none yet")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Posts have no collection template yet, so this post isn't shown as a page on the site."
+      )
+    ).toBeTruthy();
     fireEvent.click(
-      screen.getByRole("button", { name: "Create a template for Posts" })
+      screen.getByRole("button", {
+        name: "Create a collection template for posts",
+      })
     );
     await waitFor(() =>
       expect(navigated).toEqual(["/admin/collections/templates/t7/builder"])
@@ -400,6 +425,42 @@ describe("the entry's Design section", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(refetch).toHaveBeenCalled();
+  });
+});
+
+describe("the card's Preview", () => {
+  it("opens the preview beside the form where the editor offers that", () => {
+    read = { data: answer(), error: null };
+    section();
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(documentPreview?.openBeside).toHaveBeenCalledTimes(1);
+    expect(documentPreview?.open).not.toHaveBeenCalled();
+  });
+
+  it("opens it in a new tab where the editor has no preview beside the form", () => {
+    read = { data: answer(), error: null };
+    documentPreview = { open: vi.fn() };
+    section();
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(documentPreview.open).toHaveBeenCalledTimes(1);
+  });
+
+  it("is offered beside an own design too", () => {
+    read = { data: answer({ items: [design("published")] }), error: null };
+    section();
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(documentPreview?.openBeside).toHaveBeenCalledTimes(1);
+  });
+
+  it("is not offered where the editor offers no preview", () => {
+    read = { data: answer(), error: null };
+    documentPreview = null;
+    section();
+    expect(screen.queryByRole("button", { name: "Preview" })).toBeNull();
+    // The rest of the card stands.
+    expect(
+      screen.getByRole("button", { name: "Give this post its own design" })
+    ).toBeTruthy();
   });
 });
 
