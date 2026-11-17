@@ -42,10 +42,16 @@ const runtime = vi.hoisted(() => ({
   structuredPaths: [] as string[],
   structuredData: undefined as string | undefined,
 }));
+// Whether the request in hand is in Next's draft mode, as the public route
+// reads it before asking its draft gate.
+const request = vi.hoisted(() => ({ draftMode: false }));
 vi.mock("nextly/runtime", async importOriginal => {
   const actual = await importOriginal<typeof import("nextly/runtime")>();
   return {
     ...actual,
+    // What core answers for the request in hand: the draft-mode flag the
+    // public route reads before asking its draft gate.
+    isDraftModeRequest: async () => request.draftMode,
     createPublicReader: (
       ...[source, binding]: Parameters<typeof actual.createPublicReader>
     ) =>
@@ -276,6 +282,7 @@ async function served(
 }
 
 beforeEach(() => {
+  request.draftMode = false;
   runtime.tags = [];
   runtime.events = [];
   runtime.keys = [];
@@ -484,6 +491,26 @@ describe("the content route", () => {
     const html = await served(route, ["about"]);
     expect(html).toContain("The about page");
     expect(html).not.toContain("Hello world");
+  });
+
+  it("asks the public route's draft gate only on a draft-mode request", async () => {
+    // An ordinary visit to the cached route must read no cookie, so the gate
+    // (which reads the preview cookie) is not asked at all: the path a draft
+    // would answer is not found, as for any visitor.
+    const draft = vi.fn(async () => true);
+    const options = config();
+    const route = createPublicContentPage({
+      ...options,
+      pages: { ...options.pages, draft },
+      resolveAddress: async () => null,
+    });
+    await expect(served(route, ["about"])).rejects.toMatchObject(NOT_FOUND);
+    expect(draft).not.toHaveBeenCalled();
+
+    // A preview link turns draft mode on, and only then is the gate asked.
+    request.draftMode = true;
+    await served(route, ["about"]).catch(() => undefined);
+    expect(draft).toHaveBeenCalled();
   });
 
   it("serves the entry where the gate grants nothing", async () => {

@@ -600,7 +600,10 @@ async function warnOfRetiredAccessRules(
  * `nextly migrate` brings the core tables up to date and names what it finds.
  * It reads only the two registry tables, for the rules left in their retired
  * `access_rules` column, which nothing else names and which look enforced
- * while they are not. Every other report here is a development start's.
+ * while they are not, and the translations tables of translated entities, for
+ * a date column an earlier release made with a time zone, which reads shifted
+ * on a server not in UTC until `nextly upgrade` converts it. Every other report
+ * here is a development start's.
  */
 async function runCoreSchemaChecks(
   adapter: AdapterLike,
@@ -619,6 +622,15 @@ async function runCoreSchemaChecks(
       await introspectLiveColumns(adapter.getDrizzle(), adapter.dialect, [
         ...RETIRED_ACCESS_RULES_TABLES,
       ])
+    );
+    // Translated date columns an earlier release made with a time zone: named, never converted,
+    // since a production start changes no column's type; `nextly upgrade` converts them.
+    const { convertZonedDateCompanions } = await import(
+      "../domains/i18n/runtime/zoned-date-companions"
+    );
+    await convertZonedDateCompanions(
+      adapter as unknown as Parameters<typeof convertZonedDateCompanions>[0],
+      { convert: false, onWarning: message => logger.warn(message) }
     );
     return;
   }

@@ -47,12 +47,12 @@ import { singleToManifestEntity } from "./to-manifest-entity-single";
  * keys it happens to remember — is what produced a create path and an edit path
  * that disagreed about `versionsMaxPerDoc` in opposite directions.
  *
- * The technique is not invented here. `settings-dirty.ts`, one file away, has
- * enforced exactly this over the same type since the Save button was enabled by
- * a hand-written diff and a new setting left it greyed out — "a failure that
- * looks like nothing happening at all", as its own note puts it. That guard is
- * why a new setting already reaches the dirty check; this one is why it now also
- * reaches the file the dirty check lets you save.
+ * The technique is not invented here. `settings-changes.ts`, one file away,
+ * enforces exactly this over the same type: a new setting that no comparison
+ * reads would be saved without being counted as a pending change or shown in
+ * the review, "a failure that looks like nothing happening at all". That guard
+ * is why a new setting reaches the pending count; this one is why it also
+ * reaches the file the save writes.
  *
  * `false` means the manifest does not carry it, with the reason beside it. It
  * never means "not got round to yet"; a setting that ought to travel and cannot

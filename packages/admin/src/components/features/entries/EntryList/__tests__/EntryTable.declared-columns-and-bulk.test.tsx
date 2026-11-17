@@ -101,6 +101,7 @@ function renderTable(props: Partial<EntryTableProps> = {}): void {
       onSortChange={vi.fn()}
       onSearchChange={vi.fn()}
       onEdit={vi.fn()}
+      entryHref={id => `/admin/collections/posts/${id}`}
       onDelete={vi.fn()}
       onBulkDelete={vi.fn()}
       {...props}

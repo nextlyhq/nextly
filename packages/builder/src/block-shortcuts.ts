@@ -106,26 +106,31 @@ function written(
 // --- a Section's height
 
 /** At least the screen's height: `svh`, so a phone's toolbar hides none of it. */
-const FULL_SCREEN = "100svh";
+/** What Full screen writes as a Section's min height. */
+export const FULL_SCREEN = "100svh";
 
 export type HeightChoice = "auto" | "screen";
 
-/** Auto while no min height is set here, Full screen for its own, else none. */
+/**
+ * Fit content while no min height is set here, Full screen for its own, else
+ * none.
+ */
 export function heightOf(
   node: BlockNode,
   at: ShortcutAt,
   reaching: Reaching = NOTHING_REACHES
 ): HeightChoice | undefined {
   const shown = storedAt(node, at, "minHeight") ?? reaching("min-height");
-  // `auto` is what Auto writes over a min height reaching from elsewhere.
+  // `auto` is what Fit content writes over a min height reaching from
+  // elsewhere.
   if (shown === undefined || shown === "auto") return "auto";
   return shown === FULL_SCREEN ? "screen" : undefined;
 }
 
 /**
- * Full screen writes its min height here; Auto clears it, or, where one
- * reaches from elsewhere, writes `auto` over it, since a clear would leave
- * that one in force.
+ * Full screen writes its min height here; Fit content clears it, or, where
+ * one reaches from elsewhere, writes `auto` over it, since a clear would
+ * leave that one in force.
  */
 export function planHeight(
   node: BlockNode,
@@ -148,7 +153,7 @@ export type SizeChoice = "small" | "medium" | "large";
  * scaled, so the sizes follow the site's design and keep their order, and
  * its text in em, relative to what it inherits.
  */
-const SIZES = {
+export const SIZES = {
   small: { times: 0.75, text: "0.875em" },
   large: { times: 1.25, text: "1.125em" },
 } as const;

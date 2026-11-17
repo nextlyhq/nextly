@@ -1,12 +1,14 @@
 /**
  * The page builder's one page status, in a browser.
  *
- * The pill beside the title says where the SAVED page stands (Draft,
- * Published or Changed) and nothing about unsaved edits, which only the save
- * chip reports. And changes left from a last visit, stored but never saved,
- * open with Save enabled, the chip saying "Unsaved changes" and its popover
- * "Changes from your last visit aren't saved yet." with Save and Discard:
- * never "Unsaved changes" beside a Save that does nothing.
+ * Save and Publish say the page's state themselves: Save reads "Save" over
+ * unsaved work and a quiet "✓ Saved" otherwise, and Publish reads "Publish
+ * changes" while the live page is behind and a quiet "Published" when it
+ * matches. The pill beside the title says only where the page is in its life
+ * (Draft, Published or Scheduled), never "Changed" or "Modified", and no chip
+ * repeats the save state. Changes left from a last visit, stored but never
+ * saved, open with Save enabled, and Save says "Changes from your last visit
+ * aren't saved yet." with Save and Discard.
  *
  * @module tests/builder-page-status.spec
  */
@@ -30,10 +32,6 @@ const NODES = [
 
 const LAST_VISIT = "Changes from your last visit aren't saved yet.";
 
-/** The chip's control while changes from a last visit wait. */
-const offerChip = (page: Page) =>
-  end(page).getByRole("button", { name: "Unsaved changes: Save or Discard" });
-
 /** A published page of its own, and its id. */
 async function createPublishedPage(
   request: APIRequestContext
@@ -56,19 +54,18 @@ async function createPublishedPage(
 const start = (page: Page) => page.locator('[data-topbar="start"]');
 const end = (page: Page) => page.locator('[data-topbar="end"]');
 
-/** The save state's chip, inside the end column. */
-const chip = (page: Page) =>
-  end(page).locator('[data-testid="save-state-indicator"]');
+/** The bar's Save, in whichever state it reads. */
+const saveButton = (page: Page) => end(page).locator('[data-action="save"]');
+
+/** The bar's Publish, in whichever state it reads. */
+const publishButton = (page: Page) =>
+  end(page).locator('[data-action="publish"]');
 
 /** The page's status pill beside the title, its spoken prefix included. */
 const status = (page: Page) =>
   start(page)
     .getByText(/^Page status:/)
     .locator("..");
-
-/** The bar's own Save, not a row on an arrow. */
-const barSave = (page: Page) =>
-  end(page).getByRole("button", { name: "Save", exact: true });
 
 /** A block on the canvas, by its node id. */
 const block = (page: Page, id: string) =>
@@ -125,32 +122,45 @@ test.describe("the builder's page status", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
   });
 
-  test("an edit to a published page shows one unsaved signal, and a draft save reads Changed", async ({
+  test("an edit to a published page shows one unsaved signal, the Save button, and Publish changes", async ({
     page,
   }) => {
     const id = await createPublishedPage(page.request);
     await openBuilder(page, id);
     await expect(status(page)).toHaveText("Page status: Published");
-    await expect(chip(page)).toHaveText("Saved");
+    await expect(saveButton(page)).toHaveText("Saved");
+    await expect(saveButton(page)).toHaveAttribute("aria-disabled", "true");
+    await expect(publishButton(page)).toHaveText("Published");
+    // No chip beside them says it again.
+    await expect(
+      page.locator('[data-topbar] [data-testid="save-state-indicator"]')
+    ).toHaveCount(0);
 
     await block(page, "status-removed").click();
     await page.keyboard.press("Delete");
 
-    // The chip alone says so; the pill still reports the saved page.
-    await expect(chip(page)).toHaveText("Unsaved changes");
+    // Save alone says the work is unsaved; Publish says the live page is
+    // behind; the pill still says where the page is in its life.
+    await expect(saveButton(page)).toHaveText("Save");
+    await expect(publishButton(page)).toHaveText("Publish changes");
     await expect(status(page)).toHaveText("Page status: Published");
     const bar = page.locator("[data-topbar]");
-    await expect(bar.getByText("Unsaved changes", { exact: true })).toHaveCount(
-      1
-    );
+    await expect(bar.getByText("Unsaved changes")).toHaveCount(0);
     await expect(bar.getByText("Modified")).toHaveCount(0);
+    await expect(bar.getByText("Changed")).toHaveCount(0);
 
-    // Saved as a draft of the live page: changes waiting to be published.
+    // Saved as a draft of the live page: saved, and the live page behind.
     const saved = pageWrite(page, id);
-    await barSave(page).click();
+    await saveButton(page).click();
     await saved;
-    await expect(chip(page)).toHaveText("Saved");
-    await expect(status(page)).toHaveText("Page status: Changed");
+    await expect(saveButton(page)).toHaveText("Saved");
+    await expect(publishButton(page)).toHaveText("Publish changes");
+    await expect(status(page)).toHaveText("Page status: Published");
+
+    const published = pageWrite(page, id);
+    await publishButton(page).click();
+    await published;
+    await expect(publishButton(page)).toHaveText("Published");
   });
 
   test("changes from a last visit open with Save enabled, and Save keeps them", async ({
@@ -160,52 +170,52 @@ test.describe("the builder's page status", () => {
     await leaveUnsavedChange(page, id);
 
     await openBuilder(page, id);
-    await expect(chip(page)).toHaveText("Unsaved changes");
-    await expect(barSave(page)).toBeEnabled();
+    await expect(saveButton(page)).toHaveText("Save");
+    await expect(saveButton(page)).not.toHaveAttribute("aria-disabled", "true");
 
-    // The chip's popover says what they are, and offers both answers.
-    await offerChip(page).click();
+    // Save says what they are, and offers both answers.
+    await saveButton(page).click();
     const popover = page.getByRole("dialog");
     await expect(popover.getByText(LAST_VISIT)).toBeVisible();
     await expect(
       popover.getByRole("button", { name: "Discard" })
     ).toBeVisible();
-    await expect(popover.getByRole("button", { name: "Save" })).toBeVisible();
-    await page.keyboard.press("Escape");
 
     const saved = pageWrite(page, id);
-    await barSave(page).click();
+    await popover.getByRole("button", { name: "Save" }).click();
     await saved;
-    await expect(chip(page)).toHaveText("Saved");
+    await expect(saveButton(page)).toHaveText("Saved");
     await expect(block(page, "status-removed")).toHaveCount(0);
-    await expect(status(page)).toHaveText("Page status: Changed");
+    await expect(publishButton(page)).toHaveText("Publish changes");
+    await expect(status(page)).toHaveText("Page status: Published");
 
     // Saved for real: opened again, nothing is offered and the change holds.
     await openBuilder(page, id);
-    await expect(chip(page)).toHaveText("Saved");
+    await expect(saveButton(page)).toHaveText("Saved");
     await expect(block(page, "status-kept")).toHaveCount(1);
     await expect(block(page, "status-removed")).toHaveCount(0);
   });
 
-  test("changes from a last visit are dropped by Discard, and the chip goes back to saved", async ({
+  test("changes from a last visit are dropped by Discard, and Save goes back to saved", async ({
     page,
   }) => {
     const id = await createPublishedPage(page.request);
     await leaveUnsavedChange(page, id);
 
     await openBuilder(page, id);
-    await expect(offerChip(page)).toBeVisible();
+    await expect(saveButton(page)).toHaveText("Save");
 
-    await offerChip(page).click();
+    await saveButton(page).click();
     await page
       .getByRole("dialog")
       .getByRole("button", { name: "Discard" })
       .click();
 
-    await expect(chip(page)).toHaveText("Saved");
-    await expect(barSave(page)).toBeDisabled();
+    await expect(saveButton(page)).toHaveText("Saved");
+    await expect(saveButton(page)).toHaveAttribute("aria-disabled", "true");
     // The page as saved: the change was never put back.
     await expect(block(page, "status-removed")).toHaveCount(1);
+    await expect(publishButton(page)).toHaveText("Published");
     await expect(status(page)).toHaveText("Page status: Published");
   });
 });

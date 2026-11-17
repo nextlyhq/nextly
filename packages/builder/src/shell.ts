@@ -21,8 +21,8 @@
  * @module @nextlyhq/builder/shell
  */
 
-export { BuilderShell } from "./builder-shell";
-export type { BuilderShellProps } from "./builder-shell";
+export { BuilderShell } from "./shell/builder-shell";
+export type { BuilderShellProps } from "./shell/builder-shell";
 /**
  * The shell's preferences kept per signed-in user, for a host that knows who
  * is signed in: pass it as `store`. @experimental
@@ -72,7 +72,7 @@ export { pageStyleTrace } from "./style-trace";
  * Exported for slot content that PORTALS out of the shell, which the shell cannot reach with
  * `hidden` and `inert` and so has to inform instead.
  */
-export { useShellIsActive } from "./shell-active";
+export { useShellIsActive } from "./shell/shell-active";
 
 /**
  * The command palette, published here beside the shell because it is a client
@@ -81,8 +81,11 @@ export { useShellIsActive } from "./shell-active";
  *
  * Its types are described from the root entry, which stays server-callable.
  */
-export { COMMAND_PALETTE_KEYS, CommandPalette } from "./command-palette";
-export type { BuilderCommand, CommandPaletteProps } from "./command-palette";
+export { COMMAND_PALETTE_KEYS, CommandPalette } from "./shell/command-palette";
+export type {
+  BuilderCommand,
+  CommandPaletteProps,
+} from "./shell/command-palette";
 
 /**
  * The canvas, behind the same client banner and for a stricter reason than the
@@ -102,14 +105,14 @@ export {
   DropRefusal,
   nodeIdFromEvent,
   revealedDefinitions,
-} from "./canvas";
+} from "./canvas/canvas";
 
 /**
  * @experimental Which blocks' visibility conditions the page can't check, for
  * a host to hand the canvas so it badges them in red: judged as the save
  * judges them, with the collections the editor's services list.
  */
-export { useConditionsUnchecked } from "./condition-checks";
+export { useConditionsUnchecked } from "./conditions/condition-checks";
 
 /**
  * @experimental The frame the canvas is drawn in, and how the code around the
@@ -132,15 +135,19 @@ export {
   CanvasFrame,
   CANVAS_FRAME_TITLE_PREFIX,
   canvasFrameTitle,
-} from "./canvas-frame";
+} from "./canvas/canvas-frame";
 export type {
   BlankFrameSource,
   CanvasFrameFallback,
   CanvasFrameProps,
   CanvasFrameSource,
+  SiteChromeDrawn,
   SiteFrameSource,
-} from "./canvas-frame";
-export { CanvasFrameProvider, useCanvasFrame } from "./canvas-frame-context";
+} from "./canvas/canvas-frame";
+export {
+  CanvasFrameProvider,
+  useCanvasFrame,
+} from "./canvas/canvas-frame-context";
 /**
  * @experimental Where the docs explain the canvas route, for a note saying the
  * canvas is drawn without the site's layout.
@@ -149,7 +156,7 @@ export {
   CANVAS_ROUTE_DOCS_HREF,
   SITE_CODE_POLICY_DOCS_HREF,
 } from "./docs-links";
-export { CanvasMarks } from "./canvas-marks";
+export { CanvasMarks } from "./canvas/canvas-marks";
 
 /**
  * @experimental Hold the editor's shortcuts while something modal is over it.
@@ -165,11 +172,11 @@ export { CanvasMarks } from "./canvas-marks";
  * shortcuts — the canvas's bindings sit on the document, so Delete and
  * Alt+Arrow reach the page behind the dialog.
  */
-export { useModalKeyboardHold } from "./modal-keyboard-hold";
-export type { CanvasProps } from "./canvas";
+export { useModalKeyboardHold } from "./shell/modal-keyboard-hold";
+export type { CanvasProps } from "./canvas/canvas";
 // The regions of a page's Layout, drawn locked around the page on the canvas.
-export type { CanvasRegion } from "./canvas-regions";
-export { REGION_ATTRIBUTE } from "./canvas-regions";
+export type { CanvasRegion } from "./canvas/canvas-regions";
+export { REGION_ATTRIBUTE } from "./canvas/canvas-regions";
 
 /**
  * The inserter, behind the same client banner as the shell it fills: it holds
@@ -224,8 +231,8 @@ export { useVariantPreview, VariantPreviewTag } from "./variant-preview";
 export type { VariantPreviewState } from "./variant-preview";
 // The one row of tags over the canvas: the variant previewed, and the site
 // mode the author picked to preview the page in.
-export { CanvasPreviewTags } from "./canvas-preview-tags";
-export type { CanvasPreviewTagsProps } from "./canvas-preview-tags";
+export { CanvasPreviewTags } from "./canvas/canvas-preview-tags";
+export type { CanvasPreviewTagsProps } from "./canvas/canvas-preview-tags";
 
 /**
  * The Style half of the same inspector.
@@ -239,15 +246,18 @@ export type { CanvasPreviewTagsProps } from "./canvas-preview-tags";
 export { StyleInspectorPanel } from "./style-inspector-panel";
 export type { StyleInspectorPanelProps } from "./style-inspector-panel";
 
-export { InsertPanel } from "./insert-panel";
-export type { InsertPanelProps, LibraryTierState } from "./insert-panel";
+export { InsertPanel } from "./panels/add/insert-panel";
+export type {
+  InsertPanelProps,
+  LibraryTierState,
+} from "./panels/add/insert-panel";
 export { ComponentsPanel } from "./components-panel";
 export type { ComponentsPanelProps } from "./components-panel";
 // The shape a host hands the panel for the pattern tier. Published beside the
 // panel because supplying `patterns` is impossible without it: a caller loads
 // rows from a plugin's collection and has to know which fields the palette
 // reads before it can map them.
-export type { SavedPattern } from "./inserter";
+export type { SavedPattern } from "./panels/add/inserter";
 
 /**
  * The site's breakpoints, as a trigger and the dialog behind it.
@@ -263,8 +273,8 @@ export {
   BASE_DEVICE_LABEL,
   sameBreakpoints,
 } from "./breakpoints";
-export { BreakpointManager } from "./breakpoint-manager";
-export type { BreakpointManagerProps } from "./breakpoint-manager";
+export { BreakpointManager } from "./shell/breakpoint-manager";
+export type { BreakpointManagerProps } from "./shell/breakpoint-manager";
 
 /**
  * The control that sizes the canvas, and the derivations behind it.
@@ -281,8 +291,8 @@ export type { BreakpointManagerProps } from "./breakpoint-manager";
  * with it rather than from the root barrel so a host imports the pair from one
  * place.
  */
-export { BreakpointSwitcher } from "./breakpoint-switcher";
-export type { BreakpointSwitcherProps } from "./breakpoint-switcher";
+export { BreakpointSwitcher } from "./shell/breakpoint-switcher";
+export type { BreakpointSwitcherProps } from "./shell/breakpoint-switcher";
 
 /**
  * The canvas zoom, and the control that names it.
@@ -291,11 +301,11 @@ export type { BreakpointSwitcherProps } from "./breakpoint-switcher";
  * pure and is exported from the root entry as well, so a host can read a stored
  * preference without pulling a component into a server render.
  */
-export { CanvasZoomControl } from "./canvas-zoom-control";
-export type { CanvasZoomControlProps } from "./canvas-zoom-control";
+export { CanvasZoomControl } from "./canvas/canvas-zoom-control";
+export type { CanvasZoomControlProps } from "./canvas/canvas-zoom-control";
 // The type alone: a host threading a zoom through this entry should not have
 // to import the model from a second one.
-export type { CanvasZoom } from "./canvas-zoom";
+export type { CanvasZoom } from "./canvas/canvas-zoom";
 export {
   breakpointsAtWidth,
   DESKTOP_PREVIEW_WIDTH,
@@ -306,7 +316,7 @@ export {
   previewWidth,
   selectableTiers,
   widthForBreakpoint,
-} from "./canvas-width";
+} from "./canvas/canvas-width";
 
 /**
  * The editor's keyboard actions — moving, deleting, undoing — behind the same
@@ -333,7 +343,7 @@ export type {
   SharedStyleVerbHost,
 } from "./keyboard-actions";
 // Which way "Turn into component…" may go, as the host is told when it opens.
-export type { TurnIntoChoice } from "./toolbar-actions";
+export type { TurnIntoChoice } from "./canvas/toolbar-actions";
 
 /**
  * The floating toolbar, from this entry because it is a client component and
@@ -350,8 +360,8 @@ export type { TurnIntoChoice } from "./toolbar-actions";
  * below `BlockKeyboardActions`, whose verbs it runs. A host that wants to build
  * its own list uses `CommandPalette` with `builderCommands` instead.
  */
-export { EditorCommandPalette } from "./editor-command-palette";
-export type { EditorCommandPaletteProps } from "./editor-command-palette";
+export { EditorCommandPalette } from "./shell/editor-command-palette";
+export type { EditorCommandPaletteProps } from "./shell/editor-command-palette";
 
 /**
  * The right-click menu over the canvas.
@@ -360,11 +370,11 @@ export type { EditorCommandPaletteProps } from "./editor-command-palette";
  * editor assembles from the verbs context so a host does not have to know the
  * three separate facts that mounting one correctly requires.
  */
-export { BlockContextMenu } from "./block-context-menu";
-export type { BlockContextMenuProps } from "./block-context-menu";
+export { BlockContextMenu } from "./canvas/block-context-menu";
+export type { BlockContextMenuProps } from "./canvas/block-context-menu";
 
-export { BlockToolbar } from "./block-toolbar";
-export type { BlockToolbarProps } from "./block-toolbar";
+export { BlockToolbar } from "./canvas/block-toolbar";
+export type { BlockToolbarProps } from "./canvas/block-toolbar";
 
 /**
  * The selected block's margin and padding, drawn over the page.
@@ -378,21 +388,24 @@ export type { BlockToolbarProps } from "./block-toolbar";
  * logical sides to physical ones, `auto` to a used value, percentages against
  * the containing block, and the whole cascade to a winner.
  */
-export { SpacingOverlay } from "./spacing-overlay";
-export type { SpacingOverlayProps } from "./spacing-overlay";
+export { SpacingOverlay } from "./canvas/spacing-overlay";
+export type { SpacingOverlayProps } from "./canvas/spacing-overlay";
 /*
  * The notice a host renders above the canvas while a locked area holds what
  * its lock doesn't allow: it shows the repair's steps and applies them, once
  * confirmed, as one edit. `@experimental` until the editor's lock surfaces
  * ship together.
  */
-export { RepairNotice } from "./repair-notice";
+export { RepairNotice } from "./shell/repair-notice";
 /*
  * The scrub context a host has to supply for a handle to write anywhere but the
  * base breakpoint of the resting state. The overlay defaults to that tier and
  * says so; a host drawing tiers or compiling under a scope passes this instead.
  */
-export type { SpacingScrubContext, SpacingSubject } from "./spacing-handles";
+export type {
+  SpacingScrubContext,
+  SpacingSubject,
+} from "./canvas/spacing-handles";
 
 /**
  * A labelled "+" drawn over every container that has nothing in it.
@@ -404,8 +417,8 @@ export type { SpacingScrubContext, SpacingSubject } from "./spacing-handles";
  * what it has measured, so it belongs behind this entry's banner rather than
  * the root's.
  */
-export { EmptyContainerAppenders } from "./empty-container-appender";
-export type { EmptyContainerAppendersProps } from "./empty-container-appender";
+export { EmptyContainerAppenders } from "./canvas/empty-container-appender";
+export type { EmptyContainerAppendersProps } from "./canvas/empty-container-appender";
 /**
  * The badge on a block whose bound value a visitor will not see, drawn in the
  * canvas's overlay from the host's `visitorUnreadableBindings` answer.
@@ -414,12 +427,18 @@ export { VisitorUnreadableBadges } from "./visitor-unreadable-badges";
 export type { VisitorUnreadableBadgesProps } from "./visitor-unreadable-badges";
 export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
 /**
+ * @experimental Where the host keeps the signed-in author's Recent colours,
+ * provided once around the shell so every colour picker in it, a block's and
+ * a colour variable's, reads and adds to the one list.
+ */
+export { RecentColoursStore } from "./recent-colours";
+/**
  * @experimental A template's document with an entry's own blocks composed
  * into its Entry content block, as the canvas draws it, for a host asking
  * for the sources the drawn page's bindings read.
  */
-export { useComposedEntryContent } from "./entry-content-canvas";
-export type { EntryContentLimits } from "./entry-content-canvas";
+export { useComposedEntryContent } from "./canvas/entry-content-canvas";
+export type { EntryContentLimits } from "./canvas/entry-content-canvas";
 /**
  * @experimental The entry a template is previewed with: the host provides it
  * around a template's editor, and anything inside reads it. `undefined`
@@ -446,16 +465,16 @@ export {
   type AppliedConditions,
   type ConditionsPreview,
   type HiddenBlock,
-} from "./applied-conditions";
+} from "./conditions/applied-conditions";
 export {
   conditionsPreviewOf,
   useAppliedConditions,
   useItemHiddenAs,
   type AppliedConditionsOptions,
   type ItemHiddenOptions,
-} from "./use-applied-conditions";
-export { PageInserters } from "./page-inserters";
-export type { PageInsertersProps } from "./page-inserters";
+} from "./conditions/use-applied-conditions";
+export { PageInserters } from "./canvas/page-inserters";
+export type { PageInsertersProps } from "./canvas/page-inserters";
 
 /**
  * The editor's document state, published beside the canvas because it is a hook
@@ -498,16 +517,23 @@ export {
  * both are plain functions over numbers and ship from the root entry, where a
  * caller can reach them without loading React.
  */
-export { DropIndicator, useCanvasDrag } from "./canvas-drag";
+export { DropIndicator, useCanvasDrag } from "./canvas/canvas-drag";
 /**
  * Typing a block's text in place on the canvas.
  *
  * The hook owns the caret and the handover; the rules about WHAT may be edited
  * are `inline-text`'s, and a block declares its own through its prop schemas.
  */
-export { useInlineText, EDITING_ATTRIBUTE } from "./use-inline-text";
-export type { InlineTextEditing, UseInlineTextResult } from "./use-inline-text";
-export { inlineTargets, inlineTarget, inlineTextOp } from "./inline-text";
+export { useInlineText, EDITING_ATTRIBUTE } from "./canvas/use-inline-text";
+export type {
+  InlineTextEditing,
+  UseInlineTextResult,
+} from "./canvas/use-inline-text";
+export {
+  inlineTargets,
+  inlineTarget,
+  inlineTextOp,
+} from "./canvas/inline-text";
 /**
  * Typing a block's PASSAGE directly on the canvas, and the one gesture that
  * reaches either surface.
@@ -521,7 +547,7 @@ export { inlineTargets, inlineTarget, inlineTextOp } from "./inline-text";
  * classes carry a 630KB chunk that an author who never edits a passage should
  * never fetch.
  */
-export { useInlineEditing } from "./use-inline-editing";
+export { useInlineEditing } from "./canvas/use-inline-editing";
 /**
  * The registry an inspector rich-text field holds its open passage in, so the
  * host's `useInlineEditing` finishes it before the document is stored.
@@ -531,7 +557,7 @@ export { useInlineEditing } from "./use-inline-editing";
  */
 export { createOpenPassages } from "./open-passages";
 export type { OpenPassages } from "./open-passages";
-export type { UseInlineEditingResult } from "./use-inline-editing";
+export type { UseInlineEditingResult } from "./canvas/use-inline-editing";
 /**
  * What a host says when a double-click lands on text a component does not
  * expose: the hook selects the placement and hands the host its id, and the
@@ -550,7 +576,7 @@ export {
   documentAfter,
   INLINE_EDIT_DISCARDED,
   INLINE_EDIT_UNCHANGED,
-} from "./inline-edit-outcome";
+} from "./canvas/inline-edit-outcome";
 export type {
   InlineEditOutcome,
   InlineEditDiscarded,
@@ -558,25 +584,25 @@ export type {
   InlineEditRefused,
   InlineEditUnchanged,
   InlineEditWritten,
-} from "./inline-edit-outcome";
-export { useInlineRichText } from "./use-inline-rich-text";
+} from "./canvas/inline-edit-outcome";
+export { useInlineRichText } from "./canvas/use-inline-rich-text";
 export type {
   InlineRichTextEditing,
   InlineRichTextEditorLoader,
   InlineRichTextFinished,
   UseInlineRichTextResult,
-} from "./use-inline-rich-text";
+} from "./canvas/use-inline-rich-text";
 export {
   richInlineTargets,
   richInlineTarget,
   richInlineTextOp,
   richTextChanged,
-} from "./inline-rich-text";
-export type { InlineRichTextTarget } from "./inline-rich-text";
-export { inlinePropKind } from "./inline-prop-kind";
-export { namedTarget, firstInlineProp } from "./inline-target";
-export type { FirstInlineProp } from "./inline-target";
-export type { InlinePropKind } from "./inline-prop-kind";
+} from "./canvas/inline-rich-text";
+export type { InlineRichTextTarget } from "./canvas/inline-rich-text";
+export { inlinePropKind } from "./canvas/inline-prop-kind";
+export { namedTarget, firstInlineProp } from "./canvas/inline-target";
+export type { FirstInlineProp } from "./canvas/inline-target";
+export type { InlinePropKind } from "./canvas/inline-prop-kind";
 /**
  * The first-run checklist: what an author has not done on this page yet.
  *
@@ -587,26 +613,26 @@ export {
   OnboardingChecklist,
   useBuilderChecklist,
   CHECKLIST_STORAGE_KEY,
-} from "./onboarding-checklist";
+} from "./shell/onboarding-checklist";
 export type {
   OnboardingChecklistProps,
   UseBuilderChecklistOptions,
   UseBuilderChecklistResult,
-} from "./onboarding-checklist";
+} from "./shell/onboarding-checklist";
 export {
   builderChecklist,
   checklistComplete,
   checklistDoneCount,
-} from "./onboarding";
-export type { ChecklistStep } from "./onboarding";
-export type { InlineTextTarget } from "./inline-text";
+} from "./shell/onboarding";
+export type { ChecklistStep } from "./shell/onboarding";
+export type { InlineTextTarget } from "./canvas/inline-text";
 export type {
   CanvasDrag,
   CanvasDragHandlers,
   CanvasDragState,
   DropIndicatorProps,
   UseCanvasDragOptions,
-} from "./canvas-drag";
+} from "./canvas/canvas-drag";
 
 /**
  * The layers panel and the ancestor breadcrumb, behind the same client banner.
@@ -619,18 +645,39 @@ export type {
  * The tree they draw is derived in `layers`, which is plain functions over a
  * document and ships from the root entry.
  */
-export { LayersPanel } from "./layers-panel";
-export type { LayersPanelProps, LayersRegionRow } from "./layers-panel";
+export { LayersPanel } from "./panels/layers/layers-panel";
+export type {
+  LayersPanelProps,
+  LayersRegionRow,
+} from "./panels/layers/layers-panel";
 /*
  * The tokens studio. A host that mounts it owns the site style document and
  * decides when an edit is persisted; this exports the surface, not the save.
  */
+export { GroupToggle } from "./design-group-toggle";
 export { TokensPanel, useVariablesHeader } from "./tokens-panel";
 export type {
+  GroupFolds,
   TokensPanelProps,
   VariablesHeader,
   VariablesPreview,
 } from "./tokens-panel";
+// Which variable groups each Design tab lists, and the one variable search,
+// so a tab's count and the rows it lists come from the same rule.
+export {
+  DESIGN_TAB_GROUPS,
+  searchVariableGroups,
+  variableMatchesByTab,
+} from "./tokens-studio";
+// How many of the Styles tab's styles a search matches, by the tab's own rule,
+// and the way a host hands the tab its search.
+export { stylesTabMatches } from "./styles-tab-matches";
+export { SharedStylesHostSearch } from "./shared-styles-panel";
+// The site's fonts, for every Font control the host draws: the block panel's
+// and a font variable's in Design.
+export { FontChoicesContext } from "./font-family-field";
+export type { FontChoices } from "./font-family-field";
+export type { DesignTab, VariableGroup } from "./tokens-studio";
 /*
  * How widely variables are used, as a host reads it for the Variables view.
  * Experimental, as the view's `usage` is.
@@ -643,21 +690,21 @@ export type {
   VariableUseKind,
   VariableUsesPage,
 } from "./variable-usage";
-export { SelectionBreadcrumb } from "./breadcrumb";
-export type { SelectionBreadcrumbProps } from "./breadcrumb";
+export { SelectionBreadcrumb } from "./shell/breadcrumb";
+export type { SelectionBreadcrumbProps } from "./shell/breadcrumb";
 /*
  * The page reads meter: the reads a page makes against its allowance, from
  * 80% of it a warning, and over it the blocks that went unread.
  */
-export { ReadBudgetMeter } from "./read-budget-meter";
-export type { ReadBudgetMeterProps } from "./read-budget-meter";
-export { readBudgetStanding, READ_WARNING_SHARE } from "./read-budget";
+export { ReadBudgetMeter } from "./shell/read-budget-meter";
+export type { ReadBudgetMeterProps } from "./shell/read-budget-meter";
+export { readBudgetStanding, READ_WARNING_SHARE } from "./shell/read-budget";
 export type {
   PageReadReport,
   ReadBudgetStanding,
   ReadKind,
   UnreadBlock,
-} from "./read-budget";
+} from "./shell/read-budget";
 /*
  * The editor's words, spelled once, for every surface a host draws beside the
  * shell's own: a panel it mounts names its places with these.
@@ -699,8 +746,8 @@ export { sharedStyleNameTaken } from "./shared-style-target";
  * which is why the region stays unpublished: the shell is the one place a
  * queue is drawn.
  */
-export { useNoticeQueue } from "./builder-notices";
-export type { NoticeQueue, RaiseNotice } from "./builder-notices";
+export { useNoticeQueue } from "./shell/builder-notices";
+export type { NoticeQueue, RaiseNotice } from "./shell/builder-notices";
 export { SharedStylesPanel } from "./shared-styles-panel";
 export type {
   ClassRenameOutcome,

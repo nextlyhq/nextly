@@ -649,13 +649,18 @@ const CHANGER_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * A last changer as a refusal shows it: a person by the name their account
- * gives now, never their email, and no name once the account is gone; a
+ * A changer as a refusal shows it: a person by the name their account gives
+ * now, never their email, and no name once the account is gone; a
  * plugin-defined person by their kind alone; anything else by its kind.
  * Undefined for a kind this version of Nextly does not know.
+ *
+ * The one naming rule for "who changed it" wherever a caller who may read the
+ * document is told: a refused save, a recovery point, an entry's details.
+ *
+ * @experimental
  */
-async function shownChanger(
-  changer: LastChanger,
+export async function shownChanger(
+  changer: Pick<LastChanger, "kind" | "id" | "principalKind">,
   namePeople: boolean
 ): Promise<StaleVersionPublicData["changedBy"]> {
   if (!CHANGER_KINDS.has(changer.kind)) return undefined;

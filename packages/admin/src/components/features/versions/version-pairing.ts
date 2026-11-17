@@ -136,9 +136,25 @@ export type PairResolution =
    */
   | { kind: "baseline"; baseline: ServerBaseline; to?: number };
 
-/** The baselines the server resolves by name, spelled as it names them. */
-export const SERVER_BASELINES = ["published", "draft", "last-viewed"] as const;
-export type ServerBaseline = (typeof SERVER_BASELINES)[number];
+/**
+ * A baseline the server resolves by name, spelled as it names it.
+ *
+ * Any name rather than a list kept here: the server's registry is the one
+ * list, and other features add to it (workflows' `since-submitted` and
+ * `since-approved`). The server answers a name it does not know with a
+ * refusal naming the ones it does.
+ */
+export type ServerBaseline = string;
+
+/**
+ * A baseline's name in words: "since-approved" reads "Since approved". Read
+ * from the name itself, so a baseline another feature registers reads as
+ * core's do, with no list of names in the admin.
+ */
+export function baselineLabel(name: ServerBaseline): string {
+  const words = name.replace(/-/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
 
 /**
  * The pair to compare when the address names none: the newest version and what

@@ -51,6 +51,7 @@ import {
   isMessage,
   matchesQuery,
   ownerGroupOf,
+  sendersDisplayOf,
   stateOf,
   compareGroups,
   type MessageGroup,
@@ -149,6 +150,22 @@ function LastSent({ value }: { value: string | null | undefined }) {
   );
 }
 
+function SentWhen({ record }: { record: EmailTemplateRecord }) {
+  const { lines, incompleteNotice } = sendersDisplayOf(record);
+  return (
+    <div className="space-y-0.5">
+      {lines.map((line, index) => (
+        <div key={index}>{line}</div>
+      ))}
+      {incompleteNotice && (
+        <div className="text-xs text-muted-foreground/80">
+          {incompleteNotice}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface ViewProps {
   groups: MessageGroup[];
   showLastSent: boolean;
@@ -173,7 +190,7 @@ function MessagesTable({
             </th>
             <th
               scope="col"
-              className="hidden w-[28%] px-4 py-3 font-medium lg:table-cell"
+              className="hidden w-[28%] px-4 py-3 font-medium md:table-cell"
             >
               Sent when
             </th>
@@ -215,8 +232,8 @@ function MessagesTable({
                     {record.slug}
                   </div>
                 </td>
-                <td className="hidden px-4 py-3 align-top text-muted-foreground lg:table-cell">
-                  {record.description ?? "—"}
+                <td className="hidden px-4 py-3 align-top text-muted-foreground md:table-cell">
+                  <SentWhen record={record} />
                 </td>
                 <td className="px-4 py-3 align-top">
                   <StateBadges record={record} />
@@ -273,11 +290,9 @@ function MessagesCards({
                   actions={actionsFor(record)}
                 />
               </div>
-              {record.description && (
-                <p className="text-sm text-muted-foreground">
-                  {record.description}
-                </p>
-              )}
+              <div className="text-sm text-muted-foreground">
+                <SentWhen record={record} />
+              </div>
               <div className="flex flex-wrap items-center gap-2">
                 <StateBadges record={record} />
                 {showLastSent && (

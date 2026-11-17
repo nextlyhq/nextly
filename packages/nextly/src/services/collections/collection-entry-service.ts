@@ -551,6 +551,8 @@ export class CollectionEntryService extends BaseService {
     sourceLocales?: boolean;
     /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
     translations?: "all";
+    /** Attach `_details`; see `CollectionQueryService.getEntry`. */
+    details?: boolean;
   }) {
     // Rules are judged in the languages the read was asked in, `locale=all`
     // included; the query reads what that request stands for.
@@ -1008,8 +1010,6 @@ export class CollectionEntryService extends BaseService {
       /**
        * The fields this write restored, and the version each came from,
        * recorded per field on the version it captures (see `restored-from`).
-       *
-       * @experimental
        */
       restoredFrom?: FieldSources;
       /**

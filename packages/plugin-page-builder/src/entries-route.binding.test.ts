@@ -13,7 +13,7 @@
  * @module entries-route.binding.test
  */
 import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
-import { clearBlocks } from "@nextlyhq/blocks-engine";
+import { createBlockRegistry } from "@nextlyhq/blocks-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /** The Direct API handle the route reaches, with its list read recorded. */
@@ -30,6 +30,9 @@ import * as registration from "./blocks/registration-service";
 import { ENTRIES_ROUTE_PATH } from "./entries-contract";
 import { entriesRoute } from "./entries-route";
 import { pageBuilder } from "./plugin";
+
+/** The site's block registry the teaser is declared into. */
+const blocks = createBlockRegistry();
 
 /** A registered block whose prop points at `posts`, as a plugin declares one. */
 const teaser = {
@@ -73,7 +76,7 @@ function contextAs(identity: {
  * editor entry: the route reads only for blocks the editor can draw.
  */
 function declareTeaser(): void {
-  const backend = registration.createBlockRegistrationService();
+  const backend = registration.createBlockRegistrationService(blocks);
   const ctx = {
     self: { name: "@acme/teaser" },
     logger: { warn() {}, info() {}, error() {}, debug() {} },
@@ -100,7 +103,7 @@ function declareTeaser(): void {
       },
     },
   } as unknown as Parameters<typeof registration.registerDeclaredBlocks>[0];
-  registration.registerDeclaredBlocks(ctx);
+  registration.registerDeclaredBlocks(ctx, blocks);
 }
 
 const request = (query: string) =>
@@ -124,7 +127,7 @@ describe("the entries route reads AS THE CALLER", () => {
   });
 
   afterEach(() => {
-    clearBlocks();
+    blocks.clear();
   });
 
   it("says overrideAccess: false, with the identity the caller resolved", async () => {
@@ -132,7 +135,7 @@ describe("the entries route reads AS THE CALLER", () => {
       user: { id: "u1", roles: ["editor"], claims: { tenant: "t1" } },
     };
 
-    await entriesRoute().handler(
+    await entriesRoute(blocks).handler(
       request("collection=posts&search=fir"),
       contextAs(identity)
     );
@@ -153,7 +156,7 @@ describe("the entries route reads AS THE CALLER", () => {
   });
 
   it("asks for every status, so an author can choose a draft as in the admin's own picker", async () => {
-    await entriesRoute().handler(
+    await entriesRoute(blocks).handler(
       request("collection=posts"),
       contextAs({ user: { id: "u1", roles: ["editor"] } })
     );
@@ -165,7 +168,7 @@ describe("the entries route reads AS THE CALLER", () => {
   it("forwards an API key's own scope as the actor, so the key is judged on its grants", async () => {
     const scope = { actorType: "apiKey", permissions: ["read-posts"] };
 
-    await entriesRoute().handler(
+    await entriesRoute(blocks).handler(
       request("collection=posts"),
       contextAs({ user: { id: "owner" }, authenticatedScope: scope as never })
     );
@@ -177,7 +180,7 @@ describe("the entries route reads AS THE CALLER", () => {
   });
 
   it("answers the canonical list envelope of { id, title } items", async () => {
-    const response = await entriesRoute().handler(
+    const response = await entriesRoute(blocks).handler(
       request("collection=posts"),
       contextAs({ user: { id: "u1" } })
     );
@@ -198,7 +201,7 @@ describe("the entries route reads AS THE CALLER", () => {
 
   it("reads nothing for a collection no registered block names", async () => {
     await expect(
-      entriesRoute().handler(
+      entriesRoute(blocks).handler(
         request("collection=users"),
         contextAs({ user: { id: "u1" } })
       )

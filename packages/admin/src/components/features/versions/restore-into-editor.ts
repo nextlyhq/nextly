@@ -11,6 +11,7 @@
 import { toast } from "@admin/components/ui";
 import { formatDateTime } from "@admin/lib/dates/format";
 
+import { announce } from "./announce";
 import type { EditorRestoreSurface } from "./document-history-context";
 import type { RestoreRow } from "./restore-plan";
 
@@ -38,8 +39,17 @@ export function restoreIntoEditor(args: {
   // On a translated document, the language the fields went into, as the
   // restore's list named it before.
   const into = args.editor.language ? ` into ${args.editor.language}` : "";
-  toast.success(
-    `${count === 1 ? "1 field" : `${count} fields`} restored${into} from ${when}`,
-    { action: { label: "Undo", onClick: () => applied.undo() } }
-  );
+  const fields = count === 1 ? "1 field" : `${count} fields`;
+  const message = `${fields} restored${into} from ${when}`;
+  toast.success(message, {
+    action: {
+      label: "Undo",
+      onClick: () => {
+        applied.undo();
+        announce(`Restore undone: ${fields} put back as they were`);
+      },
+    },
+  });
+  // Said aloud as well as shown: a toast alone may never reach a screen reader.
+  announce(message);
 }

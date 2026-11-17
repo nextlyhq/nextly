@@ -92,8 +92,12 @@ async function seed(page: Page): Promise<Seeded> {
 /** Open a Layout's edit screen and its Remove Layout dialog. */
 async function openRemove(page: Page, id: string) {
   await gotoAdmin(page, `/collections/layouts/${id}`);
-  await page.getByRole("button", { name: "Remove Layout…" }).click();
-  const dialog = page.getByRole("alertdialog", { name: "Remove Layout" });
+  await page
+    .getByRole("button", { name: "Remove header & footer set…" })
+    .click();
+  const dialog = page.getByRole("alertdialog", {
+    name: "Remove header & footer set",
+  });
   await expect(dialog).toBeVisible();
   return dialog;
 }
@@ -107,11 +111,11 @@ test("refuses the site's default, saying why, with nothing to confirm", async ({
 
   await expect(
     dialog.getByText(
-      "This Layout is the site's default. Choose another default first."
+      "This header & footer set is the site's default. Choose another default first."
     )
   ).toBeVisible();
   await expect(
-    dialog.getByRole("button", { name: "Delete Layout" })
+    dialog.getByRole("button", { name: "Delete header & footer set" })
   ).toHaveCount(0);
   await dialog.getByRole("button", { name: "Close" }).click();
   await expect(dialog).toBeHidden();
@@ -126,7 +130,7 @@ test("lists the pages that use a Layout, each opening the page, and offers only 
 
   await expect(
     dialog.getByText(
-      /^1 page uses this Layout\. Move it to the site default, .+, and then delete or unpublish it, or close and choose another Layout for it yourself\.$/
+      /^1 page uses this header & footer set\. Move it to the site default, .+, and then delete or unpublish it, or close and choose another header & footer set for it yourself\.$/
     )
   ).toBeVisible();
   await expect(
@@ -139,7 +143,7 @@ test("lists the pages that use a Layout, each opening the page, and offers only 
   );
   await expect(link).toHaveAttribute("target", "_blank");
   await expect(
-    dialog.getByRole("button", { name: "Delete Layout" })
+    dialog.getByRole("button", { name: "Delete header & footer set" })
   ).toHaveCount(0);
 });
 
@@ -164,7 +168,7 @@ test("is the only way: the Layout's own delete is refused, naming it", async ({
 
   expect(refused.status()).toBe(409);
   expect(await refused.text()).toContain(
-    "Use Remove Layout… on the Layout's screen to take it down safely."
+    "Use Remove header & footer set… on the set's screen to take it down safely."
   );
 });
 
@@ -174,9 +178,13 @@ test("deletes a Layout no page uses, after a confirm, and returns to the list", 
   const { unused } = await seed(page);
 
   const dialog = await openRemove(page, unused);
-  await expect(dialog.getByText(/No page uses this Layout\./)).toBeVisible();
+  await expect(
+    dialog.getByText(/No page uses this header & footer set\./)
+  ).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Unpublish" })).toBeVisible();
-  await dialog.getByRole("button", { name: "Delete Layout" }).click();
+  await dialog
+    .getByRole("button", { name: "Delete header & footer set" })
+    .click();
 
   await expect(page).toHaveURL(/\/admin\/collections\/layouts$/, {
     timeout: 30_000,

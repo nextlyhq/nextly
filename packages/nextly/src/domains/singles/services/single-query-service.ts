@@ -125,6 +125,7 @@ import { readLocksRows } from "../../../shared/lib/read-transaction-scope";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { Logger } from "../../../shared/types";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
+import { entryDetails } from "../../collections/services/entry-details";
 import { recordWriteEvent } from "../../content-events/write-event";
 import { entityRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import { statedDefaultFits } from "../../dynamic-collections/services/stated-default";
@@ -133,6 +134,7 @@ import {
   withFieldGroupEvidence,
 } from "../../field-groups/live-read-access";
 import { passwordReachOf } from "../../field-groups/password-reach";
+import { fieldGroupFieldsToPopulate } from "../../field-groups/services/field-group-query-service";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
@@ -151,11 +153,13 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
+import { translationProvenancePresent } from "../../i18n/provenance/record-provenance";
 import {
   ALL_LOCALES_KEY,
   detachedCopy,
   judgeEachLanguage,
   keyedByLanguageReach,
+  languagesNotPublishedIn,
   narrowToRowFields,
   publishedInLanguageCondition,
   valuesBesideRow,
@@ -182,6 +186,7 @@ import {
   isTextStorageKind,
 } from "../../schema/services/field-column-descriptor";
 import { captureInTx } from "../../versions/capture-in-tx";
+import { partsCreated } from "../../versions/changed-parts";
 import {
   attachDocumentVersions,
   chainCoversVersion,
@@ -1047,6 +1052,11 @@ export class SingleQueryService extends BaseService {
     translations?: JoinedTranslations;
     /** The documents a due release reveals (`PopulateCompanionArgs.revealed`). */
     revealed?: ReadonlySet<unknown>;
+    /**
+     * On a public read, the languages the Single is not published in, which its field groups'
+     * translations fall back past as its own translated fields do. Absent where nothing is skipped.
+     */
+    componentSkipLanguages?: ReadonlySet<string>;
   }): Promise<SingleDocument> {
     const {
       slug,
@@ -1125,6 +1135,7 @@ export class SingleQueryService extends BaseService {
           // fields blank instead of showing default-language text.
           locale: options.locale,
           fallbackLocale: options.fallbackLocale,
+          skipLanguages: params.componentSkipLanguages,
           // A component's relationship fields copy whole rows out of the target
           // collection, which a Single's field list never describes — so the
           // caller travels down to reach the related row's own rules.
@@ -1550,11 +1561,23 @@ export class SingleQueryService extends BaseService {
         return singleAbsentResult(slug);
       }
       // A public read in a language the Single is not published in finds no
-      // Single, as a collection read finds no entry.
+      // Single, as a collection read finds no entry. Asked of every read, its
+      // translations joined with the document or read apart from it: a read
+      // whose language chain leaves a language of the version out (one with no
+      // fallback) reads them apart, and is held to the same rule.
+      const inLanguage = statusFilter
+        ? (translations ??
+          (await this.languageReadParts(
+            slug,
+            singleMeta,
+            options.locale,
+            options.fallbackLocale
+          )))
+        : null;
       if (
         statusFilter &&
-        translations &&
-        !(await this.publishedInRequestedLanguage(translations, statusFilter, {
+        inLanguage &&
+        !(await this.publishedInRequestedLanguage(inLanguage, statusFilter, {
           slug,
           now: readNow,
         }))
@@ -1579,6 +1602,8 @@ export class SingleQueryService extends BaseService {
         ? undefined
         : await this.languageCountersFirst(singleMeta, doc);
 
+      // Read once for both uses below.
+      const revealed = await this.revealedBy(slug, statusFilter, readNow);
       doc = await this.assembleStoredDocument({
         slug,
         singleMeta: readMeta,
@@ -1588,8 +1613,16 @@ export class SingleQueryService extends BaseService {
         enforceRelatedFieldAccess: true,
         translations,
         // Read as a due release will publish them, as the read admitted it.
-        revealed: new Set<unknown>(
-          await this.revealedBy(slug, statusFilter, readNow)
+        revealed: new Set<unknown>(revealed),
+        // The languages a public reader's field groups fall back past, asked of the fields the
+        // assembly populates field groups from (`readMeta`'s, narrowed by `select`).
+        componentSkipLanguages: await this.componentSkipLanguages(
+          slug,
+          singleMeta,
+          readMeta.fields,
+          doc,
+          statusFilter,
+          revealed
         ),
       });
 
@@ -1614,7 +1647,14 @@ export class SingleQueryService extends BaseService {
       // attach the per-locale `_translations` overview for the admin's language pills
       // (opt-in via `?translation-status=1`). No-op for non-localized singles / public reads.
       if (options.translationStatus) {
-        await this.attachTranslationOverview(slug, singleMeta, doc);
+        // Told the read's status filter, so a language this read hides (a
+        // draft on a published read) is hidden from the overview too.
+        await this.attachTranslationOverview(
+          slug,
+          singleMeta,
+          doc,
+          statusFilter
+        );
       }
 
       // Redact password hashes and the columns that never leave the server
@@ -1719,6 +1759,16 @@ export class SingleQueryService extends BaseService {
         locale: options.locale,
       });
 
+      // After every gate above: only a read already granted is told who
+      // changed the Single and where the site serves it, as an entry's is.
+      if (options.details && doc.id !== undefined && doc.id !== null) {
+        doc._details = await entryDetails({
+          type: { kind: "single", slug },
+          entry: doc,
+          locale: options.locale,
+        });
+      }
+
       return {
         success: true,
         statusCode: 200,
@@ -1817,6 +1867,48 @@ export class SingleQueryService extends BaseService {
   }
 
   /**
+   * On a public read, the languages the Single is not published in: what the field groups it
+   * holds read their translations past, as its own translated fields do. `undefined` where nothing
+   * is skipped; see `languagesNotPublishedIn`. `populated` is the fields the read populates field
+   * groups from: a read that populates none skips nothing, and pays no query for it.
+   */
+  private async componentSkipLanguages(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    populated: readonly FieldConfig[],
+    doc: SingleDocument,
+    statusFilter: StatusFilter | null,
+    revealed: readonly string[]
+  ): Promise<ReadonlySet<string> | undefined> {
+    const id = (doc as { id?: unknown }).id;
+    const companion = this.companionOf(slug, singleMeta);
+    // Asked before the readiness probe, so a trusted or draft read pays nothing for it. Whether the
+    // read populates a field group is the population's own answer (`fieldGroupFieldsToPopulate`):
+    // the assembly hands it `populated` with no selection, which `readMeta` has already applied.
+    if (
+      statusFilter?.isPublicRead !== true ||
+      companion?.hasStatus !== true ||
+      (typeof id !== "string" && typeof id !== "number") ||
+      !this.fieldGroupDataService ||
+      fieldGroupFieldsToPopulate(populated).length === 0
+    ) {
+      return undefined;
+    }
+    const skipped = await languagesNotPublishedIn({
+      db: this.adapter.getDrizzle<
+        Parameters<typeof languagesNotPublishedIn>[0]["db"]
+      >(),
+      companion,
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
+      statusFilter,
+      locales: (this.localization?.locales ?? []).map(l => l.code),
+      ids: [id],
+      revealed,
+    });
+    return skipped?.get(String(id));
+  }
+
+  /**
    * The Single ids a due release reveals to this read at `now`; none for a
    * read of pending work, which a release has nothing to reveal to.
    */
@@ -1841,7 +1933,7 @@ export class SingleQueryService extends BaseService {
    * (`publishedInLanguageCondition`); true where that rule keeps nothing out.
    */
   private async publishedInRequestedLanguage(
-    translations: JoinedTranslations,
+    translations: Omit<JoinedTranslations, "companionRows">,
     statusFilter: StatusFilter,
     /** Which Single, and the instant this read resolves releases against. */
     release: { slug: string; now: Date }
@@ -1859,12 +1951,14 @@ export class SingleQueryService extends BaseService {
       revealed,
       localeChain: translations.localeChain,
       mainIdColumn: (translations.mainTable as { id?: unknown }).id,
-      defaultLocale: this.localization?.defaultLocale,
     });
     if (!condition) return true;
+    // The id alone: a read that selects some fields reads only those columns,
+    // so a column not migrated yet fails only a read that selects it.
     const found = await selectEntryWithCompanion({
       db: this.adapter.getDrizzle(),
       mainTable: translations.mainTable,
+      projection: tableProjection(translations.mainTable, ["id"]),
       where: condition,
       companionTable: translations.companion.table,
       localeChain: translations.localeChain.slice(0, 1),
@@ -1944,22 +2038,45 @@ export class SingleQueryService extends BaseService {
     locale: string | undefined,
     fallbackLocale: string | false | undefined
   ): Promise<Omit<JoinedTranslations, "companionRows"> | null> {
-    const localeChain = resolveLocaleChain(
-      this.localization,
+    const parts = await this.languageReadParts(
+      slug,
+      singleMeta,
       locale,
       fallbackLocale
     );
-    if (!localeChain || !storesPerLanguage(singleMeta)) return null;
     // Joined only when the chain holds every language the version names:
     // otherwise the counters are read before the content, apart from it.
     if (
-      !chainCoversVersion(localeChain, {
+      !parts ||
+      !chainCoversVersion(parts.localeChain, {
         localization: this.localization,
         locale,
       })
     ) {
       return null;
     }
+    return parts;
+  }
+
+  /**
+   * What a read of the Single in a language reads its translations with: the
+   * language chain, the translations table, and the Single's own registered
+   * table. Null when the read resolves no language chain, the Single keeps no
+   * translations, its translations table is not there yet, or the adapter
+   * holds no table for it.
+   */
+  private async languageReadParts(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    locale: string | undefined,
+    fallbackLocale: string | false | undefined
+  ): Promise<Omit<JoinedTranslations, "companionRows"> | null> {
+    const localeChain = resolveLocaleChain(
+      this.localization,
+      locale,
+      fallbackLocale
+    );
+    if (!localeChain || !storesPerLanguage(singleMeta)) return null;
     const companion = this.companionOf(slug, singleMeta);
     if (!companion) return null;
     if (
@@ -2102,10 +2219,11 @@ export class SingleQueryService extends BaseService {
   private async attachTranslationOverview(
     slug: string,
     singleMeta: DynamicSingleRecord,
-    doc: Record<string, unknown>
+    doc: Record<string, unknown>,
+    statusFilter: StatusFilter | null | undefined
   ): Promise<void> {
     try {
-      await this.populateTranslationMeta(slug, singleMeta, doc);
+      await this.populateTranslationMeta(slug, singleMeta, doc, statusFilter);
     } catch (error) {
       // Same reasoning as the overlay above: a failed overview read reaches here, and is
       // normalized rather than handed to the wire as the driver wrote it.
@@ -2124,7 +2242,9 @@ export class SingleQueryService extends BaseService {
   private async populateTranslationMeta(
     slug: string,
     singleMeta: DynamicSingleRecord,
-    doc: Record<string, unknown>
+    doc: Record<string, unknown>,
+    /** The read's lifecycle bound; a public read is told of published languages only. */
+    statusFilter: StatusFilter | null | undefined
   ): Promise<void> {
     // Gate on THIS single's flag, not just app-level localization — a non-localized single has
     // no companion, so there is no per-locale translation status to attach.
@@ -2141,8 +2261,11 @@ export class SingleQueryService extends BaseService {
     // batched lookup the collection read uses, so both overviews answer the
     // question the same way.
     const docId = (doc as { id?: unknown }).id;
+    // A public read is told which languages are published and nothing of the
+    // work in progress, as a collection's public overview is.
+    const publicRead = statusFilter?.isPublicRead === true;
     const pendingChangeLocales =
-      typeof docId === "string"
+      !publicRead && typeof docId === "string"
         ? await new VersionsRepository(this.adapter).findPendingChangeLocales(
             "single",
             slug,
@@ -2155,10 +2278,23 @@ export class SingleQueryService extends BaseService {
       this.adapter,
       companion
     );
+    // Where provenance is recorded (the table is there), each language is
+    // judged by its recorded values, as on a collection.
+    const provenance = (await translationProvenancePresent(
+      this.adapter,
+      this.logger
+    ))
+      ? {
+          scopeKind: "single" as const,
+          scopeSlug: slug,
+          dialect: this.adapter.dialect,
+        }
+      : undefined;
     await populateTranslationStatus({
       db: this.adapter.getDrizzle(),
       companionTable: companion.table,
       pendingChangeLocales,
+      provenance,
       localizedFields: companion.localizedFields,
       rows: [doc],
       locales: this.localization.locales.map(l => l.code),
@@ -2177,6 +2313,7 @@ export class SingleQueryService extends BaseService {
       // So a Single reports staleness for what it can vouch for and stays silent about the rest,
       // which is the same conservative direction the whole feature takes.
       staleness:
+        !publicRead &&
         readiness === "ready" &&
         (await resolveCompanionColumn(
           this.adapter,
@@ -2188,6 +2325,10 @@ export class SingleQueryService extends BaseService {
               dialect: this.adapter.dialect,
             }
           : undefined,
+      // Only on a Single with per-language status and a scoped read, as on a
+      // collection: a published read drops draft translations.
+      statusValues:
+        companion.hasStatus && statusFilter ? statusFilter.values : undefined,
     });
   }
 
@@ -2962,6 +3103,9 @@ export class SingleQueryService extends BaseService {
             // Tagged with the default locale when the snapshot carries seeded
             // translatable defaults; null for a non-localized single (main row only).
             locale: seedLocale,
+            // The shared row the Single begins with, and the language its
+            // seeded translatable defaults went into.
+            changedParts: partsCreated(seedLocale),
             maxPerDoc: versionsConfig.maxPerDoc,
           });
           // Seed the default-locale companion with the localized defaults in the

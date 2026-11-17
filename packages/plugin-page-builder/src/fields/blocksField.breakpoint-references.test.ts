@@ -5,12 +5,19 @@
  * such values unwritten, so this is the editor opened before a removal,
  * saving work that would never reach the page.
  */
-import { DEFAULT_LIMITS, MAX_SCANNED_KEYS } from "@nextlyhq/blocks-engine";
+import {
+  createBlockRegistry,
+  DEFAULT_LIMITS,
+  MAX_SCANNED_KEYS,
+} from "@nextlyhq/blocks-engine";
 import type { PluginFieldWrite } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
 import type { CompositionSetup } from "./blocks-composition";
 import { blocksFieldType } from "./blocksField";
+
+/** The site's block registry these tests judge against: it holds none. */
+const blocks = createBlockRegistry();
 
 /** A text block, with what it stores under each breakpoint. */
 function text(
@@ -68,12 +75,13 @@ function setup() {
   const composition: CompositionSetup = {
     store: { collection: "components", field: "definition" },
     limits: DEFAULT_LIMITS,
+    blocks,
     composesDocuments: false,
     siteDefinitions,
   };
   return {
     siteDefinitions,
-    field: blocksFieldType(undefined, () => composition),
+    field: blocksFieldType(undefined, () => composition, blocks),
   };
 }
 

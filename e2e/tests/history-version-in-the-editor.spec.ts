@@ -14,6 +14,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { expectNoAxeViolations } from "./support/axe";
 
 const ENTRIES = "/admin/api/collections/history-notes/entries";
 
@@ -69,6 +70,9 @@ test.describe("a past version in the editor", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     const id = await noteWithTwoVersions(page);
     await showNewestVersion(page, id);
+    // A version read in the editor, as an assistive technology reads it: the
+    // page's content, where history draws the version and its changes.
+    await expectNoAxeViolations(page, { include: "main" });
 
     // The two fields the second save changed, marked in the form's order; the
     // embedded field group did not change, so it is folded away.
