@@ -227,7 +227,9 @@ describe("the Style tab beside Content", () => {
     render(<InspectorPanel editor={editorFor(documentOf(), null)} />);
 
     expect(screen.queryByRole("tab", { name: "Style" })).toBeNull();
-    expect(screen.getByText("Select a block to edit it.")).toBeDefined();
+    expect(
+      document.querySelector('[data-empty="no-selection"]')
+    ).not.toBeNull();
   });
 });
 
@@ -235,8 +237,8 @@ describe("when there is nothing to style", () => {
   it("says to select a block, rather than rendering an empty panel", () => {
     /*
      * Not covered by the wrapper's own no-selection case: that one renders
-     * `InspectorPanel`, which says "Select a block to edit it." This panel says
-     * "style", and a query matching one does not match the other.
+     * `InspectorPanel`, which shows the document's own settings. This panel
+     * says "style", and draws alone, so it says what to do.
      */
     register({ spacing: true });
     const { container } = render(

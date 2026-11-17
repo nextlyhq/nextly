@@ -546,6 +546,8 @@ describe("the component's fields, with nothing selected", () => {
     }
     render(<Host />);
     expect(screen.queryByRole("region", { name: "Fields" })).toBeNull();
-    expect(screen.getByText("Select a block to edit it.")).toBeTruthy();
+    expect(
+      document.querySelector('[data-empty="no-selection"]')
+    ).not.toBeNull();
   });
 });

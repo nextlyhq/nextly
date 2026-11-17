@@ -177,6 +177,7 @@ import type { SingleAdminOptions } from "@admin/types/entities";
 import type { RemovedFromCodeMark } from "@admin/types/removed-from-code";
 
 import { relaxIdentityRequired } from "./identity-fields";
+import { useSinglePanel, type SinglePanelProps } from "./useSinglePanel";
 import { useSinglePreviewLink } from "./useSinglePreviewLink";
 import { useSinglePreviewPane } from "./useSinglePreviewPane";
 
@@ -603,6 +604,7 @@ function SingleFormRail({
   panel,
   panelOrder,
   placedSectionProps,
+  about,
 }: {
   actionsDisabled: boolean;
   navigationDisabled: boolean;
@@ -621,6 +623,8 @@ function SingleFormRail({
   panelOrder: PanelOrderEntry[] | undefined;
   /** What each section plugins declared at the Single's page is handed. */
   placedSectionProps: SidebarSectionProps | undefined;
+  /** What the panel says about the Single itself (`useSinglePanel`). */
+  about: SinglePanelProps;
 }) {
   const documentId = entry?.id === undefined ? "" : String(entry.id);
   return (
@@ -631,6 +635,7 @@ function SingleFormRail({
     >
       <EntryFormSidebar
         mode="edit"
+        {...about}
         {...(panelOrder === undefined ? {} : { panelOrder })}
         {...(placedSectionProps === undefined ? {} : { placedSectionProps })}
         entry={entry}
@@ -1615,6 +1620,13 @@ export function SingleForm({
   // collection entry's page.
   const { panelOrder, sectionsAboveForm, placedSectionProps } =
     useDocumentPanelParts(documentPlace, panel.mode === "sheet");
+  // What the panel says about the Single: what it is, its last change and
+  // who made it, its API address, and its history.
+  const singlePanel = useSinglePanel({
+    schema,
+    documentId: document.id ? String(document.id) : undefined,
+    locale,
+  });
 
   const localeCtx = useEntryLocaleContext({
     locale,
@@ -2109,6 +2121,7 @@ export function SingleForm({
                                   panel={panel}
                                   panelOrder={panelOrder}
                                   placedSectionProps={placedSectionProps}
+                                  about={singlePanel}
                                   {...(locale === undefined ? {} : { locale })}
                                   {...(switchLocale === undefined
                                     ? {}
