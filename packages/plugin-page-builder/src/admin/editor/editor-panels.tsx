@@ -92,6 +92,7 @@ import {
 import type { FontsPanelWithUpload as FontsPanelWithUploadPart } from "./site-style-fonts";
 import {
   offerableFaces,
+  ColoursTab,
   offerableTokens,
   renderedTokens,
   SharedStylesStudio,
@@ -834,10 +835,12 @@ export type EditorPanels = OfferedLibrary &
  */
 export function editorPanelRenderer({
   editor,
+  documentLimits,
   componentLibrary,
   componentVerbs,
   componentView,
   layersRegions,
+  canvasRegions,
   drag,
   offered,
   offerablePatterns,
@@ -868,7 +871,10 @@ export function editorPanelRenderer({
   designReveal,
   onDesignRevealed,
   pictureSession,
-}: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
+}: Pick<
+  EditorMount,
+  "editor" | "componentLibrary" | "componentVerbs" | "documentLimits"
+> & {
   /** The look edited on its own, which the Design panel's Block looks choose. */
   lookEditing?: LookEditingState;
   /**
@@ -921,6 +927,7 @@ export function editorPanelRenderer({
     | "pages"
     | "designFolds"
     | "pictureSession"
+    | "canvasRegions"
   > &
   Partial<
     Pick<EditorPanels, "designReveal" | "onDesignRevealed">
@@ -1104,7 +1111,14 @@ export function editorPanelRenderer({
             </>
           )}
           tabs={{
-            colours: () => <VariablesTab tab="colours" />,
+            colours: () => (
+              <ColoursTab
+                document={editor.document}
+                components={componentLibrary.definitions}
+                regions={canvasRegions}
+                limits={documentLimits}
+              />
+            ),
             // Type: the site's fonts, then the type sizes and the font and
             // weight variables.
             type: () => (

@@ -35,13 +35,16 @@
  */
 import {
   MAX_TOKEN_NAME_LENGTH,
-  MAX_TOKEN_PREFIX_LENGTH,
   blockLabelFrom,
-  contentWidthTokenOf,
+  documentTokenUsage,
+  onlySiteProperties,
+  onlyVariableIdentities as onlyVariables,
+  styleSitePropertiesIn as propertiesIn,
+  styleVariablesIn as variablesIn,
+  type TokenUsage,
   isPlainRecord,
   isTokenName,
   resolveTokenPrefix,
-  selectNodes,
   tokenCustomProperty,
   tokenDisplayLabel,
   tokenIdentity,
@@ -81,101 +84,6 @@ export type TokenUsageRow = UsageSubject & {
 export const UNDETERMINED_TOKEN_ID: string = `undetermined:${"-".repeat(
   MAX_TOKEN_NAME_LENGTH
 )}`;
-
-/** What a stored document says about the variables it uses. */
-export interface TokenUsage {
-  /**
-   * The variable identities the document's `$token` references name, sorted,
-   * without repeats: what a write naming a variable the site lacks is judged
-   * by (`token-reference-judgement`).
-   */
-  ids: string[];
-  /**
-   * The custom properties the document's CSS text reads through `var()` that
-   * a site variable could be written under ({@link namesASiteProperty}),
-   * sorted, without repeats. Not in `ids`: which variable one names depends
-   * on the site's prefix, and a `var()` naming none is CSS the author typed,
-   * never a reference to refuse.
-   */
-  properties: string[];
-  /**
-   * Whether the whole document was read. False when a bound ended the node
-   * selection early, so `ids` is a SUBSET and an absence proves nothing.
-   */
-  complete: boolean;
-  /**
-   * How many blocks use each variable through `$token`, by identity: a block
-   * counts once however many of its values name it. A variable used only by the
-   * document's own `settings.styles` is in `ids` and absent here, since no
-   * block uses it. A Map, so an identity such as `__proto__` is a key like
-   * any other.
-   */
-  blocks: ReadonlyMap<string, number>;
-}
-
-/**
- * Whether a stored reference can name a variable the site could write.
- * Longer identities are never emitted, so they use nothing, and skipping them
- * is what keeps {@link UNDETERMINED_TOKEN_ID} disjoint from every reference.
- */
-function namesAVariable(identity: string): boolean {
-  return identity.length <= MAX_TOKEN_NAME_LENGTH;
-}
-
-/** The identities in `found` that can name a variable at all. */
-function onlyVariables(found: Set<string>): Set<string> {
-  for (const identity of found) {
-    if (!namesAVariable(identity)) found.delete(identity);
-  }
-  return found;
-}
-
-/** The variables one style envelope names that can name a variable at all. */
-function variablesIn(styles: unknown): Set<string> {
-  const found = new Set<string>();
-  styleEnvelopeTokens(styles, found);
-  return onlyVariables(found);
-}
-
-/**
- * The longest custom property a site writes a variable under: the longest
- * prefix the engine accepts and the longest identity it writes.
- */
-const MAX_SITE_PROPERTY_LENGTH =
-  MAX_TOKEN_PREFIX_LENGTH + MAX_TOKEN_NAME_LENGTH;
-
-/**
- * The alphabet of every custom property a site writes a variable under: a
- * prefix is `--` then lowercase letters, digits and dashes (`safeTokenPrefix`),
- * and an identity's dots are written as dashes (`tokenCustomProperty`).
- */
-const SITE_PROPERTY = /^--[a-z0-9-]+$/;
-
-/**
- * Whether a custom property is one a site variable could be written under:
- * any other names no variable on any site, so it uses nothing. Length first,
- * so the pattern never scans an oversized name.
- */
-function namesASiteProperty(property: string): boolean {
-  return (
-    property.length <= MAX_SITE_PROPERTY_LENGTH && SITE_PROPERTY.test(property)
-  );
-}
-
-/** The properties in `found` a site variable could be written under. */
-function onlySiteProperties(found: Set<string>): Set<string> {
-  for (const property of found) {
-    if (!namesASiteProperty(property)) found.delete(property);
-  }
-  return found;
-}
-
-/** The site properties one style envelope's CSS text reads through `var()`. */
-function propertiesIn(styles: unknown): Set<string> {
-  const found = new Set<string>();
-  styleEnvelopeProperties(styles, found);
-  return onlySiteProperties(found);
-}
 
 /**
  * What marks a usage key as a custom property rather than an identity: a
@@ -316,64 +224,17 @@ export function variablesAsked(
   };
 }
 
-/** Add each of `from` to `into`. */
-function addEach(into: Set<string>, from: Iterable<string>): void {
-  for (const value of from) into.add(value);
-}
-
 /**
- * The variables one node names through `$token`: in its styles, and as its
- * own content width, a prop the compiler writes from, so a variable it
- * names is used as one in the styles is.
- */
-function nodeVariables(node: unknown, styles: unknown): Set<string> {
-  const found = variablesIn(styles);
-  const ownWidth = contentWidthTokenOf(node);
-  if (ownWidth !== undefined && namesAVariable(ownWidth)) found.add(ownWidth);
-  return found;
-}
-
-/**
- * The variables a stored document uses, and whether it could all be read.
- *
- * Total by construction: persisted data arrives unvalidated, and a shape this
- * cannot read contributes nothing rather than raising. `limits` is required,
- * as the component reader's is: the caller is the index, which must read
- * under the bounds the page is drawn with.
+ * The variables a stored document uses, and whether it could all be read:
+ * the engine's walk (`documentTokenUsage`), over the stored JSON read.
+ * Total by construction: persisted data arrives unvalidated, and a shape the
+ * walk cannot read contributes nothing rather than raising.
  */
 export function tokenUsageOf(
   stored: unknown,
   limits: DocumentLimits
 ): TokenUsage {
-  const document = readStoredJson(stored);
-  if (!isPlainRecord(document) || !Array.isArray(document.nodes)) {
-    return { ids: [], properties: [], complete: true, blocks: new Map() };
-  }
-  // The compiler's own selection, so a variable on a node the stylesheet
-  // writes rules for is never missed, and a bound that ends it says so.
-  const selection = selectNodes(document, limits);
-  const blocks = new Map<string, number>();
-  const properties = new Set<string>();
-  for (const entry of selection.nodes) {
-    const styles: unknown = (entry.node as { styles?: unknown }).styles;
-    addEach(properties, propertiesIn(styles));
-    for (const identity of nodeVariables(entry.node, styles)) {
-      blocks.set(identity, (blocks.get(identity) ?? 0) + 1);
-    }
-  }
-  const ids = new Set(blocks.keys());
-  // The document's own styles, which the compiler emits as well.
-  const settings = isPlainRecord(document.settings)
-    ? document.settings.styles
-    : undefined;
-  addEach(ids, variablesIn(settings));
-  addEach(properties, propertiesIn(settings));
-  return {
-    ids: [...ids].sort(),
-    properties: [...properties].sort(),
-    complete: selection.stopped === undefined,
-    blocks,
-  };
+  return documentTokenUsage(readStoredJson(stored), limits);
 }
 
 /** A shared style naming a variable: its id, its name, and a look's block type. */
