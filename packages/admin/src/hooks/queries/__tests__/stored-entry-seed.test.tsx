@@ -212,6 +212,45 @@ describe("the edit page's entry reads", () => {
     ).toBeUndefined();
   });
 
+  it("keeps the newer stored read when an older populated read answers after it", async () => {
+    server();
+    const { client, wrapper } = clientAndWrapper();
+    const { result } = renderHook(() => usePair(), { wrapper });
+    await waitFor(() => expect(result.current.stored.data).toBeDefined());
+    const answers: ((value: unknown) => void)[] = [];
+    get.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          answers.push(resolve);
+        })
+    );
+    // Two refetches of the populated read alone, the first superseded.
+    const older = result.current.populated.refetch();
+    const newer = result.current.populated.refetch({ cancelRefetch: true });
+    await waitFor(() => expect(answers).toHaveLength(2));
+    const v2 = { ...stored, updatedAt: "v2" };
+    const v3 = { ...stored, updatedAt: "v3" };
+    // Answered newest first.
+    answers[1]?.({ ...populated, updatedAt: "v3", _stored: v3 });
+    await act(async () => {
+      await newer.catch(() => undefined);
+    });
+    await waitFor(() =>
+      expect(
+        client.getQueryData(storedEntryKey("pages", "e1", { draft: true }))
+      ).toEqual(v3)
+    );
+    answers[0]?.({ ...populated, updatedAt: "v2", _stored: v2 });
+    await act(async () => {
+      await older.catch(() => undefined);
+      await Promise.resolve();
+    });
+
+    expect(
+      client.getQueryData(storedEntryKey("pages", "e1", { draft: true }))
+    ).toEqual(v3);
+  });
+
   it("leaves the next account's stored read alone when a read sent before sign-out answers late", async () => {
     server();
     const { client, wrapper } = clientAndWrapper();

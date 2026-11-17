@@ -60,6 +60,8 @@ interface Carried {
   taken: boolean;
   /** The stored read it is carried for: the query under its key as it was sent. */
   readonly query: Query | undefined;
+  /** When that stored read last took an answer, as this was sent. */
+  readonly storedAt: number | undefined;
 }
 
 /** The query `client` holds under `key` now, if any. */
@@ -106,6 +108,7 @@ export function readCarryingStored<T>(
     answer: response.then(storedOf, () => undefined),
     taken: false,
     query,
+    storedAt: query?.state.dataUpdatedAt,
   };
   onTheWay.set(hash, carried);
   void carried.answer.then(stored => {
@@ -114,10 +117,13 @@ export function readCarryingStored<T>(
     // Not asked for: the stored read is not reading, so it is handed this
     // one, of the same version as the populated read beside it. Only the
     // stored read it was sent beside: a cache emptied meanwhile (a sign-out),
-    // or holding another query under the key, gets nothing.
+    // or holding another query under the key, gets nothing. Nor one given a
+    // newer answer since this was sent (a later read's, a save's): an older
+    // read answering last never puts its version back.
     const now = queryUnder(queryClient, storedKey);
     if (now === undefined || now !== query) return;
     if (now.state.fetchStatus === "fetching") return;
+    if (now.state.dataUpdatedAt !== carried.storedAt) return;
     queryClient.setQueryData(storedKey, stored);
   });
   return response.then(withoutStored);
