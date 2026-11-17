@@ -412,3 +412,66 @@ describe("a form in a Layout's header or footer", () => {
     ).toBe("core/form");
   });
 });
+
+describe("a form on a page the site lets grow past the default size", () => {
+  it("is found under the site's own limits, as its page is drawn", async () => {
+    const { COMPONENT_INSTANCE_TYPE, DEFAULT_LIMITS } = await import(
+      "@nextlyhq/blocks-engine"
+    );
+    const filler = Array.from(
+      { length: DEFAULT_LIMITS.maxNodes },
+      (_, index): BlockNode => ({
+        id: `p${index}`,
+        type: "core/paragraph",
+        version: 1,
+        props: {},
+      })
+    );
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [form("late-form")],
+    };
+    const host = page([
+      ...filler,
+      {
+        id: "placed",
+        type: COMPONENT_INSTANCE_TYPE,
+        version: 1,
+        props: { componentId: "c1" },
+      },
+    ]);
+    const limits = {
+      ...DEFAULT_LIMITS,
+      maxNodes: DEFAULT_LIMITS.maxNodes + 100,
+    };
+    const { coreBlocks } = await import("@nextlyhq/blocks-react/blocks");
+    const { createBlockResolver, prepareDocumentForRead } = await import(
+      "@nextlyhq/blocks-react"
+    );
+    const drawnId = prepareDocumentForRead(host as never, {
+      resolver: createBlockResolver(coreBlocks as never),
+      definitions: new Map([["c1", definition as never]]),
+      limits,
+    })?.nodes.find(node => node.type === "core/form")?.id;
+    // Must-be-found: the site's page does draw the form.
+    expect(drawnId).toBeDefined();
+
+    const { api } = directApi({
+      pages: [{ id: "p1", content: host }],
+      components: [{ id: "c1", content: definition }],
+    });
+    expect(
+      (
+        await publishedNode(
+          api,
+          STORES,
+          { kind: "page", id: "p1" },
+          drawnId ?? "",
+          undefined,
+          limits
+        )
+      )?.type
+    ).toBe("core/form");
+  });
+});

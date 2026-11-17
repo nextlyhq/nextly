@@ -205,6 +205,12 @@ describe("each field type, drawn", () => {
     );
   });
 
+  it("lets a Number take a fraction, as the receiver does", async () => {
+    // Without `step="any"` the browser allows whole numbers only, a rule the
+    // receiver does not hold a post to.
+    expect(controlOf(await drawn("number"), "answer")).toContain('step="any"');
+  });
+
   it("draws Long text as a textarea", async () => {
     expect(controlOf(await drawn("textarea"), "answer")).toMatch(/^<textarea/);
   });

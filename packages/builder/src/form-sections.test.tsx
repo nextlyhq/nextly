@@ -27,7 +27,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
-import { moved } from "./form-fields-control";
+import { moved, openAfterMove } from "./form-fields-control";
 import { InspectorPanel } from "./inspector-panel";
 
 beforeAll(() => {
@@ -227,6 +227,46 @@ describe("a Form's Fields", () => {
     ).toEqual(["Message", "Name", "Email"]);
   });
 
+  it("keeps the open field open when another field moves past it", () => {
+    // [A, B, C] with B open; A moves after C: B is now first.
+    expect(openAfterMove(1, 0, 2)).toBe(0);
+    // The open field itself moves with its row.
+    expect(openAfterMove(0, 0, 2)).toBe(2);
+    // C moves before A: B, then second, is now third.
+    expect(openAfterMove(1, 2, 0)).toBe(2);
+    // A move that does not cross it leaves it where it was.
+    expect(openAfterMove(0, 1, 2)).toBe(0);
+    expect(openAfterMove(null, 1, 2)).toBeNull();
+  });
+
+  it("draws a stored field whose words are not text, rather than failing", () => {
+    mount({ fields: [{ label: 42 }, { label: "Email", type: 7 }] as never });
+    expect(within(fieldsList()).getAllByRole("listitem")).toHaveLength(2);
+  });
+
+  it("shows the name an answer is sent under where the written one is taken", () => {
+    mount({
+      fields: [
+        { label: "Email", name: "email" },
+        { label: "Work email", name: "email" },
+      ],
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Work email/ }));
+    expect(screen.getByText("Sent as email-2.")).toBeDefined();
+  });
+
+  it("adds no field past the most a form draws", () => {
+    mount({
+      fields: Array.from({ length: 100 }, (_, index) => ({
+        label: `F${index}`,
+      })),
+    });
+    expect(
+      (screen.getByRole("button", { name: "+ Add field" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(true);
+  });
+
   it("moves within the list, and never past either end", () => {
     expect(moved(["a", "b", "c"], 0, 2)).toEqual(["b", "c", "a"]);
     expect(moved(["a", "b"], 1, 9)).toEqual(["a", "b"]);
@@ -290,5 +330,32 @@ describe("a Form's After sending", () => {
         "Use the form's own setting (Go to a page)"
       )
     ).toBeDefined();
+  });
+});
+
+describe("a Form inside a component's own view", () => {
+  it("keeps After sending's switch to expose it as a field of the component", async () => {
+    const { formSectionBodies } = await import("./form-sections");
+    const { inspectSelection } = await import("./inspector");
+    registerBlocks([form] as never, { source: "form-sections-expose" });
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "f", type: "core/form", version: 2, props: {} } as BlockNode,
+      ],
+    } as BlockDocument;
+    const inspection = inspectSelection(document, "f");
+    const bodies = formSectionBodies({
+      inspection: inspection!,
+      stored: {},
+      services: undefined,
+      writable: () => true,
+      onCommit: () => undefined,
+      rowsOf: () => <></>,
+      exposeOf: prop => <span data-testid="expose">{prop.name}</span>,
+    });
+    render(<>{bodies?.get("After sending")}</>);
+    expect(screen.getByTestId("expose").textContent).toBe("afterSending");
   });
 });

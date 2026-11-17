@@ -261,6 +261,9 @@ function control(field: FormFieldDrawing, args: FieldDrawArgs): ReactElement {
       {...shared}
       type={field.kind}
       {...constraints(field)}
+      // Any number, a fraction too, as the receiver takes it: without this
+      // the browser allows whole numbers only.
+      {...(field.kind === "number" ? { step: "any" } : {})}
       {...(field.kind === "file" && field.accept !== undefined
         ? { accept: field.accept }
         : {})}
@@ -275,7 +278,15 @@ export function drawField(
 ): ReactElement {
   const { id, partClass } = args;
   if (field.kind === "hidden") {
-    return <input key={id} type="hidden" name={field.name} value="" />;
+    return (
+      <input
+        key={id}
+        type="hidden"
+        name={field.name}
+        value=""
+        {...providerData(field)}
+      />
+    );
   }
   if (field.kind === "radio" || (field.kind === "checkbox" && field.options)) {
     return drawChoices(field, args);

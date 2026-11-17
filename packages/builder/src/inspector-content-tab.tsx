@@ -249,6 +249,16 @@ function ContentSurface({
       onCommit(name, value);
     },
     rowsOf: fieldsFor,
+    exposeOf:
+      fields === undefined
+        ? undefined
+        : prop => (
+            <PropExposeControl
+              binding={fields}
+              nodeId={inspection.nodeId}
+              prop={prop}
+            />
+          ),
   });
   // Each section the block places in Content, folding on its own, after
   // the one the builder draws for a core block (Columns' layout); a block

@@ -178,6 +178,28 @@ describe("a provider's form on a published page", () => {
     );
   });
 
+  it("carries a hidden field's opaque values too", async () => {
+    const out = await page(
+      formsAnswering(() =>
+        Promise.resolve({
+          ...CONTACT,
+          fields: [
+            {
+              name: "token",
+              label: "Token",
+              kind: "hidden",
+              provider: { challenge: "token" },
+            },
+          ],
+        })
+      ),
+      PICKED
+    );
+    const hidden =
+      out.match(/<input[^>]*type="hidden"[^>]*name="token"[^>]*>/)?.[0] ?? "";
+    expect(hidden).toContain('data-challenge="token"');
+  });
+
   it("carries the provider's opaque values for its own script, never the page builder's names", async () => {
     const out = await page(
       formsAnswering(() => Promise.resolve(CONTACT)),

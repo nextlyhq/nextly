@@ -73,7 +73,10 @@ export {
 export { PageRenderer } from "./page-renderer";
 // A simple form's fields with their defaults applied, their sent names among
 // them, for the editor to show the name a field's answer goes under.
-export { formFields } from "./blocks/form-fields";
+export {
+  formFields,
+  MAX_FIELDS as FORM_MAX_FIELDS,
+} from "./blocks/form-fields";
 // Binding sources read on a server, carried to the editor's canvas and read
 // back there. `@experimental` with the editor's binding sources.
 export {

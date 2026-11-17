@@ -70,6 +70,11 @@ export interface FormSectionsContext {
   readonly onCommit: (name: string, value: unknown) => void;
   /** The generated rows for `rows`, as the tab draws any section's. */
   readonly rowsOf: (rows: readonly EditableProp[]) => React.JSX.Element;
+  /**
+   * In a component's own view, a setting's switch to expose it as a field
+   * of the component, as the generated rows draw one for each setting.
+   */
+  readonly exposeOf?: ((prop: EditableProp) => React.ReactNode) | undefined;
 }
 
 /**
@@ -85,6 +90,9 @@ export function formSectionBodies(
   const pageRows = inspection.props.filter(prop => PAGE_PROPS.has(prop.name));
   const messageRows = inspection.props.filter(prop => prop.name === "message");
   const fieldsProp = inspection.props.find(prop => prop.name === "fields");
+  const afterSendingProp = inspection.props.find(
+    prop => prop.name === "afterSending"
+  );
   return new Map([
     [
       FIELDS_SECTION,
@@ -99,16 +107,20 @@ export function formSectionBodies(
     ],
     [
       AFTER_SENDING_SECTION,
-      <AfterSendingControl
-        key="after-sending"
-        id={`${inspection.nodeId}-after-sending`}
-        props={values}
-        disabled={name => !writable(name)}
-        services={context.services}
-        onCommit={onCommit}
-        message={context.rowsOf(messageRows)}
-        page={context.rowsOf(pageRows)}
-      />,
+      <React.Fragment key="after-sending">
+        <AfterSendingControl
+          id={`${inspection.nodeId}-after-sending`}
+          props={values}
+          disabled={name => !writable(name)}
+          services={context.services}
+          onCommit={onCommit}
+          message={context.rowsOf(messageRows)}
+          page={context.rowsOf(pageRows)}
+        />
+        {afterSendingProp === undefined
+          ? null
+          : context.exposeOf?.(afterSendingProp)}
+      </React.Fragment>,
     ],
   ]);
 }

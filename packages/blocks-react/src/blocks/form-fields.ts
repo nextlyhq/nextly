@@ -76,7 +76,7 @@ export interface FormField {
  * an accidentally long form would lose every field rather than the ones past
  * the end. Well above any form a person fills in, and well below the budget.
  */
-const MAX_FIELDS = 100;
+export const MAX_FIELDS = 100;
 
 /** How many options one field reads, for the same reason as {@link MAX_FIELDS}. */
 const MAX_OPTIONS = 100;

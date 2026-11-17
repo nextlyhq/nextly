@@ -32,6 +32,7 @@ import {
   resolveComponentInstances,
   type BlockDocument,
   type BlockNode,
+  type DocumentLimits,
   type RegionArea,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -139,13 +140,15 @@ export async function publishedNode(
   stores: DefiningStores,
   document: DefiningDocument,
   nodeId: string,
-  locale: string | undefined
+  locale: string | undefined,
+  /** The site's document limits, which its pages are drawn under. */
+  limits: DocumentLimits = DEFAULT_LIMITS
 ): Promise<BlockNode | null> {
   const nodes = await publishedNodes(api, stores, document, locale);
   if (nodes === null) return null;
   const found =
     findNode(nodes, nodeId) ??
-    (await composedNode(api, stores, nodes, nodeId, locale));
+    (await composedNode(api, stores, nodes, nodeId, locale, limits));
   if (found !== null || document.kind !== "component") return found;
   // A component a Layout places in its header or footer is drawn through
   // that region's placement, which gives its nodes ids of their own.
@@ -155,7 +158,8 @@ export async function publishedNode(
       stores,
       regionDocument([{ area, componentId: document.id }]).nodes,
       nodeId,
-      locale
+      locale,
+      limits
     );
     if (placed !== null) return placed;
   }
@@ -173,7 +177,8 @@ async function composedNode(
   stores: DefiningStores,
   nodes: BlockNode[],
   nodeId: string,
-  locale: string | undefined
+  locale: string | undefined,
+  limits: DocumentLimits
 ): Promise<BlockNode | null> {
   const document: BlockDocument = {
     formatVersion: DOCUMENT_FORMAT_VERSION,
@@ -197,15 +202,15 @@ async function composedNode(
       }
       return readable;
     },
-    DEFAULT_LIMITS
+    limits
   );
   if (definitions.size === 0) return null;
   // The renderer's first passes, in its order: shape repair, then
   // composition, which is what derives each placed node's id.
   const composed = resolveComponentInstances(
-    sanitizeDocument(document, DEFAULT_LIMITS),
-    repairingLookup(definitions, DEFAULT_LIMITS),
-    { limits: DEFAULT_LIMITS }
+    sanitizeDocument(document, limits),
+    repairingLookup(definitions, limits),
+    { limits: limits }
   );
   return findNode(composed.document.nodes, nodeId) ?? null;
 }

@@ -492,6 +492,14 @@ export function buildContentRoute(
     });
     if (entry === null) return null;
     const route = entryRouteOf(holder.collection);
+    // A later page's lookup was answered with the entry's space; its own
+    // address, and the first page's second spelling, ask the store.
+    const paged =
+      holder.kind === "space" ||
+      (await holdsLaterPages(holder, place.segments, language.locale));
+    // The entry's own address in the request's language, which its list's
+    // later pages extend.
+    const first = await servedAddress(pathOf(place.segments), language);
     const drawn = {
       ...entry,
       [TEMPLATE_DOCUMENT_KEY]: template.document,
@@ -503,16 +511,11 @@ export function buildContentRoute(
         id: holder.id,
         field: "",
         design: true,
+        // The entry's own address as this route serves it, its mount
+        // included, which a visitor sending a form comes back to.
+        returnTo: first,
       },
     };
-    // A later page's lookup was answered with the entry's space; its own
-    // address, and the first page's second spelling, ask the store.
-    const paged =
-      holder.kind === "space" ||
-      (await holdsLaterPages(holder, place.segments, language.locale));
-    // The entry's own address in the request's language, which its list's
-    // later pages extend.
-    const first = await servedAddress(pathOf(place.segments), language);
     // The addresses of the entry's list pages, as this route serves them, so
     // the list's links name exactly the pages the store gives the entry, and
     // none while it gives the entry none: the list is then drawn unpaged.

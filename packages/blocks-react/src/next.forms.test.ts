@@ -170,6 +170,31 @@ describe("a form in a header or footer", () => {
   });
 });
 
+describe("an entry's page under a route mounted below the root", () => {
+  it("comes back to the entry's own address, its mount included", async () => {
+    offerForms();
+    const { routedFormsFor, FORM_DOCUMENT_KEY } = await import("./next-forms");
+    const forms = await routedFormsFor({
+      entry: {
+        id: "e1",
+        [FORM_DOCUMENT_KEY]: {
+          collection: "posts",
+          id: "e1",
+          field: "",
+          design: true,
+          returnTo: "/news/story",
+        },
+      },
+      field: "__nextlyTemplateDocument",
+      route: { collection: "posts", slug: "story" },
+      cacheScope: undefined,
+      language: { fromSegment: false },
+      revalidate: undefined,
+    });
+    expect(forms?.page.returnTo).toBe("/news/story");
+  });
+});
+
 describe("an entry's page drawn by its design", () => {
   it("names the entry, so the receiver draws it as its page does", async () => {
     const { rows } = offerForms();
@@ -193,5 +218,34 @@ describe("an entry's page drawn by its design", () => {
     expect(rows).toEqual([
       { collection: "posts", id: "e1", field: "", design: true },
     ]);
+  });
+});
+
+describe("a region drawn with no shared context", () => {
+  it("still gets its forms", async () => {
+    const { drawWithRegions } = await import("./page-read-stages");
+    const drawn = drawWithRegions({
+      regions: [
+        {
+          region: { area: "header", componentId: "c2" },
+          document,
+          prepared: null,
+        },
+      ],
+      page: { document } as never,
+      shared: {} as never,
+      siteStyles: undefined,
+      definitions: new Map(),
+      formsFor: id => ({
+        action: "/send",
+        returnTo: "/",
+        document: `component:${id}`,
+        describe: async () => ({ unavailable: "missing" }),
+      }),
+    }) as ReactElement<{ children?: ReactElement<PageRendererProps> }>[];
+    const header = drawn.find(element => element.type === "header");
+    expect(header?.props.children?.props.context?.forms?.document).toBe(
+      "component:c2"
+    );
   });
 });

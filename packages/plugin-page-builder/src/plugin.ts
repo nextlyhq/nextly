@@ -509,6 +509,7 @@ export const pageBuilder = (
         formReceiverRoute({
           providers: formProviders,
           componentStore: componentStoreOf(opts),
+          ...(opts.limits === undefined ? {} : { limits: opts.limits }),
         }),
       ],
       // The grant that lets a role change the site's settings in the editor's

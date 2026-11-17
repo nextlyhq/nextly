@@ -16,7 +16,7 @@
  *
  * @module form-fields-control
  */
-import { formFields } from "@nextlyhq/blocks-react";
+import { FORM_MAX_FIELDS, formFields } from "@nextlyhq/blocks-react";
 import {
   Button,
   Input,
@@ -51,11 +51,56 @@ export interface FieldTypeChoice {
 /** The types that take a list of options. */
 const CHOICE_TYPES: ReadonlySet<string> = new Set(["select", "radio"]);
 
-/** A stored list member as a field, or an empty one. */
+/** Text, or `undefined` for anything else. */
+function textOr(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * A stored list member as a field, every setting this control reads checked:
+ * a stored array can hold anything, and a label that is not text must not
+ * stop the Fields from being drawn.
+ */
 function asSpec(value: unknown): FormFieldSpec {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value
-    : {};
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {};
+  }
+  const field: Record<string, unknown> = {
+    ...(value as Record<string, unknown>),
+  };
+  // A setting of a shape this control cannot read is left out of the field
+  // it draws, and so out of what it writes back.
+  for (const key of ["label", "name", "type"]) {
+    if (field[key] !== undefined && textOr(field[key]) === undefined) {
+      delete field[key];
+    }
+  }
+  if (field.options !== undefined) {
+    if (Array.isArray(field.options)) {
+      field.options = field.options.filter(
+        (option): option is string => typeof option === "string"
+      );
+    } else {
+      delete field.options;
+    }
+  }
+  return field;
+}
+
+/**
+ * Where the open field is once the field at `from` moves to `to`: with it,
+ * where it is the one moved, and one place along where the move crosses it.
+ */
+export function openAfterMove(
+  open: number | null,
+  from: number,
+  to: number
+): number | null {
+  if (open === null) return null;
+  if (open === from) return to;
+  if (from < open && open <= to) return open - 1;
+  if (to <= open && open < from) return open + 1;
+  return open;
 }
 
 /** `list` with the member at `from` moved to `to`. */
@@ -260,7 +305,11 @@ function FieldEditor({
             onCommit={name => set({ name: name.trim() })}
           />
           <p className="nx-inspector__note">
-            Made from the label. Each field&apos;s name is its own.
+            {field.name !== undefined &&
+            field.name !== "" &&
+            field.name !== sentName
+              ? `Sent as ${sentName}.`
+              : "Made from the label. Each field's name is its own."}
           </p>
         </div>
       </details>
@@ -307,7 +356,7 @@ export function FormFieldsControl({
     if (to < 0 || to >= list.length || from === to) return;
     const field = list[from];
     onCommit(moved(list, from, to));
-    setOpen(current => (current === from ? to : current));
+    setOpen(current => openAfterMove(current, from, to));
     setSaid(
       `${titleOf(field ?? {}, from)} moved to position ${to + 1} of ${list.length}.`
     );
@@ -433,7 +482,8 @@ export function FormFieldsControl({
         size="sm"
         variant="ghost"
         className="nx-form-fields__add"
-        disabled={disabled}
+        // No field past the most a form draws.
+        disabled={disabled || list.length >= FORM_MAX_FIELDS}
         onClick={() => {
           onCommit([...list, { label: "New field", type: "text" }]);
           setOpen(list.length);

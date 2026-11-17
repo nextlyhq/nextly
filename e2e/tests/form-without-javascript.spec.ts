@@ -64,6 +64,12 @@ async function seed(page: Page, sendTo: string): Promise<string> {
     },
   });
   expect(created.ok(), `seeding the page: ${created.status()}`).toBe(true);
+  // Drawn once before the visitor arrives, as a published page is served from
+  // the cache. A first render the dev server streams holds the page's body in
+  // a segment only script reveals; the production server's first render is
+  // checked on its own.
+  const warmed = await page.request.get(`/${slug}`);
+  expect(warmed.ok(), `drawing the page once: ${warmed.status()}`).toBe(true);
   return slug;
 }
 

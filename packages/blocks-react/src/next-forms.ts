@@ -42,6 +42,8 @@ interface StoredDocumentRow {
   readonly id: string;
   readonly field: string;
   readonly design?: boolean;
+  /** The address the route serves the drawn page at, its mount included. */
+  readonly returnTo?: string;
 }
 
 /** The row a route set under {@link FORM_DOCUMENT_KEY}, if it set one. */
@@ -50,11 +52,20 @@ function setRow(
 ): StoredDocumentRow | undefined {
   const value: unknown = entry[FORM_DOCUMENT_KEY];
   if (typeof value !== "object" || value === null) return undefined;
-  const { collection, id, field, design } = value as Record<string, unknown>;
+  const { collection, id, field, design, returnTo } = value as Record<
+    string,
+    unknown
+  >;
   return typeof collection === "string" &&
     typeof id === "string" &&
     typeof field === "string"
-    ? { collection, id, field, ...(design === true ? { design } : {}) }
+    ? {
+        collection,
+        id,
+        field,
+        ...(design === true ? { design } : {}),
+        ...(typeof returnTo === "string" ? { returnTo } : {}),
+      }
     : undefined;
 }
 
@@ -99,6 +110,9 @@ export interface RoutedForms {
  */
 async function returnPathOf(input: PageFormsInput): Promise<string> {
   const { route } = input;
+  // The address the route itself formed for the page, its mount included.
+  const formed = setRow(input.entry)?.returnTo;
+  if (formed !== undefined && route.page === undefined) return formed;
   if (route.listPagePath !== undefined) {
     return route.listPagePath(route.page ?? 1);
   }

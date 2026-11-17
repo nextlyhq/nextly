@@ -107,6 +107,7 @@ const SOURCE_MODULES: ReadonlyArray<{
     // editor. The rest are the Form block's own, published from its entry.
     internal: [
       "FORM_CHOICE_TYPES",
+      "MAX_FIELDS",
       "FORM_FIELD_TYPES",
       "formFieldDrawings",
       "sentNameOf",
@@ -582,6 +583,8 @@ describe("the root entry", () => {
       // canvas's sheet draws by the names the renderer writes.
       "ENTRY_CONTENT_DRAWN_ATTRIBUTE",
       "ENTRY_CONTENT_NOTE_ATTRIBUTE",
+      // The most fields a simple form draws, for the editor to add no more.
+      "FORM_MAX_FIELDS",
       "INSTANCE_ATTRIBUTE",
       // The action a collection list's note offers on the editor's canvas,
       // public so the canvas acts on the name the renderer writes.

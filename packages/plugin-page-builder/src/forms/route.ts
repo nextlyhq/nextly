@@ -10,6 +10,7 @@
  *
  * @module forms/route
  */
+import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
 import type {
   LimitRule,
@@ -78,6 +79,8 @@ export function definingStores(
 export function formReceiverRoute(parts: {
   readonly providers: FormProviders;
   readonly componentStore: ComponentStore;
+  /** The site's document limits, which its pages are drawn under. */
+  readonly limits?: DocumentLimits;
 }): PluginRoute {
   return {
     method: "POST",
@@ -93,7 +96,7 @@ export function formReceiverRoute(parts: {
       const stores = definingStores(ctx.self, parts.componentStore);
       return receiveFormPost(request, {
         readNode: (document, nodeId, locale) =>
-          publishedNode(api, stores, document, nodeId, locale),
+          publishedNode(api, stores, document, nodeId, locale, parts.limits),
         provider: id => parts.providers.get(id),
         limits: ctx.limits,
         deliver: (address, answers) => deliverAnswers(address, answers),

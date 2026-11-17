@@ -885,7 +885,7 @@ describe("after sending, as the block chose", () => {
     const { deps } = parts(goTo({ href: "/thanks" }));
     const failing: ReceiverDeps = {
       ...deps,
-      deliver: async () => ({ ok: false, reason: "status", status: 500 }),
+      deliver: async () => ({ ok: false, reason: "answered", status: 500 }),
     };
     expect(location(await receiveFormPost(post(ANSWERS), failing))).toBe(
       "/contact#form-f1-error"

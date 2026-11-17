@@ -64,6 +64,7 @@ import type {
   PageIssue,
   QueryBudget,
 } from "./context";
+import { createStandaloneContext } from "./context";
 import {
   anyListWhere,
   listCollectionsWhere,
@@ -867,11 +868,11 @@ export function drawWithRegions(args: {
         ...shared,
         // The blocks the renderer keeps for this region's own conditions,
         // from the preparation it draws the region with, not the page's.
-        ...(shared.context === undefined
+        ...(shared.context === undefined && formsFor === undefined
           ? {}
           : {
               context: {
-                ...shared.context,
+                ...(shared.context ?? createStandaloneContext()),
                 heldConditions: heldConditionsOf(part.prepared ?? undefined),
                 ...(formsFor === undefined
                   ? {}
