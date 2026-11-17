@@ -172,14 +172,41 @@ export async function assertVersionDocumentReadable(
   // right; null is a part with no language, which the read above covers.
   locales: readonly (string | null)[] = []
 ): Promise<void> {
-  const readable = await canReadLiveDocument(
-    scopeKind,
-    slug,
-    entryId,
-    user,
-    authenticatedScope,
-    hookInputs
-  );
+  // The document's history is open to a caller who may read the document in
+  // a language its history is about: the languages the read names when it
+  // names any, otherwise any language its history can be asked about. Never
+  // the default language alone, which a read rule may refuse while admitting
+  // another. One answer serves both halves of the gate.
+  const named = [
+    ...new Set(locales.filter((l): l is string => l !== null && l !== "")),
+  ];
+  const asked =
+    named.length > 0 ? named : [...(await historyLanguagesOf(scopeKind, slug))];
+  const allowed =
+    asked.length === 0
+      ? new Set<string>()
+      : await readableHistoryLocales(
+          scopeKind,
+          slug,
+          entryId,
+          user,
+          authenticatedScope,
+          hookInputs,
+          asked
+        );
+  // A history that names no language (a site without languages) is the
+  // document's own, read once as it is.
+  const readable =
+    asked.length === 0
+      ? await canReadLiveDocument(
+          scopeKind,
+          slug,
+          entryId,
+          user,
+          authenticatedScope,
+          hookInputs
+        )
+      : allowed.size > 0;
   if (!readable) {
     // Deliberately "not found" rather than "forbidden": a distinct 403 would
     // confirm the document exists to a caller not allowed to know that.
@@ -193,15 +220,19 @@ export async function assertVersionDocumentReadable(
       },
     });
   }
-  await assertHistoryLocalesReadable(
-    scopeKind,
-    slug,
-    entryId,
-    user,
-    authenticatedScope,
-    hookInputs,
-    locales
-  );
+  if (named.some(locale => !allowed.has(locale))) {
+    // Not found, as the document half answers, so a refused language does
+    // not confirm that the document has history in it.
+    throw NextlyError.notFound({
+      logContext: {
+        reason: "version-language-not-readable",
+        scopeKind,
+        scopeSlug: slug,
+        entryId,
+        userId: user.id,
+      },
+    });
+  }
 }
 
 /**
