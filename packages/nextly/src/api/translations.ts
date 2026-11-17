@@ -46,6 +46,8 @@ import {
   singleLanguageInState,
   translatedFilter,
   worklistTotal,
+  worklistHasNext,
+  worklistMaxPage,
   worklistTotalPages,
   worklistId,
   worklistTitle,
@@ -70,18 +72,12 @@ import { withErrorHandler } from "./with-error-handler";
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 
-/**
- * How deep into the merged list a page may reach. Each page reads the first `page × limit`
- * rows of every collection, so the order across collections is the same on every page; past this
- * depth a page answers with the last one this reaches.
- */
-const MAX_DEPTH = 2000;
-
+/** The page asked for, at most the deepest one the worklist serves (`worklistMaxPage`). */
 function parsePage(raw: string | null, limit: number): number {
   if (raw === null || raw === "") return 1;
   const n = Math.trunc(Number(raw));
   if (!Number.isFinite(n) || n < 1) return 1;
-  return Math.min(n, Math.max(1, Math.floor(MAX_DEPTH / limit)));
+  return Math.min(n, worklistMaxPage(limit));
 }
 
 function parseState(raw: string | null): TranslationFilterState {
@@ -573,8 +569,8 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
       // along. See `worklistTotalPages` for why this sits beside `hasNext:
       // false` rather than contradicting it.
       totalPages: worklistTotalPages(total, limit),
-      // Real paging: a page past this one holds rows when the backlog reaches past it.
-      hasNext: depth < total,
+      // Real paging: a page past this one holds rows and can be asked for (`worklistHasNext`).
+      hasNext: worklistHasNext(page, limit, total),
       hasPrev: page > 1,
       // Named, so the screen can say WHICH. Omitted entirely when the answer
       // covered everything, so the field's presence is itself the signal.
