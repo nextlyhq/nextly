@@ -307,49 +307,18 @@ ${ROOT} .nx-condition-hidden > svg {
 }
 
 /* A block the page hides on the device shown, drawn anyway so it can be found
-   and edited: striped over, edged, and tagged in its middle with where it is
-   hidden ("Hidden on Mobile · still here in the builder"). Only the editor's
-   canvas carries the mark; the site sheet never does. The stripes, the edge
-   and the tag are mixed from the page's own Canvas and CanvasText, so they
-   take the light or the dark values of the scheme the page is drawn in: the
-   tag's ink holds 4.5:1 on either band over any colour, and the edge 3:1
-   against the page's ground. The overlay is held to the block by
-   will-change: transform, which makes the block the box its absolutely
-   placed overlay is laid out in whatever position it has, normal flow
-   (position: static) among them, while changing neither its position nor
-   its layout; a block style never sets it. Pointers pass through, so the
-   block and what it holds are pressed as ever. */
+   and edited: edged here, in the page's own Canvas and CanvasText so the edge
+   holds 3:1 against the page's ground in the light or the dark scheme it is
+   drawn in. Its stripes and its tag ("Hidden on Mobile · still here in the
+   builder") are the editor's marks over the canvas (canvas-marks.tsx), never
+   a box of the page's own: an overlay inside the block would need the block
+   to hold it, which moves what its fixed or absolutely placed blocks are laid
+   out against. An outline moves nothing. Only the editor's canvas carries the
+   mark; the site sheet never does. */
 ${ROOT} [${DEVICE_HIDDEN_ATTRIBUTE}] {
-  will-change: transform;
-  --nx-canvas-hidden-band: color-mix(in srgb, Canvas 72%, transparent);
-  --nx-canvas-hidden-band-alt: color-mix(
-    in srgb,
-    color-mix(in srgb, CanvasText 10%, Canvas) 85%,
-    transparent
-  );
   --nx-canvas-hidden-edge: color-mix(in srgb, CanvasText 55%, Canvas);
-  --nx-canvas-hidden-ink: color-mix(in srgb, CanvasText 75%, Canvas);
   outline: 1px dashed var(--nx-canvas-hidden-edge);
   outline-offset: -1px;
-}
-${ROOT} [${DEVICE_HIDDEN_ATTRIBUTE}]::after {
-  content: attr(${DEVICE_HIDDEN_ATTRIBUTE});
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.5em;
-  background: repeating-linear-gradient(
-    135deg,
-    var(--nx-canvas-hidden-band) 0 10px,
-    var(--nx-canvas-hidden-band-alt) 10px 20px
-  );
-  color: var(--nx-canvas-hidden-ink);
-  font: 600 max(12px, calc(11px / var(--nx-canvas-zoom, 1))) / 1.35 system-ui, sans-serif;
-  text-align: center;
-  pointer-events: none;
 }
 
 [data-nx-list-diagnostic="sort-fallback"] {

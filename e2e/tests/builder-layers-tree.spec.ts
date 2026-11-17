@@ -202,54 +202,48 @@ test("the eye hides a block on the device being edited only, and the canvas draw
       layerRow(page, LAST).locator(".nx-layer-row__hidden")
     ).toHaveAttribute("title", "Hidden on Tablet");
 
-    // Still drawn on the canvas, which shows the tablet: striped, edged and
-    // tagged, by the canvas frame's own sheet.
+    // Still drawn on the canvas, which shows the tablet: edged by the canvas
+    // frame's own sheet, striped and tagged by the editor's marks over it.
     const last = await block(page, LAST);
     await expect(last).toBeVisible();
     await expect(last).toHaveAttribute("data-nx-device-hidden", TAG);
-    const stripe = await last.evaluate(element => {
-      const after = getComputedStyle(element, "::after");
-      return {
-        content: after.content,
-        background: after.backgroundImage,
-        position: after.position,
-        pointer: after.pointerEvents,
-        outline: getComputedStyle(element).outlineStyle,
-      };
-    });
-    expect(stripe).toEqual({
-      content: `"${TAG}"`,
+    const stripes = canvasLayer(page).locator(
+      '.nx-canvas-mark[data-mark="device-hidden"]'
+    );
+    await expect(stripes).toHaveCount(1);
+    await expect(stripes).toHaveAttribute("data-device-tag", TAG);
+    const drawn = await stripes.evaluate(mark => ({
+      background: getComputedStyle(mark).backgroundImage,
+      tag: getComputedStyle(mark, "::after").content,
+    }));
+    expect(drawn).toEqual({
       background: expect.stringContaining("repeating-linear-gradient"),
-      position: "absolute",
-      pointer: "none",
+      tag: `"${TAG}"`,
+    });
+    // Over the block's own box, to within a pixel of rounding.
+    const [over, own] = await Promise.all([
+      stripes.boundingBox(),
+      last.boundingBox(),
+    ]);
+    expect(over).not.toBeNull();
+    expect(own).not.toBeNull();
+    for (const side of ["x", "y", "width", "height"] as const) {
+      expect(
+        Math.abs((over?.[side] ?? 0) - (own?.[side] ?? -9))
+      ).toBeLessThanOrEqual(1);
+    }
+    // Inside the page, only an edge: nothing that would make the block the
+    // box its fixed or absolutely placed blocks are laid out against.
+    const inside = await last.evaluate(element => ({
+      outline: getComputedStyle(element).outlineStyle,
+      after: getComputedStyle(element, "::after").content,
+      willChange: getComputedStyle(element).willChange,
+    }));
+    expect(inside).toEqual({
       outline: "dashed",
+      after: "none",
+      willChange: "auto",
     });
-    // Set to normal flow (`position: static`, which outranks any position
-    // the frame could give it), the block still holds its stripes: they
-    // cover its own box, not a positioned block around it.
-    const held = await last.evaluate(element => {
-      const box = element as HTMLElement;
-      box.style.position = "static";
-      const after = getComputedStyle(box, "::after");
-      const padded = (axis: "Left" | "Top", end: "Right" | "Bottom") =>
-        after.boxSizing === "border-box"
-          ? 0
-          : parseFloat(after[`padding${axis}`]) +
-            parseFloat(after[`padding${end}`]);
-      // Off by at most a pixel: the box's own size is rounded.
-      const off = {
-        width: Math.abs(
-          parseFloat(after.width) + padded("Left", "Right") - box.clientWidth
-        ),
-        height: Math.abs(
-          parseFloat(after.height) + padded("Top", "Bottom") - box.clientHeight
-        ),
-      };
-      box.style.position = "";
-      return off;
-    });
-    expect(held.width).toBeLessThanOrEqual(1);
-    expect(held.height).toBeLessThanOrEqual(1);
     // CONTROL: a block shown on the tablet is drawn plain.
     await expect(await block(page, TITLE)).not.toHaveAttribute(
       "data-nx-device-hidden"

@@ -54,38 +54,29 @@ describe("the canvas frame's sheet", () => {
 describe("a block hidden on the device shown", () => {
   const HIDDEN = `.${CANVAS_ROOT_CLASS} [${DEVICE_HIDDEN_ATTRIBUTE}]`;
 
-  it("is edged, its stripe, edge and ink mixed from the page's own scheme", () => {
+  it("is edged, the edge mixed from the page's own scheme", () => {
     const rule = ruleFor(HIDDEN) ?? "";
     // Canvas and CanvasText are the scheme's own light or dark ground and
-    // text, so each value has a light and a dark one with no admin token.
-    for (const token of [
-      "--nx-canvas-hidden-band",
-      "--nx-canvas-hidden-band-alt",
-      "--nx-canvas-hidden-edge",
-      "--nx-canvas-hidden-ink",
-    ]) {
-      const value = new RegExp(`${token}: ([^;]+);`).exec(rule)?.[1];
-      expect(value, token).toMatch(/^color-mix\(/);
-      expect(value, token).toMatch(/\bCanvas\b/);
-    }
+    // text, so the edge has a light and a dark value with no admin token.
+    const edge = /--nx-canvas-hidden-edge: ([^;]+);/.exec(rule)?.[1];
+    expect(edge).toMatch(/^color-mix\(/);
+    expect(edge).toMatch(/\bCanvas\b/);
     expect(rule).toContain("outline: 1px dashed var(--nx-canvas-hidden-edge)");
   });
 
-  it("is striped over its whole box, tagged with its mark, pressed through", () => {
-    const rule = ruleFor(`${HIDDEN}::after`);
-    expect(rule).toContain(`content: attr(${DEVICE_HIDDEN_ATTRIBUTE})`);
-    expect(rule).toContain("inset: 0");
-    expect(rule).toContain("repeating-linear-gradient(");
-    expect(rule).toContain("pointer-events: none");
-  });
-
-  it("holds the stripes in the block whatever its position, setting none", () => {
-    // A block in normal flow (position: static) outranks any position the
-    // frame gives it, and its overlay would then cover a positioned block
-    // around it: the block is made the overlay's box without a position.
+  it("draws nothing inside the block, and moves nothing it holds", () => {
+    // The stripes and the tag are the editor's marks over the canvas. An
+    // overlay inside the block would need the block to hold it (a position,
+    // a transform, will-change), which moves what its fixed or absolutely
+    // placed blocks are laid out against.
     const rule = ruleFor(HIDDEN) ?? "";
-    expect(rule).toContain("will-change: transform");
-    expect(rule).not.toMatch(/(^|[\s;{])position:/);
+    // CONTROL: the rule read is the hidden block's own.
+    expect(rule).toContain("outline:");
+    expect(rule).not.toMatch(
+      /(^|[\s;{])(position|will-change|transform|contain|filter):/
+    );
+    expect(CANVAS_FRAME_SHEET).not.toContain(`${HIDDEN}::after`);
+    expect(CANVAS_FRAME_SHEET).not.toContain(`${HIDDEN}::before`);
     expect(ruleFor(`:where(${HIDDEN})`)).toBeUndefined();
   });
 });

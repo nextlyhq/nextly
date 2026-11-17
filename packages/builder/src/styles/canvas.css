@@ -439,11 +439,11 @@
 }
 
 /*
- * A hidden block drawn as an image, a video or another element the canvas
- * frame can't stripe: striped over in the editor's surface and tagged in its
- * middle with where it is hidden, as the frame stripes every other hidden
- * block. The tag is the editor's text on its raised surface, 4.5:1 in both
- * themes.
+ * A block the page hides on the device shown: striped over in the editor's
+ * surface and tagged in its middle with where it is hidden, drawn over the
+ * canvas so nothing inside the page is laid out differently (the frame's own
+ * sheet adds only a dashed edge). The tag is the editor's text on its raised
+ * surface, 4.5:1 in both themes.
  */
 .nx-canvas-mark[data-mark="device-hidden"] {
   display: flex;

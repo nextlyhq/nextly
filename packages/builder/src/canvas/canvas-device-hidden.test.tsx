@@ -227,9 +227,11 @@ describe("the breakpoints a hidden block is read against", () => {
   });
 });
 
-describe("a hidden block drawn as an image", () => {
-  // An image takes no ::after, so the frame's sheet can't stripe it: the
-  // editor's marks over the canvas stripe and tag it instead.
+describe("the stripes over a hidden block", () => {
+  // Drawn by the editor's marks over the canvas, never by an overlay inside
+  // the block: an image takes none, and any other block would have to hold
+  // one, which moves what its fixed or absolutely placed blocks are laid out
+  // against.
   const PICTURE = {
     formatVersion: 1,
     kind: "page",
@@ -260,7 +262,7 @@ describe("a hidden block drawn as an image", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it("is striped and tagged by the editor's marks over it", async () => {
+  it("stripe and tag a block drawn as an image", async () => {
     const { container } = render(
       <Canvas
         document={PICTURE}
@@ -279,22 +281,49 @@ describe("a hidden block drawn as an image", () => {
     await waitFor(() => expect(marks()).toEqual([TAG]));
   });
 
-  it("is not marked over a block the frame stripes itself", async () => {
-    const { container } = render(
+  /** The tags the stripes over the canvas carry, `document` drawn at 400px. */
+  function drawStripes(document: BlockDocument, breakpoints = SITE) {
+    const canvas = (set: BreakpointSet) => (
       <Canvas
-        document={PAGE}
+        document={document}
         siteStyles={{ css: "", classes: {} } as never}
-        render={{ styleContext: { breakpoints: SITE } } as never}
+        render={{ styleContext: { breakpoints: set } } as never}
         overlay={<CanvasMarks />}
       />
     );
+    const view = render(canvas(breakpoints));
+    const tags = () =>
+      [
+        ...view.container.querySelectorAll<HTMLElement>(
+          '.nx-canvas-mark[data-mark="device-hidden"]'
+        ),
+      ].map(mark => mark.getAttribute("data-device-tag"));
+    return {
+      tags,
+      redraw: (set: BreakpointSet) => view.rerender(canvas(set)),
+    };
+  }
+
+  it("stripe and tag every other hidden block too, a section among them", async () => {
+    const { tags } = drawStripes(PAGE);
     await act(async () => undefined);
-    // CONTROL: the block is marked on the page, and drawn by the frame.
-    expect(
-      container.querySelector(`[${DEVICE_HIDDEN_ATTRIBUTE}]`)
-    ).not.toBeNull();
-    expect(
-      container.querySelector('.nx-canvas-mark[data-mark="device-hidden"]')
-    ).toBeNull();
+    await waitFor(() => expect(tags()).toEqual([TAG]));
+  });
+
+  it("follow the tag when only its words change, the box staying put", async () => {
+    const { tags, redraw } = drawStripes(PAGE);
+    await act(async () => undefined);
+    await waitFor(() => expect(tags()).toEqual([TAG]));
+    // Mobile renamed: the same box, at the same place, says "Phone".
+    redraw({
+      ...SITE,
+      viewport: SITE.viewport.map(tier =>
+        tier.id === "mobile" ? { ...tier, label: "Phone" } : tier
+      ),
+    });
+    await act(async () => undefined);
+    await waitFor(() =>
+      expect(tags()).toEqual(["Hidden on Phone · still here in the builder"])
+    );
   });
 });

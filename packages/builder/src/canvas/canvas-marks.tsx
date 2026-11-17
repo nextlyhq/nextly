@@ -44,10 +44,7 @@ import {
   nodeAddressOf,
   SELECTED_ATTRIBUTE,
 } from "./canvas";
-import {
-  DEVICE_HIDDEN_ATTRIBUTE,
-  drawsNoPseudoElements,
-} from "./canvas-device-hidden";
+import { DEVICE_HIDDEN_ATTRIBUTE } from "./canvas-device-hidden";
 import { useCanvasFrame } from "./canvas-frame-context";
 import {
   OVERLAY_OUTPUT_ATTRIBUTE,
@@ -94,15 +91,17 @@ const OUTLINE_MARKS = [
 
 /**
  * The marks drawn over an element's box alone that it asks for, drawn as
- * `box`: its outline-only marks, and the stripes and tag of a hidden block
- * drawn as an image or another element the frame's sheet can't stripe.
+ * `box`: its outline-only marks, and the stripes and tag of a block the page
+ * hides on the device shown. Those are drawn here, over the canvas, rather
+ * than by an overlay inside the block, which would need the block to hold it
+ * and so move what its fixed or absolutely placed blocks are laid out against.
  */
 function outlineMarksOf(marked: Element, box: Omit<Mark, "kind">): Mark[] {
   const marks: Mark[] = OUTLINE_MARKS.filter(([attribute]) =>
     marked.hasAttribute(attribute)
   ).map(([, kind]) => ({ ...box, kind }));
   const deviceTag = marked.getAttribute(DEVICE_HIDDEN_ATTRIBUTE);
-  if (deviceTag !== null && drawsNoPseudoElements(marked)) {
+  if (deviceTag !== null) {
     marks.push({ ...box, kind: "device-hidden", deviceTag });
   }
   return marks;
@@ -132,10 +131,7 @@ interface Mark {
   readonly editing?: boolean;
   /** Another exposed part of a placement while one of its parts is edited. */
   readonly dimmed?: boolean;
-  /**
-   * A hidden block drawn as an image or another element that takes no
-   * stripe of its own: the tag its stripes carry over it.
-   */
+  /** A block the page hides on the device shown: the tag its stripes carry. */
   readonly deviceTag?: string;
   /**
    * A selected block the page hides on the device shown, drawn because it is
@@ -299,6 +295,7 @@ function markKey(mark: Mark): string {
     tabsAt,
     atRestSelected,
     radius,
+    deviceTag,
     rect,
   } = mark;
   return JSON.stringify([
@@ -325,6 +322,9 @@ function markKey(mark: Mark): string {
     tabsAt,
     atRestSelected === true,
     radius,
+    // The tag a hidden block's stripes carry, which a renamed device or
+    // another device of the same size changes while its box stays put.
+    deviceTag,
     rect.x,
     rect.y,
     rect.width,
@@ -790,7 +790,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): Measured {
   });
   return {
     root,
-    marks: dimmedBesideEditing(found),
+    marks: dimmedBesideEditing(stripesFirst(found)),
     hoveredFor: inputs.hovered,
     hovered: hoveredMarksOf(root, space, onScreen, inputs.hovered),
     atRest: atRestMarks(root, space, onScreen, toolbarAbove, inputs.shownLabel),
@@ -1183,6 +1183,16 @@ function editingAttributes(mark: Mark): Record<string, string> {
     ...(mark.editing === true ? { "data-editing": "" } : {}),
     ...(mark.dimmed === true ? { "data-dimmed": "" } : {}),
   };
+}
+
+/**
+ * The stripes over hidden blocks first, so every other mark, a ring on a block
+ * inside a hidden section among them, is drawn over them rather than under.
+ */
+function stripesFirst(marks: Mark[]): Mark[] {
+  const stripes = marks.filter(mark => mark.kind === "device-hidden");
+  if (stripes.length === 0) return marks;
+  return [...stripes, ...marks.filter(mark => mark.kind !== "device-hidden")];
 }
 
 /**

@@ -6,8 +6,9 @@
  * Editor-only by construction, as the reveal of a selected hidden block is:
  * the canvas draws a derived document with those blocks' device hiding
  * lifted, and the editor saves its own, so nothing here reaches what is
- * stored or published. The stripe is a mark on the block's element, drawn by
- * the frame's own sheet (`canvas-frame-sheet.ts`); the site sheet never
+ * stored or published. The mark on the block's element is edged by the
+ * frame's own sheet (`canvas-frame-sheet.ts`) and striped and tagged by the
+ * editor's marks over the canvas (`canvas-marks.tsx`); the site sheet never
  * carries it.
  *
  * Which device the canvas shows is read from the width its page is laid out
@@ -42,33 +43,6 @@ import { editedBreakpointAtWidth } from "./canvas-width";
  * builder".
  */
 export const DEVICE_HIDDEN_ATTRIBUTE = "data-nx-device-hidden";
-
-/**
- * The elements a browser draws no `::before` or `::after` for: an image, a
- * video, a frame, a form control and the like. A hidden block drawn as one of
- * these gets its stripes and tag from the editor's marks over the canvas
- * (`canvas-marks.tsx`), since the frame's sheet can't draw them on it.
- */
-const NO_PSEUDO_ELEMENTS: ReadonlySet<string> = new Set([
-  "audio",
-  "br",
-  "canvas",
-  "embed",
-  "hr",
-  "iframe",
-  "img",
-  "input",
-  "object",
-  "select",
-  "svg",
-  "textarea",
-  "video",
-]);
-
-/** Whether `element` is one the frame's sheet can't stripe. */
-export function drawsNoPseudoElements(element: Element): boolean {
-  return NO_PSEUDO_ELEMENTS.has(element.localName);
-}
 
 /** The set a site stating no breakpoints at all compiles under: no tiers. */
 const NO_TIERS: BreakpointSet = { viewport: [], container: [] };
