@@ -29,7 +29,11 @@ import type { RestoreOutcome } from "@admin/hooks/useAutosaveRecovery";
 import { useCan } from "@admin/hooks/useCan";
 import { useLocalization } from "@admin/hooks/useLocalization";
 
-import { documentActions, type EditorDocumentAction } from "./document-actions";
+import {
+  documentActions,
+  type EditorDocumentAction,
+  type ReviewActionState,
+} from "./document-actions";
 import {
   acceptContributions,
   reasonFor,
@@ -119,6 +123,16 @@ export function storingHandlers(
     onSaveWorkingDraft: () => submit(undefined, "save-working-draft"),
     onUnpublish: () => submit(undefined, "unpublish"),
   };
+}
+
+/**
+ * The workflow's part of the header: where the part on screen stands, and how
+ * a step is taken. Absent where no workflow is attached.
+ */
+export interface DocumentReviewBinding {
+  state: ReviewActionState;
+  /** Takes the named step, asking first where it needs a comment. */
+  takeStep: (step: string) => Promise<DocumentActionOutcome>;
 }
 
 /** What deciding the actions reads. */
@@ -235,6 +249,8 @@ export interface DocumentActionBindingsInput {
    * as it always has.
    */
   pendingRecovery?: PendingRecovery | null;
+  /** The workflow's next step, where a workflow is attached. */
+  review?: DocumentReviewBinding;
 }
 
 /**

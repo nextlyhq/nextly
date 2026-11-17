@@ -138,6 +138,38 @@ export interface DocumentActionState {
    * offered, with no permission bringing a write back. Absent means false.
    */
   writesRefused?: boolean;
+  /**
+   * Where the part on screen stands in the workflow that holds publishing,
+   * while it stands in a stage. Absent where no workflow is attached, or the
+   * part has nothing waiting to go live: the actions are then exactly those
+   * of a document without one.
+   */
+  review?: ReviewActionState;
+}
+
+/** What a workflow step does, which decides where it is drawn. */
+export type ReviewStepKind = "submit" | "approve" | "request-changes" | "move";
+
+/** A step leaving the part's stage, and whether this person may take it. */
+export interface ReviewStepState {
+  name: string;
+  label: string;
+  kind: ReviewStepKind;
+  held: boolean;
+}
+
+/** The facts about the part's review the actions depend on. */
+export interface ReviewActionState {
+  /** The stage's label, as the reason a held Publish gives names it. */
+  stageLabel: string;
+  /** Whether the stage allows publishing. */
+  publishable: boolean;
+  /** The steps leaving the stage. */
+  steps: readonly ReviewStepState[];
+  /** Who the part waits for, as words; null where it waits for no one. */
+  waitingFor: string | null;
+  /** Why no step can be taken at this moment, such as unsaved edits. */
+  stepReason?: string;
 }
 
 /** The reason every action is unavailable while a past version is on screen. */
