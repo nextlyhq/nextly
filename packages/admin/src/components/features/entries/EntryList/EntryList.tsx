@@ -31,7 +31,6 @@ import { TargetSlot } from "@admin/components/shared/target-slot";
 import { usePlaceContributions } from "@admin/components/shared/target-slot/usePlaceContributions";
 import { useListColumns } from "@admin/components/ui/table/list-view";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
-import { LOCALE_PARAM } from "@admin/constants/search-params";
 import {
   useBranding,
   useBrandingStatus,
@@ -51,6 +50,7 @@ import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ListResponse } from "@admin/lib/api/response-types";
 import { revsFor } from "@admin/lib/document-version";
 import { navigateTo } from "@admin/lib/navigation";
+import { useDocumentAddress } from "@admin/lib/navigation/useDocumentAddress";
 import {
   hasComponent,
   type InjectionPointProps,
@@ -505,22 +505,28 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // Handlers
   // ---------------------------------------------------------------------------
 
+  // Where a row opens, by the one rule every "open this document" link uses,
+  // read from this list's own copy of the collection.
+  const addressOf = useDocumentAddress();
+  const entryHref = useCallback(
+    (entryId: string, locale?: string) =>
+      addressOf(
+        { kind: "collection", slug: collectionSlug, id: entryId },
+        {
+          ...(collection === undefined ? {} : { collection }),
+          // The language rides in the URL because that is where the editor
+          // reads it. Opening a row "in Arabic" from the list is the same act
+          // as being sent a link to the Arabic copy, and both arrive the same
+          // way; the rule opens the form for any language but the default.
+          ...(locale ? { locale } : {}),
+        }
+      ),
+    [addressOf, collectionSlug, collection]
+  );
   const handleEdit = useCallback(
-    (entryId: string, locale?: string) => {
-      const path = buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
-        slug: collectionSlug,
-        id: entryId,
-      });
-      // The language rides in the URL because that is where the editor reads
-      // it. Opening a row "in Arabic" from the list is the same act as being
-      // sent a link to the Arabic copy, and both arrive the same way.
-      navigateTo(
-        locale
-          ? `${path}?${new URLSearchParams({ [LOCALE_PARAM]: locale }).toString()}`
-          : path
-      );
-    },
-    [collectionSlug]
+    (entryId: string, locale?: string) =>
+      navigateTo(entryHref(entryId, locale)),
+    [entryHref]
   );
 
   const handleDelete = useCallback((entryId: string) => {
@@ -880,6 +886,7 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
                     onSortChange={handleSortChange}
                     onSearchChange={handleSearchChange}
                     onEdit={handleEdit}
+                    entryHref={entryHref}
                     onDelete={handleDelete}
                     onBulkDelete={handleBulkDelete}
                     onBulkPublish={handleBulkPublish}

@@ -881,14 +881,22 @@
 
 /*
  * The tabs and, at the row's end, the panel's options menu, over the one
- * line the tab list drew alone.
+ * line the tab list drew alone. It stays at the top of the panel while a tab
+ * scrolls (the block card scrolls away), so the tabs and the panel's options
+ * stay in reach and the Style tab's editing bar can stay in view under it.
+ * Sticky offsets count from inside the panel's 12px padding, so -0.75rem
+ * sets it at the panel's top edge; its own ground hides what scrolls under.
  */
 .nx-inspector__tabrow {
+  position: sticky;
+  inset-block-start: -0.75rem;
+  z-index: 2;
   display: flex;
   align-items: stretch;
   gap: 0.25rem;
   min-width: 0;
   border-block-end: 1px solid var(--nx-builder-border);
+  background: var(--nx-builder-surface, var(--nx-background));
 }
 
 .nx-inspector__tabrow > .nx-inspector__tablist {

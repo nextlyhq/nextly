@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { CollectionConfig } from "../../../../collections/config/define-collection";
+import type { FieldConfig } from "../../../../collections/fields/types";
+import { calculateSchemaHash } from "../../../schema/services/schema-hash";
 import {
   ADMIN_KEYS_NOT_PERSISTED,
   asAdminOptions,
   resolveDescription,
+  toCodeFirstCollectionConfig,
   toPersistedAdmin,
 } from "../collection-sync-service";
 
@@ -196,5 +199,41 @@ describe("asAdminOptions", () => {
     // rendering with default admin options.
     expect(asAdminOptions(value)).toBeUndefined();
     expect(toPersistedAdmin(asAdminOptions(value))).toBeUndefined();
+  });
+});
+
+/**
+ * Where the admin opens a collection's entries. The admin reads it from the
+ * collection row, as it reads `useAsTitle`, so it has to be stored; it is a
+ * setting and no column, so declaring or changing it must leave the schema
+ * hash alone and ask for no table change.
+ */
+describe("opensIn", () => {
+  it("carries the declared view to the persisted shape", () => {
+    expect(toPersistedAdmin({ opensIn: "builder" })?.opensIn).toBe("builder");
+    expect(toPersistedAdmin({ opensIn: "form" })?.opensIn).toBe("form");
+  });
+
+  it("leaves it undefined when the collection declares none", () => {
+    // No default stored: the admin's rule decides for a collection that says
+    // nothing, from its fields as they are now.
+    expect(toPersistedAdmin({ useAsTitle: "title" })?.opensIn).toBeUndefined();
+  });
+
+  it("changes no schema hash, so no migration is asked for", () => {
+    const declared = (opensIn?: string) =>
+      toCodeFirstCollectionConfig({
+        slug: "notes",
+        fields: [
+          { name: "title", type: "text" },
+          { name: "sections", type: "json" },
+        ] as FieldConfig[],
+        admin: opensIn === undefined ? {} : { opensIn },
+      });
+    const hashOf = (opensIn?: string) =>
+      calculateSchemaHash(declared(opensIn).fields);
+    expect(hashOf("builder")).toBe(hashOf(undefined));
+    expect(hashOf("form")).toBe(hashOf("builder"));
+    expect(declared("builder").admin?.opensIn).toBe("builder");
   });
 });
