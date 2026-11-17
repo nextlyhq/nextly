@@ -56,6 +56,7 @@ import {
 } from "../named-queries-contract";
 
 import { sessionAnswer } from "./session-answers";
+import { readStarted } from "./startup-reads";
 
 /** One custom source, as the builder's Source menu and Inputs read it. */
 export interface CanvasCustomSource {
@@ -99,12 +100,20 @@ function hiddenReadOf(value: unknown): NamedQueryHiddenRead | undefined {
  * Source menu offers what it did before rather than an empty group.
  */
 export async function listCustomSources(
-  locale?: string
+  locale?: string,
+  userId: string | null = null
 ): Promise<readonly CanvasCustomSource[]> {
-  const body = await readPluginRoute<NamedQueriesResponse>({
-    plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path: namedQueriesPath(locale),
-  });
+  // The builder's start-up answer when it opens, the route otherwise.
+  const path = namedQueriesPath(locale);
+  const body = await readStarted(
+    path,
+    () =>
+      readPluginRoute<NamedQueriesResponse>({
+        plugin: PAGE_BUILDER_PLUGIN_NAME,
+        path,
+      }),
+    userId
+  );
   const items =
     typeof body === "object" && body !== null
       ? (body as Partial<NamedQueriesResponse>).items
@@ -463,7 +472,7 @@ export function canvasNamedQueriesIn(
     sessionAnswer(
       userId,
       JSON.stringify(["custom-sources", locale ?? ""]),
-      () => listCustomSources(locale)
+      () => listCustomSources(locale, userId)
     );
   // One host per read of the sources, so the canvas's context, which holds
   // it, stays one object until the sources are read again.

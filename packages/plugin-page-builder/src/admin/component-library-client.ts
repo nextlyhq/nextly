@@ -50,7 +50,7 @@ import {
   type ComponentTitleOf,
   type SavedComponent,
 } from "@nextlyhq/builder";
-import { useDocumentLocale, usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import { useDocumentLocale } from "@nextlyhq/plugin-sdk/admin";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 // The CONTRACT, not the route, for the reason the pattern client gives: the
@@ -61,6 +61,7 @@ import {
   type ComponentLibraryResponse,
 } from "../library-contract";
 
+import { useBuilderRoute } from "./builder-route-read";
 import {
   libraryReadState,
   type LibraryReadState,
@@ -138,7 +139,7 @@ export function useComponentLibrary({
   enabled = true,
 }: { enabled?: boolean } = {}): ComponentLibraryRead {
   const locale = useDocumentLocale();
-  const read = usePluginRoute<ComponentLibraryResponse>({
+  const read = useBuilderRoute<ComponentLibraryResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: componentLibraryPath(locale?.code),
     enabled,
