@@ -15,6 +15,7 @@ import * as React from "react";
 
 import { APPEAR_PROPERTY, AppearPlay } from "./appear-play";
 import { batchStyleClearOps } from "./batch-style";
+import { propertyWordsFor, wordedProperty } from "./block-style-words";
 import { CssHint } from "./css-hint";
 import type { EditorState } from "./editor-state";
 import { fieldLabel } from "./inspector";
@@ -59,7 +60,7 @@ import {
  * with it.
  */
 export function StylePropertyFields({
-  property,
+  property: catalogProperty,
   orientation,
   nodeId,
   state,
@@ -80,6 +81,13 @@ export function StylePropertyFields({
    */
   namesSection: boolean;
 } & StyleFieldSurroundings): React.JSX.Element {
+  // The block's own words for this property, where it has them: the fields
+  // it draws, what each is called, and a line saying what it is here.
+  const words = propertyWordsFor(
+    findNode(editor.document.nodes, nodeId)?.type,
+    catalogProperty.property
+  );
+  const property = wordedProperty(catalogProperty, words);
   const many = property.controls.length > 1;
   const fold = property.offered
     ? foldedControlFor(property.property)
@@ -145,6 +153,9 @@ export function StylePropertyFields({
         the value itself is the honest way to remove it, and it is already
         there.
       */}
+      {words?.hint === undefined ? null : (
+        <p className="nx-inspector__note">{words.hint}</p>
+      )}
       {above.map(toggle)}
       {property.offered ? null : (
         <p className="nx-inspector__note" data-not-offered={property.property}>
@@ -197,9 +208,10 @@ export function StylePropertyFields({
                     control={control}
                     side={sideOf(box, control)}
                     label={
-                      many
+                      words?.labels[control.path.join(".")] ??
+                      (many
                         ? positionLabel(control, orientation)
-                        : property.label
+                        : property.label)
                     }
                     summary={many ? undefined : property.summary}
                     propertyLabel={property.label}

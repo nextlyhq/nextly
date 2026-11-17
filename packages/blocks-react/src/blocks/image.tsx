@@ -741,6 +741,10 @@ const IMAGE_BASE_STYLES = {
 const IMAGE_PARTS = {
   // The button an enlarged picture is, and the lightbox it opens.
   ...LIGHTBOX_PARTS,
+  // The enlarge button, unclipped: the picture inside it takes its own
+  // corners and draws its own shadow, which a clip would cut off. Nothing
+  // else in the button draws past the picture's box.
+  enlarge: unclipped(LIGHTBOX_PARTS.enlarge),
   // A captioned picture's figure: the picture and its caption in a column,
   // so a height set on the block is shared between them rather than
   // overflowed.
@@ -759,9 +763,10 @@ const IMAGE_PARTS = {
     },
   },
   // The picture inside a wrapper (a figure, a link) takes its corners,
-  // proportion, fit and focal point from the root, from every tier that styles
-  // it (a look, a shared style, the node's own values), so the wrapper's box,
-  // and a caption inside it, is never rounded or squared by them. It may
+  // proportion, fit, focal point and shadow from the root, from every tier
+  // that styles it (a look, a shared style, the node's own values), so the
+  // wrapper's box, and a caption inside it, is never rounded, squared or
+  // shadowed by them: a shadow follows the picture's own shape. It may
   // shrink to the room the wrapper leaves it, where the fit crops or fits it.
   picture: {
     takesFromRoot: {
@@ -770,6 +775,7 @@ const IMAGE_PARTS = {
         "aspectRatio",
         "objectFit",
         "objectPosition",
+        "boxShadow",
       ],
       // The enlarge button sits between the figure and the picture, as a
       // link does inside a captioned picture's figure.
@@ -802,8 +808,8 @@ const IMAGE_PARTS = {
           display: "inline-block",
           maxWidth: "100%",
           minHeight: "0",
-          // Clipped, so nothing the picture draws past its corners shows.
-          overflow: "hidden",
+          // Not clipped: the picture rounds its own corners, and its shadow
+          // falls past them.
         },
       },
     },
@@ -842,6 +848,17 @@ const IMAGE_PARTS = {
     },
   },
 } as const;
+
+/** A part's styles without the clip its base sets. */
+function unclipped<Part extends { baseStyles: { base: { base: object } } }>(
+  part: Part
+): Part {
+  const { overflow: _clip, ...base } = part.baseStyles.base.base as Record<
+    string,
+    unknown
+  >;
+  return { ...part, baseStyles: { base: { base } } } as Part;
+}
 
 /** The Content section a click's choice and its link are drawn in. */
 const WHEN_CLICKED_SECTION = "When clicked";
@@ -996,6 +1013,8 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
     dimensions: true,
     border: true,
     effects: true,
+    // On the picture itself, whatever wraps it: see the picture part.
+    shadow: true,
     position: true,
   },
   // Interactive content while it links or enlarges, so a link (a linked box
