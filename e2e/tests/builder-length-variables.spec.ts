@@ -235,8 +235,11 @@ test("a type size picked for a heading is stored as a reference, and follows the
     const name = held.getByRole("button", {
       name: "Variables for Font size: Display",
     });
-    await name.focus();
-    await expect(page.getByRole("tooltip")).toHaveText(
+    // Pointed at, as an author does: its tooltip says what it is.
+    await name.hover();
+    await expect(
+      page.getByRole("tooltip", { name: /^Type size variable/ })
+    ).toHaveText(
       /^Type size variable Display · 40px · --[a-z-]+font-size-display$/
     );
     await held.getByRole("button", { name: "Unlink Font size" }).click();
