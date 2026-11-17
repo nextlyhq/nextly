@@ -42,6 +42,7 @@ import {
   hasContentControl,
 } from "./content-control-types";
 import type { EditorState } from "./editor-state";
+import { GALLERY_BLOCK } from "./gallery-pictures";
 import { INSPECTOR_SECTIONS } from "./inspector-sections";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked, lockBlockingEdit, lockedAncestorOf } from "./locking";
@@ -564,7 +565,7 @@ export function advancedRowsOf(
  * the builder draws for every block (where it shows, when, its CSS id and its
  * attributes). Content is there when the block declares a setting placed in
  * it, names its own inspector to draw it, or is a core block whose Content
- * section the builder draws ({@link builderContentSectionOf}). Judged by
+ * sections the builder draws ({@link builderContentSectionsOf}). Judged by
  * what the block declares rather than by which settings show right now, so
  * a setting a condition hides does not make the tab come and go under the
  * author.
@@ -575,25 +576,30 @@ export function inspectorTabsOf(
   const holdsContent =
     inspection.inspector !== undefined ||
     contentRowsOf(inspection).length > 0 ||
-    builderContentSectionOf(inspection.blockName) !== undefined;
+    builderContentSectionsOf(inspection.blockName).length > 0;
   return INSPECTOR_TAB_ORDER.filter(tab => tab !== "content" || holdsContent);
 }
 
 /**
- * The Content sections the builder draws itself for a core block, by block:
- * Columns' layout, which writes the row's styles and adds or removes its
- * columns, so it is no prop a generated field could draw. Content, because
- * how many columns a row holds is its structure.
+ * The Content sections the builder draws itself for a core block, by block,
+ * in the order they are drawn: Columns' layout, which writes the row's
+ * styles and adds or removes its columns, so it is no prop a generated field
+ * could draw (Content, because how many columns a row holds is its
+ * structure); and a Gallery's Pictures, which adds Image children, and its
+ * Layout, whose Columns and On mobile write the gallery's styles. A section
+ * named as one the block places props in is drawn as one, the builder's
+ * controls first.
  */
-const BUILDER_CONTENT_SECTIONS: Readonly<Record<string, string>> = {
-  [COLUMNS_ROW]: "Columns",
+const BUILDER_CONTENT_SECTIONS: Readonly<Record<string, readonly string[]>> = {
+  [COLUMNS_ROW]: ["Columns"],
+  [GALLERY_BLOCK]: ["Pictures", "Layout"],
 };
 
-/** The Content section the builder draws for a block, if it draws one. */
-export function builderContentSectionOf(blockName: string): string | undefined {
+/** The Content sections the builder draws for a block, none for most. */
+export function builderContentSectionsOf(blockName: string): readonly string[] {
   return Object.hasOwn(BUILDER_CONTENT_SECTIONS, blockName)
-    ? BUILDER_CONTENT_SECTIONS[blockName]
-    : undefined;
+    ? (BUILDER_CONTENT_SECTIONS[blockName] ?? [])
+    : [];
 }
 
 /** What a Style section is called, by its key, as the Style tab names it. */

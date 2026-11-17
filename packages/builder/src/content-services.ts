@@ -72,6 +72,14 @@ export interface MediaPickerProps {
   accept?: string;
   /** What is chosen when it opens: the file the prop stores, if any. */
   initialSelectedIds?: Set<string>;
+  /**
+   * One file, or several: `multi` lets the author pick many, handed back in
+   * the order they were picked, as a Gallery's "Add images" asks. Unset is
+   * one.
+   *
+   * @experimental Settles with the Gallery's "Add images".
+   */
+  mode?: "single" | "multi";
 }
 
 /** What a relation control asks the host for: one collection's entries. */
