@@ -56,11 +56,10 @@ import {
   duplicateVariable,
   labelNewVariable,
   searchVariableGroups,
-  type NewVariable,
   type VariableEntry,
   type VariableGroup,
 } from "./tokens-studio";
-import { ADDS, AddRows, EmptyGroup } from "./variable-adds";
+import { ADDS, AddRows, EmptyGroup, type OnAdd } from "./variable-adds";
 import { VariableRow } from "./variable-row";
 import {
   combinedReach,
@@ -469,7 +468,7 @@ function VariableGroups({
   }[];
   searching: boolean;
   folds: GroupFolds | undefined;
-  onAdd: (what: NewVariable) => void;
+  onAdd: OnAdd;
   rows: RowsHost;
 }): React.JSX.Element {
   if (shown.length === 0) {
@@ -722,7 +721,7 @@ function useOpenVariable({
   /** The row just added, while its editor is open; a search keeps it. */
   fresh: string | null;
   toggle: (key: string, open: boolean) => void;
-  add: (what: NewVariable) => void;
+  add: OnAdd;
   duplicate: (entry: VariableEntry) => void;
   forget: (key: string) => void;
   /** Each row editor's commit; see {@link useCommitsSettled}. */
@@ -774,9 +773,8 @@ function useOpenVariable({
   };
 
   // The search is kept: the new row is added where the author is.
-  const add = (what: NewVariable): void => {
-    const active = root.current?.ownerDocument.activeElement;
-    origin.current = isHTMLElement(active) ? active : null;
+  const add: OnAdd = (what, from) => {
+    origin.current = from;
     opened(addVariable(currentTokens() ?? tokens, what));
   };
 
@@ -876,7 +874,7 @@ function HiddenGroupAdds({
   searching: boolean;
   readOnly: boolean;
   folds: GroupFolds | undefined;
-  onAdd: (what: NewVariable) => void;
+  onAdd: OnAdd;
 }): React.JSX.Element | null {
   const hidden = groups.filter(
     group => SHOWN_WHEN_FILLED.has(group.group) && group.entries.length === 0
@@ -888,9 +886,9 @@ function HiddenGroupAdds({
         <AddRows
           key={group.group}
           group={group.group}
-          onAdd={what => {
+          onAdd={(what, from) => {
             openFold(folds, group.group);
-            onAdd(what);
+            onAdd(what, from);
           }}
         />
       ))}
@@ -1019,7 +1017,7 @@ function Group({
   readOnly: boolean;
   /** The row whose editor is open, which is drawn even past the page. */
   openKey: string | null;
-  onAdd: (what: NewVariable) => void;
+  onAdd: OnAdd;
   children: (entry: VariableEntry) => React.ReactNode;
 }): React.JSX.Element {
   const id = React.useId();
@@ -1062,9 +1060,9 @@ function Group({
       {readOnly || folded ? null : (
         <AddRows
           group={group}
-          onAdd={what => {
+          onAdd={(what, from) => {
             openFold(folds, group);
-            onAdd(what);
+            onAdd(what, from);
           }}
         />
       )}
