@@ -96,6 +96,49 @@ function apiRequests(
   };
 }
 
+/**
+ * Resolves once no admin API request has started for a second and none
+ * started in the last twenty seconds is still open. Not `networkidle`: a
+ * development server holds its reload poll open for seconds at a time, so the
+ * page may never go a moment without a request; and a request held open for
+ * longer than any answer takes is a stream, not a read still on its way. The
+ * poll and the document's lock are left out, as the count leaves them.
+ */
+function settling(page: Page): () => Promise<void> {
+  const inFlight = new Map<Request, number>();
+  let lastStart = Date.now();
+  const counts = (request: Request) => {
+    const path = new URL(request.url()).pathname;
+    return (
+      path.startsWith("/admin/api/") &&
+      !path.endsWith("/dev-reload") &&
+      !path.endsWith("/document-lock")
+    );
+  };
+  page.on("request", request => {
+    if (!counts(request)) return;
+    lastStart = Date.now();
+    inFlight.set(request, lastStart);
+  });
+  const done = (request: Request) => inFlight.delete(request);
+  page.on("requestfinished", done);
+  page.on("requestfailed", done);
+  return () =>
+    expect
+      .poll(
+        () => {
+          const now = Date.now();
+          const open = [...inFlight.values()].filter(at => now - at < 20_000);
+          return open.length === 0 && now - lastStart > 1_000;
+        },
+        {
+          timeout: 60_000,
+          intervals: [250],
+        }
+      )
+      .toBe(true);
+}
+
 /** Change the lead's text through the sidebar, and leave the field. */
 async function editLead(page: Page, text: string): Promise<void> {
   await canvasBlock(page, LEAD).click();
@@ -157,10 +200,12 @@ for (const status of ["published", "draft"] as const) {
   test(`${verb} a ${status} page writes once and reads the entry at most once`, async ({
     page,
   }) => {
-    test.setTimeout(120_000);
+    // The first case compiles the builder on a cold development server.
+    test.setTimeout(240_000);
     await gotoAdmin(page, "/");
     const { id, imageFile } = await seed(page, status);
     const { sent, imageFetches, start } = apiRequests(page, imageFile);
+    const settled = settling(page);
     await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
     await expect(canvasBlock(page, LEAD)).toBeVisible({ timeout: 60_000 });
     // The picture is the block's own root, or inside it.
@@ -169,15 +214,15 @@ for (const status of ["published", "draft"] as const) {
         .locator(`img[data-nx-node="${IMAGE}"], [data-nx-node="${IMAGE}"] img`)
         .first()
     ).toBeVisible();
-    await page.waitForLoadState("networkidle");
+    await settled();
 
     await editLead(page, "A page published once");
-    await page.waitForLoadState("networkidle");
+    await settled();
     const changes = await watchCanvas(page);
     start();
     await barAction(page, status === "published" ? "publish" : "save").click();
     await expectSaved(page, status);
-    await page.waitForLoadState("networkidle");
+    await settled();
 
     const entryPath = `${PAGES}/${id}`;
     const onEntry = (method: string) =>
