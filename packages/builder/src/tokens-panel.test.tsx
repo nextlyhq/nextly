@@ -297,17 +297,23 @@ describe("the rows", () => {
         tokens={{
           tokens: [
             ...SITE.tokens,
-            { name: "space.tile", kind: "dimension", values: { light: "24px" } },
-            { name: "radius.tile", kind: "dimension", values: { light: "12px" } },
+            {
+              name: "space.tile",
+              kind: "dimension",
+              values: { light: "24px" },
+            },
+            {
+              name: "radius.tile",
+              kind: "dimension",
+              values: { light: "12px" },
+            },
           ],
         }}
       />
     );
     const spacing = within(screen.getByRole("region", { name: "Spacing" }));
     const radius = within(screen.getByRole("region", { name: "Radius" }));
-    expect(
-      spacing.getByRole("button", { name: /^Tile, 24px$/ })
-    ).toBeDefined();
+    expect(spacing.getByRole("button", { name: /^Tile, 24px$/ })).toBeDefined();
     expect(radius.getByRole("button", { name: /^Tile, 12px$/ })).toBeDefined();
   });
 
@@ -333,10 +339,10 @@ describe("the rows", () => {
         }}
       />
     );
-    expect(row(/^Tile · space\.card,/).getAttribute("aria-label")).toBe(
+    expect(row(/^Tile · space\.tile,/).getAttribute("aria-label")).toBe(
       "Tile · space.tile, 24px"
     );
-    expect(row(/^Tile · spacing\.card,/).getAttribute("aria-label")).toBe(
+    expect(row(/^Tile · spacing\.tile,/).getAttribute("aria-label")).toBe(
       "Tile · spacing.tile, 32px"
     );
   });
