@@ -3,7 +3,8 @@
  * to the document's form, and recovering work after a reload without saving.
  *
  * Driven through the playground's homepage Single, whose `layout` field is a
- * blocks field, and the field's card — the way an author arrives.
+ * blocks field and its main field, so a link to it opens the builder; and
+ * through the field's card on its form.
  *
  * @module tests/builder-screen
  */
@@ -43,6 +44,15 @@ async function seed(page: Page, nodes: unknown[]): Promise<void> {
   );
 }
 
+/** The ⋯ menu's Open as form, the builder's way to the document's form. */
+async function openAsForm(page: Page): Promise<void> {
+  await page
+    .locator('[data-topbar="end"]')
+    .getByRole("button", { name: "More actions" })
+    .click();
+  await page.getByRole("menuitem", { name: "Open as form" }).click();
+}
+
 function block(page: Page, id: string) {
   return canvasFrame(page).locator(`.nx-canvas [data-nx-node="${id}"]`).first();
 }
@@ -70,12 +80,14 @@ test.describe("the Page Builder's own screen", () => {
     await expect(block(page, "kept")).toBeVisible({ timeout: 30_000 });
   });
 
-  test("goes back to the document's form on exit", async ({ page }) => {
+  test("goes back to the document's form by Open as form", async ({ page }) => {
     await seed(page, [heading("h", "Back to the form")]);
     await openBuilder(page);
     await expect(block(page, "h")).toBeVisible({ timeout: 30_000 });
 
-    await page.getByRole("button", { name: "Exit editor" }).click();
+    // The Homepage opens in the builder, so its arrow leaves for the Content
+    // screen; the ⋯ menu's Open as form is the way to its form.
+    await openAsForm(page);
 
     await expect(page).toHaveURL(/\/admin\/singles\/homepage$/);
     await expect(
@@ -89,10 +101,19 @@ test.describe("the Page Builder's own screen", () => {
     page,
   }) => {
     await seed(page, [heading("stays", "Stays"), heading("goes", "Goes")]);
-    // Arrived by clicks from elsewhere in the admin, as an author does, so the
-    // history holds somewhere off the page, then its form, then its builder.
-    await gotoAdmin(page, "/");
-    await page.locator('a[href="/admin/singles/homepage"]').first().click();
+    // Arrived by clicks from elsewhere in the admin, as an author does: the
+    // Content screen's row opens the Homepage's builder, Open as form its
+    // form, and the card the builder again. The history holds somewhere off
+    // the page, then the page's builder, its form and its builder.
+    await gotoAdmin(page, "/content");
+    const row = page
+      .getByRole("table", { name: "Singles" })
+      .getByRole("link", { name: "Homepage", exact: true });
+    // Drawn with the builder's address once the reader's access has arrived.
+    await expect(row).toHaveAttribute("href", BUILDER_URL);
+    await row.click();
+    await expect(page).toHaveURL(BUILDER_URL);
+    await openAsForm(page);
     await expect(page).toHaveURL(FORM_URL);
     await page
       .locator(PAGE_BUILDER_CARD)
@@ -120,18 +141,22 @@ test.describe("the Page Builder's own screen", () => {
     await expect(block(page, "stays")).toBeVisible({ timeout: 30_000 });
     await expect(block(page, "goes")).toHaveCount(0);
 
-    // Back twice: the second leaves the page, and asks.
+    // Back three times: to the form and the first builder, the same page, and
+    // then off it, which asks.
     await page.goBack({ waitUntil: "commit" });
     await expect(page).toHaveURL(FORM_URL);
+    await page.goBack({ waitUntil: "commit" });
+    await expect(page).toHaveURL(BUILDER_URL);
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
     // Started as the browser's button starts it, not by Playwright's `goBack`,
     // which waits for a navigation: the guard cancels this one before it moves.
     await page.evaluate(() => window.history.back());
     const question = page.getByRole("alertdialog");
     await expect(question).toBeVisible();
     // Asked on the page Back would have left: it has not moved.
-    await expect(page).toHaveURL(FORM_URL);
+    await expect(page).toHaveURL(BUILDER_URL);
     await question.getByRole("button", { name: "Keep Editing" }).click();
-    await expect(page).toHaveURL(FORM_URL);
+    await expect(page).toHaveURL(BUILDER_URL);
   });
 
   test("offers work left unsaved by a reload, and restores it", async ({

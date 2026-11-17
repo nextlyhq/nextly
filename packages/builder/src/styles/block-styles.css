@@ -114,3 +114,17 @@
   margin: 0;
   padding: 0 2px 0.25rem;
 }
+
+/* The style editor's bar: the device the top bar edits, then the State
+   switch, on one line under what the edit changes. */
+.nx-look-bar__place {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0;
+}
+
+.nx-look-bar__device {
+  color: var(--nx-muted-foreground);
+}

@@ -26,12 +26,7 @@ import { isElement } from "../../dom-kind";
 import { withEntryContentField } from "../../entry-content-rules";
 
 import type { EntryOffer } from "./insert-panel-offers";
-import {
-  cardAnchor,
-  NOWHERE,
-  useSummonAnswer,
-  type Measurable,
-} from "./insert-panel-summon";
+import { cardAnchor, NOWHERE, type Measurable } from "./insert-panel-summon";
 import type { InsertPanelProps } from "./insert-panel-types";
 import { placementSentence, placementWords } from "./insert-placement-words";
 import {
@@ -267,8 +262,7 @@ function howToAdd(entry: InsertEntry): string {
  */
 export function PlacementLine({
   document,
-  root,
-  summons,
+  flash,
   first,
   shown,
   groups,
@@ -276,10 +270,8 @@ export function PlacementLine({
   offers,
 }: {
   document: BlockDocument;
-  /** The panel, whose search and list a press is answered in. */
-  root: React.RefObject<HTMLDivElement | null>;
-  /** A canvas press still to answer, and where to say it was answered. */
-  summons: Pick<InsertPanelProps, "summoned" | "onSummoned">;
+  /** The canvas press the panel answered, while its line is highlighted. */
+  flash: number | undefined;
   first: InsertionCandidate;
   shown: boolean;
   groups: readonly InsertGroup<InsertEntry>[];
@@ -287,8 +279,6 @@ export function PlacementLine({
   offers: ReadonlyMap<string, EntryOffer>;
 }): React.JSX.Element {
   const highlighted = useCommandHighlight();
-  // The line answers a canvas press for the whole panel, highlighted for it.
-  const flash = useSummonAnswer(root, summons.summoned, summons.onSummoned);
   const entry = shown
     ? highlightedEntry(groups, tokens, highlighted)
     : undefined;

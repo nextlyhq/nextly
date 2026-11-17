@@ -184,9 +184,38 @@ describe("the views a form offers to open the document in", () => {
     expect(bar(POSTS, [BUILDER], { ...editor, locale: "en" })).toHaveLength(1);
   });
 
-  it("offers nothing on a Single, which opens as its form for now", () => {
+  it("offers a Single open as its form the builder, at the Single's own address", () => {
     expect(
       viewsToOpenIn({ kind: "single", slug: "home" }, POSTS, editor, [BUILDER])
+    ).toEqual([
+      {
+        label: "Open in builder",
+        address: "/admin/singles/home/builder?field=sections",
+        opens: "view",
+      },
+    ]);
+  });
+
+  it("offers a Single no view declared on a collection of the same slug", () => {
+    const review: RegisteredDocumentView = {
+      slug: "home",
+      path: "review",
+      component: "@acme/review#View",
+      openLabel: "Open in review",
+    };
+    expect(
+      viewsToOpenIn({ kind: "single", slug: "home" }, AUTHORS, editor, [review])
+    ).toEqual([]);
+  });
+
+  it("offers a Single nothing for a reader who may only read it", () => {
+    expect(
+      viewsToOpenIn(
+        { kind: "single", slug: "home" },
+        POSTS,
+        { ...editor, canUpdate: false },
+        [BUILDER]
+      )
     ).toEqual([]);
   });
 

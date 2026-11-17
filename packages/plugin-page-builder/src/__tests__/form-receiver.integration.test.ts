@@ -368,6 +368,92 @@ describe.each(getConfiguredTestDialects())(
       expect(said.join("\n")).not.toContain("unique-7f3c");
     });
 
+    it("finds a form inside a component a page places, and sends the visitor to the page its block names", async () => {
+      const t = await boot();
+      const { COMPONENT_INSTANCE_TYPE } = await import(
+        "@nextlyhq/blocks-engine"
+      );
+      const { coreBlocks } = await import("@nextlyhq/blocks-react/blocks");
+      const { createBlockResolver, prepareDocumentForRead } = await import(
+        "@nextlyhq/blocks-react"
+      );
+      const thanksId = idOf(
+        await t.nextly.create({
+          collection: "pages",
+          data: {
+            title: "Thanks",
+            slug: "thanks",
+            content: documentOf("page", []),
+            status: "published",
+          },
+          overrideAccess: true,
+        })
+      );
+      const definition = documentOf("component", [
+        {
+          ...picked("placed-form", "component-form"),
+          props: {
+            form: { provider: "acme", ref: "component-form" },
+            afterSending: "page",
+            entryCollection: "pages",
+            entryId: thanksId,
+          },
+        },
+      ]);
+      const componentId = idOf(
+        await t.nextly.create({
+          collection: COMPONENTS_SLUG,
+          data: {
+            title: "Signup",
+            slug: "signup-placed",
+            content: definition,
+            status: "published",
+          },
+          overrideAccess: true,
+        })
+      );
+      const host = documentOf("page", [
+        {
+          id: "placement",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId },
+        },
+      ]);
+      const pageId = idOf(
+        await t.nextly.create({
+          collection: "pages",
+          data: {
+            title: "Signup",
+            slug: "signup",
+            content: host,
+            status: "published",
+          },
+          overrideAccess: true,
+        })
+      );
+      // The id the published page draws the form under, from the renderer's
+      // own pipeline with the same definition.
+      const drawn = prepareDocumentForRead(host as never, {
+        resolver: createBlockResolver(coreBlocks as never),
+        definitions: new Map([[componentId, definition as never]]),
+      });
+      const drawnId = drawn?.nodes.find(node => node.type === "core/form")?.id;
+      expect(drawnId).toBeDefined();
+
+      const response = await send({
+        _form: `page:${pageId}`,
+        _node: drawnId ?? "",
+        email: "ada@example.com",
+      });
+      // Handed to its provider, then on to the page the block names, where
+      // the site serves it.
+      expect(accepted).toEqual([
+        { ref: "component-form", answers: [["email", ["ada@example.com"]]] },
+      ]);
+      expect(landed(response)).toBe("/thanks");
+    });
+
     it("refuses the eleventh send in a minute", async () => {
       const t = await boot();
       const pageId = idOf(

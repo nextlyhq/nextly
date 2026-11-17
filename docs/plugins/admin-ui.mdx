@@ -960,8 +960,8 @@ Startup is refused, naming the plugins involved, when a view's `path`:
 
 #### Where an entry opens
 
-> **Experimental.** `opensFirst` and a collection's `admin.opensIn` may change
-> before they are marked stable.
+> **Experimental.** `opensFirst` and a collection's or Single's `admin.opensIn`
+> may change before they are marked stable.
 
 Every admin link meant to open an entry opens it in the same place: a list
 row, the row menu's Edit and a row's language dots; the dashboard's Continue,
@@ -995,9 +995,16 @@ always opens the same place. A view opened this way is addressed on the field it
 edits (`?field=<main field>`). Collections made in the Schema Builder can't
 declare `opensIn`, so they follow steps 2 and 3, as their fields are now.
 
-Startup, and every CLI command, is refused, naming the collection and the view,
-when a collection's `opensIn` names a view it doesn't have, or a field-type
-view whose field type isn't among its top-level fields. Every plugin's views
+A Single follows the same rule, read from its own fields and its own
+`admin.opensIn`, from the sidebar, the Content screen, the dashboard's cards
+and every other link that opens it; its form's address is
+`/admin/singles/<slug>` and a view's is `/admin/singles/<slug>/<path>`. A view
+declared on a slug (`views[slug]`) is a collection's, so it is never a
+Single's, even one with the same slug.
+
+Startup, and every CLI command, is refused, naming the collection or Single and
+the view, when its `opensIn` names a view it doesn't have, or a field-type view
+whose field type isn't among its top-level fields. Every plugin's views
 count, switched-off ones included, so switching a plugin off never stops a
 start. Startup is also refused when `opensFirst` is declared on a view scoped to
 a collection, takes a value other than `"mainField"`, or is declared by two
@@ -1069,15 +1076,16 @@ header. Outside a document they render nothing.
 Your view also replaces the header's **More actions** menu. Two more exports
 let it offer what that menu offers and word its way out:
 
-- `useDocumentOpensIn()` answers where the entry being edited opens, by the
-  rule in [Where an entry opens](#where-an-entry-opens): `opensIn` is `"form"`
-  or the path of the view a click on one of the collection's entries opens,
-  and `list` is the collection's list, its `label` (the plural label, as the
-  list's heading shows it) and its `address`. A view the entry opens in has no
-  form to go back to, so its way out is the list: "Back to Pages", through
-  `navigateTo(list.address)`, which asks first about unsaved work as any leave
-  does. It answers `null` outside a collection entry's editor, on a new entry,
-  on a Single and while the collection is still loading.
+- `useDocumentOpensIn()` answers where the entry or Single being edited opens,
+  by the rule in [Where an entry opens](#where-an-entry-opens): `opensIn` is
+  `"form"` or the path of the view a click on the document opens, and `list`
+  is where it is opened from, its `label` and its `address`: a collection's
+  list, labelled by its plural label as the list's heading shows it, or, for a
+  Single, the Content screen, labelled `"content"`. A view the document opens
+  in has no form to go back to, so its way out is that place: "Back to Pages"
+  or "Back to content", through `navigateTo(list.address)`, which asks first
+  about unsaved work as any leave does. It answers `null` outside a document's
+  editor, on a new entry and while the collection or Single is still loading.
 - `PIN_TO_DASHBOARD_ACTION` is the id of the header's **Pin to dashboard** /
   **Unpin from dashboard** among `useDocumentActions().actions`. Find it there
   and run it with `run(id)`, so the pin, its words, its toast and its Undo are

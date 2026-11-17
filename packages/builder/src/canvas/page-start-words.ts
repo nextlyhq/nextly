@@ -1,58 +1,64 @@
 /**
  * What the editor says about starting an empty document, and about adding in
- * a gap between blocks. The start card speaks of sections on a page and of
- * blocks in every other kind of document; a gap's "+" names where it adds.
- * One source for the canvas's start card and gaps and for the Getting started
- * checklist, so the checklist names the control that is there.
+ * a gap between blocks. The start area greets a page by its title and every
+ * other kind of document with "Add the first block"; a gap's "+" names where
+ * it adds. One source for the canvas's start area and gaps and for the
+ * Getting started checklist, so the checklist names the control that is
+ * there.
  *
  * @module page-start-words
  */
 
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 
-/** What the start card says: of sections on a page, of blocks elsewhere. */
-const WORDS = {
-  sections: {
-    title: "Start your page",
-    hint: "Add a section, or drag one here from the panel.",
-    start: "Add section",
-  },
-  blocks: {
-    title: "Add the first block",
-    hint: "Add a block, or drag one here from the panel.",
-    start: "Add block",
-  },
+/** The start area's words, the same in every kind of document. */
+const START_AREA = {
+  /** The primary button, after its "＋" icon. */
+  start: "Add a block",
+  /** The secondary button. */
+  savedSection: "Insert a saved section",
+  /** The line under the buttons. */
+  drag: "or drag a block here",
+  /** The heading over the row of starter pages, where there are any. */
+  starters: "or start from a page",
 } as const;
 
-/**
- * Which words each kind of document speaks. Only a page is built of sections;
- * a pattern, a component and a collection template hold blocks at their top
- * level (a section among them, where the rules allow).
- * Every kind is named, so a kind the engine adds fails to type-check here
- * rather than quietly reading as a page.
- */
-const WORDS_OF_KIND: Record<BlockDocument["kind"], keyof typeof WORDS> = {
-  page: "sections",
-  pattern: "blocks",
-  component: "blocks",
-  template: "blocks",
-};
+/** What the start area of an empty document says. */
+export interface StartWords {
+  readonly title: string;
+  readonly start: string;
+  readonly savedSection: string;
+  readonly drag: string;
+  readonly starters: string;
+}
 
 /**
- * The words for a document of this kind.
+ * The start area's heading: a page is greeted by its own title, every other
+ * kind of document (a saved section, a component, a collection template) by
+ * what an author does first. Asked as an own property, so a kind newer than
+ * this editor, or one spelled like an object's inherited names
+ * (`toString`), reads as a document of blocks too.
+ */
+function titleOf(kind: BlockDocument["kind"], pageTitle: string | undefined) {
+  const page = Object.hasOwn({ page: true }, kind);
+  if (!page) return "Add the first block";
+  const named = pageTitle?.trim();
+  return named === undefined || named === ""
+    ? "Start building your page"
+    : `Start building ${named}`;
+}
+
+/**
+ * The words for an empty document of this kind.
  *
- * Block wording for a kind this editor does not know. The engine's forgiving
- * read lets a stored document through with a kind newer than the code, and
- * the type cannot see that, so the lookup is asked as an own property: a kind
- * spelled like one of an object's inherited names (`toString`) is unknown
- * too, not a function to index with.
+ * @param kind - the document's kind
+ * @param pageTitle - a page's title, which its heading names
  */
 export function startWords(
-  kind: BlockDocument["kind"]
-): (typeof WORDS)[keyof typeof WORDS] {
-  return WORDS[
-    Object.hasOwn(WORDS_OF_KIND, kind) ? WORDS_OF_KIND[kind] : "blocks"
-  ];
+  kind: BlockDocument["kind"],
+  pageTitle?: string
+): StartWords {
+  return { ...START_AREA, title: titleOf(kind, pageTitle) };
 }
 
 /**

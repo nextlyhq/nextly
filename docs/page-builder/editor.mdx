@@ -33,8 +33,14 @@ name for other collections) and returns to the list, asking first if there are
 unsaved changes. On an entry that opens as a form, such as a post, it reads
 **Exit editor** and returns to the form.
 
-To keep a collection's entries opening as a form, set `admin: { opensIn: "form" }`
-on it in code. See [Where an entry opens](/docs/plugins/admin-ui#where-an-entry-opens).
+A Single whose main field is a page layout, such as a Homepage, opens in the
+builder the same way, from the sidebar and every other link. Its **⋯** menu
+offers **Open as form**, and its arrow reads **Back to content** and returns to
+the Content screen, asking first if there are unsaved changes.
+
+To keep a collection's entries, or a Single, opening as a form, set
+`admin: { opensIn: "form" }` on it in code. See
+[Where an entry opens](/docs/plugins/admin-ui#where-an-entry-opens).
 
 ## With nothing selected
 

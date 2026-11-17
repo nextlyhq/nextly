@@ -32,6 +32,12 @@ export type {
   DefaultDataProviderOptions,
   EntryContentCanvas,
   EntryContentNote,
+  FormAfterSendingDrawing,
+  FormDrawing,
+  FormFieldDrawing,
+  FormFieldKind,
+  FormReference,
+  FormUnavailableDrawing,
   ListBaseReader,
   NamedQueryFailure,
   NamedQueryFailureCode,
@@ -41,6 +47,7 @@ export type {
   ListPageContext,
   PageBindings,
   PageContext,
+  PageForms,
   PageIssue,
   PageReadReport,
   QueryBudget,
@@ -65,6 +72,12 @@ export {
 } from "./context";
 
 export { PageRenderer } from "./page-renderer";
+// A simple form's fields with their defaults applied, their sent names among
+// them, for the editor to show the name a field's answer goes under.
+export {
+  formFields,
+  MAX_FIELDS as FORM_MAX_FIELDS,
+} from "./blocks/form-fields";
 // Binding sources read on a server, carried to the editor's canvas and read
 // back there. `@experimental` with the editor's binding sources.
 export {
@@ -268,14 +281,16 @@ export {
   createBlockResolver,
   migrationSourceFor,
   offeredSiteBlocks,
+  offeredSiteForms,
   registeredBlocks,
   SITE_BLOCKS_SERVICE,
   SITE_COPY,
+  SITE_FORMS_SERVICE,
   SITE_NAMED_QUERIES_SERVICE,
   SITE_PAGE_DATA_LIMIT_SERVICE,
   siteCopyOf,
 } from "./resolver";
-export type { BlockResolver, SiteCopyMark } from "./resolver";
+export type { BlockResolver, SiteCopyMark, SiteFormsService } from "./resolver";
 // What `offeredSiteBlocks` answers, a site's blocks read-only, and the views
 // it hands out.
 export type {

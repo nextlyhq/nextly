@@ -11,7 +11,18 @@ import type {
 } from "@nextlyhq/blocks-engine";
 import type { ReactNode } from "react";
 
+import type { PageForms } from "./forms-context";
 import type { ImageCopies, ImageSlot } from "./image-slot";
+
+export type {
+  FormAfterSendingDrawing,
+  FormDrawing,
+  FormFieldDrawing,
+  FormFieldKind,
+  FormReference,
+  FormUnavailableDrawing,
+  PageForms,
+} from "./forms-context";
 
 /**
  * What a block render receives, and where the renderer gets its data.
@@ -814,6 +825,18 @@ export interface PageContext {
    */
   item?: Record<string, unknown>;
   /**
+   * Where {@link item} is drawn among its list's entries, from 0, after the
+   * positions of the entries around it in lists that hold this one: `2`, or
+   * `0-3` for the fourth entry of a list inside the first entry of another.
+   * What tells apart the copies of a block a list draws once per entry, as
+   * the node id alone cannot.
+   *
+   * Absent outside a repeater.
+   *
+   * @experimental
+   */
+  itemPosition?: string;
+  /**
    * The collection {@link item} comes from, set by the repeater beside it, so
    * a binding to the item is checked against that collection's fields.
    *
@@ -1003,6 +1026,16 @@ export interface PageContext {
    * @experimental Settles when collection templates ship.
    */
   entryContentCanvas?: EntryContentCanvas;
+  /**
+   * Where this page's forms post, and the forms a provider describes: what
+   * a Form block needs to be sent, with no script, through the page
+   * builder's receiver. Absent where a form cannot be sent from the page,
+   * such as the editor's canvas; a Form then draws its fields with nowhere
+   * to post them.
+   *
+   * @experimental Settles with the form provider contract.
+   */
+  forms?: PageForms;
 }
 
 /**

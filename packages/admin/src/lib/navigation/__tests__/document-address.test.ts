@@ -10,8 +10,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { RegisteredDocumentView } from "@admin/lib/plugins/document-view-registry";
 
 import {
-  collectionOpeningView,
   documentAddress,
+  documentOpeningView,
   mainFieldOf,
   type OpenableCollection,
 } from "../document-address";
@@ -226,27 +226,81 @@ describe("the two ways back to the form", () => {
   });
 });
 
-describe("a Single", () => {
-  it("opens as its form", () => {
-    expect(
-      documentAddress(
-        { kind: "single", slug: "homepage" },
-        { fields: [title, blocks("content")] },
-        editor,
-        views
-      )
-    ).toBe("/admin/singles/homepage");
+describe("a Single, by the same rule", () => {
+  // A Homepage: a title and a page layout, so the builder is its main field.
+  const homepage: OpenableCollection = {
+    fields: [title, blocks("layout")],
+  };
+  // Contact details: an email first, so it stays a form though it has a
+  // blocks field further down.
+  const contact: OpenableCollection = {
+    fields: [{ name: "email", type: "email" }, blocks("extras")],
+  };
+  const single = (
+    collection: OpenableCollection | undefined,
+    request: Parameters<typeof documentAddress>[2] = editor,
+    slugOf = "homepage"
+  ) =>
+    documentAddress(
+      { kind: "single", slug: slugOf },
+      collection,
+      request,
+      views
+    );
+
+  it("opens in the builder, on its main field, when the builder is its main field", () => {
+    expect(single(homepage)).toBe(
+      "/admin/singles/homepage/builder?field=layout"
+    );
   });
 
-  it("carries its language", () => {
+  it("opens as its form when its first field is anything else", () => {
+    expect(single(contact, editor, "contact")).toBe("/admin/singles/contact");
+  });
+
+  it("opens the form, read-only, for a reader who may not update it", () => {
+    expect(single(homepage, { canUpdate: false, defaultLocale: "en" })).toBe(
+      "/admin/singles/homepage"
+    );
+  });
+
+  it("opens the form in a language other than the default", () => {
+    expect(single(homepage, { ...editor, locale: "ar" })).toBe(
+      "/admin/singles/homepage?locale=ar"
+    );
+  });
+
+  it("opens the form when it says so, whatever its main field", () => {
+    expect(single({ ...homepage, admin: { opensIn: "form" } })).toBe(
+      "/admin/singles/homepage"
+    );
+  });
+
+  it("opens where it says, on its first field of the view's type", () => {
     expect(
-      documentAddress(
-        { kind: "single", slug: "homepage" },
-        undefined,
-        { ...editor, locale: "ar" },
-        views
-      )
-    ).toBe("/admin/singles/homepage?locale=ar");
+      single({ ...contact, admin: { opensIn: "builder" } }, editor, "contact")
+    ).toBe("/admin/singles/contact/builder?field=extras");
+  });
+
+  it("never opens in a view declared on a collection of the same slug", () => {
+    // `views[slug]` declares a collection's view; a Single sharing the slug
+    // has none of it, so naming it leaves the Single as its form.
+    views = [BUILDER, { ...REVIEW, slug: "homepage" }];
+    expect(single({ ...homepage, admin: { opensIn: "review" } })).toBe(
+      "/admin/singles/homepage"
+    );
+  });
+
+  it("opens as its form while the Single is not known, carrying its language", () => {
+    expect(single(undefined)).toBe("/admin/singles/homepage");
+    expect(single(undefined, { ...editor, locale: "ar" })).toBe(
+      "/admin/singles/homepage?locale=ar"
+    );
+  });
+
+  it("opens as its form while the builder is not published (its plugin is off)", () => {
+    views = [];
+    expect(single(homepage)).toBe("/admin/singles/homepage");
   });
 });
 
@@ -270,26 +324,33 @@ describe("mainFieldOf", () => {
   });
 });
 
-describe("collectionOpeningView", () => {
+describe("documentOpeningView", () => {
   // The same reading the links act on, asked by a view about its own
   // collection: each case pairs with the address a row would open.
   it("is the view a page's main field opens in", () => {
     const pages = { fields: [title, blocks("content")] };
-    expect(collectionOpeningView("pages", pages, views)).toBe(BUILDER);
+    expect(
+      documentOpeningView({ kind: "collection", slug: "pages" }, pages, views)
+    ).toBe(BUILDER);
     expect(open(pages)).toBe(
       "/admin/collections/pages/42/builder?field=content"
     );
   });
 
   it("is none for a collection that says the form, whatever its main field", () => {
-    const pages = { fields: [title, blocks("content")], admin: { opensIn: "form" } };
-    expect(collectionOpeningView("pages", pages, views)).toBeUndefined();
+    const pages = {
+      fields: [title, blocks("content")],
+      admin: { opensIn: "form" },
+    };
+    expect(
+      documentOpeningView({ kind: "collection", slug: "pages" }, pages, views)
+    ).toBeUndefined();
   });
 
   it("is none for a post, whose main field is an excerpt", () => {
     expect(
-      collectionOpeningView(
-        "posts",
+      documentOpeningView(
+        { kind: "collection", slug: "posts" },
         { fields: [title, excerpt, blocks("sections")] },
         views
       )
@@ -298,8 +359,8 @@ describe("collectionOpeningView", () => {
 
   it("is the view a collection names, a view declared on it included", () => {
     expect(
-      collectionOpeningView(
-        "posts",
+      documentOpeningView(
+        { kind: "collection", slug: "posts" },
         { fields: [title, excerpt], admin: { opensIn: "review" } },
         views
       )
@@ -309,7 +370,26 @@ describe("collectionOpeningView", () => {
   it("is none while the view is not published (its plugin is off)", () => {
     views = [];
     expect(
-      collectionOpeningView("pages", { fields: [title, blocks("content")] }, views)
+      documentOpeningView(
+        { kind: "collection", slug: "pages" },
+        { fields: [title, blocks("content")] },
+        views
+      )
+    ).toBeUndefined();
+  });
+
+  it("is the view a Single's main field opens in, and never a collection's own view of its slug", () => {
+    const homepage = { fields: [title, blocks("layout")] };
+    expect(
+      documentOpeningView({ kind: "single", slug: "homepage" }, homepage, views)
+    ).toBe(BUILDER);
+    views = [BUILDER, { ...REVIEW, slug: "homepage" }];
+    expect(
+      documentOpeningView(
+        { kind: "single", slug: "homepage" },
+        { ...homepage, admin: { opensIn: "review" } },
+        views
+      )
     ).toBeUndefined();
   });
 });
