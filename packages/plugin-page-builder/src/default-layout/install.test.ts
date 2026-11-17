@@ -54,3 +54,42 @@ describe("the starter the installed plugin seeds with", () => {
     ).toBeUndefined();
   });
 });
+
+describe("the first-header fill the installed plugin wires", () => {
+  /** The `phase collection` pairs an install registers. */
+  function wired(
+    siteHeaderFooter: "page-builder" | "code",
+    componentStore: { collection?: string; field: string }
+  ): string[] {
+    const on: string[] = [];
+    installDefaultLayout(
+      {
+        ...context(),
+        hooks: {
+          on: (phase: string, collection: string) =>
+            on.push(`${phase} ${collection}`),
+        },
+      },
+      { siteHeaderFooter, componentStore }
+    );
+    return on;
+  }
+
+  it("listens to the components the plugin stores, on the sites that get the starter", () => {
+    const pairs = wired("page-builder", DEFAULT_COMPONENT_STORE);
+    expect(pairs).toContain(`afterCreate ${COMPONENTS_SLUG}`);
+    expect(pairs).toContain(`afterUpdate ${COMPONENTS_SLUG}`);
+  });
+
+  it("is not wired where the site draws its own, or keeps its components elsewhere", () => {
+    for (const pairs of [
+      wired("code", DEFAULT_COMPONENT_STORE),
+      wired("page-builder", { collection: "site_components", field: "blocks" }),
+    ]) {
+      expect(pairs.filter(pair => pair.includes(COMPONENTS_SLUG))).toEqual([]);
+      expect(pairs.filter(pair => pair.includes("site_components"))).toEqual(
+        []
+      );
+    }
+  });
+});

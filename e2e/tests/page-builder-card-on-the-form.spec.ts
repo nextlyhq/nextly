@@ -103,7 +103,6 @@ async function seed(api: APIRequestContext): Promise<Seeded> {
       data: {
         title: `Card header ${STAMP}`,
         slug: `card-header-${STAMP}`,
-        area: "header",
         content: {
           formatVersion: 1,
           kind: "component",
