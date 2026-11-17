@@ -41,8 +41,7 @@ function RoleBasicInfoWrapper({
       form.setError(field as "name" | "slug", { message });
     }
     // Set once, as a submit would; the errors are the test's fixed input.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [form, errors]);
 
   return (
     <Form {...form}>
