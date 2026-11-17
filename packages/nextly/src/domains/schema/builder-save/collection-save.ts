@@ -41,8 +41,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { sql } from "drizzle-orm";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { sql } from "drizzle-orm";
 
 import { serializeUiSchema } from "../../../cli/utils/ui-schema-writer";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -63,8 +63,8 @@ import { boundedStopRecord } from "../busy-table/stopped-record";
 import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import type { FieldMoveRequest } from "../field-moves/check-move";
-import { movedColumnSentences } from "../field-moves/moved-column-facts";
 import { holdsValueAt } from "../field-moves/move-statements";
+import { movedColumnSentences } from "../field-moves/moved-column-facts";
 import { planEntityMoves, type EntityMoves } from "../field-moves/plan-moves";
 import { checksumOf } from "../migrate/applied-checksums";
 import {

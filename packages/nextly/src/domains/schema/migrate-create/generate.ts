@@ -1010,9 +1010,7 @@ export async function generateMigration(
   // own though no table's shape changes with it: a field's values moved between two groups,
   // whose columns both stand.
   const changesBeyondTables =
-    hasSettingsChanges ||
-    changedPermissions.length > 0 ||
-    (args.valuesMovedIn?.length ?? 0) > 0;
+    hasSettingsChanges || changedPermissions.length > 0 || movesValues(args);
 
   const recorded = await recordedUnlessChanged(args, {
     // Not the per-language unique indexes: a snapshot from before the record has none of them, so
@@ -1105,7 +1103,7 @@ export async function generateMigration(
   const heldSettings = fieldLeavesPlans.map(({ held }) => held);
   operations = withSettingsHeldBack(operations, heldSettings);
   // A column a move fills from its group is added nullable; it is made required after the fill.
-  operations = restoredNullable(operations, args.refilledColumns ?? []);
+  operations = restoredNullable(operations, args.refilledColumns);
 
   // 7. Generate UP SQL per op, a foreign-key cycle's keys split out of the
   // table operations that cannot carry them (see `withCyclicForeignKeysSplit`),
@@ -1174,7 +1172,7 @@ export async function generateMigration(
     ...operations.map(operationTableName),
     // A table whose values the appended statements move, though no operation may name it: a
     // field's values moved between two of its groups.
-    ...(args.valuesMovedIn ?? []),
+    ...valuesMovedIn(args),
     // A renamed field group's parent changes with it, though no statement names that table.
     ...groupRenames.parentTables,
   ]);
@@ -3000,6 +2998,18 @@ function requiredAgain(
   return generateStatements(ops, dialect, previousSnapshot.tables);
 }
 
+/** The tables whose values the caller's appended statements move (`valuesMovedIn`). */
+function valuesMovedIn(
+  args: Pick<GenerateArgs, "valuesMovedIn">
+): readonly string[] {
+  return args.valuesMovedIn ?? [];
+}
+
+/** Whether the caller's appended statements move any table's values. */
+function movesValues(args: Pick<GenerateArgs, "valuesMovedIn">): boolean {
+  return valuesMovedIn(args).length > 0;
+}
+
 /** The columns the way down re-adds and then fills: each joining field's, and each moved field's. */
 function refilledOnTheWayDown(
   joins: readonly FieldJoinsEntry[],
@@ -3025,9 +3035,9 @@ function refilledOnTheWayDown(
  */
 function restoredNullable(
   inverse: Operation[],
-  refilled: readonly { table: string; column: string }[]
+  refilled: readonly { table: string; column: string }[] | undefined
 ): Operation[] {
-  const keys = new Set(refilled.map(r => `${r.table}::${r.column}`));
+  const keys = new Set((refilled ?? []).map(r => `${r.table}::${r.column}`));
   return inverse.map(op =>
     op.type === "add_column" &&
     keys.has(`${op.tableName}::${op.column.name}`) &&

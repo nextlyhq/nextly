@@ -258,22 +258,29 @@ export function planEntityMoves(args: {
       result[way].first.push(...statements[way].first);
       result[way].last.push(...statements[way].last);
     }
-    if (move.from.kind === "json" && move.to.kind === "column") {
-      result.refilledColumns.push({
-        table: args.table,
-        column: move.to.column,
-        field: request.to.join("."),
-        required: (move.field as { required?: unknown }).required === true,
-        source: { column: move.from.column, keys: move.from.keys },
-      });
-    }
-    if (move.from.kind === "column" && move.to.kind === "json") {
-      result.movedColumns.push({
-        table: args.table,
-        column: move.from.column,
-        into: move.to.column,
-      });
-    }
+    recordColumns(result, move, request, args.table);
   }
   return result;
+}
+
+/** The column a move adds and fills from its group, or the one it drops into a group, recorded. */
+function recordColumns(
+  result: EntityMoves,
+  move: PlannedMove,
+  request: FieldMoveRequest,
+  table: string
+): void {
+  const { from, to } = move;
+  if (from.kind === "json" && to.kind === "column") {
+    result.refilledColumns.push({
+      table,
+      column: to.column,
+      field: request.to.join("."),
+      required: (move.field as { required?: unknown }).required === true,
+      source: { column: from.column, keys: from.keys },
+    });
+  }
+  if (from.kind === "column" && to.kind === "json") {
+    result.movedColumns.push({ table, column: from.column, into: to.column });
+  }
 }
