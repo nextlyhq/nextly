@@ -35,7 +35,11 @@ import {
   type TableProbe,
 } from "../../dashboard/table-presence";
 
-import type { ProvenanceClaim, ProvenanceClaims } from "./provenance-claims";
+import {
+  ownEntry,
+  type ProvenanceClaim,
+  type ProvenanceClaims,
+} from "./provenance-claims";
 
 /** The surface of a transaction recording reads and writes through. */
 export interface ProvenanceDb {
@@ -241,7 +245,10 @@ async function recordTranslationProvenance(
   const fields = Object.keys(write.values);
   if (fields.length === 0) return;
   const origins = new Map(
-    fields.map(field => [field, fieldOrigin(write, write.claims?.[field])])
+    fields.map(field => [
+      field,
+      fieldOrigin(write, ownEntry(write.claims, field)),
+    ])
   );
   // Each source language's fingerprints, read once for every field made from it.
   const sources = new Map<string, Map<string, string>>();
@@ -305,7 +312,7 @@ async function recordTranslationProvenance(
     await recordRowOrigins(db, {
       field,
       value: write.values[field],
-      claim: write.claims?.[field],
+      claim: ownEntry(write.claims, field),
       fieldValues: values,
       existing,
       upsert,
@@ -344,7 +351,8 @@ async function recordRowOrigins(
     const fieldPath = `${prefix}${rowId}`;
     if (fieldPath.length > TRANSLATION_PROVENANCE_FIELD_PATH_LENGTH) continue;
     const originRowId =
-      claimedRows[rowId] ?? (args.claim?.origin === "copy" ? rowId : undefined);
+      ownEntry(claimedRows, rowId) ??
+      (args.claim?.origin === "copy" ? rowId : undefined);
     if (originRowId === undefined) continue;
     await args.upsert(fieldPath, {
       ...args.fieldValues,

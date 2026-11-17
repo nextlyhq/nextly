@@ -71,6 +71,20 @@ export function provenanceClaimsOf(
 }
 
 /**
+ * The value `claims` names under `key`, read from its own keys only. Claims and their row maps are
+ * plain objects, so an inherited member such as `constructor` would otherwise answer for a field or
+ * row of that name that the write never claimed.
+ */
+export function ownEntry<T>(
+  claims: Readonly<Record<string, T>> | undefined,
+  key: string
+): T | undefined {
+  return claims !== undefined && Object.hasOwn(claims, key)
+    ? claims[key]
+    : undefined;
+}
+
+/**
  * Refuses a claim the writer may not make: `agent` is claimed by an agent's own credentials, an
  * API key or a plugin-defined person, never by a person signed in.
  */

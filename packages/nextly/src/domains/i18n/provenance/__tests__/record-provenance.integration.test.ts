@@ -66,6 +66,12 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           json({ name: "meta", localized: true }),
         ],
       }),
+      // A translated field named like a member every object inherits.
+      defineCollection({
+        slug: "glossary",
+        localized: true,
+        fields: [text({ name: "constructor", localized: true })],
+      }),
       // A structure per language: each language holds its own rows.
       defineCollection({
         slug: "menus",
@@ -700,6 +706,62 @@ describe.each(getConfiguredTestDialects())(
         "menus"
       );
       expect(await rowOrigins("fr")).toEqual({ "items#r1": ["copy", "r1"] });
+    });
+    it("reads a write's claims by their own names, never a member every object inherits", async () => {
+      // A field or a row named `constructor` has no claim unless the write names one: an object's
+      // inherited `constructor` is no claim, so it neither stands in for the field's origin nor
+      // for a row's source row.
+      await boot(dialect);
+      const created = (await t!.nextly.create({
+        collection: "glossary",
+        locale: "en",
+        data: { constructor: "Builder" },
+      })) as unknown as { item: { id: string } };
+      const word = created.item.id;
+      const saved = await save(
+        word,
+        "es",
+        { constructor: "Constructor" },
+        { user: "ann" },
+        "glossary"
+      );
+      expect(saved, JSON.stringify(saved)).toMatchObject({ success: true });
+      expect(
+        (await rowsOf(word, { kind: "collection", slug: "glossary" })).es
+      ).toEqual([
+        expect.objectContaining({
+          fieldPath: "constructor",
+          origin: "person",
+          actorKind: "user",
+          sourceLocale: "en",
+        }),
+      ]);
+
+      const menu = (await t!.nextly.create({
+        collection: "menus",
+        locale: "en",
+        data: { items: [{ id: "constructor", label: "Home" }] },
+      })) as unknown as { item: { id: string } };
+      const translated = await save(
+        menu.item.id,
+        "es",
+        {
+          items: [{ id: "constructor", label: "Inicio" }],
+          _provenance: { items: { origin: "machine", engine: "e1", rows: {} } },
+        },
+        { apiKey: "key-1" },
+        "menus"
+      );
+      expect(translated, JSON.stringify(translated)).toMatchObject({
+        success: true,
+      });
+      // The claim names no source row for it, so the row keeps no record of one.
+      expect(
+        (
+          (await rowsOf(menu.item.id, { kind: "collection", slug: "menus" }))
+            .es ?? []
+        ).map(row => row.fieldPath)
+      ).toEqual(["items"]);
     });
   }
 );
