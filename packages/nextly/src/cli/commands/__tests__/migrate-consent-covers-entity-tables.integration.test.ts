@@ -296,6 +296,38 @@ describe.each(LOCK_DIALECTS)(
       );
     }
 
+    /** How many rows of one entity each shared table holds, by kind. */
+    async function sharedRowsOf(
+      kind: "collection" | "single",
+      slug: string,
+      main: string
+    ) {
+      const count = async (table: string, where: string) =>
+        Number(
+          (
+            await adapter.executeQuery<{ n: unknown }>(
+              `SELECT COUNT(*) AS n FROM ${table} WHERE ${where}`
+            )
+          )[0]?.n ?? 0
+        );
+      const scoped = `scope_kind = '${kind}' AND scope_slug = '${slug}'`;
+      return {
+        versions: await count("nextly_versions", scoped),
+        pins: await count("nextly_version_pins", scoped),
+        views: await count("nextly_version_views", scoped),
+        archive: await count(
+          "nextly_i18n_archive",
+          `collection = '${slug}' AND entity_kind = '${kind}'`
+        ),
+        events: await count(
+          "nextly_content_events",
+          `subject_kind = '${kind}' AND subject_slug = '${slug}'`
+        ),
+        permissions: await count("permissions", `resource = '${slug}'`),
+        fieldGroups: await count(seo, `_parent_table = '${main}'`),
+      };
+    }
+
     /** Every table's row count, the registries' slugs and the ledger. */
     async function databaseState() {
       const tables: Record<string, number> = {};
@@ -422,6 +454,16 @@ describe.each(LOCK_DIALECTS)(
       expect(after.tables[pages]).toBe(1);
       expect(after.tables[`${pages}_locales`]).toBe(1);
       expect(after.tables[`${pages}_refs`]).toBe(1);
+      // And its rows in every shared table, which a consent naming the two others does not reach.
+      expect(await sharedRowsOf("collection", "pages", pages)).toEqual({
+        versions: 1,
+        pins: 1,
+        views: 1,
+        archive: 1,
+        events: 1,
+        permissions: 1,
+        fieldGroups: 1,
+      });
     }, 180_000);
 
     it("lists each owned table's rows and each entity's own shared rows before asking", async () => {
