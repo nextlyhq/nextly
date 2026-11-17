@@ -88,6 +88,45 @@ function release(reserved: Reserved | null): void {
   else reserved.element.style.setProperty("min-block-size", reserved.before);
 }
 
+/**
+ * The chooser's own height, its padding and the plate's edge included. Read
+ * from the body, not the plate, whose height follows the block's and would
+ * hold a room once made.
+ */
+function chooserHeight(body: HTMLDivElement | null): number {
+  if (body === null) return 0;
+  const plate = body.parentElement;
+  const edge = plate === null ? 0 : plate.offsetHeight - plate.clientHeight;
+  return body.offsetHeight + edge;
+}
+
+/**
+ * Give the block the chooser's height as its minimum, as the page measures
+ * it: the overlay is drawn at the canvas's zoom, the page at its own size.
+ * What the block carried before is kept, to be put back.
+ */
+function reserveRoom(
+  reserved: { current: Reserved | null },
+  found: { readonly element: Element; readonly scale: number },
+  height: number
+): void {
+  const { element: block } = found;
+  if (height <= 0 || !isHTMLElement(block)) return;
+  const wanted = `${String(Math.ceil(height / found.scale))}px`;
+  if (reserved.current?.element !== block) {
+    release(reserved.current);
+    reserved.current = {
+      element: block,
+      before: block.style.getPropertyValue("min-block-size"),
+    };
+  }
+  // Only when it changes: the canvas watches the page's styles, and an
+  // unchanged write would measure again for nothing.
+  if (block.style.getPropertyValue("min-block-size") !== wanted) {
+    block.style.setProperty("min-block-size", wanted);
+  }
+}
+
 /** The chooser for the block just added, over the canvas. */
 export function FirstAddChoosers({
   editor,
@@ -113,32 +152,7 @@ export function FirstAddChoosers({
       setRect(current => (current === null ? current : null));
       return;
     }
-    // The chooser's own height, its padding and the plate's edge included,
-    // as the page measures it: the overlay is drawn at the canvas's zoom, the
-    // page at its own size. Read from the body, not the plate, whose height
-    // follows the block's and would hold a room once made.
-    const plate = body.current?.parentElement;
-    const edge =
-      plate === null || plate === undefined
-        ? 0
-        : plate.offsetHeight - plate.clientHeight;
-    const height = (body.current?.offsetHeight ?? 0) + edge;
-    if (height > 0 && isHTMLElement(found.element)) {
-      const wanted = `${String(Math.ceil(height / found.scale))}px`;
-      const { element: block } = found;
-      if (reserved.current?.element !== block) {
-        release(reserved.current);
-        reserved.current = {
-          element: block,
-          before: block.style.getPropertyValue("min-block-size"),
-        };
-      }
-      // Only when it changes: the canvas watches the page's styles, and an
-      // unchanged write would measure again for nothing.
-      if (block.style.getPropertyValue("min-block-size") !== wanted) {
-        block.style.setProperty("min-block-size", wanted);
-      }
-    }
+    reserveRoom(reserved, found, chooserHeight(body.current));
     // Read again: the room just made moves what follows, and may grow it.
     const next = shownRectOf(element, id)?.rect ?? found.rect;
     setRect(current => (sameRect(current, next) ? current : next));
