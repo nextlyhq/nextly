@@ -622,11 +622,7 @@ const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
     // as its words. The entry validator would refuse the second as "must be
     // text", so it is checked as editor content or a string instead.
     declaration.oneParagraph === true
-      ? {
-          ...base(name, declaration, path, ctx),
-          type: "richText",
-          validate: isTextOrEditorContent,
-        }
+      ? oneParagraphConfig(name, declaration, path, ctx)
       : {
           ...base(name, declaration, path, ctx),
           type: "textarea",
@@ -978,6 +974,36 @@ function countOption(
  * their own), so validating the full tree would encode the editor's node
  * catalog into the field system.
  */
+/**
+ * A one-paragraph textarea prop's config: words or editor content, with no
+ * length bound, which editor content has no single length to hold to. A
+ * bound declared beside it is refused rather than left unenforced.
+ */
+function oneParagraphConfig(
+  name: string,
+  declaration: BlockPropDeclaration,
+  path: string,
+  ctx: ConversionContext
+): FieldConfig | null {
+  const bounds = ["minLength", "maxLength"].filter(key =>
+    Object.prototype.hasOwnProperty.call(declaration, key)
+  );
+  for (const key of bounds) {
+    record(
+      ctx,
+      `${path}.${key}`,
+      "UNKNOWN_OPTION",
+      `A one-paragraph textarea prop does not accept \`${key}\`: its value may be editor content, which has no length to bound.`
+    );
+  }
+  if (bounds.length > 0) return null;
+  return {
+    ...base(name, declaration, path, ctx),
+    type: "richText",
+    validate: isTextOrEditorContent,
+  };
+}
+
 /**
  * Whether a one-paragraph prop's value is one it can hold: the words, as a
  * string, or {@link isEditorContent editor content}.

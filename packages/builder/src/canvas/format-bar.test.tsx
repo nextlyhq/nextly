@@ -252,6 +252,27 @@ describe("the keyboard", () => {
     expect(formatBar.holdsFocus()).toBe(false);
   });
 
+  it("is drawn and focused on request even over a caret with nothing selected", () => {
+    serve();
+    act(() => {
+      formatBar.selected({
+        collapsed: true,
+        bold: false,
+        italic: false,
+        link: null,
+      });
+    });
+    drawBar();
+    expect(screen.queryByRole("toolbar")).toBeNull();
+    act(() => formatBar.requestFocus());
+    // Drawn, not merely focused: a hidden bar takes no focus in a browser.
+    const bar = screen.getByRole("toolbar", { name: FORMAT_BAR_WORDS.bar });
+    expect(bar.hidden).toBe(false);
+    const bold = screen.getByRole("button", { name: "Bold" });
+    expect(document.activeElement).toBe(bold);
+    expect(formatBar.holdsFocus()).toBe(true);
+  });
+
   it("finishes the edit when the focus leaves the bar for anywhere but the words", async () => {
     const { finish } = serve();
     const elsewhere = document.createElement("button");

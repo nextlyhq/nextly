@@ -320,3 +320,13 @@ describe("toOneParagraph: links nested very deep", () => {
     expect(richTextToPlainText(restricted.value)).toBe("deep words");
   });
 });
+
+describe("toOneParagraph: one leaf with very many lines", () => {
+  it("keeps every line without passing them as call arguments", () => {
+    const restricted = toOneParagraph(
+      value([paragraph(text("a\n".repeat(150_000)))])
+    );
+    const kids = restricted.value.root.children[0]?.children ?? [];
+    expect(kids.filter(kid => kid.type === "linebreak")).toHaveLength(150_000);
+  });
+});

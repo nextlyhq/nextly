@@ -1544,6 +1544,18 @@ describe("a one-paragraph Text prop", () => {
     ).toHaveLength(1);
   });
 
+  it("refuses a length bound it could not enforce on editor content", () => {
+    for (const bound of ["minLength", "maxLength"]) {
+      expect(() =>
+        blockPropsToFieldConfigs({
+          props: {
+            text: { type: "textarea", oneParagraph: true, [bound]: 10 },
+          },
+        })
+      ).toThrow();
+    }
+  });
+
   it("is a control: a plain textarea prop still refuses editor content", async () => {
     expect(
       await validateBlockPropValues(

@@ -54,28 +54,20 @@ async function openBuilder(page: Page): Promise<void> {
   });
 }
 
-/** Enter the Text by double-clicking its words, once the editor has it. */
+/**
+ * Enter the Text: select it, then Enter, the keyboard's way in. Aimed by
+ * selection rather than a double-click, because the block bar drawn over
+ * the first block on a page can take the second click.
+ */
 async function enterWords(page: Page): Promise<void> {
-  const words = canvasFrame(page).locator(WORDS).first();
-  const box = await words.evaluate(element => {
-    const range = element.ownerDocument.createRange();
-    range.selectNodeContents(element);
-    const glyphs = range.getBoundingClientRect();
-    const own = element.getBoundingClientRect();
-    return {
-      x: (glyphs.x + glyphs.width * 0.25 - own.x) / own.width,
-      y: (glyphs.y + glyphs.height / 2 - own.y) / own.height,
-    };
-  });
-  const onPage = await words.boundingBox();
-  if (onPage === null) throw new Error("[e2e] the Text has no box");
-  await page.mouse.dblclick(
-    onPage.x + box.x * onPage.width,
-    onPage.y + box.y * onPage.height
-  );
+  await canvasFrame(page).locator(WORDS).first().click();
+  await expect(
+    page.getByRole("toolbar", { name: "Block actions" })
+  ).toBeVisible();
+  await page.keyboard.press("Enter");
   await expect(
     canvasFrame(page).locator(`${WORDS}[contenteditable="true"]`)
-  ).toBeVisible({ timeout: 30_000 });
+  ).toBeVisible({ timeout: 60_000 });
 }
 
 /** Select the last `count` characters before the caret's line end. */
@@ -221,11 +213,19 @@ test.describe("a Text edited on the canvas", () => {
     await seed(page, layoutWith("Keyboard words"));
     await openBuilder(page);
     await enterWords(page);
-    await selectLast(page, 5);
-    await page.keyboard.press("Alt+F10");
     const bold = page
       .getByRole("toolbar", { name: "Text formatting" })
       .getByRole("button", { name: "Bold" });
+    // From a caret with nothing selected, the bar is drawn and reached too.
+    await page.keyboard.press("End");
+    await page.keyboard.press("Alt+F10");
+    await expect(bold).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(
+      canvasFrame(page).locator(`${WORDS}[contenteditable="true"]`)
+    ).toBeFocused();
+    await selectLast(page, 5);
+    await page.keyboard.press("Alt+F10");
     await expect(bold).toBeFocused();
     await page.keyboard.press("ArrowRight");
     await expect(page.getByRole("button", { name: "Italic" })).toBeFocused();

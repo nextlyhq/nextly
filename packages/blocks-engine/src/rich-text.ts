@@ -611,6 +611,17 @@ function nodePieces(
   return [];
 }
 
+/**
+ * Adds pieces one by one rather than spread into one call: a single text leaf
+ * can expand to any number of pieces, more than a call takes as arguments.
+ */
+function appendAll(
+  out: ParagraphPiece[],
+  pieces: readonly ParagraphPiece[]
+): void {
+  for (const piece of pieces) out.push(piece);
+}
+
 /** Puts nodes on a walk's stack so they pop in their order. */
 function pushReversed(stack: unknown[], nodes: readonly unknown[]): void {
   for (let i = nodes.length - 1; i >= 0; i--) stack.push(nodes[i]);
@@ -631,7 +642,7 @@ function inlinePieces(
   pushReversed(stack, nodes);
   while (stack.length > 0 && !spent(walk)) {
     walk.visits += 1;
-    out.push(...nodePieces(stack.pop(), walk, inLink, stack));
+    appendAll(out, nodePieces(stack.pop(), walk, inLink, stack));
   }
   return out;
 }
@@ -699,7 +710,7 @@ function readBlock(
   const pieces = inlinePieces(kids, walk, false);
   if (pieces.length === 0) return;
   if (walk.wrote) out.push({ kind: "break" });
-  out.push(...pieces);
+  appendAll(out, pieces);
   walk.wrote = true;
 }
 

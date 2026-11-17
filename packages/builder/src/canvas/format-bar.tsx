@@ -37,6 +37,7 @@ import type { Rect } from "../geometry";
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE } from "./canvas";
 import { BLOCK_TOOLBAR_CLASS } from "./canvas-chrome";
+import { watchCanvasFor } from "./canvas-geometry-watch";
 import { overlaps } from "./canvas-tab-places";
 import {
   formatBar,
@@ -401,21 +402,62 @@ function useNoticePlace(
   shown: boolean
 ): Placed | null {
   const [place, setPlace] = React.useState<Placed | null>(null);
-  React.useLayoutEffect(() => {
+  const measure = React.useCallback(() => {
     const element = notice.current;
-    if (!shown || element === null || target === null) {
-      setPlace(null);
-      return;
-    }
-    const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
-    if (space === null || !space.root.contains(target.element)) {
-      setPlace(null);
-      return;
-    }
-    const box = space.place(canvasContentRect(target.element, space.root));
-    setPlace({ x: box.x, y: box.y + box.height + GAP_PX });
+    setPlace(
+      !shown || element === null || target === null
+        ? null
+        : placeUnder(element, target)
+    );
   }, [notice, target, shown]);
+  React.useLayoutEffect(measure, [measure]);
+  React.useEffect(() => {
+    if (!shown) return;
+    return watchCanvasFor(() => notice.current, measure);
+  }, [shown, measure, notice]);
   return place;
+}
+
+/** Just under the passage, in the overlay; `null` outside this canvas. */
+function placeUnder(element: HTMLElement, target: FormatTarget): Placed | null {
+  const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+  if (space === null || !space.root.contains(target.element)) return null;
+  const box = space.place(canvasContentRect(target.element, space.root));
+  return { x: box.x, y: box.y + box.height + GAP_PX };
+}
+
+/**
+ * Whether Alt+F10 asked for the bar and it has not taken the focus yet. The
+ * bar is drawn while it is asked, so a caret with nothing selected can still
+ * reach it.
+ */
+function useFocusRequest(request: number): {
+  readonly asked: boolean;
+  readonly done: () => void;
+} {
+  const seen = React.useRef(request);
+  const [asked, setAsked] = React.useState(false);
+  React.useEffect(() => {
+    if (request === seen.current) return;
+    seen.current = request;
+    setAsked(true);
+  }, [request]);
+  const done = React.useCallback(() => setAsked(false), []);
+  return React.useMemo(() => ({ asked, done }), [asked, done]);
+}
+
+/**
+ * Take the focus to the bar's tab stop. The words' blur is told first that
+ * the bar holds the focus, as moving there is still editing; and told again
+ * that it does not when the focus did not arrive.
+ */
+function focusBar(element: HTMLElement | null): void {
+  const stop = element?.querySelector<HTMLElement>('[tabindex="0"]');
+  if (element === null || stop === null || stop === undefined) return;
+  formatBar.setHoldsFocus(true);
+  stop.focus();
+  if (!element.contains(element.ownerDocument.activeElement))
+    formatBar.setHoldsFocus(false);
 }
 
 /**
@@ -428,136 +470,179 @@ export function FormatBar(): React.JSX.Element | null {
     formatBar.get,
     formatBar.get
   );
-  const bar = React.useRef<HTMLDivElement>(null);
-  const notice = React.useRef<HTMLDivElement>(null);
+  const { target } = state;
+  if (target === null) return null;
+  return (
+    <>
+      <OpenBar state={state} target={target} />
+      {state.dropped ? <NoticeLayer target={target} /> : null}
+    </>
+  );
+}
+
+/**
+ * Where the bar is drawn while it is shown, measured again whenever the
+ * canvas moves under the words: an image above them loading, the canvas
+ * resized, a recompiled sheet, as the block bar re-measures.
+ */
+function useBarPlace(
+  bar: React.RefObject<HTMLDivElement | null>,
+  shown: boolean,
+  target: FormatTarget,
+  state: FormatBarSnapshot
+): Placed | null {
   const [placed, setPlaced] = React.useState<Placed | null>(null);
+  const measure = React.useCallback(() => {
+    const element = bar.current;
+    setPlaced(shown && element !== null ? placeBar(element, target) : null);
+  }, [bar, shown, target]);
+  React.useLayoutEffect(measure, [measure, state.selection, state.linking]);
+  React.useEffect(() => {
+    if (!shown) return;
+    return watchCanvasFor(() => bar.current, measure);
+  }, [bar, shown, measure]);
+  return placed;
+}
+
+/**
+ * The focus leaving the bar, read once it has landed: back in the words is
+ * still editing; anywhere else finishes the edit, as leaving the words does.
+ */
+function leaveBar(bar: HTMLElement | null, target: FormatTarget): void {
+  const passage = target.element;
+  setTimeout(() => {
+    if (bar?.contains(bar.ownerDocument.activeElement)) return;
+    const inWords =
+      passage.ownerDocument.activeElement === passage &&
+      passage.ownerDocument.hasFocus();
+    formatBar.setHoldsFocus(false);
+    if (!inWords) target.finish();
+  }, 0);
+}
+
+/** Where an arrow, Home or End moves the bar's focus, or `undefined`. */
+function movedTo(key: string, stop: number, count: number): number | undefined {
+  const moves: Record<string, number> = {
+    ArrowRight: stop + 1,
+    ArrowLeft: stop - 1,
+    Home: 0,
+    End: count - 1,
+  };
+  return moves[key];
+}
+
+/** Focus the bar's button at `index`, wrapping, and answer where it landed. */
+function focusButton(bar: HTMLElement | null, index: number): number | null {
+  const buttons = bar?.querySelectorAll<HTMLElement>(
+    `.${FORMAT_BAR_CLASS}__button`
+  );
+  const count = buttons?.length ?? 0;
+  if (count === 0) return null;
+  const next = ((index % count) + count) % count;
+  buttons?.[next]?.focus();
+  return next;
+}
+
+/** The bar itself, for a passage being edited. */
+function OpenBar({
+  state,
+  target,
+}: {
+  state: FormatBarSnapshot;
+  target: FormatTarget;
+}): React.JSX.Element {
+  const bar = React.useRef<HTMLDivElement>(null);
   const [stop, setStop] = React.useState(0);
   const [focused, setFocused] = React.useState(false);
-  const { target } = state;
-  const shown = target !== null && (formatBarShown(state) || focused);
-  const actions = target === null ? [] : drawnActions(target);
+  const wanted = useFocusRequest(state.focusRequest);
+  const shown = formatBarShown(state) || focused || wanted.asked;
+  const actions = drawnActions(target);
+  const placed = useBarPlace(bar, shown, target, state);
 
-  React.useLayoutEffect(() => {
-    const element = bar.current;
-    if (!shown || element === null || target === null) {
-      setPlaced(null);
+  // Alt+F10 from the words: drawn first, even over a caret with nothing
+  // selected, then focused once placed.
+  React.useEffect(() => {
+    if (!wanted.asked || placed === null) return;
+    wanted.done();
+    focusBar(bar.current);
+  }, [wanted, placed]);
+
+  const onKeyDown = (event: React.KeyboardEvent): void => {
+    if (state.linking) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      backToWords(target);
       return;
     }
-    setPlaced(placeBar(element, target));
-  }, [shown, target, state.selection, state.linking]);
-
-  // Alt+F10 from the words: the bar takes the focus, on its tab stop.
-  const asked = React.useRef(state.focusRequest);
-  React.useEffect(() => {
-    if (state.focusRequest === asked.current) return;
-    asked.current = state.focusRequest;
-    const element = bar.current;
-    if (element === null) return;
-    formatBar.setHoldsFocus(true);
-    element.querySelector<HTMLElement>('[tabindex="0"]')?.focus();
-  }, [state.focusRequest]);
-
-  const noticePlace = useNoticePlace(notice, target, state.dropped);
-
-  if (target === null) return null;
-
-  const focusAt = (index: number): void => {
-    const buttons = bar.current?.querySelectorAll<HTMLElement>(
-      `.${FORMAT_BAR_CLASS}__button`
-    );
-    const count = buttons?.length ?? 0;
-    if (count === 0) return;
-    const next = ((index % count) + count) % count;
-    setStop(next);
-    buttons?.[next]?.focus();
+    const to = movedTo(event.key, stop, actions.length);
+    if (to === undefined) return;
+    event.preventDefault();
+    const landed = focusButton(bar.current, to);
+    if (landed !== null) setStop(landed);
   };
 
   return (
-    <>
-      <div
-        ref={bar}
-        className={FORMAT_BAR_CLASS}
-        {...{ [CHROME_ATTRIBUTE]: "" }}
-        role="toolbar"
-        aria-orientation="horizontal"
-        aria-label={FORMAT_BAR_WORDS.bar}
-        hidden={!shown}
-        data-linking={state.linking ? "" : undefined}
-        style={{
-          left: placed?.x ?? 0,
-          top: placed?.y ?? 0,
-          visibility: placed === null ? "hidden" : undefined,
-        }}
-        onFocus={() => {
-          formatBar.setHoldsFocus(true);
-          setFocused(true);
-        }}
-        onBlur={event => {
-          const next = event.relatedTarget;
-          if (isElement(next) && bar.current?.contains(next)) return;
-          setFocused(false);
-          // Read once the focus has landed: back in the words is still
-          // editing; anywhere else finishes the edit, as leaving the words
-          // does.
-          const passage = target.element;
-          setTimeout(() => {
-            if (bar.current?.contains(bar.current.ownerDocument.activeElement))
-              return;
-            const inWords =
-              passage.ownerDocument.activeElement === passage &&
-              passage.ownerDocument.hasFocus();
-            formatBar.setHoldsFocus(false);
-            if (!inWords) target.finish();
-          }, 0);
-        }}
-        onKeyDown={event => {
-          if (state.linking) return;
-          if (event.key === "Escape") {
-            event.preventDefault();
-            event.stopPropagation();
-            backToWords(target);
-            return;
-          }
-          const moves: Record<string, number> = {
-            ArrowRight: stop + 1,
-            ArrowLeft: stop - 1,
-            Home: 0,
-            End: actions.length - 1,
-          };
-          const to = moves[event.key];
-          if (to === undefined) return;
-          event.preventDefault();
-          focusAt(to);
-        }}
-      >
-        {state.linking ? (
-          <LinkField state={state} target={target} />
-        ) : (
-          actions.map((action, index) => (
-            <ActionButton
-              key={action}
-              action={action}
-              state={state}
-              target={target}
-              tabbable={index === Math.min(stop, actions.length - 1)}
-              onFocusHere={() => setStop(index)}
-            />
-          ))
-        )}
-      </div>
-      {state.dropped ? (
-        <div
-          ref={notice}
-          className={`${FORMAT_NOTICE_CLASS}__place`}
-          style={{
-            left: noticePlace?.x ?? 0,
-            top: noticePlace?.y ?? 0,
-            visibility: noticePlace === null ? "hidden" : undefined,
-          }}
-        >
-          <DroppedNotice target={target} />
-        </div>
-      ) : null}
-    </>
+    <div
+      ref={bar}
+      className={FORMAT_BAR_CLASS}
+      {...{ [CHROME_ATTRIBUTE]: "" }}
+      role="toolbar"
+      aria-orientation="horizontal"
+      aria-label={FORMAT_BAR_WORDS.bar}
+      hidden={!shown}
+      data-linking={state.linking ? "" : undefined}
+      style={placedStyle(placed)}
+      onFocus={() => {
+        formatBar.setHoldsFocus(true);
+        setFocused(true);
+      }}
+      onBlur={event => {
+        const next = event.relatedTarget;
+        if (isElement(next) && bar.current?.contains(next)) return;
+        setFocused(false);
+        leaveBar(bar.current, target);
+      }}
+      onKeyDown={onKeyDown}
+    >
+      {state.linking ? (
+        <LinkField state={state} target={target} />
+      ) : (
+        actions.map((action, index) => (
+          <ActionButton
+            key={action}
+            action={action}
+            state={state}
+            target={target}
+            tabbable={index === Math.min(stop, actions.length - 1)}
+            onFocusHere={() => setStop(index)}
+          />
+        ))
+      )}
+    </div>
+  );
+}
+
+/** A placed layer's style: kept out of sight until it has a place. */
+function placedStyle(placed: Placed | null): React.CSSProperties {
+  return {
+    left: placed?.x ?? 0,
+    top: placed?.y ?? 0,
+    visibility: placed === null ? "hidden" : undefined,
+  };
+}
+
+/** The paste notice's layer, just under the passage. */
+function NoticeLayer({ target }: { target: FormatTarget }): React.JSX.Element {
+  const notice = React.useRef<HTMLDivElement>(null);
+  const place = useNoticePlace(notice, target, true);
+  return (
+    <div
+      ref={notice}
+      className={`${FORMAT_NOTICE_CLASS}__place`}
+      style={placedStyle(place)}
+    >
+      <DroppedNotice target={target} />
+    </div>
   );
 }
