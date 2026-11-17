@@ -718,6 +718,37 @@ function refuseRowFillsOutsideSingle(
   }
 }
 
+/**
+ * The fills and deletes a save's file writes between a column's creation and its NOT NULL: the
+ * person's answers, and a Single's row fills (`CollectionSave.rowFills`) as fills, each a column
+ * of `table`. A structured value (a JSON, chips or plugin JSON field's) is written as the JSON
+ * text its column stores.
+ */
+function fileResolutions(
+  save: CollectionSave,
+  table: string
+): { resolutions?: ColumnResolution[] } {
+  const answers = [
+    ...(save.resolutions ?? []),
+    ...(save.rowFills ?? []).map(fill => ({
+      column: fill.column,
+      kind: "fill" as const,
+      value: fill.value,
+    })),
+  ];
+  if (answers.length === 0) return {};
+  return {
+    resolutions: answers.map(r => ({
+      ...r,
+      tableName: table,
+      columnName: toSnakeCase(r.column),
+      ...(r.kind === "fill" && storesJson(save, r.column)
+        ? { json: true }
+        : {}),
+    })),
+  };
+}
+
 async function settledRows(
   deps: CollectionSaveDeps,
   save: CollectionSave,
@@ -1025,29 +1056,7 @@ async function writeFiles(
     table: plan.table,
     now: new Date(now.getTime() + offset),
     appended: addedStatements(deps, save, plan.table),
-    ...(save.resolutions === undefined && save.rowFills === undefined
-      ? {}
-      : {
-          resolutions: [
-            ...(save.resolutions ?? []),
-            // A Single's row fills, written as fills; the generator leaves an optional field's
-            // column nullable after its fill.
-            ...(save.rowFills ?? []).map(f => ({
-              column: f.column,
-              kind: "fill" as const,
-              value: f.value,
-            })),
-          ].map(r => ({
-            ...r,
-            tableName: plan.table,
-            columnName: toSnakeCase(r.column),
-            // A structured value (a JSON, chips or plugin JSON field's) is
-            // written as the JSON text its column stores.
-            ...(r.kind === "fill" && storesJson(save, r.column)
-              ? { json: true }
-              : {}),
-          })),
-        }),
+    ...fileResolutions(save, plan.table),
     ...(save.keys === undefined
       ? {}
       : { newTableKeys: new Map([[plan.table, save.keys.after]]) }),
