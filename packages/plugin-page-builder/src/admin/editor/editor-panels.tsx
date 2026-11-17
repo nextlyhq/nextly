@@ -32,6 +32,8 @@ import {
   type InsertPlace,
   type LayersRegionRow,
   type LibraryTierState,
+  type MiniatureSession,
+  useMiniatureSession,
   type VariablesPreview,
 } from "@nextlyhq/builder/shell";
 import {
@@ -55,6 +57,7 @@ import {
   type LibraryReadState,
 } from "../pattern-library-client";
 
+import { usePictureContext } from "./canvas-page-context";
 import {
   useCanvasPreviewMode,
   type CanvasPreviewMode,
@@ -79,6 +82,10 @@ import {
   type ComponentGraph,
 } from "./offered-library";
 import { usePagesPanel, type PagesPanelMount } from "./pages-panel";
+import {
+  useSectionPictures,
+  type SectionPictureInputs,
+} from "./section-pictures";
 import type { FontsPanelWithUpload as FontsPanelWithUploadPart } from "./site-style-fonts";
 import {
   offerableFaces,
@@ -150,6 +157,7 @@ const AVAILABLE_PANELS = [
 function InsertPanelWithLibrary({
   components,
   offerablePatterns,
+  pictures,
   ...props
 }: {
   editor: React.ComponentProps<typeof InsertPanel>["editor"];
@@ -187,8 +195,18 @@ function InsertPanelWithLibrary({
   offerablePatterns: (
     patterns: readonly SavedPattern[]
   ) => readonly SavedPattern[];
+  /**
+   * What a saved section's picture is drawn with, beside the component
+   * definitions above: the site's style as the canvas draws with it, the mode
+   * the canvas is previewed in, and the editor's picture session.
+   */
+  pictures: Omit<SectionPictureInputs, "definitions">;
 }): React.JSX.Element {
   const library = usePatternLibrary();
+  const renderPicture = useSectionPictures({
+    ...pictures,
+    definitions: components.definitions,
+  });
   const patterns = useMemo(
     () => offerablePatterns(library.patterns),
     [offerablePatterns, library.patterns]
@@ -197,6 +215,7 @@ function InsertPanelWithLibrary({
     <InsertPanel
       {...props}
       patterns={patterns}
+      renderPicture={renderPicture}
       components={components.components}
       componentDefinitions={components.definitions}
       library={{
@@ -444,6 +463,23 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
 }
 
 /**
+ * What the canvas and the pictures are drawn in, held above the panels so
+ * both outlast them: the site mode the canvas is previewed in (picked in the
+ * Design panel; plain state, never stored, so a reload draws the page's own
+ * mode again) and the editor's picture session (what pictures' async blocks
+ * drew, and which sections were already seen).
+ */
+function useDrawnLook(): {
+  readonly previewMode: CanvasPreviewMode;
+  readonly pictureSession: MiniatureSession;
+} {
+  return {
+    previewMode: useCanvasPreviewMode(),
+    pictureSession: useMiniatureSession(usePictureContext()),
+  };
+}
+
+/**
  * The panels' side of the editor: what the rail offers, the entry's own
  * fields, the getting-started card, the offered library and the requests.
  */
@@ -516,14 +552,12 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   // Which look the inspector edits on its own: chosen in the Design panel,
   // left by selecting a block, by the bar's Back, or by Esc.
   const lookEditing = useLookEditing(editor);
-  // The site mode the canvas is previewed in: picked in the Design panel and
-  // held here, above it, so it outlasts the panel; plain state, never stored,
-  // so a reload draws the page's own mode again.
-  const previewMode = useCanvasPreviewMode();
+  const { previewMode, pictureSession } = useDrawnLook();
   return {
     entryFields,
     lookEditing,
     previewMode,
+    pictureSession,
     search: { open: searchOpen, setOpen: setSearchOpen },
     pages,
     checklist,
@@ -697,6 +731,8 @@ export type EditorPanels = OfferedLibrary &
      * drawn in it, and the tag over the canvas clears it.
      */
     previewMode: CanvasPreviewMode;
+    /** What the editor's pictures share for as long as it is open. */
+    pictureSession: MiniatureSession;
   };
 
 /**
@@ -738,6 +774,7 @@ export function editorPanelRenderer({
   lookEditing,
   previewMode,
   designFolds,
+  pictureSession,
 }: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
   /** The look edited on its own, which the Design panel's Block looks choose. */
   lookEditing?: LookEditingState;
@@ -788,6 +825,7 @@ export function editorPanelRenderer({
     | "onAddSummoned"
     | "pages"
     | "designFolds"
+    | "pictureSession"
   >): React.ComponentProps<typeof BuilderShell>["renderPanel"] {
   return (panel, view) => {
     /*
@@ -817,6 +855,11 @@ export function editorPanelRenderer({
           // was already open.
           summoned={addSummon}
           onSummoned={onAddSummoned}
+          pictures={{
+            siteStyle: canvasSiteStyle,
+            mode: previewMode?.picked,
+            session: pictureSession,
+          }}
         />
       ),
       /*

@@ -166,6 +166,13 @@ function tabOf(entry: InsertEntry): PanelTab {
 const GRID_COLUMNS = 3;
 
 /**
+ * How many tiles sit in a row where each draws a picture of its saved
+ * section: two, so a picture is wide enough to read at the panel's default
+ * width. Fixed per tab for the reason {@link GRID_COLUMNS} is.
+ */
+const PICTURE_COLUMNS = 2;
+
+/**
  * The tier a tab offers: components among the blocks, patterns as sections.
  */
 function tierOf(tab: PanelTab): LibraryTier {
@@ -178,6 +185,7 @@ export function InsertPanel({
   blockOrder,
   beginInsertDrag,
   renderPreview,
+  renderPicture,
   // A canvas press to answer, handed to the line that answers it.
   summoned,
   onSummoned,
@@ -454,7 +462,9 @@ export function InsertPanel({
                     });
                   }}
                 >
-                  <BlockIconMark icon={entry.icon} size={20} />
+                  {tilePicture(entry, renderPicture) ?? (
+                    <BlockIconMark icon={entry.icon} size={20} />
+                  )}
                   <span className="nx-insert-panel__label">{entry.label}</span>
                   {/* Kept in the tile and not drawn: `aria-describedby`
                       needs an element to point at, and keeping it here is what
@@ -508,7 +518,13 @@ export function InsertPanel({
          element the grid is applied to — their items container — and a
          property set on a wrapper inside it would be inherited by the tiles
          instead of read by the grid. */
-      style={{ "--nx-insert-columns": GRID_COLUMNS } as React.CSSProperties}
+      style={
+        {
+          "--nx-insert-columns": picturesIn(tab, renderPicture)
+            ? PICTURE_COLUMNS
+            : GRID_COLUMNS,
+        } as React.CSSProperties
+      }
       // The current tile is painted once the author has moved through the
       // tiles, or typed a search whose first match Enter would take.
       data-highlight={
@@ -549,6 +565,29 @@ export function InsertPanel({
       </Tabs>
     </div>
   );
+}
+
+/** Whether a tab's tiles draw pictures: the saved sections, given a host's. */
+function picturesIn(
+  tab: PanelTab,
+  renderPicture: InsertPanelProps["renderPicture"]
+): boolean {
+  return tab === "sections" && renderPicture !== undefined;
+}
+
+/**
+ * A saved section's picture for its tile, or nothing to keep the mark: only
+ * a pattern has a document to draw, and a host may answer none for one.
+ */
+function tilePicture(
+  entry: InsertEntry,
+  renderPicture: InsertPanelProps["renderPicture"]
+): React.ReactNode {
+  if (entry.kind !== "pattern" || renderPicture === undefined) return null;
+  const picture = renderPicture(entry);
+  // A host writing `has(entry) && <Picture />` hands back `false` for none,
+  // which draws nothing; the tile keeps its mark for it, as for `null`.
+  return typeof picture === "boolean" ? null : picture;
 }
 
 /**
