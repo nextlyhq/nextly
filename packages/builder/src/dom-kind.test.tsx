@@ -39,7 +39,7 @@ import {
 } from "./canvas";
 import type { CanvasDragState } from "./canvas-drag";
 import { escapeOutcome, isTextEntry, pressOrigin } from "./canvas-escape";
-import { CommandPalette } from "./command-palette";
+import { CommandPalette } from "./shell/command-palette";
 import {
   deepActiveElement,
   isElement,
