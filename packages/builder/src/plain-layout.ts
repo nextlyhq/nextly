@@ -1224,17 +1224,14 @@ const ZERO_BASES: ReadonlySet<string> = new Set(["0", "0%", "0px"]);
 function mainSize(size: string | undefined, values: LayoutValues): ChildSize {
   const grow = values.flexGrow ?? "0";
   const basis = values.flexBasis ?? "auto";
-  if (!automatic(size)) {
-    return grow === "0" && basis === "auto"
-      ? { choice: "fixed", size: size ?? "" }
-      : { choice: "custom" };
+  const natural = grow === "0" && basis === "auto";
+  if (grow === "1" && ZERO_BASES.has(basis) && automatic(size)) {
+    return { choice: "fill" };
   }
-  if (grow === "1") {
-    return ZERO_BASES.has(basis) ? { choice: "fill" } : { choice: "custom" };
-  }
-  return grow === "0" && basis === "auto"
+  if (!natural) return { choice: "custom" };
+  return automatic(size)
     ? { choice: "fit" }
-    : { choice: "custom" };
+    : { choice: "fixed", size: size ?? "" };
 }
 
 /**

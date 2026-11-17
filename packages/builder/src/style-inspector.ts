@@ -331,11 +331,7 @@ export function inspectStyle(
     }
   }
 
-  // A block taken out of the flow by its own position isn't laid out by its
-  // parent: no Fill, Fit or Fixed is offered for it.
-  const parent = OUT_OF_FLOW.has(context.position ?? "")
-    ? undefined
-    : parentArrangementOf(document, node, at, options);
+  const parent = laidOutBy(document, node, at, options, context.position);
   return {
     nodeId: node.id,
     state,
@@ -394,6 +390,21 @@ function appliesContextOf(
           ? undefined
           : false,
   };
+}
+
+/**
+ * How the block's parent lays it out, unless the block's own position takes
+ * it out of the flow: then its parent doesn't, and nothing is offered.
+ */
+function laidOutBy(
+  document: BlockDocument,
+  node: BlockNode,
+  at: ReadAt,
+  options: StyleInspectionOptions | undefined,
+  position: string | undefined
+): ParentArrangement | undefined {
+  if (OUT_OF_FLOW.has(position ?? "")) return undefined;
+  return parentArrangementOf(document, node, at, options);
 }
 
 /** The positions that take a block out of its parent's layout. */
