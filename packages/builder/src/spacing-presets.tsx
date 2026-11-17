@@ -75,7 +75,7 @@ export function offeredPreset(
 }
 
 /** The preset a side holds: its variable, "None" for a zero, else none. */
-export function heldPreset(stored: StyleValue | undefined): string | undefined {
+function heldPreset(stored: StyleValue | undefined): string | undefined {
   if (isTokenRef(stored)) return presetKey(stored.$token);
   if (stored === undefined) return undefined;
   return ZERO.test(storedText(stored)) && /\d/.test(storedText(stored))
