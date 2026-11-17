@@ -775,7 +775,7 @@ describe("the shared style target", () => {
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
-  describe("the Look row", () => {
+  describe("the Block style tiles", () => {
     const outline = {
       id: "look:acme/box:outline",
       slug: "box-outline",
@@ -784,7 +784,7 @@ describe("the shared style target", () => {
       blockType: "acme/box",
       styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } } as NodeStyles,
     };
-    const looks = () => screen.getByRole("radiogroup", { name: "Look" });
+    const looks = () => screen.getByRole("radiogroup", { name: "Block style" });
 
     it("offers the block's own look and its type's looks, its own chosen", () => {
       mountTarget({ library: [card, outline] });
@@ -954,7 +954,9 @@ describe("the shared style target", () => {
 
     it("draws no row for a type with no looks", () => {
       mountTarget({ library: [card] });
-      expect(screen.queryByRole("radiogroup", { name: "Look" })).toBeNull();
+      expect(
+        screen.queryByRole("radiogroup", { name: "Block style" })
+      ).toBeNull();
     });
   });
 
