@@ -50,6 +50,7 @@ const {
   listEntryCollectionOf,
   namedHostRetryDelay,
   useCanvasPageContext,
+  usePictureContext,
   visitorListWords,
 } = await import("./canvas-page-context");
 const { canvasListReadsIn } = await import("../list-entries-client");
@@ -402,6 +403,41 @@ describe("a list's sample for the binding picker", () => {
         NO_ENTRY
       )
     ).toBeUndefined();
+  });
+});
+
+describe("the context saved section pictures draw with", () => {
+  it("resolves a media id through the admin's media read, as the canvas does", async () => {
+    readMedia.mockResolvedValue({
+      id: "m1",
+      url: "/uploads/hero.jpg",
+      altText: "The hero",
+      width: 1600,
+      height: 900,
+    });
+    const { result } = renderHook(() => usePictureContext());
+    await expect(result.current.resolveMedia("m1")).resolves.toEqual({
+      url: "/uploads/hero.jpg",
+      alt: "The hero",
+      width: 1600,
+      height: 900,
+    });
+    readMedia.mockResolvedValue(null);
+    await expect(result.current.resolveMedia("gone")).resolves.toBeNull();
+  });
+
+  it("resolves an icon from the set a published page draws with", async () => {
+    const { result } = renderHook(() => usePictureContext());
+    await expect(
+      result.current.resolveIcon("lucide:star")
+    ).resolves.not.toBeNull();
+  });
+
+  it("is one object for as long as the media read is the same", () => {
+    const { result, rerender } = renderHook(() => usePictureContext());
+    const first = result.current;
+    rerender();
+    expect(result.current).toBe(first);
   });
 });
 

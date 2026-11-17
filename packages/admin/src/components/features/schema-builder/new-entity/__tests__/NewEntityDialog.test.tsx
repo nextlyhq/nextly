@@ -116,7 +116,9 @@ describe("NewEntityDialog", () => {
     await waitFor(() => expect(createButton()).toBeEnabled());
     await user.click(createButton());
     expect(onCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ startingFieldType: "blocks" })
+      expect.objectContaining({ startingFieldType: "blocks" }),
+      // No template picked: Create hands over no template fields.
+      []
     );
   });
 
@@ -241,7 +243,9 @@ describe("NewEntityDialog", () => {
         icon: "Package",
         // Drafts and publishing start on for a kind that has them.
         status: true,
-      })
+      }),
+      // No template picked: Create hands over no template fields.
+      []
     );
   });
 
@@ -331,7 +335,7 @@ describe("NewEntityDialog", () => {
     );
   });
 
-  it("counts an address an unsaved entity holds as used", async () => {
+  it("an address held by a pending create", async () => {
     addUnsavedEntity({
       kind: "collection",
       address: "product",
@@ -355,7 +359,7 @@ describe("NewEntityDialog", () => {
     expect(createButton()).toBeDisabled();
   });
 
-  it("refuses a hyphenated address whose snake_case form an unsaved entity holds", async () => {
+  it("a hyphenated address whose snake_case form a pending create holds", async () => {
     addUnsavedEntity({
       kind: "collection",
       address: "blog_posts",
@@ -389,7 +393,9 @@ describe("NewEntityDialog", () => {
     await waitFor(() => expect(createButton()).toBeEnabled());
     await user.click(createButton());
     expect(onCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ icon: "Camera" })
+      expect.objectContaining({ icon: "Camera" }),
+      // No template picked: Create hands over no template fields.
+      []
     );
   });
 
@@ -424,7 +430,9 @@ describe("NewEntityDialog", () => {
     await waitFor(() => expect(createButton()).toBeEnabled());
     await user.click(createButton());
     expect(onCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ slug: "posts" })
+      expect.objectContaining({ slug: "posts" }),
+      // No template picked: Create hands over no template fields.
+      []
     );
   });
 
@@ -446,14 +454,18 @@ describe("NewEntityDialog", () => {
     await waitFor(() => expect(createButton()).toBeEnabled());
     await user.click(createButton());
     expect(onCreate).toHaveBeenLastCalledWith(
-      expect.objectContaining({ description: "Shop items" })
+      expect.objectContaining({ description: "Shop items" }),
+      // No template picked: Create hands over no template fields.
+      []
     );
 
     await user.clear(screen.getByLabelText("Description"));
     await user.type(screen.getByLabelText("Description"), "   ");
     await user.click(createButton());
     expect(onCreate).toHaveBeenLastCalledWith(
-      expect.objectContaining({ description: "" })
+      expect.objectContaining({ description: "" }),
+      // No template picked: Create hands over no template fields.
+      []
     );
   });
 
@@ -463,7 +475,9 @@ describe("NewEntityDialog", () => {
     await waitFor(() => expect(createButton()).toBeEnabled());
     await single.user.click(createButton());
     expect(single.onCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ status: true })
+      expect.objectContaining({ status: true }),
+      // No template picked: Create hands over no template fields.
+      []
     );
   });
 

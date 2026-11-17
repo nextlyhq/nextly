@@ -149,6 +149,7 @@ export function BuilderToolbar({
           count={unsavedCount}
           locked={locked}
           saving={saving}
+          held={saveHeld !== undefined}
         />
         {/* Adding is an edit, so a read-only entity has no add here. */}
         {!locked && (

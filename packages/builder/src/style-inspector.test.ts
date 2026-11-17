@@ -676,11 +676,35 @@ describe("every label fits the Style tab's label column", () => {
     );
   });
 
+  /**
+   * Whether a property's name is a heading above its rows rather than a label
+   * in the column: it has more than one control, and no choice of form at its
+   * root, which draws on a row named for the property (`StylePropertyFields`).
+   * Its rows are named by their positions, which the column then holds.
+   */
+  const headed = (row: ReturnType<typeof everyRow>[number]) =>
+    row.controls.length > 1 &&
+    !row.variants.some(
+      variant => variant.path.length === 0 && variant.count > 1
+    );
+
   it("gives each label no more characters than the column holds", () => {
     const tooLong = everyRow()
-      .filter(row => row.label.length > LABEL_BUDGET)
+      .filter(row => !headed(row) && row.label.length > LABEL_BUDGET)
       .map(row => `${row.property}: "${row.label}"`);
     expect(tooLong).toEqual([]);
+  });
+
+  it("draws the entrance animation's name above its rows, each named to fit", () => {
+    const appear = everyRow().find(row => row.property === "appear");
+    expect(appear?.label).toBe("Animation when it appears");
+    expect(appear === undefined ? false : headed(appear)).toBe(true);
+    expect(appear?.controls.map(control => control.path)).toEqual([
+      ["effect"],
+      ["duration"],
+      ["delay"],
+      ["start"],
+    ]);
   });
 
   it("labels the background gradient Gradient, with its full name on hover", () => {

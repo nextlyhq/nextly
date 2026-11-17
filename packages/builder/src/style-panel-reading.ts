@@ -16,9 +16,8 @@ import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 
 import { editedTierLive } from "./breakpoints";
 import { breakpointsAtWidth } from "./canvas/canvas-width";
-import type { AppliedAt } from "./columns-layout";
 import type { EditorState } from "./editor-state";
-import type { ProvenanceOf } from "./style-field-surroundings";
+import type { CascadeAt, ProvenanceOf } from "./style-field-surroundings";
 import type { StyleInspectionOptions } from "./style-inspector";
 import {
   breakpointBadge,
@@ -43,7 +42,7 @@ export function appliedAtReader({
   state: StyleState;
   breakpoints: BreakpointSet | undefined;
   nodeId: string;
-}): AppliedAt | undefined {
+}): CascadeAt | undefined {
   if (cascade === undefined || subject === undefined) return undefined;
   return (tier, cssProperty) => {
     const width = breakpoints?.viewport.find(
@@ -72,6 +71,32 @@ export function appliedAtReader({
       own: entry.origin.kind === "node" && entry.origin.id === nodeId,
     };
   };
+}
+
+/**
+ * What the cascade applies to the block at a tier beneath its own
+ * declarations: a shared style it wears, its block's defaults. What would stay
+ * in force were the block's own values gone, which a control clearing one
+ * must spell out to undo.
+ */
+export function beneathAtReader(args: {
+  cascade: PageStyleCascade | undefined;
+  subject: StyleSubject | undefined;
+  state: StyleState;
+  breakpoints: BreakpointSet | undefined;
+  nodeId: string;
+}): CascadeAt | undefined {
+  const { cascade, nodeId } = args;
+  if (cascade === undefined) return undefined;
+  return appliedAtReader({
+    ...args,
+    cascade: {
+      ...cascade,
+      entries: cascade.entries.filter(
+        entry => !(entry.origin.kind === "node" && entry.origin.id === nodeId)
+      ),
+    },
+  });
 }
 
 /**

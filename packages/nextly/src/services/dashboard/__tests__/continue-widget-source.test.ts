@@ -1,6 +1,6 @@
 /**
  * `system:continue`: Continue where you left off's source lists the reader's
- * pins in the order pinned and then their own latest saves (Mine), or other
+ * newest pins and then their own latest saves (Mine), or other
  * people's (Team), each document once, every title read as the reader now and
  * never taken from the trail, and a row the reader may not read now left out.
  */
@@ -155,22 +155,24 @@ beforeEach(() => {
 });
 
 describe("Mine", () => {
-  it("lists the pins first in the order pinned, then the reader's own saves, each document once", async () => {
-    // Newest first, as the pins service lists them.
+  it("lists the pins first, newest pin first, then the reader's own saves, each document once", async () => {
+    // Read oldest first, so the order is the source's own.
     listPins.mockResolvedValue([
-      pin("p2", "2026-10-22T00:00:00.000Z"),
       pin("p1", "2026-10-21T00:00:00.000Z"),
+      pin("p2", "2026-10-22T00:00:00.000Z"),
     ]);
     getRecentEdits.mockResolvedValue({
       edits: [edit("posts", "p1", "user-1"), edit("pages", "g1", "user-1")],
       hasMore: false,
     });
     const answer = rows(await ask());
-    expect(answer.map(row => [row.entryId, row.pinned])).toEqual([
-      ["p1", true],
-      ["p2", true],
+    expect(
+      answer.map(row => [row.entryId, row.pinned, row.group, row.pinCount])
+    ).toEqual([
+      ["p2", true, "pinned", 2],
+      ["p1", true, "pinned", 2],
       // p1's save is already listed as its pin.
-      ["g1", false],
+      ["g1", false, "recent", null],
     ]);
     // The reader's own saves, enough of them that the pins cannot leave Mine short.
     expect(getRecentEdits).toHaveBeenCalledWith(
@@ -218,6 +220,231 @@ describe("Mine", () => {
   });
 });
 
+describe("Mine's rows split between pins and recent saves", () => {
+  /** `count` pins, the newest first named n1, pinned a minute apart. */
+  function pins(count: number) {
+    return Array.from({ length: count }, (_, i) =>
+      pin(
+        `n${i + 1}`,
+        new Date(Date.UTC(2026, 9, 22, 12, 60 - i)).toISOString()
+      )
+    );
+  }
+  /** `count` of the reader's own saves, each of a document no pin names. */
+  function saves(count: number) {
+    return Array.from({ length: count }, (_, i) =>
+      edit("pages", `s${i + 1}`, "user-1")
+    );
+  }
+
+  /**
+   * Mine as a card of the default five rows asks for it: its rows and one
+   * more (`listEntries(…) + 1`), as `core-widgets/continue.ts` does.
+   */
+  async function mineOfFiveRows(pinCount: number, saveCount: number) {
+    readable = new Set([
+      ...pins(pinCount).map(p => `posts/${p.entryId}`),
+      ...saves(saveCount).map(s => `pages/${s.entryId}`),
+    ]);
+    // Read oldest first, so the newest-first order is the source's own.
+    listPins.mockResolvedValue(pins(pinCount).reverse());
+    getRecentEdits.mockResolvedValue({
+      edits: saves(saveCount),
+      hasMore: false,
+    });
+    const answer = rows(
+      await executeWidgetQuery(
+        { source: CONTINUE_SOURCE_ID, op: "list", limit: 6 },
+        caller as never
+      )
+    );
+    return answer.map(row => `${String(row.group)}:${String(row.entryId)}`);
+  }
+
+  it.each([
+    // pins, saves, what Mine holds: the card draws the first five.
+    [
+      0,
+      6,
+      [
+        "recent:s1",
+        "recent:s2",
+        "recent:s3",
+        "recent:s4",
+        "recent:s5",
+        "recent:s6",
+      ],
+    ],
+    [
+      1,
+      6,
+      [
+        "pinned:n1",
+        "recent:s1",
+        "recent:s2",
+        "recent:s3",
+        "recent:s4",
+        "recent:s5",
+      ],
+    ],
+    [
+      3,
+      6,
+      [
+        "pinned:n1",
+        "pinned:n2",
+        "pinned:n3",
+        "recent:s1",
+        "recent:s2",
+        "recent:s3",
+      ],
+    ],
+    [
+      4,
+      6,
+      [
+        "pinned:n1",
+        "pinned:n2",
+        "pinned:n3",
+        "recent:s1",
+        "recent:s2",
+        "recent:s3",
+      ],
+    ],
+    [
+      7,
+      6,
+      [
+        "pinned:n1",
+        "pinned:n2",
+        "pinned:n3",
+        "recent:s1",
+        "recent:s2",
+        "recent:s3",
+      ],
+    ],
+    // One save: the pins still take at most three rows, and it the rest.
+    [7, 1, ["pinned:n1", "pinned:n2", "pinned:n3", "recent:s1"]],
+  ] as const)(
+    "with %i pins and %i saves, gives the pins at most the card's rows less two",
+    async (pinCount, saveCount, expected) => {
+      expect(await mineOfFiveRows(pinCount, saveCount)).toEqual(expected);
+    }
+  );
+
+  it.each([
+    [0, []],
+    [1, ["pinned:n1"]],
+    [3, ["pinned:n1", "pinned:n2", "pinned:n3"]],
+    [4, ["pinned:n1", "pinned:n2", "pinned:n3", "pinned:n4"]],
+    [
+      7,
+      [
+        "pinned:n1",
+        "pinned:n2",
+        "pinned:n3",
+        "pinned:n4",
+        "pinned:n5",
+        "pinned:n6",
+      ],
+    ],
+  ] as const)(
+    "with %i pins and no saves, gives the pins every row",
+    async (pinCount, expected) => {
+      expect(await mineOfFiveRows(pinCount, 0)).toEqual(expected);
+    }
+  );
+
+  it("keeps on Recent the latest save of a pin the card does not show, marked pinned", async () => {
+    readable = new Set([
+      ...pins(7).map(p => `posts/${p.entryId}`),
+      ...saves(2).map(s => `pages/${s.entryId}`),
+    ]);
+    listPins.mockResolvedValue(pins(7));
+    // The reader's latest save is of their sixth pin, which Pinned does not show.
+    getRecentEdits.mockResolvedValue({
+      edits: [edit("posts", "n6", "user-1"), ...saves(2)],
+      hasMore: false,
+    });
+    const answer = rows(
+      await executeWidgetQuery(
+        { source: CONTINUE_SOURCE_ID, op: "list", limit: 6 },
+        caller as never
+      )
+    );
+    expect(answer.map(row => [row.group, row.entryId, row.pinned])).toEqual([
+      ["pinned", "n1", true],
+      ["pinned", "n2", true],
+      ["pinned", "n3", true],
+      ["recent", "n6", true],
+      ["recent", "s1", false],
+      ["recent", "s2", false],
+    ]);
+  });
+
+  it("gives the pins every row when the only saves are of pins it shows", async () => {
+    readable = new Set(pins(4).map(p => `posts/${p.entryId}`));
+    listPins.mockResolvedValue(pins(4));
+    getRecentEdits.mockResolvedValue({
+      edits: [edit("posts", "n2", "user-1")],
+      hasMore: false,
+    });
+    const answer = rows(
+      await executeWidgetQuery(
+        { source: CONTINUE_SOURCE_ID, op: "list", limit: 6 },
+        caller as never
+      )
+    );
+    expect(
+      answer.map(row => `${String(row.group)}:${String(row.entryId)}`)
+    ).toEqual(["pinned:n1", "pinned:n2", "pinned:n3", "pinned:n4"]);
+  });
+
+  it("tells each pinned row how many pins the reader may read in all", async () => {
+    readable = new Set([
+      ...pins(7).map(p => `posts/${p.entryId}`),
+      ...saves(3).map(s => `pages/${s.entryId}`),
+    ]);
+    listPins.mockResolvedValue(pins(7));
+    getRecentEdits.mockResolvedValue({ edits: saves(3), hasMore: false });
+    const answer = rows(
+      await executeWidgetQuery(
+        { source: CONTINUE_SOURCE_ID, op: "list", limit: 6 },
+        caller as never
+      )
+    );
+    expect(
+      answer.filter(row => row.group === "pinned").map(row => row.pinCount)
+    ).toEqual([7, 7, 7]);
+  });
+
+  it("shows a pin just made, whatever number of pins came before it", async () => {
+    const older = pins(19).map(p => ({
+      ...p,
+      pinnedAt: new Date(Date.parse(p.pinnedAt) - 3_600_000).toISOString(),
+    }));
+    const fresh = pin("fresh", "2026-10-23T08:00:00.000Z");
+    readable = new Set([
+      ...older.map(p => `posts/${p.entryId}`),
+      "posts/fresh",
+      "pages/s1",
+    ]);
+    listPins.mockResolvedValue([...older.reverse(), fresh]);
+    getRecentEdits.mockResolvedValue({ edits: saves(1), hasMore: false });
+    const [first] = rows(
+      await executeWidgetQuery(
+        { source: CONTINUE_SOURCE_ID, op: "list", limit: 6 },
+        caller as never
+      )
+    );
+    expect(first).toMatchObject({
+      entryId: "fresh",
+      group: "pinned",
+      pinCount: 20,
+    });
+  });
+});
+
 describe("Team", () => {
   it("asks for every save but the reader's, and marks the documents the reader pinned", async () => {
     listPins.mockResolvedValue([pin("p2", "2026-10-21T00:00:00.000Z")]);
@@ -226,9 +453,12 @@ describe("Team", () => {
       hasMore: false,
     });
     const answer = rows(await ask({ tab: "team" }));
-    expect(answer.map(row => [row.entryId, row.userName, row.pinned])).toEqual([
-      ["p2", "Ana", true],
-      ["g1", "Ana", false],
+    expect(
+      answer.map(row => [row.entryId, row.userName, row.pinned, row.group])
+    ).toEqual([
+      // Team has no groups.
+      ["p2", "Ana", true, null],
+      ["g1", "Ana", false, null],
     ]);
     const [options] = getRecentEdits.mock.calls[0] as [Record<string, unknown>];
     expect(options).toMatchObject({ notSavedBy: "user-1", limit: 5 });

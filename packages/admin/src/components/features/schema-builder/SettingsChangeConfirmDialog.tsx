@@ -20,6 +20,10 @@ import type { JSX } from "react";
 import type { SettingChange } from "@admin/lib/builder/settings-changes";
 
 import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
+import {
+  FieldGroupCreatesList,
+  type FieldGroupCreate,
+} from "./FieldGroupCreatesList";
 import { SettingChangesList } from "./SettingChangesList";
 
 interface SettingsChangeConfirmDialogProps {
@@ -32,6 +36,8 @@ interface SettingsChangeConfirmDialogProps {
   settingChanges: readonly SettingChange[];
   onConfirm: () => void;
   isApplying: boolean;
+  /** The field groups not saved yet that this save creates first, listed before all else. */
+  fieldGroupCreates?: readonly FieldGroupCreate[];
 }
 
 export function SettingsChangeConfirmDialog({
@@ -42,19 +48,26 @@ export function SettingsChangeConfirmDialog({
   settingChanges,
   onConfirm,
   isApplying,
+  fieldGroupCreates = [],
 }: SettingsChangeConfirmDialogProps): JSX.Element {
+  // A save that changes no setting and only creates the field groups its fields use.
+  const onlyCreates = settingChanges.length === 0;
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent className="max-w-md">
         <AlertDialogHeader>
           <AlertDialogTitle>
-            Save the settings of the {BUILDER_KIND_NOUN[kind]}{" "}
+            Save {onlyCreates ? "the" : "the settings of the"}{" "}
+            {BUILDER_KIND_NOUN[kind]}{" "}
             <span className="font-mono">{entityName}</span>?
           </AlertDialogTitle>
           <AlertDialogDescription>
-            Only these settings change. No field or stored value does.
+            {onlyCreates
+              ? "Only these field groups are created. No stored value changes."
+              : "Only these settings change. No field or stored value does."}
           </AlertDialogDescription>
         </AlertDialogHeader>
+        <FieldGroupCreatesList groups={fieldGroupCreates} />
         <SettingChangesList changes={settingChanges} />
         <AlertDialogFooter>
           <AlertDialogCancel disabled={isApplying}>Cancel</AlertDialogCancel>
