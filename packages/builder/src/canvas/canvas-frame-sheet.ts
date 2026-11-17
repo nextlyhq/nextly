@@ -313,13 +313,14 @@ ${ROOT} .nx-condition-hidden > svg {
    and the tag are mixed from the page's own Canvas and CanvasText, so they
    take the light or the dark values of the scheme the page is drawn in: the
    tag's ink holds 4.5:1 on either band over any colour, and the edge 3:1
-   against the page's ground. The block's own position wins,
-   at no specificity, and any position holds the overlay. Pointers pass
-   through, so the block and what it holds are pressed as ever. */
-:where(${ROOT} [${DEVICE_HIDDEN_ATTRIBUTE}]) {
-  position: relative;
-}
+   against the page's ground. The overlay is held to the block by
+   will-change: transform, which makes the block the box its absolutely
+   placed overlay is laid out in whatever position it has, normal flow
+   (position: static) among them, while changing neither its position nor
+   its layout; a block style never sets it. Pointers pass through, so the
+   block and what it holds are pressed as ever. */
 ${ROOT} [${DEVICE_HIDDEN_ATTRIBUTE}] {
+  will-change: transform;
   --nx-canvas-hidden-band: color-mix(in srgb, Canvas 72%, transparent);
   --nx-canvas-hidden-band-alt: color-mix(
     in srgb,

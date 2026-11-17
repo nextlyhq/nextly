@@ -79,7 +79,13 @@ describe("a block hidden on the device shown", () => {
     expect(rule).toContain("pointer-events: none");
   });
 
-  it("holds the stripes in the block, at no weight over its own position", () => {
-    expect(ruleFor(`:where(${HIDDEN})`)).toContain("position: relative");
+  it("holds the stripes in the block whatever its position, setting none", () => {
+    // A block in normal flow (position: static) outranks any position the
+    // frame gives it, and its overlay would then cover a positioned block
+    // around it: the block is made the overlay's box without a position.
+    const rule = ruleFor(HIDDEN) ?? "";
+    expect(rule).toContain("will-change: transform");
+    expect(rule).not.toMatch(/(^|[\s;{])position:/);
+    expect(ruleFor(`:where(${HIDDEN})`)).toBeUndefined();
   });
 });

@@ -25,6 +25,10 @@ import {
   type BlockDocument,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
+import {
+  sharedStyleInputs,
+  type PageRendererProps,
+} from "@nextlyhq/blocks-react";
 import { useMemo } from "react";
 
 import { deviceLabel } from "../shell/breakpoint-switcher";
@@ -64,6 +68,26 @@ const NO_PSEUDO_ELEMENTS: ReadonlySet<string> = new Set([
 /** Whether `element` is one the frame's sheet can't stripe. */
 export function drawsNoPseudoElements(element: Element): boolean {
   return NO_PSEUDO_ELEMENTS.has(element.localName);
+}
+
+/** The set a site stating no breakpoints at all compiles under: no tiers. */
+const NO_TIERS: BreakpointSet = { viewport: [], container: [] };
+
+/**
+ * The breakpoints the page's own rules are compiled under, so a block is read
+ * as hidden on exactly the devices its media queries hide it on: reconciled
+ * from the route's context and the site's styles by `sharedStyleInputs`,
+ * the same reading `PageRenderer` compiles by, so the site's set wins where
+ * both state one. A site stating none (`null`) has no tiers, as the
+ * renderer reads it; `undefined` where neither states any.
+ */
+export function drawnBreakpoints(
+  render: Pick<PageRendererProps, "styleContext"> | undefined,
+  siteStyles: PageRendererProps["siteStyles"]
+): BreakpointSet | undefined {
+  const site = typeof siteStyles === "object" ? siteStyles : undefined;
+  const stated = sharedStyleInputs(render?.styleContext, site).breakpoints;
+  return stated === null ? NO_TIERS : stated;
 }
 
 /** The tag on a block hidden on `device`. */

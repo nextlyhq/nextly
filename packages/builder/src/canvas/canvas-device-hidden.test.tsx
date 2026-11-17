@@ -175,6 +175,58 @@ describe("the canvas at each device", () => {
   });
 });
 
+describe("the breakpoints a hidden block is read against", () => {
+  // The route's own set, where Mobile stops at 300px: at 400px the page
+  // would be read as Tablet, where the block shows.
+  const ROUTE: BreakpointSet = {
+    viewport: [
+      { id: "tablet", label: "Tablet", maxWidth: 1023 },
+      { id: "mobile", label: "Mobile", maxWidth: 300 },
+    ],
+    container: [],
+  };
+
+  /** The canvas at 400px, the breakpoints handed as `site` and `route`. */
+  async function drawWith(site?: BreakpointSet, route?: BreakpointSet) {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 400,
+    });
+    const view = render(
+      <Canvas
+        document={PAGE}
+        siteStyles={
+          {
+            css: "",
+            classes: {},
+            ...(site === undefined ? {} : { breakpoints: site }),
+          } as never
+        }
+        render={
+          (route === undefined
+            ? {}
+            : { styleContext: { breakpoints: route } }) as never
+        }
+      />
+    );
+    await act(async () => undefined);
+    return view.container
+      .querySelector(`[${NODE_ID_ATTRIBUTE}="box"]`)
+      ?.getAttribute(DEVICE_HIDDEN_ATTRIBUTE);
+  }
+
+  it("are the site's, where only its styles state them", async () => {
+    expect(await drawWith(SITE)).toBe(TAG);
+  });
+
+  it("are the site's over the route's, as the page's rules are compiled", async () => {
+    expect(await drawWith(SITE, ROUTE)).toBe(TAG);
+    // CONTROL: the route's set alone reads 400px as Tablet, where it shows.
+    cleanup();
+    expect(await drawWith(undefined, ROUTE)).toBeNull();
+  });
+});
+
 describe("a hidden block drawn as an image", () => {
   // An image takes no ::after, so the frame's sheet can't stripe it: the
   // editor's marks over the canvas stripe and tag it instead.

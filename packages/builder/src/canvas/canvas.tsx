@@ -60,7 +60,10 @@ import {
   lockMarksOf,
 } from "./canvas-block-marks";
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
-import { useDeviceHiddenDrawing } from "./canvas-device-hidden";
+import {
+  drawnBreakpoints,
+  useDeviceHiddenDrawing,
+} from "./canvas-device-hidden";
 import { useCanvasEnvironment, useDrawnPage } from "./canvas-drawn-page";
 import { drawnRefusal } from "./canvas-drop-refusal";
 import { useCanvasFrame } from "./canvas-frame-context";
@@ -306,7 +309,7 @@ export function Canvas({
   // none while the page is shown as a visitor gets it.
   const deviceHidden = useDeviceHiddenDrawing(
     appliedDrawing ?? composedPage,
-    render?.styleContext?.breakpoints,
+    drawnBreakpoints(render, siteStyles),
     conditionsApplied === undefined
   );
   const { drawn, page } = useDrawnPage({

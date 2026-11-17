@@ -224,6 +224,32 @@ test("the eye hides a block on the device being edited only, and the canvas draw
       pointer: "none",
       outline: "dashed",
     });
+    // Set to normal flow (`position: static`, which outranks any position
+    // the frame could give it), the block still holds its stripes: they
+    // cover its own box, not a positioned block around it.
+    const held = await last.evaluate(element => {
+      const box = element as HTMLElement;
+      box.style.position = "static";
+      const after = getComputedStyle(box, "::after");
+      const padded = (axis: "Left" | "Top", end: "Right" | "Bottom") =>
+        after.boxSizing === "border-box"
+          ? 0
+          : parseFloat(after[`padding${axis}`]) +
+            parseFloat(after[`padding${end}`]);
+      // Off by at most a pixel: the box's own size is rounded.
+      const off = {
+        width: Math.abs(
+          parseFloat(after.width) + padded("Left", "Right") - box.clientWidth
+        ),
+        height: Math.abs(
+          parseFloat(after.height) + padded("Top", "Bottom") - box.clientHeight
+        ),
+      };
+      box.style.position = "";
+      return off;
+    });
+    expect(held.width).toBeLessThanOrEqual(1);
+    expect(held.height).toBeLessThanOrEqual(1);
     // CONTROL: a block shown on the tablet is drawn plain.
     await expect(await block(page, TITLE)).not.toHaveAttribute(
       "data-nx-device-hidden"
