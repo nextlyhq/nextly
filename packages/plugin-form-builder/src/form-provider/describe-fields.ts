@@ -115,12 +115,22 @@ export function describeField(
     name: field.name,
     label: labelOf(field, raw),
     kind: many ? "checkbox" : kind,
-    ...(field.required === true ? { required: true } : {}),
+    // A conditional field's requirement holds only while its condition does,
+    // which the plugin's server judges; the browser would demand it always.
+    ...(field.required === true && !conditional(raw) ? { required: true } : {}),
     ...wordingOf(field),
     ...(choices ? { options: optionsOf(raw) } : {}),
     ...limitsOf(field, raw),
     ...providerData(raw),
   };
+}
+
+/** Whether a field's showing depends on a condition. */
+function conditional(field: Record<string, unknown>): boolean {
+  return (
+    (field.conditionalLogic as { enabled?: unknown } | undefined)?.enabled ===
+    true
+  );
 }
 
 /**

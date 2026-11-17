@@ -24,6 +24,8 @@ export const BOT_CHECK_SCRIPT_PATH = "/page-forms/bot-check.js";
  * `data-forms-*` values the form's description put on its hidden answer.
  */
 export const BOT_CHECK_SCRIPT = `
+// The form's own submit, called on it: a control named \`submit\` is the
+// form's \`submit\` property, and would be called in its place.
 const loaded = new Map();
 function load(src) {
   if (!loaded.has(src)) {
@@ -60,7 +62,7 @@ function turnstile(input, siteKey) {
         input.value = token;
         if (held && form) {
           held = false;
-          form.submit();
+          HTMLFormElement.prototype.submit.call(form);
         }
       },
     });
@@ -80,7 +82,7 @@ function recaptcha(input, siteKey) {
       .then(() => window.grecaptcha.execute(siteKey, { action: "submit" }))
       .then(token => {
         input.value = token;
-        form.submit();
+        HTMLFormElement.prototype.submit.call(form);
       });
   });
 }

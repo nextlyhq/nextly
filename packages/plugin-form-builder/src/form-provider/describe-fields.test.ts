@@ -114,6 +114,27 @@ describe("the plugin's field types, described", () => {
     ).not.toHaveProperty("provider");
   });
 
+  it("leaves a conditional field's requirement to the server, which knows when it applies", () => {
+    const described = describeField(
+      field("text", {
+        required: true,
+        conditionalLogic: {
+          enabled: true,
+          action: "show",
+          operator: "AND",
+          conditions: [
+            { field: "kind", comparison: "equals", value: "business" },
+          ],
+        },
+      })
+    );
+    expect(described).not.toHaveProperty("required");
+    // An unconditional required field is still required in the browser.
+    expect(describeField(field("text", { required: true }))?.required).toBe(
+      true
+    );
+  });
+
   it("describes no type another plugin added, which no plain control draws", () => {
     expect(describeField(field("signature"))).toBeUndefined();
   });

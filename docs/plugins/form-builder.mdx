@@ -829,6 +829,10 @@ same validation, storage, emails, honeypot, rate limit, bot check and one-respon
   sentence, so a file is never dropped without a word. Files still go through this plugin's
   own upload route (`POST /api/forms/:slug/upload`) and JSON address, as before.
 - A form taking **one response per browser** gets its browser token from the same script.
+- The script's address, like the page builder's form route, assumes Nextly's handler is
+  mounted at `/admin/api`, as a scaffolded project mounts it.
+- A **conditional** field that is required is checked by the server only while its condition
+  holds; the page does not ask the browser to require it.
 
 The JSON address, `POST /api/forms/:slug/submit`, is unchanged. The two plugins reach each
 other only through the page builder's `forms` service and the plugin SDK's form provider
