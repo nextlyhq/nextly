@@ -625,7 +625,15 @@ async function singleWork(
     localized,
     AUTHORIZATION_CONCURRENCY,
     async (single): Promise<TranslationWorkRow | null> => {
-      const id = await resolveSingleDocumentId(single.slug);
+      // A lookup that fails is this Single's answer missing, not the worklist's: named as not
+      // consulted, as a Single whose read fails is, and the rest is still listed.
+      let id: string | null;
+      try {
+        id = await resolveSingleDocumentId(single.slug);
+      } catch {
+        failed.push(single.slug);
+        return null;
+      }
       if (id === null) return null;
       const result = await singleEntries.get(single.slug, {
         user: caller.user,
