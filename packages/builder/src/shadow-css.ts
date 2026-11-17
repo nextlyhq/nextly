@@ -63,7 +63,7 @@ export const NEW_SHADOW_LAYER: ShadowLayer = {
  * What a colour variable is offered at: a colour with no contrast partner,
  * so every colour variable the site has is listed for a shadow.
  */
-const SHADOW_COLOUR_LEAF: StyleLeaf = {
+export const SHADOW_COLOUR_LEAF: Extract<StyleLeaf, { kind: "color" }> = {
   kind: "color",
   cssProperty: "box-shadow",
   tokenKinds: ["color"],

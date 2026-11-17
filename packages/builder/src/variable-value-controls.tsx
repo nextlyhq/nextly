@@ -323,8 +323,11 @@ export function SizeInput({
   );
 }
 
-/** A size under its own label, as a variable's Light and Dark are laid out. */
-function SizeValue(props: ValueFieldProps): React.JSX.Element {
+/**
+ * A size under its own label, as a variable's Light and Dark are laid out,
+ * and as a shadow layer's offsets, blur and spread are.
+ */
+export function SizeValue(props: ValueFieldProps): React.JSX.Element {
   return <NumericValue {...props} control={SIZE_CONTROL} />;
 }
 
