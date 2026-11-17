@@ -101,6 +101,7 @@ import { toSnakeCase } from "../../../lib/case-conversion";
 import {
   isStatusOnlyWrite,
   stripImmutableSystemFields,
+  withoutContributedColumns,
   writableBodyOf,
   writeGateFor,
 } from "../../../lib/immutable-system-fields";
@@ -16115,7 +16116,14 @@ export class CollectionMutationService extends BaseService {
     // Refused rather than narrowed to the status: silently ignoring the other
     // fields would report success for a write that did not happen.
     if (sweepAllLocales) {
-      const named = Object.keys(body);
+      // Judged on what the write stores: a column a schema hook contributed is never written, so
+      // it makes the patch no field write.
+      const named = Object.keys(
+        withoutContributedColumns(
+          body,
+          await this.collectionTableNameOf(rawParams.collectionName)
+        )
+      );
       const statusOnly = named.length === 1 && named[0] === "status";
       // The VALUE has to be one the lifecycle can hold, not merely the right
       // key. A caller sending `{ status: false }` otherwise passes this guard,
@@ -24322,11 +24330,15 @@ export class CollectionMutationService extends BaseService {
 
   /**
    * The table a collection's entries are stored in, as its record names it: what a write's gate
-   * reads the contributed columns of.
+   * reads the contributed columns of. Read on `executor` where the caller holds a transaction, so
+   * the read sees its writes and never waits on the connection it holds.
    */
-  async collectionTableNameOf(collectionName: string): Promise<string> {
+  async collectionTableNameOf(
+    collectionName: string,
+    executor?: unknown
+  ): Promise<string> {
     return collectionTableName(
-      await this.collectionService.getCollection(collectionName),
+      await this.collectionService.getCollection(collectionName, executor),
       collectionName
     );
   }
@@ -24361,7 +24373,7 @@ export class CollectionMutationService extends BaseService {
     const gate = await writeGateFor(
       body,
       "collection",
-      await this.collectionTableNameOf(params.collectionName),
+      await this.collectionTableNameOf(params.collectionName, executor),
       hasLifecycle
     );
     const gateParams = {

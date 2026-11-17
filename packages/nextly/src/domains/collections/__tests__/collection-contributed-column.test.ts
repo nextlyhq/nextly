@@ -318,6 +318,26 @@ describe("a column contributed to a collection whose table is named by dbName", 
       expectNoContributedColumn(payload);
     });
 
+    it("leaves a contributed column out of what a write to every language is judged on", async () => {
+      selectData.rows = [storedRow()];
+
+      const result = await service.updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: "entry-1",
+          overrideAccess: true,
+          locale: "*",
+        },
+        { status: "published", searchVector: "a", _overwrite: true }
+      );
+
+      // Not refused as a write of field values: the contributed column is never stored, so the
+      // patch names the status alone, whatever the collection then answers about its lifecycle.
+      expect(JSON.stringify(result)).not.toMatch(
+        /accepts a 'status' patch alone/
+      );
+    });
+
     it("still refuses a key that is no field beside a contributed one, writing nothing", async () => {
       selectData.rows = [storedRow()];
 
