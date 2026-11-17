@@ -11,7 +11,18 @@ import type {
 } from "@nextlyhq/blocks-engine";
 import type { ReactNode } from "react";
 
+import type { PageForms } from "./forms-context";
 import type { ImageCopies, ImageSlot } from "./image-slot";
+
+export type {
+  FormAfterSendingDrawing,
+  FormDrawing,
+  FormFieldDrawing,
+  FormFieldKind,
+  FormReference,
+  FormUnavailableDrawing,
+  PageForms,
+} from "./forms-context";
 
 /**
  * What a block render receives, and where the renderer gets its data.
@@ -1003,6 +1014,16 @@ export interface PageContext {
    * @experimental Settles when collection templates ship.
    */
   entryContentCanvas?: EntryContentCanvas;
+  /**
+   * Where this page's forms post, and the forms a provider describes: what
+   * a Form block needs to be sent, with no script, through the page
+   * builder's receiver. Absent where a form cannot be sent from the page,
+   * such as the editor's canvas; a Form then draws its fields with nowhere
+   * to post them.
+   *
+   * @experimental Settles with the form provider contract.
+   */
+  forms?: PageForms;
 }
 
 /**

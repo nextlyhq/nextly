@@ -17,10 +17,15 @@ import type {
   PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
 
+import {
+  CONTENT_ADDRESS_SERVICE,
+  type ContentAddressService,
+} from "../address-claims/content-addresses";
 import { COMPONENTS_SLUG } from "../collections/components";
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { PAGES_SLUG } from "../collections/pages";
 import { TEMPLATES_SLUG } from "../collections/templates";
+import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import type { ComponentStore } from "../library-route";
 
 import {
@@ -52,7 +57,7 @@ export const FORM_SEND_LIMITS: Readonly<Record<string, LimitRule>> = {
 };
 
 /** Where this site stores each kind of document a form can be defined in. */
-function definingStores(
+export function definingStores(
   self: PluginRouteContext["self"],
   componentStore: ComponentStore
 ): DefiningStores {
@@ -92,8 +97,31 @@ export function formReceiverRoute(parts: {
         provider: id => parts.providers.get(id),
         limits: ctx.limits,
         deliver: (address, answers) => deliverAnswers(address, answers),
+        entryAddress: (collection, id, locale) =>
+          servedAddressOf(api, collection, id, locale),
         logger: ctx.logger,
       });
     },
   };
+}
+
+/**
+ * Where the site serves a page or an entry, from the page builder's address
+ * store, as the live page's content route reads it; `null` where it serves
+ * it nowhere, or the store cannot be read.
+ */
+async function servedAddressOf(
+  api: unknown,
+  collection: string,
+  id: string,
+  locale: string | undefined
+): Promise<string | null> {
+  const plugins = (api as { plugins?: unknown }).plugins;
+  const service = (
+    plugins as Record<string, Record<string, unknown> | undefined> | undefined
+  )?.[PAGE_BUILDER_PLUGIN_NAME]?.[CONTENT_ADDRESS_SERVICE] as
+    | Pick<ContentAddressService, "pathHeldBy">
+    | undefined;
+  if (typeof service?.pathHeldBy !== "function") return null;
+  return await service.pathHeldBy(locale, collection, id);
 }

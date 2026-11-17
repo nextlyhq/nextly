@@ -1,26 +1,27 @@
 /**
- * What `core/form` has to get right.
+ * What `core/form` has to get right, on its own fields.
  *
- * Three things, and none of them is "it renders a form": the value that reaches
- * the `action` attribute is followed by the browser on submit, the association
- * between a label and its control is what makes the form usable without sight,
- * and the flat structure is load-bearing rather than incidental — the block's
- * whole layout is one grid on the root, so a control nested inside its label
- * would stop being a grid item and the form would lose its rows.
+ * A form a visitor fills in and sends with no script: the browser refuses
+ * what the form's own checks refuse (both read one description of each
+ * field), the answers post to the page builder's receiver with the hidden
+ * fields it reads, and the four answers a send can come back to are drawn,
+ * hidden, for a CSS `:target` rule to show. A provider's form is drawn the
+ * same way (`form.provider.test.tsx`).
  */
 import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
 import {
   blockPartClassName,
   contrastRatio,
   defaultSiteTokens,
+  migrateDocument,
   parseColor,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import type { BlockRenderArgs, PageContext } from "../context";
-import type { BlockResolver } from "../resolver";
+import type { BlockRenderArgs, PageContext, PageForms } from "../context";
+import { migrationSourceFor, type BlockResolver } from "../resolver";
 import { resolvePageStyles } from "../styles";
 
 import { coreBlocks } from "./index";
@@ -28,272 +29,489 @@ import { coreBlocks } from "./index";
 import { BUTTON_BASE_STYLES } from "./button";
 import {
   form,
+  formFieldDrawings,
   formFields,
   renderForm,
+  sentNameOf,
   FORM_FIELD_TYPES,
   FORM_HONEYPOT_FIELD,
+  FORM_REFUSALS,
+  FORM_SENT_MESSAGE,
   type FormProps,
 } from "./form";
+import { FORM_RESULT_CSS } from "./form-draw";
 
-function context(): PageContext {
+/** A receiver to post to, as a published page's route gives one. */
+const FORMS: PageForms = {
+  action: "/admin/api/plugins/@nextlyhq/plugin-page-builder/forms/send",
+  document: "page:p1",
+  returnTo: "/contact",
+  describe: () => Promise.resolve({ unavailable: "missing" }),
+};
+
+function context(overrides: Partial<PageContext> = {}): PageContext {
   return {
     entry: null,
     data: { find: () => Promise.resolve({ items: [], total: 0 }) },
     resolveMedia: () => Promise.resolve(null),
     resolveEntryPath: () => Promise.resolve(null),
+    ...overrides,
   } as unknown as PageContext;
 }
 
-function args(props: FormProps, nodeId = "n1"): BlockRenderArgs<FormProps> {
+function args(
+  props: FormProps,
+  options: {
+    nodeId?: string;
+    ctx?: Partial<PageContext>;
+    parts?: boolean;
+  } = {}
+): BlockRenderArgs<FormProps> {
   const node: BlockNode = {
-    id: nodeId,
+    id: options.nodeId ?? "n1",
     type: "core/form",
-    version: 1,
+    version: 2,
     props: props as BlockNode["props"],
   };
   return {
     props,
     node,
     className: "nx-n1",
-    // Required by the render contract; these fixtures declare no parts.
-    partClass: () => "",
-    ctx: context(),
+    partClass:
+      options.parts === true ? (part: string) => `nx-part-${part}` : () => "",
+    ctx: context(options.ctx),
     renderSlot: () => null,
   } as unknown as BlockRenderArgs<FormProps>;
 }
 
-const html = (element: ReactElement): string => renderToStaticMarkup(element);
+/** The form drawn as markup, with the result rules React hoists out of it. */
+async function drawn(
+  props: FormProps,
+  options: Parameters<typeof args>[1] = {}
+): Promise<string> {
+  const element = (await renderForm(args(props, options))) as ReactElement;
+  return renderToStaticMarkup(element);
+}
 
-/**
- * The form's markup without its spam trap, for assertions about the fields an
- * author added: the trap is a text input in every form, so a check for
- * `type="text"` or a count of inputs would otherwise pass on it alone.
- */
-const fieldsHtml = (element: ReactElement): string =>
-  html(element).replace(/<div[^>]*aria-hidden="true"[^>]*>.*?<\/div>/, "");
+/** The form drawn as markup: the form element alone. */
+async function html(
+  props: FormProps,
+  options: Parameters<typeof args>[1] = {}
+): Promise<string> {
+  return (await drawn(props, options)).replace(
+    /^<style[^>]*>[^<]*<\/style>/,
+    ""
+  );
+}
 
-describe("core/form", () => {
-  describe("the value that reaches the action attribute", () => {
-    it("refuses a scheme that executes rather than navigates", () => {
-      // The single highest-consequence prop in this block: `action` is followed
-      // by the browser on submit, so a stored `javascript:` value runs. The
-      // block routes it through `url()` rather than trusting the declared type,
-      // because the declared type describes what an EDITOR offers and the
-      // document holds whatever was written.
-      const out = html(renderForm(args({ action: "javascript:alert(1)" })));
+/** The opening tag of the control sent under `name`. */
+function controlOf(out: string, name: string): string | undefined {
+  return out.match(
+    new RegExp(`<(?:input|select|textarea)[^>]*name="${name}"[^>]*>`)
+  )?.[0];
+}
 
-      expect(out).not.toContain("javascript:");
-      // And the attribute is dropped entirely rather than emitted empty: an
-      // `action=""` submits to the page's own URL, which is the same behaviour
-      // as omitting it, but asserting the absence is what proves the refusal
-      // took the value out rather than blanking it.
-      expect(out).not.toContain("action=");
+describe("a new form", () => {
+  it("starts with Name and Email, both required, then Message, and a Send button", () => {
+    // What the inserter stores for a new block.
+    const props = form.defaultProps as FormProps;
+    expect(props.submitText).toBe("Send");
+    expect(formFields(props)).toEqual([
+      {
+        name: "name",
+        label: "Name",
+        type: "text",
+        required: true,
+        options: [],
+      },
+      {
+        name: "email",
+        label: "Email",
+        type: "email",
+        required: true,
+        options: [],
+      },
+      {
+        name: "message",
+        label: "Message",
+        type: "textarea",
+        required: false,
+        options: [],
+      },
+    ]);
+    // Stores no sending choice: a simple form shows its message, and a form
+    // picked later from a provider follows that form's own setting.
+    expect(props).not.toHaveProperty("afterSending");
+    expect(props).not.toHaveProperty("method");
+  });
+});
+
+describe("a field's sent name", () => {
+  it("is made from its label", () => {
+    expect(sentNameOf("Your email")).toBe("your-email");
+    expect(sentNameOf("  Café & menu!  ")).toBe("cafe-menu");
+    // A label with nothing to make a name from still sends under one.
+    expect(sentNameOf("¿?")).toBe("field");
+  });
+
+  it("is unique within the form, made from the label or written", () => {
+    const names = formFields({
+      fields: [
+        { label: "Your email" },
+        { label: "Your email" },
+        { label: "Phone", name: "your-email" },
+        { label: "Your email", name: "contact" },
+      ],
+    }).map(field => field.name);
+    expect(names).toEqual([
+      "your-email",
+      "your-email-2",
+      "your-email-3",
+      "contact",
+    ]);
+  });
+
+  it("is the author's own where they wrote one, but never one the receiver keeps", () => {
+    const names = formFields({
+      fields: [
+        { label: "Company", name: "org" },
+        // `_hp` is the spam trap and `_form` the receiver's own: an answer sent
+        // under either would be read as the receiver's, so the label names it.
+        { label: "Trap", name: "_hp" },
+        { label: "Form", name: "_form" },
+      ],
+    }).map(field => field.name);
+    expect(names).toEqual(["org", "trap", "form"]);
+  });
+});
+
+describe("each field type, drawn", () => {
+  const drawn = async (type: string, extra: object = {}): Promise<string> =>
+    await html(
+      { fields: [{ label: "Answer", type: type as never, ...extra }] },
+      { ctx: { forms: FORMS } }
+    );
+
+  it.each([
+    ["text", "text"],
+    ["email", "email"],
+    ["tel", "tel"],
+    ["number", "number"],
+    ["url", "url"],
+    ["date", "date"],
+  ])("draws %s as an input of type %s", async (type, input) => {
+    expect(controlOf(await drawn(type), "answer")).toMatch(
+      new RegExp(`^<input[^>]*type="${input}"`)
+    );
+  });
+
+  it("draws Long text as a textarea", async () => {
+    expect(controlOf(await drawn("textarea"), "answer")).toMatch(/^<textarea/);
+  });
+
+  it("draws a Dropdown with an empty first choice and its options", async () => {
+    const out = await drawn("select", { options: ["Small", "Large"] });
+    expect(controlOf(out, "answer")).toMatch(/^<select/);
+    expect(out).toContain('<option value="" selected="">Choose…</option>');
+    expect(out).toContain('<option value="Small">Small</option>');
+    expect(out).toContain('<option value="Large">Large</option>');
+  });
+
+  it("draws a Choice as a group of radios under one legend", async () => {
+    const out = await drawn("radio", {
+      options: ["Yes", "No"],
+      required: true,
     });
+    expect(out).toMatch(/<fieldset[^>]*><legend>Answer/);
+    const radios = out.match(/<input[^>]*type="radio"[^>]*>/g) ?? [];
+    expect(radios).toHaveLength(2);
+    // The browser refuses a required Choice left empty on its own.
+    for (const radio of radios) expect(radio).toContain('required=""');
+  });
 
-    it("keeps a destination an author legitimately wrote", () => {
-      // The positive control. Without it, a block that dropped EVERY action
-      // would pass the refusal above while being completely broken.
-      const out = html(renderForm(args({ action: "/api/contact" })));
+  it("draws a Checkbox as one box its label sits beside", async () => {
+    const out = await drawn("checkbox", { required: true });
+    const box = controlOf(out, "answer") ?? "";
+    expect(box).toMatch(/^<input[^>]*type="checkbox"/);
+    expect(box).toContain('value="yes"');
+    expect(box).toContain('required=""');
+    expect(out).toMatch(/<label[^>]*for="n1-field-0"><input/);
+  });
 
-      expect(out).toContain('action="/api/contact"');
-    });
+  it("offers exactly the types it draws", () => {
+    expect([...FORM_FIELD_TYPES]).toEqual([
+      "text",
+      "email",
+      "tel",
+      "number",
+      "url",
+      "date",
+      "textarea",
+      "select",
+      "checkbox",
+      "radio",
+    ]);
+    const item = (form.props?.fields as { item?: Record<string, unknown> })
+      ?.item as { type?: { options?: unknown } };
+    expect(item.type?.options).toEqual([...FORM_FIELD_TYPES]);
+  });
 
-    it("posts back to the page when no action is stored", () => {
-      const out = html(renderForm(args({})));
+  it("falls back to a text input for a type nobody declared", async () => {
+    expect(controlOf(await drawn("colour"), "answer")).toMatch(
+      /^<input[^>]*type="text"/
+    );
+  });
+});
 
-      expect(out).toContain("<form");
-      expect(out).not.toContain("action=");
+describe("one description for what is drawn and what is checked", () => {
+  it("draws each field's rules from the description the receiver checks", async () => {
+    const props: FormProps = {
+      fields: [
+        { label: "Email", type: "email", required: true },
+        { label: "Size", type: "select", options: ["S", "M"], required: true },
+        { label: "Visit", type: "radio", options: ["Today", "Later"] },
+        { label: "Site", type: "url" },
+        { label: "Notes", type: "textarea" },
+      ],
+    };
+    const out = await html(props, { ctx: { forms: FORMS } });
+    for (const field of formFieldDrawings(props)) {
+      const controls =
+        out.match(
+          new RegExp(
+            `<(?:input|select|textarea)[^>]*name="${field.name}"[^>]*>`,
+            "g"
+          )
+        ) ?? [];
+      // Must-be-found: the description's every field is drawn.
+      expect(controls.length, field.name).toBeGreaterThan(0);
+      for (const control of controls) {
+        expect(control.includes('required=""'), field.name).toBe(
+          field.required === true && field.kind !== "checkbox"
+            ? true
+            : field.required === true
+        );
+        if (["email", "url", "number", "date"].includes(field.kind)) {
+          expect(control).toContain(`type="${field.kind}"`);
+        }
+      }
+      // A Dropdown or Choice offers exactly the description's options.
+      if (field.options !== undefined) {
+        const drawnValues = [
+          ...out.matchAll(
+            new RegExp(
+              field.kind === "select"
+                ? `<option value="([^"]+)">`
+                : `<input[^>]*name="${field.name}"[^>]*value="([^"]+)"`,
+              "g"
+            )
+          ),
+        ].map(match => match[1]);
+        for (const option of field.options) {
+          expect(drawnValues).toContain(option.value);
+        }
+      }
+    }
+  });
+
+  it("gives a Dropdown or Choice its options, and no other type any", () => {
+    expect(
+      formFieldDrawings({
+        fields: [
+          { label: "Size", type: "select", options: ["S", "", "S", "M"] },
+          { label: "Name", type: "text", options: ["ignored"] },
+        ],
+      })
+    ).toEqual([
+      {
+        name: "size",
+        label: "Size",
+        kind: "select",
+        required: false,
+        options: [
+          { value: "S", label: "S" },
+          { value: "M", label: "M" },
+        ],
+      },
+      { name: "name", label: "Name", kind: "text", required: false },
+    ]);
+  });
+});
+
+describe("required marks", () => {
+  const props: FormProps = {
+    fields: [
+      { label: "Name", required: true },
+      { label: "Email", type: "email", required: true },
+      { label: "Notes" },
+    ],
+  };
+
+  it("says '* Required' once, above the fields, for the eye only", async () => {
+    const out = await html(props);
+    expect(out.match(/\* Required/g)).toHaveLength(1);
+    expect(out.indexOf("* Required")).toBeLessThan(out.indexOf("Name"));
+    expect(out).toMatch(/<p[^>]*aria-hidden="true"[^>]*>\* Required<\/p>/);
+  });
+
+  it("marks each required field with a visible star and 'required' in its name", async () => {
+    const out = await html(props, { parts: true });
+    expect(out).toContain(
+      '<label for="n1-field-0">Name<span aria-hidden="true"> *</span><span class="nx-part-spoken"> (required)</span></label>'
+    );
+    expect(out).toContain('<label for="n1-field-2">Notes</label>');
+  });
+
+  it("says nothing of required fields where none is", async () => {
+    expect(await html({ fields: [{ label: "Notes" }] })).not.toContain(
+      "Required"
+    );
+  });
+});
+
+describe("sending, with no script", () => {
+  it("posts to the receiver with the fields it reads the form by", async () => {
+    const out = await html(
+      { fields: [{ label: "Name" }] },
+      { nodeId: "contact", ctx: { forms: FORMS, locale: "de" } }
+    );
+    expect(out).toMatch(
+      /^<form class="nx-n1" action="\/admin\/api\/plugins\/@nextlyhq\/plugin-page-builder\/forms\/send" method="post">/
+    );
+    expect(out).toContain(
+      '<input type="hidden" name="_form" value="page:p1"/>'
+    );
+    expect(out).toContain(
+      '<input type="hidden" name="_node" value="contact"/>'
+    );
+    expect(out).toContain(
+      '<input type="hidden" name="_return" value="/contact"/>'
+    );
+    expect(out).toContain('<input type="hidden" name="_locale" value="de"/>');
+  });
+
+  it("never posts to its 'Send to' address from the visitor's browser", async () => {
+    const out = await html(
+      { action: "https://hooks.example.com/in", fields: [{ label: "Name" }] },
+      { ctx: { forms: FORMS } }
+    );
+    expect(out).not.toContain("hooks.example.com");
+  });
+
+  it("posts nowhere where the page has no receiver, as on the canvas", async () => {
+    const out = await html({ fields: [{ label: "Name" }] });
+    expect(out).toMatch(/^<form class="nx-n1">/);
+    expect(out).not.toContain('name="_form"');
+  });
+
+  it("gives the button words when none were stored", async () => {
+    expect(await html({})).toContain('type="submit">Send</button>');
+    expect(await html({ submitText: "Ask us" })).toContain(">Ask us</button>");
+  });
+});
+
+describe("the answers a send comes back to", () => {
+  it("draws each outcome's message, hidden, under the id the receiver names", async () => {
+    const out = await html({ fields: [] }, { nodeId: "contact" });
+    for (const [outcome, words] of [
+      ["sent", FORM_SENT_MESSAGE],
+      ["invalid", FORM_REFUSALS.invalid],
+      ["closed", FORM_REFUSALS.closed],
+      ["error", FORM_REFUSALS.error],
+    ] as const) {
+      expect(out).toContain(
+        `<div id="form-contact-${outcome}" class="" data-nx-form-result="${outcome}" tabindex="-1" hidden="">${words.replaceAll("'", "&#x27;")}</div>`
+      );
+    }
+  });
+
+  it("says the author's own message once sent", async () => {
+    const out = await html({ message: "We'll call you back." });
+    expect(out).toMatch(
+      /data-nx-form-result="sent"[^>]*>We&#x27;ll call you back\./
+    );
+  });
+
+  it("shows the message the address names, and hides the fields once sent", () => {
+    expect(FORM_RESULT_CSS).toContain(
+      "[data-nx-form-result]:target{display:block}"
+    );
+    expect(FORM_RESULT_CSS).toContain(
+      'form:has(>[data-nx-form-result="sent"]:target)>:not([data-nx-form-result="sent"]){display:none}'
+    );
+  });
+
+  it("carries the rules with every form, to be hoisted once per page", async () => {
+    // Hoisted by React as `data-href`, which is how one copy is kept.
+    expect(await drawn({})).toMatch(
+      /^<style data-precedence="default" data-href="nx-form-results">/
+    );
+  });
+});
+
+describe("a form saved before this version", () => {
+  const resolver: BlockResolver = {
+    get: (name: string) =>
+      coreBlocks.find(candidate => candidate.name === name) as never,
+  };
+  const v1 = {
+    id: "f",
+    type: "core/form",
+    version: 1,
+    props: {
+      action: "https://hooks.example.com/in",
+      method: "get",
+      fields: [
+        { label: "Name", name: "name", type: "text", required: true },
+        { label: "Email", name: "email", type: "email" },
+      ],
+    },
+  };
+
+  it("is read as this version, losing only its method", () => {
+    const { doc } = migrateDocument(
+      { formatVersion: 1, kind: "page", nodes: [v1] },
+      migrationSourceFor(resolver)
+    );
+    const [node] = doc.nodes;
+    expect(node?.version).toBe(2);
+    expect(node?.props).toEqual({
+      action: "https://hooks.example.com/in",
+      fields: v1.props.fields,
+      // What the button said when nothing was stored.
+      submitText: "Submit",
     });
   });
 
-  describe("the label and its control", () => {
-    it("associates them by id rather than by nesting", () => {
-      const out = html(
-        renderForm(args({ fields: [{ label: "Email", name: "email" }] }))
-      );
-
-      // `htmlFor` and `id` rather than a wrapping `<label>`, because the layout
-      // is one grid on the root: a control nested inside its label is not a
-      // grid item and the form loses its rows.
-      expect(out).toContain('for="n1-field-0"');
-      expect(out).toContain('id="n1-field-0"');
-      // SIBLINGS. A control that ended up inside the label would still carry
-      // both attributes and still be correctly associated, so the assertions
-      // above cannot see the layout regression on their own.
-      expect(out).not.toMatch(/<label[^>]*>[^<]*<input/);
-    });
-
-    it("derives the id from the node, so two forms on a page cannot collide", () => {
-      // A fixed id prefix makes the second form's label point at the FIRST
-      // form's field — the browser resolves a duplicate id to the first match,
-      // so clicking one form's label focuses another form's input.
-      const first = html(renderForm(args({ fields: [{ name: "a" }] }, "n1")));
-      const second = html(renderForm(args({ fields: [{ name: "a" }] }, "n2")));
-
-      expect(first).toContain('id="n1-field-0"');
-      expect(second).toContain('id="n2-field-0"');
-    });
-
-    it("labels a field that has no label with the name it submits under", () => {
-      // An empty `<label>` announces nothing. The submitted name is a worse
-      // label than one an author wrote and a far better one than silence.
-      const out = html(renderForm(args({ fields: [{ name: "phone" }] })));
-
-      expect(out).toContain(">phone</label>");
-    });
-
-    it("hides the required marker from assistive technology", () => {
-      // The `required` attribute already carries this, so an announced asterisk
-      // is the same information twice, read as the word "asterisk".
-      const out = html(
-        renderForm(args({ fields: [{ label: "Name", required: true }] }))
-      );
-
-      expect(out).toContain('aria-hidden="true"');
-      expect(out).toContain("required");
-    });
-  });
-
-  describe("what a stored document can actually hold", () => {
-    it("renders a textarea only for the type that asks for one", () => {
-      const out = fieldsHtml(
-        renderForm(
-          args({
-            fields: [{ name: "a", type: "textarea" }, { name: "b" }],
-          })
-        )
-      );
-
-      expect(out).toContain("<textarea");
-      expect(out).toContain('type="text"');
-    });
-
-    it("falls back to a text input for a type nobody declared", () => {
-      // A stored type can be anything: a migration, a hand edit, or a version
-      // of this block that offered a control this one does not.
-      const stored = { fields: [{ name: "a", type: "color" }] };
-      const out = fieldsHtml(renderForm(args(stored as unknown as FormProps)));
-
-      expect(out).toContain('type="text"');
-      expect(out).not.toContain('type="color"');
-    });
-
-    it("survives members that are not fields at all", () => {
-      // `sanitizeDocument` keeps content it cannot validate, so a member of the
-      // wrong type reaches render. Each falls back rather than throwing.
-      const stored = { fields: [42, null, {}, ["nested"], "text"] };
-
-      expect(() =>
-        html(renderForm(args(stored as unknown as FormProps)))
-      ).not.toThrow();
-    });
-
-    it("renders nothing but the button when fields is not an array", () => {
-      const stored = { fields: 42 };
-      const out = fieldsHtml(renderForm(args(stored as unknown as FormProps)));
-
-      // Matched on the attribute rather than on the opening tag's exact text:
-      // the submit carries a part class now, and asserting attribute ORDER
-      // makes this fail for a styling change while the property under test —
-      // that a non-array `fields` renders no fields — is untouched.
-      expect(out).toContain('type="submit"');
-      expect(out).toContain("<button");
-      expect(out).not.toContain("<input");
-    });
-
-    it("clamps an oversized array rather than letting the page be refused", () => {
-      // Past the renderer's inspection budget the normalizer refuses the WHOLE
-      // output and the block becomes a placeholder, so an accidentally long
-      // form would lose every field rather than the ones past the end.
-      const fields = Array.from({ length: 500 }, (_, index) => ({
-        name: `f${index}`,
-      }));
-      const out = fieldsHtml(renderForm(args({ fields })));
-
-      const inputs = out.match(/<input/g) ?? [];
-      expect(inputs.length).toBe(100);
-    });
-
-    it("gives the submit button words when none were stored", () => {
-      // `text()` maps a missing value and an authored empty string alike to
-      // `""`, and a button with no words on it is unusable either way.
-      expect(html(renderForm(args({ submitText: "" })))).toContain(">Submit<");
-      expect(html(renderForm(args({})))).toContain(">Submit<");
-    });
-
-    it("submits by post unless get was explicitly chosen", () => {
-      // A `get` form puts every answer in the URL, where it reaches the
-      // server's logs and the visitor's history, so it is never the fallback.
-      const stored = { method: "delete" };
-
-      expect(html(renderForm(args(stored as unknown as FormProps)))).toContain(
-        'method="post"'
-      );
-      expect(html(renderForm(args({ method: "get" })))).toContain(
-        'method="get"'
-      );
-    });
-  });
-
-  describe("the declaration", () => {
-    it("offers exactly the control types the renderer can draw", () => {
-      // The schema's options and the renderer's allow-list are the same
-      // question, so they are the same array. Two lists would let an editor
-      // offer a control that silently renders as a text input.
-      expect(form.props?.method?.options).toEqual(["post", "get"]);
-      expect(FORM_FIELD_TYPES).toContain("textarea");
-      expect(FORM_FIELD_TYPES).toContain("email");
-    });
-
-    it("writes no inline style, because the layout is the compiled grid", () => {
-      // The root-inline-styles ratchet asserts this across the whole library;
-      // named here too because this block is the one that most obviously wants
-      // an inline `display: grid`, which is what its PoC predecessor wrote.
-      const out = html(
-        renderForm(args({ fields: [{ name: "a", type: "textarea" }] }))
-      );
-
-      expect(out).not.toContain("style=");
-    });
+  it("keeps words its button had", () => {
+    const { doc } = migrateDocument(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [{ ...v1, props: { ...v1.props, submitText: "Go" } }],
+      },
+      migrationSourceFor(resolver)
+    );
+    expect(doc.nodes[0]?.props.submitText).toBe("Go");
   });
 });
 
 describe("a control an author can SEE", () => {
-  /*
-   * Measured in a browser before this existed: an input compiled to
-   * `border: 0px`, `background: transparent`, `padding: 0`, so a published
-   * form rendered as a column of labels with nothing under them. The fields
-   * were present, focusable and submittable, and invisible.
-   *
-   * The cause is a host CSS reset — Tailwind's Preflight, which the scaffold
-   * ships — taking away the border and background a user agent draws on an
-   * input. The `control` part already existed and stated only spacing.
-   *
-   * jsdom cannot see a border, so appearance itself is verified in a browser on
-   * a published page rather than here. What a test CAN pin is the compiled
-   * stylesheet, and that is what these read — not the declaration object, which
-   * is a weaker claim than it looks. `expect(control.border).toBeDefined()`
-   * holds for `{ style, color }` with the WIDTH deleted, and a border of no
-   * width is exactly as invisible under Preflight as no border at all.
-   */
   const control = form.parts?.control?.baseStyles?.base?.base as
     | Record<string, unknown>
     | undefined;
 
-  /** The compiled rule for the control part, which is what reaches a page. */
-  function controlCss(): string {
+  /** The compiled rule for one part, which is what reaches a page. */
+  function partCss(part: string): string {
     const document: BlockDocument = {
       formatVersion: 1,
       kind: "page",
-      nodes: [{ id: "f", type: form.name, version: 1, props: {} }],
+      nodes: [{ id: "f", type: form.name, version: 2, props: {} }],
     };
     const resolver: BlockResolver = {
       get: (name: string) =>
         coreBlocks.find(candidate => candidate.name === name) as never,
     };
-    // A style context is REQUIRED: `resolvePageStyles` compiles only under
-    // `if (styleContext)` and returns empty css otherwise, which would report
-    // every one of these properties as missing and read as a real failure.
     const css =
       resolvePageStyles(
         document,
@@ -306,29 +524,20 @@ describe("a control an author can SEE", () => {
         },
         resolver
       ).css ?? "";
-    const selector = blockPartClassName(form.name, "control");
+    const selector = blockPartClassName(form.name, part);
     return css
       .split("}")
       .filter(rule => rule.includes(`.${selector}`))
       .join("}");
   }
 
-  /**
-   * The VALUE of one declaration inside the control's rule.
-   *
-   * Read out and asserted separately rather than folded into one regex with a
-   * negative lookahead. `property:\s*(?!0[;\s}])` looks like it rejects a zero
-   * and does not: `\s*` backtracks to zero width, which moves the lookahead onto
-   * the SPACE, where it trivially succeeds. Verified — a control compiling to
-   * `border-block-start-width: 0` passed that form.
-   */
+  /** The value of one declaration inside a compiled rule. */
   function declaredValue(css: string, property: string): string | undefined {
     return css
       .match(new RegExp(`(?:^|[;{\\s])${property}:\\s*([^;}]+)`))?.[1]
       .trim();
   }
 
-  /** A length that actually draws something — not `0`, `0px`, `0rem`. */
   function expectNonZero(css: string, property: string): void {
     const value = declaredValue(css, property);
     expect(value, `${property} never reached the stylesheet`).toBeDefined();
@@ -338,18 +547,7 @@ describe("a control an author can SEE", () => {
   }
 
   it("draws a border with a NONZERO width on every side", () => {
-    /*
-     * The width is the whole mechanism. Preflight sets `border-width: 0` and
-     * leaves `border-style: solid` in place, so a control declaring style and
-     * colour and no width inherits the zero and stays invisible — while
-     * `border` is still "defined" and every leaf it does declare still reaches
-     * the stylesheet. Asserting the sides by name and by VALUE is what
-     * separates a visible border from that.
-     */
-    const css = controlCss();
-
-    // Must-be-found: the part compiled at all, so the assertions below are
-    // reading a real rule rather than an empty string.
+    const css = partCss("control");
     expect(css).not.toBe("");
     for (const side of [
       "border-block-start-width",
@@ -363,60 +561,39 @@ describe("a control an author can SEE", () => {
   });
 
   it("outlines the control in a colour a person can actually SEE it by", () => {
-    /*
-     * The border is this control's only boundary — it takes the page's own
-     * background on purpose — so WCAG 2.2 SC 1.4.11 (Non-text Contrast) wants
-     * 3:1 against what sits behind it.
-     *
-     * The hairline `color.border` does NOT clear that: `#e5e7eb` on `#ffffff` is
-     * 1.24:1 and `#1f2937` on `#0b0f19` is 1.30:1. Outlining a field in it is
-     * the invisible control this part exists to fix, one property in — and it
-     * passes every check that only asks whether a border is "defined" or
-     * whether its width is nonzero.
-     *
-     * Computed from the token set rather than compared to a spelling, so a
-     * palette retune that keeps the token name and loses the contrast fails
-     * here. The ratio is the thing anybody depends on.
-     */
     const named = (
       control?.border as { color?: { $token?: string } } | undefined
     )?.color?.$token;
-    expect(named, "the control names no border colour token").toBeDefined();
-
     const token = defaultSiteTokens().find(entry => entry.name === named);
+    const background = defaultSiteTokens().find(
+      entry => entry.name === "color.background"
+    );
     expect(
       token,
       `${String(named)} is not in the guaranteed set`
     ).toBeDefined();
-
-    const background = defaultSiteTokens().find(
-      entry => entry.name === "color.background"
-    );
-
     for (const mode of ["light", "dark"] as const) {
-      const edge = parseColor(token?.values[mode] ?? "");
-      const behind = parseColor(background?.values[mode] ?? "");
-      expect(edge, `${String(named)} has no ${mode} value`).toBeDefined();
-      expect(behind, `color.background has no ${mode} value`).toBeDefined();
-
-      const ratio = contrastRatio(edge!, behind!);
-
-      expect(
-        ratio,
-        `${String(named)} is ${ratio.toFixed(2)}:1 against the page in ${mode}, ` +
-          `below the 3:1 a control boundary needs to be findable.`
-      ).toBeGreaterThanOrEqual(3);
+      const ratio = contrastRatio(
+        parseColor(token?.values[mode] ?? "")!,
+        parseColor(background?.values[mode] ?? "")!
+      );
+      expect(ratio, `${mode}`).toBeGreaterThanOrEqual(3);
     }
   });
 
-  it("draws a background and padding an author can see", () => {
-    const css = controlCss();
+  it("keeps a phone from zooming in, and is a target a thumb can hit", () => {
+    // 16px of text, so a phone does not zoom the page when a field is
+    // tapped, and 44px tall.
+    const css = partCss("control");
+    expect(declaredValue(css, "font-size")).toBe("1rem");
+    expect(declaredValue(css, "min-height")).toBe("2.75rem");
+    expect(declaredValue(partCss("choice"), "min-height")).toBe("2.75rem");
+    expect(declaredValue(partCss("submit"), "min-height")).toBe("2.75rem");
+  });
 
-    // A background is what separates the control from the page behind it once
-    // the reset has taken the user agent's away.
+  it("draws a background and padding an author can see", () => {
+    const css = partCss("control");
     expect(css).toMatch(/background-color:\s*var\(--site-/);
-    // Padding on all four sides, by value: a zero would compile and read as
-    // present while leaving the text against the border.
     for (const side of [
       "padding-block-start",
       "padding-block-end",
@@ -427,130 +604,119 @@ describe("a control an author can SEE", () => {
     }
   });
 
-  it("takes its COLOURS from tokens and its spacing from literals", () => {
-    /*
-     * A literal colour is wrong in whichever of light and dark it was not
-     * chosen for, which is the reason a token set exists; spacing carries no
-     * such asymmetry. `core/card` states the same split for the same reason.
-     */
-    expect(control?.backgroundColor).toHaveProperty("$token");
-    expect(control?.color).toHaveProperty("$token");
-    expect(
-      (control?.border as Record<string, unknown> | undefined)?.color
-    ).toHaveProperty("$token");
-    expect(typeof control?.borderRadius).toBe("string");
+  it("writes the messages and help in colours that read in light and dark", () => {
+    const tokens = defaultSiteTokens();
+    const value = (name: string, mode: "light" | "dark"): string =>
+      tokens.find(entry => entry.name === name)?.values[mode] ?? "";
+    const parts = form.parts ?? {};
+    const colourOf = (part: string, key: string): string | undefined =>
+      (
+        (parts[part]?.baseStyles?.base?.base as Record<string, unknown>)?.[
+          key
+        ] as { $token?: string } | undefined
+      )?.$token;
+    for (const mode of ["light", "dark"] as const) {
+      // The message box: its text on its own surface.
+      const message = contrastRatio(
+        parseColor(value(colourOf("message", "color")!, mode))!,
+        parseColor(value(colourOf("message", "backgroundColor")!, mode))!
+      );
+      expect(message, `message in ${mode}`).toBeGreaterThanOrEqual(4.5);
+      // Help, the note and an error, on the page's background.
+      for (const part of ["help", "note", "error"]) {
+        const ratio = contrastRatio(
+          parseColor(value(colourOf(part, "color")!, mode))!,
+          parseColor(value("color.background", mode))!
+        );
+        expect(ratio, `${part} in ${mode}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
   });
 
-  it("puts the submit's part class on the button it renders", () => {
-    /*
-     * The style and the markup are two halves of one fact and the suite held
-     * only the first. `args()` returns an empty `partClass`, so removing the
-     * className from the button left every style test green while the compiled
-     * submit rule matched nothing — returning the control to the reset-stripped
-     * plain text this whole change exists to fix.
-     */
-    const out = html(
-      renderForm({
-        ...args({
-          submitText: "Send",
-          fields: [{ name: "email", label: "Email", type: "email" }],
-        } as unknown as FormProps),
-        partClass: (part: string) => `nx-part-${part}`,
-      } as unknown as BlockRenderArgs<FormProps>)
+  it("puts the parts' classes on what it draws", async () => {
+    const out = await html(
+      {
+        fields: [
+          { label: "Email", type: "email", required: true },
+          { label: "Size", type: "radio", options: ["S"] },
+        ],
+      },
+      { parts: true }
     );
-    expect(out).toContain('class="nx-part-submit"');
-    // Must-be-found control: the control part is marked the same way, so a
-    // `partClass` that returned nothing would fail here rather than pass.
-    expect(out).toContain("nx-part-control");
+    for (const part of [
+      "submit",
+      "control",
+      "field",
+      "choice",
+      "tick",
+      "note",
+      "error",
+      "message",
+      "spoken",
+      "trap",
+    ]) {
+      expect(out, part).toContain(`nx-part-${part}`);
+    }
   });
 
-  it("gives the submit the SAME appearance as core/button", () => {
-    /*
-     * A form's submit and a button block are one control to an author, and
-     * describing that appearance twice is how a page comes to carry two
-     * different-looking primary actions — which is what it did while the
-     * submit was a bare element the reset stripped to plain text.
-     */
-    /*
-     * Compared BY VALUE, and as one whole envelope.
-     *
-     * This checked that every key existed, at both levels. Key existence cannot
-     * see the drift it was written to catch: a submit that overrode `padding`,
-     * or copied a hover state and changed a declaration inside it, has every
-     * expected key and a different appearance. It also cannot see an addition,
-     * so a declaration the button never had would pass silently.
-     *
-     * The expectation is DERIVED from `BUTTON_BASE_STYLES` rather than written
-     * out, so the two cannot drift by this file being updated to match a change
-     * nobody meant — which is the failure a literal envelope invites.
-     */
-    const expected = {
+  it("gives the button the SAME appearance as core/button, sized to its words", () => {
+    expect(form.parts?.submit?.baseStyles).toEqual({
       ...BUTTON_BASE_STYLES,
       base: {
         ...BUTTON_BASE_STYLES.base,
         base: {
           ...BUTTON_BASE_STYLES.base.base,
-          // The one deliberate difference: the form is a grid, so a stretched
-          // item would run the full column width and stop reading as a button.
           width: "fit-content",
+          minHeight: "2.75rem",
         },
       },
-    };
-
-    expect(form.parts?.submit?.baseStyles).toEqual(expected);
-
-    // Must-be-found control: the envelope really carries declarations, so the
-    // equality above is not two empty shapes agreeing.
+    });
     expect(Object.keys(BUTTON_BASE_STYLES.base.base).length).toBeGreaterThan(3);
+  });
+
+  it("writes no inline style", async () => {
+    expect(
+      await html({
+        fields: [
+          { label: "A", required: true },
+          { label: "B", type: "radio", options: ["x"] },
+        ],
+      })
+    ).not.toContain("style=");
   });
 });
 
 describe("the hidden spam trap", () => {
-  /** The trap's input element, as it reaches the page. */
   function trapInput(out: string): string | undefined {
     return out.match(
       new RegExp(`<input[^>]*name="${FORM_HONEYPOT_FIELD}"[^>]*>`)
     )?.[0];
   }
 
-  it("is in every form, under the name the receiver reads", () => {
-    // `_hp` is the name the forms plugin also treats as a trap, so a form
-    // received there reads the same field.
+  it("is in every form, under the name the receiver reads", async () => {
     expect(FORM_HONEYPOT_FIELD).toBe("_hp");
-    expect(trapInput(html(renderForm(args({}))))).toBeDefined();
+    expect(trapInput(await html({}))).toBeDefined();
     expect(
-      trapInput(
-        html(renderForm(args({ fields: [{ name: "email", type: "email" }] })))
-      )
+      trapInput(await html({ fields: [{ label: "Email", type: "email" }] }))
     ).toBeDefined();
   });
 
-  it("is out of the tab order, closed to autofill and hidden from screen readers", () => {
-    const input = trapInput(html(renderForm(args({})))) ?? "";
-
+  it("is out of the tab order, closed to autofill and hidden from screen readers", async () => {
+    const input = trapInput(await html({})) ?? "";
     expect(input).toContain('tabindex="-1"');
-    // Matched without case: HTML attribute names are case-insensitive, and
-    // React writes this one as `autoComplete`.
     expect(input).toMatch(/autocomplete="off"/i);
     expect(input).toContain('aria-hidden="true"');
-    // A field a bot would skip is no trap: not `type="hidden"`, and empty.
     expect(input).toContain('type="text"');
     expect(input).not.toMatch(/value="[^"]+"/);
   });
 
-  it("hides its label from screen readers with it", () => {
-    const out = html(renderForm(args({}, "n7")));
-    // The wrapper carries `aria-hidden`, so the label inside is not read out
-    // either; the label still names the input for whoever reads the markup.
-    expect(out).toMatch(
+  it("hides its label from screen readers with it", async () => {
+    expect(await html({}, { nodeId: "n7" })).toMatch(
       /<div[^>]*aria-hidden="true"[^>]*><label for="n7-trap">[^<]+<\/label><input[^>]*id="n7-trap"/
     );
   });
 
   it("is drawn off screen by its part, not by an inline style", () => {
-    const out = html(renderForm(args({})));
-    expect(out).not.toContain("style=");
-
     const trap = form.parts?.trap?.baseStyles?.base?.base as
       | Record<string, unknown>
       | undefined;
@@ -560,44 +726,24 @@ describe("the hidden spam trap", () => {
   });
 });
 
-describe("the fields a form describes", () => {
-  it("applies every default the form draws with", () => {
-    expect(
-      formFields({
-        fields: [
-          { label: "Email", name: "email", type: "email", required: true },
-          { name: "phone" },
-          { label: "Odd", type: "colour" as never },
-          "not a field" as never,
-        ],
-      })
-    ).toEqual([
-      { name: "email", label: "Email", type: "email", required: true },
-      { name: "phone", label: "phone", type: "text", required: false },
-      { name: "field-2", label: "Odd", type: "text", required: false },
-      { name: "field-3", label: "field-3", type: "text", required: false },
-    ]);
-  });
-
-  it("is what the form draws, so the receiver checks the fields people see", () => {
-    const props: FormProps = {
-      fields: [
-        { label: "Your email", name: "your-email", type: "email" },
-        { label: "Note", type: "textarea", required: true },
-      ],
-    };
-    const out = html(renderForm(args(props)));
-
-    for (const field of formFields(props)) {
-      expect(out).toContain(`name="${field.name}"`);
-      expect(out).toContain(`>${field.label}`);
-    }
+describe("what a stored form can hold", () => {
+  it("survives members that are not fields at all", async () => {
+    const out = await html({
+      fields: ["not a field", null, { label: "Name" }] as never,
+    });
+    expect(controlOf(out, "name")).toBeDefined();
   });
 
   it("reads at most a hundred stored fields", () => {
     const fields = Array.from({ length: 150 }, (_, index) => ({
-      name: `f${index}`,
+      label: `F${index}`,
     }));
     expect(formFields({ fields })).toHaveLength(100);
+  });
+
+  it("labels a field that has no label with the name it sends under", async () => {
+    expect(await html({ fields: [{ name: "phone" }] })).toContain(
+      '<label for="n1-field-0">phone</label>'
+    );
   });
 });

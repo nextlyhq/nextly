@@ -5,6 +5,12 @@ import {
   type MigrationSource,
 } from "@nextlyhq/blocks-engine";
 
+import type {
+  FormDrawing,
+  FormReference,
+  FormUnavailableDrawing,
+} from "./context";
+
 /**
  * How the renderer finds the definition for a stored node's `type`.
  *
@@ -65,6 +71,67 @@ export const SITE_NAMED_QUERIES_SERVICE: {
   plugin: SITE_BLOCKS_SERVICE.plugin,
   service: "site-named-queries",
 };
+
+/**
+ * Where a started page builder offers what a routed page's forms need: the
+ * receiver's address, the stored document each drawn document is, and the
+ * description of a form picked from a provider. A route reads it on each
+ * render to fill `ctx.forms`.
+ *
+ * @experimental Settles with the form provider contract.
+ */
+export const SITE_FORMS_SERVICE: {
+  readonly plugin: typeof SITE_BLOCKS_SERVICE.plugin;
+  readonly service: "site-forms";
+} = {
+  plugin: SITE_BLOCKS_SERVICE.plugin,
+  service: "site-forms",
+};
+
+/**
+ * What a started page builder offers under {@link SITE_FORMS_SERVICE}.
+ *
+ * @experimental Settles with the form provider contract.
+ */
+export interface SiteFormsService {
+  /** The address every form on the site posts to. */
+  readonly action: string;
+  /**
+   * The value naming the stored row's document as a form's post names it,
+   * or `undefined` where the receiver reads no such document.
+   */
+  documentOf(row: {
+    readonly collection: string;
+    readonly id: string;
+    readonly field: string;
+  }): string | undefined;
+  /** The value naming a component's document, as a form's post names it. */
+  componentDocument(id: string): string;
+  /** A form picked from a provider, as the public reads it. */
+  describe(
+    form: FormReference,
+    locale: string | undefined
+  ): Promise<FormDrawing | FormUnavailableDrawing>;
+}
+
+/**
+ * The page builder's `site-forms` service as an instance offers it (its
+ * `plugins`), or `undefined` where it offers none of that shape.
+ */
+export function offeredSiteForms(
+  plugins: Readonly<Record<string, Readonly<Record<string, unknown>>>>
+): SiteFormsService | undefined {
+  const offered: unknown =
+    plugins[SITE_FORMS_SERVICE.plugin]?.[SITE_FORMS_SERVICE.service];
+  if (typeof offered !== "object" || offered === null) return undefined;
+  const service = offered as Record<string, unknown>;
+  return typeof service.action === "string" &&
+    typeof service.documentOf === "function" &&
+    typeof service.componentDocument === "function" &&
+    typeof service.describe === "function"
+    ? (offered as SiteFormsService)
+    : undefined;
+}
 
 /**
  * Where a started page builder offers the site's page data limit on the

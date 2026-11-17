@@ -43,6 +43,7 @@ import type { ReactElement } from "react";
 
 import { blocksRouteConfig, perRequestNotFound } from "./next-blocks-route";
 import { linkLanguageOf } from "./next-entry-paths";
+import { FORM_DOCUMENT_KEY } from "./next-forms";
 import type {
   BlocksPageConfig,
   ContentAddressHolder,
@@ -491,7 +492,17 @@ export function buildContentRoute(
     });
     if (entry === null) return null;
     const route = entryRouteOf(holder.collection);
-    const drawn = { ...entry, [TEMPLATE_DOCUMENT_KEY]: template.document };
+    const drawn = {
+      ...entry,
+      [TEMPLATE_DOCUMENT_KEY]: template.document,
+      // The template is the stored document the entry's page draws, so a
+      // form on it posts naming the template.
+      [FORM_DOCUMENT_KEY]: {
+        collection: templates.collection,
+        id: template.id,
+        field: "",
+      },
+    };
     // A later page's lookup was answered with the entry's space; its own
     // address, and the first page's second spelling, ask the store.
     const paged =

@@ -18,8 +18,6 @@ import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { useSettingsMatch } from "./settings-filter";
-
 import { columnsContentSection } from "./columns-layout-field";
 import {
   PropExposeControl,
@@ -27,6 +25,7 @@ import {
 } from "./component-fields-panel";
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
+import { formSectionBodies } from "./form-sections";
 import {
   blockIsReadOnly,
   builderContentSectionOf,
@@ -48,6 +47,7 @@ import {
   rowsHoldValue,
   type PanelSection,
 } from "./panel-section";
+import { useSettingsMatch } from "./settings-filter";
 import {
   useVisitorUnreadable,
   VisitorUnreadableNote,
@@ -232,6 +232,24 @@ function ContentSurface({
       listView={listViewOf(editor, inspection.nodeId)}
     />
   );
+  // The Form's Fields and After sending, which the builder draws in place
+  // of their generated rows.
+  const formBodies = formSectionBodies({
+    inspection,
+    stored: findNode(editor.document.nodes, inspection.nodeId)?.props ?? {},
+    services,
+    writable: name =>
+      propIsWritable(
+        editor.document,
+        inspection.nodeId,
+        name,
+        lockViewOf(editor)
+      ),
+    onCommit: (name, value) => {
+      onCommit(name, value);
+    },
+    rowsOf: fieldsFor,
+  });
   // Each section the block places in Content, folding on its own, after
   // the one the builder draws for a core block (Columns' layout); a block
   // with none draws the fields' own note that there is nothing to set.
@@ -241,7 +259,7 @@ function ContentSurface({
       key: section.label,
       label: section.label,
       holdsValue: rowsHoldValue(section.rows),
-      body: fieldsFor(section.rows),
+      body: formBodies?.get(section.label) ?? fieldsFor(section.rows),
     })),
   ];
   const generated =

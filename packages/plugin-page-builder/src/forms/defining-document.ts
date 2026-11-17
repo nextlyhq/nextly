@@ -14,15 +14,29 @@
  * component, and a header & footer set, as the system, which is how the
  * renderer reads what a visitor's page embeds.
  *
+ * A form inside a component the document places is drawn under an id the
+ * composition derives from the placement, which no stored document holds.
+ * Such a node is found by composing the document with its components'
+ * published definitions, as the renderer composes it.
+ *
  * @module forms/defining-document
  */
 import {
+  DEFAULT_LIMITS,
+  DOCUMENT_FORMAT_VERSION,
   findNode,
   regionsOf,
   REGION_AREAS,
+  resolveComponentInstances,
+  type BlockDocument,
   type BlockNode,
   type RegionArea,
 } from "@nextlyhq/blocks-engine";
+import {
+  definitionsFor,
+  repairingLookup,
+  sanitizeDocument,
+} from "@nextlyhq/blocks-react";
 
 import { PAGES_CONTENT_FIELD } from "../collections/pages";
 import { TEMPLATE_CONTENT_FIELD } from "../collections/templates";
@@ -100,7 +114,59 @@ export async function publishedNode(
   locale: string | undefined
 ): Promise<BlockNode | null> {
   const nodes = await publishedNodes(api, stores, document, locale);
-  return nodes === null ? null : (findNode(nodes, nodeId) ?? null);
+  if (nodes === null) return null;
+  return (
+    findNode(nodes, nodeId) ??
+    (await composedNode(api, stores, nodes, nodeId, locale))
+  );
+}
+
+/**
+ * The node `nodeId` of `nodes` composed with the published definitions of
+ * the components they place, as the renderer composes a page, or `null`.
+ * Asked only once the stored nodes do not hold the id, so a document
+ * placing no component reads nothing more.
+ */
+async function composedNode(
+  api: PublishedReadApi,
+  stores: DefiningStores,
+  nodes: BlockNode[],
+  nodeId: string,
+  locale: string | undefined
+): Promise<BlockNode | null> {
+  const document: BlockDocument = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes,
+  };
+  const read = publishedStoreSource(api, {
+    collection: stores.components.collection,
+    field: stores.components.field,
+    locale,
+    reading: AS_THE_SYSTEM,
+  });
+  const definitions = await definitionsFor(
+    document,
+    async ids => {
+      const found = await read(ids);
+      const readable = new Map<string, BlockDocument>();
+      for (const [id, value] of found) {
+        const definition = asDocument(value);
+        if (definition !== null) readable.set(id, definition);
+      }
+      return readable;
+    },
+    DEFAULT_LIMITS
+  );
+  if (definitions.size === 0) return null;
+  // The renderer's first passes, in its order: shape repair, then
+  // composition, which is what derives each placed node's id.
+  const composed = resolveComponentInstances(
+    sanitizeDocument(document, DEFAULT_LIMITS),
+    repairingLookup(definitions, DEFAULT_LIMITS),
+    { limits: DEFAULT_LIMITS }
+  );
+  return findNode(composed.document.nodes, nodeId) ?? null;
 }
 
 /** The published node list of `document`, or `null`. */

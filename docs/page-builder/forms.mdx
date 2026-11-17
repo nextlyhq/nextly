@@ -8,6 +8,50 @@ the post, finds the form on the published page, and hands the answers to the for
 provider. This is experimental: the route's fields and the provider contract may change
 before the page builder is stable.
 
+## The Form block
+
+A Form works with JavaScript off. A visitor fills it in and presses the button; the browser
+posts the answers to the page builder, and comes back to the same page with the answer in
+place of the form, or a message above it. The block adds no script to the page.
+
+A new Form starts with **Name** and **Email**, both required, then **Message**, and a
+**Send** button. In the block's **Fields**, **+ Add field** adds a field, the handle beside
+each one drags it into a new order (or moves it with the arrow keys), and opening a field
+edits its label, its type and **Required**. The types are Text, Email, Phone, Number, Link,
+Date, Long text, Dropdown, Checkbox and Choice; a Dropdown and a Choice take a list of
+options.
+
+Each field's answer is sent under a name made from its label ("Your email" is sent as
+`your-email`), unique within the form. Set your own under the field's **Advanced** options.
+
+Required fields carry a visible `*` and say "required" to a screen reader, and the form says
+"\* Required" once above its fields. The browser refuses an empty required field, a
+malformed email or a link that isn't one with its own message, before anything is sent, and
+the server checks the same rules again.
+
+**After sending** chooses what a visitor sees once a send is accepted:
+
+- **Show a message**: the form is replaced by the message, "Thanks, we got your message."
+  unless you write another. The message takes the keyboard and screen reader focus.
+- **Go to a page**: the visitor is sent to a page of the site, or to an address you write.
+
+When the server refuses a send, the visitor comes back to the form with one message above
+it: "Some answers weren't accepted. Please check them and send again.", "This form isn't
+taking answers right now." or "Something went wrong. Please try again."
+
+The page stays cacheable: nothing in its HTML depends on a send. The block draws each
+message hidden, with an id the route's answer names in the address's fragment
+(`#form-<id>-sent`, `-invalid`, `-closed`, `-error`), and a CSS `:target` rule shows the one
+named. A browser without `:has()` shows the sent message above the fields rather than in
+their place.
+
+### Known limits
+
+- A form repeated in each item of a collection list shares one message: sending one item's
+  form shows the message in every item's.
+- The receiver's address assumes Nextly's handler is mounted at `/admin/api`, as a
+  scaffolded project mounts it.
+
 ## The receiving route
 
 Forms post to `POST <api mount>/plugins/@nextlyhq/plugin-page-builder/forms/send`, which is
@@ -53,10 +97,15 @@ In this order, each before the work it guards:
 ## A simple form
 
 A Form block with no form picked from a provider is a simple form. Its answers are checked
-against the block's own fields, with the rules a browser applies (required fields, an
-email, a full web address, a number, a date, a time, the listed choices). Then the site's
-server posts them, as `application/x-www-form-urlencoded`, to the block's "Send to"
-address. The visitor's browser never posts there itself, and nothing is stored.
+against the block's own fields, read from the same description its controls are drawn
+from, with the rules a browser applies (required fields, an email, a full web address, a
+number, a date, a time, a Dropdown's or a Choice's options). Then the site's server posts
+them, as `application/x-www-form-urlencoded`, to the block's "Send to" address. The
+visitor's browser never posts there itself, and nothing is stored.
+
+Once sent, a simple form shows its message, or sends the visitor to the page its "Go to a
+page" names. A page of the site is followed to where the site serves it now; an address is
+followed as written.
 
 "Send to" must be an `https` address of a public host. It is checked when each post is
 sent on, against every address its host resolves to, so private, loopback and link-local
@@ -135,6 +184,27 @@ A form that is `closed` answers with the `-closed` outcome and a `missing` one w
 `-error`, and `accept` is not called. Otherwise `accept` gets the answers to the described
 fields and the visitor's request, for the provider's own limits and checks. The page
 builder's own spam trap and per-address limit have already run.
+
+### How a provider's form is drawn
+
+The Form block draws a provider's form on the server, from what `describe` gives, with the
+same markup and style parts as a simple form, so the block's Style settings apply to both.
+Each described field is drawn as its `kind`'s HTML control, with its label, help,
+placeholder, options, `accept`, `min`, `max` and `pattern`. A field's `provider` values are
+drawn as `data-*` attributes on its control, for the provider's own script; the page
+builder never reads them. A form whose `encoding` is `multipart` posts as
+`multipart/form-data`.
+
+Each control's `aria-describedby` names its help and an empty, hidden error slot
+(`[data-nx-form-error]`) under it. A provider's own script that sends without a reload can
+write the reason a field was refused there and show it; the visitor's answers stay as typed.
+
+A described `script` is added, as a module, only to pages that draw that form, once however
+many of its forms a page holds. A closed form shows its own message (or "This form isn't
+taking answers right now.") in its place; a missing one draws nothing.
+
+"After sending" on a block with a provider's form starts as **Use the form's own setting**,
+which follows `afterSending`. The block may choose a message or a page of its own instead.
 
 `accept` answers with one of:
 

@@ -757,3 +757,152 @@ describe("a form picked from a provider", () => {
     expect(delivered).toEqual([]);
   });
 });
+
+describe("the block's own fields, as it draws them", () => {
+  it("refuses a Dropdown's or a Choice's answer that is not one of its options", async () => {
+    const { deps, delivered } = parts(
+      simpleForm({
+        props: {
+          action: "https://hooks.example.com/in",
+          fields: [
+            { label: "Size", type: "select", options: ["S", "M"] },
+            { label: "Visit", type: "radio", options: ["Today", "Later"] },
+          ],
+        },
+      })
+    );
+    const refused = await receiveFormPost(post({ size: "XL" }), deps);
+    expect(location(refused)).toBe("/contact#form-f1-invalid");
+    const alsoRefused = await receiveFormPost(post({ visit: "Never" }), deps);
+    expect(location(alsoRefused)).toBe("/contact#form-f1-invalid");
+    expect(delivered).toEqual([]);
+
+    const accepted = await receiveFormPost(
+      post({ size: "M", visit: "Later" }),
+      deps
+    );
+    expect(location(accepted)).toBe("/contact#form-f1-sent");
+    expect(delivered[0]?.answers).toEqual([
+      { name: "size", values: ["M"] },
+      { name: "visit", values: ["Later"] },
+    ]);
+  });
+
+  it("reads the names it sends from the labels, as the form draws them", async () => {
+    const { deps, delivered } = parts(
+      simpleForm({
+        props: {
+          action: "https://hooks.example.com/in",
+          fields: [{ label: "Your email", type: "email", required: true }],
+        },
+      })
+    );
+    await receiveFormPost(post({ "your-email": "ada@example.com" }), deps);
+    expect(delivered[0]?.answers).toEqual([
+      { name: "your-email", values: ["ada@example.com"] },
+    ]);
+  });
+});
+
+describe("after sending, as the block chose", () => {
+  const goTo = (props: Record<string, unknown>): BlockNode =>
+    simpleForm({
+      props: {
+        ...simpleForm().props,
+        afterSending: "page",
+        ...props,
+      },
+    });
+
+  it("sends the visitor to the page a simple form names", async () => {
+    const { deps } = parts(goTo({ href: "/thanks?from=contact" }));
+    expect(location(await receiveFormPost(post(ANSWERS), deps))).toBe(
+      "/thanks?from=contact"
+    );
+  });
+
+  it("sends the visitor to an address the author wrote, on another site too", async () => {
+    const { deps } = parts(goTo({ href: "https://example.org/thanks" }));
+    expect(location(await receiveFormPost(post(ANSWERS), deps))).toBe(
+      "https://example.org/thanks"
+    );
+  });
+
+  it("finds a page of the site picked by its entry, in the page's language", async () => {
+    const { deps } = parts(
+      goTo({ entryCollection: "pages", entryId: "p9", href: "/stale" })
+    );
+    const asked: unknown[] = [];
+    const withAddress: ReceiverDeps = {
+      ...deps,
+      entryAddress: async (...args) => {
+        asked.push(args);
+        return "/de/danke";
+      },
+    };
+    expect(
+      location(
+        await receiveFormPost(post({ ...ANSWERS, _locale: "de" }), withAddress)
+      )
+    ).toBe("/de/danke");
+    expect(asked).toEqual([["pages", "p9", "de"]]);
+  });
+
+  it("shows the message where the page it names cannot be followed", async () => {
+    for (const props of [
+      { href: "javascript:alert(1)" },
+      { href: "//evil.example/" },
+      { entryCollection: "pages", entryId: "gone" },
+      {},
+    ]) {
+      const { deps } = parts(goTo(props));
+      const response = await receiveFormPost(post(ANSWERS), {
+        ...deps,
+        entryAddress: async () => null,
+      });
+      expect(location(response), JSON.stringify(props)).toBe(
+        "/contact#form-f1-sent"
+      );
+    }
+  });
+
+  it("goes nowhere before the answers are passed on", async () => {
+    const { deps } = parts(goTo({ href: "/thanks" }));
+    const failing: ReceiverDeps = {
+      ...deps,
+      deliver: async () => ({ ok: false, reason: "status", status: 500 }),
+    };
+    expect(location(await receiveFormPost(post(ANSWERS), failing))).toBe(
+      "/contact#form-f1-error"
+    );
+  });
+
+  it("overrides a provider form's own setting with the block's", async () => {
+    const thanksPage = fakeProvider({
+      describe: async () => ({
+        ref: "contact",
+        title: "Contact",
+        fields: [{ name: "email", label: "Email", kind: "email" }],
+        submitText: "Send",
+        afterSending: { kind: "page", href: "/form-own-page" },
+        encoding: "urlencoded",
+      }),
+    });
+    const picked = (props: Record<string, unknown>): BlockNode =>
+      simpleForm({
+        props: { form: { provider: "acme", ref: "contact" }, ...props },
+      });
+    const cases: [Record<string, unknown>, string][] = [
+      [{}, "/form-own-page"],
+      [{ afterSending: "form" }, "/form-own-page"],
+      [{ afterSending: "message" }, "/contact#form-f1-sent"],
+      [{ afterSending: "page", href: "/block-page" }, "/block-page"],
+    ];
+    for (const [props, expected] of cases) {
+      const { deps, providers } = parts(picked(props));
+      providers.set("acme", thanksPage);
+      const response = await receiveFormPost(post({ email: "a@b.co" }), deps);
+      expect(location(response), JSON.stringify(props)).toBe(expected);
+    }
+  });
+});

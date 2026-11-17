@@ -52,6 +52,7 @@ import {
   linkLanguageOf,
   entryPathResolver,
 } from "./next-entry-paths";
+import { routedFormsFor } from "./next-forms";
 import { checkedLayoutsProvider } from "./next-layouts";
 import {
   MEDIA_TAG_COLLECTION,
@@ -662,6 +663,15 @@ export function blocksRouteConfig(
       // `isWorkingDraft` is surfaced, not acted on: the renderer draws the
       // pending content either way, and a host that wants to say so on the page
       // has to be told which one it got.
+      // Where the page's forms post, and the forms a provider describes,
+      // from the page builder: with none, the page's forms are left unsent.
+      const forms = await routedFormsFor({
+        entry,
+        field,
+        route: context,
+        language: linkLanguageOf(config.locale, context.locale),
+        revalidate: await releaseBoundedRevalidate(listWindow),
+      });
       const pageContext: PageContext = createStandaloneContext({
         entry,
         // So a list of the entry's related entries reads the relation as the
@@ -699,6 +709,7 @@ export function blocksRouteConfig(
           context,
         }),
         // The page of its list this address draws, and where the others are.
+        forms: forms?.page,
       });
 
       const configuredSiteStyles = await configuredSiteStylesFor(
@@ -846,6 +857,7 @@ export function blocksRouteConfig(
             shared,
             siteStyles,
             definitions: regionDefinitions,
+            formsFor: forms?.region,
           })
         ),
         context.structuredData

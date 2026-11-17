@@ -229,3 +229,77 @@ describe("the published node", () => {
     ).toBeNull();
   });
 });
+
+describe("a form inside a component placed on a page", () => {
+  it("is found under the id the page draws it with", async () => {
+    const { COMPONENT_INSTANCE_TYPE } = await import("@nextlyhq/blocks-engine");
+    const { coreBlocks } = await import("@nextlyhq/blocks-react/blocks");
+    const { createBlockResolver, prepareDocumentForRead } = await import(
+      "@nextlyhq/blocks-react"
+    );
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [form("contact-form")],
+    };
+    const host = page([
+      {
+        id: "placed",
+        type: COMPONENT_INSTANCE_TYPE,
+        version: 1,
+        props: { componentId: "c1" },
+      },
+    ]);
+    // The id the published page draws the form under, from the renderer's
+    // own pipeline with the same definitions.
+    const drawn = prepareDocumentForRead(host as never, {
+      resolver: createBlockResolver(coreBlocks as never),
+      definitions: new Map([["c1", definition as never]]),
+    });
+    const drawnForm = drawn?.nodes.find(node => node.type === "core/form");
+    // Must-be-found: the page really draws the form, under an id of its own.
+    expect(drawnForm?.id).toBeDefined();
+    expect(drawnForm?.id).not.toBe("contact-form");
+
+    const { api } = directApi({
+      pages: [{ id: "p1", content: host }],
+      components: [{ id: "c1", content: definition }],
+    });
+    const found = await publishedNode(
+      api,
+      STORES,
+      { kind: "page", id: "p1" },
+      drawnForm?.id ?? "",
+      undefined
+    );
+    expect(found?.type).toBe("core/form");
+  });
+
+  it("is not found where the component is not published", async () => {
+    const { COMPONENT_INSTANCE_TYPE } = await import("@nextlyhq/blocks-engine");
+    const { api } = directApi({
+      pages: [
+        {
+          id: "p1",
+          content: page([
+            {
+              id: "placed",
+              type: COMPONENT_INSTANCE_TYPE,
+              version: 1,
+              props: { componentId: "c-draft" },
+            },
+          ]),
+        },
+      ],
+    });
+    expect(
+      await publishedNode(
+        api,
+        STORES,
+        { kind: "page", id: "p1" },
+        "cx-anything",
+        undefined
+      )
+    ).toBeNull();
+  });
+});

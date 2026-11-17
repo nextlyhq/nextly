@@ -252,6 +252,20 @@ export interface ContentServices extends BindingServices {
    * picker offers no Recent row.
    */
   readonly recentIcons?: PreferenceStore;
+  /**
+   * A form a Form block picked from a provider, read with the signed-in
+   * author's own access, for what its own "After sending" setting is.
+   * Absent, or answering `undefined`, the panel names the choice without
+   * saying what it is.
+   *
+   * @experimental Settles with the form provider contract.
+   */
+  readonly describeForm?: (form: {
+    readonly provider: string;
+    readonly ref: string;
+  }) => Promise<
+    { readonly afterSending: { readonly kind: "message" | "page" } } | undefined
+  >;
 }
 
 /**

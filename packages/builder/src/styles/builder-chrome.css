@@ -42,6 +42,7 @@
  * - preview: content a visitor cannot read, the preview strip and picker.
  * - read-panel: the read meter and the read panel.
  * - bindings: data bindings, the image fallback and the media library picker.
+ * - form-fields: a Form's Fields and After sending.
  *
  * Tests that read the stylesheet's rules read it through
  * `chrome-stylesheet.ts` beside this file, which follows these imports in
@@ -91,3 +92,5 @@
 @import "./read-panel.css";
 
 @import "./bindings.css";
+
+@import "./form-fields.css";
