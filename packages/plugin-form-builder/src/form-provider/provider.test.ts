@@ -52,6 +52,7 @@ function provider(
   options: Parameters<typeof formBuilder>[0] = {}
 ) {
   const reads: { where?: unknown; access: unknown }[] = [];
+  const count = vi.fn(async () => 0);
   const context = {
     self: {
       name: "@nextlyhq/plugin-form-builder",
@@ -87,13 +88,14 @@ function provider(
           }
         ),
       },
-      ownCollections: { count: vi.fn(async () => 0) },
+      ownCollections: { count },
     },
   };
   const { config } = formBuilder(options);
   return {
     forms: formsProvider({ config, context: () => context as never }),
     reads,
+    counted: () => count.mock.calls.length,
   };
 }
 
@@ -150,6 +152,20 @@ describe("the forms plugin as a provider", () => {
     });
     expect(listed).toHaveLength(450);
     expect(listed.at(-1)?.ref).toBe("f449");
+  });
+
+  it("lists forms with a submission limit without counting each one", async () => {
+    const limited = Array.from({ length: 30 }, (_, index) => ({
+      id: `f${index}`,
+      name: `Form ${index}`,
+      slug: `form-${index}`,
+      status: "published",
+      settings: { submissionLimit: 5 },
+    }));
+    const { forms, counted } = provider(limited);
+    await forms.list({ as: "user", user: { id: "u1" } as never });
+    // One read per form is the N+1 the listing must not make.
+    expect(counted()).toBe(0);
   });
 
   it("reads a form in the language asked, as the services take it", async () => {

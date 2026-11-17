@@ -234,13 +234,20 @@ function describedFields(
 }
 
 /** The listing's state of a form: draft, published, or closed now. */
-async function stateOf(
-  parts: FormsProviderParts,
-  row: FormRow
-): Promise<FormListing["state"]> {
+/**
+ * The listing's state of a form: draft, published, or closed by its status
+ * or its closing time. Read from the row alone, so the picker makes one
+ * read however many forms it lists: a form full by its submission limit is
+ * listed as published, and its page, which counts, shows it closed.
+ */
+function stateOf(row: FormRow): FormListing["state"] {
   if (row.status === "draft") return "draft";
   if (row.status === "closed") return "closed";
-  const availability = await availabilityOf(parts, row);
+  const availability = formAvailabilityNow(
+    row,
+    { closesAt: normalizeFormSettings(row.settings).closesAt },
+    { now: new Date() }
+  );
   return availability.kind === "closed" ? "closed" : "published";
 }
 
@@ -364,17 +371,15 @@ export function formsProvider(parts: FormsProviderParts): FormProvider {
     async list(access) {
       const rows = await everyForm(parts, access);
       const forms = slugsOf(parts).forms;
-      return await Promise.all(
-        rows.map(async row => {
-          const id = String(row.id);
-          return {
-            ref: id,
-            title: textOf(row.name) ?? textOf(row.slug) ?? id,
-            state: await stateOf(parts, row),
-            editHref: `/admin/collections/${encodeURIComponent(forms)}/${encodeURIComponent(id)}`,
-          };
-        })
-      );
+      return rows.map(row => {
+        const id = String(row.id);
+        return {
+          ref: id,
+          title: textOf(row.name) ?? textOf(row.slug) ?? id,
+          state: stateOf(row),
+          editHref: `/admin/collections/${encodeURIComponent(forms)}/${encodeURIComponent(id)}`,
+        };
+      });
     },
     describe,
     async accept(ref, post): Promise<FormAcceptResult> {
