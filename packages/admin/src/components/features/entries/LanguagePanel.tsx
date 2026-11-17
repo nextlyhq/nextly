@@ -303,6 +303,7 @@ function LanguageRows({
   actionsDisabled,
   navigationDisabled,
   onSelect,
+  reviewStages,
 }: {
   shown: readonly { code: string; label: string; rtl: boolean }[];
   filter: string;
@@ -325,6 +326,8 @@ function LanguageRows({
   onSelect:
     | ((code: string, options?: { seedFrom?: string }) => void)
     | undefined;
+  /** Each language's workflow stage, by code; undefined where none holds it. */
+  reviewStages: Readonly<Record<string, string>> | undefined;
 }) {
   if (shown.length === 0) {
     // Said rather than shown as an empty list. A list with no rows under a
@@ -365,6 +368,7 @@ function LanguageRows({
           }}
           actionsDisabled={actionsDisabled}
           navigationDisabled={navigationDisabled}
+          reviewStage={reviewStages?.[locale.code]}
         />
       ))}
     </ul>
@@ -557,6 +561,7 @@ function LanguageRow({
   onSeed,
   actionsDisabled,
   navigationDisabled,
+  reviewStage,
 }: {
   code: string;
   label: string;
@@ -574,6 +579,8 @@ function LanguageRow({
   onSeed?: () => void;
   actionsDisabled: boolean;
   navigationDisabled: boolean;
+  /** The language's stage in the workflow holding publishing, where one does. */
+  reviewStage: string | undefined;
 }) {
   return (
     <li className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-2 border-b border-border last:border-b-0">
@@ -612,6 +619,16 @@ function LanguageRow({
             title={languageStateLabel(state, { pendingChange, stale })}
           >
             {LANGUAGE_STATE_LABEL[state]}
+          </span>
+        )}
+        {/* Beside the state rather than in place of it: the status says what
+            readers see, the stage what the language waits for. */}
+        {reviewStage === undefined ? null : (
+          <span
+            className="whitespace-nowrap text-xs text-muted-foreground"
+            data-review-stage={reviewStage}
+          >
+            · {reviewStage}
           </span>
         )}
       </div>
@@ -783,6 +800,7 @@ export function LanguagePanel({
   publishAllDisabled = actionsDisabled,
   navigationDisabled = actionsDisabled,
   sharedChangesPending,
+  reviewStages,
   className,
 }: LanguagePanelProps): JSX.Element | null {
   const [confirmPublishAll, setConfirmPublishAll] = useState(false);
@@ -855,6 +873,7 @@ export function LanguagePanel({
         actionsDisabled={actionsDisabled}
         navigationDisabled={navigationDisabled}
         onSelect={onSelect}
+        reviewStages={reviewStages}
       />
       <StateLegend />
     </div>

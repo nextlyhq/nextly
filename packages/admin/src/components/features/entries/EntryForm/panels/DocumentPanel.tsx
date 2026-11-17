@@ -24,6 +24,8 @@ import type { ReleaseDocumentRef } from "@admin/types/releases";
 
 import { useEntryLocale } from "../../EntryLocaleContext";
 import { DocumentLanguagePanel, hasLanguages } from "../../LanguagePanel";
+import { ReviewSection } from "../../review/ReviewSection";
+import { useLanguageReviewStages } from "../../review/useLanguageReviewStages";
 import { DocumentIdCopy } from "../DocumentIdCopy";
 import type { EntryData, EntryFormMode } from "../useEntryForm";
 
@@ -119,6 +121,11 @@ export function DocumentPanel({
   panelOrder = BUILT_IN_ORDER,
   placedSectionProps = pluginSectionProps,
 }: DocumentPanelProps): React.ReactElement | null {
+  // Each language's workflow stage, read before the panel decides whether it
+  // draws anything, as every hook here must be.
+  const reviewStages = useLanguageReviewStages(
+    mode === "create" ? undefined : releaseDocument
+  );
   // Nothing to say until the document exists.
   if (mode === "create") return null;
 
@@ -136,8 +143,18 @@ export function DocumentPanel({
   const builtIn = (name: string): React.ReactNode => {
     switch (name) {
       case "status":
+        // The Review section follows the status it qualifies, and draws
+        // nothing where no workflow is attached.
         return hasStatus && documentStatus ? (
-          <StatusSection documentStatus={documentStatus} />
+          <>
+            <StatusSection documentStatus={documentStatus} />
+            {releaseDocument === undefined ? null : (
+              <ReviewSection
+                document={releaseDocument}
+                {...(locale === undefined ? {} : { locale })}
+              />
+            )}
+          </>
         ) : null;
       case "publishing":
         // A release publishes or unpublishes, so only a document with that
@@ -157,6 +174,7 @@ export function DocumentPanel({
               navigationDisabled={navigationDisabled}
               publishAllDisabled={publishAllDisabled}
               sharedChangesPending={sharedChangesPending}
+              {...(reviewStages === undefined ? {} : { reviewStages })}
             />
           </LanguageSection>
         );
