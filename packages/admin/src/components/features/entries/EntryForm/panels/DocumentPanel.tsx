@@ -188,47 +188,28 @@ export function DocumentPanel({
           </LanguageSection>
         );
       case "details":
-        return single ? (
-          <ForDevelopersSection apiAddress={apiAddress} id={entry?.id} />
-        ) : (
-          <DetailsSection
-            entry={entry}
-            apiAddress={apiAddress}
-            createdBy={details?.createdBy}
-            updatedBy={details?.updatedBy}
-            changedAt={details?.updatedAt}
-          />
+        return (
+          about.developers ?? (
+            <DetailsSection
+              entry={entry}
+              apiAddress={apiAddress}
+              createdBy={details?.createdBy}
+              updatedBy={details?.updatedBy}
+              changedAt={details?.updatedAt}
+            />
+          )
         );
       default:
         return null;
     }
   };
 
-  // A Single's last change, said after the last of its lifecycle and
-  // language sections, so every section a plugin adds comes after it.
-  const lastChanged = single ? (
-    <LastChangedSection
-      at={
-        details?.updatedAt ??
-        entry?.updatedAt ??
-        (entry?.updated_at as string | undefined) ??
-        undefined
-      }
-      by={details?.updatedBy}
-      onOpenHistory={single.onOpenHistory}
-    />
-  ) : null;
-  const lastChangedAfter = single ? lastAboutTheDocument(panelOrder) : -1;
+  // A Single's own sections, and where its last change goes.
+  const about = singleParts({ single, entry, apiAddress, details, panelOrder });
 
   return (
     <div className="flex flex-col" data-testid="document-panel-sections">
-      {single ? (
-        <WhatThisIsSection
-          label={single.label}
-          description={single.description}
-        />
-      ) : null}
-      {lastChangedAfter === -1 ? lastChanged : null}
+      {about.lead}
       {panelOrder.map((part, index) => (
         <Fragment
           key={
@@ -242,7 +223,7 @@ export function DocumentPanel({
           ) : placedSectionProps === undefined ? null : (
             <PlacedSection part={part} props={placedSectionProps} />
           )}
-          {index === lastChangedAfter ? lastChanged : null}
+          {about.after(index)}
         </Fragment>
       ))}
       {pluginSectionProps === undefined
@@ -274,6 +255,80 @@ export function DocumentPanel({
           ))}
     </div>
   );
+}
+
+/** A Single's own sections, or none of them for an entry's panel. */
+interface SingleParts {
+  /**
+   * Drawn before the placed sections: what this is, and Last changed where
+   * none of the sections about the document is placed.
+   */
+  lead: React.ReactNode;
+  /** Drawn straight after the placed section at `index`. */
+  after: (index: number) => React.ReactNode;
+  /** For developers, drawn in Details' place; null keeps Details. */
+  developers: React.ReactNode;
+}
+
+const NO_SINGLE: SingleParts = {
+  lead: null,
+  after: () => null,
+  developers: null,
+};
+
+/**
+ * When a Single was last changed: its last recorded change, else its row's
+ * own time.
+ */
+function changedAtOf(
+  details: DocumentPanelProps["details"],
+  entry: DocumentPanelProps["entry"]
+): string | undefined {
+  return (
+    details?.updatedAt ??
+    entry?.updatedAt ??
+    (entry?.updated_at as string | undefined) ??
+    undefined
+  );
+}
+
+/**
+ * What a Single's panel draws besides the shared sections: what this is,
+ * its last change after the last of its lifecycle and language sections (so
+ * every section a plugin adds comes after it), and "For developers" in
+ * Details' place.
+ */
+function singleParts({
+  single,
+  entry,
+  apiAddress,
+  details,
+  panelOrder,
+}: Pick<DocumentPanelProps, "single" | "entry" | "apiAddress" | "details"> & {
+  panelOrder: readonly PanelOrderEntry[];
+}): SingleParts {
+  if (!single) return NO_SINGLE;
+  const lastChanged = (
+    <LastChangedSection
+      at={changedAtOf(details, entry)}
+      by={details?.updatedBy}
+      onOpenHistory={single.onOpenHistory}
+    />
+  );
+  const lastChangedAfter = lastAboutTheDocument(panelOrder);
+  return {
+    lead: (
+      <>
+        <WhatThisIsSection
+          label={single.label}
+          description={single.description}
+        />
+        {lastChangedAfter === -1 ? lastChanged : null}
+      </>
+    ),
+    after: index => (index === lastChangedAfter ? lastChanged : null),
+    developers: <ForDevelopersSection apiAddress={apiAddress} id={entry?.id} />,
+  };
 }
 
 /** The built-in sections about the document itself, before any plugin's. */
