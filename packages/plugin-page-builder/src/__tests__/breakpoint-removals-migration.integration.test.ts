@@ -315,10 +315,15 @@ describe.each(getConfiguredTestDialects())(
             name: "upgrade-probe",
             value: "kept",
           });
-          // CONTROL: migrating the earlier release put no lock row in place.
+          // CONTROL: migrating a release before the lock's module put no
+          // lock row in place; one with it put one, where the dialect takes
+          // a row lock.
+          const seeded =
+            shipped > shippedBefore("_seed_composition_graph_lock") &&
+            dialect !== "sqlite";
           expect(
             await rowsOn(dialect, adapter).named(OPTIONS_TABLE, GRAPH_LOCK_ROW)
-          ).toEqual([]);
+          ).toHaveLength(seeded ? 1 : 0);
           // The row a start of the earlier release put in place, where it
           // takes a row lock.
           const started = startedLockRow === true && dialect !== "sqlite";
