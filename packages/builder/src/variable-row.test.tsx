@@ -149,6 +149,8 @@ describe("the ⋯ menu", () => {
     expect(items(await openMenu("Text"))).toEqual([
       "Rename",
       "Duplicate",
+      "Move up",
+      "Move down",
       "Add dark value",
       "Remove",
     ]);
@@ -159,6 +161,8 @@ describe("the ⋯ menu", () => {
     expect(items(await openMenu("Brand"))).toEqual([
       "Rename",
       "Duplicate",
+      "Move up",
+      "Move down",
       "Remove dark value",
       "Remove",
     ]);
@@ -175,6 +179,8 @@ describe("the ⋯ menu", () => {
     expect(items(menu)).toEqual([
       "Rename",
       "Duplicate",
+      "Move up",
+      "Move down",
       "Remove dark value",
       "Reset to built-in",
     ]);

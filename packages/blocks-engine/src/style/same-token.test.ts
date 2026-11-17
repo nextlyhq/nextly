@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import { sameSiteToken } from "./same-token";
+import type { SiteToken } from "./site-tokens";
 
 describe("a fluid size's two sizes", () => {
   const base = {
@@ -33,5 +34,20 @@ describe("a fluid size's two sizes", () => {
       )
     ).toBe(true);
     expect(sameSiteToken(base, { ...base })).toBe(true);
+  });
+});
+
+describe("a colour's group", () => {
+  const base: SiteToken = {
+    name: "color.brand",
+    kind: "color",
+    values: { light: "#123456" },
+  };
+
+  it("makes a token different, so moving a supplied colour to a group is saved", () => {
+    expect(sameSiteToken(base, { ...base, group: "Accents" })).toBe(false);
+    expect(
+      sameSiteToken({ ...base, group: "Brand" }, { ...base, group: "Brand" })
+    ).toBe(true);
   });
 });

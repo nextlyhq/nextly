@@ -139,6 +139,12 @@ export interface SiteToken {
    */
   fluid?: { readonly small: number; readonly large: number };
   /**
+   * The named group a colour is listed under in the Design panel ("Brand",
+   * "Text and surfaces"). Display-only, as `label` is: never emitted, and a
+   * group never changes the code name, so moving a colour moves no CSS.
+   */
+  group?: string;
+  /**
    * Fields found under THIS system's own extension key that this build does not
    * read, kept so it can write them back out.
    *
@@ -182,6 +188,13 @@ export interface SiteTokenSet {
    * remakes those values.
    */
   fluidRange?: { readonly min: number; readonly max: number };
+  /**
+   * The site's colours in the order its authors put them, by identity.
+   * Colours it does not name follow in the set's own order, so a site that
+   * never reorders stores nothing. Display-only: the Design panel and every
+   * colour picker list colours in this order, and nothing is emitted from it.
+   */
+  order?: readonly string[];
 }
 
 /**
@@ -667,6 +680,25 @@ function typeInstead(kind: TokenKind): string {
  * be a design system would be a set most sites delete.
  */
 /**
+ * A site's own token over the one it replaces, keeping the replaced token's
+ * group and label where the site's says neither: a built-in colour the site
+ * gave its own value to before colours had groups and these names is still
+ * listed where, and as, the built-in one is. Display only, as both are.
+ */
+function withDefaultWords(
+  token: SiteToken,
+  replaced: SiteToken | undefined
+): SiteToken {
+  const group = token.group ?? replaced?.group;
+  const label = token.label ?? replaced?.label;
+  return {
+    ...token,
+    ...(group === undefined ? {} : { group }),
+    ...(label === undefined ? {} : { label }),
+  };
+}
+
+/**
  * The token set a site actually renders with: the defaults, with a site's own
  * definitions layered over them by NAME.
  *
@@ -715,7 +747,8 @@ export function resolveSiteTokens(override?: SiteTokenSet): SiteTokenSet {
   // imported DTCG file can carry one, and taking the first would apply a value
   // the author replaced.
   for (const token of override?.tokens ?? []) {
-    byIdentity.set(tokenIdentity(token), token);
+    const identity = tokenIdentity(token);
+    byIdentity.set(identity, withDefaultWords(token, byIdentity.get(identity)));
   }
   return {
     tokens: [...byIdentity.values()],
@@ -727,6 +760,8 @@ export function resolveSiteTokens(override?: SiteTokenSet): SiteTokenSet {
     ...(override?.fluidRange === undefined
       ? {}
       : { fluidRange: override.fluidRange }),
+    // Site-wide as well: the order the site's colours are listed in.
+    ...(override?.order === undefined ? {} : { order: override.order }),
   };
 }
 
@@ -738,20 +773,25 @@ export function defaultSiteTokens(): SiteToken[] {
       values: { light: "72rem" },
       description: "How wide a centred container may grow.",
     },
+    // The brand colour first: the Design panel lists the site's colours in
+    // this order, and "Brand" comes before "Text and surfaces".
+    {
+      name: "color.primary",
+      kind: "color",
+      group: "Brand",
+      values: { light: "#2563eb", dark: "#60a5fa" },
+    },
     {
       name: "color.text",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#111827", dark: "#f9fafb" },
     },
     {
       name: "color.background",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#ffffff", dark: "#0b0f19" },
-    },
-    {
-      name: "color.primary",
-      kind: "color",
-      values: { light: "#2563eb", dark: "#60a5fa" },
     },
     /**
      * A raised surface: a card, a panel, a table header. DISTINCT from
@@ -773,6 +813,7 @@ export function defaultSiteTokens(): SiteToken[] {
     {
       name: "color.surface",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#f9fafb", dark: "#151b2b" },
     },
     /**
@@ -794,6 +835,7 @@ export function defaultSiteTokens(): SiteToken[] {
     {
       name: "color.border",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#e5e7eb", dark: "#1f2937" },
     },
     /**
@@ -822,7 +864,10 @@ export function defaultSiteTokens(): SiteToken[] {
      */
     {
       name: "color.border-strong",
+      // Named as an author reads it; the code name stays as it was.
+      label: "Strong border",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#6b7280", dark: "#9ca3af" },
     },
     /**
@@ -835,7 +880,10 @@ export function defaultSiteTokens(): SiteToken[] {
      */
     {
       name: "color.muted",
+      // Named as an author reads it; the code name stays as it was.
+      label: "Muted text",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#6b7280", dark: "#9ca3af" },
     },
     { name: "font.body", kind: "fontFamily", values: { light: "system-ui" } },
