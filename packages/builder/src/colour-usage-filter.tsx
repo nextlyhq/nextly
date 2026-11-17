@@ -11,6 +11,7 @@
  *
  * @module colour-usage-filter
  */
+import type { SiteTokenSet } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import { keepsColour, type ColourFilter } from "./colour-usage";
@@ -37,11 +38,14 @@ interface Listed {
  */
 export function useColourFilter<G extends Listed>({
   shown,
+  tokens,
   usage,
   usedOnPage,
   openKey,
 }: {
   shown: readonly G[];
+  /** The site's variables, whose change can make a colour used or unused. */
+  tokens: SiteTokenSet | undefined;
   usage: VariableUsageHere | undefined;
   usedOnPage: ReadonlySet<string> | undefined;
   /** The row whose editor is open, listed whatever the filter. */
@@ -49,6 +53,11 @@ export function useColourFilter<G extends Listed>({
 }): { shown: readonly G[]; control: React.ReactNode } {
   const [filter, setFilter] = React.useState<ColourFilter>("all");
   const colours = shown.find(group => group.group === "colours");
+  useCountsAfterChange(
+    filter === "unused" ? usage : undefined,
+    tokens,
+    colours
+  );
   if (colours === undefined) return { shown, control: null };
   const stateOf = (entry: VariableEntry): UsageState =>
     usageState(usage?.reachOf(entry.row.identity));
@@ -76,6 +85,35 @@ export function useColourFilter<G extends Listed>({
       />
     ),
   };
+}
+
+/** How long after a change of the variables the counts are read again. */
+const RECOUNT_AFTER_MS = 800;
+
+/**
+ * Reads the colours' counts again a moment after the site's variables change,
+ * while Unused is chosen: an edit that names a colour through another
+ * variable, or stops naming it, changes whether it is used, and the counts
+ * say so once the change is saved.
+ */
+function useCountsAfterChange(
+  usage: VariableUsageHere | undefined,
+  tokens: SiteTokenSet | undefined,
+  colours: Listed | undefined
+): void {
+  const seen = React.useRef(tokens);
+  const latest = React.useRef({ usage, colours });
+  latest.current = { usage, colours };
+  React.useEffect(() => {
+    if (seen.current === tokens) return undefined;
+    seen.current = tokens;
+    const { usage: read, colours: listed } = latest.current;
+    if (read === undefined || listed === undefined) return undefined;
+    const timer = window.setTimeout(() => {
+      void read.readAgain(listed.entries.map(entry => entry.row.identity));
+    }, RECOUNT_AFTER_MS);
+    return () => window.clearTimeout(timer);
+  }, [tokens]);
 }
 
 /** The pills, a radio group the arrow keys move through, and its note. */

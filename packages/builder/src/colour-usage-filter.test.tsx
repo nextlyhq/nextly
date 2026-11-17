@@ -110,11 +110,15 @@ function access(complete = true): VariablesAccess {
 function Panel({
   usage,
   usedOnPage,
+  site = SITE,
 }: {
   usage: VariablesAccess;
   usedOnPage?: ReadonlySet<string>;
+  /** The site's variables as a host hands them, changed by a later render. */
+  site?: SiteTokenSet;
 }): React.JSX.Element {
-  const [tokens, setTokens] = React.useState(SITE);
+  const [tokens, setTokens] = React.useState(site);
+  React.useEffect(() => setTokens(site), [site]);
   return (
     <TokensPanel
       tokens={tokens}
@@ -190,6 +194,39 @@ describe("the Colours tab's usage filter", () => {
       await screen.findByRole("dialog", { name: "Edit New colour" })
     ).toBeDefined();
     expect(listed()).toContain("New colour");
+  });
+
+  it("reads the counts again once a colour changes, while Unused is chosen", async () => {
+    const counted = access();
+    let reads = 0;
+    const usage: VariablesAccess = {
+      ...counted,
+      usage: async (ids, signal) => {
+        reads += 1;
+        return counted.usage(ids, signal);
+      },
+    };
+    const view = render(<Panel usage={usage} />);
+    fireEvent.click(option("Unused"));
+    await waitFor(() => expect(listed()).toEqual(["Spare", "Button"]));
+    const before = reads;
+    // Spare now names Button through var(): the site has changed under it.
+    view.rerender(
+      <Panel
+        usage={usage}
+        site={{
+          ...SITE,
+          tokens: SITE.tokens.map(token =>
+            token.name === "color.spare"
+              ? { ...token, values: { light: "var(--site-color-button)" } }
+              : token
+          ),
+        }}
+      />
+    );
+    await waitFor(() => expect(reads).toBeGreaterThan(before), {
+      timeout: 3000,
+    });
   });
 
   it("moves between the choices with the arrow keys", () => {
