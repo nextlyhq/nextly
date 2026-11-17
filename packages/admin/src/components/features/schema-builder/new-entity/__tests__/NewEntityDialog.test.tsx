@@ -74,8 +74,8 @@ function renderDialog(
   return { onCreate, user: userEvent.setup() };
 }
 
-const nameInput = () => screen.getByLabelText("Name");
-const addressInput = () => screen.getByLabelText("API address");
+const nameInput = () => screen.getByRole("textbox", { name: "Name" });
+const addressInput = () => screen.getByRole("textbox", { name: "API address" });
 const createButton = () => screen.getByRole("button", { name: "Create" });
 
 beforeEach(() => {
@@ -146,14 +146,16 @@ describe("NewEntityDialog", () => {
   it("derives", async () => {
     const { user } = renderDialog();
     await user.type(nameInput(), "Blog post");
-    expect(screen.getByLabelText("Plural name")).toHaveValue("Blog posts");
+    expect(screen.getByRole("textbox", { name: "Plural name" })).toHaveValue(
+      "Blog posts"
+    );
     expect(addressInput()).toHaveValue("blog_post");
   });
 
   it("edited plural and address", async () => {
     const { user } = renderDialog();
     await user.type(nameInput(), "Person");
-    const plural = screen.getByLabelText("Plural name");
+    const plural = screen.getByRole("textbox", { name: "Plural name" });
     await user.clear(plural);
     await user.type(plural, "Folks");
     await user.clear(addressInput());
@@ -174,7 +176,7 @@ describe("NewEntityDialog", () => {
   it("empty plural", async () => {
     const { user } = renderDialog();
     await user.type(nameInput(), "Post");
-    await user.clear(screen.getByLabelText("Plural name"));
+    await user.clear(screen.getByRole("textbox", { name: "Plural name" }));
     expect(createButton()).toBeDisabled();
     expect(createButton()).toHaveAccessibleDescription("Add a plural name.");
   });
@@ -314,7 +316,7 @@ describe("NewEntityDialog", () => {
   it("a Single", async () => {
     const { user } = renderDialog(SINGLE_BUILDER_CONFIG);
     expect(screen.getByRole("heading", { name: "New Single" })).toBeVisible();
-    expect(screen.queryByLabelText("Plural name")).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Plural name" })).toBeNull();
     await user.type(nameInput(), "Home page");
     expect(addressInput()).toHaveValue("home-page");
     await waitFor(() =>
@@ -324,7 +326,7 @@ describe("NewEntityDialog", () => {
 
   it("a field group", async () => {
     const { user } = renderDialog(FIELD_GROUP_BUILDER_CONFIG);
-    expect(screen.queryByLabelText("Plural name")).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Plural name" })).toBeNull();
     const options = screen.getByRole("button", { name: /More options/ });
     expect(options).toHaveAccessibleName("More options, none on");
     await user.click(options);
@@ -493,10 +495,38 @@ describe("NewEntityDialog", () => {
     expect(onCreate).not.toHaveBeenCalled();
   });
 
-  it("says Name and Plural name are required", () => {
+  it("says Name, Plural name and API address are required", () => {
     renderDialog();
     expect(nameInput()).toBeRequired();
-    expect(screen.getByLabelText("Plural name")).toBeRequired();
+    expect(screen.getByRole("textbox", { name: "Plural name" })).toBeRequired();
+    // Create is held while the address is blank, so it is required too.
+    expect(addressInput()).toBeRequired();
+  });
+
+  // Each field Create waits for is marked where it is seen, not only to
+  // assistive technology: the asterisk sits in its label, hidden from the
+  // accessible name the role queries above match exactly.
+  it("marks each required field with an asterisk beside its label", () => {
+    renderDialog();
+    for (const input of [
+      nameInput(),
+      screen.getByRole("textbox", { name: "Plural name" }),
+      addressInput(),
+    ]) {
+      const mark = (input as HTMLInputElement).labels?.[0]?.querySelector(
+        '[aria-hidden="true"]'
+      );
+      expect(mark).toHaveTextContent("*");
+    }
+  });
+
+  it("marks no optional field as required", async () => {
+    const { user } = renderDialog();
+    await user.click(screen.getByRole("button", { name: /More options/ }));
+    const description =
+      screen.getByLabelText<HTMLTextAreaElement>("Description");
+    expect(description).not.toBeRequired();
+    expect(description.labels?.[0]?.textContent).toBe("Description");
   });
 
   it("scrolls within the viewport when its options are open", () => {

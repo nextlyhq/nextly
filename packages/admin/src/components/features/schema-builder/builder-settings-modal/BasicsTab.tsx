@@ -26,6 +26,7 @@ import type { BasicsField, BuilderKind } from "../builder-config";
 import type { BuilderSettingsValues } from "../BuilderSettingsModal";
 
 import { IconPicker } from "./IconPicker";
+import { RequiredMark } from "./RequiredMark";
 import { SlugInput } from "./SlugInput";
 
 type Props = {
@@ -111,6 +112,26 @@ export function BasicsTab({
     });
   };
 
+  // Built once for both layout branches below, like the slug and icon. Marked
+  // required: every kind's settings save refuses an empty name ("Name is
+  // required" in each builder page's schema). The plural is optional here —
+  // a blank one falls back to the derived form — and the slug cannot change
+  // once saved, so the name is the only field this tab requires.
+  const singularField = fields.includes("singularName") && (
+    <div className="space-y-1">
+      <Label htmlFor="singularName">
+        Singular name
+        <RequiredMark />
+      </Label>
+      <Input
+        id="singularName"
+        required
+        value={values.singularName}
+        onChange={e => setSingular(e.target.value)}
+      />
+    </div>
+  );
+
   const hasPlural = fields.includes("pluralName");
 
   return (
@@ -126,16 +147,7 @@ export function BasicsTab({
           fields.includes("slug") ||
           fields.includes("icon")) && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {fields.includes("singularName") && (
-              <div className="space-y-1">
-                <Label htmlFor="singularName">Singular name</Label>
-                <Input
-                  id="singularName"
-                  value={values.singularName}
-                  onChange={e => setSingular(e.target.value)}
-                />
-              </div>
-            )}
+            {singularField}
             {slugField}
             {iconField}
           </div>
@@ -147,16 +159,7 @@ export function BasicsTab({
           // 50/50 row per feedback Section 1. Collapses to stacked on
           // mobile.
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {fields.includes("singularName") && (
-              <div className="space-y-1">
-                <Label htmlFor="singularName">Singular name</Label>
-                <Input
-                  id="singularName"
-                  value={values.singularName}
-                  onChange={e => setSingular(e.target.value)}
-                />
-              </div>
-            )}
+            {singularField}
 
             {fields.includes("pluralName") && (
               <div className="space-y-1">

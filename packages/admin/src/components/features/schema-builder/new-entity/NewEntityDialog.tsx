@@ -47,6 +47,7 @@ import {
   ICON_PICKER_ICONS,
   IconPicker,
 } from "../builder-settings-modal/IconPicker";
+import { RequiredMark } from "../builder-settings-modal/RequiredMark";
 import {
   createDefaults,
   normalizedSettings,
@@ -211,7 +212,10 @@ export function NewEntityDialog({
 
           {hasPlural && (
             <div className="space-y-1">
-              <Label htmlFor={`${ids}-plural`}>Plural name</Label>
+              <Label htmlFor={`${ids}-plural`}>
+                Plural name
+                <RequiredMark />
+              </Label>
               <Input
                 id={`${ids}-plural`}
                 required
@@ -296,7 +300,10 @@ function NameRow({
         </div>
       )}
       <div className="min-w-0 flex-1 space-y-1">
-        <Label htmlFor={`${ids}-name`}>Name</Label>
+        <Label htmlFor={`${ids}-name`}>
+          Name
+          <RequiredMark />
+        </Label>
         <Input
           id={`${ids}-name`}
           required
@@ -322,9 +329,15 @@ function AddressField({
 }): JSX.Element {
   return (
     <div className="space-y-1">
-      <Label htmlFor={`${ids}-address`}>API address</Label>
+      <Label htmlFor={`${ids}-address`}>
+        API address
+        <RequiredMark />
+      </Label>
+      {/* Required like the names: Create is held while it is blank
+          (`createBlockedBy`), even though the name normally fills it. */}
       <Input
         id={`${ids}-address`}
+        required
         className="font-mono"
         value={value}
         aria-invalid={note.refused}

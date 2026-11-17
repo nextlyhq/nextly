@@ -47,6 +47,26 @@ describe("BasicsTab", () => {
     expect(screen.queryByLabelText(/description/i)).not.toBeInTheDocument();
   });
 
+  // A settings save refuses an empty name for every kind, so the name is marked
+  // required where it is seen; the plural falls back to the derived form and
+  // stays unmarked.
+  it("marks the singular name required, and the plural name not", () => {
+    render(<Controlled fields={["singularName", "pluralName", "slug"]} />);
+    const singular = screen.getByRole<HTMLInputElement>("textbox", {
+      name: "Singular name",
+    });
+    expect(singular).toBeRequired();
+    expect(
+      singular.labels?.[0]?.querySelector('[aria-hidden="true"]')
+    ).toHaveTextContent("*");
+
+    const plural = screen.getByRole<HTMLInputElement>("textbox", {
+      name: "Plural name",
+    });
+    expect(plural).not.toBeRequired();
+    expect(plural.labels?.[0]?.textContent).toBe("Plural name");
+  });
+
   it("renders the plural name input when configured (Collections)", () => {
     render(
       <Controlled fields={["singularName", "pluralName", "slug", "icon"]} />

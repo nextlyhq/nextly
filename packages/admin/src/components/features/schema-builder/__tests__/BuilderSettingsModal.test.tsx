@@ -459,7 +459,7 @@ describe("BuilderSettingsModal — the address", () => {
         onSubmit={onSubmit}
       />
     );
-    const name = screen.getByLabelText("Singular name");
+    const name = screen.getByRole("textbox", { name: "Singular name" });
     await user.clear(name);
     await user.type(name, "Article");
     expect(screen.getByLabelText("Slug")).toHaveValue("post");
@@ -578,7 +578,7 @@ describe("BuilderSettingsModal — its changes, pending", () => {
         onSubmit={next => editor.result.current.setSettings(next)}
       />
     );
-    const name = screen.getByLabelText("Singular name");
+    const name = screen.getByRole("textbox", { name: "Singular name" });
     await user.clear(name);
     await user.type(name, "Article");
     await user.click(screen.getByRole("tab", { name: "Advanced" }));
