@@ -43,9 +43,9 @@
  */
 
 import {
+  COMPONENT_INSTANCE_TYPE,
   componentLayersLocks,
-  type BlockDocument,
-  type ComponentLayersLock,
+  type BlockNode,
 } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import {
@@ -261,30 +261,34 @@ const HELD_REASON = "The area it sits in fixes this.";
 const COMPONENT_HELD_REASON = "Set by its component.";
 
 /**
- * The blocks a placed component locks in Layers, per composed page. Kept by
- * the composed document's identity, so selecting another block in the same
- * page walks nothing again.
+ * Whether the block sits inside a component the page places: in the slot the
+ * placement exposes, which the page fills. Only there can a component's own
+ * lock hold one of the page's blocks.
  */
-const componentLocksByPage = new WeakMap<
-  BlockDocument,
-  ReadonlyMap<string, ComponentLayersLock>
->();
+function insidePlacement(nodes: readonly BlockNode[], id: string): boolean {
+  const search = (list: readonly BlockNode[], placed: boolean): boolean => {
+    for (const node of list) {
+      const within = placed || node.type === COMPONENT_INSTANCE_TYPE;
+      if (node.id === id) return placed;
+      for (const children of Object.values(node.slots ?? {})) {
+        if (search(children, within)) return true;
+      }
+    }
+    return false;
+  };
+  return search(nodes, false);
+}
 
 /**
  * Whether a component the page places locks the block in Layers. Only the
  * composed page shows it: the lock is in the component's own nodes, which a
- * page reaches through its placement. A page that places none composes
- * nothing, so this asks nothing there.
+ * page reaches through its placement. Composed only for a block inside a
+ * placement, so selecting any other block composes nothing.
  */
 function lockedByComponent(editor: EditorState, id: string): boolean {
+  if (!insidePlacement(editor.document.nodes, id)) return false;
   const composed = editor.composed();
-  if (composed === undefined) return false;
-  let locks = componentLocksByPage.get(composed);
-  if (locks === undefined) {
-    locks = componentLayersLocks(composed.nodes);
-    componentLocksByPage.set(composed, locks);
-  }
-  return locks.has(id);
+  return composed !== undefined && componentLayersLocks(composed.nodes).has(id);
 }
 
 function barLockOf(

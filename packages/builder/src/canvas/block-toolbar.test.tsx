@@ -18,7 +18,10 @@
  *
  * @module block-toolbar.test
  */
-import type { NestingSource } from "@nextlyhq/blocks-engine";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  type NestingSource,
+} from "@nextlyhq/blocks-engine";
 import {
   cleanup,
   fireEvent,
@@ -590,14 +593,34 @@ describe("BlockToolbar", () => {
    */
   function lockedByItsComponent(lockedOnPage: boolean) {
     register();
-    const page = pair(lockedOnPage ? { locked: true } : {});
+    const [own, after] = pair(lockedOnPage ? { locked: true } : {}).nodes as [
+      BlockNode,
+      BlockNode,
+    ];
+    // On the page, the block fills the slot the placement exposes.
+    const page = documentOf([
+      {
+        id: "placement",
+        type: COMPONENT_INSTANCE_TYPE,
+        version: 1,
+        props: { componentId: "promo-card" },
+        slots: { content: [own] },
+      } as BlockNode,
+      after,
+    ]);
+    // Composed, it sits in the component's own node, which the component
+    // locks in Layers.
     const composed = documentOf([
       {
-        ...(page.nodes[0] as BlockNode),
+        id: "promo-root",
+        type: "acme/leaf",
+        version: 1,
+        props: {},
         instanceOf: "placement",
         locked: true,
+        slots: { content: [own] },
       } as BlockNode,
-      page.nodes[1] as BlockNode,
+      after,
     ]);
     const componentLock = {
       code: "layers-locked",
@@ -639,6 +662,16 @@ describe("BlockToolbar", () => {
       expect(editor.apply).not.toHaveBeenCalled();
     }
   );
+
+  it("composes nothing to select a block outside any placed component", () => {
+    // Selection stays free of the composition: only a block inside a
+    // placement can be held by its component's lock.
+    register();
+    const composed = vi.fn(() => undefined);
+    mount(Object.assign(editorSpy(pair(), "a"), { composed }));
+
+    expect(composed).not.toHaveBeenCalled();
+  });
 
   it("says Locked by the block around it, with Select it and no Unlock", () => {
     register();
