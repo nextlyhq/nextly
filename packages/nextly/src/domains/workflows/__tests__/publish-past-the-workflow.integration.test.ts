@@ -838,6 +838,88 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("a caller who may not publish", () => {
+      /** A person who may read and edit Posts but not publish them. */
+      async function editorWhoMayNotPublish(): Promise<Record<string, string>> {
+        await person(app(), "edna", [
+          ["read", POSTS],
+          ["update", POSTS],
+          ["create", POSTS],
+        ]);
+        return sessionOf("edna");
+      }
+
+      /** A Post whose Spanish part is under review. */
+      async function spanishUnderReview(): Promise<string> {
+        const id = await draftOf(POSTS, { title: "Hello", code: "C-1" });
+        await save(POSTS, id, { title: "Hola" }, "es");
+        await take(POSTS, id, "es", "submit", { kind: "system" });
+        return id;
+      }
+
+      const publishSpanish = (id: string, session: Record<string, string>) =>
+        rest(
+          "POST",
+          ["collections", POSTS, "entries", id, "publish"],
+          session,
+          {
+            locales: ["es"],
+            _overwrite: true,
+          }
+        );
+
+      it("is told only that it may not publish, never the workflow's state", async () => {
+        await boot(dialect);
+        const session = await editorWhoMayNotPublish();
+        const id = await spanishUnderReview();
+
+        const answer = await publishSpanish(id, session);
+
+        const body = JSON.stringify(answer.json);
+        expect(answer.status, body).toBeGreaterThanOrEqual(400);
+        expect(body).toContain("FORBIDDEN");
+        expect(body).not.toContain("NOT_APPROVED");
+        expect(body).not.toContain("Review");
+        expect(body).not.toMatch(/approv/i);
+        expect(await visitorRead(POSTS, id, "es")).toBeNull();
+      });
+
+      it("is told only that when a save also names a status", async () => {
+        await boot(dialect);
+        const session = await editorWhoMayNotPublish();
+        const id = await spanishUnderReview();
+
+        const answer = await rest(
+          "PATCH",
+          ["collections", POSTS, "entries", id],
+          session,
+          { title: "Hola 2", status: "published", _overwrite: true },
+          "?locale=es"
+        );
+
+        const body = JSON.stringify(answer.json);
+        expect(answer.status, body).toBeGreaterThanOrEqual(400);
+        expect(body).not.toContain("NOT_APPROVED");
+        expect(body).not.toContain("Review");
+        expect(body).not.toMatch(/approv/i);
+        expect(await visitorRead(POSTS, id, "es")).toBeNull();
+      });
+
+      it("leaves a caller who may publish told why the workflow holds it, which is the control", async () => {
+        await boot(dialect);
+        const session = await publisher();
+        const id = await spanishUnderReview();
+
+        const answer = await publishSpanish(id, session);
+
+        const body = JSON.stringify(answer.json);
+        expect(answer.status, body).toBe(400);
+        expect(body).toContain("NOT_APPROVED");
+        expect(body).toContain("Review");
+        expect(await visitorRead(POSTS, id, "es")).toBeNull();
+      });
+    });
+
     describe("creating as published", () => {
       it("is refused through REST, where nothing could have been approved", async () => {
         await boot(dialect);
