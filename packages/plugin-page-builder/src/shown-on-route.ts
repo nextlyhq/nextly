@@ -43,13 +43,13 @@ import type {
   StoredUse,
 } from "./bindings-report/uses-store";
 import { parseRouteQuery } from "./route-query";
-import type { DraftDocument } from "./shown-on-drafts";
 import {
   SHOWN_ON_FIRST,
   SHOWN_ON_ROUTE_PATH,
   type ShownOnAnswer,
   type ShownOnPlace,
 } from "./shown-on-contract";
+import type { DraftDocument } from "./shown-on-drafts";
 
 /**
  * How many uses one answer reads at most: far more than any Single is bound
