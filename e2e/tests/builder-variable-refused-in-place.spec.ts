@@ -65,10 +65,7 @@ async function addSpacing(page: Page) {
     .getByRole("region", { name: "Design panel" })
     .getByRole("tab", { name: /^Spacing/ })
     .click();
-  await page
-    .getByRole("button", { name: "Add spacing, radius or shadow" })
-    .click();
-  await page.getByRole("menuitem", { name: "Spacing" }).click();
+  await page.getByRole("button", { name: "Add spacing" }).click();
   const editor = page.getByRole("dialog", { name: /^Edit New spacing/ });
   await expect(editor).toBeVisible();
   return editor;
