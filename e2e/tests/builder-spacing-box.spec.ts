@@ -299,7 +299,11 @@ test("at the narrowest panel a long value or variable ends in an ellipsis, whole
       ellipsis: getComputedStyle(element).textOverflow === "ellipsis",
     }));
     expect(cut.ellipsis).toBe(true);
-    await expect(sideField(box, side)).toHaveAccessibleName(`${side} ${whole}`);
+    // The side's name, then the whole value (the dot's words, such as "Set
+    // here", may come between).
+    await expect(sideField(box, side)).toHaveAccessibleName(
+      new RegExp(`^${side} .*${whole.replace(/[()]/g, "\\$&")}$`)
+    );
     if (cut.overflows) {
       await sideField(box, side).hover();
       await expect(page.getByRole("tooltip")).toHaveText(whole);
