@@ -89,6 +89,7 @@ import {
   type EditedAddress,
 } from "./style-field-surroundings";
 import {
+  fieldStyles,
   sharedStyleNamer,
   targetProvenance,
   targetReadOnly,
@@ -794,13 +795,10 @@ function sharesItsId(editor: EditorState, id: string): boolean {
 }
 
 /**
- * The edited target's own styles at every state and device: a shared
- * style's while one is the target, the selected block's otherwise.
+ * The edited target's own styles at every state and device, as the controls
+ * read them: a shared style's while one is the target, the block's otherwise.
  */
 function editedStyles(target: StyleTarget, editor: EditorState): unknown {
-  const shared = targetStyles(target);
-  if (shared !== undefined) return shared;
-  return editor.selectedId === null
-    ? undefined
-    : findNode(editor.document.nodes, editor.selectedId)?.styles;
+  if (editor.selectedId === null) return undefined;
+  return fieldStyles(target, editor, editor.selectedId).styles;
 }
