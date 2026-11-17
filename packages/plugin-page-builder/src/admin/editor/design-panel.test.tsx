@@ -8,7 +8,13 @@
  * open tab's content is mounted — each tab reads the site's style, and a
  * hidden one has no reason to.
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as React from "react";
@@ -456,6 +462,82 @@ describe("Manage fonts… from a Font control in Design", () => {
     expect(screen.queryByText("font rows")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Manage fonts…" }));
     expect(choose).toHaveBeenCalledWith("type");
+    expect(screen.getByText("font rows")).toBeTruthy();
+  });
+
+  /** The Type tab with the Fonts group and a Font control's way to it. */
+  function renderFonts(): { choose: ReturnType<typeof vi.fn> } {
+    const choose = vi.fn();
+    render(
+      <DesignPanel
+        view={{ current: "type", choose }}
+        frame={designTabs => (
+          <DesignFonts
+            faces={[]}
+            fromCode={[]}
+            onManageFonts={() => choose("type")}
+          >
+            {designTabs}
+          </DesignFonts>
+        )}
+        tabs={{
+          colours: () => null,
+          type: () => (
+            <>
+              <DesignGroup id={SITE_FONTS_GROUP} heading="Fonts" count={1}>
+                <p>font rows</p>
+              </DesignGroup>
+              <ManageFonts />
+            </>
+          ),
+          spacing: () => null,
+          styles: () => null,
+        }}
+      />
+    );
+    return { choose };
+  }
+
+  it("brings the Fonts group into view", async () => {
+    const scrolled: Element[] = [];
+    // jsdom draws nothing, so it has no scrollIntoView to spy on.
+    if (!("scrollIntoView" in window.Element.prototype)) {
+      Object.defineProperty(window.Element.prototype, "scrollIntoView", {
+        configurable: true,
+        writable: true,
+        value: () => undefined,
+      });
+    }
+    const scroll = vi
+      .spyOn(window.Element.prototype, "scrollIntoView")
+      .mockImplementation(function (this: Element) {
+        scrolled.push(this);
+      });
+    try {
+      renderFonts();
+      fireEvent.click(screen.getByRole("button", { name: "Manage fonts…" }));
+      // Once the opened group is drawn.
+      await waitFor(() =>
+        expect(
+          scrolled.some(
+            element =>
+              element instanceof HTMLElement &&
+              element.dataset.group === SITE_FONTS_GROUP
+          )
+        ).toBe(true)
+      );
+    } finally {
+      scroll.mockRestore();
+    }
+  });
+
+  it("puts a Design search away, which would hide the Fonts group", () => {
+    renderFonts();
+    const search = screen.getByRole("searchbox", { name: "Search Design" });
+    fireEvent.change(search, { target: { value: "heading" } });
+    expect(screen.queryByText("font rows")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Manage fonts…" }));
+    expect((search as HTMLInputElement).value).toBe("");
     expect(screen.getByText("font rows")).toBeTruthy();
   });
 });

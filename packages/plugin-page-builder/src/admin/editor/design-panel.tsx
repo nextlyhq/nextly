@@ -366,6 +366,8 @@ export function DesignGroup({
       className="nx-vars__group nx-pb-design__group"
       aria-labelledby={headingId}
       data-folded={folded ? "" : undefined}
+      // The group's name where a reveal finds it, as a Variables group has.
+      data-group={id}
     >
       <div className="nx-vars__group-head">
         <h3 className="nx-vars__group-name" id={headingId}>
@@ -392,7 +394,8 @@ export const SITE_FONTS_GROUP = "site-fonts";
  * panel is given them: the faces the canvas loads, those the site's code
  * supplies, and the way to the site's fonts. In Design that way is its Type
  * tab with the site's Fonts group opened and brought into view, since an
- * author may already be on the tab, with the group folded or scrolled away.
+ * author may already be on the tab, with the group folded or scrolled away,
+ * and with any search put away, since a search hides the group.
  */
 export function DesignFonts({
   faces,
@@ -400,17 +403,18 @@ export function DesignFonts({
   onManageFonts,
   children,
 }: FontChoices & { children: React.ReactNode }): React.JSX.Element {
-  const { reveal } = useDesignBrowse();
+  const { reveal, setSearch } = useDesignBrowse();
   const fonts = React.useMemo<FontChoices>(
     () => ({
       faces,
       fromCode,
       onManageFonts: () => {
+        setSearch("");
         onManageFonts?.();
         reveal(SITE_FONTS_GROUP);
       },
     }),
-    [faces, fromCode, onManageFonts, reveal]
+    [faces, fromCode, onManageFonts, reveal, setSearch]
   );
   return (
     <FontChoicesContext.Provider value={fonts}>

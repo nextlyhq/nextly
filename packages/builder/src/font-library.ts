@@ -447,11 +447,13 @@ export const NAMED_WEIGHTS: readonly number[] = Object.keys(WEIGHT_NAMES)
 
 /**
  * The named weights some face draws: each face's own weight, and every named
- * weight inside a variable face's range.
+ * weight inside a variable face's range. Only the faces the stylesheet emits
+ * count, the ones the Font picker lists, so a face kept only so its issue can
+ * be said draws no weight.
  */
 export function weightsDrawn(faces: readonly FontFaceDef[]): Set<number> {
   const drawn = new Set<number>();
-  for (const face of faces) {
+  for (const face of emittableFaces(faces)) {
     const [low, high = low] = weightNumbers(face.weight);
     if (low === undefined) continue;
     for (const weight of NAMED_WEIGHTS) {

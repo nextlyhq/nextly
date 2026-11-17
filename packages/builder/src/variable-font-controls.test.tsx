@@ -174,6 +174,23 @@ describe("a weight variable", () => {
     );
   });
 
+  it("counts no weight from a face the site's stylesheet would not load", async () => {
+    // Kept in the stored fonts so its issue can be said, never emitted.
+    const broken: FontFaceDef = { family: "Inter", src: [], weight: "500" };
+    render(
+      <Hosted
+        tokens={SITE}
+        fonts={{ faces: [...INTER, broken], fromCode: [] }}
+      />
+    );
+    const editor = await openEditor(/^Strong/);
+    fireEvent.click(within(editor).getByLabelText("Light"));
+    expect(
+      screen.getByRole("option", { name: /^Medium 500/, hidden: true })
+        .textContent
+    ).toBe("Medium 500No font on this site has this weight");
+  });
+
   it("stores the weight chosen as its number", async () => {
     const onChange = vi.fn();
     render(
