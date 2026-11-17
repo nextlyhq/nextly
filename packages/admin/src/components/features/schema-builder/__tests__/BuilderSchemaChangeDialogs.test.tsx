@@ -7,6 +7,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
+import type { SettingChange } from "@admin/lib/builder/settings-changes";
 import type { SchemaPreviewResponse } from "@admin/services/schemaApi";
 
 import { BuilderSchemaChangeDialogs } from "../BuilderSchemaChangeDialogs";
@@ -629,6 +630,256 @@ describe("a rename that keeps the rows but converts their values", () => {
     expect(screen.getByRole("alertdialog")).toHaveTextContent(
       "The collection posts will be created, with no fields yet."
     );
+  });
+});
+
+// Each changed setting is a pending change, so the review lists it: alone, in
+// a review of its own that saves without a restart, or beside the fields it is
+// saved with, translation turned off among them.
+describe("BuilderSchemaChangeDialogs: the settings a save changes", () => {
+  const RENAMED: SettingChange = {
+    key: "singularName",
+    label: "name",
+    from: "Post",
+    to: "Article",
+  };
+  const DRAFTS_ON: SettingChange = {
+    key: "status",
+    label: "drafts and publishing",
+    from: "off",
+    to: "on",
+  };
+
+  function renderWithSettings(
+    p: SchemaPreviewResponse,
+    settingChanges: readonly SettingChange[],
+    onConfirm = vi.fn()
+  ) {
+    render(
+      <BuilderSchemaChangeDialogs
+        confirmation={confirmationOf(p)}
+        kind="collection"
+        entityName="posts"
+        onConfirm={onConfirm}
+        settingChanges={settingChanges}
+      />
+    );
+    return { onConfirm };
+  }
+
+  it("reviews a settings-only save: each setting it changes, saved without a restart", async () => {
+    const { onConfirm } = renderWithSettings(preview({ hasChanges: false }), [
+      RENAMED,
+      DRAFTS_ON,
+    ]);
+    const dialog = screen.getByRole("alertdialog");
+    expect(
+      within(dialog).getByRole("heading", {
+        name: "Save the settings of the collection posts?",
+      })
+    ).toBeInTheDocument();
+    const listed = within(
+      within(dialog).getByRole("list", { name: "Settings" })
+    ).getAllByRole("listitem");
+    expect(listed.map(item => item.textContent)).toEqual([
+      "Name: Post → Article",
+      "Drafts and publishing: off → on",
+    ]);
+    expect(dialog).not.toHaveTextContent(/restart/i);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("lists the settings saved with a field change", () => {
+    renderWithSettings(
+      preview({
+        changes: {
+          added: [
+            {
+              name: "subtitle",
+              type: "text",
+              required: false,
+              hasDefault: false,
+              classification: "safe",
+            },
+          ],
+          removed: [],
+          changed: [],
+          unchanged: [],
+        },
+      }),
+      [RENAMED]
+    );
+    const dialog = screen.getByRole("alertdialog");
+    expect(within(dialog).getByText(/safe change/i)).toBeInTheDocument();
+    expect(
+      within(within(dialog).getByRole("list", { name: "Settings" }))
+        .getAllByRole("listitem")
+        .map(item => item.textContent)
+    ).toEqual(["Name: Post → Article"]);
+  });
+
+  it("lists translation turned off among the settings, beside what leaving it moves", () => {
+    renderWithSettings(
+      preview({
+        leavingTranslation: [
+          {
+            name: "heading",
+            column: "heading",
+            entriesWithoutDefault: 0,
+            byLocale: { es: 12 },
+            total: 12,
+            defaultLocale: "en",
+            restoreCommand:
+              "nextly i18n:restore --collection posts --field heading",
+          },
+        ],
+      }),
+      [{ key: "i18n", label: "translation", from: "on", to: "off" }]
+    );
+    const dialog = screen.getByRole("alertdialog");
+    expect(
+      within(within(dialog).getByRole("list", { name: "Settings" }))
+        .getAllByRole("listitem")
+        .map(item => item.textContent)
+    ).toEqual(["Translation: on → off"]);
+    expect(
+      within(dialog).getByText(
+        "12 Spanish values move to the archive. English becomes the shared value."
+      )
+    ).toBeInTheDocument();
+  });
+});
+
+// A field group made from the field picker and not saved yet is created by this save, before the
+// entity: every review the save can open lists it first, so it is never created unseen.
+describe("field groups the save creates first", () => {
+  const HERO = { address: "hero", label: "Hero" };
+  const ADDED_SUBTITLE = {
+    added: [
+      {
+        name: "subtitle",
+        type: "text",
+        required: false,
+        hasDefault: false,
+        classification: "safe" as const,
+      },
+    ],
+    removed: [],
+    changed: [],
+    unchanged: [],
+  };
+
+  function renderWithCreates(
+    p: SchemaPreviewResponse,
+    { creating = false }: { creating?: boolean } = {}
+  ) {
+    const onConfirm = vi.fn();
+    render(
+      <BuilderSchemaChangeDialogs
+        confirmation={confirmationOf(p)}
+        kind="collection"
+        entityName="posts"
+        onConfirm={onConfirm}
+        creating={creating}
+        fieldGroupCreates={[HERO]}
+      />
+    );
+    return { onConfirm, dialog: screen.getByRole("alertdialog") };
+  }
+
+  /** The dialog's text, in order, from its first list of what the save creates. */
+  function createsFirst(dialog: HTMLElement): void {
+    const list = within(dialog).getByRole("list", {
+      name: "Field groups created first",
+    });
+    expect(
+      within(list)
+        .getAllByRole("listitem")
+        .map(item => item.textContent)
+    ).toEqual(["Create the field group Hero"]);
+    // Before anything else the dialog lists.
+    const lists = within(dialog).getAllByRole("list");
+    expect(lists[0]).toBe(list);
+  }
+
+  it("lists them first in the short confirmation", () => {
+    const { dialog } = renderWithCreates(preview({ changes: ADDED_SUBTITLE }));
+    expect(within(dialog).getByText(/safe change/i)).toBeInTheDocument();
+    createsFirst(dialog);
+  });
+
+  it("lists them first in the full dialog", () => {
+    const { dialog } = renderWithCreates(
+      preview({
+        hasDestructiveChanges: true,
+        classification: "destructive",
+        changes: {
+          added: [],
+          removed: [
+            {
+              name: "body",
+              type: "text",
+              rowCount: 2,
+              classification: "destructive",
+            },
+          ],
+          changed: [],
+          unchanged: [],
+        },
+      })
+    );
+    createsFirst(dialog);
+  });
+
+  it("reviews a save whose only change is a field group to create", async () => {
+    const { dialog, onConfirm } = renderWithCreates(
+      preview({ hasChanges: false })
+    );
+    createsFirst(dialog);
+    expect(dialog).not.toHaveTextContent(/restart/i);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("lists them first in a new entity's create", () => {
+    const { dialog } = renderWithCreates(preview({ changes: ADDED_SUBTITLE }), {
+      creating: true,
+    });
+    createsFirst(dialog);
+  });
+});
+
+describe("BuilderSchemaChangeDialogs: an unsaved entity's settings", () => {
+  it("lists the settings changed before the first save in its create review", () => {
+    render(
+      <BuilderSchemaChangeDialogs
+        confirmation={confirmationOf(preview())}
+        kind="collection"
+        entityName="posts"
+        onConfirm={vi.fn()}
+        creating
+        settingChanges={[
+          {
+            key: "description",
+            label: "description",
+            from: "",
+            to: "Long reads",
+          },
+        ]}
+      />
+    );
+    const dialog = screen.getByRole("alertdialog");
+    expect(
+      within(dialog).getByRole("heading", {
+        name: "Create the collection posts?",
+      })
+    ).toBeInTheDocument();
+    expect(
+      within(within(dialog).getByRole("list", { name: "Settings" }))
+        .getAllByRole("listitem")
+        .map(item => item.textContent)
+    ).toEqual(["Description: none → Long reads"]);
   });
 });
 

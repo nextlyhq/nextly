@@ -125,6 +125,42 @@ describe("useDocumentLock", () => {
     });
   });
 
+  it("does not render the editor again on a renewal that changes nothing it shows", async () => {
+    // An open editor renews every beat while its author is idle; a render
+    // per beat would redraw the editor around a page nobody is changing.
+    let renders = 0;
+    const { result } = renderHook(() => {
+      renders += 1;
+      return useDocumentLock(ref);
+    });
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    const settled = renders;
+
+    for (let beat = 0; beat < 4; beat += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+      });
+    }
+    expect(patch).toHaveBeenCalledTimes(4);
+    expect(renders).toBe(settled);
+
+    // CONTROL: a renewal that says someone is waiting renders, once.
+    patch.mockResolvedValue({
+      message: "",
+      item: { status: "renewed", waiting: true },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await waitFor(() =>
+      expect(result.current.state).toEqual({
+        status: "held-by-me",
+        someoneWaiting: true,
+      })
+    );
+    expect(renders).toBe(settled + 1);
+  });
+
   it("stops renewing once someone takes over, and says who", async () => {
     const { result } = renderHook(() => useDocumentLock(ref));
     await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
@@ -2055,5 +2091,235 @@ describe("useDocumentLock: someone else's change to the document held", () => {
     patch.mockResolvedValue(renewedWith());
     rerender({ entryId: "43" });
     await waitFor(() => expect(result.current.change).toBeNull());
+  });
+});
+
+describe("useDocumentLock: a long task on the main thread", () => {
+  // A page busy with one long task runs no timer until it finishes, so no beat
+  // renews the claim while the clock keeps moving. When the editor comes back,
+  // the deadline has passed although nothing was refused: the lease rested on
+  // beats that could not run, not on a server that stopped answering. The
+  // editor asks once, and goes read-only only if that ask is refused.
+
+  /** One beat, settled. */
+  async function beat(times = 1) {
+    for (let i = 0; i < times; i += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+      });
+    }
+  }
+
+  /**
+   * Block the main thread for `ms`: the clock moves and no timer fires, which
+   * is what a long task does. The next beat then runs late.
+   */
+  function longTask(ms: number) {
+    vi.setSystemTime(Date.now() + ms);
+  }
+
+  /** Every status the hook reported, in order, so a passing "lost" is seen. */
+  function renderWatched() {
+    const seen: string[] = [];
+    const hook = renderHook(() => {
+      const lock = useDocumentLock(ref);
+      seen.push(lock.state.status);
+      return lock;
+    });
+    return { ...hook, seen };
+  }
+
+  it("renews the claim when the editor recovers, rather than reporting it lost", async () => {
+    const { result, seen } = renderWatched();
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    longTask(DOCUMENT_LOCK_LOSS_AFTER_MS);
+    await beat();
+
+    expect(patch).toHaveBeenCalledTimes(1);
+    expect(patch).toHaveBeenCalledWith("/document-lock", {
+      ...ref,
+      claimToken: "t1",
+    });
+    expect(result.current.state.status).toBe("held-by-me");
+    expect(seen).not.toContain("lost");
+
+    // The claim goes on as before: renewed on every beat, never surrendered.
+    await beat(3);
+    expect(patch).toHaveBeenCalledTimes(4);
+    expect(result.current.state.status).toBe("held-by-me");
+    expect(seen).not.toContain("lost");
+  });
+
+  it("goes read-only when a colleague's claim refuses that renewal", async () => {
+    const { result } = renderWatched();
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    patch.mockResolvedValue({
+      message: "",
+      item: { status: "lost", holder: other },
+    });
+    longTask(DOCUMENT_LOCK_LOSS_AFTER_MS);
+    await beat();
+
+    await waitFor(() =>
+      expect(result.current.state).toEqual({
+        status: "taken-over",
+        holder: other,
+      })
+    );
+    // A colleague holds a live claim: claiming again would only be refused, and
+    // taking it over is the person's decision, not the editor's.
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["no claim is left at all", { status: "lost" }],
+    [
+      "only its own lapsed claim is left",
+      {
+        status: "lost",
+        holder: { ownerId: "u1", ownerLabel: "Ada", expiresInSeconds: -20 },
+      },
+    ],
+  ])(
+    "claims the document again when %s, since nobody took it",
+    async (_case, refusal) => {
+      const { result, seen } = renderWatched();
+      await waitFor(() =>
+        expect(result.current.state.status).toBe("held-by-me")
+      );
+
+      patch.mockResolvedValue({ message: "", item: refusal });
+      post.mockResolvedValue({
+        message: "",
+        item: { status: "acquired", claimToken: "t2" },
+      });
+      // Longer than the lease itself, so the server has let the claim go.
+      longTask(DOCUMENT_LOCK_LOSS_AFTER_MS * 2);
+      await beat();
+
+      await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+      // A plain claim, never a take-over: it gets the document only if
+      // nobody else holds it.
+      expect(post).toHaveBeenLastCalledWith("/document-lock", {
+        ...ref,
+        takeover: false,
+        requestAccess: false,
+      });
+      await waitFor(() =>
+        expect(result.current.state.status).toBe("held-by-me")
+      );
+      expect(seen).not.toContain("lost");
+      expect(seen).not.toContain("taken-over");
+
+      // The new claim is the one renewed from here on.
+      patch.mockResolvedValue({
+        message: "",
+        item: { status: "renewed", waiting: false },
+      });
+      await beat();
+      expect(patch).toHaveBeenLastCalledWith("/document-lock", {
+        ...ref,
+        claimToken: "t2",
+      });
+    }
+  );
+
+  it("keeps the copy's version through a take-back, and reports a colleague's save in the lapse as made while away", async () => {
+    // The lease lapsed, so a colleague may have claimed the document, saved
+    // and left before this editor came back. Claiming it again must not make
+    // the copy look current: the claim names the version the copy started
+    // from, the server's answer names the newer one, and the editor is told
+    // of it as a change made while it was away. That notice holds the form
+    // (`useHeldDocumentChange`), and the next save still carries the old
+    // version, which the server refuses as stale rather than overwriting.
+    const { result } = renderHook(() =>
+      useDocumentLock({ ...ref, version: () => "1" })
+    );
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    const changed = {
+      currentVersion: "2",
+      changedBy: { kind: "person" as const, name: "Bob" },
+      changedAt: "2026-11-17T08:00:00.000Z",
+    };
+    patch.mockResolvedValue({ message: "", item: { status: "lost" } });
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "acquired", claimToken: "t2", changed },
+    });
+    longTask(DOCUMENT_LOCK_LOSS_AFTER_MS * 2);
+    await beat();
+
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+    expect(post).toHaveBeenLastCalledWith(
+      "/document-lock",
+      expect.objectContaining({ takeover: false, _rev: "1" })
+    );
+    await waitFor(() =>
+      expect(result.current.change).toEqual({
+        change: changed,
+        whileAway: true,
+      })
+    );
+    expect(result.current.state.status).toBe("held-by-me");
+  });
+
+  it("goes read-only a beat later when that renewal never answers", async () => {
+    // Recovering asks once; it does not hold the deadline open for a
+    // connection that has stalled as well.
+    const { result } = renderWatched();
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    patch.mockReturnValue(new Promise(() => {}));
+    longTask(DOCUMENT_LOCK_LOSS_AFTER_MS);
+    await beat();
+    expect(result.current.state.status).toBe("held-by-me");
+
+    await beat();
+    await waitFor(() => expect(result.current.state.status).toBe("lost"));
+  });
+
+  it("asks once per lapse when every beat runs late, then reports the claim lost", async () => {
+    // A hidden tab's timers can stay slowed, so every beat runs late, not
+    // only the first after a freeze. With nothing answering, a late beat
+    // must not keep the deadline open forever: one renewal is asked, and the
+    // beat after it, late or not, reports the claim lost.
+    const { result } = renderWatched();
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    patch.mockReturnValue(new Promise(() => {}));
+    const slowedBeat = async () => {
+      longTask(3 * DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+      await beat();
+    };
+    const beats = Math.ceil(
+      DOCUMENT_LOCK_LOSS_AFTER_MS / (4 * DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS)
+    );
+    for (let i = 0; i < beats; i += 1) await slowedBeat();
+    // The deadline is behind it now: this beat asks once more.
+    expect(result.current.state.status).toBe("held-by-me");
+    const asked = patch.mock.calls.length;
+
+    await slowedBeat();
+    await waitFor(() => expect(result.current.state.status).toBe("lost"));
+    expect(patch).toHaveBeenCalledTimes(asked);
+  });
+
+  it("still reports the claim lost at the deadline when the beats ran on time", async () => {
+    // The other side of the rule: only a late beat earns the extra ask. A
+    // connection that stalls while every beat runs keeps today's deadline.
+    const { result } = renderWatched();
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    patch.mockReturnValue(new Promise(() => {}));
+    const beats = Math.ceil(
+      DOCUMENT_LOCK_LOSS_AFTER_MS / DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS
+    );
+    await beat(beats);
+
+    await waitFor(() => expect(result.current.state.status).toBe("lost"));
+    expect(patch).toHaveBeenCalledTimes(beats - 1);
   });
 });

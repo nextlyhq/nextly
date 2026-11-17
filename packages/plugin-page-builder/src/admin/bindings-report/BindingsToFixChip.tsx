@@ -90,10 +90,11 @@ export function BindingsToFixChip({
   requestPanel,
 }: BindingsToFixChipProps): JSX.Element | null {
   const key = useDocumentKey();
-  // This document's bindings, and the whole report's count for the rest.
-  const report = useBindingsToFix(key === undefined ? {} : { document: key });
-  const everything = useBindingsToFix();
   const [open, setOpen] = useState(false);
+  // This document's bindings, and, once the list is open, the whole report's
+  // count for the rest: the builder opens on one read of the report.
+  const report = useBindingsToFix(key === undefined ? {} : { document: key });
+  const everything = useBindingsToFix({}, { enabled: open });
   if (key === undefined) return null;
   const item = report.data?.items.find(entry => entry.documentKey === key);
   // The bindings on this canvas: in the field it is open on, in the default

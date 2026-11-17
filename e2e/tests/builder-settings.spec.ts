@@ -142,16 +142,15 @@ async function paintText(page: Page): Promise<void> {
   await expect(await block(page, TEXT_ID)).toBeVisible({ timeout: 30_000 });
   await clickBlock(page, TEXT_ID);
   await page.getByRole("tab", { name: "Style" }).click();
-  // Colour sits in Typography, which starts closed for a text block.
-  const section = page.getByRole("button", {
-    name: "Typography",
-    exact: true,
+  // Colour sits in Text, which starts closed for a text block.
+  const section = page.getByTestId("inspector").getByRole("button", {
+    name: /^Text(\s?has changes)?$/,
   });
   if ((await section.getAttribute("aria-expanded")) !== "true") {
     await section.click();
   }
   const color = page
-    .getByRole("region", { name: /^Typography/ })
+    .getByRole("region", { name: /^Text(\s?has changes)?$/ })
     .getByRole("textbox", { name: "Colour", exact: true });
   await color.fill("#1155cc");
   await color.press("Enter");
@@ -644,7 +643,9 @@ test.describe("Removing a breakpoint in Settings", () => {
       await expect(
         dialog.getByText("You can undo this from Settings for 30 days.")
       ).toBeVisible();
-      await expect(dialog.getByText("Default Layout")).toHaveCount(0);
+      await expect(dialog.getByText("Default header & footer set")).toHaveCount(
+        0
+      );
       expect((await storedTextStyles(page.request, id))[small]).toBeDefined();
 
       // Back: the draft as it was, Small still removed from it.
@@ -700,7 +701,9 @@ test.describe("Removing a breakpoint in Settings", () => {
       await expect(
         dialog.getByText("Its styles are gone from 1 page.")
       ).toBeVisible();
-      await expect(dialog.getByText("Default Layout")).toBeVisible();
+      await expect(
+        dialog.getByText("Default header & footer set")
+      ).toBeVisible();
       await expect
         .poll(async () => (await storedTextStyles(page.request, id))[small])
         .toBeUndefined();

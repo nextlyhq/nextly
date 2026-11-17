@@ -28,6 +28,7 @@ import { useRestingPageRender } from "../use-resting-page-render";
 import { BlocksEditor } from "./BlocksEditor";
 import { openAtFromSearch } from "./builder-address";
 import { rememberBuilderReturn } from "./builder-return";
+import { BuilderStartup } from "./builder-startup";
 import { rowGuardedWrite } from "./row-commit";
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
 
@@ -76,25 +77,29 @@ function BoundEditor({
       : openAtFromSearch(window.location.search)
   );
   return (
-    <BlocksEditor
-      // No key from the value: the editor seeds its own history from the value
-      // it opened with, and keying it by whether that value exists remounted it
-      // on its own first commit into an empty field, losing its history. A
-      // value replaced from outside — a restore — arrives with a fresh mount
-      // of the whole view, which the admin gives it.
-      initialValue={field.value}
-      // What an empty document has to be for this field, read from its own
-      // declaration: a component store seeded as a page is refused on save.
-      kinds={acceptedKinds(declaration)}
-      onCommit={commit}
-      onClose={exit}
-      name={name}
-      control={control}
-      openAt={openAt}
-      address={address}
-      location={fieldLocation}
-      pathIn={fieldPathIn}
-    />
+    <>
+      {/* First, so the reads the editor asks as it mounts find it sent. */}
+      <BuilderStartup />
+      <BlocksEditor
+        // No key from the value: the editor seeds its own history from the value
+        // it opened with, and keying it by whether that value exists remounted it
+        // on its own first commit into an empty field, losing its history. A
+        // value replaced from outside — a restore — arrives with a fresh mount
+        // of the whole view, which the admin gives it.
+        initialValue={field.value}
+        // What an empty document has to be for this field, read from its own
+        // declaration: a component store seeded as a page is refused on save.
+        kinds={acceptedKinds(declaration)}
+        onCommit={commit}
+        onClose={exit}
+        name={name}
+        control={control}
+        openAt={openAt}
+        address={address}
+        location={fieldLocation}
+        pathIn={fieldPathIn}
+      />
+    </>
   );
 }
 

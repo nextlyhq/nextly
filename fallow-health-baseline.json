@@ -1517,12 +1517,7 @@
         "count": 1
       }
     },
-    "packages/builder/src/builder-shell.tsx": {
-      "complexity_moderate": {
-        "count": 1
-      }
-    },
-    "packages/builder/src/canvas.tsx": {
+    "packages/builder/src/canvas/canvas.tsx": {
       "complexity_high": {
         "count": 1
       }
@@ -1537,6 +1532,11 @@
         "count": 1
       },
       "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/builder/src/shell/shell-regions.tsx": {
+      "complexity_moderate": {
         "count": 1
       }
     },
@@ -4139,7 +4139,7 @@
     "packages/nextly/src/cli/commands/migrate.ts:circular dependency",
     "packages/nextly/src/shared/lib/entry-validation.ts:complexity",
     "packages/nextly/src/domains/singles/services/single-registry-service.ts:complexity",
-    "packages/builder/src/canvas.tsx:complexity",
+    "packages/builder/src/canvas/canvas.tsx:complexity",
     "packages/nextly/src/cli/commands/migrate-check.ts:circular dependency",
     "packages/admin/src/lib/auth/session.ts:dead code",
     "packages/nextly/src/schemas/rbac-epoch/index.ts:dead code",
@@ -4197,7 +4197,7 @@
     "packages/admin/src/components/features/auth-login/index.tsx:complexity",
     "packages/admin/src/components/features/versions/VersionComparePage.tsx:hidden coupling",
     "packages/nextly/src/auth/handlers/unknown-source.ts:hidden coupling",
-    "packages/builder/src/builder-shell.tsx:dead code",
+    "packages/builder/src/shell/builder-shell.tsx:dead code",
     "packages/adapter-postgres/src/index.ts:hidden coupling",
     "packages/admin/src/components/features/versions/diff/VersionDiffView.tsx:complexity",
     "packages/admin/src/components/features/entries/EntryForm/EntryForm.tsx:complexity",
@@ -4270,7 +4270,7 @@
     "packages/admin/src/components/features/entries/APIPlayground/ResponseViewer.tsx:complexity",
     "packages/nextly/src/plugins/plugin-versions.ts:circular dependency",
     "packages/blocks-engine/src/style/validate-style-value.ts:complexity",
-    "packages/builder/src/spacing-overlay.tsx:hidden coupling",
+    "packages/builder/src/canvas/spacing-overlay.tsx:hidden coupling",
     "packages/admin/src/pages/dashboard/settings/image-sizes/edit/[id].tsx:circular dependency",
     "packages/nextly/src/cli/commands/plugin-lifecycle-runner.ts:hidden coupling",
     "packages/nextly/src/domains/collections/query/geo-utils.ts:dead code",
@@ -4325,7 +4325,7 @@
     "packages/create-nextly-app/src/generators/routes.ts:circular dependency",
     "packages/nextly/src/plugins/admin-views.ts:complexity",
     "packages/admin/src/components/features/dashboard/SeedDemoContentCard.tsx:complexity",
-    "packages/builder/src/use-inline-editing.ts:hidden coupling",
+    "packages/builder/src/canvas/use-inline-editing.ts:hidden coupling",
     "packages/create-nextly-app/src/generators/media-routes.ts:circular dependency",
     "packages/nextly/src/direct-api/namespaces/content-events.ts:circular dependency",
     "packages/nextly/src/schemas/user-fields.ts:complexity",
@@ -4344,7 +4344,7 @@
     "packages/admin/src/pages/registry.ts:circular dependency",
     "packages/plugin-form-builder/src/utils/redirect-reference.ts:hidden coupling",
     "packages/nextly/src/hooks/register-collection-hooks.ts:hidden coupling",
-    "packages/builder/src/canvas-width.ts:hidden coupling",
+    "packages/builder/src/canvas/canvas-width.ts:hidden coupling",
     "packages/nextly/src/domains/releases/__tests__/release-capabilities.test.ts:hidden coupling",
     "packages/plugin-form-builder/src/utils/redirect-target.ts:hidden coupling",
     "packages/create-nextly-app/src/generators/write-new.ts:circular dependency",
@@ -4394,7 +4394,7 @@
     "packages/nextly/src/api/__tests__/releases-route-authority.test.ts:hidden coupling",
     "packages/nextly/src/cli/commands/telemetry.ts:circular dependency",
     "packages/admin/src/components/features/widgets/useGridAnnouncer.ts:hidden coupling",
-    "packages/builder/src/use-inline-rich-text.ts:hidden coupling",
+    "packages/builder/src/canvas/use-inline-rich-text.ts:hidden coupling",
     "packages/admin/src/pages/dashboard/email/design.tsx:circular dependency",
     "packages/nextly/src/schemas/auth-tokens/postgres.ts:hidden coupling",
     "packages/ui/src/styles/contrast/__tests__/ink-utilities.test.ts:complexity",
@@ -4406,7 +4406,7 @@
     "packages/plugin-form-builder/src/utils/redirect-target.test.ts:hidden coupling",
     "packages/builder/src/custom-attributes.ts:hidden coupling",
     "packages/nextly/src/domains/media/__tests__/media-revalidation.integration.test.ts:hidden coupling",
-    "packages/builder/src/use-inline-editing.test.tsx:hidden coupling",
+    "packages/builder/src/canvas/use-inline-editing.test.tsx:hidden coupling",
     "packages/nextly/src/domains/releases/__tests__/releases-service.test.ts:hidden coupling",
     "packages/builder/src/fonts-panel.tsx:hidden coupling",
     "packages/builder/src/advanced-panel.tsx:hidden coupling",
@@ -4441,7 +4441,7 @@
     "packages/nextly/src/route-handler/__tests__/route-parser.versions.test.ts:hidden coupling",
     "packages/admin/src/lib/rich-text/__tests__/inline-editor.test.ts:hidden coupling",
     "packages/ui/src/styles/__tests__/comments-describe-code.test.ts:complexity",
-    "packages/builder/src/breakpoint-switcher.test.tsx:hidden coupling",
+    "packages/builder/src/shell/breakpoint-switcher.test.tsx:hidden coupling",
     "e2e/tests/canvas/spacing-overlay.spec.ts:hidden coupling"
   ]
 }

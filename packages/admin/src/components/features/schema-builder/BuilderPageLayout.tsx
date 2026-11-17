@@ -49,6 +49,7 @@ import {
   renameOffered,
 } from "@admin/lib/builder/rename-field";
 import { navigateTo } from "@admin/lib/navigation";
+import type { PendingAddress } from "@admin/services/addressCheckApi";
 import type { StoredHookConfig } from "@admin/types/collection";
 
 import type { BuilderConfig } from "./builder-config";
@@ -83,7 +84,15 @@ type Props = {
   savedFieldIds: ReadonlySet<string>;
   onSave: () => void;
   settings: BuilderSettingsValues;
-  onSettingsChange: (next: BuilderSettingsValues) => void;
+  /**
+   * The settings the modal hands back. `leaveWithoutWarning` is the leave
+   * guard's: a change that moves the editor to a new route (an unsaved
+   * entity's new address) states that move deliberate with it.
+   */
+  onSettingsChange: (
+    next: BuilderSettingsValues,
+    leaveWithoutWarning?: () => void
+  ) => void;
   /**
    * Whether the save judges names with Draft/Published on: on as stored, or as the pending settings
    * turn it on. Its columns stand until the save that turns it off lands, after the fields, so a
@@ -92,6 +101,10 @@ type Props = {
   lifecycleEnabled?: boolean;
   /** A collection's stored hooks, shown read-only in its settings modal. */
   storedHooks?: readonly StoredHookConfig[];
+  /** An unsaved entity's address stays editable, checked against these. */
+  unsavedAddress?: { otherAddresses: readonly PendingAddress[] };
+  /** How many places use a field group, said beside its fixed address. */
+  usedByCount?: number;
   active: ActiveOverlay;
   onActiveChange: (next: ActiveOverlay) => void;
   /** Copy a field to right after itself, named clear of what is beside it. */
@@ -102,6 +115,8 @@ type Props = {
   isSaving: boolean;
   /** What the live region announces during that save. */
   savingLabel: string;
+  /** Why Save waits, while it does: shown beside it, and Save is held. */
+  saveHeld?: string;
   /**
    * Runs when the editor is left through the leave guard's Discard Changes,
    * before the navigation: an unsaved entity is let go with its changes.
@@ -128,10 +143,13 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     settings,
     onSettingsChange,
     storedHooks,
+    unsavedAddress,
+    usedByCount,
     active,
     onActiveChange,
     isSaving,
     savingLabel,
+    saveHeld,
     onDiscard,
     pageBuilderHref,
     children,
@@ -146,7 +164,9 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     <UnsavedChangesGuard
       isDirty={unsavedCount > 0 || isSaving}
       disabled={locked}
-      busy={isSaving}
+      // Nor while an unsaved entity's new address is checked: discarding then
+      // would let the entity go before the move renames it.
+      busy={isSaving || saveHeld !== undefined}
       onDiscard={onDiscard}
     >
       <div className="flex flex-col min-h-screen bg-background">
@@ -160,6 +180,7 @@ export function BuilderPageLayout(props: Props): JSX.Element {
           onAddField={() => onActiveChange({ kind: "picker", position: {} })}
           onOpenSettings={() => onActiveChange({ kind: "settings" })}
           onSave={onSave}
+          saveHeld={saveHeld}
           pageBuilderHref={pageBuilderHref}
         />
         <BuilderWorkspace {...props} />
@@ -173,6 +194,8 @@ export function BuilderPageLayout(props: Props): JSX.Element {
           onSettingsChange={onSettingsChange}
           readOnly={locked}
           storedHooks={storedHooks}
+          unsavedAddress={unsavedAddress}
+          usedByCount={usedByCount}
           savedFields={pending.saved}
           lifecycleEnabled={props.lifecycleEnabled}
         />

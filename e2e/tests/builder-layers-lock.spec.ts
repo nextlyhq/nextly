@@ -25,6 +25,7 @@ import {
   openLayers,
   pressSave,
   selection,
+  structure,
 } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { canvasLayer } from "./support/canvas-frame";
@@ -149,11 +150,9 @@ function isWrite(request: { url(): string; method(): string }): boolean {
   );
 }
 
-/** The top bar's save state chip. */
+/** The top bar's Save, which says whether the work is saved. */
 function saveState(page: Page) {
-  return page
-    .locator('[data-topbar="end"]')
-    .locator('[data-testid="save-state-indicator"]');
+  return page.locator('[data-topbar="end"]').locator('[data-action="save"]');
 }
 
 /**
@@ -203,10 +202,10 @@ test.describe("a block locked in Layers", () => {
 
     // A click still selects the locked block, so it can be unlocked.
     await selectBlock(page, HERO);
-    // The note, the toolbar and the refusal are chrome, drawn over the canvas
-    // in the admin's document rather than in the page.
+    // The toolbar's Unlock, the toolbar and the refusal are chrome, drawn
+    // over the canvas in the admin's document rather than in the page.
     const scope = canvasLayer(page);
-    await expect(scope.locator("[data-lock-note]")).toHaveText("Locked");
+    await expect(await toolbarButton(page, "Unlock")).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Actions for Hero" })
     ).toBeVisible();
@@ -215,7 +214,7 @@ test.describe("a block locked in Layers", () => {
     await clickBlock(page, TITLE);
     await expect.poll(() => selection(page)).toEqual([TITLE]);
     await expect(scope.locator("[data-lock-note]")).toHaveText(
-      "Locked by Hero"
+      "Locked by Hero · Select it"
     );
     for (const verb of ["Move up", "Move down", "Delete"]) {
       const button = await toolbarButton(page, verb);
@@ -266,22 +265,21 @@ test.describe("a block locked in Layers", () => {
     await openBuilder(page, id);
     await openLayers(page);
 
-    // Inside the locked block a copy would change what it holds, so the bar
-    // says so before anything is tried.
+    // Inside the locked block a copy would change what it holds: pressing
+    // Duplicate says why and copies nothing.
     await clickBlock(page, TITLE);
     await expect.poll(() => selection(page)).toEqual([TITLE]);
-    const inside = await toolbarButton(page, "Duplicate");
-    await expect(inside).toHaveAttribute("aria-disabled", "true");
-    await expect(inside).toHaveAttribute(
-      "title",
+    const before = await structure(page);
+    await (await toolbarButton(page, "Duplicate")).click();
+    await expect(announcer(page)).toContainText(
       "Hero is locked. Unlock it to add blocks to it."
     );
+    expect(await structure(page)).toEqual(before);
+    await expect.poll(() => selection(page)).toEqual([TITLE]);
 
     // The locked block itself copies, and the copy keeps its lock.
     await selectBlock(page, HERO);
-    const duplicate = await toolbarButton(page, "Duplicate");
-    await expect(duplicate).not.toHaveAttribute("aria-disabled", "true");
-    await duplicate.click();
+    await (await toolbarButton(page, "Duplicate")).click();
     // Selection follows the copy, which is what the author works on next.
     await expect
       .poll(async () => {
@@ -308,7 +306,7 @@ test.describe("a block locked in Layers", () => {
     await textField(page).press("Tab");
 
     expect(await saveDraft(page)).toBe(1);
-    // One save, said once: the chip says "Saved" for the one write.
+    // One save, said once: Save reads "Saved" for the one write.
     await expect(saveState(page)).toHaveText("Saved");
 
     const [hero] = await storedNodes(page.request, id);
@@ -362,9 +360,14 @@ test.describe("a block locked in Layers", () => {
     await pressSave(page);
     await refused;
     const indicator = saveState(page);
-    await expect(indicator).toContainText("Not saved", { timeout: 30_000 });
-    const retry = indicator.getByRole("button", { name: "Retry" });
-    await expect(retry).toBeVisible();
+    // Save itself is the Retry, with the reason in its notice.
+    await expect(indicator).toHaveText("Retry save", { timeout: 30_000 });
+    await expect(
+      page.getByTestId("document-save-publish-notice").getByText("Not saved", {
+        exact: true,
+      })
+    ).toBeVisible();
+    const retry = indicator;
 
     // Nothing stored changed, and the editor still holds the work.
     const [hero] = await storedNodes(page.request, id);
@@ -390,15 +393,17 @@ test.describe("a block locked in Layers", () => {
 
     await selectBlock(page, HERO);
     await unlockFromCard(page, "Hero");
+    // Still locked on the saved page: pressing Delete says why and removes
+    // nothing.
     const remove = await toolbarButton(page, "Delete");
-    await expect(remove).toHaveAttribute("aria-disabled", "true");
-    await expect(remove).toHaveAttribute(
-      "title",
+    await remove.click();
+    await expect(announcer(page)).toContainText(
       "Save first: this block is still locked on the saved page. Save, then delete it."
     );
+    await expect(await block(page, HERO)).toHaveCount(1);
+    await expect.poll(() => selection(page)).toEqual([HERO]);
 
     expect(await saveDraft(page)).toBe(1);
-    await expect(remove).not.toHaveAttribute("aria-disabled", "true");
     await remove.click();
     await expect(await block(page, HERO)).toHaveCount(0);
     expect(await saveDraft(page)).toBe(1);

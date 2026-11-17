@@ -12,9 +12,12 @@
  * @module cli/errors/areas/plugin-config
  */
 
-import type { CrossFileIssue } from "../../../domains/schema/ui-schema/cross-file";
+import {
+  BUILDER_DEFINITION_MISSING_ISSUE,
+  RELATION_TARGET_MISSING_ISSUE,
+} from "../../../domains/schema/ui-schema/definition-issues";
 import type { NextlyError } from "../../../errors/nextly-error";
-import { CliError, type CliErrorParts } from "../cli-error";
+import type { CliErrorParts } from "../cli-error";
 import { defineCodes, type FromError } from "../define";
 import {
   asSentence,
@@ -38,6 +41,16 @@ function count(error: NextlyError, key: string): string {
 /** The strings the error's log context lists under `key`. */
 function names(error: NextlyError, key: string): string[] {
   return contextNames(error, key);
+}
+
+/** The message of each issue of `code` a validation error lists, in its order. */
+function issueMessages(error: NextlyError, code: string): string[] {
+  const data = error.publicData as
+    | { errors?: Array<{ code?: unknown; message?: unknown }> }
+    | undefined;
+  return (data?.errors ?? [])
+    .filter(issue => issue.code === code)
+    .map(issue => (typeof issue.message === "string" ? issue.message : ""));
 }
 
 /** The sentence the throw site wrote for whoever fixes it; the public message is generic. */
@@ -799,10 +812,53 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
   BUILDER_SLUG_COLLISION: {
     cause:
       "An entity in `ui-schema.json` has the slug of a collection in `nextly.config.ts`.",
+    retired: {
+      why: "`nextly migrate:check` now warns about such an entity, naming its kind, as `nextly migrate:create` does: the code-first definition of that kind wins.",
+    },
   },
   BUILDER_RELATION_TARGET_UNKNOWN: {
     cause:
       "A relationship field in `ui-schema.json` names a collection that neither file declares.",
+    from: [
+      {
+        code: "VALIDATION_ERROR",
+        issue: RELATION_TARGET_MISSING_ISSUE,
+        describe: error => {
+          const listed = issueMessages(error, RELATION_TARGET_MISSING_ISSUE);
+          const file = field(error, "definitionFile", "ui-schema.json");
+          return {
+            what:
+              listed.length === 1
+                ? `A field in \`${file}\` relates to a collection that does not exist.`
+                : `${listed.length} fields in \`${file}\` relate to collections that do not exist.`,
+            why: listed.join("\n"),
+            next: `Point each field listed at a collection in \`nextly.config.ts\` or \`${file}\`, or create the collection it names, then run the command again.`,
+          };
+        },
+      },
+    ],
+  },
+  BUILDER_DEFINITION_MISSING: {
+    cause:
+      "The newest migration snapshot records a Schema Builder entity that neither `nextly.config.ts` nor `ui-schema.json` declares.",
+    from: [
+      {
+        code: "VALIDATION_ERROR",
+        issue: BUILDER_DEFINITION_MISSING_ISSUE,
+        describe: error => {
+          const lost = issueMessages(error, BUILDER_DEFINITION_MISSING_ISSUE);
+          const file = field(error, "definitionFile", "ui-schema.json");
+          return {
+            what:
+              lost.length === 1
+                ? `The newest migration snapshot records a Builder ${lost[0]} that neither \`nextly.config.ts\` nor \`${file}\` declares.`
+                : `The newest migration snapshot records ${lost.length} Builder entities that neither \`nextly.config.ts\` nor \`${file}\` declares: ${lost.join(", ")}.`,
+            why: `\`${file}\` is part of the code: \`migrate:create\` reads the Builder's entities from it. Without them, a migration written now would drop each one's table and its content.`,
+            next: `Restore \`${file}\` from version control and commit it with your migrations. To remove an entity, delete it in the Schema Builder, which writes the migration that drops it. Then run the command again.`,
+          };
+        },
+      },
+    ],
   },
 
   NEXTLY_PERMISSION_COLLISION: {
@@ -1014,35 +1070,3 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
     ],
   },
 });
-
-/**
- * The checks between `nextly.config.ts` and `ui-schema.json`, as the command's error: one line
- * per issue. A slug both files declare comes first, since a relation to it reads differently
- * once it is fixed.
- */
-export function builderSchemaConflict(
-  issues: readonly CrossFileIssue[]
-): CliError {
-  const collisions = issues.filter(
-    issue => issue.code === "NEXTLY_SCHEMA_SLUG_COLLISION"
-  );
-  const listed = issues.map(issue => issue.message).join("\n");
-  if (collisions.length > 0) {
-    return new CliError("BUILDER_SLUG_COLLISION", {
-      what:
-        collisions.length === 1
-          ? "An entity is defined in both `nextly.config.ts` and `ui-schema.json`."
-          : `${collisions.length} entities are defined in both \`nextly.config.ts\` and \`ui-schema.json\`.`,
-      why: listed,
-      next: "Remove each slug listed from one of the two files, or rename it in one of them, then run the command again.",
-    });
-  }
-  return new CliError("BUILDER_RELATION_TARGET_UNKNOWN", {
-    what:
-      issues.length === 1
-        ? "A field in `ui-schema.json` relates to a collection that does not exist."
-        : `${issues.length} fields in \`ui-schema.json\` relate to collections that do not exist.`,
-    why: listed,
-    next: "Point each field listed at a collection in `nextly.config.ts` or `ui-schema.json`, or create the collection it names, then run the command again.",
-  });
-}

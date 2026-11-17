@@ -46,7 +46,6 @@ import {
   ListView,
   type ListColumnsControl,
 } from "@admin/components/ui/table/list-view";
-import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useLocalization } from "@admin/hooks/useLocalization";
 
 import { BulkActionBar } from "./BulkActionBar";
@@ -116,6 +115,11 @@ export interface EntryTableProps {
   /** Callback when edit action is triggered */
   /** Open a row. `locale` opens it in that content language. */
   onEdit: (entryId: string, locale?: string) => void;
+  /**
+   * Where a row opens, by the admin's one rule for opening a document, so a
+   * row is a real link: a middle or modified click opens the same place.
+   */
+  entryHref: (entryId: string) => string;
   /** Callback when delete action is triggered */
   onDelete: (entryId: string) => void;
   /** Callback for bulk delete operation */
@@ -301,6 +305,7 @@ export const EntryTable: ForwardRefExoticComponent<
     onSortChange,
     onSearchChange,
     onEdit,
+    entryHref,
     onDelete,
     onBulkDelete,
     onBulkUpdate,
@@ -700,12 +705,7 @@ export const EntryTable: ForwardRefExoticComponent<
         rowActions={rowActions}
         sort={sort}
         onSortChange={onSortChange}
-        rowHref={row =>
-          buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
-            slug: collection.slug,
-            id: rowId(row),
-          })
-        }
+        rowHref={row => entryHref(rowId(row))}
         primaryColumn={titleField}
         registryKey={collection.slug}
         ariaLabel="Entries table"

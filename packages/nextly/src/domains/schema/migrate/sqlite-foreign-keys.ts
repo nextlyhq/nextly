@@ -81,6 +81,16 @@ async function danglingReferenceCounts(
 }
 
 /**
+ * The rows `PRAGMA foreign_key_check` reports, by table and the parent it references: what a
+ * check of the database as it stands finds, for a caller judging a change it did not run.
+ */
+export async function danglingReferences(
+  session: Pick<SqliteForeignKeySession, "read">
+): Promise<Array<{ table: string; parent: string; rows: number }>> {
+  return [...(await danglingReferenceCounts(session)).values()];
+}
+
+/**
  * Runs `work`, then refuses if it left MORE rows referencing rows that do not
  * exist than there were before it ran.
  *

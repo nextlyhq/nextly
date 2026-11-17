@@ -227,8 +227,8 @@ const USES: readonly VariableUse[] = [
   },
 ];
 
-describe("the count at the end of each row", () => {
-  it("is the places, said in words to a screen reader and in the row's tooltip", async () => {
+describe("how widely each row's variable is used", () => {
+  it("is the places, said in words to a screen reader and in the row's tooltip, never drawn on the row", async () => {
     const usage = host({
       reaches: () => ({
         "color.brand": reach(12, ["c-card", "c-hero"]),
@@ -244,30 +244,17 @@ describe("the count at the end of each row", () => {
     const brand = await screen.findByRole("button", {
       name: /^Brand.*\. Used in 14 places$/,
     });
-    const count = brand.querySelector(".nx-vars__count");
-    expect(count?.textContent).toBe("14");
-    expect(count?.hasAttribute("data-zero")).toBe(false);
-    // Said by the row's tooltip, where keyboard users meet it too, not by a
-    // title on the hidden count.
-    expect(count?.hasAttribute("title")).toBe(false);
+    // Nothing on the row itself: the tooltip says it.
+    expect(brand.textContent).not.toContain("14");
     await act(async () => {
       brand.focus();
     });
     expect((await screen.findByRole("tooltip")).textContent).toContain(
       "Used in 14 places"
     );
-
-    const text = row(/^Text.*\. Not used anywhere$/);
-    const zero = text.querySelector(".nx-vars__count");
-    expect(zero?.textContent).toBe("0");
-    expect(zero?.hasAttribute("data-zero")).toBe(true);
-
+    expect(row(/^Text.*\. Not used$/)).toBeDefined();
     expect(row(/^Body.*\. Used in 1 place$/)).toBeDefined();
-
-    const space = row(/Some pages aren't counted yet\.$/);
-    const floor = space.querySelector(".nx-vars__count");
-    expect(floor?.textContent).toBe("2+");
-    expect(floor?.hasAttribute("data-floor")).toBe(true);
+    expect(row(/Some pages aren't counted yet\.$/)).toBeDefined();
   });
 
   it("asks for each row's variable, and for a type size its line height too", async () => {
@@ -294,21 +281,23 @@ describe("the count at the end of each row", () => {
     });
     render(<Hosted usage={usage} />);
     // 1 for the size, 3 for the line height: neither alone.
-    const body = await screen.findByRole("button", {
-      name: /^Body.*\. Used in 4 places$/,
-    });
-    expect(body.querySelector(".nx-vars__count")?.textContent).toBe("4");
+    expect(
+      await screen.findByRole("button", { name: /^Body.*\. Used in 4 places$/ })
+    ).toBeDefined();
   });
 
-  it("shows nothing for a row not read yet, and no counts without the host's reads", async () => {
+  it("says nothing for a row not read yet, and nothing without the host's reads", async () => {
     const usage = host({ reaches: () => ({ "color.brand": reach(3) }) });
     const { unmount } = render(<Hosted usage={usage} />);
     await screen.findByRole("button", { name: /^Brand.*Used in 3 places$/ });
-    expect(row(/^Text/).querySelector(".nx-vars__count")).toBeNull();
+    expect(row(/^Text/).getAttribute("aria-label")).not.toMatch(
+      /used|counted/i
+    );
     unmount();
     render(<Hosted />);
-    expect(document.querySelector(".nx-vars__count")).toBeNull();
-    expect(row(/^Brand/).hasAttribute("data-counted")).toBe(false);
+    expect(row(/^Brand/).getAttribute("aria-label")).not.toMatch(
+      /used|counted/i
+    );
   });
 });
 
@@ -352,7 +341,7 @@ describe("removing a variable nothing uses", () => {
     const onChange = vi.fn();
     const usage = host({ reaches: () => ({ "color.text": reach(0) }) });
     render(<Hosted usage={usage} onChange={onChange} />);
-    const editor = await openEditor(/^Text.*Not used anywhere$/);
+    const editor = await openEditor(/^Text.*Not used$/);
     expect(within(editor).getByText("Not used anywhere")).toBeDefined();
     fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
     expect(
@@ -544,61 +533,36 @@ describe("removing a variable in use", () => {
 });
 
 describe("removing a variable not counted yet", () => {
-  it("says it may still be in use, and Count now counts, reads again, then confirms", async () => {
-    let counted = false;
+  it("takes the removal at once, and leaves the save to count and decide", async () => {
+    // The save counts the pages before it decides and refuses a use it
+    // finds, so the editor never refuses for want of a count: one press
+    // opens the confirm, with nothing read again and no count started.
+    const onChange = vi.fn();
     const usage = host({
-      reaches: () => ({ "color.text": reach(0, [], counted) }),
+      reaches: () => ({ "color.text": reach(0, [], false) }),
       mayCount: true,
-      count: async () => {
-        counted = true;
-        return { kind: "counted", whole: true, counting: false };
-      },
+      count: async () => ({ kind: "counted", whole: true, counting: false }),
     });
-    render(<Hosted usage={usage} />);
-    const editor = await openEditor(/^Text.*No uses counted yet/);
-    expect(within(editor).getByText("Counting where it's used…")).toBeDefined();
-    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
-    const heading = await within(editor).findByRole("heading", {
-      name: "Text can't be removed yet.",
-    });
-    await waitFor(() => expect(document.activeElement).toBe(heading));
-    expect(
-      within(editor).getByText(
-        "Some pages haven’t been counted, so it may still be in use."
-      )
-    ).toBeDefined();
-    expect(within(editor).getByText(/usually a few seconds/)).toBeDefined();
+    render(<Hosted usage={usage} onChange={onChange} />);
+    const editor = await openEditor(/^Text.*Not counted yet$/);
+    // Nothing is counting, so the line does not say it is.
+    expect(within(editor).getByText("Not counted yet")).toBeDefined();
+    expect(within(editor).queryByText(/Counting where/)).toBeNull();
     const readsBefore = usage.asked.length;
-
-    fireEvent.click(within(editor).getByRole("button", { name: "Count now" }));
-    // Counted, read again, and now unused: the confirm the author asked for.
-    await within(editor).findByText(/Any block using it loses that style/);
-    expect(usage.counted.count).toBe(1);
-    expect(usage.asked.length).toBeGreaterThan(readsBefore);
+    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    expect(
+      within(editor).getByText(/Any block using it loses that style/)
+    ).toBeDefined();
     expect(
       within(editor).queryByRole("heading", { name: /can't be removed/ })
     ).toBeNull();
-  });
-
-  it("points at the site's background jobs where it cannot count now", async () => {
-    const usage = host({
-      reaches: () => ({ "color.text": reach(0, [], false) }),
-    });
-    render(<Hosted usage={usage} />);
-    const editor = await openEditor(/^Text.*No uses counted yet/);
-    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
-    // Answered once Remove has read the counts again.
-    expect(
-      await within(editor).findByText(
-        /Pages are counted by the site's background jobs/
-      )
-    ).toBeDefined();
-    expect(
-      within(editor).getByRole("link", { name: "How background jobs run" })
-    ).toBeDefined();
-    expect(
-      within(editor).queryByRole("button", { name: "Count now" })
-    ).toBeNull();
+    expect(usage.asked.length).toBe(readsBefore);
+    expect(usage.counted.count).toBe(0);
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Remove Text" })
+    );
+    const saved = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
+    expect(saved.tokens.map(token => token.name)).not.toContain("color.text");
   });
 });
 
@@ -695,7 +659,7 @@ describe("removing a type size", () => {
       }),
     });
     render(<Hosted usage={usage} />);
-    const editor = await openEditor(/^Body.*Not used anywhere$/);
+    const editor = await openEditor(/^Body.*Not used$/);
     fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
     expect(
       within(editor).getByText(/Any block using it loses that style/)
@@ -899,7 +863,7 @@ describe("a removal the save refuses", () => {
       ],
     });
     render(<Refusing usage={usage} />);
-    let editor = await openEditor(/^Text.*Not used anywhere$/);
+    let editor = await openEditor(/^Text.*Not used$/);
     fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
     // Taken before the press: the refused save reads again within it.
     const readsBefore = usage.asked.length;

@@ -50,6 +50,7 @@ import { chromium } from "@playwright/test";
 import {
   canvasOf,
   fixtureIds,
+  measuredPage,
   openBuilder,
   signIn,
   throttle,
@@ -62,7 +63,6 @@ import {
   ONLY,
   OUT_DIR,
   OWN_SERVER,
-  PORT,
   RATE,
   ROOT,
   SAMPLES,
@@ -80,15 +80,8 @@ import {
   typing,
 } from "./editing.mjs";
 import { EXPECTED_FAILURES } from "./expected-failures.mjs";
-import { pageAgent, pageChecks } from "./page-agent.mjs";
 import { judge, percentile, table } from "./report.mjs";
-import {
-  portOpen,
-  prepareDatabase,
-  run,
-  serverEnv,
-  startServer,
-} from "./server.mjs";
+import { startOwnServer } from "./server.mjs";
 import { heapGrowth, idleMinute, opens, publishes } from "./session.mjs";
 
 async function measure(log) {
@@ -99,14 +92,7 @@ async function measure(log) {
     measured[id] = { samples, ...(note === undefined ? {} : { note }) };
   };
   try {
-    const context = await browser.newContext({
-      viewport: { width: 1440, height: 900 },
-      bypassCSP: true,
-    });
-    await context.addInitScript(pageAgent);
-    await context.addInitScript(pageChecks);
-    const page = await context.newPage();
-    const cdp = await context.newCDPSession(page);
+    const { page, cdp } = await measuredPage(browser);
     await cdp.send("Network.enable");
     const watcher = watchRequests(page);
     await signIn(page);
@@ -338,17 +324,7 @@ async function main() {
   const log = OWN_SERVER ? path.join(dir, "statements.jsonl") : null;
   let server;
   try {
-    if (OWN_SERVER) {
-      if (await portOpen(PORT))
-        throw new Error(
-          `port ${String(PORT)} is already in use; stop what listens there, set BUILDER_SPEED_PORT, or measure it with --base-url`
-        );
-      const env = serverEnv();
-      prepareDatabase(env);
-      if (flag("build")) run("pnpm --filter playground exec next build", env);
-      fs.rmSync(log, { force: true });
-      server = await startServer(serverEnv(log));
-    }
+    if (OWN_SERVER) server = await startOwnServer(log);
     const started = Date.now();
     const { measured, extra } = await measure(log);
     const { rows, problems } = judge(measured, BUDGETS, EXPECTED_FAILURES, {

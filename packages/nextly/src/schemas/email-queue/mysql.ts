@@ -29,6 +29,7 @@ export const emailQueueMysql = mysqlTable(
     principalKind: varchar("principal_kind", { length: 191 }),
     principalId: varchar("principal_id", { length: 191 }),
     failure: text("failure"),
+    templateSlug: varchar("template_slug", { length: 255 }),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
     updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
     settledAt: bigint("settled_at", { mode: "number" }),
@@ -36,5 +37,7 @@ export const emailQueueMysql = mysqlTable(
   t => [
     index("email_queue_state_idx").on(t.state, t.settledAt),
     index("email_queue_principal_idx").on(t.principalKind, t.principalId),
+    index("email_queue_created_idx").on(t.createdAt, t.id),
+    index("email_queue_template_idx").on(t.templateSlug, t.createdAt),
   ]
 );

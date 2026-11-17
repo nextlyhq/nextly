@@ -111,23 +111,35 @@ function offeredSave(hosted: DocumentActionBindings): OfferedSave {
 export function DocumentPrimaryAction(): JSX.Element | null {
   const hosted = useDocumentActionsContext();
   if (hosted === null) return null;
-  const { run } = hosted;
-  const bindings: Record<string, ActionBinding | undefined> = {};
-  for (const [id, binding] of Object.entries(hosted.bindings)) {
-    if (binding === undefined) continue;
-    bindings[id] = {
-      onSelect: () => {
-        void run(id);
-      },
-      ...(binding.disabledReason === undefined
-        ? {}
-        : { disabledReason: binding.disabledReason }),
-    };
-  }
+  const bindings = bindingsThroughRun(hosted);
   // No spinner on the control: "saving" includes a write the page depends on
   // (a site-wide style), which Publish waits for rather than being busy
   // with, and the save chip beside it already says so.
   return (
     <CompactDocumentActionBar actions={hosted.actions} bindings={bindings} />
   );
+}
+
+/**
+ * The host's bindings as a surface's controls take them: each runs its
+ * action through the host's `run`, never a native submit, with the reason it
+ * can't run now. One adapter for every control drawn outside the header, so
+ * they run and refuse alike.
+ */
+export function bindingsThroughRun(
+  hosted: DocumentActionBindings
+): Record<string, ActionBinding | undefined> {
+  const bindings: Record<string, ActionBinding | undefined> = {};
+  for (const [id, binding] of Object.entries(hosted.bindings)) {
+    if (binding === undefined) continue;
+    bindings[id] = {
+      onSelect: () => {
+        void hosted.run(id);
+      },
+      ...(binding.disabledReason === undefined
+        ? {}
+        : { disabledReason: binding.disabledReason }),
+    };
+  }
+  return bindings;
 }
