@@ -50,8 +50,12 @@ const CHECKING_POLL_MS = 10_000;
  * so a count shown on many screens is not asked again on each; asked again
  * every ten seconds while the check of every document has not finished, since
  * the route answers at once with what was stored and the check goes on.
+ * Not asked at all while `enabled` is false.
  */
-export function useBindingsToFix(query: BindingsToFixQuery = {}): {
+export function useBindingsToFix(
+  query: BindingsToFixQuery = {},
+  { enabled = true }: { readonly enabled?: boolean } = {}
+): {
   readonly data: BindingsToFixAnswer | undefined;
   readonly pending: boolean;
   readonly error: unknown;
@@ -67,6 +71,7 @@ export function useBindingsToFix(query: BindingsToFixQuery = {}): {
   const read = usePluginRoute<BindingsToFixAnswer>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: `${BINDINGS_TO_FIX_ROUTE_PATH}${search}`,
+    enabled,
     staleTime: 30_000,
   });
   const meta = read.data?.meta;
