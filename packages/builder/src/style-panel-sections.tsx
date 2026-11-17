@@ -28,6 +28,13 @@ import { ContentWidthFields } from "./content-width-fields";
 import { FocalFrame } from "./focal-frame";
 import type { InspectorSectionKey } from "./inspector-sections";
 import { useTabFolds } from "./panel-folds-context";
+import { SHORTCUT_IDS } from "./block-shortcuts-field";
+import {
+  SettingSlot,
+  sectionShown,
+  useSettingsMatch,
+  type SettingsMatch,
+} from "./settings-filter";
 import { SectionHeading } from "./panel-section";
 import { SectionHeld } from "./section-held";
 import { spacingRings } from "./spacing-box";
@@ -73,6 +80,7 @@ export function StyleSections({
 }): React.JSX.Element {
   // The picture lent from above, with the fit in force here.
   const { picture, position } = React.useContext(FocalFrame);
+  const match = useSettingsMatch();
   const { open, onOpenChange } = useTabFolds(
     "style",
     sections.map(section => ({
@@ -92,6 +100,7 @@ export function StyleSections({
             key={section.key}
             section={section}
             open={open.includes(section.key)}
+            hidden={!sectionShown(match, "style", section.key)}
             readOnlyReason={readOnlyReason}
             {...surroundings}
           />
@@ -132,6 +141,8 @@ type StyleSectionItemProps = {
   section: StyleSection;
   /** Whether it is the section open, whose fields are drawn. */
   open: boolean;
+  /** Whether the panel's filter keeps nothing in it, so it is not drawn. */
+  hidden: boolean;
   /** Why every control is read-only, which also withholds "+ More". */
   readOnlyReason: string | undefined;
 } & StyleFieldSurroundings;
@@ -152,6 +163,7 @@ function sameClosedSection(
 ): boolean {
   if (before.open || after.open) return false;
   return (
+    before.hidden === after.hidden &&
     before.section.key === after.section.key &&
     before.section.label === after.section.label &&
     holdsValues(before.section) === holdsValues(after.section)
@@ -173,11 +185,16 @@ const StyleSectionItem: React.NamedExoticComponent<StyleSectionItemProps> =
   React.memo(function StyleSectionItem({
     section,
     open: _open,
+    hidden,
     readOnlyReason,
     ...surroundings
   }: StyleSectionItemProps): React.JSX.Element {
     return (
-      <AccordionItem value={section.key} data-section={section.key}>
+      <AccordionItem
+        value={section.key}
+        data-section={section.key}
+        hidden={hidden}
+      >
         <SectionHeading
           label={section.label}
           holdsValues={holdsValues(section)}
@@ -196,6 +213,53 @@ const StyleSectionItem: React.NamedExoticComponent<StyleSectionItemProps> =
       </AccordionItem>
     );
   }, sameClosedSection);
+
+/** The spacing box's properties, which the filter keeps it by. */
+const SPACING_IDS: readonly string[] = ["margin", "padding"];
+
+/** The block's settings Content width draws, which the filter keeps it by. */
+const CONTENT_WIDTH_IDS: readonly string[] = ["contained", "contentWidth"];
+
+/** The Size shortcuts, which the filter keeps them by. */
+const SHORTCUTS: readonly string[] = Object.values(SHORTCUT_IDS);
+
+/**
+ * A section's properties drawn at once, and those behind "+ More". While the
+ * panel is filtered, every property it keeps is drawn at once, "+ More"'s
+ * included, and nothing else.
+ */
+function shownProperties(
+  properties: readonly InspectedStyleProperty[],
+  isRevealed: (property: string) => boolean,
+  match: SettingsMatch
+): {
+  shown: readonly InspectedStyleProperty[];
+  more: readonly InspectedStyleProperty[];
+} {
+  if (match.active) {
+    // Every row drawn before stays mounted, hidden where the filter keeps
+    // nothing of it, so an unsaved or refused value outlives the search; a
+    // kept one from "+ More" is drawn too.
+    const kept = match.kept.get("style");
+    return {
+      shown: properties.filter(
+        property =>
+          property.common ||
+          isRevealed(property.property) ||
+          kept?.has(property.property) === true
+      ),
+      more: [],
+    };
+  }
+  return {
+    shown: properties.filter(
+      property => property.common || isRevealed(property.property)
+    ),
+    more: properties.filter(
+      property => !property.common && !isRevealed(property.property)
+    ),
+  };
+}
 
 /**
  * An open section's fields: its common properties, any that hold a value,
@@ -216,7 +280,7 @@ function SectionBody({
   editing,
   onChooseForm,
   breakpoints,
-}: Omit<StyleSectionItemProps, "open">): React.JSX.Element {
+}: Omit<StyleSectionItemProps, "open" | "hidden">): React.JSX.Element {
   const readOnly = readOnlyReason !== undefined;
   /*
    * What the author brought out from "+ More". Held here, in a body keyed by
@@ -253,12 +317,8 @@ function SectionBody({
       )
   );
   const { listed, arrange } = arrangedSection(section.properties, reading);
-  const shown = listed.filter(
-    property => property.common || isRevealed(property.property)
-  );
-  const more = listed.filter(
-    property => !property.common && !isRevealed(property.property)
-  );
+  const match = useSettingsMatch();
+  const { shown, more } = shownProperties(listed, isRevealed, match);
   return (
     <>
       <SectionFields
@@ -346,7 +406,9 @@ function LayoutLead({
 }): React.JSX.Element {
   return (
     <>
-      <ContentWidthFields surroundings={surroundings} />
+      <SettingSlot tab="style" ids={CONTENT_WIDTH_IDS}>
+        <ContentWidthFields surroundings={surroundings} />
+      </SettingSlot>
       {arrange === undefined ? null : (
         <ArrangeFields
           surroundings={surroundings}
@@ -388,22 +450,36 @@ function SectionFields({
           <LayoutLead surroundings={surroundings} arrange={arrange} />
         ) : null}
         {sectionKey === "size" ? (
-          <BlockShortcutsFields
-            surroundings={surroundings}
-            minHeightDrawn={(rings?.rest ?? shown).some(
-              property => property.property === "minHeight"
-            )}
-          />
+          <SettingSlot tab="style" ids={SHORTCUTS}>
+            <BlockShortcutsFields
+              surroundings={surroundings}
+              minHeightDrawn={(rings?.rest ?? shown).some(
+                property => property.property === "minHeight"
+              )}
+            />
+          </SettingSlot>
         ) : null}
         {rings === undefined ? null : (
-          <SpacingBox
-            margin={rings.margin}
-            padding={rings.padding}
-            surroundings={surroundings}
-          />
+          <SettingSlot tab="style" ids={SPACING_IDS}>
+            <SpacingBox
+              margin={rings.margin}
+              padding={rings.padding}
+              surroundings={surroundings}
+            />
+          </SettingSlot>
         )}
         {(rings?.rest ?? shown).map(property => (
-          <React.Fragment key={`${surroundings.nodeId}:${property.property}`}>
+          <SettingSlot
+            key={`${surroundings.nodeId}:${property.property}`}
+            tab="style"
+            // Min height draws a Section's Height presets over it, so the
+            // row is kept for those as well.
+            ids={
+              property.property === "minHeight"
+                ? [property.property, SHORTCUT_IDS.height]
+                : [property.property]
+            }
+          >
             {property.property === "minHeight" ? (
               <BlockPresetsOver surroundings={surroundings} />
             ) : null}
@@ -412,7 +488,7 @@ function SectionFields({
               namesSection={property.property === sectionKey}
               {...surroundings}
             />
-          </React.Fragment>
+          </SettingSlot>
         ))}
         <NothingSetNote shown={shown.length} arrange={arrange} />
       </SectionHeld.Provider>

@@ -30,6 +30,12 @@ import {
   seedDefaultLayoutAtStart,
 } from "./default-layout/install";
 import { blocksFieldType } from "./fields/blocksField";
+import {
+  createFormProviders,
+  FORM_SERVICE,
+  startFormProviders,
+} from "./forms/providers";
+import { FORM_SEND_LIMITS, formReceiverRoute } from "./forms/route";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
 import { registerNamedQueriesAtBoot } from "./named-queries";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
@@ -133,6 +139,8 @@ export const pageBuilder = (
   // shared by every part below; a bad option refuses here, while the config
   // is read.
   const def = createDefinition(opts);
+  // The form providers other plugins register, read by the form receiver.
+  const formProviders = createFormProviders();
   const { state, templateAddresses, configStyle, configClassIds, fonts } = def;
   const { pagesCountOf, uncoveredPagesOf, usageSourceOf, countPlacements } =
     usageParts(def);
@@ -257,6 +265,9 @@ export const pageBuilder = (
       });
       registerCoreBlocks(ctx, def.blocks);
       registerDeclaredBlocks(ctx, def.blocks);
+      // Starts this boot's form providers, so the last boot's are forgotten
+      // even when no plugin registers one.
+      startFormProviders(ctx.services);
       // The site's named queries and the ones plugins declare, into a
       // registry emptied for this boot.
       state.namedQueries = registerNamedQueriesAtBoot(ctx, opts.namedQueries);
@@ -375,7 +386,13 @@ export const pageBuilder = (
       // `contributes.blocks` key — a plugin contributing blocks is contributing
       // to the page builder, not to Nextly — so the registry is offered here and
       // reached via `ctx.services.plugins`.
-      services: pluginServices(def, { removalService, readRetiredFor }),
+      // And `forms`, the channel a plugin adds a form provider through.
+      services: {
+        ...pluginServices(def, { removalService, readRetiredFor }),
+        [FORM_SERVICE]: () => formProviders.start(),
+      },
+      // The form receiver's send limit per visitor address.
+      limits: FORM_SEND_LIMITS,
       // The backfill sweep. Contributed unconditionally beside the index it
       // fills: the work is owed from the moment this plugin meets existing
       // content, and no request or hook ever becomes the moment to enqueue it.
@@ -480,6 +497,11 @@ export const pageBuilder = (
         ...siteStyle.sharedStyles,
         ...siteStyle.variables,
         startup.builderStartup,
+        // The one public route every form on the site posts to.
+        formReceiverRoute({
+          providers: formProviders,
+          componentStore: componentStoreOf(opts),
+        }),
       ],
       // The grant that lets a role change the site's settings in the editor's
       // Settings: its breakpoints, through the one route that changes them,

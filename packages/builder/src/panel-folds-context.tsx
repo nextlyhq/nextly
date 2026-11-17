@@ -10,6 +10,12 @@
 import * as React from "react";
 
 import {
+  sectionShown,
+  useSearchFolds,
+  useSettingsMatch,
+  type SearchFold,
+} from "./settings-filter";
+import {
   sectionOpens,
   withSectionFold,
   type SectionFolds,
@@ -81,6 +87,29 @@ export function useTabFolds(
   readonly onOpenChange: (open: string[]) => void;
 } {
   const { folds, change } = usePanelFolds();
+  const match = useSettingsMatch();
+  // While the panel is filtered, the sections holding a match open on their
+  // own, and what the author opens or closes then is kept for that search
+  // alone: the folds they left come back as they were once it is cleared.
+  const matchedKeys = sections
+    .filter(section => sectionShown(match, tab, section.key))
+    .map(section => section.key);
+  // What a search's own folds belong to: the words and the toggle, and the
+  // sections they keep, so a new device, state, block or search starts from
+  // its matches again.
+  const searching = [
+    match.query,
+    String(match.onlyChanged),
+    ...matchedKeys,
+  ].join("\u0000");
+  const searchFolds = useSearchFolds();
+  if (match.active) {
+    return {
+      open: filteredOpen(searchFolds.folds[tab], searching, matchedKeys),
+      onOpenChange: next =>
+        searchFolds.set(tab, { kind: "chosen", search: searching, open: next }),
+    };
+  }
   const open = sections
     .filter((section, index) =>
       sectionOpens(folds, tab, section.label, {
@@ -103,4 +132,20 @@ export function useTabFolds(
     );
   };
   return { open, onOpenChange };
+}
+
+/**
+ * The open sections while filtered: all or none from the panel's menu, those
+ * the author chose during this search, else the matches.
+ */
+function filteredOpen(
+  fold: SearchFold | undefined,
+  searching: string,
+  matched: string[]
+): string[] {
+  if (fold?.kind === "all") return fold.open ? matched : [];
+  if (fold?.kind === "chosen" && fold.search === searching) {
+    return [...fold.open];
+  }
+  return matched;
 }
