@@ -63,6 +63,19 @@ describe("focusing the field on its tab", () => {
     expect(document.activeElement?.id).toBe("meta");
   });
 
+  it("prefers the control that edits the field, where one says so", () => {
+    document.body.innerHTML = `
+      <div id="tab">
+        <div data-field="slug">
+          <button id="copy">Copy address</button>
+          <button id="edit" data-field-control>Edit address</button>
+        </div>
+      </div>`;
+    const tab = document.getElementById("tab")!;
+    expect(focusFieldIn(tab, "slug")).toBe(true);
+    expect(document.activeElement?.id).toBe("edit");
+  });
+
   it("falls back to the input named by the path, and says when nothing took it", () => {
     document.body.innerHTML = `<div id="tab"><input name="summary" id="s"></div>`;
     const tab = document.getElementById("tab")!;

@@ -27,6 +27,8 @@ import type * as React from "react";
 
 import { computeFieldsBeside } from "@admin/lib/builder/takeoverLayout";
 
+import { effectiveFieldGate } from "../fields/field-admin-gates";
+
 import { DocumentAddressChip } from "./DocumentAddressChip";
 import { useEntryDetails, type EntryDetailsTarget } from "./entry-details-read";
 import { EntryFormContent } from "./EntryFormContent";
@@ -327,7 +329,7 @@ function IdentityGroup({
         <AddressChipField
           slug={slug}
           facts={address}
-          locked={readOnly === true || disabled === true}
+          locked={addressLocked(slug, readOnly, disabled)}
           hasPublicAddress={slugName !== undefined}
         />
       ) : (
@@ -335,6 +337,25 @@ function IdentityGroup({
       )}
     </section>
   );
+}
+
+/**
+ * Whether the address chip may not edit the slug: the form's one decision
+ * about the field (`effectiveFieldGate`), from what the panel holds and the
+ * slug's own read-only and disabled gates, as the field itself would be.
+ * Its condition is judged before this, where the field is offered at all.
+ */
+function addressLocked(
+  slug: FieldConfig,
+  readOnly: boolean | undefined,
+  disabled: boolean | undefined
+): boolean {
+  const gate = effectiveFieldGate(
+    slug,
+    { shown: true, readOnly: readOnly === true, disabled: disabled === true },
+    undefined
+  );
+  return gate.readOnly || gate.disabled;
 }
 
 /** The change warning beside the slug drawn as a field, only where it is live. */
@@ -373,7 +394,8 @@ function AddressChipField({
       role="group"
       aria-labelledby="entry-fields-address"
       className="pt-3"
-      data-entry-address=""
+      // The slug's place, where a surface showing a field it refused finds it.
+      data-field={"name" in slug ? slug.name : "slug"}
     >
       <p id="entry-fields-address" className="text-sm font-medium">
         Address

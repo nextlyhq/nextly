@@ -12,6 +12,10 @@
  *
  * @module components/features/entries/EntryForm/entry-fields-layout
  */
+import {
+  computeFieldsBeside,
+  type LayoutField,
+} from "@admin/lib/builder/takeoverLayout";
 
 /** Where the entry page draws a field. */
 export type EntryFieldTab =
@@ -47,26 +51,8 @@ export interface EntryFieldsLayout {
 /** The fields drawn as the document's identity rather than its content. */
 const IDENTITY_FIELDS = new Set(["title", "slug"]);
 
-/** A field as far as the layout reads it: any field config fits. */
-interface LaidOutField {
-  name?: unknown;
-  type?: unknown;
-  label?: unknown;
-  fields?: unknown;
-  admin?: unknown;
-}
-
-function isHidden(field: LaidOutField): boolean {
-  const admin = field.admin;
-  return (
-    typeof admin === "object" &&
-    admin !== null &&
-    (admin as { hidden?: unknown }).hidden === true
-  );
-}
-
-function childrenOf(field: LaidOutField): readonly LaidOutField[] {
-  return Array.isArray(field.fields) ? (field.fields as LaidOutField[]) : [];
+function isHidden(field: LayoutField): boolean {
+  return field.admin?.hidden === true;
 }
 
 /**
@@ -74,19 +60,20 @@ function childrenOf(field: LaidOutField): readonly LaidOutField[] {
  * its own name, or, for a nameless field that only arranges others (a row),
  * the name of a field inside it, as the form stores those at the root.
  */
-function holds(field: LaidOutField, name: string): boolean {
+function holds(field: LayoutField, name: string): boolean {
   if (typeof field.name === "string") return field.name === name;
-  return childrenOf(field).some(child => holds(child, name));
+  return (field.fields ?? []).some(child => holds(child, name));
 }
 
 /** A content field as a surface names it, or none for a nameless one. */
-function contentFieldOf(field: LaidOutField): EntryContentField[] {
+function contentFieldOf(
+  field: LayoutField & { label?: unknown }
+): EntryContentField[] {
   if (typeof field.name !== "string") return [];
-  if (IDENTITY_FIELDS.has(field.name) || isHidden(field)) return [];
   return [
     {
       name: field.name,
-      type: typeof field.type === "string" ? field.type : "",
+      type: field.type ?? "",
       label: typeof field.label === "string" ? field.label : field.name,
     },
   ];
@@ -94,15 +81,19 @@ function contentFieldOf(field: LaidOutField): EntryContentField[] {
 
 /**
  * The layout, from the document's fields, the content the page draws (its
- * fields less those a tab takes and those kept off the type), and which tab
- * takes which top-level field.
+ * fields less those a tab takes and those kept off the type), which tab
+ * takes which top-level field, and the values the fields' conditions read.
+ * The content's fields are the ones the renderer would draw now, by the same
+ * rule (`computeFieldsBeside`): never a hidden one, or one whose condition
+ * is false.
  */
-export function entryFieldsLayout(
-  allFields: readonly LaidOutField[],
-  contentFields: readonly LaidOutField[],
-  takenBy: ReadonlyMap<string, string>
+export function entryFieldsLayout<F extends LayoutField & { label?: unknown }>(
+  allFields: readonly F[],
+  contentFields: F[],
+  takenBy: ReadonlyMap<string, string>,
+  values: Record<string, unknown> = {}
 ): EntryFieldsLayout {
-  const drawn = new Set(contentFields);
+  const drawn = new Set<LayoutField>(contentFields);
   return {
     tabOf: path => {
       const first = path.split(".")[0] ?? "";
@@ -113,6 +104,10 @@ export function entryFieldsLayout(
       if (tab !== undefined) return { kind: "tab", id: tab };
       return drawn.has(holder) ? { kind: "content" } : null;
     },
-    contentFields: contentFields.flatMap(contentFieldOf),
+    contentFields: computeFieldsBeside(
+      contentFields,
+      "",
+      values
+    ).content.flatMap(contentFieldOf),
   };
 }

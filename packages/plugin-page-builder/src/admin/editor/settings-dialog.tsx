@@ -231,6 +231,7 @@ export function SettingsDialog({
           // One height for every tab, so moving between them never resizes
           // the dialog under the pointer.
           className="flex h-[min(85vh,720px)] max-w-[680px] flex-col gap-0 p-0"
+          data-page-settings=""
           onKeyDown={keepEnterFromThePage}
           onEscapeKeyDown={leaveEscapeToItsControl}
           // "Show me" focuses its field once the tab is drawn.
@@ -547,6 +548,19 @@ function useShowMe({
 }
 
 /**
+ * Focus the field at `path` in the tab's content, or, where it cannot take
+ * the focus, the tab it is on: the dialog's own first focus was kept back
+ * for the field, so focus never stays outside the dialog.
+ */
+function focusShownField(body: HTMLElement, path: string): void {
+  if (focusFieldIn(body, path)) return;
+  body
+    .closest('[role="dialog"]')
+    ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+    ?.focus();
+}
+
+/**
  * Focus the field "Show me" asked for, once its tab is drawn in the open
  * dialog: on the next frame, after the dialog's own first focus.
  */
@@ -562,7 +576,7 @@ function useFocusShownField(
   useEffect(() => {
     if (!open || path === null) return;
     const frame = requestAnimationFrame(() => {
-      if (body.current !== null) focusFieldIn(body.current, path);
+      if (body.current !== null) focusShownField(body.current, path);
       done.current();
     });
     return () => cancelAnimationFrame(frame);

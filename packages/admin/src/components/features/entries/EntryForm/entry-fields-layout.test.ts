@@ -74,6 +74,26 @@ describe("the entry page's layout of a document's fields", () => {
     expect(layout.tabOf("nothing.here")).toBeNull();
   });
 
+  it("lists only the fields the renderer draws now, by their conditions", () => {
+    const aside = {
+      name: "aside",
+      type: "blocks",
+      label: "Aside",
+      admin: { condition: { field: "showAside", operator: "isTrue" } },
+    };
+    const fields = [summary, aside];
+    expect(
+      entryFieldsLayout(fields, fields, new Map(), {
+        showAside: false,
+      }).contentFields.map(f => f.name)
+    ).toEqual(["summary"]);
+    expect(
+      entryFieldsLayout(fields, fields, new Map(), {
+        showAside: true,
+      }).contentFields.map(f => f.name)
+    ).toEqual(["summary", "aside"]);
+  });
+
   it("lists the content's named fields, less the identity and hidden ones, in order", () => {
     expect(layout.contentFields).toEqual([
       { name: "summary", type: "textarea", label: "Summary" },

@@ -496,6 +496,31 @@ describe("a part of the entry's fields, for a surface that frames them", () => {
     });
   });
 
+  it("holds the address where the slug's own gates hold the field, and marks where the slug is", () => {
+    chipProps.length = 0;
+    const gated = page.map(f =>
+      f.name === "slug" ? field("slug", "text", { readOnly: true }) : f
+    );
+    function Host(): React.JSX.Element {
+      const form = useForm({ defaultValues: { slug: "about-us" } });
+      return (
+        <FormProvider {...form}>
+          {fieldsBesidePanel(gated, "body", {
+            presentation: "dialog",
+            group: "page",
+            address: ADDRESS,
+          })}
+        </FormProvider>
+      );
+    }
+    render(<Host />);
+    expect(chipProps.at(-1)?.slug).toMatchObject({ locked: true });
+    // A surface sending an author to the slug finds it by its field name.
+    expect(
+      screen.getByRole("group", { name: "Address" }).getAttribute("data-field")
+    ).toBe("slug");
+  });
+
   it("holds the address read-only with the fields, and keeps both groups as fields when both are drawn", () => {
     chipProps.length = 0;
     function Host({ both }: { both: boolean }): React.JSX.Element {

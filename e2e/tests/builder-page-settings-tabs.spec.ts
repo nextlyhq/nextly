@@ -117,7 +117,7 @@ test.describe("Page settings", () => {
     await expect(
       dialog.getByText("Saved with the page when you Save or Publish.")
     ).toBeVisible();
-    await expectNoAxeViolations(page, { include: '[role="dialog"]' });
+    await expectNoAxeViolations(page, { include: "[data-page-settings]" });
 
     // Fields: the fixture's Summary, which the builder knows nothing of, and
     // the title not repeated.
@@ -133,7 +133,7 @@ test.describe("Page settings", () => {
     await expect(
       dialog.getByRole("button", { name: "Open as form" })
     ).toBeVisible();
-    await expectNoAxeViolations(page, { include: '[role="dialog"]' });
+    await expectNoAxeViolations(page, { include: "[data-page-settings]" });
 
     // No sideways scrolling at this size.
     const sideways = await dialog.evaluate(

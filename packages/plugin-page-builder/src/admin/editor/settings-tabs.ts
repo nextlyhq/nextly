@@ -45,9 +45,10 @@ const FOCUSABLE =
   "input:not([type=hidden]), textarea, select, button, [tabindex]:not([tabindex='-1']), [contenteditable='true']";
 
 /**
- * Focus the field at a form path inside `container`: the control inside the
- * form's wrapper for it (`data-field`), or the input named by the path.
- * Answers whether one took the focus.
+ * Focus the field at a form path inside `container`: inside the form's
+ * wrapper for it (`data-field`), the control that edits it where one says so
+ * (`data-field-control`, the address's Edit), else its first control; or the
+ * input named by the path. Answers whether one took the focus.
  */
 export function focusFieldIn(container: HTMLElement, path: string): boolean {
   // Quoted in the selector: only a quote or a backslash needs escaping there.
@@ -56,6 +57,7 @@ export function focusFieldIn(container: HTMLElement, path: string): boolean {
     `[data-field="${escaped}"]`
   );
   const target =
+    wrapper?.querySelector<HTMLElement>("[data-field-control]") ??
     wrapper?.querySelector<HTMLElement>(FOCUSABLE) ??
     container.querySelector<HTMLElement>(`[name="${escaped}"]`) ??
     wrapper;

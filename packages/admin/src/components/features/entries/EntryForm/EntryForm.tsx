@@ -944,8 +944,9 @@ export function EntryForm({
   // the surface covering it: it sends an author to a refused field's tab.
   const takenByTab = useFieldsTakenByTab(documentPlace, fieldNames);
   const fieldsLayout = useMemo(
-    () => entryFieldsLayout(allFields, besideFields, takenByTab),
-    [allFields, besideFields, takenByTab]
+    () =>
+      entryFieldsLayout(allFields, besideFields, takenByTab, conditionValues),
+    [allFields, besideFields, takenByTab, conditionValues]
   );
   // Whether the entry's address is live, for the dialog's address as for
   // the header's chip: a collection without a lifecycle is always live.

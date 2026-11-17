@@ -655,6 +655,18 @@ describe("Page settings", () => {
     );
   });
 
+  it("focuses the field's tab where the field itself cannot take the focus", async () => {
+    tabOf = path => (path === "slug" ? { kind: "page" } : null);
+    const { reopen } = show({ open: false });
+    act(() => reveal?.("slug")?.());
+    reopen();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("tab", { name: "General" })
+      )
+    );
+  });
+
   it("offers no Show me for the page's content when Fields is left out", () => {
     contentLeft = false;
     tabOf = () => ({ kind: "content" });
