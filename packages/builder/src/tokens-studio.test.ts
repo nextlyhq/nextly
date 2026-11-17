@@ -558,12 +558,15 @@ describe("variables, grouped as the Design panel shows them", () => {
       ])
     );
 
-  it("puts each variable in one of five groups, in the panel's order", () => {
+  it("puts each variable in one of eight groups, in the panel's order", () => {
     expect(variableGroups(SET).map(group => group.heading)).toEqual([
       "Colours",
       "Type scale",
       "Fonts and weights",
-      "Spacing, radius & shadows",
+      "Spacing",
+      "Radius",
+      "Shadows",
+      "Content width",
       "Other values",
     ]);
     // A font sits with the type, and only what belongs to no other group is
@@ -572,8 +575,11 @@ describe("variables, grouped as the Design panel shows them", () => {
       colours: ["Brand"],
       type: ["Body", "Loose"],
       fonts: ["Body"],
-      spacing: ["Space 4", "Card", "Card"],
-      other: ["Content width"],
+      spacing: ["Space 4"],
+      radius: ["Card"],
+      shadows: ["Card"],
+      content: ["Content width"],
+      other: [],
     });
   });
 
@@ -581,7 +587,7 @@ describe("variables, grouped as the Design panel shows them", () => {
     expect(DESIGN_TAB_GROUPS).toEqual({
       colours: ["colours"],
       type: ["type", "fonts"],
-      spacing: ["spacing", "other"],
+      spacing: ["spacing", "radius", "shadows", "content", "other"],
       styles: [],
     });
     // Every group is under exactly one tab.
@@ -659,12 +665,16 @@ describe("variables, grouped as the Design panel shows them", () => {
     expect(emitTokenBlocks(made.tokens, ":root").issues).toEqual([]);
   });
 
-  it("adds spacing, radius and shadow to their shared group", () => {
-    for (const kind of ["spacing", "radius", "shadow"] as const) {
+  it("adds spacing, radius and shadow each to its own group", () => {
+    for (const [kind, group] of [
+      ["spacing", "spacing"],
+      ["radius", "radius"],
+      ["shadow", "shadows"],
+    ] as const) {
       const made = addVariable({ tokens: [] }, kind);
       expect(
         variableGroups(made.tokens).map(g => [g.group, g.entries.length])
-      ).toContainEqual(["spacing", 1]);
+      ).toContainEqual([group, 1]);
     }
   });
 

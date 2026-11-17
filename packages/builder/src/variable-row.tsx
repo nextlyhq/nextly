@@ -660,7 +660,9 @@ function RowTail({
       {words}
     </span>
   );
-  if (lengthFamilyOf(entry.row) !== "spacing") return chip;
+  if (variableGroupOf(entry.row) !== "spacing" || entry.row.kind !== "dimension") {
+    return chip;
+  }
   // A spacing draws a bar as long as it is at the desktop width.
   const px = pxAtWidth(own, DESKTOP_PREVIEW_WIDTH);
   return (

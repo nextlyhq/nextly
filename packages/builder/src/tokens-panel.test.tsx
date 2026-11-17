@@ -114,7 +114,9 @@ describe("the rows", () => {
     expect(headings).toEqual([
       "Colours",
       "Type scale",
-      "Spacing, radius & shadows",
+      "Spacing",
+      "Radius",
+      "Shadows",
     ]);
   });
 
@@ -126,9 +128,7 @@ describe("the rows", () => {
       spacing: { mode: "classic", onChange: () => undefined },
     };
     render(<Hosted tokens={SITE} {...stale} />);
-    const spacing = screen.getByRole("region", {
-      name: "Spacing, radius & shadows",
-    });
+    const spacing = screen.getByRole("region", { name: "Spacing" });
     expect(screen.queryByText("Space between blocks")).toBeNull();
     expect(screen.queryByRole("radiogroup")).toBeNull();
     expect(screen.queryByText(/classic/i)).toBeNull();
@@ -270,7 +270,7 @@ describe("the rows", () => {
           tokens: [
             ...SITE.tokens,
             {
-              name: "space.section-y",
+              name: "space.hero",
               kind: "dimension",
               values: { light: fluid },
             },
@@ -278,67 +278,41 @@ describe("the rows", () => {
         }}
       />
     );
-    const section = row(/^Section y/);
+    const section = row(/^Hero/);
     const chip = section.querySelector(".nx-vars__chip");
-    expect(chip?.textContent).toBe("Fluid");
+    expect(chip?.textContent).toBe("Fluid · 16–32px");
     expect(chip?.getAttribute("title")).toBe(fluid);
-    expect(section.getAttribute("aria-label")).toBe(`Section y, ${fluid}`);
+    expect(section.getAttribute("aria-label")).toBe(`Hero, ${fluid}`);
     // A fixed length still reads as itself, with no hover to add.
     const fixed = row(/^Space 4/).querySelector(".nx-vars__chip");
     expect(fixed?.textContent).toBe("1rem");
     expect(fixed?.getAttribute("title")).toBeNull();
   });
 
-  it("tells apart two rows shown under one name by their kind, and only those", () => {
-    // `space.card` and `radius.card` both read "Card": side by side, nothing
-    // said which was which.
+  it("lists a spacing and a radius of one name in their own groups, each under its plain name", () => {
+    // `space.tile` and `radius.tile` both read "Tile": each sits under its
+    // own heading, so the heading tells them apart and the name stays plain.
     render(
       <Hosted
         tokens={{
           tokens: [
             ...SITE.tokens,
-            {
-              name: "space.card",
-              kind: "dimension",
-              values: { light: "24px" },
-            },
-            {
-              name: "radius.card",
-              kind: "dimension",
-              values: { light: "12px" },
-            },
+            { name: "space.tile", kind: "dimension", values: { light: "24px" } },
+            { name: "radius.tile", kind: "dimension", values: { light: "12px" } },
           ],
         }}
       />
     );
-    const spacing = row(/^Card · spacing/);
-    const radius = row(/^Card · radius/);
-    expect(spacing.getAttribute("aria-label")).toBe("Card · spacing, 24px");
-    expect(radius.getAttribute("aria-label")).toBe("Card · radius, 12px");
-    // The kind is muted beside the name, not part of it.
-    expect(radius.querySelector(".nx-vars__name")?.textContent).toBe(
-      "Card · radius"
-    );
-    expect(radius.querySelector(".nx-vars__name-kind")?.textContent).toBe(
-      " · radius"
-    );
-    // A name only one row has stays as it is.
-    expect(row(/^Space 4/).getAttribute("aria-label")).toBe("Space 4, 1rem");
-    // Each draws its kind's icon, so the two differ at a glance too.
+    const spacing = within(screen.getByRole("region", { name: "Spacing" }));
+    const radius = within(screen.getByRole("region", { name: "Radius" }));
     expect(
-      radius
-        .querySelector("[data-variable-icon]")
-        ?.getAttribute("data-variable-icon")
-    ).toBe("radius");
-    expect(
-      spacing
-        .querySelector("[data-variable-icon]")
-        ?.getAttribute("data-variable-icon")
-    ).toBe("spacing");
+      spacing.getByRole("button", { name: /^Tile, 24px$/ })
+    ).toBeDefined();
+    expect(radius.getByRole("button", { name: /^Tile, 12px$/ })).toBeDefined();
   });
 
   it("names the code name when two rows of one name are of one kind too", () => {
-    // `space.card` and `spacing.card` are both spacing steps called "Card":
+    // `space.tile` and `spacing.tile` are both spacing steps called "Tile":
     // the kind cannot tell them apart, the code name can.
     render(
       <Hosted
@@ -346,12 +320,12 @@ describe("the rows", () => {
           tokens: [
             ...SITE.tokens,
             {
-              name: "space.card",
+              name: "space.tile",
               kind: "dimension",
               values: { light: "24px" },
             },
             {
-              name: "spacing.card",
+              name: "spacing.tile",
               kind: "dimension",
               values: { light: "32px" },
             },
@@ -359,11 +333,11 @@ describe("the rows", () => {
         }}
       />
     );
-    expect(row(/^Card · space\.card,/).getAttribute("aria-label")).toBe(
-      "Card · space.card, 24px"
+    expect(row(/^Tile · space\.card,/).getAttribute("aria-label")).toBe(
+      "Tile · space.tile, 24px"
     );
-    expect(row(/^Card · spacing\.card,/).getAttribute("aria-label")).toBe(
-      "Card · spacing.card, 32px"
+    expect(row(/^Tile · spacing\.card,/).getAttribute("aria-label")).toBe(
+      "Tile · spacing.tile, 32px"
     );
   });
 

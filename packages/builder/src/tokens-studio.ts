@@ -779,9 +779,13 @@ const SIZE_PREFIX = "font-size.";
 const LINE_HEIGHT_PREFIX = "line-height.";
 
 /** Code-name prefixes of a spacing step, and of a radius. */
-// A button's paddings are spacing too: set alongside the rest, with the
-// same fields.
-const SPACING_PREFIXES = ["space.", "spacing.", "gap.", "button.padding"];
+const SPACING_PREFIXES = ["space.", "spacing.", "gap."];
+
+/**
+ * A button's paddings, listed with the spacing in Design though they are
+ * not offered to a block's spacing fields: they are the button's own.
+ */
+const BUTTON_PADDING_PREFIX = "button.padding";
 
 /** The site's content width, which has a group of its own. */
 const CONTENT_WIDTH = "content.width";
@@ -851,6 +855,7 @@ export function variableGroupOf(token: {
   const family = lengthFamilyOf(token);
   if (family === "font-size" || family === "line-height") return "type";
   if (family === "spacing" || family === "radius") return family;
+  if (token.name.startsWith(BUTTON_PADDING_PREFIX)) return "spacing";
   return "other";
 }
 

@@ -496,7 +496,6 @@
   flex: none;
   max-width: 3rem;
   height: 6px;
-  border-radius: 1px;
   background: var(--nx-muted-foreground);
   opacity: 0.55;
 }
