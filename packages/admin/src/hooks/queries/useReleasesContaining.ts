@@ -11,7 +11,11 @@
  * @module hooks/queries/useReleasesContaining
  */
 
-import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import {
+  useQuery,
+  useQueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 
 import {
   fetchReleases,
@@ -40,18 +44,8 @@ export function useReleasesContaining(
   document: ReleaseDocumentRef | undefined,
   enabled = true
 ): UseQueryResult<ReleaseListResponse, Error> {
-  // The route's ceiling rather than its default of 50. A document in more
-  // than fifty scheduled releases is implausible, and asking for the ceiling
-  // costs nothing when the real answer is one or two — but the banner presents
-  // the rows as a SEQUENCE whose last member is the document's final state, and
-  // a silently truncated sequence would present an incomplete answer as a
-  // complete one.
-  const params: ReleaseListParams = document
-    ? { containing: document, limit: 200 }
-    : {};
   const query = useQuery({
-    queryKey: releaseKeys.list(params),
-    queryFn: () => fetchReleases(params),
+    ...releasesContaining(document),
     // Never asked without a complete reference: the route refuses a partial
     // one, and a 404-shaped error in the console under every document editor
     // is a poor way to say "this document has no id yet".
@@ -81,4 +75,44 @@ export function useReleasesContaining(
     refetchOnWindowFocus: true,
   });
   return query;
+}
+
+/** The read of which releases hold `document`: its key and its request. */
+function releasesContaining(document: ReleaseDocumentRef | undefined): {
+  queryKey: ReturnType<typeof releaseKeys.list>;
+  queryFn: () => Promise<ReleaseListResponse>;
+} {
+  // The route's ceiling rather than its default of 50. A document in more
+  // than fifty scheduled releases is implausible, and asking for the ceiling
+  // costs nothing when the real answer is one or two — but the banner presents
+  // the rows as a SEQUENCE whose last member is the document's final state, and
+  // a silently truncated sequence would present an incomplete answer as a
+  // complete one.
+  const params: ReleaseListParams = document
+    ? { containing: document, limit: 200 }
+    : {};
+  return {
+    queryKey: releaseKeys.list(params),
+    queryFn: () => fetchReleases(params),
+  };
+}
+
+/**
+ * Start reading which releases hold `document` as a page first renders, under
+ * the key {@link useReleasesContaining} reads, so the banner, the Publish
+ * split and the Publishing section find it on its way or answered when the
+ * editor is drawn, rather than asking only then. Nothing is sent where it is
+ * already read or being read, nor while `enabled` is false.
+ */
+export function useStartReleasesContaining(
+  document: ReleaseDocumentRef | undefined,
+  enabled: boolean
+): void {
+  const queryClient = useQueryClient();
+  if (!enabled || document === undefined) return;
+  const read = releasesContaining(document);
+  // In render, as `usePrefetchQuery` starts its read: a read already in the
+  // cache, answered or on its way, is left alone.
+  if (queryClient.getQueryState(read.queryKey) !== undefined) return;
+  void queryClient.prefetchQuery(read);
 }

@@ -22,6 +22,7 @@
 import {
   DEFAULT_LIMITS,
   surveyDocument,
+  type BlockRegistryReader,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import { pageActionSchema } from "@nextlyhq/builder/ops";
@@ -91,6 +92,8 @@ export interface UnbindPlanReads {
   plan: typeof planUnbind;
   /** The collection templates are stored in, under the host's name for it. */
   readonly templates: string;
+  /** The site's block registry, whose blocks the page is drawn with. */
+  readonly blocks: BlockRegistryReader;
 }
 
 /**
@@ -156,13 +159,17 @@ export async function answerUnbindPlan(
       : { collection: at.collection, id: at.id }),
     ...(at.locale === undefined ? {} : { locale: at.locale }),
     ...(target === undefined ? {} : { templateTarget: target.collection }),
+    blocks: reads.blocks,
   };
   const { nodeId, prop, keep } = request.action;
   return reads.plan(source, request.document, nodeId, prop, keep ?? "visitor");
 }
 
 /** The reads the route binds: the page as the caller, and the one decision. */
-function directUnbindPlanReads(ctx: PluginRouteContext): UnbindPlanReads {
+function directUnbindPlanReads(
+  ctx: PluginRouteContext,
+  blocks: BlockRegistryReader
+): UnbindPlanReads {
   return {
     readPage: async page => {
       const reader = await editorReaderAsCaller(ctx, page.locale);
@@ -194,6 +201,7 @@ function directUnbindPlanReads(ctx: PluginRouteContext): UnbindPlanReads {
         unbindReadsOf(ctx.services.collections)
       ),
     templates: ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG,
+    blocks,
   };
 }
 
@@ -203,12 +211,12 @@ function directUnbindPlanReads(ctx: PluginRouteContext): UnbindPlanReads {
  * caller. A POST because an ask carries a document, never because it writes;
  * `noStore` because its answer is one person's ask.
  */
-export function unbindPlanRoute(
-  setup: {
-    /** The site's document limits, as the page actions are given them. */
-    readonly limits?: () => DocumentLimits;
-  } = {}
-): {
+export function unbindPlanRoute(setup: {
+  /** The site's document limits, as the page actions are given them. */
+  readonly limits?: () => DocumentLimits;
+  /** The site's block registry, whose blocks the page is drawn with. */
+  readonly blocks: BlockRegistryReader;
+}): {
   method: "POST";
   checksAccess: true;
   path: string;
@@ -225,7 +233,7 @@ export function unbindPlanRoute(
       return respondDoc(
         await answerUnbindPlan(
           unbindPlanRequestOf(raw, setup.limits?.() ?? DEFAULT_LIMITS),
-          directUnbindPlanReads(ctx)
+          directUnbindPlanReads(ctx, setup.blocks)
         )
       );
     },

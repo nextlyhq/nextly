@@ -26,11 +26,7 @@ import {
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   expandSlotDefaults,
-  hasBlock,
   makeNode,
-  registerBlocks,
-  registryBlockSource,
-  registryNestingSource,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
@@ -46,6 +42,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { COMPONENTS_SLUG } from "../collections/components";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { BLOCKS_TYPE } from "../fields/blocksField";
+import { blockRegistry, blocksOf } from "../index";
 import { pageBuilder } from "../plugin";
 
 type Node = Record<string, unknown>;
@@ -94,16 +91,18 @@ const document = (kind: "page" | "component", nodes: Node[]) => ({
  * A headline, and a hero whose one slot is locked to the two headlines it
  * starts with: nothing may be added to it, nor taken out.
  */
-function registerLockedHero(): void {
-  if (hasBlock("acme/locked-hero")) return;
-  const base = {
-    version: 1,
-    description: "A block.",
-    example: { props: {} },
-    render: () => null,
-  };
-  registerBlocks(
-    [
+const lockedHeroBlocks = definePlugin({
+  name: "acme",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  init: ctx => {
+    const base = {
+      version: 1,
+      description: "A block.",
+      example: { props: {} },
+      render: () => null,
+    };
+    blockRegistry(ctx).register([
       {
         ...base,
         name: "acme/headline",
@@ -123,10 +122,12 @@ function registerLockedHero(): void {
           },
         },
       },
-    ] as never,
-    { source: "acme" }
-  );
-}
+    ] as never);
+  },
+});
+
+/** The page builder of the site booted last, whose blocks are inserted. */
+let builder: ReturnType<typeof pageBuilder>;
 
 /** A block as inserting it places it, its slots filled with their defaults. */
 function inserted(type: string): BlockNode {
@@ -134,7 +135,11 @@ function inserted(type: string): BlockNode {
     type,
     1,
     {},
-    expandSlotDefaults(type, registryBlockSource(), registryNestingSource())
+    expandSlotDefaults(
+      type,
+      blocksOf(builder).blockSource(),
+      blocksOf(builder).nestingSource()
+    )
   );
 }
 
@@ -257,11 +262,14 @@ describe.each(getConfiguredTestDialects())(
 
     async function boot(): Promise<TestNextly> {
       gate = newGate();
+      builder = pageBuilder({ limits: { ...DEFAULT_LIMITS, maxDepth: 4 } });
       current = await createTestNextly({
         dialect,
         plugins: [
-          pageBuilder({ limits: { ...DEFAULT_LIMITS, maxDepth: 4 } }),
+          builder,
           gatePlugin(gate),
+          // The locked hero a case places.
+          lockedHeroBlocks,
         ],
         collections: [
           { slug: "notes", fields: [textField({ name: "title" })] } as never,
@@ -400,8 +408,6 @@ describe.each(getConfiguredTestDialects())(
       // is locked to its two headlines. The page, judged before against the
       // box, fills the slot with three.
       const t = await boot();
-      // After the boot, which starts the block registry afresh.
-      registerLockedHero();
       const shell = box("shell", []);
       const c = String(
         (

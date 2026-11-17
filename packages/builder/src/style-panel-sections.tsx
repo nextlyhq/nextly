@@ -17,7 +17,6 @@ import {
   Accordion,
   AccordionContent,
   AccordionItem,
-  AccordionTrigger,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -25,13 +24,15 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { ContentWidthFields } from "./content-width-fields";
 import { FocalFrame } from "./focal-frame";
 import type { InspectorSectionKey } from "./inspector-sections";
+import { useTabFolds } from "./panel-folds-context";
+import { SectionHeading } from "./panel-section";
 import { SectionHeld } from "./section-held";
 import { spacingRings } from "./spacing-box";
 import { SpacingBox } from "./spacing-box-fields";
 import {
-  ColumnsLayoutFields,
   BlockShortcutsFields,
   BlockPresetsOver,
 } from "./style-block-shortcuts";
@@ -41,27 +42,29 @@ import {
 } from "./style-field-surroundings";
 import { fieldStyles } from "./style-field-target";
 import type { InspectedStyleProperty, StyleSection } from "./style-inspector";
+import {
+  ArrangeFields,
+  arrangedAway,
+  SPACE_PROPERTIES,
+  useArrangeReading,
+  type ArrangeReading,
+} from "./plain-layout-controls";
 import { StylePropertyFields } from "./style-property-fields";
 import type { StyleProvenance } from "./style-provenance";
 import type { StyleTarget } from "./style-target";
 
 /**
- * The panel's sections, one open at a time, with the block's picture and fit
- * for the focal point drawn over it.
+ * The panel's sections, each folding on its own and remembered as the author
+ * left it (`panel-folds`), with the block's picture and fit for the focal
+ * point drawn over it.
  */
 export function StyleSections({
   sections,
-  nodeId,
-  open,
-  onOpen,
   readOnlyReason,
   surroundings,
   fit,
 }: {
   sections: readonly StyleSection[];
-  nodeId: string;
-  open: string;
-  onOpen: (group: string) => void;
   readOnlyReason: React.ComponentProps<
     typeof StyleSectionItem
   >["readOnlyReason"];
@@ -70,16 +73,25 @@ export function StyleSections({
 }): React.JSX.Element {
   // The picture lent from above, with the fit in force here.
   const { picture, position } = React.useContext(FocalFrame);
+  const { open, onOpenChange } = useTabFolds(
+    "style",
+    sections.map(section => ({
+      key: section.key,
+      label: section.label,
+      holdsValue: holdsValues(section),
+    }))
+  );
   return (
     <FocalFrame.Provider value={{ picture, position, fit }}>
-      <Accordion type="single" collapsible value={open} onValueChange={onOpen}>
+      <Accordion type="multiple" value={open} onValueChange={onOpenChange}>
         {sections.map(section => (
           <StyleSectionItem
-            // Keyed by node AND group: a bare group would let React reuse one
-            // block's inputs for the next block's same-named section, so a
-            // field would keep the previous block's uncommitted text.
-            key={`${nodeId}:${section.key}`}
+            // Keyed by group alone, so a closed section whose heading reads
+            // the same is kept as it is for the next block. What a field
+            // holds is keyed by node inside it (`SectionBody`).
+            key={section.key}
             section={section}
+            open={open.includes(section.key)}
             readOnlyReason={readOnlyReason}
             {...surroundings}
           />
@@ -115,15 +127,81 @@ export function rendersMedia(
   return renderedTag !== undefined && REPLACED_ELEMENTS.has(renderedTag);
 }
 
+/** The props one section is drawn from. */
+type StyleSectionItemProps = {
+  section: StyleSection;
+  /** Whether it is the section open, whose fields are drawn. */
+  open: boolean;
+  /** Why every control is read-only, which also withholds "+ More". */
+  readOnlyReason: string | undefined;
+} & StyleFieldSurroundings;
+
+/** Whether any of a section's properties holds a value. */
+function holdsValues(section: StyleSection): boolean {
+  return section.properties.some(property => property.set);
+}
+
 /**
- * One section: its common properties, any that hold a value, and the rest
- * behind "+ More".
+ * Whether a section draws nothing new: closed both times, it draws only its
+ * heading, so it is drawn again only when what the heading says changes. An
+ * open section draws its fields, which read everything, and is always drawn.
+ */
+function sameClosedSection(
+  before: StyleSectionItemProps,
+  after: StyleSectionItemProps
+): boolean {
+  if (before.open || after.open) return false;
+  return (
+    before.section.key === after.section.key &&
+    before.section.label === after.section.label &&
+    holdsValues(before.section) === holdsValues(after.section)
+  );
+}
+
+/**
+ * One section: its heading, and while it is open, its fields.
  *
  * **The header marks a section that holds values** with a dot and the words
  * "has values" for a screen reader, so an author can see which sections they
  * have touched without opening each one, and the dot is never colour alone.
+ *
+ * Kept as it is while it stays closed and its heading reads the same, so a
+ * selection rebuilds only the sections that change: the open one, and any
+ * whose dot comes or goes.
  */
-function StyleSectionItem({
+const StyleSectionItem: React.NamedExoticComponent<StyleSectionItemProps> =
+  React.memo(function StyleSectionItem({
+    section,
+    open: _open,
+    readOnlyReason,
+    ...surroundings
+  }: StyleSectionItemProps): React.JSX.Element {
+    return (
+      <AccordionItem value={section.key} data-section={section.key}>
+        <SectionHeading
+          label={section.label}
+          holdsValues={holdsValues(section)}
+        />
+        <AccordionContent>
+          <SectionBody
+            // Keyed by node: what a field holds, and what "+ More" brought
+            // out, stay with the block they were for, and the next block's
+            // fields start from its own values.
+            key={surroundings.nodeId}
+            section={section}
+            readOnlyReason={readOnlyReason}
+            {...surroundings}
+          />
+        </AccordionContent>
+      </AccordionItem>
+    );
+  }, sameClosedSection);
+
+/**
+ * An open section's fields: its common properties, any that hold a value,
+ * and the rest behind "+ More".
+ */
+function SectionBody({
   section,
   readOnlyReason,
   orientation,
@@ -138,15 +216,11 @@ function StyleSectionItem({
   editing,
   onChooseForm,
   breakpoints,
-}: {
-  section: StyleSection;
-  /** Why every control is read-only, which also withholds "+ More". */
-  readOnlyReason: string | undefined;
-} & StyleFieldSurroundings): React.JSX.Element {
+}: Omit<StyleSectionItemProps, "open">): React.JSX.Element {
   const readOnly = readOnlyReason !== undefined;
   /*
-   * What the author brought out from "+ More". Held here, by a section keyed
-   * by node and section, so it lasts while this block stays selected and
+   * What the author brought out from "+ More". Held here, in a body keyed by
+   * node inside its section, so it lasts while this block stays selected and
    * starts empty for the next. Panel state, like the open section: what the
    * author chose to look at, not anything the page stores — and a property
    * holding a value shows whatever this says, so it can hide nothing set.
@@ -155,13 +229,6 @@ function StyleSectionItem({
     () => new Set()
   );
   const isRevealed = (property: string) => revealed.has(property);
-  const holdsValues = section.properties.some(property => property.set);
-  const shown = section.properties.filter(
-    property => property.common || isRevealed(property.property)
-  );
-  const more = section.properties.filter(
-    property => !property.common && !isRevealed(property.property)
-  );
   const surroundings: StyleFieldSurroundings = {
     orientation,
     nodeId,
@@ -176,53 +243,118 @@ function StyleSectionItem({
     onChooseForm,
     breakpoints,
   };
+  const reading = useArrangeReading(
+    surroundings,
+    section.key === "layout" &&
+      section.properties.some(
+        // Offered, not only kept: a block that no longer has layout keeps a
+        // stored Display clear-only, as a raw row.
+        property => property.property === "display" && property.offered
+      )
+  );
+  const { listed, arrange } = arrangedSection(section.properties, reading);
+  const shown = listed.filter(
+    property => property.common || isRevealed(property.property)
+  );
+  const more = listed.filter(
+    property => !property.common && !isRevealed(property.property)
+  );
   return (
-    <AccordionItem value={section.key} data-section={section.key}>
-      <SectionHeading label={section.label} holdsValues={holdsValues} />
-      <AccordionContent>
-        <SectionFields
-          sectionKey={section.key}
-          shown={shown}
-          readOnly={readOnly}
-          surroundings={surroundings}
+    <>
+      <SectionFields
+        sectionKey={section.key}
+        shown={shown}
+        readOnly={readOnly}
+        surroundings={surroundings}
+        arrange={arrange}
+      />
+      {readOnly || more.length === 0 ? null : (
+        <MoreProperties
+          sectionLabel={section.label}
+          properties={more}
+          onReveal={property =>
+            setRevealed(current => new Set(current).add(property))
+          }
         />
-        {readOnly || more.length === 0 ? null : (
-          <MoreProperties
-            sectionLabel={section.label}
-            properties={more}
-            onReveal={property =>
-              setRevealed(current => new Set(current).add(property))
-            }
-          />
-        )}
-      </AccordionContent>
-    </AccordionItem>
+      )}
+    </>
   );
 }
 
-/** A section's heading: its name, the dot when it holds values, the chevron. */
-function SectionHeading({
-  label,
-  holdsValues,
+/** A Layout section's raw rows, and the Arrange drawn above them. */
+interface ArrangedSection {
+  readonly listed: readonly InspectedStyleProperty[];
+  readonly arrange:
+    | {
+        readonly reading: ArrangeReading;
+        readonly spacing: readonly InspectedStyleProperty[];
+      }
+    | undefined;
+}
+
+/**
+ * A container's Layout says its arrangement in plain words. Arrange's rows
+ * hold the properties it draws, so they leave the raw rows and More, except
+ * while it reads Custom, when the raw rows are what hold it.
+ */
+function arrangedSection(
+  properties: readonly InspectedStyleProperty[],
+  reading: ArrangeReading | undefined
+): ArrangedSection {
+  if (reading === undefined) return { listed: properties, arrange: undefined };
+  if (reading.arrange.mode === "custom") {
+    return { listed: properties, arrange: { reading, spacing: [] } };
+  }
+  const { mode } = reading.arrange;
+  return {
+    listed: properties.filter(property => !arrangedAway(property, mode)),
+    arrange: {
+      reading,
+      spacing: properties.filter(property =>
+        SPACE_PROPERTIES.has(property.property)
+      ),
+    },
+  };
+}
+
+/**
+ * "Nothing set here yet" for a section showing no row: not under Arrange,
+ * whose rows are what a container's Layout shows.
+ */
+function NothingSetNote({
+  shown,
+  arrange,
 }: {
-  label: string;
-  holdsValues: boolean;
+  shown: number;
+  arrange: ArrangedSection["arrange"];
+}): React.JSX.Element | null {
+  if (shown > 0 || arrange !== undefined) return null;
+  return (
+    <p className="nx-inspector__note">
+      Nothing set here yet. Add a property from More.
+    </p>
+  );
+}
+
+/** What leads a Layout section: Content width, then a container's Arrange. */
+function LayoutLead({
+  surroundings,
+  arrange,
+}: {
+  surroundings: StyleFieldSurroundings;
+  arrange: ArrangedSection["arrange"];
 }): React.JSX.Element {
   return (
-    // The panel's own class sets the heading's height and turns the shared
-    // chevron to point right while closed and down while open.
-    <AccordionTrigger className="nx-style-inspector__section-trigger">
-      <span className="nx-style-inspector__section-label">
-        {label}
-        {/* Beside the name it qualifies, as the design sets it. */}
-        {holdsValues ? (
-          <span className="nx-style-inspector__section-dot" data-has-values="">
-            <span aria-hidden="true" className="nx-style-inspector__dot" />
-            <span className="nx-sr-only">has values</span>
-          </span>
-        ) : null}
-      </span>
-    </AccordionTrigger>
+    <>
+      <ContentWidthFields surroundings={surroundings} />
+      {arrange === undefined ? null : (
+        <ArrangeFields
+          surroundings={surroundings}
+          reading={arrange.reading}
+          spacing={arrange.spacing}
+        />
+      )}
+    </>
   );
 }
 
@@ -235,11 +367,14 @@ function SectionFields({
   shown,
   readOnly,
   surroundings,
+  arrange,
 }: {
   sectionKey: InspectorSectionKey;
   shown: readonly InspectedStyleProperty[];
   readOnly: boolean;
   surroundings: StyleFieldSurroundings;
+  /** A container's Arrange, with the space fields it draws. */
+  arrange?: ArrangedSection["arrange"];
 }): React.JSX.Element {
   const target = React.useContext(StyleTargetContext);
   const rings =
@@ -250,7 +385,7 @@ function SectionFields({
     <fieldset className="nx-inspector__fields" disabled={readOnly}>
       <SectionHeld.Provider value={readOnly}>
         {sectionKey === "layout" ? (
-          <ColumnsLayoutFields surroundings={surroundings} />
+          <LayoutLead surroundings={surroundings} arrange={arrange} />
         ) : null}
         {sectionKey === "size" ? (
           <BlockShortcutsFields
@@ -279,11 +414,7 @@ function SectionFields({
             />
           </React.Fragment>
         ))}
-        {shown.length === 0 ? (
-          <p className="nx-inspector__note">
-            Nothing set here yet. Add a property from More.
-          </p>
-        ) : null}
+        <NothingSetNote shown={shown.length} arrange={arrange} />
       </SectionHeld.Provider>
     </fieldset>
   );

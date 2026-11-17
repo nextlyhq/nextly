@@ -136,9 +136,9 @@ describe("saving a block's look as a shared style", () => {
       may = true
     ) => saveAsSharedStyleRefusal(page(node), "a", offer(library, may));
     expect(refusal({ styles: OWN }, [card], false)).toBe(NO_DESIGN_RIGHT);
-    expect(refusal({})).toBe("This block has no styles of its own yet.");
+    expect(refusal({})).toBe("Change a style first, then save it to reuse it.");
     expect(refusal({ styles: { base: { base: {} } } })).toBe(
-      "This block has no styles of its own yet."
+      "Change a style first, then save it to reuse it."
     );
     expect(refusal({ styles: OWN, classes: ["c-card"] })).toBe(
       "This block already uses Card."

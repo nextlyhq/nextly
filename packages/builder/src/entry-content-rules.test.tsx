@@ -28,13 +28,13 @@ import {
   offeredIn,
   withEntryContentField,
 } from "./entry-content-rules";
-import { InsertPanel } from "./insert-panel";
+import { InsertPanel } from "./panels/add/insert-panel";
 import {
   PreviewedEntryProvider,
   type PreviewedCollection,
 } from "./previewed-entry";
 import { EMPTY_SELECTION } from "./selection";
-import { toolbarActions, type ToolbarAction } from "./toolbar-actions";
+import { toolbarActions, type ToolbarAction } from "./canvas/toolbar-actions";
 
 beforeAll(() => {
   globalThis.ResizeObserver ??= class {
@@ -86,7 +86,7 @@ const POSTS: PreviewedCollection = {
 describe("which documents are offered Entry content", () => {
   it("offers it in a template, and nowhere else", () => {
     expect(offeredIn("template", ENTRY_CONTENT_TYPE)).toBe(true);
-    for (const kind of ["page", "component", "pattern", "region"]) {
+    for (const kind of ["page", "component", "pattern"]) {
       expect(offeredIn(kind, ENTRY_CONTENT_TYPE), kind).toBe(false);
     }
     // Every other block is offered everywhere (the control).
@@ -264,11 +264,11 @@ describe("Entry content in the Add panel", () => {
   });
 });
 
-describe("making a pattern or a component of a selection holding Entry content", () => {
+describe("saving a selection holding Entry content as a section or a component", () => {
   const anyParent = { parentsOf: () => undefined };
   const offer = { mayCreate: true, mayUpdatePattern: true };
   const PATTERN =
-    "Entry content belongs in its template, so it can’t be saved in a pattern.";
+    "Entry content belongs in its template, so it can’t be saved to Saved sections.";
   const COMPONENT =
     "Entry content belongs in its template, so it can’t be saved in a component.";
   const box = {
@@ -293,7 +293,7 @@ describe("making a pattern or a component of a selection holding Entry content",
     ).find(action => action.id === id);
   }
 
-  it("dims Save as pattern, Update a pattern and Turn into component, saying why", () => {
+  it("dims Save as section…, Update a saved section and Turn into component…, saying why", () => {
     // The block holding it, and the two of them selected together.
     for (const ids of [["box"], ["ec"], ["box", "h"]]) {
       expect(verb(ids, "save-as-pattern"), ids.join()).toMatchObject({

@@ -26,6 +26,7 @@ describe("the editor's recovery offer", () => {
       },
       isResolved: true,
       dismiss: vi.fn(),
+      discard: vi.fn(),
       restore,
       restoreChecked: vi.fn(),
       take: vi.fn(),

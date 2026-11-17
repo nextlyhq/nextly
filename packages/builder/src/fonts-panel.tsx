@@ -735,7 +735,7 @@ function VariableRow({
                 className="nx-vars__link"
                 onClick={onOpenTokens}
               >
-                {`Edit in ${EDITOR_WORDS.variables}`}
+                Edit this variable
               </button>
             </>
           )}

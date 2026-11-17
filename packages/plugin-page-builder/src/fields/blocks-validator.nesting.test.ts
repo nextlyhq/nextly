@@ -12,9 +12,12 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { clearBlocks, registerBlocks } from "@nextlyhq/blocks-engine";
+import { createBlockRegistry } from "@nextlyhq/blocks-engine";
 
 import { validateBlocksValue } from "./blocks-validator";
+
+/** The site's block registry these tests seed and judge against. */
+const blocks = createBlockRegistry();
 
 const base = {
   version: 1,
@@ -25,7 +28,7 @@ const base = {
 
 /** A block that may only sit inside `core/columns`, contributed as a plugin would. */
 function registerRestrictedBlock(): void {
-  registerBlocks(
+  blocks.register(
     [
       // Its slot is declared: a child in a slot its container never declares
       // is refused on its own account, which is not what these cases test.
@@ -47,7 +50,7 @@ function node(type: string, id: string, slots?: Record<string, unknown[]>) {
 }
 
 afterEach(() => {
-  clearBlocks();
+  blocks.clear();
 });
 
 describe("nesting on the write path", () => {
@@ -58,7 +61,8 @@ describe("nesting on the write path", () => {
       page([node("acme/column", "n1")]),
       "content",
       "Content",
-      {}
+      {},
+      blocks
     );
 
     expect(issues.length).toBeGreaterThan(0);
@@ -82,7 +86,8 @@ describe("nesting on the write path", () => {
       ]),
       "content",
       "Content",
-      {}
+      {},
+      blocks
     );
 
     // The permitted placement in the same document is what separates this from
@@ -99,7 +104,8 @@ describe("nesting on the write path", () => {
       ]),
       "content",
       "Content",
-      {}
+      {},
+      blocks
     );
     expect(bad.length).toBeGreaterThan(0);
   });
@@ -116,7 +122,8 @@ describe("nesting on the write path", () => {
       ]),
       "content",
       "Content",
-      {}
+      {},
+      blocks
     );
 
     expect(issues).toEqual([]);
@@ -131,7 +138,8 @@ describe("nesting on the write path", () => {
       page([node("acme/column", "n1")]),
       "content",
       "Content",
-      {}
+      {},
+      blocks
     );
 
     expect(issues).toEqual([]);

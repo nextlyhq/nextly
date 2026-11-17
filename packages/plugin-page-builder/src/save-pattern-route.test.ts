@@ -12,6 +12,7 @@
  * left in the default state is a save the author cannot find afterwards.
  */
 import {
+  createBlockRegistry,
   DOCUMENT_FORMAT_VERSION,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
@@ -23,6 +24,9 @@ import {
   savePattern,
   type SavePatternRouteContext,
 } from "./save-pattern-route";
+
+/** The site's block registry these tests read: it holds none. */
+const blocks = createBlockRegistry();
 
 function node(id: string, type = "core/box"): BlockNode {
   return { id, type, version: 1, props: {} };
@@ -94,7 +98,8 @@ describe("where a saved pattern goes", () => {
 
     await savePattern(
       request({ document: pageDocument, selectedIds: ["a"], fields }),
-      ctx
+      ctx,
+      blocks
     );
 
     expect(createEntry.mock.calls[0]?.[0]).toBe("site_blocks");
@@ -105,7 +110,8 @@ describe("where a saved pattern goes", () => {
 
     await savePattern(
       request({ document: pageDocument, selectedIds: ["a"], fields }),
-      ctx
+      ctx,
+      blocks
     );
 
     expect(createEntry.mock.calls[0]?.[0]).toBe(PATTERNS_SLUG);
@@ -120,7 +126,8 @@ describe("where a saved pattern goes", () => {
 
     await savePattern(
       request({ document: pageDocument, selectedIds: ["a"], fields }),
-      ctx
+      ctx,
+      blocks
     );
 
     expect(createEntry.mock.calls[0]?.[2]).toEqual({
@@ -136,7 +143,8 @@ describe("what a saved pattern is made of", () => {
 
     await savePattern(
       request({ document: pageDocument, selectedIds: ["a", "b"], fields }),
-      ctx
+      ctx,
+      blocks
     );
 
     // The field name is the translation this module makes: the collection calls
@@ -163,7 +171,8 @@ describe("what a saved pattern is made of", () => {
 
     await savePattern(
       request({ document: pageDocument, selectedIds: ["a", "b"], fields }),
-      ctx
+      ctx,
+      blocks
     );
 
     const stored = written(createEntry).content as { nodes: BlockNode[] };
@@ -180,7 +189,8 @@ describe("what a saved pattern is made of", () => {
 
     await savePattern(
       request({ document: pageDocument, selectedIds: ["a"], fields }),
-      ctx
+      ctx,
+      blocks
     );
 
     expect(written(createEntry).status).toBe("published");
@@ -212,7 +222,8 @@ describe("what a saved pattern is made of", () => {
           invented: true,
         },
       }),
-      ctx
+      ctx,
+      blocks
     );
 
     expect(Object.keys(written(createEntry)).sort()).toEqual([
@@ -256,7 +267,8 @@ describe("what a saved pattern is made of", () => {
           ])
         ),
       }),
-      ctx
+      ctx,
+      blocks
     );
 
     expect(declared.length).toBeGreaterThan(1);
@@ -280,7 +292,8 @@ describe("what a completed save answers", () => {
 
     const response = await savePattern(
       request({ document: pageDocument, selectedIds: ["a"], fields }),
-      ctx
+      ctx,
+      blocks
     );
     const body = (await response.json()) as Record<string, unknown>;
 
@@ -299,7 +312,8 @@ describe("what a completed save answers", () => {
     const error = await thrownBy(
       savePattern(
         request({ document: pageDocument, selectedIds: ["a"], fields }),
-        ctx
+        ctx,
+        blocks
       )
     );
 
@@ -317,7 +331,8 @@ describe("the identifier a pattern is keyed by", () => {
         selectedIds: ["a"],
         fields: { title: "Hero Banner!", granularity: "section" },
       }),
-      ctx
+      ctx,
+      blocks
     );
 
     expect(written(createEntry).slug).toBe("hero-banner");
@@ -332,7 +347,8 @@ describe("the identifier a pattern is keyed by", () => {
         selectedIds: ["a"],
         fields: { title: "Hero", slug: "legacy-hero", granularity: "section" },
       }),
-      ctx
+      ctx,
+      blocks
     );
 
     expect(written(createEntry).slug).toBe("legacy-hero");
@@ -353,7 +369,8 @@ describe("the identifier a pattern is keyed by", () => {
           selectedIds: ["a"],
           fields: { title, granularity: "section" },
         }),
-        ctx
+        ctx,
+        blocks
       );
 
       expect(written(createEntry).slug).toEqual(expect.stringMatching(/^.+$/));
@@ -373,7 +390,8 @@ describe("the identifier a pattern is keyed by", () => {
           selectedIds: ["a"],
           fields: { title: "見出し", granularity: "section" },
         }),
-        ctx
+        ctx,
+        blocks
       );
       slugs.add(String(written(createEntry).slug));
     }
@@ -392,7 +410,8 @@ describe("what the route refuses, and how it says so", () => {
     const error = await thrownBy(
       savePattern(
         request({ document: pageDocument, selectedIds: ["a", "c"], fields }),
-        ctx
+        ctx,
+        blocks
       )
     );
 
@@ -413,7 +432,8 @@ describe("what the route refuses, and how it says so", () => {
     const error = await thrownBy(
       savePattern(
         request({ document: pageDocument, selectedIds: ["nowhere"], fields }),
-        ctx
+        ctx,
+        blocks
       )
     );
 
@@ -426,7 +446,7 @@ describe("what the route refuses, and how it says so", () => {
     // sends whoever reads the log looking at the wrong side.
     const { ctx } = contextOver();
 
-    const error = await thrownBy(savePattern(request("{"), ctx));
+    const error = await thrownBy(savePattern(request("{"), ctx, blocks));
 
     expect(error.statusCode).toBe(400);
   });
@@ -455,7 +475,7 @@ describe("what the route refuses, and how it says so", () => {
   ])("refuses a request whose %s is not one", async (path, body) => {
     const { ctx, createEntry } = contextOver();
 
-    const error = await thrownBy(savePattern(request(body), ctx));
+    const error = await thrownBy(savePattern(request(body), ctx, blocks));
 
     expect(error.statusCode).toBe(400);
     expect(error.publicData).toMatchObject({ errors: [{ path }] });
@@ -468,7 +488,8 @@ describe("what the route refuses, and how it says so", () => {
     const error = await thrownBy(
       savePattern(
         request({ document: pageDocument, selectedIds: [], fields }),
-        ctx
+        ctx,
+        blocks
       )
     );
 
@@ -485,7 +506,8 @@ describe("what the route refuses, and how it says so", () => {
 
     await savePattern(
       request({ document: pageDocument, selectedIds: ["a"], fields: {} }),
-      ctx
+      ctx,
+      blocks
     );
 
     expect(createEntry).toHaveBeenCalled();

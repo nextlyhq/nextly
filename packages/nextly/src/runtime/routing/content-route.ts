@@ -46,6 +46,7 @@ import type {
   PageStructuredDataHints,
 } from "../seo/page-metadata-contract";
 
+import { isDraftModeRequest } from "./draft-mode";
 import { answerNotFound, triggerPermanentRedirect } from "./not-found";
 import {
   confirmedLanguage,
@@ -271,9 +272,13 @@ export interface ContentRouteConfig<TNode> {
    * and means every visitor sees unpublished content at every path. It is
    * almost never what a public site wants.
    *
-   * `draft` belongs to this factory alone. `createPublicContentRoute` refuses
-   * it: a draft read is never cacheable, so it marks the render dynamic, while
-   * a public route's `generateStaticParams` has told Next it is static.
+   * On `createPublicContentRoute` a `draft` function is asked only on a request
+   * in Next's draft mode, which the preview link turns on. Next renders those
+   * on demand and never stores them, so every other visit stays static and
+   * cached, and the function may read the request's cookies. A literal `true`
+   * is refused there: it would make every visit a draft read, which is never
+   * cacheable, while the route's `generateStaticParams` has told Next it is
+   * static.
    *
    * @default false
    */
@@ -695,6 +700,13 @@ function buildRoute<TNode>(
       }
       return false;
     }
+    // A public route is static and cached, so its draft hook is asked only on
+    // a draft-mode request. Next renders those on demand and never stores
+    // them, so the hook may read the request's cookies there; on any other
+    // request the flag alone is read, which keeps the render static. The
+    // preview link turns draft mode on when it opens (`createPreviewRoute`),
+    // and the hook still decides which entry, if any, that link may see.
+    if (isPublic && !(await isDraftModeRequest())) return false;
     return typeof decision === "function" ? decision(context) : decision;
   }
 
@@ -1239,22 +1251,26 @@ export function createContentRoute<TNode>(
 export function createPublicContentRoute<TNode>(
   config: ContentRouteConfig<TNode>
 ): StaticContentRoute<TNode> {
-  // Refused at construction, not tolerated at request time. Both of these make
-  // the route dynamic while its `generateStaticParams` still tells Next it is
-  // static — the same contradiction this split exists to remove, arriving
-  // through a different option. A module-scope throw names the incompatible
-  // pair at build; the alternative is a 500 on a page whose config looked fine.
-  if (config.draft !== undefined && config.draft !== false) {
+  // A literal `true` is refused at construction, not tolerated at request
+  // time: it grants the draft on every request, so every render reads
+  // uncached and is dynamic while `generateStaticParams` tells Next the route
+  // is static. A module-scope throw names the contradiction at build; the
+  // alternative is a 500 on a page whose config looked fine. A `draft`
+  // FUNCTION is accepted, because this route asks it only on a draft-mode
+  // request (`draftForThisPath`), which Next renders on demand and never
+  // stores: every other visit stays static and cached.
+  if (config.draft === true) {
     throw NextlyError.invalidInput({
       message:
-        "createPublicContentRoute() cannot serve drafts. Use createContentRoute() " +
-        "with `draft` and mount previewable paths there.",
+        "createPublicContentRoute() cannot serve drafts to every visitor. Pass " +
+        "`draft: previewDraftGate()` to serve a preview link's draft, or use " +
+        "createContentRoute() for a route behind your own sign-in.",
       logContext: {
         reason:
-          "`draft` makes every resolved read uncached, which marks the render " +
-          "dynamic — but a public route exports `generateStaticParams`, so Next " +
-          "classifies it static, and a dynamic marking inside a static render is " +
-          "an error.",
+          "`draft: true` makes every resolved read uncached, which marks the " +
+          "render dynamic — but a public route exports `generateStaticParams`, " +
+          "so Next classifies it static, and a dynamic marking inside a static " +
+          "render is an error.",
       },
     });
   }

@@ -18,9 +18,14 @@ import type { StatusFilter } from "../../lib/status-filter";
 import type { FieldGroupReach } from "../../shared/lib/password-fields";
 
 import { isFieldLocalized } from "./classify-fields";
-import { buildCompanionExists, SOURCE_LOCALES_KEY } from "./companion-join";
+import {
+  buildCompanionExists,
+  readCompanionLocaleStatusAllOf,
+  SOURCE_LOCALES_KEY,
+} from "./companion-join";
 import { EVERY_TRANSLATION } from "./locale-selector";
 import type { CompanionSchema } from "./runtime/companion-io";
+import type { CompanionReadiness } from "./runtime/companion-readiness";
 
 /**
  * On a public read in a language, the condition keeping only the documents
@@ -46,14 +51,14 @@ export function publishedInLanguageCondition(args: {
   /** The read's language chain; its first language is the one requested. */
   localeChain: readonly string[] | null | undefined;
   mainIdColumn: unknown;
-  defaultLocale: string | undefined;
 }): SQL | undefined {
+  // A read with no language chain is one with localization off, or one of
+  // every language at once: neither asks for a language to be published.
   const requested = args.localeChain?.[0];
   if (
     args.statusFilter?.isPublicRead !== true ||
     args.companion?.hasStatus !== true ||
-    requested === undefined ||
-    args.defaultLocale === undefined
+    requested === undefined
   ) {
     return undefined;
   }
@@ -70,6 +75,63 @@ export function publishedInLanguageCondition(args: {
     args.revealed.map(id => sql`${id}`),
     sql`, `
   )}))`;
+}
+
+/**
+ * On a public read, the languages each document is NOT published in, by the
+ * document's id as a string: what a read of something the document holds in
+ * its own tables (a translated field group's values) falls back past, as the
+ * document's own translated fields already do through their `_status` filter.
+ * `undefined` where nothing is skipped: a trusted or draft read, an entity
+ * whose one status is its only publication (`companion.hasStatus` false), or
+ * a translations table not there yet. A document a due release reveals is
+ * public in every language, and is left out of the map, so it skips nothing.
+ * Read in ONE query for every document asked.
+ */
+export async function languagesNotPublishedIn(args: {
+  db: Parameters<typeof readCompanionLocaleStatusAllOf>[0];
+  companion: CompanionSchema | null | undefined;
+  readiness: CompanionReadiness | undefined;
+  /** The read's lifecycle bound, as its status filter resolved it. */
+  statusFilter: StatusFilter | null | undefined;
+  /** Every configured language: those a document is not published in are skipped. */
+  locales: readonly string[];
+  /** The documents read. */
+  ids: readonly (string | number)[];
+  /** The documents a due release makes public as of this read. */
+  revealed?: Iterable<unknown>;
+}): Promise<Map<string, ReadonlySet<string>> | undefined> {
+  if (
+    args.statusFilter?.isPublicRead !== true ||
+    args.companion?.hasStatus !== true ||
+    args.readiness !== "ready"
+  ) {
+    return undefined;
+  }
+  const revealed = new Set([...(args.revealed ?? [])].map(id => String(id)));
+  const ids = args.ids.filter(id => !revealed.has(String(id)));
+  const statuses = await readCompanionLocaleStatusAllOf(
+    args.db,
+    args.companion.table,
+    ids,
+    args.readiness
+  );
+  // Every public state the workflow names, as the read's own bound does.
+  const publicStates = new Set<string>(args.statusFilter.values);
+  const skipped = new Map<string, ReadonlySet<string>>();
+  for (const id of ids) {
+    const byLocale = statuses.get(String(id));
+    skipped.set(
+      String(id),
+      new Set(
+        args.locales.filter(locale => {
+          const status = byLocale?.get(locale);
+          return typeof status !== "string" || !publicStates.has(status);
+        })
+      )
+    );
+  }
+  return skipped;
 }
 
 /** The parts of a read's answer whole-document fallback looks at. */
@@ -166,6 +228,24 @@ export function valuesBesideRow(
 ): Record<string, unknown> | undefined {
   const every = row[ALL_LOCALES_KEY];
   return isValues(every) ? every : undefined;
+}
+
+/**
+ * Withhold `languages` from every language's values beside `row`
+ * (`_allLocales`): each field's value in each of them is removed, its own
+ * fields' and its field groups' alike. How a language a read rule refuses
+ * leaves a read of every language; a row with nothing beside it is unchanged.
+ */
+export function withholdLanguages(
+  row: Record<string, unknown>,
+  languages: ReadonlySet<string> | undefined
+): void {
+  const every = valuesBesideRow(row);
+  if (!every || !languages) return;
+  for (const values of Object.values(every)) {
+    if (!isValues(values)) continue;
+    for (const code of languages) delete values[code];
+  }
 }
 
 /**
