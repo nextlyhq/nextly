@@ -69,6 +69,8 @@ function hueOf(text: string): number | null {
 interface Components {
   channels: string[];
   alpha: string | undefined;
+  /** Written in the comma syntax, whose channels are stricter. */
+  legacy: boolean;
 }
 
 /** Every component separated by commas: `rgb(255, 0, 0, 0.5)`. */
@@ -76,7 +78,7 @@ function commaComponents(body: string): Components | null {
   if (body.includes("/")) return null;
   const parts = body.split(",").map(part => part.trim());
   if (parts.length !== 3 && parts.length !== 4) return null;
-  return { channels: parts.slice(0, 3), alpha: parts[3] };
+  return { channels: parts.slice(0, 3), alpha: parts[3], legacy: true };
 }
 
 /** Channels separated by spaces, the alpha after a slash: `rgb(255 0 0 / 50%)`. */
@@ -84,7 +86,9 @@ function spaceComponents(body: string): Components | null {
   const [channelText = "", alpha, extra] = body.split("/");
   if (extra !== undefined || alpha?.trim() === "") return null;
   const channels = channelText.trim().split(/\s+/);
-  return channels.length === 3 ? { channels, alpha: alpha?.trim() } : null;
+  return channels.length === 3
+    ? { channels, alpha: alpha?.trim(), legacy: false }
+    : null;
 }
 
 /**
@@ -98,6 +102,19 @@ function componentsOf(body: string): Components | null {
 
 /** A colour function, as its name and the text between its brackets. */
 const FUNCTION = /^(rgba?|hsla?)\(\s*([^()]*?)\s*\)$/i;
+
+const isPercent = (text: string | undefined): boolean =>
+  text?.endsWith("%") === true;
+
+/**
+ * Whether the comma syntax's stricter channels hold: `rgb()` takes three
+ * numbers or three percentages, never a mix, and `hsl()` takes its
+ * saturation and lightness as percentages. A browser drops anything else.
+ */
+function legacyChannelsHold(rgb: boolean, [first, ...rest]: string[]): boolean {
+  if (!rgb) return rest.every(isPercent);
+  return rest.every(channel => isPercent(channel) === isPercent(first));
+}
 
 function readRgb([r, g, b]: string[], alpha: number): Rgba | null {
   const red = fractionOf(r, 255);
@@ -122,11 +139,11 @@ function parseFunction(text: string): Rgba | null {
   const [, name = "", body = ""] = FUNCTION.exec(text) ?? [];
   const parts = name === "" ? null : componentsOf(body);
   if (parts === null) return null;
+  const rgb = name.toLowerCase().startsWith("rgb");
+  if (parts.legacy && !legacyChannelsHold(rgb, parts.channels)) return null;
   const alpha = parts.alpha === undefined ? 1 : fractionOf(parts.alpha, 1);
   if (alpha === null) return null;
-  return name.toLowerCase().startsWith("rgb")
-    ? readRgb(parts.channels, alpha)
-    : readHsl(parts.channels, alpha);
+  return rgb ? readRgb(parts.channels, alpha) : readHsl(parts.channels, alpha);
 }
 
 /**

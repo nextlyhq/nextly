@@ -530,7 +530,11 @@ function HalfInput({
   onCommit: (value: string) => void;
   css: string;
 }): React.JSX.Element {
-  return half === "Size" ? <SizeInput {...field} /> : <LineHeightInput {...field} />;
+  return half === "Size" ? (
+    <SizeInput {...field} />
+  ) : (
+    <LineHeightInput {...field} />
+  );
 }
 
 /**
@@ -755,13 +759,8 @@ function colourFieldState(
   said: string;
 } {
   const current = typed === "" ? value : typed;
-  const resolved = colourHexOf(current, undefined);
-  const invalid =
-    shown === null &&
-    typed !== "" &&
-    resolved === undefined &&
-    !isCssColour(current);
-  const hex = shown ?? resolved;
+  const invalid = shown === null && typed !== "" && !isColour(current);
+  const hex = shown ?? colourHexOf(current, undefined);
   return {
     hex,
     paint: hex,
@@ -770,7 +769,10 @@ function colourFieldState(
   };
 }
 
-/** Whether `text` is a colour: one this package reads, or the browser does. */
+/**
+ * Whether `text` is a colour: one this package reads, or the browser does.
+ * The one answer both the field's invalid mark and Recent colours read.
+ */
 function isColour(text: string): boolean {
   return colourHexOf(text, undefined) !== undefined || isCssColour(text);
 }
