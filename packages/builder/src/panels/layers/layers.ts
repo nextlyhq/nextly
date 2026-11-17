@@ -48,7 +48,7 @@ import {
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
 
-import { gatedAsStored } from "../../condition-gate";
+import { gatedAsStored } from "../../conditions/condition-gate";
 import { storedComponentId } from "../../placement-props";
 import { blockLabel, type SavedComponent } from "../add/inserter";
 

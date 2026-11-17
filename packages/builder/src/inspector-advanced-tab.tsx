@@ -28,7 +28,7 @@ import {
   VisibilityExposeControl,
   type ComponentFieldsBinding,
 } from "./component-fields-panel";
-import { ShowWhen } from "./condition-controls";
+import { ShowWhen } from "./conditions/condition-controls";
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
 import { HeldByLock } from "./held-by-lock";

@@ -14,7 +14,7 @@ import {
   type Condition,
 } from "@nextlyhq/blocks-engine";
 
-import type { BuilderOp } from "./op-vocabulary";
+import type { BuilderOp } from "../op-vocabulary";
 
 /**
  * The op setting a block's conditions to `conditions`, an OR of AND groups;

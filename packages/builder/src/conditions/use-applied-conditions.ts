@@ -16,6 +16,11 @@ import {
 } from "@nextlyhq/blocks-react";
 import { useMemo } from "react";
 
+import { useLoopCollections } from "../collection-loop-controls";
+import type { ContentServices } from "../content-controls";
+import { layerLabel, type ComponentTitleOf } from "../panels/layers/layers";
+import type { PreviewedEntry } from "../previewed-entry";
+
 import {
   appliedConditionsOf,
   itemHiddenAsOf,
@@ -23,15 +28,11 @@ import {
   type ConditionsPreview,
   type DrawnWith,
 } from "./applied-conditions";
-import { useLoopCollections } from "./collection-loop-controls";
 import {
   conditionFieldsOf,
   conditionFieldsOfShapes,
   type ConditionField,
 } from "./condition-model";
-import type { ContentServices } from "./content-controls";
-import { layerLabel, type ComponentTitleOf } from "./panels/layers/layers";
-import type { PreviewedEntry } from "./previewed-entry";
 
 /**
  * What a template's conditions are checked against, from the entry it is
