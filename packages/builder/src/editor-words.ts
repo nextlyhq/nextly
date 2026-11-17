@@ -56,6 +56,16 @@ export const CONVERSION_WORDS = {
 } as const;
 
 /**
+ * The top bar's light and dark preview: its name for assistive technology,
+ * which stays the same pressed or not, and its tooltip, which says that
+ * nothing a visitor sees changes with it.
+ */
+export const DARK_PREVIEW_WORDS = {
+  name: "Preview in dark mode",
+  tooltip: "Preview only. Visitors see what their own device is set to.",
+} as const;
+
+/**
  * What a place using a variable would lose with it, by the variable's kind:
  * "they would lose this colour". The author's words for each kind, not the
  * engine's, so a dimension is a size and anything without a plainer word is
