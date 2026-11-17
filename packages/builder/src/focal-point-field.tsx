@@ -90,6 +90,22 @@ function pointOf(stored: string): (typeof POINTS)[number] | undefined {
   return POINTS.find(point => point.x === x && point.y === y);
 }
 
+/**
+ * What the readout says: the point set here by name, an exact one as Custom
+ * with the value written, what reaches it from elsewhere, or the default when
+ * nothing does.
+ */
+function readoutOf(
+  chosen: (typeof POINTS)[number] | undefined,
+  text: string | undefined,
+  inheritedPoint: (typeof POINTS)[number] | undefined,
+  inherited: string | undefined
+): string {
+  if (chosen !== undefined) return chosen.label;
+  if (text !== undefined) return `Custom: ${text}`;
+  return inheritedPoint?.label ?? inherited ?? "Center by default";
+}
+
 /** What the point does for a fit: kept in view as it crops, or where it sits. */
 function hintFor(fit: string | undefined): string {
   return fit === "cover" ? "Kept in view" : "Where it sits";
@@ -161,15 +177,7 @@ export function FocalPointField({
       ?.focus();
   };
 
-  // The readout: the point set here by name, an exact one as Custom with the
-  // value written, what reaches it from elsewhere, or the default when
-  // nothing does.
-  const readout =
-    chosen?.label ??
-    (text === undefined ? undefined : `Custom: ${text}`) ??
-    inheritedPoint?.label ??
-    inherited ??
-    "Center by default";
+  const readout = readoutOf(chosen, text, inheritedPoint, inherited);
 
   return (
     <div className="nx-focal">
