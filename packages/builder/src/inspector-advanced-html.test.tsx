@@ -102,7 +102,14 @@ function advancedOf(id: string): HTMLElement {
   act(() => editor().select(id));
   fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
   const advanced = screen.getByRole("tabpanel", { name: "Advanced" });
-  return within(advanced).getByRole("region", { name: "HTML" });
+  // HTML starts closed on a block whose HTML holds nothing.
+  const header = advanced.querySelector<HTMLElement>(
+    '[data-section="html"] [data-slot="accordion-trigger"]'
+  );
+  if (header !== null && header.getAttribute("aria-expanded") !== "true") {
+    fireEvent.click(header);
+  }
+  return within(advanced).getByRole("region", { name: /^HTML/ });
 }
 
 const stored = (id: string): BlockNode | undefined =>

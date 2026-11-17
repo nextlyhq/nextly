@@ -97,6 +97,19 @@ function editorFor(id: string, document: BlockDocument = PAGE): EditorState {
 }
 
 /** The panel with `id` selected, re-selectable as an author clicks blocks. */
+/**
+ * Open Advanced's HTML section unless it is open: it starts closed on a block
+ * whose HTML holds nothing.
+ */
+function openHtmlSection(): void {
+  const header = document.querySelector<HTMLElement>(
+    '[data-section="html"] [data-slot="accordion-trigger"]'
+  );
+  if (header !== null && header.getAttribute("aria-expanded") !== "true") {
+    fireEvent.click(header);
+  }
+}
+
 function mount(id: string, styleState?: StyleStateBinding) {
   const view = render(
     <InspectorPanel editor={editorFor(id)} styleState={styleState} />
@@ -140,8 +153,9 @@ describe("the tabs a selected block has", () => {
     mount("section");
     expect(tabNames()).toEqual(["Style", "Advanced"]);
     choose("Advanced");
+    openHtmlSection();
     const advanced = screen.getByRole("tabpanel", { name: "Advanced" });
-    const html = within(advanced).getByRole("region", { name: "HTML" });
+    const html = within(advanced).getByRole("region", { name: /^HTML/ });
     expect(within(html).getByText("HTML tag")).toBeTruthy();
   });
 });
@@ -272,6 +286,7 @@ describe("the shared settings in Advanced", () => {
   it("are drawn by the builder for a block that declares no settings", () => {
     mount("spacer");
     choose("Advanced");
+    openHtmlSection();
     const advanced = screen.getByRole("tabpanel", { name: "Advanced" });
 
     expect(within(advanced).getByText("Visible on")).toBeTruthy();
@@ -285,16 +300,17 @@ describe("the shared settings in Advanced", () => {
   it("put Visibility before HTML, and the anchor under HTML", () => {
     mount("button");
     choose("Advanced");
+    openHtmlSection();
     const advanced = screen.getByRole("tabpanel", { name: "Advanced" });
 
-    // The tab's own section headings, in order; a control's own title (Show
+    // The tab's own section headers, in order; a control's own title (Show
     // when names itself) is not one.
     expect(
       [
         ...advanced.querySelectorAll(
-          ":scope > .nx-inspector__group > .nx-inspector__heading"
+          "[data-section] > h3 .nx-style-inspector__section-label"
         ),
-      ].map(heading => heading.textContent)
+      ].map(label => label.firstChild?.textContent)
     ).toEqual(["Visibility", "HTML"]);
     const html = within(advanced).getByRole("region", { name: "HTML" });
     expect(within(html).getByLabelText("Anchor (ID)")).toBeTruthy();
