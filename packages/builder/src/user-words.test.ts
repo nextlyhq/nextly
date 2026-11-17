@@ -104,6 +104,8 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   // The same Layout control, as the settings search finds it.
   "settings-entries.ts": ["Layout"],
   "columns-layout.ts": ["Not a layout."],
+  // The same arrangement, chosen on the canvas when a Columns row is added.
+  "columns-layout-picker.tsx": ["Choose a layout"],
   // The Style tab's Layout section, where a container's Content width is.
   "core-block-placement.fixture.ts": ["Layout"],
   // The Add panel's group of layout blocks (Section, Columns, Grid).

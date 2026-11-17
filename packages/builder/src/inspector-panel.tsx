@@ -95,6 +95,7 @@ import { StyleTab } from "./inspector-style-tab";
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
 import { LookInspector } from "./look-inspector";
+import { blockStyleEntries } from "./look-tiles-view";
 import { ManyBlocksPanel } from "./many-blocks-panel";
 import { PanelFoldsProvider } from "./panel-folds-context";
 import { PanelOptions } from "./panel-options";
@@ -664,6 +665,8 @@ function SelectionInspector({
       writingMode: canvas.orientation?.writingMode ?? "horizontal-tb",
       rtl: canvas.orientation?.direction === "rtl",
     },
+    editor,
+    library: styleOnly.classLibrary,
   });
 
   // Where the block is hidden, at the top of every tab; "Change" goes to
@@ -751,20 +754,24 @@ function SelectionInspector({
                 breakpoints={styleOnly.breakpoints}
                 onJumpToBreakpoint={styleOnly.onJumpToBreakpoint}
               />
-              <StyleTab
-                {...styleOnly}
-                editor={editor}
-                styleNode={styleNode}
-                renderedTag={canvas.tag}
-                renderedPicture={canvas.picture}
-                renderedPicturePosition={canvas.picturePosition}
-                sideOrientation={canvas.orientation}
-                styleState={styleState}
-                breakpoint={breakpoint}
-                cascade={cascade}
-                previewContainer={previewContainer}
-                verbs={verbs}
-              />
+              {/* The Style tab reaches the host's media library too: the
+                  background image picks and uploads as the Content tab does. */}
+              <ContentServicesContext.Provider value={contentServices}>
+                <StyleTab
+                  {...styleOnly}
+                  editor={editor}
+                  styleNode={styleNode}
+                  renderedTag={canvas.tag}
+                  renderedPicture={canvas.picture}
+                  renderedPicturePosition={canvas.picturePosition}
+                  sideOrientation={canvas.orientation}
+                  styleState={styleState}
+                  breakpoint={breakpoint}
+                  cascade={cascade}
+                  previewContainer={previewContainer}
+                  verbs={verbs}
+                />
+              </ContentServicesContext.Provider>
             </TabsContent>
 
             <TabsContent
@@ -879,6 +886,8 @@ function blockMatch(
         at.reported?.arranges
       ),
       ...advancedEntries(block, node),
+      // The Block style section, drawn above the Style tab's bar.
+      ...blockStyleEntries(at.editor, at.library),
     ],
     filter
   );
@@ -892,6 +901,9 @@ interface MatchAt {
   /** What the Style tab draws, while it is open, for its target. */
   reported: ReportedStyle | undefined;
   flow: PlainFlow;
+  /** The editor and the site's library, which the Block style tiles read. */
+  editor: EditorState;
+  library: InspectorPanelProps["classLibrary"];
 }
 
 /**

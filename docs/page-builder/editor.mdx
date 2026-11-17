@@ -251,7 +251,18 @@ chosen as you select other blocks. A block without it opens on its first tab, an
 next block that has it opens on yours again. If the editor opens with a state such as
 Hover already chosen, it opens on Style.
 
-At the top of **Style**, one line says what a change will affect:
+**Style** starts with **Block style** on a block whose type has saved styles: a Section's
+Plain and Hero, a Button's Primary, Secondary, Outline and Text, an Image's Square,
+Rounded and Circle. Each is a picture tile drawn in your site's own colours and fonts.
+The block's own style is marked **Default**, and the one the block wears is ticked. Pick
+a tile to change the block's style. A block style is shared by every block of the type
+that wears it, so the line under the tiles says so ("A saved style for every Section.").
+**Edit block styles** there opens **Design**, **Styles**, at that type's block styles,
+where you change, add, rename or remove them. A change made in the block panel goes to
+the selected block only, on top of the style it wears.
+
+Under it, or at the top for a block with no saved styles, one line says what a change
+will affect:
 
 - **● This block** (pink), or **◆** and the name of a shared style (green) when you
   chose to edit that style instead;
@@ -328,6 +339,12 @@ example) clears the value and removes the row in one step that **Undo** brings b
 everything that applies is already there, the list says **Nothing left that applies
 here.** "Find a setting" finds these too: a property you haven't added is listed under CSS
 properties with **Add**.
+
+**Background** picks an image rather than taking an address: **Choose** opens the Media
+library, **Upload** adds a file, or paste a link into the field below them. A thumbnail then
+shows with **Replace** and **Remove**; Remove clears only the image. **Position** places the
+image on one of nine points (hover a point to see the CSS it writes); a position set any
+other way reads **Custom** with its value.
 
 **Animation when it appears**, in Effects, gives a block an entrance: **None** (the
 default), **Fade in**, **Rise**, **Slide in from the left**, **Slide in from the right** or
@@ -411,6 +428,16 @@ the end of the page". Each tile tells a screen reader where it goes, and after a
 a screen reader hears what was added and where ("Heading added inside Hero, at the
 end"). The new block is selected, so the next one goes after it.
 
+### Columns ask for a layout
+
+A new **Columns** row shows "Choose a layout" on the canvas in place of its two empty
+columns, however you added it: **2 equal**, **3 equal**, **4 equal**, **Wide left**,
+**Wide right** and **Wide middle**, the same tiles as in the row's Content tab, and
+**Skip**, which keeps two equal columns. Move between the tiles with the arrow keys,
+pick with <kbd>Enter</kbd> or skip with <kbd>Escape</kbd>. The choice is part of adding
+the row, so one Undo removes the whole row. Clicking elsewhere also keeps two equal
+columns, and the question is never asked again for that row, even after a reload.
+
 ## Adding a block where you are
 
 Press <kbd>/</kbd> on the canvas, with a block selected or nothing selected, and a small
@@ -455,6 +482,28 @@ and nothing changes. If an Image's file is deleted from the media library, the b
 **This image's file is missing**, with **Replace**.
 
 An Image with no picture draws nothing on the published page.
+
+### An image's settings
+
+With an Image selected, its **Content** tab holds:
+
+- **Image**: the picture, with **Replace** to choose another.
+- **Alt text**: what screen readers say for the picture. A picture from the media
+  library brings the alt text the library holds for it: the field shows those words,
+  marked **From the media library**. Type your own to replace them for this page;
+  empty the field, or choose **Use the media library's alt text**, to follow the
+  library's again. Tick **Decorative, no alt text** for a picture that adds nothing to
+  the page's words: screen readers skip it, and the page's `img` carries `alt=""`.
+- **When clicked**: **Nothing**, **Link** or **Enlarge**. Only **Link** shows the link's
+  settings: where it goes (an address, or a page or entry), opening in a new tab, and
+  its relationship. A link you set stays stored when you choose another option, so
+  choosing **Link** again brings it back. An Image saved before this setting existed
+  reads as **Link** when it has a link, and **Nothing** otherwise.
+- **Caption**: shown under the picture, as the figure's caption.
+
+The shapes **Square**, **Rounded** and **Circle** are block styles, at the top of the
+**Style** tab. **Circle** crops the picture to a square first, so a wide picture is a
+circle, never an oval.
 
 ## Bold, italic and links in a Text
 
@@ -668,6 +717,22 @@ ring and padding the inner one. Each side shows its value.
 With a block selected, the canvas shows the space above it from its container as
 **Gap · from Section** (or the container's name), not as the block's own margin.
 
+### Using a variable in a field
+
+Every other value in **Style** reaches your variables through its own menu:
+
+- **A size** (a font size, a gap, a radius, a width): open its unit menu. Your variables
+  come first, under **Your spacing** and **Your sizes**, then the units.
+- **A colour**: open its swatch. Your colour variables come first.
+- **A font**: open the font list. **Font variables** come first.
+- **A field with no unit menu** (a line height, a shadow) has a menu of its own at its end.
+
+A field holding a variable shows it in green with the variable's name. Hover it, or move
+to it with Tab, to see what it is, for example "Spacing variable XL · 64px ·
+--site-space-xl": its kind, its value and the CSS name the page reads it from. Click the
+name to choose another variable. **Unlink** keeps the value the field shows now as a plain
+one, so it no longer changes with the variable. To remove the value, use the row's reset.
+
 ## The bottom bar
 
 The bottom bar shows where you are: **Page**, then each block holding the selected
@@ -824,6 +889,11 @@ URL side, and the alt text each have a bind button of their own. A bound image's
 **Fallback** is an image address, shown with a small picture of it: one starting
 `https://` or `http://`, or a path on the site such as `/media/spring.jpg`. Anything else
 is held back with the reason.
+
+A picture bound to a media field is described by its file's own alt text. Alt text you
+type replaces it for this page, and **Use the media library's alt text** goes back to
+the file's. A picture bound to a URL field carries no alt text, so there is none to go
+back to.
 
 The fallback can also be an image from the media library. **Choose from library**, the
 button at the end of the Fallback row, opens the newest images with a search by name:

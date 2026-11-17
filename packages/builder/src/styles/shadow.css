@@ -147,8 +147,8 @@
   color: color-mix(in oklch, var(--nx-destructive), var(--nx-foreground) 35%);
 }
 
-/* A block's shadow: the control, with the ◇ for a shadow variable beside its
-   top edge. */
+/* A block's shadow: the control, with the menu of shadow variables beside
+   its top edge. */
 .nx-shadow-field {
   display: flex;
   align-items: flex-start;
