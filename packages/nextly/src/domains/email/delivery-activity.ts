@@ -120,15 +120,12 @@ interface DeliveryAttempt {
   failureStatus: number | null;
   /** Core's sentence for the failure, with anything address-shaped removed. */
   failureReason: string | null;
-  /** The provider's own id for the message, when it gave one. */
-  providerMessageId: string | null;
   templateVersion: DeliveryTemplateVersionRead;
   erased: boolean;
 }
 
 /** @experimental A delivery's detail sheet. */
 export interface DeliveryDetail extends DeliveryActivity {
-  providerMessageId: string | null;
   /**
    * Oldest first: every delivery its queued email's attempts recorded, to
    * every recipient, this one among them by its id; or itself alone.
@@ -583,7 +580,6 @@ export class EmailDeliveryActivity {
       : { records: [record], truncated: false };
     return {
       ...deliveryOf(record),
-      providerMessageId: record.messageId,
       timeline: [...records].reverse().map(attemptOf),
       timelineTruncated: truncated,
     };
@@ -759,7 +755,6 @@ function attemptOf(record: EmailDeliveryRecord): DeliveryAttempt {
     failureKind: delivery.failureKind,
     failureStatus: delivery.failureStatus,
     failureReason: delivery.failureReason,
-    providerMessageId: record.messageId,
     templateVersion: delivery.templateVersion,
     erased: delivery.erased,
   };

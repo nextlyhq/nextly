@@ -33,7 +33,12 @@ import { defineEmailProvider } from "../provider-definition";
 import type { EmailDeliveryService } from "../services/email-delivery-service";
 import type { EmailService } from "../services/email-service";
 import type { EmailTemplateService } from "../services/email-template-service";
-import { versionDigest } from "../template-ownership";
+import {
+  versionDigest,
+  versionOf,
+  writtenVersionDigest,
+} from "../template-ownership";
+import type { WrittenDocument } from "../written/document";
 import type { EmailProviderAdapter } from "../types";
 
 const SECRET = "sk_live_DO_NOT_STORE_0123456789";
@@ -435,6 +440,41 @@ for (const dialect of getConfiguredTestDialects()) {
         digest: null,
         draft: true,
       });
+    });
+
+    it("records a written template's version by its blocks, as ownership does", async () => {
+      const t = await boot(dialect);
+      const blocks: WrittenDocument = {
+        version: 1,
+        blocks: [{ type: "heading", text: [{ type: "text", text: "News" }] }],
+      };
+      await t.nextly.emailTemplates.create({
+        data: {
+          name: "Written",
+          slug: "written-news",
+          subject: "News",
+          format: "written",
+          blocks,
+        } as never,
+      });
+      await t.nextly.email.sendWithTemplate({
+        template: "written-news",
+        to: "a@example.com",
+      });
+
+      const stored = await t.nextly.emailTemplates.findBySlug({
+        slug: "written-news",
+      });
+      const [item] = (await t.nextly.emailDeliveries.find({})).items;
+      const version = versionOf(stored as never);
+      expect(item.templateVersion).toMatchObject({
+        owner: "site",
+        digest: writtenVersionDigest(version, blocks),
+      });
+      // Not the digest of the HTML the blocks compile to.
+      expect((item.templateVersion as { digest: string }).digest).not.toBe(
+        versionDigest(version)
+      );
     });
   });
 }

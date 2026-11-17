@@ -100,7 +100,8 @@ import { templateCaused } from "../template-failure";
 import {
   CODE_TEMPLATE_KEYS,
   sendSource,
-  versionDigest,
+  storedVersionDigest,
+  versionOf,
 } from "../template-ownership";
 import type {
   EmailAttachmentInput,
@@ -108,6 +109,7 @@ import type {
   EmailProviderAdapter,
   ResolvedAttachment,
 } from "../types";
+import { storedFormat } from "../written/fields";
 
 import { getAttachmentLimits } from "./attachment-limits";
 import type {
@@ -931,12 +933,10 @@ export class EmailService extends BaseService {
           digest:
             draft !== undefined
               ? null
-              : versionDigest({
-                  subject: dbTemplate.subject,
-                  htmlContent: dbTemplate.htmlContent,
-                  plainTextContent: dbTemplate.plainTextContent ?? null,
-                  preheader: dbTemplate.preheader ?? null,
-                }),
+              : storedVersionDigest(
+                  versionOf(dbTemplate),
+                  storedFormat(dbTemplate).blocks
+                ),
           ...(draft !== undefined ? { draft: true as const } : {}),
         }
       );
