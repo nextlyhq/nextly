@@ -39,7 +39,7 @@ import {
   structure,
 } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 
 const PAGES = "/admin/api/collections/pages/entries";
 const BLOCK_PAGES = "/admin/api/collections/block-pages/entries";
@@ -389,6 +389,10 @@ test("the published page draws no marker in an empty Section", async ({
   await expect(dark).toHaveCSS("outline-style", "none");
   await expect(dark).toHaveCSS("background-color", NEAR_BLACK);
   // No words, and no height beyond what the author set.
-  await expect(page.getByText("Add a block, or drop one here")).toHaveCount(0);
+  // Absent anywhere, a hidden copy included: an absence the page's visible
+  // locators would also report for a copy merely hidden.
+  await expect(
+    includingHidden(page).getByText("Add a block, or drop one here")
+  ).toHaveCount(0);
   await expect(dark).toHaveCSS("min-height", "160px");
 });

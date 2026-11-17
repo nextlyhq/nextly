@@ -31,7 +31,7 @@ import { canvasFrame, CANVAS_FRAME } from "./support/canvas-frame";
 import { pngBuffer } from "./support/media-files";
 import { uploadImage } from "./support/media-upload";
 import { storedPageNodes } from "./support/stored-page";
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 
 const ENTRIES = "/admin/api/collections/pages/entries";
 const HEADING = "00000000-0000-4000-8000-00000000e001";
@@ -397,6 +397,9 @@ test.describe("an Image whose library file is gone", () => {
     await expect(
       missing.getByRole("button", { name: "Replace", exact: true })
     ).toBeVisible();
-    await expect(page.getByText("Add an image")).toHaveCount(0);
+    // Absent anywhere, a hidden copy included, not only from what is shown.
+    await expect(includingHidden(page).getByText("Add an image")).toHaveCount(
+      0
+    );
   });
 });
