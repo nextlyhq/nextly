@@ -332,6 +332,21 @@ describe("a spacing-box side", () => {
     expect(op).not.toContain("inlineStart");
   });
 
+  it("writes the same preset again in a later gesture, as after an undo", async () => {
+    // All sides at zero, chosen twice: the second is its own gesture (an undo
+    // may have come between, changing only the other sides), so it writes.
+    const editor = mount(at({ margin: { blockStart: "0", inlineEnd: "8px" } }));
+    fireEvent.click(side("Margin top"));
+    fireEvent.click(screen.getByRole("radio", { name: "All sides" }));
+    const calls = editor.applyAll.mock.calls.length;
+    fireEvent.click(screen.getByRole("radio", { name: "None 0" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("radio", { name: "None 0" }));
+    expect(editor.applyAll).toHaveBeenCalledTimes(calls + 2);
+  });
+
   it("writes None as a zero, and a typed number as a literal", () => {
     const editor = mount();
     fireEvent.click(side("Padding top"));
