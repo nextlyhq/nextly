@@ -107,7 +107,7 @@ describe("deriving a document's index rows", () => {
 
     expect(derivation).toEqual({
       complete: true,
-      rows: [{ ...single, classId: "hero" }],
+      rows: [{ ...single, classId: "hero", blocks: 1 }],
     });
   });
 
@@ -162,7 +162,7 @@ describe("deriving a document's index rows", () => {
       complete: false,
       // The marker id, not one of the ids it managed to read. A marker naming
       // a real class would be counted as a reference by every lookup for it.
-      undetermined: { ...page, classId: UNDETERMINED_CLASS_ID },
+      undetermined: { ...page, classId: UNDETERMINED_CLASS_ID, blocks: null },
     });
   });
 

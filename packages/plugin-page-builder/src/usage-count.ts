@@ -116,6 +116,12 @@ export interface DocumentsUsing {
   }[];
   /** Whether `collections` is the whole answer; see {@link UsageCount}. */
   readonly complete: boolean;
+  /**
+   * Set when the listing comes from an index that counts blocks and from its
+   * rows, so a listing with no documents still says "no blocks" rather than
+   * nothing: the class index's row read. Absent from every other listing.
+   */
+  readonly countsBlocks?: true;
 }
 
 /** One reference to one document, as either read finds it. */
@@ -362,7 +368,15 @@ export async function listDocumentsUsingEach<TRow extends UsageSubject>(args: {
   }
   const listings = listingFrom(asked, found, readCut, args.health);
   if (ids.includes("")) listings.set("", { collections: [], complete: true });
-  return listings;
+  if (args.index.blocksOf === undefined) return listings;
+  // Read from the rows of an index that counts blocks: every listing says so,
+  // its empty ones included.
+  return new Map(
+    [...listings].map(([id, listing]) => [
+      id,
+      { ...listing, countsBlocks: true as const },
+    ])
+  );
 }
 
 /** One stored row as a found reference, or `undefined` when it is not one. */
@@ -410,11 +424,12 @@ function shareOf<TRow extends UsageSubject>(
 /**
  * How many blocks a listing's documents hold, and whether that is all of them:
  * a floor when the listing is, or when any document's count is unknown.
- * `undefined` when the listing counted no blocks at all.
+ * `undefined` for a listing that counts no blocks.
  */
 export function blockCountOf(
   found: DocumentsUsing
 ): { blocks: number; complete: boolean } | undefined {
+  if (found.countsBlocks !== true) return undefined;
   let blocks = 0;
   let known = found.complete;
   for (const entry of found.collections) {

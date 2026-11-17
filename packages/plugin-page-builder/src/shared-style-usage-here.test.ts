@@ -17,6 +17,7 @@ const found: DocumentsUsing = {
     { collection: "home", documents: [null], blocks: [4], single: true },
   ],
   complete: true,
+  countsBlocks: true,
 };
 
 describe("a style's usage", () => {
@@ -62,6 +63,7 @@ describe("a style's usage", () => {
           { collection: "pages", documents: ["p1", "p2"], blocks: [2, null] },
         ],
         complete: true,
+        countsBlocks: true,
       },
       kindOf
     );

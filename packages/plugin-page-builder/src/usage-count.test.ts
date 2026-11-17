@@ -383,6 +383,21 @@ describe("the blocks a listing counts", () => {
     });
   });
 
+  it("says no blocks for a style no document uses", async () => {
+    const { read } = rowReader([]);
+    const found = await listDocumentsUsingEach({
+      index: classUsageIndex,
+      rows: read,
+      referenceIds: ["c-0"],
+      health: WHOLE,
+    });
+    const listing = found.get("c-0");
+    expect(listing && blockCountOf(listing)).toEqual({
+      blocks: 0,
+      complete: true,
+    });
+  });
+
   it("counts no blocks from a listing the grouped read made", () => {
     expect(
       blockCountOf({
@@ -438,8 +453,13 @@ describe("listDocumentsUsingEach", () => {
         { collection: "components", documents: ["k1"], blocks: [1] },
       ],
       complete: true,
+      countsBlocks: true,
     });
-    expect(found.get("c-unused")).toEqual({ collections: [], complete: true });
+    expect(found.get("c-unused")).toEqual({
+      collections: [],
+      complete: true,
+      countsBlocks: true,
+    });
   });
 
   it("is a floor for every id once the reads reach their cap", async () => {
@@ -466,7 +486,11 @@ describe("listDocumentsUsingEach", () => {
       referenceIds: ["c-0"],
       health: WHOLE,
     });
-    expect(found.get("c-0")).toEqual({ collections: [], complete: false });
+    expect(found.get("c-0")).toEqual({
+      collections: [],
+      complete: false,
+      countsBlocks: true,
+    });
   });
 
   it("agrees with the single count, which derives from the same listing", async () => {
