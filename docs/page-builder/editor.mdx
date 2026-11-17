@@ -356,6 +356,27 @@ the container holding them, set per container or by the spacing variables:
 - **Section** pads its content above, below and beside it. **Card** pads its content.
   Box and Column have no padding.
 
+Every container also says how it arranges its blocks, under **Style → Layout →
+Arrange**: **Stack**, **Row** or **Grid**, with the CSS it writes shown small under the
+choice ("display: flex · flex-direction: row"), and the same CSS on hover.
+
+- **Stack** puts blocks one under another. It writes nothing until you set its
+  **Align**, **Space between** or **Reverse order**, which make it a flex column.
+- **Row** puts blocks side by side. **Stack on** stacks it on a device and the smaller
+  ones; it still reads as a Row there, and its **Align**, **Spread** and **Reverse order**
+  then go by the column. **Spread** (Packed, Space between, Space around, Even) shares
+  out the room along the row, and while it isn't Packed the 3×3 **Align** says "Spread is
+  on" for that axis. **Wrap onto new lines** lets blocks run onto a new line.
+- **Grid** sets **Columns**, a number per device or **As many as fit** a minimum width,
+  and **Rows**. **Set rows and columns apart** gives each its own space.
+
+The 3×3 **Align** names its nine points, from Top left to Bottom right; with none chosen,
+blocks fill the width. Values that stop applying after a change are kept, and the
+section says so ("2 settings from Row aren't used · Clear"); **Clear** removes them in one
+step you can undo. A layout set in CSS with no plain equivalent, such as `inline-flex`,
+reads **Arrange: Custom** with the CSS rows that hold it; **Use plain controls** rewrites
+it to the nearest plain choice.
+
 Every container has **Content width** under **Style → Layout**: **Boxed** or **Full
 width**. A new Section starts Boxed, and every other container starts Full width.
 
@@ -397,8 +418,8 @@ layout:
   under a 20px gap leaves 40px.
 - In flex or grid, the gap is the container's `gap`, and a margin on a block **adds**
   to it, as margins do in CSS: the same block sits 60px below its neighbour. To change
-  the spacing of a flex or grid container, set its gap rather than a margin on each
-  block.
+  the spacing of a flex or grid container, set its **Space between** rather than a
+  margin on each block.
 
 A block hidden on a device still counts as a block above the next one. When every
 block above it is hidden, the first block shown in a normal-flow container keeps the
