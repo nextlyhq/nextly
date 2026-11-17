@@ -308,8 +308,19 @@ export function InspectorPanel({
   componentFields,
   componentVariants,
   canvasPassage = null,
+  regionCard,
   ...panel
 }: InspectorPanelProps): React.JSX.Element {
+  // A header or footer selected on the canvas: the host's card for it, in
+  // the panel's frame, so the canvas keeps its width. Never beside a block's
+  // settings, which a region's selection has already cleared.
+  if (regionCard !== undefined && panel.editor.selectedId === null) {
+    return (
+      <div className="nx-inspector" data-empty="region">
+        {regionCard}
+      </div>
+    );
+  }
   const look = editedLook(panel);
   if (look !== undefined && panel.lookEditing !== undefined) {
     // The host's services reach a look's Style controls as they reach a

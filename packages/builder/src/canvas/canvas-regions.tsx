@@ -96,6 +96,18 @@ export interface CanvasRegion {
   readonly badge: string;
   /** Its tag while it is selected: "Site header". */
   readonly name: string;
+  /**
+   * The way to edit what it comes from, for someone who may: a link that
+   * opens in a new tab, offered where a block of it is named off the canvas
+   * (the page data panel). Absent for anyone else.
+   */
+  readonly edit?: {
+    readonly href: string;
+    /** The visible text. */
+    readonly text: string;
+    /** The accessible name, which says it opens in a new tab. */
+    readonly name: string;
+  };
 }
 
 /** The attribute naming a drawn region's area, for a host scrolling to it. */

@@ -13,10 +13,10 @@ import {
 } from "./region-selection";
 
 /** An editor whose block selection the test sets, recording each select. */
-function editorWith(selectedId: string | null): RegionSelectionEditor & {
-  select: ReturnType<typeof vi.fn>;
-} {
-  return { selectedId, select: vi.fn() };
+function editorWith(
+  selectedId: string | null
+): RegionSelectionEditor & { select: ReturnType<typeof vi.fn<(id: null) => void>> } {
+  return { selectedId, select: vi.fn<(id: null) => void>() };
 }
 
 describe("selecting a header or footer on the canvas", () => {
