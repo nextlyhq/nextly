@@ -734,6 +734,13 @@ export function ImageAltField({
     return true;
   };
   const altHeld = !writable(group.alt);
+  const bound = boundPictureOf(
+    picture,
+    { document, nodeId, services },
+    group.media
+  );
+  // Back to the file's own words drops the page's: one edit, either source.
+  const useFileAlt = (): boolean => write({ [group.alt]: undefined });
   const wrap = bindable ?? unwrapped;
   // The alt text's bind button sits on its row; bound, the chip stands for
   // the words and the decorative mark alike.
@@ -767,21 +774,17 @@ export function ImageAltField({
                 id={noteId}
                 mode={mode}
                 own={ownStored ? own : undefined}
-                bound={boundPictureOf(
-                  picture,
-                  { document, nodeId, services },
-                  group.media
-                )}
+                bound={bound}
                 mediaId={mediaId}
                 libraryAlt={libraryAlt}
                 read={summary !== undefined}
               />
-              <UseLibraryAlt
-                offered={
-                  ownStored && libraryAlt !== undefined && mode !== "decorative"
-                }
+              <AltReset
+                bound={bound}
+                libraryAlt={libraryAlt}
+                offered={ownStored && mode !== "decorative"}
                 held={altHeld}
-                onUse={() => write({ [group.alt]: undefined })}
+                onUse={useFileAlt}
               />
             </div>
           </HeldByLock>
@@ -856,6 +859,67 @@ function UseLibraryAlt({
     >
       Use the media library&apos;s alt text
     </Button>
+  );
+}
+
+/**
+ * The way back from the page's own alt text to the file's: for a picked file
+ * once the library's words are read, and for a bound one by its field.
+ */
+function AltReset({
+  bound,
+  libraryAlt,
+  offered,
+  held,
+  onUse,
+}: {
+  bound: BoundPicture | undefined;
+  libraryAlt: string | undefined;
+  /** Whether the page stores words of its own, on an image not decorative. */
+  offered: boolean;
+  held: boolean;
+  onUse: () => void;
+}): React.JSX.Element | null {
+  if (bound !== undefined) {
+    return (
+      <UseBoundFileAlt {...bound} offered={offered} held={held} onUse={onUse} />
+    );
+  }
+  return (
+    <UseLibraryAlt
+      offered={offered && libraryAlt !== undefined}
+      held={held}
+      onUse={onUse}
+    />
+  );
+}
+
+/**
+ * The way back to a bound picture's file's own alt text, over words the page
+ * stores. The editor can't show the file's words, since the page reads the
+ * field when it is drawn, so this is offered without them; a stored empty
+ * alt leaves the field blank already, and emptying it again writes nothing,
+ * so without this there would be no way back. A field known to hold an
+ * address has no library words to go back to, so none is offered there.
+ */
+function UseBoundFileAlt({
+  binding,
+  document,
+  nodeId,
+  services,
+  offered,
+  held,
+  onUse,
+}: BoundPicture & {
+  offered: boolean;
+  held: boolean;
+  onUse: () => void;
+}): React.JSX.Element | null {
+  const field = useBoundFieldOf(binding, document, nodeId, services);
+  const kind = field === undefined ? undefined : bindingKindOf(field);
+  const address = kind === "url" || kind === "text";
+  return (
+    <UseLibraryAlt offered={offered && !address} held={held} onUse={onUse} />
   );
 }
 
