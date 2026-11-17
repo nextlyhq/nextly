@@ -4,7 +4,8 @@
  * - "+ New button style" asks for a name, makes "Ghost" from the ★ style's
  *   values and opens it in the style editor; a button can then wear it.
  * - A style the site made is renamed, duplicated and removed; one in use is
- *   refused, naming the document using it, by the panel and by the route.
+ *   refused, saying where: the panel names this page's blocks, and the route
+ *   names the document.
  * - A built-in style (Button "Text") is hidden: the block panel stops
  *   offering it, a button already wearing it keeps it and says "Hidden", and
  *   it is shown again.
@@ -330,11 +331,13 @@ test.describe("block styles in the Styles tab", () => {
       )
       .toEqual([ghost.id]);
 
-    // Remove the one the homepage wears: refused, saying where.
+    // Remove the one a block on this page wears: refused, saying where,
+    // before the route is asked, since the page's own blocks may be unsaved.
     await chooseFromMenu(page, "Soft ghost", "Remove");
     const refusal = buttonStyles(page).getByRole("alert");
-    await expect(refusal).toContainText("Soft ghost is used on");
-    await expect(refusal).toContainText("Homepage");
+    await expect(refusal).toHaveText(
+      "Soft ghost is used on 1 block on this page. Take it off them first."
+    );
     await expect(styleRow(page, "Soft ghost")).toBeVisible();
 
     // The route refuses it too, listing where, and nothing is removed.
