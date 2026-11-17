@@ -30,7 +30,10 @@ const checked = vi.hoisted(() => [] as unknown[]);
 
 // The change check has its own tests; here it would share the mocked route
 // with the read under test, so only what it is handed is recorded.
-vi.mock("./editor/canvas-source-check", () => ({
+vi.mock("./editor/canvas-source-check", async importOriginal => ({
+  // The rule for when the first reads are in stays real; only the check
+  // itself is watched.
+  ...(await importOriginal<typeof import("./editor/canvas-source-check")>()),
   useCanvasSourceCheck: (asked: unknown) => {
     checked.push(asked);
   },
