@@ -20,9 +20,9 @@ import {
 import { Input, Switch } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { chainedStyleOp, COLUMNS_ROW } from "./columns-layout";
+import { offeredTiers } from "./canvas/canvas-width";
+import { chainedStyleOp, COLUMNS_ROW, type AppliedAt } from "./columns-layout";
 import { CssHint } from "./css-hint";
-import type { EditorState } from "./editor-state";
 import {
   ARRANGE_WRITES,
   LAYOUT_PROPERTIES,
@@ -45,35 +45,35 @@ import {
   type PlainArrange,
   type Spread,
 } from "./plain-layout";
-import { arrowTo, SegmentChoices } from "./segment-choices";
+import { SegmentChoices } from "./segment-choices";
 import {
   sharedStyleChange,
   type SharedStyleChange,
 } from "./shared-style-target";
 import {
+  AppliedAtTier,
   StyleTargetContext,
   type StyleFieldSurroundings,
 } from "./style-field-surroundings";
 import type { StyleTarget } from "./style-target";
 import { readStyleValue } from "./style-values";
 
-/** The devices along the viewport axis, widest (the base) first. */
+/**
+ * The devices the switcher offers, widest (the base) first: of two at one
+ * width the one the browser lets win, so a write lands where it applies.
+ */
 function deviceOrder(breakpoints: BreakpointSet | undefined): string[] {
-  const narrower = [...(breakpoints?.viewport ?? [])]
-    .filter(each => each.maxWidth !== undefined)
-    .sort((a, b) => (b.maxWidth ?? 0) - (a.maxWidth ?? 0))
-    .map(each => each.id);
-  return [BASE_BREAKPOINT, ...narrower];
+  return [BASE_BREAKPOINT, ...offeredTiers(breakpoints).map(tier => tier.id)];
 }
 
 /** The edited target's styles: the block's, or the shared style's. */
 function stylesOf(
   target: StyleTarget,
-  editor: EditorState,
-  nodeId: string
+  surroundings: StyleFieldSurroundings
 ): NodeStyles | undefined {
   if (target.kind === "shared") return target.style.styles as NodeStyles;
-  return findNode(editor.document.nodes, nodeId)?.styles;
+  return findNode(surroundings.editor.document.nodes, surroundings.nodeId)
+    ?.styles;
 }
 
 /** What the target stores at one device, as text. */
@@ -95,43 +95,52 @@ function ownAt(
   return values;
 }
 
+/** What the target's own values put in force at a device, widest first. */
+function ownInForce(
+  order: readonly string[],
+  own: (device: string) => LayoutValues
+): (device: string) => LayoutValues {
+  return device => {
+    const merged: Partial<Record<LayoutProperty, string>> = {};
+    for (const each of order) {
+      Object.assign(merged, own(each));
+      if (each === device) break;
+    }
+    return merged;
+  };
+}
+
+/** What the cascade applies to the block at a device, property by property. */
+function appliedInForce(applied: AppliedAt): (device: string) => LayoutValues {
+  return device => {
+    const values: Partial<Record<LayoutProperty, string>> = {};
+    for (const property of LAYOUT_PROPERTIES) {
+      const answer = applied(device, CSS_NAMES[property]);
+      if (answer !== undefined) values[property] = answer.value;
+    }
+    return values;
+  };
+}
+
 /**
- * What is in force and stored at each device: the target's own values,
- * cascading widest first, over what reaches the edited device from elsewhere
- * (a shared style it wears, its block's defaults), as the panel's cascade
- * answers it.
+ * What is in force and stored at each device. A block reads what the cascade
+ * applies to it there (its own values over a shared style it wears and its
+ * block's defaults); a shared style reads its own values, which are what its
+ * Arrange writes.
  */
 export function layoutTiers(
   surroundings: StyleFieldSurroundings,
-  target: StyleTarget
+  target: StyleTarget,
+  applied: AppliedAt | undefined
 ): LayoutTiers {
-  const { editor, nodeId, state, breakpoints, provenanceOf } = surroundings;
-  const order = deviceOrder(breakpoints);
-  const styles = stylesOf(target, editor, nodeId);
-  const own = (device: string) => ownAt(styles, state, device);
-  const reaching: Partial<Record<LayoutProperty, string>> = {};
-  for (const property of LAYOUT_PROPERTIES) {
-    const answer = provenanceOf({
-      kind: "cssValue",
-      cssProperty: CSS_NAMES[property],
-      tokenKinds: [],
-    });
-    if (answer?.provenance.kind === "inherited") {
-      reaching[property] = answer.provenance.entry.value;
-    }
-  }
-  return {
-    order,
-    own,
-    inForce: device => {
-      const merged: Partial<Record<LayoutProperty, string>> = { ...reaching };
-      for (const each of order) {
-        Object.assign(merged, own(each));
-        if (each === device) break;
-      }
-      return merged;
-    },
-  };
+  const order = deviceOrder(surroundings.breakpoints);
+  const styles = stylesOf(target, surroundings);
+  const own = (device: string) => ownAt(styles, surroundings.state, device);
+  const inForce =
+    target.kind === "block" && applied !== undefined
+      ? appliedInForce(applied)
+      : ownInForce(order, own);
+  return { order, own, inForce };
 }
 
 /** Each layout property's CSS name, for the cascade's answer. */
@@ -269,10 +278,11 @@ export function ArrangeFields({
   surroundings: StyleFieldSurroundings;
 }): React.JSX.Element | null {
   const target = React.useContext(StyleTargetContext);
+  const applied = React.useContext(AppliedAtTier);
   const labelId = React.useId();
   const apply = useApply(surroundings, target);
   if (!arrangesLayout(surroundings.editing.blockType)) return null;
-  const tiers = layoutTiers(surroundings, target);
+  const tiers = layoutTiers(surroundings, target, applied);
   const editing = surroundings.breakpoint;
   const arrange = readArrange(tiers, editing);
   const unused = unusedSettings(tiers, editing);
@@ -784,6 +794,3 @@ function UnusedLine({
     </p>
   );
 }
-
-// Not every import is drawn on every path.
-void arrowTo;
