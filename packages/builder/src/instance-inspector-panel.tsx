@@ -34,6 +34,7 @@ import {
   isRichTextValue,
   isUnsetOverride,
   neededFor,
+  oneParagraphWords,
   richTextToPlainText,
   type BlockDocument,
   type ComponentDocument,
@@ -481,7 +482,7 @@ function ExposedControl({
   // replaces the whole value with what was typed into that blank. Shown rather
   // than offered for editing, so nothing is lost to a control that cannot hold
   // it.
-  if (!row.supported || !representable(row)) return <NotEditable row={row} />;
+  if (!row.supported || !editableRow(row)) return <NotEditable row={row} />;
   if (row.type === "visibility") {
     return <ExposedVisibilityField id={id} row={row} onSet={onSet} />;
   }
@@ -652,6 +653,19 @@ function ExposedRichTextField({
   );
 }
 
+/**
+ * A Text's one paragraph, exposed as text: its words are what a text field
+ * holds, and what a placement sets in its place (`textRowValue`).
+ */
+function textParagraph(row: ExposedRow): boolean {
+  return row.type === "text" && isRichTextValue(row.value);
+}
+
+/** Whether a row's value is one its control can hold. */
+function editableRow(row: ExposedRow): boolean {
+  return representable(row) || textParagraph(row);
+}
+
 function representable(row: ExposedRow): boolean {
   if (row.type === "visibility" || row.type === "select") return true;
   const { value } = row;
@@ -761,6 +775,16 @@ function storedText(value: OverrideValue): string {
  * a field that wrote `""` would leave them with a value the definition may
  * treat as meaningful and no way to say "nothing".
  */
+/**
+ * What a text row's field holds: the stored words, or, for a value in force
+ * that is a Text's one paragraph (the component's own, with its marks), its
+ * words. A placement then sets plain words in its place, as a placement's
+ * text always is; an untouched field writes nothing.
+ */
+function textRowValue(value: OverrideValue): string {
+  return isRichTextValue(value) ? oneParagraphWords(value) : storedText(value);
+}
+
 function ExposedTextField({
   id,
   row,
@@ -773,7 +797,7 @@ function ExposedTextField({
   // Only a primitive becomes text, for the reason the block inspector gives:
   // an unrepresentable value shows empty, and because `send` compares against
   // this, an untouched field writes nothing.
-  const stored = storedText(row.value);
+  const stored = textRowValue(row.value);
   const [draft, setDraft] = useStoredDraft(stored);
   // A value the store would refuse is held here with the reason rather than
   // written: a link the renderer would not draw is the case a text field can

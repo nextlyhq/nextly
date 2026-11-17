@@ -1702,3 +1702,44 @@ describe("the instance's card menu", () => {
     expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull(); // menu closed
   });
 });
+
+describe("an exposed Text, whose component holds one paragraph", () => {
+  const paragraphOf = (...children: unknown[]) => ({
+    root: { type: "root", children: [{ type: "paragraph", children }] },
+  });
+  const withText = () =>
+    header({
+      nodes: [
+        {
+          id: "h1",
+          type: "acme/heading",
+          version: 1,
+          props: {
+            text: paragraphOf(
+              { type: "text", text: "Made ", format: 0 },
+              { type: "text", text: "by hand", format: 1 }
+            ),
+          },
+        },
+      ],
+    });
+
+  it("shows the component's words and sets plain words in their place", () => {
+    const editor = mount(instance(), withText());
+    const field = screen.getByRole("textbox", { name: "Title" });
+    expect((field as HTMLInputElement).value).toBe("Made by hand");
+
+    fireEvent.change(field, { target: { value: "Made by us" } });
+    fireEvent.blur(field);
+    expect(appliedProps(editor)).toEqual({
+      componentId: "header",
+      overrides: { title: "Made by us" },
+    });
+  });
+
+  it("writes nothing for the component's words left as they were", () => {
+    const editor = mount(instance(), withText());
+    fireEvent.blur(screen.getByRole("textbox", { name: "Title" }));
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+});

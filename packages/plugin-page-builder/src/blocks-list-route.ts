@@ -19,6 +19,7 @@
  */
 import {
   blockLabelFrom,
+  isOneParagraphProp,
   slotAdmits,
   type AnyBlockDefinition,
 } from "@nextlyhq/blocks-engine";
@@ -81,6 +82,9 @@ export function listAcceptedBlocks(
                 name,
                 label: propLabel(name, schema),
                 type: schema.type,
+                ...(isOneParagraphProp(schema)
+                  ? { oneParagraph: true as const }
+                  : {}),
               },
             ]
       ),

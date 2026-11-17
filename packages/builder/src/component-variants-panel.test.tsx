@@ -407,3 +407,48 @@ describe("a component's variants in its own view", () => {
     expect(opened).toEqual(["a", undefined]);
   });
 });
+
+describe("a variant of a component holding a Text", () => {
+  it("shows the Text's words, and sets plain words in their place", () => {
+    const editor = mount(
+      component({
+        nodes: [
+          {
+            id: "h1",
+            type: "core/text",
+            version: 2,
+            props: {
+              text: {
+                root: {
+                  type: "root",
+                  children: [
+                    {
+                      type: "paragraph",
+                      children: [
+                        { type: "text", text: "Hand ", format: 0 },
+                        { type: "text", text: "made", format: 1 },
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+        variants: { a: { label: "Night", overrides: {} } },
+      })
+    );
+    fireEvent.click(
+      within(section()).getByRole("button", {
+        name: "Show the values of Night",
+      })
+    );
+    const value = within(section()).getByRole("textbox", { name: "Headline" });
+    expect(value).toHaveProperty("value", "Hand made");
+    fireEvent.change(value, { target: { value: "Machine made" } });
+    fireEvent.keyDown(value, { key: "Enter" });
+    expect(variantsOf(editor())?.a?.overrides).toEqual({
+      headline: "Machine made",
+    });
+  });
+});

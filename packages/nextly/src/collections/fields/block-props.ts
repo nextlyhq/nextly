@@ -511,7 +511,9 @@ const ALLOWED_OPTIONS: Readonly<
     "minRows",
     "maxRows",
   ],
-  textarea: ["label", "required", "minLength", "maxLength"],
+  // `oneParagraph`: the value may be one paragraph of editor content as well
+  // as its words (the core Text's).
+  textarea: ["label", "required", "minLength", "maxLength", "oneParagraph"],
   richText: ["label", "required"],
   email: ["label", "required"],
   number: ["label", "required", "min", "max", "hasMany", "minRows", "maxRows"],
@@ -613,11 +615,23 @@ const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
       validate: listBoundsValidator(rows.minRows, rows.maxRows),
     };
   },
-  textarea: (name, declaration, path, ctx) => ({
-    ...base(name, declaration, path, ctx),
-    type: "textarea",
-    ...lengthBounds(declaration, path, ctx),
-  }),
+  textarea: (name, declaration, path, ctx) =>
+    // One paragraph of words with bold, italic and links (`oneParagraph`, as
+    // the core Text declares it) holds either the words a string held before,
+    // or editor content restricted to that paragraph, which a renderer reads
+    // as its words. The entry validator would refuse the second as "must be
+    // text", so it is checked as editor content or a string instead.
+    declaration.oneParagraph === true
+      ? {
+          ...base(name, declaration, path, ctx),
+          type: "richText",
+          validate: isTextOrEditorContent,
+        }
+      : {
+          ...base(name, declaration, path, ctx),
+          type: "textarea",
+          ...lengthBounds(declaration, path, ctx),
+        },
   richText: (name, declaration, path, ctx) => ({
     ...base(name, declaration, path, ctx),
     type: "richText",
@@ -964,6 +978,17 @@ function countOption(
  * their own), so validating the full tree would encode the editor's node
  * catalog into the field system.
  */
+/**
+ * Whether a one-paragraph prop's value is one it can hold: the words, as a
+ * string, or {@link isEditorContent editor content}.
+ */
+function isTextOrEditorContent(value: unknown): string | true {
+  if (typeof value === "string") return true;
+  return isEditorContent(value) === true
+    ? true
+    : "must be text, or one paragraph of words with bold, italic and links";
+}
+
 export function isEditorContent(value: unknown): string | true {
   // Plain records, not merely objects: a class instance with the right keys
   // encodes to whatever its own `toJSON` decides, so the renderer would read

@@ -418,3 +418,396 @@ export function codeTokenClass(highlightType: unknown): string | undefined {
   if (!SAFE_HIGHLIGHT_TYPE.test(highlightType)) return undefined;
   return `nextly-code-token nextly-code-token--${highlightType}`;
 }
+
+/**
+ * The schema option that restricts a prop's rich value to ONE paragraph of
+ * words with bold, italic, links and line breaks.
+ *
+ * A block declares it beside the prop's type, as `core/text` does:
+ * `{ type: "textarea", oneParagraph: true }`. The TYPE stays the one a line of
+ * words has, because that is what the value is to everything that is not an
+ * editor or a renderer: a binding fills it from a text field and never from a
+ * rich-text one, a component exposes it as text, and a placement's value for it
+ * is a string. The option is what tells an editor and a renderer that the
+ * value may also carry the three marks, and that they must restrict it.
+ *
+ * Here rather than in each reader because two ends must mean the same thing by
+ * it: the block library writes it into a schema, and the builder reads it to
+ * decide which editor the value is handed to.
+ */
+export const ONE_PARAGRAPH_OPTION = "oneParagraph";
+
+/**
+ * Whether a prop's schema declares the one-paragraph restriction.
+ *
+ * Takes any record, not the engine's prop schema, so a reader holding a schema
+ * from anywhere asks the same question; only an explicit `true` counts.
+ */
+export function isOneParagraphProp(
+  schema: Readonly<Record<string, unknown>> | undefined
+): boolean {
+  return schema !== undefined && schema[ONE_PARAGRAPH_OPTION] === true;
+}
+
+/** The format bits a one-paragraph value keeps: bold and italic. */
+const ONE_PARAGRAPH_FORMATS = TEXT_FORMAT.BOLD | TEXT_FORMAT.ITALIC;
+
+/**
+ * How many nodes one restriction visits at most.
+ *
+ * A stored value has no size of its own beyond the document's byte cap, and a
+ * value well under it can nest thousands of containers deep. Past this the
+ * restriction keeps what it has read and says it dropped the rest.
+ */
+const MAX_ONE_PARAGRAPH_VISITS = 50_000;
+
+/** One piece of a restricted paragraph, before adjacent runs are joined. */
+type ParagraphPiece =
+  | { readonly kind: "text"; readonly text: string; readonly format: number }
+  | { readonly kind: "break" }
+  | {
+      readonly kind: "link";
+      readonly url: string;
+      readonly target?: "_blank";
+      readonly rel?: string;
+      readonly runs: readonly ParagraphPiece[];
+    };
+
+/** What restricting a value produced. */
+export interface OneParagraph {
+  /** The value as one paragraph: what is stored, and what is drawn. */
+  readonly value: RichTextValue;
+  /**
+   * Whether anything beyond the words was left out: a second paragraph, a
+   * heading, a list, a quote, a mark other than bold or italic, an inline
+   * style, a link this format cannot hold, or anything else.
+   *
+   * False for words alone, a string with line breaks, and a value that was
+   * already one paragraph of the three marks. An editor reads it to tell the
+   * author that a paste lost its formatting.
+   */
+  readonly dropped: boolean;
+}
+
+/**
+ * A `rel` kept only as space-separated lowercase words, so whatever a paste or
+ * an import left there reaches the renderer as link relations and nothing
+ * else. The renderer adds `noopener noreferrer` to a new-tab link either way.
+ */
+const SAFE_REL = /^[a-z]+(?: [a-z]+)*$/;
+
+/** Mutable state of one restriction walk. */
+interface RestrictWalk {
+  visits: number;
+  dropped: boolean;
+  /** Whether the walk has already put words in, for the line between blocks. */
+  wrote: boolean;
+}
+
+/** A text leaf's words as pieces: its runs, with `\n` read as line breaks. */
+function textPieces(text: string, format: number): ParagraphPiece[] {
+  const pieces: ParagraphPiece[] = [];
+  const lines = text.split(/\r\n|\r|\n/);
+  lines.forEach((line, index) => {
+    if (index > 0) pieces.push({ kind: "break" });
+    if (line !== "") pieces.push({ kind: "text", text: line, format });
+  });
+  return pieces;
+}
+
+/** A link node's address and attributes as the restriction keeps them. */
+function linkParts(
+  node: RichTextNode
+): Omit<Extract<ParagraphPiece, { kind: "link" }>, "kind" | "runs"> | null {
+  if (!isLinkableUrl(node.url)) return null;
+  const url = (node.url as string).trim();
+  const rel =
+    typeof node.rel === "string" && SAFE_REL.test(node.rel.trim())
+      ? node.rel.trim()
+      : undefined;
+  return {
+    url,
+    ...(node.target === "_blank" ? { target: "_blank" as const } : {}),
+    ...(rel === undefined ? {} : { rel }),
+  };
+}
+
+/** Whether the walk has spent its budget, which drops what is left. */
+function spent(walk: RestrictWalk): boolean {
+  if (walk.visits < MAX_ONE_PARAGRAPH_VISITS) return false;
+  walk.dropped = true;
+  return true;
+}
+
+/** A text leaf's pieces: its words, with only bold and italic kept. */
+function textLeafPieces(
+  node: RichTextNode,
+  walk: RestrictWalk
+): ParagraphPiece[] {
+  const format = typeof node.format === "number" ? node.format : 0;
+  const kept = format & ONE_PARAGRAPH_FORMATS;
+  const styled = typeof node.style === "string" && node.style.trim() !== "";
+  if (kept !== format || styled) walk.dropped = true;
+  return textPieces(node.text as string, kept);
+}
+
+/**
+ * A link's pieces: a link around its runs when its address is one this
+ * format can hold, and its runs alone otherwise (or inside another link).
+ */
+function linkPieces(
+  node: RichTextNode,
+  walk: RestrictWalk,
+  inLink: boolean
+): ParagraphPiece[] {
+  const parts = inLink ? null : linkParts(node);
+  const runs = inlinePieces(kidsOf(node), walk, true);
+  if (parts === null) {
+    walk.dropped = true;
+    return runs;
+  }
+  return runs.length > 0 ? [{ kind: "link", ...parts, runs }] : [];
+}
+
+/**
+ * The pieces one node contributes in a line. A node this format does not
+ * hold keeps only its words: a label or a code token's text as plain words,
+ * and a container's children, which go on `stack` to be read in turn.
+ */
+function nodePieces(
+  node: unknown,
+  walk: RestrictWalk,
+  inLink: boolean,
+  stack: unknown[]
+): ParagraphPiece[] {
+  if (!isRichTextNode(node)) {
+    walk.dropped = true;
+    return [];
+  }
+  if (node.type === "text" && typeof node.text === "string") {
+    return textLeafPieces(node, walk);
+  }
+  if (node.type === "linebreak") return [{ kind: "break" }];
+  if (node.type === "link" || node.type === "autolink") {
+    return linkPieces(node, walk, inLink);
+  }
+  walk.dropped = true;
+  if (typeof node.text === "string") return textPieces(node.text, 0);
+  pushReversed(stack, kidsOf(node));
+  return [];
+}
+
+/** Puts nodes on a walk's stack so they pop in their order. */
+function pushReversed(stack: unknown[], nodes: readonly unknown[]): void {
+  for (let i = nodes.length - 1; i >= 0; i--) stack.push(nodes[i]);
+}
+
+/**
+ * The inline pieces of a list of nodes, read in document order within the
+ * walk's budget. `inLink` flattens a link inside a link to its words, since an
+ * anchor cannot hold another.
+ */
+function inlinePieces(
+  nodes: readonly unknown[],
+  walk: RestrictWalk,
+  inLink: boolean
+): ParagraphPiece[] {
+  const out: ParagraphPiece[] = [];
+  const stack: unknown[] = [];
+  pushReversed(stack, nodes);
+  while (stack.length > 0 && !spent(walk)) {
+    walk.visits += 1;
+    out.push(...nodePieces(stack.pop(), walk, inLink, stack));
+  }
+  return out;
+}
+
+/** A node's children as a list, whatever storage left there. */
+function kidsOf(node: RichTextNode): readonly unknown[] {
+  return Array.isArray(node.children) ? node.children : [];
+}
+
+/** Whether a node is a block that holds others: a paragraph, a list, an item. */
+function isBlockContainer(node: unknown): boolean {
+  return (
+    isRichTextNode(node) &&
+    Array.isArray(node.children) &&
+    !INLINE_CONTAINERS.has(node.type)
+  );
+}
+
+/**
+ * A list of nodes as blocks: each block as it is, and each run of inline nodes
+ * between them wrapped as one paragraph of its own, so words that sit beside a
+ * nested list, or straight under the root, are read as a line of their own.
+ */
+function asBlocks(nodes: readonly unknown[]): unknown[] {
+  const blocks: unknown[] = [];
+  let run: unknown[] = [];
+  const flush = (): void => {
+    if (run.length > 0) blocks.push({ type: "paragraph", children: run });
+    run = [];
+  };
+  for (const node of nodes) {
+    if (isBlockContainer(node)) {
+      flush();
+      blocks.push(node);
+    } else {
+      run.push(node);
+    }
+  }
+  flush();
+  return blocks;
+}
+
+/**
+ * One block's part of the walk: its blocks pushed to be read in turn when it
+ * holds any (a list, a quote, a table), or its words added on a line of
+ * their own.
+ */
+function readBlock(
+  block: unknown,
+  walk: RestrictWalk,
+  stack: unknown[],
+  out: ParagraphPiece[]
+): void {
+  if (!isRichTextNode(block)) {
+    walk.dropped = true;
+    return;
+  }
+  if (block.type !== "paragraph") walk.dropped = true;
+  const kids = kidsOf(block);
+  if (kids.some(isBlockContainer)) {
+    walk.dropped = true;
+    pushReversed(stack, asBlocks(kids));
+    return;
+  }
+  const pieces = inlinePieces(kids, walk, false);
+  if (pieces.length === 0) return;
+  if (walk.wrote) out.push({ kind: "break" });
+  out.push(...pieces);
+  walk.wrote = true;
+}
+
+/**
+ * The words of every block in a value, one block after another, with a line
+ * break where one block ended and the next began.
+ */
+function blockPieces(
+  nodes: readonly unknown[],
+  walk: RestrictWalk
+): ParagraphPiece[] {
+  const out: ParagraphPiece[] = [];
+  const top = asBlocks(nodes);
+  // More than one block is more than one paragraph, whatever each holds.
+  if (top.length > 1) walk.dropped = true;
+  const stack: unknown[] = [];
+  pushReversed(stack, top);
+  while (stack.length > 0 && !spent(walk)) {
+    walk.visits += 1;
+    readBlock(stack.pop(), walk, stack, out);
+  }
+  return out;
+}
+
+/** A link piece as a stored node, or `null` when it holds no words. */
+function linkNode(
+  piece: Extract<ParagraphPiece, { kind: "link" }>
+): RichTextNode | null {
+  const children = paragraphNodes(piece.runs);
+  if (children.length === 0) return null;
+  return {
+    type: "link",
+    url: piece.url,
+    ...(piece.target === undefined ? {} : { target: piece.target }),
+    ...(piece.rel === undefined ? {} : { rel: piece.rel }),
+    children,
+  };
+}
+
+/** Adds words to a run of nodes, joined to the last when it has their format. */
+function appendWords(
+  nodes: RichTextNode[],
+  piece: Extract<ParagraphPiece, { kind: "text" }>
+): void {
+  const last = nodes.at(-1);
+  if (last?.type === "text" && last.format === piece.format) {
+    last.text = `${String(last.text)}${piece.text}`;
+    return;
+  }
+  nodes.push({ type: "text", text: piece.text, format: piece.format });
+}
+
+/**
+ * The stored nodes for a run of pieces, with adjacent words of one format
+ * joined, so one value has one stored form whichever editor produced it.
+ */
+function paragraphNodes(pieces: readonly ParagraphPiece[]): RichTextNode[] {
+  const nodes: RichTextNode[] = [];
+  for (const piece of pieces) {
+    if (piece.kind === "text") {
+      appendWords(nodes, piece);
+      continue;
+    }
+    const node =
+      piece.kind === "break" ? { type: "linebreak" } : linkNode(piece);
+    if (node !== null) nodes.push(node);
+  }
+  return nodes;
+}
+
+/** One paragraph holding these nodes, as a whole value. */
+function paragraphValue(children: RichTextNode[]): RichTextValue {
+  return {
+    root: { type: "root", children: [{ type: "paragraph", children }] },
+  };
+}
+
+/**
+ * A stored value as ONE paragraph of words with bold, italic, links and line
+ * breaks, and whether anything else was left out.
+ *
+ * The one restriction for every reader and writer of such a value: the editor
+ * restricts what it writes, the renderer restricts what it draws, and the
+ * upgrade of an older string goes through it too, so a value that holds a
+ * heading — written by an older editor, an import or a hand-edited row — is
+ * drawn and saved as its words rather than as a heading.
+ *
+ * Anything that is not rich text is read as authored text: a string (or a
+ * stored number) becomes the paragraph, each `\n` a line break, which is how a
+ * Text saved as plain words reads. Rich text keeps its words, in order; each
+ * block after the first starts a new line. A link keeps its address only when
+ * it is one this format can express ({@link isLinkableUrl}: never
+ * `javascript:`), its target only when it is a new tab, and its `rel` only as
+ * plain words; any other link keeps its words without the link.
+ *
+ * Total and pure: whatever the input, the answer is a value every reader can
+ * walk, built fresh, sharing nothing with the input.
+ */
+export function toOneParagraph(value: unknown): OneParagraph {
+  if (!isRichTextValue(value)) {
+    return {
+      value: paragraphValue(paragraphNodes(textPieces(authoredText(value), 0))),
+      dropped: false,
+    };
+  }
+  const walk: RestrictWalk = { visits: 0, dropped: false, wrote: false };
+  const pieces = blockPieces(value.root.children, walk);
+  return {
+    value: paragraphValue(paragraphNodes(pieces)),
+    dropped: walk.dropped,
+  };
+}
+
+/**
+ * The words of a one-paragraph value, with its marks left out and each line
+ * break read as a space: what a description, a summary or a note quoting the
+ * value says.
+ *
+ * Takes anything a document may hold there, an older string included, through
+ * {@link toOneParagraph}, so every reader of a Text's words reads the same
+ * words the page draws.
+ */
+export function oneParagraphWords(value: unknown): string {
+  return richTextToPlainText(toOneParagraph(value).value);
+}

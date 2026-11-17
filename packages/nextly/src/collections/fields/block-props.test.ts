@@ -1508,3 +1508,48 @@ describe("validateBlockPropValues", () => {
     expect(issues.map(issue => issue.path)).toEqual(["text"]);
   });
 });
+
+describe("a one-paragraph Text prop", () => {
+  const source: BlockPropsSource = {
+    props: { text: { type: "textarea", oneParagraph: true } },
+  };
+  const paragraph = {
+    root: {
+      type: "root",
+      children: [
+        {
+          type: "paragraph",
+          children: [{ type: "text", text: "Bold", format: 1 }],
+        },
+      ],
+    },
+  };
+
+  it("holds its words as a string, as an older Text did", async () => {
+    expect(
+      await validateBlockPropValues({ text: "Old words" }, source)
+    ).toEqual([]);
+  });
+
+  it("holds one paragraph of editor content", async () => {
+    expect(await validateBlockPropValues({ text: paragraph }, source)).toEqual(
+      []
+    );
+  });
+
+  it("refuses anything else", async () => {
+    expect(await validateBlockPropValues({ text: 42 }, source)).toHaveLength(1);
+    expect(
+      await validateBlockPropValues({ text: { nope: true } }, source)
+    ).toHaveLength(1);
+  });
+
+  it("is a control: a plain textarea prop still refuses editor content", async () => {
+    expect(
+      await validateBlockPropValues(
+        { text: paragraph },
+        { props: { text: { type: "textarea" } } }
+      )
+    ).toHaveLength(1);
+  });
+});

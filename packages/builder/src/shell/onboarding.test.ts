@@ -74,6 +74,31 @@ function register() {
           variations: [{ name: "hero", props: { text: "Hero title" } }],
         },
       },
+      // A one-paragraph Text, placed with its example's words as core/text is.
+      {
+        ...base,
+        name: "acme/text",
+        props: {
+          text: { type: "textarea", inline: true, oneParagraph: true },
+        },
+        example: {
+          props: {
+            text: {
+              root: {
+                type: "root",
+                children: [
+                  {
+                    type: "paragraph",
+                    children: [
+                      { type: "text", text: "A paragraph of text.", format: 0 },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
     ] as never,
     { source: "onboarding-test" }
   );
@@ -274,5 +299,43 @@ describe("checklistComplete", () => {
     // `every` on nothing is true, which would report a checklist that failed to
     // build as finished — and the card would never appear.
     expect(checklistComplete([])).toBe(false);
+  });
+});
+
+describe("a Text's words", () => {
+  const text = (value: unknown): BlockNode =>
+    ({
+      id: "t",
+      type: "acme/text",
+      version: 1,
+      props: { text: value },
+    }) as BlockNode;
+  const one = (...children: unknown[]) => ({
+    root: { type: "root", children: [{ type: "paragraph", children }] },
+  });
+
+  it("count as something written once they are words an author typed", () => {
+    expect(
+      step(
+        documentOf([text(one({ type: "text", text: "Our story", format: 1 }))]),
+        "write-text"
+      )?.done
+    ).toBe(true);
+    // An older Text, saved as a string, counts the same way.
+    expect(step(documentOf([text("Old words")]), "write-text")?.done).toBe(
+      true
+    );
+  });
+
+  it("do not count while they are empty or what the Text was placed with", () => {
+    expect(step(documentOf([text(one())]), "write-text")?.done).toBe(false);
+    expect(
+      step(
+        documentOf([
+          text(one({ type: "text", text: "A paragraph of text.", format: 0 })),
+        ]),
+        "write-text"
+      )?.done
+    ).toBe(false);
   });
 });

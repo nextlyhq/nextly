@@ -20,7 +20,9 @@
  * @module component-variants-panel
  */
 import {
+  isRichTextValue,
   isUnsetOverride,
+  oneParagraphWords,
   variantOptions,
   type ComponentDocument,
   type ExposedProperty,
@@ -491,7 +493,15 @@ function VariantValueControl({
       return (
         <TextValue
           id={id}
-          value={typeof value === "string" ? value : ""}
+          // A Text's one paragraph, the component's own value, shows its
+          // words; a variant sets plain words in its place.
+          value={
+            typeof value === "string"
+              ? value
+              : isRichTextValue(value)
+                ? oneParagraphWords(value)
+                : ""
+          }
           onCommit={onCommit}
         />
       );
