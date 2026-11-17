@@ -695,7 +695,15 @@ function buildRoute<TNode>(
       // Development only. The production 404 stays uniform by design: making it
       // distinguishable would turn the endpoint into an oracle for which
       // entries exist in draft.
-      if (process.env.NODE_ENV !== "production") {
+      //
+      // On a public route, only on a draft-mode request, which a preview link
+      // turns on as it opens: any other request reads no cookie, so the page
+      // stays static. A public page renders with no Suspense boundary above
+      // it, where Next.js refuses a read of the request while it prerenders.
+      if (
+        process.env.NODE_ENV !== "production" &&
+        (!isPublic || (await isDraftModeRequest()))
+      ) {
         await warnOnUnhonouredPreviewCookie(context);
       }
       return false;

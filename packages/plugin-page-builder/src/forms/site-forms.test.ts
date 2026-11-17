@@ -45,6 +45,47 @@ describe("the site's forms service", () => {
     }
   });
 
+  it("serves a provider's script under the app's base path, as its post is", async () => {
+    // A provider names its script by the API mount alone; under a base path
+    // the browser finds it only below that path, as it finds the form's post.
+    const module = "/admin/api/plugins/forms/bot-check.js";
+    const provider: FormProvider = {
+      id: "forms",
+      label: "Forms",
+      list: async () => [],
+      describe: async ref => ({
+        ref,
+        title: "Quote",
+        fields: [],
+        submitText: "Send",
+        afterSending: { kind: "message", message: "Thanks" },
+        encoding: "urlencoded",
+        script: { module, reason: "Draws the bot check." },
+      }),
+      accept: async () => ({ kind: "sent" }),
+    };
+    vi.stubEnv("__NEXT_ROUTER_BASEPATH", "/site");
+    try {
+      const described = await service(provider).describe({
+        provider: "forms",
+        ref: "quote",
+      });
+      expect(
+        "script" in described ? described.script?.module : undefined
+      ).toBe(`/site${module}`);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    // Served at the root, the address is the provider's own.
+    const atRoot = await service(provider).describe({
+      provider: "forms",
+      ref: "quote",
+    });
+    expect("script" in atRoot ? atRoot.script?.module : undefined).toBe(
+      module
+    );
+  });
+
   it("names the documents the receiver reads, under the host's names", () => {
     const forms = service();
     const named = forms.documentOf({

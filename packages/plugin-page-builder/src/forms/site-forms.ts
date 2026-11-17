@@ -91,10 +91,23 @@ export function siteForms(parts: {
       async describe(form, locale) {
         const provider = parts.providers.get(form.provider);
         if (provider === undefined) return { unavailable: "missing" };
-        return await provider.describe(form.ref, {
+        const described = await provider.describe(form.ref, {
           access: { as: "public" },
           ...(locale === undefined ? {} : { locale }),
         });
+        // A provider names its script by the API mount alone. The browser
+        // loads it from the page, so under a base path it lives below that
+        // path, exactly as the form's post does.
+        if (!("script" in described) || described.script === undefined) {
+          return described;
+        }
+        return {
+          ...described,
+          script: {
+            ...described.script,
+            module: servedUnderBase(described.script.module),
+          },
+        };
       },
     }),
   };

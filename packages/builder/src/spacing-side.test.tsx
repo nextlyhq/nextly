@@ -313,6 +313,15 @@ describe("a spacing-box side", () => {
     expect(presets).toContain("Card (spacing.card) 8px");
   });
 
+  it("carries the builder's tokens into the popover, drawn outside the panel", () => {
+    // Portaled to the page's end, outside the builder's own element: without
+    // the token class its chips and segments resolve no border or green.
+    mount();
+    fireEvent.click(side("Padding top"));
+    const dialog = screen.getByRole("dialog", { name: "Padding top" });
+    expect(dialog.classList.contains("nx-builder-tokens")).toBe(true);
+  });
+
   it("offers Left & right for a left side", () => {
     mount();
     fireEvent.click(side("Margin left"));

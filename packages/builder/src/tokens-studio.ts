@@ -56,6 +56,7 @@ import {
   validateStyleValues,
 } from "@nextlyhq/blocks-engine";
 
+import { colourOrder } from "./colour-groups";
 import {
   DEFAULT_FLUID_RANGE,
   fluidValue,
@@ -688,9 +689,17 @@ export function clearDarkValue(tokens: SiteTokenSet, at: number): SiteTokenSet {
  * both, which is the opposite of what an author repairing a collision means.
  */
 export function removeToken(tokens: SiteTokenSet, at: number): SiteTokenSet {
+  const removed = tokens.tokens[at];
+  // Its place in the colour order goes with it, so a later variable given
+  // its free name is not listed where it was.
+  const order =
+    removed === undefined
+      ? tokens.order
+      : withoutIdentity(tokens.order, removed);
   return {
     ...tokens,
     tokens: tokens.tokens.filter((_, index) => index !== at),
+    ...(order === undefined ? {} : { order }),
   };
 }
 
@@ -1039,9 +1048,33 @@ export function variableGroups(
     group,
     heading,
     entries: withKindWhereNamesClash(
-      (byGroup.get(group) ?? []).filter(entry => !paired.has(entry.row))
+      inListedOrder(
+        group,
+        (byGroup.get(group) ?? []).filter(entry => !paired.has(entry.row)),
+        tokens
+      )
     ),
   }));
+}
+
+/**
+ * A group's rows in the order they are listed: colours in the site's colour
+ * order, the one every picker lists them in; any other kind as stored.
+ */
+function inListedOrder(
+  group: VariableGroup,
+  entries: VariableEntry[],
+  tokens: SiteTokenSet | undefined
+): VariableEntry[] {
+  if (group !== "colours") return entries;
+  const rank = new Map(
+    colourOrder(tokens).map((identity, at) => [identity, at])
+  );
+  return [...entries].sort(
+    (a, b) =>
+      (rank.get(a.row.identity) ?? rank.size) -
+      (rank.get(b.row.identity) ?? rank.size)
+  );
 }
 
 /**
@@ -1286,7 +1319,18 @@ export function labelNewVariable(
   if (partner !== undefined) {
     next[partnerAt] = { ...partner, name: `${LINE_HEIGHT_PREFIX}${words}` };
   }
-  return { ...relabelled, tokens: next };
+  // With no id, its code name is its identity, so the colour order follows
+  // the new name: the variable keeps its place.
+  const order = renamedInOrder(
+    relabelled.order,
+    token.name,
+    `${prefix}.${words}`
+  );
+  return {
+    ...relabelled,
+    tokens: next,
+    ...(order === undefined ? {} : { order }),
+  };
 }
 
 /**
@@ -1330,7 +1374,62 @@ export function duplicateVariable(
   }
   const next = [...tokens.tokens];
   next.splice(at + 1, 0, ...copies);
-  return { tokens: { ...tokens, tokens: next }, at: at + 1 };
+  return {
+    tokens: {
+      ...tokens,
+      tokens: next,
+      ...orderWithCopy(tokens, token, copies),
+    },
+    at: at + 1,
+  };
+}
+
+/**
+ * The site's colour order with a copy listed right after the colour it
+ * copies, where the order names that colour; otherwise nothing, and the copy
+ * is listed where its group puts it.
+ */
+function orderWithCopy(
+  tokens: SiteTokenSet,
+  token: SiteToken,
+  copies: readonly SiteToken[]
+): { order?: readonly string[] } {
+  const copy = copies[0];
+  // A colour removed before may have left the copy's free name in the order:
+  // it is listed once, here.
+  const order =
+    copy === undefined ? tokens.order : withoutIdentity(tokens.order, copy);
+  const at = order?.indexOf(tokenIdentity(token)) ?? -1;
+  if (order === undefined || at === -1 || copy === undefined) return {};
+  return {
+    order: [
+      ...order.slice(0, at + 1),
+      tokenIdentity(copy),
+      ...order.slice(at + 1),
+    ],
+  };
+}
+
+/** The colour order without a variable's identity, where it has one. */
+function withoutIdentity(
+  order: readonly string[] | undefined,
+  token: SiteToken
+): readonly string[] | undefined {
+  return order?.filter(identity => identity !== tokenIdentity(token));
+}
+
+/**
+ * The colour order with one identity renamed in its place, listed there
+ * once: a colour removed before may have left the new name in the order.
+ */
+function renamedInOrder(
+  order: readonly string[] | undefined,
+  from: string,
+  to: string
+): readonly string[] | undefined {
+  return order
+    ?.filter(identity => identity !== to)
+    .map(identity => (identity === from ? to : identity));
 }
 
 /**

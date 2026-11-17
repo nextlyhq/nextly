@@ -11,6 +11,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
   waitFor,
   renderHook,
 } from "@testing-library/react";
@@ -47,17 +48,25 @@ const addressAsked: string[] = [];
 let siteError: Error | null = null;
 let siteFetching = false;
 const refetch = vi.fn();
-const writes: Array<{ path: string }> = [];
-let writeAnswer: () => Promise<unknown> = async () => ({});
-/** What the readiness question answers; nothing to publish by default. */
-let readinessAnswer: unknown = { dependencies: [], missing: 0 };
-const asked: unknown[] = [];
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   usePluginRoute: ({ path }: { path: string }) => {
     if (path === "/site/code") {
       return {
         data: codeRead,
+        pending: false,
+        error: null,
+        fetching: false,
+        refetch: vi.fn(),
+      };
+    }
+    if (path === "/layouts/page-collection") {
+      return {
+        data: {
+          pagesCollection: "pages",
+          layoutsCollection: "site_layouts",
+          templatesCollection: "templates",
+        },
         pending: false,
         error: null,
         fetching: false,
@@ -87,14 +96,6 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   PlaceTabs: (props: { children: ReactElement } & Record<string, unknown>) => {
     placeTabs.push(props);
     return props.children;
-  },
-  writePluginRoute: async (write: { path: string; body?: unknown }) => {
-    if (write.path === "/publish-readiness") {
-      asked.push(write.body);
-      return readinessAnswer;
-    }
-    writes.push(write);
-    return writeAnswer();
   },
 }));
 
@@ -136,23 +137,13 @@ Element.prototype.hasPointerCapture ??= () => false;
 Element.prototype.releasePointerCapture ??= () => {};
 Element.prototype.scrollIntoView ??= () => {};
 
-const LAYOUT_LABEL = "Pages without a header & footer set of their own use";
-
-/** Choose a Layout in the default Layout's select, as an author does. */
-async function chooseLayout(title: string): Promise<void> {
-  await userEvent.click(screen.getByRole("combobox", { name: LAYOUT_LABEL }));
-  await userEvent.click(await screen.findByRole("option", { name: title }));
-}
-
 const MANAGER: SiteSettingsRead = {
   mayManageSite: true,
   mayChooseDefaultLayout: true,
   defaultLayout: "main",
   breakpoints: null,
-  layouts: [
-    { id: "main", title: "Main" },
-    { id: "bare", title: "No header or footer" },
-  ],
+  // The default only, which the Site tab names.
+  layouts: [{ id: "main", title: "Main" }],
 };
 
 /** Renders the dialog again with the current read, as a refetch would. */
@@ -207,10 +198,6 @@ beforeEach(() => {
   siteRead = MANAGER;
   siteError = null;
   siteFetching = false;
-  writes.length = 0;
-  writeAnswer = async () => ({});
-  asked.length = 0;
-  readinessAnswer = { dependencies: [], missing: 0 };
   refetch.mockClear();
 });
 afterEach(cleanup);
@@ -555,129 +542,30 @@ describe("the Settings dialog", () => {
     expect(onOpenChange).not.toHaveBeenCalled();
   });
 
-  it("changes the default Layout at once, and says Saved", async () => {
+  it("names the site default, and points to the Header & footer list to change it", async () => {
     show();
     await userEvent.click(screen.getByRole("tab", { name: "Site" }));
-    await chooseLayout("No header or footer");
-    await screen.findByText("Saved");
-    expect(writes).toEqual([
-      expect.objectContaining({ path: "/layouts/bare/make-default" }),
-    ]);
-    expect(refetch).toHaveBeenCalled();
+    const line = screen.getByRole("region", {
+      name: "Site default header & footer",
+    });
+    expect(line.textContent).toContain("Site default header & footer: Main");
+    const change = within(line).getByRole("link", {
+      name: /^Change in Pages ▸ Header & footer\s*\(opens in a new tab\)$/,
+    });
+    expect(change.getAttribute("href")).toBe("/admin/collections/site_layouts");
+    expect(change.getAttribute("target")).toBe("_blank");
+    // The default is no longer chosen here.
+    expect(screen.queryByRole("combobox")).toBeNull();
   });
 
-  it("says Not saved with Retry when the change is refused, and Retry tries again", async () => {
-    writeAnswer = () =>
-      Promise.reject(new Error("This header & footer set is not published."));
+  it("says when the site has no default", async () => {
+    siteRead = { ...MANAGER, defaultLayout: null, layouts: [] };
     show();
     await userEvent.click(screen.getByRole("tab", { name: "Site" }));
-    await chooseLayout("No header or footer");
-    await screen.findByText("Not saved");
-    writeAnswer = async () => ({});
-    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await screen.findByText("Saved");
-    expect(writes).toHaveLength(2);
-  });
-
-  it("asks about the Layout's unpublished components before making it the default", async () => {
-    readinessAnswer = {
-      dependencies: [
-        {
-          kind: "component",
-          id: "hdr",
-          title: "Site header",
-          mayPublish: true,
-        },
-      ],
-      missing: 0,
-    };
-    show();
-    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
-    await chooseLayout("No header or footer");
-    const question = await screen.findByRole("alertdialog");
-    expect(question.textContent).toContain(
-      "This header & footer set uses 1 component that isn't published"
-    );
-    expect(asked).toEqual([{ documents: [], layout: "bare" }]);
-    // Nothing is written while the author is being asked.
-    expect(writes).toEqual([]);
-
-    await userEvent.click(
-      screen.getByRole("button", { name: "Make default anyway" })
-    );
-    await screen.findByText("Saved");
-    expect(writes).toEqual([
-      expect.objectContaining({ path: "/layouts/bare/make-default" }),
-    ]);
-  });
-
-  it("publishes the components first, then makes the Layout the default", async () => {
-    readinessAnswer = {
-      dependencies: [
-        {
-          kind: "component",
-          id: "hdr",
-          title: "Site header",
-          mayPublish: true,
-        },
-      ],
-      missing: 0,
-    };
-    writeAnswer = async () => ({ item: { published: [], refused: [] } });
-    show();
-    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
-    await chooseLayout("No header or footer");
-    await userEvent.click(
-      await screen.findByRole("button", {
-        name: "Publish it, then make default",
-      })
-    );
-    await screen.findByText("Saved");
-    expect(writes.map(write => write.path)).toEqual([
-      "/publish-dependencies",
-      "/layouts/bare/make-default",
-    ]);
-  });
-
-  it("changes nothing when the author cancels the question", async () => {
-    readinessAnswer = {
-      dependencies: [
-        {
-          kind: "component",
-          id: "hdr",
-          title: "Site header",
-          mayPublish: true,
-        },
-      ],
-      missing: 0,
-    };
-    show();
-    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
-    await chooseLayout("No header or footer");
-    await screen.findByRole("alertdialog");
-    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
-    expect(writes).toEqual([]);
-    expect(screen.queryByText("Saving…")).toBeNull();
-  });
-
-  it("shows the default read-only, naming it, without the Layout rights", async () => {
-    siteRead = {
-      ...MANAGER,
-      mayChooseDefaultLayout: false,
-      layouts: [{ id: "main", title: "Main" }],
-    };
-    show();
-    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
-    const select = screen.getByRole("combobox", { name: LAYOUT_LABEL });
-    expect(select.hasAttribute("disabled")).toBe(true);
-    await waitFor(() =>
-      expect(
-        screen.getByText(
-          /needs the rights to update and publish header & footer sets/
-        )
-      ).toBeTruthy()
-    );
+    expect(
+      screen.getByRole("region", { name: "Site default header & footer" })
+        .textContent
+    ).toContain("Site default header & footer: none set");
   });
 
   it("asks before a tab switch drops a breakpoint edit", async () => {
@@ -731,33 +619,6 @@ describe("the Settings dialog", () => {
     ).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(refetch).toHaveBeenCalled();
-  });
-
-  it("keeps the chosen default shown after Saved, until the read catches up", async () => {
-    show();
-    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
-    await chooseLayout("No header or footer");
-    await screen.findByText("Saved");
-    expect(
-      screen.getByRole("combobox", { name: LAYOUT_LABEL }).textContent
-    ).toContain("No header or footer");
-  });
-
-  it("follows the read once it confirms the choice, so a later change shows", async () => {
-    show();
-    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
-    await chooseLayout("No header or footer");
-    await screen.findByText("Saved");
-    siteRead = { ...MANAGER, defaultLayout: "bare" };
-    reshow();
-    // Someone else then puts it back: the held choice must not hide that.
-    siteRead = { ...MANAGER, defaultLayout: "main" };
-    reshow();
-    await waitFor(() =>
-      expect(
-        screen.getByRole("combobox", { name: LAYOUT_LABEL }).textContent
-      ).toContain("Main")
-    );
   });
 
   it("holds the breakpoints back while a reopened read is refreshing", async () => {

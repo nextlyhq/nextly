@@ -90,14 +90,6 @@ async function visitor(
 const result = (page: Page, outcome: string) =>
   page.locator(`#form-contact-${outcome}:visible`);
 
-// Every test here needs the page readable from its HTML alone, and the
-// published route streams the page's body in a part only script reveals.
-test.skip(
-  true,
-  "The published route sends the page body hidden until JavaScript runs; " +
-    "enabled once it renders in the first HTML."
-);
-
 test.describe("a form sent with JavaScript off", () => {
   test("is refused by the browser while a required field is empty, keeping what was typed", async ({
     page,
