@@ -7,6 +7,11 @@
  * - Escape cancels and hands focus back to the row.
  * - The code name stays through every rename, so CSS that uses it keeps
  *   working.
+ * - A new colour's code name follows its name on every keystroke; once
+ *   saved, renaming it leaves the code name as it was, and says so.
+ * - "+ Add colour" at the end of the list, on a site with 30 colours and a
+ *   search on, keeps the search and the list where it is, and opens the new
+ *   colour beside its row, marked "New", with its name focused.
  */
 import { expect, type Page } from "@playwright/test";
 
@@ -140,6 +145,138 @@ test("a colour is renamed in place: Enter and leaving the field keep the name, E
       "color.brand=Harbour",
       "color.text=Paper ink",
     ]);
+  } finally {
+    await seed(page, before);
+  }
+});
+
+/** `count` colours, named so they sort in order. */
+function colours(count: number) {
+  return {
+    tokens: Array.from({ length: count }, (_, at) => ({
+      name: `color.many-${String(at).padStart(2, "0")}`,
+      kind: "color",
+      values: { light: `#${(0x203040 + at * 0x050505).toString(16)}` },
+    })),
+  };
+}
+
+test("+ Add colour keeps the search and the list's place, and opens the new colour beside its row with its name focused", async ({
+  page,
+}) => {
+  // Thirty colours seeded and read back, then restored: slow on a busy
+  // machine, so more room than the other tests here.
+  test.setTimeout(300_000);
+  const before = await storedTokens(page);
+  try {
+    await seed(page, colours(30));
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await openEditorWith(page, NODES, "rows-text");
+    await openDesign(page, "Colours");
+    const panel = page.getByRole("region", { name: "Design panel" });
+    const search = panel.getByRole("searchbox", { name: "Search Design" });
+    // Matches every colour, enough rows to scroll, and not the new one.
+    await search.fill("many");
+    await expect(panel.locator(".nx-vars__row")).toHaveCount(30);
+    const body = panel.locator(".nx-vars__body").first();
+    // Part way down, where the add row is in view.
+    const add = panel.getByRole("button", { name: "Add colour" });
+    await add.scrollIntoViewIfNeeded();
+    const scrolled = await body.evaluate(element => element.scrollTop);
+    await add.click();
+
+    const editor = page.getByRole("dialog", { name: "Edit New colour" });
+    await expect(editor).toBeVisible();
+    await expect(editor.getByLabel("Name", { exact: true })).toBeFocused();
+    // The search is kept, and the list did not jump back to its top. Read
+    // by its field: the open editor hides the rest from the tree.
+    await expect(page.locator('input[aria-label="Search Design"]')).toHaveValue(
+      "many"
+    );
+    expect(
+      Math.abs((await body.evaluate(element => element.scrollTop)) - scrolled)
+    ).toBeLessThan(80);
+    // The new row is the group's last, marked New, in view, and the editor
+    // opens beside it.
+    const added = panel.locator(".nx-vars__item").last();
+    await expect(added.locator(".nx-vars__name")).toContainText("New colour");
+    await expect(added.locator(".nx-vars__new")).toHaveText("New");
+    await expect(added).toBeInViewport();
+    const rowBox = await added.boundingBox();
+    const box = await editor.boundingBox();
+    const view = page.viewportSize();
+    if (rowBox === null || box === null || view === null) {
+      throw new Error("[e2e] no box");
+    }
+    expect(box.x).toBeGreaterThanOrEqual(rowBox.x + rowBox.width - 1);
+    expect(box.y).toBeLessThanOrEqual(rowBox.y + rowBox.height);
+    expect(box.y + box.height).toBeGreaterThanOrEqual(rowBox.y);
+    expect(box.y + box.height).toBeLessThanOrEqual(view.height);
+    // Closed, so the new colour is saved and the panel is at rest before
+    // the variables are put back.
+    await page.keyboard.press("Escape");
+    await expect(editor).toBeHidden();
+  } finally {
+    await seed(page, before);
+  }
+});
+
+test("a new colour's code name follows each keystroke of its name, and a saved one keeps its code name on rename", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  const before = await storedTokens(page);
+  try {
+    await seed(page, { tokens: TOKENS });
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await openEditorWith(page, NODES, "rows-text");
+    await openDesign(page, "Colours");
+    const panel = page.getByRole("region", { name: "Design panel" });
+
+    await panel.getByRole("button", { name: "Add colour" }).click();
+    const editor = page.getByRole("dialog", { name: "Edit New colour" });
+    await expect(editor).toBeVisible();
+    const code = page.locator(".nx-vars-editor .nx-vars-editor__code code");
+    await expect(code).toHaveText("--site-color-new-colour");
+    const name = page.locator(".nx-vars-editor").getByLabel("Name", {
+      exact: true,
+    });
+    await expect(name).toBeFocused();
+    // Each key, read back before the next: the code name follows.
+    for (const [typed, expected] of [
+      ["T", "--site-color-t"],
+      ["i", "--site-color-ti"],
+      ["d", "--site-color-tid"],
+      ["e", "--site-color-tide"],
+    ] as const) {
+      await page.keyboard.type(typed);
+      await expect(code).toHaveText(expected);
+    }
+    await expect(
+      page
+        .locator(".nx-vars-editor")
+        .getByText(/^Stays the same when you rename/)
+    ).toHaveCount(0);
+    // Closed, it is saved under that code name.
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".nx-vars-editor")).toHaveCount(0);
+    await expect.poll(() => storedNames(page)).toContain("color.tide=Tide");
+
+    // Renamed once saved: the code name stays, and the editor says why.
+    await panel.getByRole("button", { name: /^Tide,/ }).click();
+    const saved = page.locator(".nx-vars-editor");
+    await expect(code).toHaveText("--site-color-tide");
+    await expect(
+      saved.getByText(
+        "Stays the same when you rename, so CSS that uses it keeps working"
+      )
+    ).toBeVisible();
+    const renamed = saved.getByLabel("Name", { exact: true });
+    await renamed.fill("Lagoon");
+    await renamed.press("Enter");
+    await expect(code).toHaveText("--site-color-tide");
+    await page.keyboard.press("Escape");
+    await expect.poll(() => storedNames(page)).toContain("color.tide=Lagoon");
   } finally {
     await seed(page, before);
   }

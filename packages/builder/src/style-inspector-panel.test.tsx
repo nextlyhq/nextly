@@ -44,6 +44,7 @@ import {
   describeProvenance,
   StyleInspectorPanel,
 } from "./style-inspector-panel";
+import { SettingsFilterProvider, StyleReportContext } from "./settings-filter";
 import { keywordLabel } from "./style-keyword-labels";
 import type { SharedStylesHost } from "./style-target";
 import type { StylePolicy } from "./style-values";
@@ -195,6 +196,17 @@ function fieldsOf(property: string) {
     document.querySelector(`[data-property="${property}"]`) as HTMLElement
   );
 }
+
+/**
+ * A container's layout drawn as its raw rows. Arrange draws a container's
+ * Display, Direction and Justify in plain words, and leaves them to the raw
+ * rows only while it reads "Arrange: Custom": a baseline alignment has no
+ * 3×3 point, and a flow-root display no plain choice.
+ */
+const RAW_LAYOUT = { alignItems: "baseline" } as const;
+const CUSTOM_DISPLAY = {
+  base: { [BASE_BREAKPOINT]: { display: "flow-root" } },
+} as NodeStyles;
 
 describe("the Style tab beside Content", () => {
   it("offers both tabs and shows Content first", () => {
@@ -771,7 +783,18 @@ describe("the shared style target", () => {
 
     it("leaves a hidden look out of the tiles", () => {
       const hidden = { ...outline, hidden: true as const };
-      mountTarget({ library: [card, hidden, { ...outline, id: "look:acme/box:soft", slug: "box-soft", label: "Soft" }] });
+      mountTarget({
+        library: [
+          card,
+          hidden,
+          {
+            ...outline,
+            id: "look:acme/box:soft",
+            slug: "box-soft",
+            label: "Soft",
+          },
+        ],
+      });
       expect(
         within(looks())
           .getAllByRole("radio")
@@ -1760,7 +1783,11 @@ describe("controls", () => {
     // A column's main axis runs down the page, so "start" points up, not left.
     const styles = {
       base: {
-        [BASE_BREAKPOINT]: { display: "flex", flexDirection: "column" },
+        [BASE_BREAKPOINT]: {
+          display: "flex",
+          flexDirection: "column",
+          ...RAW_LAYOUT,
+        },
       },
     } as NodeStyles;
     const editor = mount({ layout: true }, styles);
@@ -1782,7 +1809,13 @@ describe("controls", () => {
     // A label's `for` would CLICK a radio button, choosing or clearing a value;
     // this label only moves focus to the group's tab stop.
     const styles = {
-      base: { [BASE_BREAKPOINT]: { display: "flex", justifyContent: "end" } },
+      base: {
+        [BASE_BREAKPOINT]: {
+          display: "flex",
+          justifyContent: "end",
+          ...RAW_LAYOUT,
+        },
+      },
     } as NodeStyles;
     const editor = mount({ layout: true }, styles);
 
@@ -1798,7 +1831,7 @@ describe("controls", () => {
     // and a Reset line under it besides, and none at all where the panel was
     // mounted without a cascade to say where values come from.
     const styles = {
-      base: { [BASE_BREAKPOINT]: { display: "flex" } },
+      base: { [BASE_BREAKPOINT]: { display: "flex", ...RAW_LAYOUT } },
     } as NodeStyles;
     const editor = mount({ layout: true }, styles);
 
@@ -1811,7 +1844,7 @@ describe("controls", () => {
     const reset = within(field).getByRole("button", { name: /^Reset Display/ });
     expect(reset.textContent).toBe("");
     fireEvent.click(reset);
-    // The only value goes, and with it the node's styles.
+    // The value goes; the alignment that kept the layout raw stays.
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).not.toContain(
       "flex"
@@ -3331,7 +3364,7 @@ describe("where a control's value came from", () => {
       ],
     } as never);
     const cardStyles = {
-      base: { [BASE_BREAKPOINT]: { display: "flex" } },
+      base: { [BASE_BREAKPOINT]: { display: "flex", ...RAW_LAYOUT } },
     } as NodeStyles;
     const target = {
       kind: "shared" as const,
@@ -3627,9 +3660,13 @@ describe("where a control's value came from", () => {
   });
 
   it("marks an inherited Display's icon, without choosing it", () => {
-    mountCarded([fromCard({ property: "display", value: "flex" })], {
-      layout: true,
-    });
+    mountCarded(
+      [
+        fromCard({ property: "display", value: "flex" }),
+        fromCard({ property: "align-items", value: "baseline" }),
+      ],
+      { layout: true }
+    );
     const flex = screen.getByRole("radio", { name: "Flex, inherited" });
     expect(flex.getAttribute("aria-checked")).toBe("false");
     expect(sourceIn("display")).toBe("From .card");
@@ -4714,7 +4751,9 @@ describe("the action a control's breakpoint provenance earns", () => {
      */
     register({ layout: true });
     const editor = editorFor(
-      documentOf({ base: { tablet: { display: "flex" } } } as NodeStyles)
+      documentOf({
+        base: { tablet: { display: "flex", ...RAW_LAYOUT } },
+      } as NodeStyles)
     );
     render(
       <StyleInspectorPanel
@@ -4730,6 +4769,13 @@ describe("the action a control's breakpoint provenance earns", () => {
                 origin: { kind: "node", id: "a" },
                 property: "display",
                 value: "flex",
+                state: "base",
+                breakpoint: "tablet",
+              },
+              {
+                origin: { kind: "node", id: "a" },
+                property: "align-items",
+                value: "baseline",
                 state: "base",
                 breakpoint: "tablet",
               },
@@ -6019,7 +6065,7 @@ describe("a font size's unit menu", () => {
 
 describe("the Baseline gate on the panel", () => {
   it("offers no control for a withheld keyword", () => {
-    mount({ layout: true });
+    mount({ layout: true }, CUSTOM_DISPLAY);
 
     fireEvent.click(screen.getByLabelText("More Display values"));
 
@@ -6029,7 +6075,7 @@ describe("the Baseline gate on the panel", () => {
 
   it("names a keyword in words, with its CSS spelling in the tooltip", () => {
     // "inline-flex" read as code; the words are what an author picks from.
-    mount({ layout: true });
+    mount({ layout: true }, CUSTOM_DISPLAY);
     fireEvent.click(screen.getByLabelText("More Display values"));
     const option = screen.getByRole("option", { name: "Inline flex" });
     expect(option.getAttribute("title")).toBe("inline-flex");
@@ -6277,5 +6323,53 @@ describe("the Font control", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Manage fonts…" }));
     expect(onManageFonts).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("what the Style tab tells the panel's filter", () => {
+  it("reports the shared style's own values while one is the target", () => {
+    // The block holds a background; Card, the target, holds a colour. The
+    // filter keeps what these controls show: Card's.
+    register({ color: true, background: true });
+    const editor = editorFor(
+      documentOf({
+        base: { [BASE_BREAKPOINT]: { backgroundColor: "#123456" } },
+      } as NodeStyles)
+    );
+    const target = {
+      kind: "shared" as const,
+      worn: [],
+      style: {
+        id: "cls-1",
+        name: "Card",
+        styles: { base: { [BASE_BREAKPOINT]: { color: "#ff0000" } } },
+      } as never,
+      readOnly: undefined,
+      write: async () => undefined,
+    };
+    const report = vi.fn();
+    render(
+      <SettingsFilterProvider initial={{ onlyChanged: true }}>
+        <StyleReportContext.Provider value={report}>
+          <StyleInspectorPanel editor={editor} target={target} />
+        </StyleReportContext.Provider>
+      </SettingsFilterProvider>
+    );
+    const sections = report.mock.lastCall?.[0]?.sections as
+      | readonly { properties: readonly { property: string; set: boolean }[] }[]
+      | undefined;
+    const set = (sections ?? [])
+      .flatMap(section => section.properties)
+      .filter(property => property.set)
+      .map(property => property.property);
+    expect(set).toContain("color");
+    expect(set).not.toContain("backgroundColor");
+    // And says a shared style is the target, which draws no block shortcuts.
+    expect(report.mock.lastCall?.[0]?.shared).toBe(true);
+    // And reports the style's own values at every state and device, which
+    // "Also changed on" reads, not the block's.
+    expect(report.mock.lastCall?.[0]?.styles).toEqual({
+      base: { [BASE_BREAKPOINT]: { color: "#ff0000" } },
+    });
   });
 });

@@ -92,11 +92,11 @@ test.describe("restoring a version into the editor", () => {
     // The toast, not the history's announcer, which says the same words.
     const toast = page
       .getByText(/^2 fields restored from /)
-      .and(page.locator(":not(#nextly-history-announcer)"));
+      .and(page.locator(":not(#nextly-history-announcer):visible"));
     await expect(toast).toBeVisible();
     await expect(summaryBox(page)).toHaveValue("first summary");
     // Said aloud as well as shown, through the history's own announcer.
-    const announcer = page.locator("#nextly-history-announcer");
+    const announcer = page.locator("#nextly-history-announcer:visible");
     await expect(announcer).toHaveText(/^2 fields restored from /);
 
     // Undo puts the current values back, and says so.

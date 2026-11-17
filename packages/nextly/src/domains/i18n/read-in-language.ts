@@ -231,6 +231,24 @@ export function valuesBesideRow(
 }
 
 /**
+ * Withhold `languages` from every language's values beside `row`
+ * (`_allLocales`): each field's value in each of them is removed, its own
+ * fields' and its field groups' alike. How a language a read rule refuses
+ * leaves a read of every language; a row with nothing beside it is unchanged.
+ */
+export function withholdLanguages(
+  row: Record<string, unknown>,
+  languages: ReadonlySet<string> | undefined
+): void {
+  const every = valuesBesideRow(row);
+  if (!every || !languages) return;
+  for (const values of Object.values(every)) {
+    if (!isValues(values)) continue;
+    for (const code of languages) delete values[code];
+  }
+}
+
+/**
  * `value` with every plain object and array in it copied, so a later change
  * to the original's nested values leaves this one as it was; any other value
  * is shared. The evidence a rule is judged on is taken this way, so a pass

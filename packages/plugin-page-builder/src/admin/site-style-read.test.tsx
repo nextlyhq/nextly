@@ -180,7 +180,7 @@ describe("the builder's start-up answer for the site style", () => {
   /** A start-up read whose site style answer is `body`. */
   function startWith(body: unknown): void {
     startBuilderReads("ada", [SITE_STYLE_ROUTE_PATH], async () => ({
-      [SITE_STYLE_ROUTE_PATH]: { status: 200, body },
+      reads: { [SITE_STYLE_ROUTE_PATH]: { status: 200, body } },
     }));
   }
 

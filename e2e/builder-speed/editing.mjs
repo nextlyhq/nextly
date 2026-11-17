@@ -187,6 +187,25 @@ export const addButton = page =>
     .getByRole("navigation", { name: "Editor panels" })
     .getByRole("button", { name: "Add", exact: true });
 
+/**
+ * With the Add panel open on a page of `base` blocks, inserts a Heading and
+ * undoes it, waiting each time until the canvas draws the new count.
+ */
+export async function insertHeadingAndUndo(page, base) {
+  await page.getByRole("option", { name: "Heading", exact: true }).click();
+  await page.waitForFunction(
+    n => window.__builderSpeedChecks.canvasBlocks({ count: n }),
+    base + 1,
+    { timeout: SHOW_LIMIT_MS, polling: 100 }
+  );
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await page.waitForFunction(
+    n => window.__builderSpeedChecks.canvasBlocks({ count: n }),
+    base,
+    { timeout: SHOW_LIMIT_MS, polling: 100 }
+  );
+}
+
 export async function closeAddPanel(page) {
   if ((await addButton(page).getAttribute("aria-pressed")) === "true") {
     await addButton(page).click();

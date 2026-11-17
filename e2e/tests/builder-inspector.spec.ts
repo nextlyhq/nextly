@@ -510,7 +510,7 @@ test.describe("the inspector", () => {
     const order = await page
       .getByRole("tabpanel", { name: "Advanced" })
       .locator(
-        "[data-visible-on], .nx-show-when, [data-never-quote], #nx-block-css-id"
+        "[data-visible-on], .nx-show-when, [data-never-quote], #nx-block-css-id:visible"
       )
       .evaluateAll(elements =>
         elements.map(element =>

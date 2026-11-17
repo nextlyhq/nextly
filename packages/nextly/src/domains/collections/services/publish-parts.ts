@@ -21,6 +21,7 @@
  *
  * @module domains/collections/services/publish-parts
  */
+import type { RequestActor } from "../../../auth/request-actor";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { ValidationPublicData } from "../../../errors/public-data";
@@ -128,7 +129,16 @@ export interface PublishPartsEngines {
   gate: PublishGate;
   /** The entry's collection and who asks, for the gate. */
   collection: string;
+  /**
+   * Whether `collection` names a collection or a Single, as the gate is told; a collection where
+   * absent.
+   */
+  scopeKind?: "collection" | "single";
   caller: PublishCaller;
+  /** Who makes the move, as its write records it, so the gate names the same actor. */
+  actor?: RequestActor;
+  /** A publish made without review, with the caller's reason, told to the gate. */
+  withoutReview?: { reason: string };
   /**
    * The transition of `parts` (every part, where absent) in `direction`, in one transaction; or,
    * where `describe`, what a publish of them would do, changing nothing.
@@ -286,21 +296,42 @@ async function gateIssues(
   judged: Judged,
   engines: PublishPartsEngines
 ): Promise<Issue[]> {
+  // Unpublishing is never gated: what holds a publish back does not keep a part live.
+  if (judged.direction !== "publish") return [];
+  // Languages only where the entry keeps them: an untranslated one moves its shared part alone,
+  // whatever languages the site has.
   const parts: PublishPart[] = [
-    ...judged.chosen.map(locale => ({ kind: "language" as const, locale })),
+    ...(judged.reads.state.translated ? judged.chosen : []).map(locale => ({
+      kind: "language" as const,
+      locale,
+    })),
     ...(judged.sharedPart ? [{ kind: "shared" as const }] : []),
   ];
+  const { state } = judged.reads;
   const held = await engines.gate.refusals({
-    collection: engines.collection,
+    scope: {
+      kind: engines.scopeKind ?? "collection",
+      slug: engines.collection,
+    },
     entryId: judged.id,
     direction: judged.direction,
     parts,
+    live: {
+      languages: [...state.languages]
+        .filter(([, language]) => language.live)
+        .map(([locale]) => locale),
+      shared: state.sharedLive,
+    },
     caller: engines.caller,
+    ...(engines.actor === undefined ? {} : { actor: engines.actor }),
+    ...(engines.withoutReview === undefined
+      ? {}
+      : { withoutReview: engines.withoutReview }),
   });
-  return held.map(({ part, message }) =>
+  return held.map(({ part, code, message }) =>
     part.kind === "shared"
-      ? { path: SHARED_PATH, code: "HELD", message }
-      : { path: part.locale, code: "HELD", locale: part.locale, message }
+      ? { path: SHARED_PATH, code, message }
+      : { path: part.locale, code, locale: part.locale, message }
   );
 }
 

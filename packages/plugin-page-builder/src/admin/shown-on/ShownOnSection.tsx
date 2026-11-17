@@ -137,15 +137,19 @@ function AllPlaces({
   );
 }
 
-/** The lines under the list: the places past ten, and those hidden. */
+/**
+ * The lines under the list: the places past ten, those hidden, those in
+ * drafts not checked, each "at least" where the read stopped at its bound.
+ */
 function Counts({
   answer,
   onMore,
 }: {
-  answer: Pick<ShownOnAnswer, "more" | "hidden">;
+  answer: Pick<ShownOnAnswer, "more" | "hidden" | "unchecked" | "floor">;
   onMore?: () => void;
 }): JSX.Element | null {
-  if (answer.more === 0 && answer.hidden === 0) return null;
+  const { more, hidden, unchecked, floor } = answer;
+  if (more === 0 && hidden === 0 && unchecked === 0 && !floor) return null;
   return (
     <div className="grid justify-items-start gap-1 pl-3.5 text-sm">
       {answer.more > 0 && onMore !== undefined ? (
@@ -155,13 +159,21 @@ function Counts({
           className="h-auto p-0 text-sm"
           onClick={onMore}
         >
-          {WORDS.more(answer.more)}
+          {WORDS.more(more, floor)}
         </Button>
       ) : null}
-      {answer.hidden > 0 ? (
+      {hidden > 0 ? (
         <span className="text-muted-foreground">
-          {WORDS.hidden(answer.hidden)}
+          {WORDS.hidden(hidden, floor)}
         </span>
+      ) : null}
+      {unchecked > 0 ? (
+        <span className="text-muted-foreground">
+          {WORDS.unchecked(unchecked)}
+        </span>
+      ) : null}
+      {floor && hidden === 0 && (more === 0 || onMore === undefined) ? (
+        <span className="text-muted-foreground">{WORDS.maybeMore}</span>
       ) : null}
     </div>
   );
@@ -210,7 +222,7 @@ function ShownOnBody({
         <PlaceList places={answer.places} />
       ) : answer.checking ? (
         <p className="m-0 text-sm text-muted-foreground">{WORDS.checking}</p>
-      ) : answer.hidden === 0 ? (
+      ) : answer.hidden === 0 && answer.unchecked === 0 && !answer.floor ? (
         <p className="m-0 text-sm text-muted-foreground">{WORDS.none}</p>
       ) : null}
       <Counts answer={answer} onMore={onMore} />

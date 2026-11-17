@@ -62,7 +62,11 @@ import { useAfterRecordings } from "@admin/hooks/useSnapshotAutosave";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
-import { versionForLanguage } from "@admin/lib/document-version";
+import {
+  versionForLanguage,
+  type ShownCopy,
+  type ShownCopyHandle,
+} from "@admin/lib/document-version";
 import { readsHeldDraft } from "@admin/lib/held-draft";
 import { cn } from "@admin/lib/utils";
 import { entryApi } from "@admin/services/entryApi";
@@ -287,6 +291,11 @@ export interface EntryFormProps {
     onExit?: () => void;
   };
   className?: string;
+  /**
+   * Filled with how to read the copy this editor shows, for an action the page draws outside it
+   * (publishing chosen parts) that must be refused when the document changed since it opened.
+   */
+  shownCopy?: ShownCopyHandle;
 }
 
 // ============================================================================
@@ -389,6 +398,7 @@ export function EntryForm({
   documentActions,
   documentBanner,
   documentView,
+  shownCopy,
 }: EntryFormProps): JSX.Element {
   /*
    * Whether the preview pane is open, and when the document last saved.
@@ -517,24 +527,37 @@ export function EntryForm({
   // availability rule through the locale context. Called unconditionally with
   // the resolved slug; the seam below is what decides whether the action is
   // offered, so a create form supplies none and nothing renders.
-  const publishAllEntryLocales = usePublishAllLocales({
-    collectionSlug: collection.slug ?? collection.name,
-    // The copy on screen, read as the editor reads it, so a publish of every
-    // language is refused when that language changed since it opened.
-    shown: () => ({
+  // Where the entry's recovery points are recorded: a write made outside a save
+  // waits for one on its way.
+  const recordingsOf = documentRecordingKey(
+    autosaveScopeFor("collection", collection.name, entry?.id)
+  );
+  // The copy on screen, read as the editor reads it, so a publish of every
+  // language, or of chosen parts from the page, is refused when that language
+  // changed since it opened, and waits for the copy's recordings on their way.
+  const shownCopyOf = useCallback(
+    (): ShownCopy => ({
       version: versionStartedFrom(),
       locale,
       draft: readsDraft,
+      recordings: recordingsOf,
     }),
+    [versionStartedFrom, locale, readsDraft, recordingsOf]
+  );
+  useEffect(() => {
+    if (!shownCopy) return undefined;
+    shownCopy.current = shownCopyOf;
+    return () => {
+      shownCopy.current = null;
+    };
+  }, [shownCopy, shownCopyOf]);
+  const publishAllEntryLocales = usePublishAllLocales({
+    collectionSlug: collection.slug ?? collection.name,
+    shown: shownCopyOf,
   });
   // Publishing every language waits for the entry's recordings in flight.
   const { run: runAfterRecordings, pending: publishAllPending } =
-    useAfterRecordings(
-      documentRecordingKey(
-        autosaveScopeFor("collection", collection.name, entry?.id)
-      ),
-      publishAllEntryLocales.isPending
-    );
+    useAfterRecordings(recordingsOf, publishAllEntryLocales.isPending);
 
   // Publish-every-language rides the same kind of seam `fetchSourceValues`
   // does, and its ABSENCE is what keeps the action off a create form: there is
