@@ -14,6 +14,7 @@ import { formatDateTime } from "@admin/lib/dates/format";
 import { announce } from "./announce";
 import type { EditorRestoreSurface } from "./document-history-context";
 import type { RestoreRow } from "./restore-plan";
+import { formFieldsOf } from "./snapshot-to-form-values";
 
 export function restoreIntoEditor(args: {
   editor: EditorRestoreSurface;
@@ -32,7 +33,15 @@ export function restoreIntoEditor(args: {
   );
   const count = Object.keys(values).length;
   if (count === 0) return;
-  const applied = args.editor.restore.apply(values, args.versionNo);
+  // Each field's type, read from the fields the restore list was judged over,
+  // so the restore asks "is it still the restored value?" as that list asked
+  // "does it differ?".
+  const types = new Map(
+    formFieldsOf(args.editor.fields).map(field => [field.name, field.type])
+  );
+  const applied = args.editor.restore.apply(values, args.versionNo, name =>
+    types.get(name)
+  );
   const when = args.savedAt
     ? formatDateTime(args.savedAt)
     : `version ${args.versionNo}`;

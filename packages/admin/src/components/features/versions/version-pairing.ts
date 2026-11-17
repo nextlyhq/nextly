@@ -60,21 +60,36 @@ export function sameLocaleVersions<T extends PairableVersion>(
 ): T[] {
   const anchor = versions.find(v => v.versionNo === versionNo);
   if (anchor === undefined) return [];
-  const locale = localeOf(anchor);
+  return versionsInLocale(versions, localeOf(anchor));
+}
+
+/** The comparable versions of one locale, in list order: newest first. */
+function versionsInLocale<T extends PairableVersion>(
+  versions: readonly T[],
+  locale: string | null
+): T[] {
   return versions.filter(v => v.versionNo !== null && localeOf(v) === locale);
 }
 
 /**
  * The newest version in `versionNo`'s own locale, which it is compared with to
- * see everything since it, or null when it is that version itself or is not
- * loaded. The list loads newest first, so the newest is in hand whenever the
- * version is: no pager question arises, unlike a predecessor.
+ * see everything since it, or null when it is that version itself or none in
+ * its locale is loaded. The list loads newest first, so the first loaded row
+ * in the locale is its newest: no pager question arises, unlike a predecessor.
+ *
+ * The locale is the version's own row's; `locale`, the one the version's own
+ * read gives, answers for a version linked to beyond the loaded rows, whose
+ * newest sibling is loaded all the same.
  */
 export function newestInLocale(
   versions: readonly PairableVersion[],
-  versionNo: number
+  versionNo: number,
+  locale?: string | null
 ): number | null {
-  const newest = sameLocaleVersions(versions, versionNo)[0]?.versionNo ?? null;
+  const anchor = versions.find(v => v.versionNo === versionNo);
+  const inLocale = anchor === undefined ? locale : localeOf(anchor);
+  if (inLocale === undefined) return null;
+  const newest = versionsInLocale(versions, inLocale)[0]?.versionNo ?? null;
   return newest === versionNo ? null : newest;
 }
 
