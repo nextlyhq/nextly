@@ -143,7 +143,7 @@ async function paintText(page: Page): Promise<void> {
   await clickBlock(page, TEXT_ID);
   await page.getByRole("tab", { name: "Style" }).click();
   // Colour sits in Text, which starts closed for a text block.
-  const section = page.getByRole("button", {
+  const section = page.getByTestId("inspector").getByRole("button", {
     name: /^Text(\s?has changes)?$/,
   });
   if ((await section.getAttribute("aria-expanded")) !== "true") {

@@ -276,15 +276,19 @@ async function openSections(page: Page): Promise<string[]> {
     );
 }
 
-/** The Style tab on the section block, settled, with Layout open. */
+/**
+ * The Style tab on the section block, settled, with every section collapsed
+ * from the panel's options menu, since a section holding a value starts open:
+ * the headers then sit together in view, where a click can be aimed at one.
+ */
 async function sectionStyleTab(page: Page): Promise<void> {
   const id = await createPage(page.request);
   await openBuilder(page, id);
   await select(page, SECTION, "corner");
   await page.getByRole("tab", { name: "Style" }).click();
-  await expect
-    .poll(async () => (await openSections(page)).includes("layout"))
-    .toBe(true);
+  await page.getByRole("button", { name: "Panel options" }).click();
+  await page.getByRole("menuitem", { name: "Collapse all" }).click();
+  await expect.poll(async () => (await openSections(page)).length).toBe(0);
   // The tab's own opening motion done, so the first click starts the only one.
   await page.waitForFunction(
     () =>
@@ -596,7 +600,7 @@ test.describe("the inspector", () => {
     const spacing = await sectionHeader(page, "spacing").boundingBox();
     if (spacing === null) throw new Error("the Spacing header has no box");
     // A mouse click, not a locator's: a locator waits for the motion to end,
-    // and the motion is what this is about. Spacing opens as Layout closes.
+    // and the motion is what this is about. Spacing opens, pushing Size down.
     await page.mouse.click(spacing.x + 20, spacing.y + spacing.height / 2);
     // Mid-motion: the 150ms opening and closing have started, not ended.
     await page.waitForTimeout(40);

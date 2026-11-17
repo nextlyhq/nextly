@@ -107,7 +107,9 @@ const chip = (page: Page, name: string) =>
 async function styleOf(page: Page, id: string): Promise<void> {
   await clickBlock(page, id);
   await page.getByRole("tab", { name: "Style" }).click();
-  const section = page.getByRole("button", { name: /^Text(\s?has changes)?$/ });
+  const section = page
+    .getByTestId("inspector")
+    .getByRole("button", { name: /^Text(\s?has changes)?$/ });
   if ((await section.getAttribute("aria-expanded")) !== "true") {
     await section.click();
   }
