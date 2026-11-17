@@ -30,3 +30,5 @@
 ---
 
 The canvas draws the page edge to edge at the device's width, with no margin or shadow around it, and a narrower device is centred with a thin edge. A selected block at the page's edge keeps its whole outline in view. The device buttons are icons whose tooltips give each device's name, width and the widths it styles, and the width being styled is always shown beside them.
+
+`@nextlyhq/builder/shell-state` no longer exports `CANVAS_GUTTER`: the canvas has no gutter. Code that padded something by it uses no padding, and `MIN_CANVAS_PANEL_WIDTH` now equals `MIN_CANVAS_WIDTH`.
