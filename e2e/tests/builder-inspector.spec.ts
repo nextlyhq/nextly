@@ -3,7 +3,7 @@
  *
  * - Selecting a heading shows its card (icon, type, description, menu), three
  *   tabs, and on Style a bar naming the target, the device and the state; the
- *   bar follows a change of state.
+ *   bar follows a change of device and of state.
  * - The Style tab orders its sections Layout to Effects and places each
  *   property as the placement table says, for a section, a heading and an
  *   image: the common controls show, the rest wait behind "+ More".
@@ -245,12 +245,18 @@ async function lockAndUnlock(page: Page): Promise<void> {
   await page.getByRole("tab", { name: "Style" }).click();
   await expect(field).toBeDisabled();
   await expect(page.getByText(LOCKED_REASON)).toHaveCount(1);
-  // The shared style's chip is held, and its tooltip says why.
-  const chip = page.locator(`[data-target-chip="${CARD.id}"]`);
-  await expect(chip).toHaveAttribute("aria-disabled", "true");
-  await chip.focus();
-  await expect(page.getByRole("tooltip")).toContainText(LOCKED_REASON);
-  await chip.blur();
+  // The shared style is held in the target menu, and says why under its name.
+  await page.getByRole("button", { name: "Editing: This block" }).click();
+  const worn = page.getByRole("menuitemradio", {
+    name: new RegExp(CARD.label),
+  });
+  await expect(worn).toHaveAttribute("aria-disabled", "true");
+  // Under its name, after the separator a reader hears.
+  await expect(worn).toContainText(
+    new RegExp(LOCKED_REASON.source.replace(/^\^/, ""))
+  );
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Actions for Heading" }).click();
   await page.getByRole("menuitem", { name: "Unlock", exact: true }).click();
@@ -337,23 +343,26 @@ test.describe("the inspector", () => {
 
     await page.getByRole("tab", { name: "Style" }).click();
     const bar = page.getByRole("region", { name: "What you're editing" });
-    await expect(bar.locator("[data-edit-target]")).toHaveText("This block");
+    await expect(bar.locator("[data-edit-target]")).toHaveAccessibleName(
+      "Editing: This block"
+    );
     await expect(bar.locator("[data-edit-state]")).toHaveText("Normal");
-    // The device is the canvas's own, said as the devices an edit there
-    // reaches. Moving the canvas to a device moves the bar with it.
-    await expect(bar.locator("[data-edit-device]")).toHaveText("All devices");
+    // The device is the canvas's own, named as the top bar names it, with
+    // the devices an edit there reaches. Moving the canvas moves the bar.
+    const device = bar.locator(".nx-editing-bar__device");
+    await expect(bar.locator("[data-edit-device]")).toHaveText("Desktop");
+    await expect(device).toContainText("Changes here reach: All devices.");
     const widths = page.getByRole("radiogroup", { name: "Device" });
-    for (const [device, reach] of [
+    for (const [name, reach] of [
       ["Mobile", "Mobile"],
       ["Tablet", "Tablet and smaller"],
     ]) {
-      await widths
-        .getByRole("radio", { name: new RegExp(`^${device}`) })
-        .click();
-      await expect(bar.locator("[data-edit-device]")).toHaveText(reach);
+      await widths.getByRole("radio", { name: new RegExp(`^${name}`) }).click();
+      await expect(bar.locator("[data-edit-device]")).toHaveText(name);
+      await expect(device).toContainText(`Changes here reach: ${reach}.`);
     }
 
-    // The state is a compact menu named State on the bar's second line.
+    // The state is the State menu, drawn as the bar's last chip.
     await bar.getByRole("button", { name: /^State: / }).click();
     await page.getByRole("menuitemradio", { name: /^Hover/ }).click();
     await expect(bar.locator("[data-edit-state]")).toHaveText("Hover");

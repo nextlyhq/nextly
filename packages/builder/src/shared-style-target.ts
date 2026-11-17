@@ -135,7 +135,8 @@ export function saveAsSharedStyleRefusal(
   );
   if (worn !== undefined) return `This block already uses ${worn.name}.`;
   if (!hasOwnStyles(node.styles)) {
-    return "This block has no styles of its own yet.";
+    // Said as what to do next: a value changed is what makes a save useful.
+    return "Change a style first, then save it to reuse it.";
   }
   // The page's per-block limit, asked of the one rule that owns it.
   if (!withClassApplied(node.classes ?? [], "").ok) {
