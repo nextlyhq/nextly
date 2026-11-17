@@ -211,6 +211,10 @@ import {
 } from "./sql-templates/sqlite-rebuild";
 import { withCapturedStdout } from "./stdout-capture";
 import type { DesiredSchema } from "./types";
+import {
+  refuseRenamedUiTypeChanges,
+  refuseUiTypeChanges,
+} from "./ui-type-changes";
 import { uniqueColumnLookup } from "./unique-columns";
 import { currentWithheldScopeFields } from "./withheld-scope-fields";
 
@@ -1260,6 +1264,16 @@ export class PushSchemaPipeline {
           dispatchResult,
           resolvedOps
         );
+        // A Schema Builder field renamed and retyped in one save: its old column's values reach the
+        // new type through the rename the answers confirmed, judged here, before anything runs.
+        if (source === "ui") {
+          await refuseRenamedUiTypeChanges(
+            args.desired,
+            dispatchResult.confirmedRenames,
+            db,
+            dialect
+          );
+        }
         // A relationship switched to or from naming several target collections, while a row holds a
         // value no conversion can carry across; then one switched from many related entries to one,
         // while a row holds several.
@@ -2164,6 +2178,13 @@ export class PushSchemaPipeline {
           moved: moves.moved,
         };
       };
+
+      // A Schema Builder save's field type changes are judged over the values their columns hold
+      // before anything is planned or run: a blocked change, or a lossy one not consented to, refuses
+      // the save here, once for every try, naming each field (`refuseUiTypeChanges`).
+      if (source === "ui") {
+        await refuseUiTypeChanges(args.desired, db, dialect);
+      }
 
       // MySQL and SQLite keep what a try committed, so each try plans the apply again from the
       // live database, which shows it; Phase B's answers are read from the first try's
