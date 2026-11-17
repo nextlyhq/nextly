@@ -7,14 +7,15 @@
  *
  * Who comes from the Single's own read with `?details=1`, as an entry's does
  * (`useEntryDetails`); the server answers it only to a signed-in admin user
- * the read is granted to. History is offered by the rule the document bar
+ * the read is granted to. The panel reads it while it is drawn, so a
+ * document view covering the Single costs no request. History is offered by the rule the document bar
  * offers it by: a saved Single that keeps versions, to a person who may read
  * them (`useHistoryOffered`).
  *
  * @module components/features/singles/useSinglePanel
  */
 
-import { useEntryDetails } from "@admin/components/features/entries/EntryForm/entry-details-read";
+import type { EntryFormSidebarProps } from "@admin/components/features/entries/EntryForm/EntryFormSidebar";
 import type { DocumentPanelProps } from "@admin/components/features/entries/EntryForm/panels";
 import { useHistoryAddress } from "@admin/components/features/versions/history-address";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
@@ -26,7 +27,7 @@ import type { SingleAdminOptions } from "@admin/types/entities";
 export type SinglePanelProps = Required<
   Pick<DocumentPanelProps, "single" | "apiAddress">
 > &
-  Pick<DocumentPanelProps, "details">;
+  Required<Pick<EntryFormSidebarProps, "detailsOf">>;
 
 export function useSinglePanel({
   schema,
@@ -55,12 +56,6 @@ export function useSinglePanel({
     enabled: historyEnabledFrom(schema),
   });
   const { setOpen: setHistoryOpen } = useHistoryAddress(historyOffered);
-  const details = useEntryDetails({
-    scope: "single",
-    collectionSlug: schema.slug,
-    entryId: documentId,
-    locale,
-  });
   return {
     single: {
       label: schema.label,
@@ -73,6 +68,11 @@ export function useSinglePanel({
       scope: "single",
       collectionSlug: schema.slug,
     }),
-    ...(details === undefined ? {} : { details }),
+    detailsOf: {
+      scope: "single",
+      collectionSlug: schema.slug,
+      entryId: documentId,
+      locale,
+    },
   };
 }
