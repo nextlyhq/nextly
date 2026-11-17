@@ -14,8 +14,8 @@
  *   blocks field it is in by its whole path, read as them
  *   (`bindings-report/readable`).
  * - A place only in a document's unpublished working draft is listed only
- *   for a reader who may edit that document's collection or Single, the
- *   callers core shows a working draft to.
+ *   for a reader who may update or publish that document's collection or
+ *   Single, the callers core shows a working draft to.
  * - The others are counted from the index, as the system, and answered as a
  *   number only: never a title, an id or an address of a document the
  *   reader may not open.
@@ -71,8 +71,8 @@ export interface ShownOnDeps {
     entries: readonly ReadableQuestion[]
   ) => Promise<ReadonlyMap<string, ReadableDocument>>;
   /**
-   * Whether the caller may edit documents of this collection or Single, so
-   * core would show them its working draft.
+   * Whether core would show the caller the working draft of documents of
+   * this collection or Single ({@link mayOpenWorkingDraft}).
    */
   readonly mayEdit: (ctx: PluginRouteContext, slug: string) => Promise<boolean>;
   /** Whether the caller may read the Single, read as them. */
@@ -195,8 +195,23 @@ function byTitle(a: ShownOnPlace, b: ShownOnPlace): number {
 }
 
 /**
+ * Whether core would show the caller a working draft of this collection's or
+ * Single's documents: to one who may update them, or, refused that, to one
+ * who may publish them, as its own read decides.
+ */
+export async function mayOpenWorkingDraft(
+  ctx: Pick<PluginRouteContext, "caller">,
+  slug: string
+): Promise<boolean> {
+  const caller = ctx.caller;
+  if (caller === null || caller === undefined) return false;
+  if (await caller.can("update", slug)) return true;
+  return caller.can("publish", slug);
+}
+
+/**
  * The collections and Singles, of those whose places are only in a working
- * draft, whose documents the caller may edit: asked once each.
+ * draft, whose working drafts the caller may open: asked once each.
  */
 async function editorsOf(
   ctx: PluginRouteContext,

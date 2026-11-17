@@ -39,7 +39,9 @@ export function useShownOn(
     enabled,
     staleTime: 0,
   });
-  const checking = read.data?.checking === true;
+  // Only while the read is wanted: a closed full list keeps its last
+  // answer, and asking again for it would read for no one.
+  const checking = enabled && read.data?.checking === true;
   const { refetch } = read;
   useEffect(() => {
     if (!checking) return undefined;

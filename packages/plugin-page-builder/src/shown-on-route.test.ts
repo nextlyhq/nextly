@@ -12,7 +12,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { ReadableDocument } from "./bindings-report/readable";
 import type { StoredUse } from "./bindings-report/uses-store";
 import { SHOWN_ON_ROUTE_PATH, shownOnPath } from "./shown-on-contract";
-import { readShownOn, shownOnRoute, type ShownOnDeps } from "./shown-on-route";
+import {
+  mayOpenWorkingDraft,
+  readShownOn,
+  shownOnRoute,
+  type ShownOnDeps,
+} from "./shown-on-route";
 
 /** A use of the Homepage Single by block `nodeId` of page `id`. */
 const use = (
@@ -282,6 +287,27 @@ describe("readShownOn", () => {
       title: "The landing",
       inAnotherLanguage: true,
     });
+  });
+});
+
+describe("mayOpenWorkingDraft", () => {
+  /** A caller holding these actions on every collection. */
+  const holding = (actions: readonly string[]) =>
+    ({
+      caller: { can: async (action: string) => actions.includes(action) },
+    }) as unknown as PluginRouteContext;
+
+  it("opens a working draft to a caller who may update or publish, as core does", async () => {
+    expect(
+      await mayOpenWorkingDraft(holding(["read", "update"]), "pages")
+    ).toBe(true);
+    expect(
+      await mayOpenWorkingDraft(holding(["read", "publish"]), "pages")
+    ).toBe(true);
+    expect(await mayOpenWorkingDraft(holding(["read"]), "pages")).toBe(false);
+    expect(await mayOpenWorkingDraft({ caller: null } as never, "pages")).toBe(
+      false
+    );
   });
 });
 

@@ -26,19 +26,29 @@ let answers: { first?: ShownOnAnswer; all?: ShownOnAnswer } = {};
 let failed: Error | null = null;
 const asked: { path: string; enabled: boolean }[] = [];
 const navigated: string[] = [];
+/** Whether a disabled read still hands back its last answer, as a cache does. */
+let keptWhenDisabled = false;
+/** How often each read was asked again, by whether it is the full list's. */
+const refetched = { first: 0, all: 0 };
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   usePluginRoute: ({ path, enabled }: { path: string; enabled?: boolean }) => {
     asked.push({ path, enabled: enabled !== false });
     const all = path.endsWith("?all=1");
     const data =
-      enabled === false ? undefined : all ? answers.all : answers.first;
+      enabled === false && !keptWhenDisabled
+        ? undefined
+        : all
+          ? answers.all
+          : answers.first;
     return {
       data,
       error: failed,
       pending: data === undefined,
       fetching: false,
-      refetch: vi.fn(),
+      refetch: () => {
+        refetched[all ? "all" : "first"] += 1;
+      },
     };
   },
   navigateTo: (to: string) => {
@@ -83,6 +93,9 @@ const onSingle = () =>
 beforeEach(() => {
   answers = {};
   failed = null;
+  keptWhenDisabled = false;
+  refetched.first = 0;
+  refetched.all = 0;
   asked.length = 0;
   navigated.length = 0;
 });
@@ -175,6 +188,21 @@ describe("ShownOnSection", () => {
     onSingle();
     expect(screen.queryByRole("link")).toBeNull();
     expect(screen.getByText(/Home, Hero section/)).toBeTruthy();
+  });
+
+  it("asks again while pages are being checked, but not for a closed full list", () => {
+    vi.useFakeTimers();
+    try {
+      keptWhenDisabled = true;
+      answers.first = answer({ checking: true });
+      answers.all = answer({ checking: true });
+      onSingle();
+      vi.advanceTimersByTime(25_000);
+      expect(refetched.first).toBe(2);
+      expect(refetched.all).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says a read that failed, with a way to ask again", () => {
