@@ -47,9 +47,13 @@ export const TYPOGRAPHIC_ELEMENTS = [
   "hr",
   "ol",
   "ul",
-  // Last, so adding it moved no earlier element's rule: rich text renders a
-  // code block as one.
+  // After the elements before it, so adding it moved no earlier element's
+  // rule: rich text renders a code block as one.
   "pre",
+  // Links and captions, which Site text's Links and Captions rows style.
+  // Last, for the same reason.
+  "a",
+  "figcaption",
 ] as const;
 
 /**

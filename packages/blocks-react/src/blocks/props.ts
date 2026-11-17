@@ -218,13 +218,17 @@ export const LINK_PROPS = {
     type: "text",
   },
   entryId: { label: "Linked entry", role: "content", type: "text" },
+  // Drawn as one switch, "Open in a new tab", by the inspector's link
+  // control; the options stay the values stored.
   target: {
-    label: "Open link in",
+    label: "Open in a new tab",
     optionLabels: { _self: "This tab", _blank: "New tab" },
     type: "select",
     options: ["_self", "_blank"],
   },
-  rel: { label: "Link relationship", type: "text" },
+  // How the page relates to where it links: an HTML-level detail, so in
+  // Advanced › HTML with the block's other HTML settings.
+  rel: { label: "Link relationship", type: "text", group: "advanced" },
 } as const;
 
 /**
@@ -294,6 +298,25 @@ export interface LinkAttributes {
 }
 
 /**
+ * Whether props name a destination `linkFor` could follow: an address it
+ * would draw, or an entry. Synchronous, for a content model, which cannot
+ * wait for an entry's path; an entry that then fails to resolve draws no link
+ * where interactive content was allowed, which refuses nothing it should not.
+ */
+export function canLink(props: LinkProps): boolean {
+  return url(props.href) !== undefined || linksToEntry(props);
+}
+
+/**
+ * Whether props link to an entry, which only `linkFor` can follow, since its
+ * path is a read. A block without one draws its link with `addressLinkFor`,
+ * at once, and waits for nothing.
+ */
+export function linksToEntry(props: LinkProps): boolean {
+  return text(props.entryCollection) !== "" && text(props.entryId) !== "";
+}
+
+/**
  * Where a block links, or `undefined` for nowhere: every block that links
  * reads its destination here, so a button and a linked image follow the same
  * address for the same props.
@@ -303,30 +326,32 @@ export interface LinkAttributes {
  * failure means "no destination" rather than a lost page. Either address must
  * be one `url` follows, so a `javascript:` link draws no link at all.
  */
-/**
- * Whether props name a destination `linkFor` could follow: an address it
- * would draw, or an entry. Synchronous, for a content model, which cannot
- * wait for an entry's path; an entry that then fails to resolve draws no link
- * where interactive content was allowed, which refuses nothing it should not.
- */
-export function canLink(props: LinkProps): boolean {
-  return (
-    url(props.href) !== undefined ||
-    (text(props.entryCollection) !== "" && text(props.entryId) !== "")
-  );
-}
-
 export async function linkFor(
   props: LinkProps,
   resolveEntryPath: (collection: string, id: string) => Promise<string | null>
 ): Promise<LinkAttributes | undefined> {
-  const collection = text(props.entryCollection);
-  const entryId = text(props.entryId);
-  const resolvedPath =
-    collection !== "" && entryId !== ""
-      ? await resolveEntryPath(collection, entryId).catch(() => null)
-      : null;
-  const href = url(resolvedPath ?? undefined) ?? url(props.href);
+  const resolvedPath = linksToEntry(props)
+    ? await resolveEntryPath(
+        text(props.entryCollection),
+        text(props.entryId)
+      ).catch(() => null)
+    : null;
+  return linkTo(url(resolvedPath ?? undefined) ?? url(props.href), props);
+}
+
+/**
+ * A typed address's link, for props that link to no entry: what `linkFor`
+ * gives them, without waiting, so a block linking by address renders at once.
+ */
+export function addressLinkFor(props: LinkProps): LinkAttributes | undefined {
+  return linkTo(url(props.href), props);
+}
+
+/** The attributes of a link to `href`, opened as the props say. */
+function linkTo(
+  href: string | undefined,
+  props: LinkProps
+): LinkAttributes | undefined {
   if (href === undefined) return undefined;
   const rel = relFor(props.target, props.rel);
   return {

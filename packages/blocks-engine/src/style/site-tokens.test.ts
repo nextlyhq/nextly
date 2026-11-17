@@ -742,12 +742,79 @@ describe("emitTokenBlocks", () => {
       ":root"
     );
     expect(css).toContain(
-      `[${DARK_MODE_ATTRIBUTE}="dark"]{--site-color-text:#eee}`
+      `[${DARK_MODE_ATTRIBUTE}="dark"]{--site-color-text:#eee;color-scheme:dark}`
     );
     // Not anchored to the root, which is the form that only works on `<html>`.
     expect(css).not.toContain(`:root[${DARK_MODE_ATTRIBUTE}="dark"]`);
     // And the light block still declares on the root itself.
-    expect(css).toContain(":root{--site-color-text:#111}");
+    expect(css).toContain(":root{--site-color-text:#111;color-scheme:light}");
+  });
+
+  describe("the colour scheme native controls are drawn in", () => {
+    // A checkbox, a radio, a select's list and a scrollbar are drawn by the
+    // browser in the colour scheme the page states, not from the site's
+    // variables. A site with dark values says which scheme each block is, so
+    // its controls follow the same switch its colours do.
+    const tokens: SiteToken[] = [
+      {
+        name: "color.text",
+        kind: "color",
+        values: { light: "#111", dark: "#eee" },
+      },
+      { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+    ];
+
+    // The declarations alone: the media query's `prefers-color-scheme:dark`
+    // is a condition, not a scheme a block states.
+    const schemesIn = (css: string) =>
+      [...css.matchAll(/[{;]color-scheme:(light|dark)[;}]/g)].map(
+        match => `color-scheme:${match[1]}`
+      );
+
+    it("writes exactly what it wrote before for a site with no dark values", () => {
+      // Pinned byte for byte, on the root and on a scope: a site with no dark
+      // values has no second scheme to state, so its sheet does not change.
+      const light: SiteToken[] = [
+        {
+          name: "color.text",
+          kind: "color",
+          values: { light: "#111" },
+        },
+        { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+      ];
+      expect(emitTokenBlocks({ tokens: light }, ":root").css).toBe(
+        ":root{--site-color-text:#111;--site-space-4:1rem}"
+      );
+      expect(emitTokenBlocks({ tokens: light }, SCOPE).css).toBe(
+        `${SCOPE}{--site-color-text:#111;--site-space-4:1rem}`
+      );
+    });
+
+    it("states light on the light blocks and dark on both dark blocks", () => {
+      const { css } = emitTokenBlocks({ tokens }, ":root");
+      // The order is the cascade's: the root, the device's dark, the host's
+      // dark marker, then the light marker that undoes it nearer in.
+      expect(schemesIn(css)).toEqual([
+        "color-scheme:light",
+        "color-scheme:dark",
+        "color-scheme:dark",
+        "color-scheme:light",
+      ]);
+      expect(css).toContain(
+        ":root{--site-color-text:#111;--site-space-4:1rem;color-scheme:light}"
+      );
+    });
+
+    it("states it on a scoped sheet's blocks too", () => {
+      const { css } = emitTokenBlocks({ tokens }, SCOPE);
+      expect(css.startsWith(`${SCOPE}{`)).toBe(true);
+      expect(schemesIn(css)).toEqual([
+        "color-scheme:light",
+        "color-scheme:dark",
+        "color-scheme:dark",
+        "color-scheme:light",
+      ]);
+    });
   });
 
   it("follows the device's dark preference unless the marker pins light", () => {
@@ -769,10 +836,10 @@ describe("emitTokenBlocks", () => {
       ":root"
     );
     expect(css).toBe(
-      ":root{--site-color-text:#111}" +
-        `@media (prefers-color-scheme:dark){:root:not([${DARK_MODE_ATTRIBUTE}="light"]){--site-color-text:#eee}}` +
-        `[${DARK_MODE_ATTRIBUTE}="dark"]{--site-color-text:#eee}` +
-        `[${DARK_MODE_ATTRIBUTE}="light"]{--site-color-text:#111}`
+      ":root{--site-color-text:#111;color-scheme:light}" +
+        `@media (prefers-color-scheme:dark){:root:not([${DARK_MODE_ATTRIBUTE}="light"]){--site-color-text:#eee;color-scheme:dark}}` +
+        `[${DARK_MODE_ATTRIBUTE}="dark"]{--site-color-text:#eee;color-scheme:dark}` +
+        `[${DARK_MODE_ATTRIBUTE}="light"]{--site-color-text:#111;color-scheme:light}`
     );
   });
 
@@ -794,7 +861,7 @@ describe("emitTokenBlocks", () => {
       },
       ":root"
     );
-    const light = `[${DARK_MODE_ATTRIBUTE}="light"]{--site-color-text:#111}`;
+    const light = `[${DARK_MODE_ATTRIBUTE}="light"]{--site-color-text:#111;color-scheme:light}`;
     expect(css).toContain(light);
     expect(css.indexOf(light)).toBeGreaterThan(
       css.indexOf(`[${DARK_MODE_ATTRIBUTE}="dark"]{`)
@@ -817,10 +884,10 @@ describe("emitTokenBlocks", () => {
       ".scope"
     );
     expect(css).toContain(
-      ':is(.scope)[data-nx-theme="dark"],[data-nx-theme="dark"] :is(.scope):not([data-nx-theme="light"],[data-nx-theme="dark"] [data-nx-theme="light"] *){--site-color-text:#eee}'
+      ':is(.scope)[data-nx-theme="dark"],[data-nx-theme="dark"] :is(.scope):not([data-nx-theme="light"],[data-nx-theme="dark"] [data-nx-theme="light"] *){--site-color-text:#eee;color-scheme:dark}'
     );
     expect(css).toContain(
-      ':is(.scope)[data-nx-theme="light"],[data-nx-theme="light"] :is(.scope):not([data-nx-theme="dark"],[data-nx-theme="light"] [data-nx-theme="dark"] *){--site-color-text:#111}'
+      ':is(.scope)[data-nx-theme="light"],[data-nx-theme="light"] :is(.scope):not([data-nx-theme="dark"],[data-nx-theme="light"] [data-nx-theme="dark"] *){--site-color-text:#111;color-scheme:light}'
     );
   });
 
@@ -839,7 +906,7 @@ describe("emitTokenBlocks", () => {
     );
     expect(
       css.endsWith(
-        `:is(${SCOPE})[${DARK_MODE_ATTRIBUTE}="light"],[${DARK_MODE_ATTRIBUTE}="light"] :is(${SCOPE}):not([${DARK_MODE_ATTRIBUTE}="dark"],[${DARK_MODE_ATTRIBUTE}="light"] [${DARK_MODE_ATTRIBUTE}="dark"] *){--site-color-text:#111}`
+        `:is(${SCOPE})[${DARK_MODE_ATTRIBUTE}="light"],[${DARK_MODE_ATTRIBUTE}="light"] :is(${SCOPE}):not([${DARK_MODE_ATTRIBUTE}="dark"],[${DARK_MODE_ATTRIBUTE}="light"] [${DARK_MODE_ATTRIBUTE}="dark"] *){--site-color-text:#111;color-scheme:light}`
       )
     ).toBe(true);
   });
@@ -858,7 +925,7 @@ describe("emitTokenBlocks", () => {
       SCOPE
     );
     expect(css).toContain(
-      `@media (prefers-color-scheme:dark){:is(${SCOPE}):not([${DARK_MODE_ATTRIBUTE}="light"],[${DARK_MODE_ATTRIBUTE}="light"] *){--site-color-text:#eee}}`
+      `@media (prefers-color-scheme:dark){:is(${SCOPE}):not([${DARK_MODE_ATTRIBUTE}="light"],[${DARK_MODE_ATTRIBUTE}="light"] *){--site-color-text:#eee;color-scheme:dark}}`
     );
   });
 
@@ -1842,5 +1909,53 @@ describe("the default spacing", () => {
       "--site-space-section-y:clamp(3rem, 2rem + 4vw, 5rem)"
     );
     expect(css).toContain("--site-button-padding-x:1.25rem");
+  });
+});
+
+describe("the built-in type sizes", () => {
+  /** A built-in variable's light value, by name. */
+  const builtIn = (name: string): string | undefined =>
+    defaultSiteTokens().find(token => token.name === name)?.values.light;
+
+  it.each([
+    // The heading sizes the block library drew before, at a 16px root, as
+    // `rem`: a heading inside a container with its own size no longer scales.
+    ["h1", "2.25rem", "1.15"],
+    ["h2", "1.75rem", "1.2"],
+    ["h3", "1.375rem", "1.3"],
+    ["h4", "1.125rem", "1.4"],
+    ["h5", "1rem", "1.45"],
+    ["h6", "0.875rem", "1.5"],
+    ["small", "0.875rem", "1.5"],
+  ])(
+    "gives %s its size and the line height it pairs with",
+    (name, size, line) => {
+      expect(builtIn(`font-size.${name}`)).toBe(size);
+      expect(builtIn(`line-height.${name}`)).toBe(line);
+    }
+  );
+
+  it("names them as an author reads them", () => {
+    const label = (name: string): string | undefined => {
+      const token = defaultSiteTokens().find(entry => entry.name === name);
+      return token === undefined ? undefined : tokenDisplayLabel(token);
+    };
+    expect(label("font-size.h2")).toBe("H2");
+    expect(label("font-size.small")).toBe("Small");
+  });
+
+  it("are sizes and numbers, so each field offers them", () => {
+    const kinds = defaultSiteTokens()
+      .filter(token => /^(font-size|line-height)\./.test(token.name))
+      .map(token => `${token.name}:${token.kind}`);
+    expect(kinds).toContain("font-size.h1:dimension");
+    expect(kinds).toContain("line-height.h1:number");
+  });
+
+  it("passes a site's text through a resolve, as it passes its fluid range", () => {
+    const siteText = { h2: { fontSize: "40px" } };
+    expect(resolveSiteTokens({ tokens: [], siteText }).siteText).toEqual(
+      siteText
+    );
   });
 });

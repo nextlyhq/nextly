@@ -117,7 +117,7 @@ export const richText: BlockDefinition<RichTextBlockProps, PageContext> =
     },
     props: {
       content: {
-        label: "Content",
+        label: "Text",
         role: "content",
         type: RICH_TEXT_PROP_TYPE,
         inline: true,

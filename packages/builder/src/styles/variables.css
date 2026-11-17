@@ -17,19 +17,13 @@
   padding: 0.5rem 0.75rem 0;
 }
 
-.nx-vars__controls,
-.nx-vars__preview {
+.nx-vars__controls {
   display: flex;
   align-items: center;
   gap: 0.375rem;
 }
 
-.nx-vars__preview-label {
-  font-size: 11px;
-  color: var(--nx-muted-foreground);
-}
-
-/* A segmented pair: the preview switch, and keep-or-use in the import. */
+/* A segmented choice: keep-or-use in the import, and other few-way picks. */
 .nx-vars__seg {
   display: inline-flex;
   padding: 2px;

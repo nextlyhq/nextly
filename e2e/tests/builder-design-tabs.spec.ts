@@ -57,8 +57,11 @@ async function switchTo(page: Page, name: string): Promise<void> {
 /** The first variable row's name and value columns, in the window. */
 async function firstRowColumns(page: Page) {
   // A variable's row, beside its ⋯: the fonts and site text rows a tab may
-  // list first are other lists, with no ⋯ of their own.
-  const row = page.locator(".nx-vars__line > .nx-vars__row").first();
+  // list first are other lists, with no ⋯ of their own, and run the whole
+  // width.
+  const row = page
+    .locator(".nx-vars__line:has(.nx-vars__more) > .nx-vars__row")
+    .first();
   await expect(row).toBeVisible();
   const body = await page
     .locator(".nx-vars__body")

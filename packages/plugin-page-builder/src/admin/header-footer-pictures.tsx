@@ -37,16 +37,20 @@ import { useSiteStyle } from "./site-style-client";
 const SET_ICON = "section";
 
 /**
- * @param definitions - the published definitions the choices read sent, by
- *   component id
- * @param complete - whether those hold every listed set's, so a region whose
- *   component is not among them is missing rather than still on its way
- * @returns a set's picture, from its published regions
+ * A picture of some documents, drawn small from the published definitions
+ * they reach, with the part and rendering the Add panel's saved section
+ * pictures use: a set's regions, or a template's document. Until those
+ * definitions have arrived a picture is a quiet placeholder, never the
+ * broken-picture icon a missing definition would draw.
+ *
+ * @param definitions - the published definitions, by component id
+ * @param complete - whether those hold every drawn document's, so one not
+ *   among them is missing rather than still on its way
  */
-export function useSetPictures(
+export function useDocumentPictures(
   definitions: Readonly<Record<string, BlockDocument>>,
   complete: boolean
-): (picture: readonly LayoutRegion[]) => ReactNode {
+): (documents: readonly BlockDocument[], waiting?: boolean) => ReactNode {
   const clientConfig = usePluginClientConfig(PLUGIN_SOURCE);
   const configStyle = useMemo(
     () => readSiteStyleRecord(clientConfig?.siteStyle),
@@ -60,6 +64,34 @@ export function useSetPictures(
   );
   const render = usePictureRender(siteStyle, byId);
   const session = useMiniatureSession(usePictureContext());
+  return useCallback(
+    (documents: readonly BlockDocument[], waiting = !complete) => {
+      if (waiting) return <Skeleton className="h-full w-full rounded-sm" />;
+      return (
+        <DocumentMiniature
+          documents={documents}
+          render={render}
+          icon={SET_ICON}
+          session={session}
+        />
+      );
+    },
+    [complete, render, session]
+  );
+}
+
+/**
+ * @param definitions - the published definitions the choices read sent, by
+ *   component id
+ * @param complete - whether those hold every listed set's, so a region whose
+ *   component is not among them is missing rather than still on its way
+ * @returns a set's picture, from its published regions
+ */
+export function useSetPictures(
+  definitions: Readonly<Record<string, BlockDocument>>,
+  complete: boolean
+): (picture: readonly LayoutRegion[]) => ReactNode {
+  const draw = useDocumentPictures(definitions, complete);
   // One document per region for as long as the menu is mounted: a picture is
   // drawn once and found again by its document, so the same region must be
   // the same object from one render to the next.
@@ -73,19 +105,12 @@ export function useSetPictures(
     return made;
   }, []);
   return useCallback(
-    (picture: readonly LayoutRegion[]) => {
-      const waiting =
-        !complete && picture.some(region => !byId.has(region.componentId));
-      if (waiting) return <Skeleton className="h-full w-full rounded-sm" />;
-      return (
-        <DocumentMiniature
-          documents={picture.map(documentOf)}
-          render={render}
-          icon={SET_ICON}
-          session={session}
-        />
-      );
-    },
-    [complete, byId, render, session, documentOf]
+    (picture: readonly LayoutRegion[]) =>
+      draw(
+        picture.map(documentOf),
+        !complete &&
+          picture.some(region => !(region.componentId in definitions))
+      ),
+    [complete, definitions, draw, documentOf]
   );
 }

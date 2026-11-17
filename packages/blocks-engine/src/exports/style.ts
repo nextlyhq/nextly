@@ -82,6 +82,19 @@ export {
   // contains stops reading where the compiler does.
   MAX_VALUE_LENGTH,
 } from "../style/css-value";
+export {
+  collectStyleProperties,
+  collectStyleTokens,
+  documentTokenUsage,
+  forEachStyleValues,
+  onlySiteProperties,
+  onlyVariableIdentities,
+  styleEnvelopeProperties,
+  styleEnvelopeTokens,
+  styleSitePropertiesIn,
+  styleVariablesIn,
+  type TokenUsage,
+} from "../style/document-token-usage";
 export type {
   CssValueRejection,
   MayFetchUrl,
@@ -454,3 +467,28 @@ export {
   type FluidRangeWidths,
   type FluidSizes,
 } from "../style/fluid-value";
+
+/**
+ * Site text: the size and line height of body text, each heading level,
+ * links, buttons and captions, set once for every page of a site. Public
+ * because the block library compiles it, the plugin stores and judges it, and
+ * the editor draws its rows, and each must read one map the same way.
+ */
+export {
+  DEFAULT_SITE_TEXT,
+  resolveSiteText,
+  SITE_TEXT_LABELS,
+  SITE_TEXT_ROLES,
+  SITE_TEXT_ROOT,
+  SITE_TEXT_UNDERLINES,
+  siteTextElementBases,
+  siteTextIssues,
+  siteTextRoleOf,
+  siteTextStyles,
+  siteTextUses,
+  type ElementBaseKey,
+  type SiteTextEntry,
+  type SiteTextMap,
+  type SiteTextRole,
+  type SiteTextUnderline,
+} from "../style/site-text";
