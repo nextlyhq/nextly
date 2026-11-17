@@ -441,24 +441,6 @@ function familiesOf(list: readonly unknown[]): Set<string> {
 /** Section-wide token settings merged as one value, never field by field. */
 const WHOLE_SETTINGS: ReadonlySet<string> = new Set(["fluidRange"]);
 
-/**
- * One value merged whole: the side that changed it wins, and where both did,
- * differently, the preferred side, told as a conflict.
- */
-function wholeValue(
-  base: unknown,
-  mine: unknown,
-  theirs: unknown,
-  settle: MergeSettle
-): unknown {
-  if (sameStoredValue(mine, base)) return theirs;
-  if (sameStoredValue(theirs, base) || sameStoredValue(mine, theirs)) {
-    return mine;
-  }
-  settle.conflict?.();
-  return settle.prefer === "mine" ? mine : theirs;
-}
-
 /** A token set's entries merged, and its section-wide settings beside them. */
 function mergedTokenSet(
   base: unknown,
@@ -482,7 +464,7 @@ function mergedTokenSet(
     // The fluid range is one value: merged width by width, a width one side
     // left alone takes the other side's, and the pair is no range at all.
     const value = WHOLE_SETTINGS.has(key)
-      ? wholeValue(sides.base, sides.mine, ownValueAt(theirs, key), settle)
+      ? mergedLeaf(sides.base, sides.mine, ownValueAt(theirs, key), settle)
       : mergedValue(sides.base, sides.mine, ownValueAt(theirs, key), settle);
     if (conflicted) {
       conflicts.push({
