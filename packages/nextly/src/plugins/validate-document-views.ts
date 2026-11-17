@@ -43,6 +43,8 @@ interface ContributedViewBase {
   path: string;
   component: ComponentPath;
   label?: string;
+  /** The words of a way into the view, carried only when declared. */
+  openLabel?: string;
   /** The contributing plugin's name, for the admin's diagnostics. */
   plugin: string;
 }
@@ -93,6 +95,11 @@ function labelOf(view: { label?: string }): { label?: string } {
   return view.label === undefined ? {} : { label: view.label };
 }
 
+/** The words of a way into the view, carried only when declared. */
+function openLabelOf(view: { openLabel?: string }): { openLabel?: string } {
+  return view.openLabel === undefined ? {} : { openLabel: view.openLabel };
+}
+
 /** `opensFirst`, carried only when it asks to open first for a main field. */
 function opensFirstOf(view: object): { opensFirst?: "mainField" } {
   return "opensFirst" in view && view.opensFirst === OPENS_FIRST_MAIN_FIELD
@@ -110,6 +117,7 @@ function viewsOf(plugin: PluginDefinition): ContributedDocumentView[] {
         path: documentView.path,
         component: documentView.component,
         ...labelOf(documentView),
+        ...openLabelOf(documentView),
         plugin: plugin.name,
       }))
   );
@@ -118,6 +126,7 @@ function viewsOf(plugin: PluginDefinition): ContributedDocumentView[] {
     path: documentView.path,
     component: documentView.component,
     ...labelOf(documentView),
+    ...openLabelOf(documentView),
     ...opensFirstOf(documentView),
     plugin: plugin.name,
   }));
@@ -142,6 +151,15 @@ function unroutableReason(view: ContributedDocumentView): string | undefined {
   const label: unknown = view.label;
   if (label !== undefined && typeof label !== "string") {
     return `${scopeOf(view)} at "${view.path}" has a label that is not text`;
+  }
+  // The words are the whole of the way into the view a row or the bar
+  // offers, so text with none in it would be an entry nobody can read.
+  const openLabel: unknown = view.openLabel;
+  if (
+    openLabel !== undefined &&
+    (typeof openLabel !== "string" || openLabel.trim() === "")
+  ) {
+    return `${scopeOf(view)} at "${view.path}" has an openLabel that is not text with words in it`;
   }
   if (typeof view.path !== "string" || !VIEW_PATH.test(view.path)) {
     return (
