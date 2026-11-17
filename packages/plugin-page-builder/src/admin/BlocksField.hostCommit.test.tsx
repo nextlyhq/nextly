@@ -635,7 +635,7 @@ describe("a colleague taking the document over", () => {
     // which the card says in words of its own, and the edit holds a block, so
     // the card offers its preview instead.
     await waitFor(() =>
-      expect(container.textContent).toContain("Live preview")
+      expect(container.textContent).toMatch(/Sections \(\d+\)/)
     );
     expect(container.textContent).not.toContain("Nothing here yet");
     // Into this browser\'s form only. Nothing left the editor through its

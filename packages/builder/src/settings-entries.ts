@@ -25,6 +25,15 @@ import {
   SIZE_LABELS,
 } from "./block-shortcuts-field";
 import { BUILT_IN_WRITES } from "./code-hints";
+import {
+  childAxisRows,
+  LAYOUT_CSS_NAMES,
+  offersChildAxis,
+  type ChildAxis,
+  type ParentArrangement,
+  type PlainFlow,
+} from "./plain-layout";
+import { CHILD_SIZE_IDS } from "./plain-parent-controls";
 import { CONTENT_WIDTH_CHOICES } from "./content-width-control";
 import { keywordLabel } from "./style-keyword-labels";
 import {
@@ -314,6 +323,60 @@ function shortcutRows(
   ];
 }
 
+/**
+ * "Inside its parent"'s Width, and its Height under a Row or a Grid, by the
+ * words they're drawn with, set where the block holds a share of its own.
+ * None where the parent isn't known: nothing draws them.
+ */
+function childSizeRows(
+  parent: ParentArrangement | undefined,
+  sections: readonly StyleSection[],
+  flow: PlainFlow | undefined
+): IndexedRow[] {
+  if (parent === undefined) return [];
+  const choices = ["Fill", "Fit", "Fixed"];
+  // Each axis is set by what it writes, wherever its rows are (a width is
+  // Size's): a share's or an order's value says nothing of the other axis.
+  const stored = new Set(
+    sections
+      .flatMap(section => section.properties)
+      .filter(property => property.set)
+      .map(property => property.property)
+  );
+  const holds = (properties: readonly string[]) =>
+    properties.some(property => stored.has(property));
+  return [
+    {
+      id: CHILD_SIZE_IDS.width,
+      label: "Width",
+      options: choices,
+      css: cssNamesOf(written("width")),
+      set: holds(written("width")),
+    },
+    ...(offersChildAxis(parent, "height", flow)
+      ? [
+          {
+            id: CHILD_SIZE_IDS.height,
+            label: "Height",
+            options: choices,
+            css: cssNamesOf(written("height")),
+            set: holds(written("height")),
+          },
+        ]
+      : []),
+  ];
+
+  /** What a size's choices write, its own size included. */
+  function written(axis: ChildAxis): string[] {
+    return [axis, ...childAxisRows(parent as ParentArrangement, axis, flow)];
+  }
+}
+
+/** Layout properties by their CSS names, as a search spells them. */
+function cssNamesOf(properties: readonly string[]): string[] {
+  return properties.map(property => LAYOUT_CSS_NAMES[property] ?? property);
+}
+
 /** The CSS properties a Style property's controls write. */
 function cssOf(property: StyleSection["properties"][number]): string[] {
   const names = new Set<string>();
@@ -351,12 +414,17 @@ function optionsOf(property: StyleSection["properties"][number]): string[] {
 export function styleEntries(
   sections: readonly StyleSection[],
   inspection: BlockInspection | null,
-  shortcuts?: { node: BlockNode | undefined; at: ShortcutAt }
+  shortcuts?: { node: BlockNode | undefined; at: ShortcutAt },
+  parent?: ParentArrangement,
+  flow?: PlainFlow
 ): SettingEntry[] {
   const props = inspection?.sections.styleProps ?? [];
   return sections.flatMap(section => {
     const own = props.find(each => each.key === section.key)?.rows ?? [];
     return sectionEntries("style", section, [
+      ...(section.key === "inside-parent"
+        ? childSizeRows(parent, sections, flow)
+        : []),
       ...(section.key === "size" && shortcuts !== undefined
         ? shortcutRows(shortcuts.node, shortcuts.at)
         : []),

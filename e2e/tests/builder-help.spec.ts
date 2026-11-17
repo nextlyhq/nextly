@@ -21,7 +21,7 @@ import { test } from "./support/test";
 test.describe.configure({ lock: [LOCK.homepage] });
 
 /** The control that opens the page builder, in either of its wordings. */
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
 
 async function openEditor(page: Page): Promise<void> {
   await gotoAdmin(page, "/singles/homepage");

@@ -102,6 +102,7 @@ import { useDeclaredBulkActions } from "./useDeclaredBulkActions";
 import { useDeclaredRowActions } from "./useDeclaredRowActions";
 import { useEntryBulkActions } from "./useEntryBulkActions";
 import type { EntryRow, EntryVersions } from "./useEntrySelection";
+import { useListCreateDialog } from "./useListCreateDialog";
 
 // ============================================================================
 // Types
@@ -674,12 +675,20 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // The bulk actions offered here, which the table's checkboxes and bar
   // follow too, so the Delete shortcut opens nothing they would not.
   const offeredBulk = useEntryBulkActions(collectionForColumns);
+  // The dialog the view this collection's entries open in declares for
+  // "+ New", opened in place of the create form where there is one.
+  const createDialog = useListCreateDialog({
+    slug: collectionSlug,
+    collection,
+    labels,
+    entryHref,
+  });
   const handleCreateClick = useCallback(() => {
-    if (!createAllowed) return;
+    if (!createAllowed || createDialog.open()) return;
     navigateTo(
       buildRoute(ROUTES.COLLECTION_ENTRY_CREATE, { slug: collectionSlug })
     );
-  }, [collectionSlug, createAllowed]);
+  }, [collectionSlug, createAllowed, createDialog]);
 
   const handleApiPlaygroundClick = useCallback(() => {
     navigateTo(
@@ -949,6 +958,8 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
         onConfirm={handleConfirmDelete}
         isLoading={bulkDelete.isPending}
       />
+
+      {createDialog.dialog}
 
       {/* A declared action that opens its plugin's component, with its rows */}
       <Dialog
