@@ -285,6 +285,25 @@ describe("merging sizes made with Fluid… and the fluid range", () => {
     );
   });
 
+  it("merges the range whole, never one width from each side", () => {
+    // Field by field, the width mine left alone took theirs, which held no
+    // range: { max: 1440 } alone, a range the save refuses.
+    const merged = mergeSiteStyleSection(
+      "tokens",
+      { tokens: [lead(16, 20, OLD)], fluidRange: OLD },
+      {
+        tokens: [lead(16, 20, { min: 360, max: 1440 })],
+        fluidRange: { min: 360, max: 1440 },
+      },
+      { tokens: [lead(16, 20, OLD)] },
+      "mine"
+    );
+    expect((merged.value as { fluidRange: unknown }).fluidRange).toEqual({
+      min: 360,
+      max: 1440,
+    });
+  });
+
   it("rewrites nothing where no tier stores a range to write a size across", () => {
     // Made across the code's own range, which the stored tier does not hold:
     // writing it across the default would move every fluid size.
