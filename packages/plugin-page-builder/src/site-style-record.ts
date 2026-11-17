@@ -57,6 +57,7 @@ import {
   BUILT_IN_NAME_FIELDS,
   resolveSiteStyle,
   siteStyleOf,
+  withBuiltInNames,
   type SiteStyleData,
 } from "./site-style";
 
@@ -861,9 +862,12 @@ export function checkStoredClasses(
       issues.push(`classes[${index}] repeats the id "${entry.id}".`);
       return;
     }
+    // Judged as it merges: an override of a built-in that leaves out its
+    // name fields takes the code's, so its own-style mark is the code's too.
+    const named = withBuiltInNames(policy.defaults?.classes, [entry])?.[0] ?? entry;
     // A block's own look is never written as a class and claims no slug, as
     // the engine's claim rules have it, so a style may share its name.
-    const claimsSlug = !isDefaultLook(entry);
+    const claimsSlug = !isDefaultLook(named);
     if (claimsSlug && slugs.has(entry.slug)) {
       issues.push(`classes[${index}] repeats the slug "${entry.slug}".`);
       return;
@@ -876,7 +880,7 @@ export function checkStoredClasses(
     if (!budget.truncated) {
       issues.push(...classValueIssues(entry, index, policy, budget));
     }
-    issues.push(...blockStyleMarkIssues(entry, index));
+    issues.push(...blockStyleMarkIssues(named, index));
     issues.push(...builtInRenameIssues(entry, index, policy));
     classes.push(withUsableMarks(entry, index, issues));
   });

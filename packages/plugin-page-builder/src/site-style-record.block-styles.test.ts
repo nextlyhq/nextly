@@ -82,6 +82,37 @@ describe("the stored ★ and hidden marks", () => {
   });
 });
 
+describe("marks on an override that leaves the built-in's name fields out", () => {
+  it("are judged as it merges: a ★ on the block's own style is refused", () => {
+    // The button's own style, its own-style mark left out: the code's comes
+    // back at the merge, so a ★ here would star the block's own style.
+    expect(
+      issuesOf([
+        {
+          id: primary.id,
+          slug: primary.slug,
+          blockType: primary.blockType,
+          orderIndex: 0,
+          styles: primary.styles,
+          starred: true,
+        },
+      ])
+    ).not.toEqual([]);
+    // The control: the same ★ on a style a block can pick is accepted.
+    expect(
+      issuesOf([
+        {
+          id: outline.id,
+          slug: outline.slug,
+          orderIndex: 1,
+          styles: outline.styles,
+          starred: true,
+        },
+      ])
+    ).toEqual([]);
+  });
+});
+
 describe("a built-in block style's name", () => {
   it("can't be changed: a block or a plugin names it in code", () => {
     expect(issuesOf([{ ...text, label: "Link" }])).toEqual([

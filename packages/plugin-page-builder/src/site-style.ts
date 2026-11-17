@@ -151,7 +151,7 @@ export const BUILT_IN_NAME_FIELDS = [
  * built-in it overrides (the image's own style stays its own, named as the
  * code names it) rather than replacing it with a nameless shared class.
  */
-function withBuiltInNames(
+export function withBuiltInNames(
   defaults: readonly NamedClass[] | undefined,
   stored: readonly NamedClass[] | undefined
 ): readonly NamedClass[] | undefined {
