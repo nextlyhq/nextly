@@ -68,6 +68,20 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           json({ name: "meta", localized: true }),
         ],
       }),
+      // Drafts of a structure per language: a held change to its rows goes live with a publish.
+      defineCollection({
+        slug: "playlists",
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        fields: [
+          repeater({
+            name: "tracks",
+            localized: true,
+            fields: [text({ name: "label" })],
+          }),
+        ],
+      }),
       // A translated field named like a member every object inherits.
       defineCollection({
         slug: "glossary",
@@ -929,6 +943,78 @@ describe.each(getConfiguredTestDialects())(
         partState: "live",
         valueFingerprint: valueFingerprint("Corto"),
       });
+    });
+    it("forgets a row's record when a published draft no longer has the row", async () => {
+      // Spanish was published with rows a and b, each recorded. A held change keeps a alone; once
+      // it goes live, b's record goes with b, and a's is the draft's.
+      await boot(dialect);
+      const created = (await t!.nextly.create({
+        collection: "playlists",
+        locale: "en",
+        data: {
+          tracks: [
+            { id: "a", label: "One" },
+            { id: "b", label: "Two" },
+          ],
+        },
+      })) as unknown as { item: { id: string } };
+      const id = created.item.id;
+      const playlists = { kind: "collection", slug: "playlists" };
+      await save(id, "en", { status: "published" }, undefined, "playlists");
+      const published = await save(
+        id,
+        "es",
+        {
+          tracks: [
+            { id: "a", label: "Uno" },
+            { id: "b", label: "Dos" },
+          ],
+          status: "published",
+          _provenance: {
+            tracks: {
+              origin: "machine",
+              engine: "e1",
+              rows: { a: "a", b: "b" },
+            },
+          },
+        },
+        { apiKey: "key-1" },
+        "playlists"
+      );
+      expect(published, JSON.stringify(published)).toMatchObject({
+        success: true,
+      });
+      const livePaths = async () =>
+        ((await rowsOf(id, playlists)).es ?? [])
+          .filter(row => row.partState === "live")
+          .map(row => row.fieldPath)
+          .sort();
+      expect(await livePaths()).toEqual(["tracks", "tracks#a", "tracks#b"]);
+
+      const held = await save(
+        id,
+        "es",
+        {
+          tracks: [{ id: "a", label: "Uno" }],
+          _provenance: {
+            tracks: { origin: "machine", engine: "e1", rows: { a: "a" } },
+          },
+        },
+        { apiKey: "key-1" },
+        "playlists"
+      );
+      expect(held, JSON.stringify(held)).toMatchObject({ success: true });
+      const goingLive = await save(
+        id,
+        "es",
+        { status: "published" },
+        { apiKey: "key-1" },
+        "playlists"
+      );
+      expect(goingLive, JSON.stringify(goingLive)).toMatchObject({
+        success: true,
+      });
+      expect(await livePaths()).toEqual(["tracks", "tracks#a"]);
     });
   }
 );

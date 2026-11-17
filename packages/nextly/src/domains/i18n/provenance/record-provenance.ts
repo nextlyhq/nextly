@@ -494,12 +494,30 @@ async function promoteDraftProvenance(
     })
   ).map(row => row.fieldPath);
   if (drafted.length === 0) return new Set();
-  await db.delete(TRANSLATION_PROVENANCE_TABLE, {
-    and: [
-      ...documentWhere(promotion, promotion.locale, "live").and,
-      { column: "fieldPath", op: "IN", value: drafted },
-    ],
-  });
+  // Each drafted field's live records give way, its rows' records included: a row the draft no
+  // longer has has no record in the draft, and its live one would outlive the row.
+  const draftedFields = new Set(
+    drafted.filter(path => !path.includes(ROW_PATH_SEPARATOR))
+  );
+  const live = await db.select<{ id: string; fieldPath: string }>(
+    TRANSLATION_PROVENANCE_TABLE,
+    {
+      columns: ["id", "fieldPath"],
+      where: documentWhere(promotion, promotion.locale, "live"),
+    }
+  );
+  const replaced = live
+    .filter(
+      row =>
+        drafted.includes(row.fieldPath) ||
+        draftedFields.has(row.fieldPath.split(ROW_PATH_SEPARATOR)[0])
+    )
+    .map(row => row.id);
+  if (replaced.length > 0) {
+    await db.delete(TRANSLATION_PROVENANCE_TABLE, {
+      and: [{ column: "id", op: "IN", value: replaced }],
+    });
+  }
   await db.updateCount(
     TRANSLATION_PROVENANCE_TABLE,
     { partState: "live" },
@@ -508,7 +526,6 @@ async function promoteDraftProvenance(
   return new Set(drafted);
 }
 
-/** A write's values and, where it puts a held draft live, that it does. */
 /**
  * The document's languages' counters as they stand, read on `db` (the write's transaction) when a
  * write claims a copy, for {@link ProvenanceWrite.languageRevisions}; undefined when none does, or
@@ -536,6 +553,7 @@ export async function copySourceRevisions(
   return counters.get(args.entryId) ?? new Map<string, number>();
 }
 
+/** A write's values and, where it puts a held draft live, that it does. */
 export interface WrittenValues extends ProvenanceWrite {
   /** The write puts the language's held draft live: the draft's record moves with it. */
   promotesDraft?: boolean;
