@@ -394,6 +394,31 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await collectionStatus("lcown")).toBeNull();
     });
 
+    // A junction may be named by its field (`options.junctionTable`), `dc_<slug>` included: empty,
+    // it is still the registered collection's, never this create's leftover main table.
+    it("refuses a collection create whose main table is another collection's junction, dropping nothing", async () => {
+      await createCollection("lcjtarget");
+      await createCollection("lcjowner", [
+        {
+          name: "tags",
+          type: "relationship",
+          options: {
+            relationType: "manyToMany",
+            target: "lcjtarget",
+            junctionTable: "dc_lcreports",
+          },
+        },
+      ]);
+      expect(await app().adapter.tableExists("dc_lcreports")).toBe(true);
+
+      const refused = await refusalOf(createCollection("lcreports"));
+
+      expect(refused).toMatchObject({ code: "DUPLICATE" });
+      expect(await app().adapter.tableExists("dc_lcreports")).toBe(true);
+      expect(await liveColumns("dc_lcreports")).not.toContain("title");
+      expect(await collectionStatus("lcreports")).toBeNull();
+    });
+
     it("refuses a translated collection's create over a leftover translations table holding rows", async () => {
       await translatedApp();
       const STALE_TRANSLATED = [

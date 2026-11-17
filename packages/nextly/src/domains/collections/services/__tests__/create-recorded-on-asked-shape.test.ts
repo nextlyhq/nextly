@@ -41,6 +41,7 @@ vi.mock("../../../schema/schema-version", async importOriginal => ({
   writeRegistryRows: (_adapter: unknown, write: () => unknown) => write(),
 }));
 
+import { clearLeftoverStorage } from "../../../schema/services/leftover-storage";
 import { CollectionMetadataService } from "../collection-metadata-service";
 
 const FIELDS = [{ name: "title", type: "text" }];
@@ -72,12 +73,12 @@ function service(): CollectionMetadataService {
   );
   // What follows the row is not judged here.
   const internals = created as unknown as {
-    assertTableFamilyUnclaimed: () => Promise<void>;
+    assertTablesUnclaimed: () => Promise<void>;
     registerRuntimeSchema: () => Promise<void>;
     seedPermissionsForCollection: () => Promise<void>;
   };
   // No registered entity stores in the new table's family: the ground is clear.
-  internals.assertTableFamilyUnclaimed = vi.fn(async () => undefined);
+  internals.assertTablesUnclaimed = vi.fn(async () => undefined);
   internals.registerRuntimeSchema = vi.fn(async () => undefined);
   internals.seedPermissionsForCollection = vi.fn(async () => undefined);
   return created;
@@ -116,5 +117,28 @@ describe("a collection create's recorded status", () => {
     ];
 
     expect(await recordedStatus()).toBe("failed");
+  });
+});
+
+// Clearing a leftover reads the catalog and drops tables: a failure there is the server's, so
+// it is reported as one, whatever the caller sent.
+describe("a failure while clearing a leftover", () => {
+  it("is reported as the server's (500, INTERNAL_ERROR), never as the caller's mistake", async () => {
+    vi.mocked(clearLeftoverStorage).mockRejectedValueOnce(
+      new Error("the catalog read failed")
+    );
+
+    const result = await service().createCollection({
+      name: "posts",
+      label: "Posts",
+      fields: FIELDS as never,
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      statusCode: 500,
+      code: "INTERNAL_ERROR",
+    });
+    expect(registerCollection).not.toHaveBeenCalled();
   });
 });
