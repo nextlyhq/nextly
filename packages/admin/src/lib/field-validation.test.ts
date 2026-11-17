@@ -818,6 +818,103 @@ describe("generateClientSchema — a required field left empty", () => {
   });
 });
 
+// A required field holding many values must hold one, as the server judges
+// (`entry-validation`) — for the types stored as a plain list. The form used
+// to pass an empty list through, and only the save refused it. Chips (a text
+// or number hasMany) and a repeater keep their own rule: required alone says
+// nothing about their length, so an empty list stands unless `minRows` says
+// otherwise.
+describe("generateClientSchema — a required field left an empty list", () => {
+  const firstMessage = (field: Record<string, unknown>, value: unknown) => {
+    const result = generateClientSchema([
+      field as unknown as FieldConfig,
+    ]).safeParse({ [field.name as string]: value });
+    return result.success ? null : result.error.issues[0]?.message;
+  };
+
+  it("names a required multi-select left empty, before the save does", () => {
+    const tags = {
+      type: "select",
+      name: "tags",
+      label: "Tags",
+      required: true,
+      hasMany: true,
+      options: [
+        { label: "News", value: "news" },
+        { label: "Guide", value: "guide" },
+      ],
+    };
+    expect(firstMessage(tags, [])).toBe("Tags is required.");
+    expect(firstMessage(tags, undefined)).toBe("Tags is required.");
+    expect(firstMessage(tags, ["news"])).toBeNull();
+  });
+
+  it("names a required relationship or upload list left empty", () => {
+    expect(
+      firstMessage(
+        {
+          type: "relationship",
+          name: "authors",
+          label: "Authors",
+          required: true,
+          hasMany: true,
+          relationTo: "users",
+        },
+        []
+      )
+    ).toBe("Authors is required.");
+    expect(
+      firstMessage(
+        {
+          type: "upload",
+          name: "gallery",
+          label: "Gallery",
+          required: true,
+          hasMany: true,
+        },
+        []
+      )
+    ).toBe("Gallery is required.");
+  });
+
+  it("leaves chips and a repeater to their row bounds, as the server does", () => {
+    const keywords = {
+      type: "text",
+      name: "keywords",
+      label: "Keywords",
+      required: true,
+      hasMany: true,
+    };
+    expect(firstMessage(keywords, [])).toBeNull();
+    expect(
+      firstMessage({ ...keywords, validation: { minRows: 1 } }, [])
+    ).toMatch(/Minimum 1 items required/);
+
+    const steps = {
+      type: "repeater",
+      name: "steps",
+      label: "Steps",
+      required: true,
+      fields: [{ type: "text", name: "text", label: "Text" }],
+    };
+    expect(firstMessage(steps, [])).toBeNull();
+  });
+
+  it("leaves an optional list free to stay empty", () => {
+    expect(
+      firstMessage(
+        {
+          type: "select",
+          name: "tones",
+          hasMany: true,
+          options: [{ label: "A", value: "a" }],
+        },
+        []
+      )
+    ).toBeNull();
+  });
+});
+
 describe("generateClientSchema — a password's pattern", () => {
   const password = (validation: Record<string, unknown>) => ({
     type: "password",

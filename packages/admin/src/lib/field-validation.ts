@@ -396,7 +396,7 @@ function fieldToZodSchema(
       // real required error when the editor is empty.
       schema = schema.refine(value => !isRichTextEmpty(value), { message });
     }
-    schema = requiredFirst(schema, message);
+    schema = requiredFirst(schema, message, emptyListIsMissing(field));
   }
 
   return schema;
@@ -415,7 +415,9 @@ function requiredMessage(field: DataFieldConfig | ExtractedField): string {
 /**
  * Whether a value counts as not given, by the server's own rule (`isEmpty` in
  * `entry-validation`): absent, null, or text of nothing but spaces. A list is
- * left to its own schema, whose row bounds already judge an empty one.
+ * left to its own schema, whose row bounds already judge an empty one — except
+ * where the field is one `emptyListIsMissing` names, whose empty list the
+ * server reads as not given.
  */
 function isMissingValue(value: unknown): boolean {
   return (
@@ -423,6 +425,20 @@ function isMissingValue(value: unknown): boolean {
     value === null ||
     (typeof value === "string" && value.trim() === "")
   );
+}
+
+/**
+ * Whether a required field's empty list counts as not given, as the server
+ * judges it (`entry-validation`): a select, a relationship or an upload
+ * holding many values must hold one, while chips (a text or number `hasMany`)
+ * and a repeater are judged by their row bounds instead — there required
+ * alone says nothing about an empty list, and only `minRows` does.
+ */
+function emptyListIsMissing(field: DataFieldConfig): boolean {
+  if (isSelectField(field)) return field.hasMany === true;
+  if (isRelationshipField(field)) return field.hasMany === true;
+  if (isUploadField(field)) return field.hasMany === true;
+  return false;
 }
 
 /**
@@ -434,12 +450,23 @@ function isMissingValue(value: unknown): boolean {
  * or `Invalid input: expected number, received null`: a developer's message
  * that names raw option values and says nothing about what to do. A missing
  * value now says only that it is required, and the type's own rules are asked
- * only of a value that was given.
+ * only of a value that was given. An empty list counts as missing only where
+ * `emptyListIsMissing` says the server reads it that way, so the form never
+ * refuses a list the save would take.
  */
-function requiredFirst(schema: z.ZodTypeAny, message: string): z.ZodTypeAny {
+function requiredFirst(
+  schema: z.ZodTypeAny,
+  message: string,
+  emptyListMissing = false
+): z.ZodTypeAny {
   return z
     .unknown()
-    .refine(value => !isMissingValue(value), { message, abort: true })
+    .refine(
+      value =>
+        !isMissingValue(value) &&
+        !(emptyListMissing && Array.isArray(value) && value.length === 0),
+      { message, abort: true }
+    )
     .pipe(schema);
 }
 
