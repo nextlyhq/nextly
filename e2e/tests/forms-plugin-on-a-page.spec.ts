@@ -160,7 +160,7 @@ async function sendAndSeeItKept(
   await visitorPage.getByRole("button", { name: "Submit" }).click();
 
   await expect(visitorPage).toHaveURL(new RegExp(`#form-quote-sent$`));
-  const message = visitorPage.locator("#form-quote-sent");
+  const message = visitorPage.locator("#form-quote-sent:visible");
   await expect(message).toContainText("we'll reply soon.");
   // The focus on the answer is the browser's own, from the address's
   // fragment, read from the page's HTML alone. With script on it does not
@@ -198,7 +198,7 @@ async function refusesASecondAnswerThenShowsClosed(
     await visitorPage.getByRole("button", { name: "Submit" }).click();
     await expect(visitorPage).toHaveURL(new RegExp(`#form-quote-${expected}$`));
   }
-  await expect(visitorPage.locator("#form-quote-closed")).toHaveText(
+  await expect(visitorPage.locator("#form-quote-closed:visible")).toHaveText(
     "This form isn't taking answers right now."
   );
   expect(await submissions(page, formId)).toHaveLength(1);
