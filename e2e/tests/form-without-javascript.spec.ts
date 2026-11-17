@@ -64,12 +64,6 @@ async function seed(page: Page, sendTo: string): Promise<string> {
     },
   });
   expect(created.ok(), `seeding the page: ${created.status()}`).toBe(true);
-  // Drawn once before the visitor arrives, as a published page is served from
-  // the cache. A first render the dev server streams holds the page's body in
-  // a segment only script reveals; the production server's first render is
-  // checked on its own.
-  const warmed = await page.request.get(`/${slug}`);
-  expect(warmed.ok(), `drawing the page once: ${warmed.status()}`).toBe(true);
   return slug;
 }
 
@@ -89,6 +83,18 @@ async function visitor(
   return { context, page: await context.newPage() };
 }
 
+/**
+ * Open `path` as the visitor, the page drawn once first by the same visitor
+ * as a published page is served from the cache. A first render the dev
+ * server streams holds the page's body in a segment only script reveals; a
+ * production server's first render is checked on its own.
+ */
+async function open(visitorPage: Page, path: string) {
+  const warmed = await visitorPage.request.get(path.split("#")[0] ?? path);
+  expect(warmed.ok(), `drawing ${path} once: ${warmed.status()}`).toBe(true);
+  return await visitorPage.goto(path);
+}
+
 /** The message a send comes back to, by its outcome. */
 const result = (page: Page, outcome: string) =>
   page.locator(`#form-contact-${outcome}`);
@@ -102,7 +108,7 @@ test.describe("a form sent with JavaScript off", () => {
     const slug = await seed(page, "https://hooks.example.com/contact");
     const { context, page: visitorPage } = await visitor(browser, baseURL);
     try {
-      await visitorPage.goto(`/${slug}`);
+      await open(visitorPage, `/${slug}`);
       await visitorPage.getByLabel("Your email").fill("ada@example.com");
       await visitorPage.getByRole("button", { name: "Send" }).click();
 
@@ -130,7 +136,7 @@ test.describe("a form sent with JavaScript off", () => {
     const slug = await seed(page, "https://127.0.0.1/contact");
     const { context, page: visitorPage } = await visitor(browser, baseURL);
     try {
-      await visitorPage.goto(`/${slug}`);
+      await open(visitorPage, `/${slug}`);
       await visitorPage.getByLabel("Name").fill("Ada Lovelace");
       await visitorPage.getByLabel("Your email").fill("ada@example.com");
       await visitorPage.getByRole("button", { name: "Send" }).click();
@@ -164,7 +170,7 @@ test.describe("a form sent with JavaScript off", () => {
     const slug = await seed(page, "https://hooks.example.com/contact");
     const { context, page: visitorPage } = await visitor(browser, baseURL);
     try {
-      await visitorPage.goto(`/${slug}`);
+      await open(visitorPage, `/${slug}`);
       await visitorPage.getByLabel("Name").fill("Ada Lovelace");
       await visitorPage.getByLabel("Your email").fill("ada@example.com");
       // The receiver answers a filled spam trap exactly as it answers a real
@@ -209,7 +215,7 @@ test.describe("a form sent with JavaScript off", () => {
         ["error", "Something went wrong. Please try again."],
       ] as const) {
         // The address the receiver sends a refused visitor back to.
-        await visitorPage.goto(`/${slug}#form-contact-${outcome}`);
+        await open(visitorPage, `/${slug}#form-contact-${outcome}`);
         await expect(result(visitorPage, outcome)).toHaveText(words);
         await expect(result(visitorPage, outcome)).toBeVisible();
         await expect(visitorPage.getByLabel("Name")).toBeVisible();
@@ -234,7 +240,7 @@ test.describe("a form sent with JavaScript off", () => {
       true
     );
     try {
-      await visitorPage.goto(`/${slug}`);
+      await open(visitorPage, `/${slug}`);
       const form = visitorPage.locator("form").filter({
         has: visitorPage.getByRole("button", { name: "Send" }),
       });
