@@ -134,8 +134,8 @@ async function selection(page: Page): Promise<string[]> {
       const marked = Array.from(body.querySelectorAll("[data-nx-selected]"));
       const id = (each: Element) => each.getAttribute("data-nx-node") ?? "";
       return [
-        ...marked.filter(each => each.dataset.nxSelected === "primary"),
-        ...marked.filter(each => each.dataset.nxSelected !== "primary"),
+        ...marked.filter(each => each.getAttribute("data-nx-selected") === "primary"),
+        ...marked.filter(each => each.getAttribute("data-nx-selected") !== "primary"),
       ].map(id);
     });
 }
