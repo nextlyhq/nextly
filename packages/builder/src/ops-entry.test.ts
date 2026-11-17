@@ -79,7 +79,7 @@ describe("the ops module stays server-safe", () => {
       "./binding-ops",
       "./binding-services",
       "./composition-actions",
-      "./condition-ops",
+      "./conditions/condition-ops",
       "./op-vocabulary",
       "./prop-label",
       "./template-actions",
@@ -122,7 +122,7 @@ describe("the ops module stays server-safe", () => {
   });
 
   it("reaches through its binding and condition ops only the engine", () => {
-    for (const module of ["binding-ops.ts", "condition-ops.ts"]) {
+    for (const module of ["binding-ops.ts", "conditions/condition-ops.ts"]) {
       const loaded = moduleSpecifierRefs(read(`src/${module}`), module)
         .filter(ref => !ref.typeOnly)
         .map(ref => ref.specifier);

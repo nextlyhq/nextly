@@ -98,7 +98,7 @@ export type {
   UnbindAsk,
   UnbindPlanAnswer,
 } from "./binding-services";
-export { conditionsOp } from "./condition-ops";
+export { conditionsOp } from "./conditions/condition-ops";
 
 export {
   TEMPLATE_ACTION_KINDS,

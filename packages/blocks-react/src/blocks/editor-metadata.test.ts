@@ -150,9 +150,50 @@ describe("a container's HTML tag", () => {
       expect(as?.label).toBe("HTML tag");
       for (const tag of as?.options ?? []) {
         expect(as?.optionLabels?.[tag], `${block.name}: ${tag}`).toBeDefined();
-        // What each choice writes, shown beside its words.
-        expect(as?.code?.[tag], `${block.name}: ${tag}`).toBe(tag);
+        // What each choice writes, shown beside its words: the tag itself.
+        expect(as?.code?.[tag], `${block.name}: ${tag}`).toBe(`<${tag}>`);
       }
+    }
+  });
+
+  it("names each tag plainly, with a one-line meaning, and leaves the tag to its code", () => {
+    // "Section — a themed part of the page", then `<section>`: the words never
+    // repeat the tag the menu already shows once beside them.
+    const as = (
+      coreBlocks.find(block => block.name === "core/section")?.props as Record<
+        string,
+        { optionLabels?: Record<string, string> }
+      >
+    ).as;
+    expect(as?.optionLabels?.section).toBe(
+      "Section — a themed part of the page"
+    );
+    for (const block of coreBlocks) {
+      const prop = (
+        block.props as Record<
+          string,
+          { options?: string[]; optionLabels?: Record<string, string> }
+        >
+      ).as;
+      for (const tag of prop?.options ?? []) {
+        const words = prop?.optionLabels?.[tag] ?? "";
+        expect(words, `${block.name}: ${tag}`).toMatch(/^[A-Z][^—]* — [a-z]/);
+        expect(words, `${block.name}: ${tag}`).not.toContain(`<${tag}>`);
+      }
+    }
+  });
+
+  it("is edited in Advanced › HTML on every container", () => {
+    for (const block of coreBlocks) {
+      const as = (
+        block.props as Record<
+          string,
+          { type?: string; group?: string; section?: string } | undefined
+        >
+      ).as;
+      if (as?.type !== "select") continue;
+      expect(as.group, block.name).toBe("advanced");
+      expect(as.section, block.name).toBe("HTML");
     }
   });
 });

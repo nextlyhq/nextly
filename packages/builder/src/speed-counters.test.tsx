@@ -91,7 +91,7 @@ import { Canvas } from "./canvas/canvas";
 import { type CanvasRegion } from "./canvas/canvas-regions";
 import { useEditorState, type EditorState } from "./editor-state";
 import { HoveredBlockProvider, useHoveredBlock } from "./canvas/hovered-block";
-import { InsertPanel } from "./insert-panel";
+import { InsertPanel } from "./panels/add/insert-panel";
 import { InspectorPanel } from "./inspector-panel";
 import { BlockKeyboardActions } from "./keyboard-actions";
 import { ShortcutProvider } from "@nextlyhq/ui";

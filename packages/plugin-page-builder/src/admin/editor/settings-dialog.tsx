@@ -62,7 +62,6 @@ import { AlertCircle, Check, Loader2, TriangleAlert } from "lucide-react";
 import {
   useEffect,
   useId,
-  useRef,
   useState,
   type ComponentProps,
   type JSX,
@@ -75,10 +74,6 @@ import {
   SITE_SETTINGS_ROUTE_PATH,
   type SiteSettingsRead,
 } from "../../library-contract";
-import {
-  pageAddressPath,
-  type PageAddressResponse,
-} from "../../pages-search-contract";
 import type { PublishReadinessResponse } from "../../publish-readiness-contract";
 import { PAGE_BUILDER_SETTINGS_PLACE } from "../../settings-place-contract";
 import { lazyPart } from "../lazy-part";
@@ -93,7 +88,7 @@ import {
 import { RemovalStatusRow, RemovalStepPanel } from "./breakpoint-removal-step";
 import { undoableHint } from "./breakpoint-undo-flow";
 import { UndoStatusRow, UndoStepPanel } from "./breakpoint-undo-step";
-import type { SettingsAddress } from "./settings-address";
+import { useSavedAddress, type SettingsAddress } from "./settings-address";
 import type { SettingsPlace } from "./settings-place";
 import type { SharePreview } from "./share-preview";
 import type { SiteCodeSection as SiteCodeSectionPart } from "./site-code-settings";
@@ -511,21 +506,7 @@ function AddressLine({
   address: SettingsAddress;
   open: boolean;
 }): JSX.Element | null {
-  const read = usePluginRoute<PageAddressResponse>({
-    plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path: pageAddressPath(address.page, address.locale),
-    staleTime: 0,
-    enabled: open,
-  });
-  // Read again after each save, whichever field it changed: the host's path
-  // can name more than the slug, and the query's own key would not move.
-  const { refetch } = read;
-  const revisionSeen = useRef(address.savedRevision);
-  useEffect(() => {
-    if (revisionSeen.current === address.savedRevision) return;
-    revisionSeen.current = address.savedRevision;
-    void refetch();
-  }, [address.savedRevision, refetch]);
+  const read = useSavedAddress(address, open);
   if (read.data === undefined) {
     return read.error === null ? null : (
       <p className="text-xs text-muted-foreground">

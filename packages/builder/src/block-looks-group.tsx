@@ -24,8 +24,8 @@ import {
   type LookKey,
 } from "./block-look-rows";
 import { ChromeTooltip } from "./chrome-tooltip";
-import { blockLabel } from "./inserter";
 import { LookSpecimen } from "./look-tiles-view";
+import { blockLabel } from "./panels/add/inserter";
 import {
   sharedStyleReachSentence,
   type BlocksOnThisPage,

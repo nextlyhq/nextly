@@ -322,7 +322,8 @@ function NoSnippetWarning(): ReactNode {
       </b>{" "}
       Google also won&apos;t use the page as a direct source in AI Overviews or
       AI Mode. The page itself stays in search. To keep one passage out instead,
-      turn on &quot;Never quote this&quot; for that section in Page Builder.
+      turn on &quot;Keep out of search previews&quot; for that section in Page
+      Builder.
     </Note>
   );
 }

@@ -32,7 +32,7 @@ import {
 
 import { inlineTargets } from "../canvas/inline-text";
 import { startWords } from "../canvas/page-start-words";
-import { insertionPropSets } from "../inserter";
+import { insertionPropSets } from "../panels/add/inserter";
 
 /** One thing to do, and whether the page shows it has been done. */
 export interface ChecklistStep {

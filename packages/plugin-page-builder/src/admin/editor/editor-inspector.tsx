@@ -12,10 +12,13 @@ import {
   type SharedStylesHost,
   type VariantPreviewState,
 } from "@nextlyhq/builder/shell";
+import type { Control, FieldValues } from "react-hook-form";
 
 import { contributedInspector } from "../contributed-blocks";
 
+import { DocumentSettingsPanel } from "./document-settings-panel";
 import { servicesFor } from "./editor-services";
+import { pageAddressOf, type PageFacts } from "./editor-settings";
 import type { CardVerbs, EditorView } from "./editor-view";
 import {
   offerableFaces,
@@ -23,11 +26,18 @@ import {
   siteStyleStatus,
 } from "./site-style-studios";
 
+/** The entry's form and what the editor reads of it, for the panel's rows. */
+interface EntryForm<TFieldValues extends FieldValues> {
+  control: Control<TFieldValues>;
+  page: PageFacts;
+}
+
 /** The inspector, given the same readings the canvas draws with. */
-export function editorInspector(
+export function editorInspector<TFieldValues extends FieldValues>(
   view: EditorView,
   verbs: CardVerbs,
-  sharedStyles: SharedStylesHost
+  sharedStyles: SharedStylesHost,
+  form: EntryForm<TFieldValues>
 ): React.JSX.Element {
   const {
     editor,
@@ -147,6 +157,20 @@ export function editorInspector(
       // And how many placements chose a variant, for its delete dialog, and
       // the open variant, which the canvas previews.
       componentVariants={previewingHost(componentVariants, view.preview)}
+      // With nothing selected: the open document's own settings, editing
+      // the entry's form as Settings does, saved with the page's draft.
+      documentSettings={own => (
+        <DocumentSettingsPanel
+          kind={view.initialDocument.kind}
+          own={own}
+          control={form.control as unknown as Control<FieldValues>}
+          onOpenSettings={view.pages.openSettings}
+          address={pageAddressOf(view, form.page)}
+          // The one signal Settings reads too: the SEO plugin's group on
+          // the page's form.
+          seoEditsPage={form.page.seo !== undefined}
+        />
+      )}
     />
   );
 }

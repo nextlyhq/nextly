@@ -37,7 +37,10 @@ import {
 
 import { Canvas } from "./canvas";
 import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
-import { componentTitles, type ComponentTitleOf } from "../layers";
+import {
+  componentTitles,
+  type ComponentTitleOf,
+} from "../panels/layers/layers";
 import { PageInserters } from "./page-inserters";
 
 afterEach(cleanup);

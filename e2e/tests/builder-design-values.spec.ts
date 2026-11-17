@@ -97,7 +97,9 @@ test("a size is a number with a unit menu, saves a bare number as pixels, and it
     await expect(editor.getByLabel("Light", { exact: true })).toHaveValue("1");
     await editor.getByLabel("Unit for Light").click();
     for (const unit of ["px", "rem", "em", "%", "vw", "vh"]) {
-      await expect(page.getByRole("option", { name: unit, exact: true })).toBeVisible();
+      await expect(
+        page.getByRole("option", { name: unit, exact: true })
+      ).toBeVisible();
     }
     await page.getByRole("option", { name: "px", exact: true }).click();
     const light = editor.getByLabel("Light", { exact: true });
@@ -156,9 +158,7 @@ test("a line height of 20 offers 20px, and uses it when asked", async ({
       editor.getByText("20× the text size. Did you mean 20px?")
     ).toBeVisible();
     await editor.getByRole("button", { name: "Use 20px" }).click();
-    await expect
-      .poll(() => storedValue(page, "line-height.body"))
-      .toBe("20px");
+    await expect.poll(() => storedValue(page, "line-height.body")).toBe("20px");
   } finally {
     await seed(page, before);
   }

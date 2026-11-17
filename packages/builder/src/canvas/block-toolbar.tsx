@@ -82,8 +82,8 @@ import {
   useBlockActionsContext,
   useToolbarFocusSlot,
 } from "../keyboard-actions";
-import { layerLabel, pathTo } from "../layers";
 import { lockBlockingEdit } from "../locking";
+import { layerLabel, pathTo } from "../panels/layers/layers";
 import { useSelectionActions } from "../selection-actions";
 import { blockActionRunners } from "../shell/builder-commands";
 

@@ -29,9 +29,9 @@ import { ENTRY_CONTENT_DRAWN_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import {
   appliedConditionsOf,
   conditionedBlocksIn,
-} from "../applied-conditions";
+} from "../conditions/applied-conditions";
 import { Canvas } from "./canvas";
-import { conditionFieldsOfShapes } from "../condition-model";
+import { conditionFieldsOfShapes } from "../conditions/condition-model";
 import {
   PreviewedEntryProvider,
   type PreviewedCollection,

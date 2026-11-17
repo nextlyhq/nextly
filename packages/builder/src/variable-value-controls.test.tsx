@@ -146,7 +146,11 @@ describe("a size", () => {
 
 describe("a size, answering a refusal and holding a negative", () => {
   it.each([
-    ["a value the field shows whole", "clamp(1rem, 2vw, 2rem)", "clamp(1rem, 2vw, 2rem)"],
+    [
+      "a value the field shows whole",
+      "clamp(1rem, 2vw, 2rem)",
+      "clamp(1rem, 2vw, 2rem)",
+    ],
     ["a number beside its unit", "1rem", "1"],
   ])("clears a refusal when %s is typed back", async (_, stored, typed) => {
     const held: SiteTokenSet = {
@@ -232,7 +236,11 @@ describe("a line height", () => {
     const onChange = vi.fn();
     const alone: SiteTokenSet = {
       tokens: [
-        { name: "line-height.hero", kind: "dimension", values: { light: "24px" } },
+        {
+          name: "line-height.hero",
+          kind: "dimension",
+          values: { light: "24px" },
+        },
       ],
     };
     render(<Hosted tokens={alone} onChange={onChange} />);

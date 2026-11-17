@@ -108,7 +108,9 @@ test("a number field's label drags its value, as one undo step", async ({
     .getByTestId("inspector")
     .getByRole("tab", { name: "Style" })
     .click();
-  const section = page.getByRole("button", { name: /^Typography/ }).first();
+  const section = page
+    .getByRole("button", { name: /^Text(\s?has changes)?$/ })
+    .first();
   if ((await section.getAttribute("aria-expanded")) !== "true") {
     await section.click();
   }

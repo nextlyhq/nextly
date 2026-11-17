@@ -41,13 +41,13 @@ import {
   hasContentControl,
 } from "./content-control-types";
 import type { EditorState } from "./editor-state";
-import { blockLabel, insertionPropSets } from "./inserter";
 import { INSPECTOR_SECTIONS } from "./inspector-sections";
-import { layerLabel } from "./layers";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked, lockBlockingEdit, lockedAncestorOf } from "./locking";
 import { refusalAnnouncement } from "./move-refusal";
 import type { BuilderOp, NodePatch } from "./op-vocabulary";
+import { blockLabel, insertionPropSets } from "./panels/add/inserter";
+import { layerLabel } from "./panels/layers/layers";
 
 /**
  * The prop types this inspector can draw a control for.

@@ -15,8 +15,8 @@ import type {
 import type * as React from "react";
 
 import type { EditorState } from "../editor-state";
-import type { SlotSource } from "../inserter";
 import type { LockDropRefusal } from "../lock-refusal";
+import type { SlotSource } from "../panels/add/inserter";
 
 import type { DropRefusal, DropTarget } from "./drop-targets";
 

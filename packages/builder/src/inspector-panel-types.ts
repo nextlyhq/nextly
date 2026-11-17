@@ -24,8 +24,8 @@ import type { ComponentFieldsHost } from "./component-fields";
 import type { ComponentVariantsHost } from "./component-variants";
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
-import type { SavedComponent } from "./inserter";
 import type { LookEditing } from "./look-inspector";
+import type { SavedComponent } from "./panels/add/inserter";
 import type { StyleInspectorPanelProps } from "./style-inspector-panel";
 import type { SharedStylesHost, StyleTargetBarProps } from "./style-target";
 import type { StylePolicy } from "./style-values";
@@ -254,7 +254,22 @@ export interface InspectorPanelProps {
    * @experimental Settles when the component editor ships.
    */
   componentVariants?: ComponentVariantsHost;
+  /**
+   * The open document's own settings, drawn while nothing is selected: a
+   * page's title and address, or a component's or template's own fields.
+   * Handed what the builder draws of the document itself (a component's
+   * fields and variants), or null, to place among its own rows. Without it
+   * the panel shows only that part, and keeps its width either way.
+   *
+   * @experimental Settles with the page's settings panel.
+   */
+  documentSettings?: DocumentSettingsView;
 }
+
+/** What the host draws of the open document while nothing is selected. */
+export type DocumentSettingsView = (
+  own: React.ReactNode | null
+) => React.ReactNode;
 
 /** What the inspector needs of the host's component read. */
 export interface ComponentLibrary {

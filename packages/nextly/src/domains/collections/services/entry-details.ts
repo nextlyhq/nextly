@@ -1,6 +1,7 @@
 /**
  * What an editor's read of an entry adds about it (`?details=1`): where the
- * site serves it, and who made and changed it.
+ * site serves it, and who made and changed it. A Single's read adds the same,
+ * by the same rules.
  *
  * Answered on the server because the admin can ask neither itself: a type
  * made in the Schema Builder gets its address from a plugin, the site's
@@ -20,6 +21,7 @@ import type { GeneralSettingsService } from "../../../services/general-settings/
 import {
   addressFrom,
   declaredFor,
+  type PublicAddressType,
 } from "../../public-addresses/public-address";
 import {
   documentChangers,
@@ -95,13 +97,12 @@ function aroundSlugOf(
   return { before, after };
 }
 
-/** Where the site serves `entry`, or null where it has no address. */
+/** Where the site serves `entry`, an entry of `type`, or null where it has no address. */
 async function entryAddress(
-  collection: string,
+  type: PublicAddressType,
   entry: Readonly<Record<string, unknown>>,
   locale: string | undefined
 ): Promise<EntryAddressDetails | null> {
-  const type = { kind: "collection" as const, slug: collection };
   const declared = await declaredFor(type, locale);
   const address = addressFrom(type, declared, entry);
   if (address.status !== "resolved") return null;
@@ -127,15 +128,16 @@ async function entryAddress(
  * @experimental
  */
 export async function entryDetails(args: {
-  collection: string;
+  /** The entry's type: a collection, or a Single, whose one entry it is. */
+  type: PublicAddressType;
   entry: Readonly<Record<string, unknown>> & { id?: unknown };
   locale: string | undefined;
 }): Promise<EntryDetails> {
   const [address, changers] = await Promise.all([
-    entryAddress(args.collection, args.entry, args.locale).catch(() => null),
+    entryAddress(args.type, args.entry, args.locale).catch(() => null),
     documentChangers({
-      scopeKind: "collection",
-      slug: args.collection,
+      scopeKind: args.type.kind,
+      slug: args.type.slug,
       entryId: String(args.entry.id),
       locale: args.locale ?? null,
     }),

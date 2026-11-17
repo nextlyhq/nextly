@@ -105,7 +105,7 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   // The Style tab's Layout section, where a container's Content width is.
   "core-block-placement.fixture.ts": ["Layout"],
   // The Add panel's group of layout blocks (Section, Columns, Grid).
-  "inserter-palette.ts": ["Layout"],
+  "panels/add/inserter-palette.ts": ["Layout"],
   // The Style tab's Layout section.
   "inspector-sections.ts": ["Layout"],
   // A header or footer the site's own code draws around the canvas.
@@ -138,7 +138,7 @@ describe("the editor's words", () => {
         "editor-words.ts",
         "shell/builder-commands.ts",
         "canvas/toolbar-actions.ts",
-        "insert-panel.tsx",
+        "panels/add/insert-panel.tsx",
       ])
     );
   });

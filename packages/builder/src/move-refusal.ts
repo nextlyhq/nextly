@@ -42,8 +42,8 @@ import { canPlaceIn, findNode } from "@nextlyhq/blocks-engine";
 
 import { placementWording, type RefusalWording } from "./canvas/drag-refusal";
 import { placementSources } from "./canvas/drop-targets";
-import { layerLabel } from "./layers";
 import type { OpPosition } from "./op-vocabulary";
+import { layerLabel } from "./panels/layers/layers";
 
 /**
  * The nesting rule's refusal for a proposed move, or `null` if it permits it.
