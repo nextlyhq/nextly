@@ -23,13 +23,30 @@ import {
 
 afterEach(() => forgetStartedReads());
 
-function startup(answers: Record<string, { status: number; body?: unknown }>) {
+/** A start-up request answering `answers`, read for `readFor`, counted. */
+function startup(
+  answers: Record<string, { status: number; body?: unknown }>,
+  readFor: string | null = "ada"
+) {
   let sent = 0;
   const ask: AskStartup = async () => {
     sent += 1;
-    return answers;
+    return { reads: answers, readFor };
   };
   return { ask, sent: () => sent };
+}
+
+/** A start-up request that answers, read for `readFor`, when told to. */
+function deferred(
+  answers: Record<string, { status: number; body?: unknown }>,
+  readFor: string | null
+) {
+  let answer: () => void = () => undefined;
+  const ask: AskStartup = () =>
+    new Promise(resolve => {
+      answer = () => resolve({ reads: answers, readFor });
+    });
+  return { ask, answer: () => answer() };
 }
 
 const route = (body: unknown) => vi.fn(async () => body);
@@ -94,6 +111,58 @@ describe("the builder's start-up read, sent as the admin loads", () => {
     startBuilderReads("ada", ["/site/style"], own.ask);
 
     expect(own.sent()).toBe(1);
+  });
+
+  it("gives another account nothing it read, once answered: their reads go to their routes", async () => {
+    // Sent as the admin loaded, for ada; ada signs out before the builder
+    // opens, and bo opens it with the same reads.
+    const early = startup(
+      { "/site/style": { status: 200, body: { a: 1 } } },
+      "ada"
+    );
+    startEarlyBuilderReads(["/site/style"], early.ask);
+    await Promise.resolve();
+    await Promise.resolve();
+    const own = startup(
+      { "/site/style": { status: 200, body: { a: 2 } } },
+      "bo"
+    );
+    startBuilderReads("bo", ["/site/style"], own.ask);
+    const style = route({ a: 3 });
+
+    const read = await readStarted("/site/style", style, "bo");
+    expect(read).not.toEqual({ a: 1 });
+    // Not claimed: bo's own start-up read answers bo.
+    expect(own.sent()).toBe(1);
+    expect(read).toEqual({ a: 2 });
+  });
+
+  it("gives another account nothing it read, when it answers after the claim", async () => {
+    const early = deferred(
+      { "/site/style": { status: 200, body: { a: 1 } } },
+      "ada"
+    );
+    startEarlyBuilderReads(["/site/style"], early.ask);
+    // Claimed while on its way, by bo.
+    startBuilderReads("bo", ["/site/style"], startup({}, "bo").ask);
+    const style = route({ a: 3 });
+    const read = readStarted("/site/style", style, "bo");
+    early.answer();
+
+    expect(await read).toEqual({ a: 3 });
+    expect(style).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands out nothing whose answer does not say whom it was read for", async () => {
+    const early = startup(
+      { "/site/style": { status: 200, body: { a: 1 } } },
+      null
+    );
+    startEarlyBuilderReads(["/site/style"], early.ask);
+    startBuilderReads("ada", ["/site/style"], startup({}).ask);
+    const style = route({ a: 3 });
+
+    expect(await readStarted("/site/style", style, "ada")).toEqual({ a: 3 });
   });
 
   it("is sent once however often the admin asks", () => {

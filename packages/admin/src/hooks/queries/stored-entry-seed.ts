@@ -16,10 +16,14 @@
  *   came back without `_stored` or failed, reads depth 0 itself, as before.
  * - A stored read that did not take the answer (it was not asking) is handed
  *   it, so the two stay reads of one version.
+ * - Both only to the stored read the populated read was made beside: the
+ *   query the cache held under its key when the populated read was sent. A
+ *   sign-out empties the cache, so a read sent before it reaches no query
+ *   made after it, another account's included.
  *
  * @module hooks/queries/stored-entry-seed
  */
-import { hashKey, type QueryClient } from "@tanstack/react-query";
+import { hashKey, type Query, type QueryClient } from "@tanstack/react-query";
 
 import { entryKeys } from "@admin/services/entryApi";
 
@@ -54,6 +58,16 @@ export function storedEntryKey(
 interface Carried {
   readonly answer: Promise<Doc | undefined>;
   taken: boolean;
+  /** The stored read it is carried for: the query under its key as it was sent. */
+  readonly query: Query | undefined;
+}
+
+/** The query `client` holds under `key` now, if any. */
+function queryUnder(
+  client: QueryClient,
+  key: readonly unknown[]
+): Query | undefined {
+  return client.getQueryCache().find({ queryKey: key, exact: true });
 }
 
 /** Stored reads on their way inside a populated read, by the stored read's key. */
@@ -86,20 +100,24 @@ export function readCarryingStored<T>(
   read: () => Promise<T>
 ): Promise<T> {
   const hash = hashKey(storedKey);
+  const query = queryUnder(queryClient, storedKey);
   const response = read();
   const carried: Carried = {
     answer: response.then(storedOf, () => undefined),
     taken: false,
+    query,
   };
   onTheWay.set(hash, carried);
   void carried.answer.then(stored => {
     if (onTheWay.get(hash) === carried) onTheWay.delete(hash);
     if (carried.taken || stored === undefined) return;
     // Not asked for: the stored read is not reading, so it is handed this
-    // one, of the same version as the populated read beside it. Only a read
-    // the cache still holds: one emptied meanwhile (a sign-out) gets nothing.
-    const state = queryClient.getQueryState(storedKey);
-    if (state === undefined || state.fetchStatus === "fetching") return;
+    // one, of the same version as the populated read beside it. Only the
+    // stored read it was sent beside: a cache emptied meanwhile (a sign-out),
+    // or holding another query under the key, gets nothing.
+    const now = queryUnder(queryClient, storedKey);
+    if (now === undefined || now !== query) return;
+    if (now.state.fetchStatus === "fetching") return;
     queryClient.setQueryData(storedKey, stored);
   });
   return response.then(withoutStored);
@@ -113,11 +131,14 @@ export function readCarryingStored<T>(
  * one pass, and an invalidation refetches both in one, in either order.
  */
 export async function takeCarriedStored(
+  queryClient: QueryClient,
   storedKey: readonly unknown[]
 ): Promise<Doc | undefined> {
   await Promise.resolve();
   const carried = onTheWay.get(hashKey(storedKey));
   if (carried === undefined || carried.taken) return undefined;
+  // Carried for another stored read: one from before a sign-out.
+  if (carried.query !== queryUnder(queryClient, storedKey)) return undefined;
   carried.taken = true;
   return await carried.answer;
 }

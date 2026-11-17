@@ -211,4 +211,69 @@ describe("the edit page's entry reads", () => {
       client.getQueryData(storedEntryKey("pages", "e1", { draft: true }))
     ).toBeUndefined();
   });
+
+  it("leaves the next account's stored read alone when a read sent before sign-out answers late", async () => {
+    server();
+    const { client, wrapper } = clientAndWrapper();
+    const first = renderHook(() => usePair(), { wrapper });
+    await waitFor(() => expect(first.result.current.stored.data).toBeDefined());
+    let late: (value: unknown) => void = () => undefined;
+    get.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          late = resolve;
+        })
+    );
+    const refetch = first.result.current.populated.refetch();
+    // Signed out while that read was on its way, and another account opens
+    // the same entry, whose reads settle first.
+    first.unmount();
+    client.clear();
+    const theirs = { id: "e1", updatedAt: "v9", author: "b", reviewer: null };
+    get.mockImplementation((url: string) => {
+      const query = new URL(url, "http://x").searchParams;
+      if (query.get("depth") === "0") return Promise.resolve({ ...theirs });
+      return Promise.resolve({ ...populated, _stored: { ...theirs } });
+    });
+    const second = renderHook(() => usePair(), { wrapper });
+    await waitFor(() =>
+      expect(second.result.current.stored.data).toEqual(theirs)
+    );
+
+    late({ ...populated, _stored: { ...stored, author: "first-account" } });
+    await act(async () => {
+      await refetch.catch(() => undefined);
+      await Promise.resolve();
+    });
+
+    expect(
+      client.getQueryData(storedEntryKey("pages", "e1", { draft: true }))
+    ).toEqual(theirs);
+  });
+
+  it("gives a stored read asked after sign-out nothing a read from before it carries", async () => {
+    server();
+    const { client, wrapper } = clientAndWrapper();
+    const first = renderHook(() => usePair(), { wrapper });
+    await waitFor(() => expect(first.result.current.stored.data).toBeDefined());
+    let late: (value: unknown) => void = () => undefined;
+    get.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          late = resolve;
+        })
+    );
+    void first.result.current.populated.refetch();
+    first.unmount();
+    client.clear();
+    // The next account's stored read asks on its own, while the read sent
+    // before the sign-out is still on its way.
+    const theirs = { id: "e1", updatedAt: "v9", author: "b" };
+    get.mockImplementation(() => Promise.resolve({ ...theirs }));
+    const second = renderHook(() => useStoredEntry(scope), { wrapper });
+    late({ ...populated, _stored: { ...stored, author: "first-account" } });
+    await waitFor(() => expect(second.result.current.data).toBeDefined());
+
+    expect(second.result.current.data).toEqual(theirs);
+  });
 });

@@ -24,6 +24,7 @@
 import {
   useIsMutating,
   useQuery,
+  useQueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { FieldConfig } from "nextly/config";
@@ -71,6 +72,7 @@ export function useStoredEntry({
   /** False holds the read back, as `useEntry`'s option does. */
   enabled?: boolean;
 }): UseQueryResult<Doc, Error> {
+  const queryClient = useQueryClient();
   const queryKey = storedEntryKey(collectionSlug ?? "", entryId ?? "", {
     locale,
     fallbackLocale,
@@ -82,7 +84,7 @@ export function useStoredEntry({
       if (!collectionSlug || !entryId) {
         throw new Error("Collection and entry ID are required");
       }
-      const carried = await takeCarriedStored(queryKey);
+      const carried = await takeCarriedStored(queryClient, queryKey);
       if (carried !== undefined) return carried;
       return await entryApi.findByID(collectionSlug, entryId, {
         depth: 0,
