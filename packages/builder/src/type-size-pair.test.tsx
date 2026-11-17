@@ -110,8 +110,10 @@ const field = (property: string) =>
 
 /** Pick a type size in the font size field. */
 function pickTypeSize(name: RegExp): void {
+  // The field's menu, which lists the variables first: named for the unit
+  // where the field holds one, else for the variables alone.
   fireEvent.click(
-    screen.getByRole("button", { name: "Variables for Font size" })
+    screen.getByRole("combobox", { name: /^(Unit|Variables) for Font size$/ })
   );
   fireEvent.click(screen.getByRole("option", { name }));
 }

@@ -489,7 +489,6 @@ function LinkColour({
         <VariableChoice
           leaf={COLOUR_LEAF}
           tokens={tokens}
-          bound={held !== undefined}
           current={held}
           label={label}
           onPick={identity => onValue(tokenRef(identity))}

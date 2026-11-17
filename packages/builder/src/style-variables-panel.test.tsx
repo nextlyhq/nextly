@@ -373,7 +373,7 @@ describe("a field holding a variable", () => {
     expect(fontSize.queryByText(/font-size\.display/)).toBeNull();
     expect(chip.getAttribute("title")).toBeNull();
     const name = within(chip).getByRole("button", {
-      name: "Variables for Font size: Display",
+      name: "Variables for Font size: Display · 48 / 56px",
     });
     fireEvent.keyDown(document.body, { key: "Tab" });
     name.focus();
@@ -532,7 +532,7 @@ describe("where focus goes as a field changes shape", () => {
     await waitFor(() =>
       expect(document.activeElement).toBe(
         fieldsOf("fontSize").getByRole("button", {
-          name: "Variables for Font size: Display",
+          name: "Variables for Font size: Display · 48 / 56px",
         })
       )
     );
@@ -669,7 +669,9 @@ describe("the mode a field's variables are read in", () => {
       });
       await waitFor(() => expect(chip.textContent).toBe("Mode · 24"));
       fireEvent.click(
-        screen.getByRole("button", { name: "Variables for Font size: Mode" })
+        screen.getByRole("button", {
+          name: "Variables for Font size: Mode · 24",
+        })
       );
       expect(screen.getByRole("option", { name: "Mode 24px" })).toBeDefined();
       fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
@@ -753,7 +755,7 @@ describe("a held variable whose name another shares", () => {
     ).toBeDefined();
     fireEvent.click(
       fieldsOf("fontSize").getByRole("button", {
-        name: "Variables for Font size: Big (font-size.hero)",
+        name: "Variables for Font size: Big (font-size.hero) · 48",
       })
     );
     expect(
@@ -833,9 +835,10 @@ describe("the source caption after a variable is picked", () => {
     );
     expect(field().hasAttribute("data-provenance-quiet")).toBe(true);
 
-    // The author comes back to it from elsewhere.
+    // The author comes back to it from elsewhere: the line height, which the
+    // type size picked set as well.
     const elsewhere = screen.getByRole("button", {
-      name: "Variables for Line height",
+      name: /^Variables for Line height/,
     });
     elsewhere.focus();
     fireEvent.focusIn(
