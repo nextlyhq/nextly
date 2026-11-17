@@ -243,6 +243,27 @@ export function variableRemoval(
   return variablePlaces(reach) > 0 ? "in-use" : "free";
 }
 
+/**
+ * Whether a variable is used, for the usage filter: "counting" until the
+ * site's documents are all counted, since an absence proves nothing before.
+ *
+ * Used means something the site stores names it: a document, a shared or
+ * block style, or (`namedHere`, read from the set itself) another variable
+ * or a Site text row. A block type's own built-in look does not count: a
+ * built-in colour only a core block uses is one the site never chose.
+ */
+export type UsageState = "used" | "unused" | "counting";
+
+export function usageState(
+  reach: VariableReach | undefined,
+  namedHere: boolean
+): UsageState {
+  if (namedHere) return "used";
+  if (reach === undefined) return "counting";
+  if (reach.documents > 0 || reach.sharedStyles.length > 0) return "used";
+  return reach.complete ? "unused" : "counting";
+}
+
 /** The editor's line beside Remove: how widely the variable is used. */
 export function variableStatus(reach: VariableReach | undefined): string {
   if (reach === undefined) return "";
