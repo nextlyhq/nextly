@@ -119,14 +119,22 @@ async function slash(page: Page): Promise<void> {
   await expect(search(page)).toBeFocused();
 }
 
-/** The blocks directly inside Hero, and the page's top level, by id. */
+/** How many blocks are directly inside Hero. */
 async function heroChildren(page: Page): Promise<number> {
   return (await structure(page)).filter(entry => entry.startsWith(`${HERO}>`))
     .length;
 }
 
-async function topLevel(page: Page): Promise<number> {
-  return (await structure(page)).filter(entry => !entry.includes(">")).length;
+/** The page's top-level blocks, in page order, so a placement is checked by order. */
+async function topLevel(page: Page): Promise<string[]> {
+  return (await structure(page)).filter(entry => !entry.includes(">"));
+}
+
+/** A Box just added after Hero: second at the top level, and the one selected. */
+async function expectAddedAfterHero(page: Page): Promise<void> {
+  await expect.poll(() => topLevel(page)).toEqual([HERO, expect.any(String)]);
+  const [, added] = await topLevel(page);
+  expect(await selection(page)).toEqual([added]);
 }
 
 /** Whether focus is on the canvas's frame, and what is focused inside it. */
@@ -215,7 +223,7 @@ test.describe("the in-place picker, opened with /", () => {
     await search(page).fill("box");
     await page.keyboard.press("Enter");
     await expect(picker(page)).toBeHidden();
-    await expect.poll(() => topLevel(page)).toBe(2);
+    await expectAddedAfterHero(page);
     await expect
       .poll(() => canvasFocus(page))
       .toEqual({ onFrame: true, editing: null });
@@ -290,7 +298,7 @@ test.describe("the in-place picker, opened with /", () => {
     await expect.poll(() => heroChildren(page)).toBe(2);
     await selectHero(page);
     await page.getByRole("option", { name: "Box", exact: true }).click();
-    await expect.poll(() => topLevel(page)).toBe(2);
+    await expectAddedAfterHero(page);
     expect(await heroChildren(page)).toBe(2);
   });
 
