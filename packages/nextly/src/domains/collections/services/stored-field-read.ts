@@ -400,8 +400,9 @@ export async function readStoredFieldsOn(
  * each: what {@link readStoredField} answers for each id, keyed by id, read by
  * the same rules from one query for the rows and one for their working drafts
  * ({@link readStoredRows}). An id that names no stored entry is absent from
- * the map. A refusal refuses the whole read: the field, and whether it may be
- * read, is the same for every entry.
+ * the map, and each id is answered as a read of it alone is, another spelling
+ * the database matches included. A refusal refuses the whole read: the field,
+ * and whether it may be read, is the same for every entry.
  */
 async function readStoredFieldOf(
   connection: StoredFieldConnection,
@@ -410,28 +411,37 @@ async function readStoredFieldOf(
   records: RegistryRecords = registryRecords(connection)
 ): Promise<Map<string, PluginStoredValue>> {
   const { field, ...document } = target;
+  const scope = scopeOfType(allowedType);
+  const read = (ids: readonly string[]) =>
+    readStoredRows(
+      connection,
+      scope,
+      { ...document, ids, fields: [field] },
+      {
+        records,
+      }
+    );
   const found = new Map<string, PluginStoredValue>();
-  const reads = await readStoredRows(
-    connection,
-    scopeOfType(allowedType),
-    { ...document, fields: [field] },
-    { records }
-  );
-  for (const [stored, read] of reads) {
-    const value = read.values.get(field) ?? { kind: "absent" };
-    // Under the id it was asked by: a database whose ids compare without
-    // regard to case finds a row by an id spelt otherwise, as a read of that
-    // one entry does.
-    for (const id of askedFor(stored, document.ids)) found.set(id, value);
+  const answer = (id: string, row: StoredFieldsRead) =>
+    found.set(id, row.values.get(field) ?? { kind: "absent" });
+  const asked = new Set(document.ids);
+  for (const [stored, row] of await read([...asked])) {
+    if (asked.has(stored)) answer(stored, row);
+  }
+  // An id the rows were not stored under is either no entry, or another
+  // spelling of one that the database's own comparison matched (ignoring
+  // case or trailing spaces, as MySQL's does). The database says which:
+  // the unanswered ids are asked again together, and only where that finds
+  // a row is each asked alone, so each is answered as a read of it alone is.
+  const unanswered = [...asked].filter(id => !found.has(id));
+  if (unanswered.length === 0 || (await read(unanswered)).size === 0) {
+    return found;
+  }
+  for (const id of unanswered) {
+    const [row] = (await read([id])).values();
+    if (row !== undefined) answer(id, row);
   }
   return found;
-}
-
-/** The ids among `asked` that found the row stored under `stored`. */
-function askedFor(stored: string, asked: readonly string[]): string[] {
-  if (asked.includes(stored)) return [stored];
-  const folded = stored.toLowerCase();
-  return asked.filter(id => id.toLowerCase() === folded);
 }
 
 /** How a read of stored fields is made, beyond what it is pointed at. */

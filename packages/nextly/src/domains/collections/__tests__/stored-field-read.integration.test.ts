@@ -665,6 +665,42 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
       });
     });
 
+    it("answers each spelling of an id as a read of that spelling alone does", async () => {
+      const t = await boot(dialect);
+      const id = await created(t, "plain", { title: "a", body: { v: 1 } });
+      // The database decides whether another spelling names the same entry:
+      // MySQL compares ids without regard to case, the others exactly.
+      const spellings = [id, id.toUpperCase(), ` ${id}`, `${id} `].filter(
+        (spelling, at, all) => all.indexOf(spelling) === at
+      );
+      const one = poolReader(t, "probe");
+      const many = await poolReaderOf(
+        t,
+        "probe"
+      )({
+        collection: "plain",
+        ids: spellings,
+        field: "body",
+        form: "published",
+      });
+
+      for (const spelling of spellings) {
+        const alone = await one({
+          collection: "plain",
+          id: spelling,
+          field: "body",
+          form: "published",
+        });
+        expect(many.get(spelling) ?? { kind: "absent" }, spelling).toEqual(
+          alone
+        );
+        // An entry left out answers absent alone, and one answered is one
+        // the database found by that spelling.
+        expect(many.has(spelling), spelling).toBe(alone.kind !== "absent");
+      }
+      expect(many.get(id)).toEqual({ kind: "value", value: { v: 1 } });
+    });
+
     it("reads the pending working drafts as `draft`, in one query for the rows and one for the drafts", async () => {
       const t = await boot(dialect);
       const pending = await created(t, "drafted", {
