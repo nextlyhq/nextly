@@ -10,12 +10,19 @@
  * - The definition is the code's: a write naming any part of it is refused, and nothing is stored.
  * - A write is made over the revision the caller read: one over a stale revision is refused.
  * - Which roles hold a step's permission is set on every attached collection and Single at once,
- *   and recorded.
+ *   and recorded. Nothing is hidden from the reader: a role holding it on some attachments only is
+ *   named, and so are the steps that share one permission.
+ * - Grants and default reviewers written together are judged together: a reviewer who holds the
+ *   step only through the grants being written is accepted, and a refused reviewer leaves the
+ *   grants unwritten.
+ * - The change is filed with the other settings changes, so a reader of settings sees it in the
+ *   dashboard's activity feed and a reader of content alone does not.
  * - Reading and writing ask the settings permissions; changing grants also asks to update roles.
  *
  * The plausible broken surfaces: an eligibility check on the first attached collection only, a
  * write that stores a definition key or ignores it, a write that skips the revision, grants set on
- * one collection, and a REST route and a Direct API call that disagree.
+ * one collection, a read that shows only the roles holding a step everywhere, eligibility judged
+ * before the grants written with it, and a REST route and a Direct API call that disagree.
  */
 
 // Set before the harness boots (env validation reads it once), so a session can be signed.
@@ -35,7 +42,13 @@ import { createDynamicHandlers } from "../../../routeHandler";
 import { holderAnswer } from "../holders";
 import { readWorkflowSettings } from "../workflow-settings-repository";
 
-import { bootSteps, person, role, stateDb } from "./helpers/step-harness";
+import {
+  bootSteps,
+  giveRole,
+  person,
+  role,
+  stateDb,
+} from "./helpers/step-harness";
 
 type Doc = Record<string, unknown>;
 
@@ -90,7 +103,8 @@ async function rest(
   method: "GET" | "PATCH",
   path: string[],
   who: string,
-  body?: unknown
+  body?: unknown,
+  query = ""
 ): Promise<Doc> {
   const token = await signAccessToken(
     buildClaims({
@@ -104,15 +118,18 @@ async function rest(
     process.env.NEXTLY_SECRET!
   );
   const handlers = createDynamicHandlers();
-  const request = new Request(`http://localhost/api/${path.join("/")}`, {
-    method,
-    headers: {
-      cookie: `nextly_session=${token}`,
-      origin: "http://localhost",
-      "content-type": "application/json",
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
+  const request = new Request(
+    `http://localhost/api/${path.join("/")}${query}`,
+    {
+      method,
+      headers: {
+        cookie: `nextly_session=${token}`,
+        origin: "http://localhost",
+        "content-type": "application/json",
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }
+  );
   const context = { params: Promise.resolve({ params: path }) };
   const response =
     method === "GET"
@@ -230,11 +247,42 @@ interface ActivityRow {
   metadata: string | Record<string, unknown> | null;
 }
 
+/** The activity-log entry a workflow's settings changes are filed under, beside a plugin's. */
+const ENTRY = "workflow:editorial";
+
 async function workflowActivity(): Promise<ActivityRow[]> {
   return app().adapter.select<ActivityRow>("activity_log", {
-    where: { and: [{ column: "collection", op: "=", value: "workflows" }] },
+    where: {
+      and: [
+        { column: "collection", op: "=", value: "settings" },
+        { column: "entryId", op: "=", value: ENTRY },
+      ],
+    },
   });
 }
+
+/** The dashboard's activity feed, as `who` reads it. */
+async function feed(who: string): Promise<Doc[]> {
+  const answer = await rest(
+    "GET",
+    ["dashboard", "activity"],
+    who,
+    undefined,
+    "?limit=50"
+  );
+  return answer.activities as Doc[];
+}
+
+/** The details of each grantable step a settings read gives, by step. */
+const stepsOf = (settings: Doc) =>
+  settings.grantableSteps as Record<
+    string,
+    {
+      permission: string;
+      partialRoles: { id: string; name: string | null }[];
+      sharesPermissionWith: string[];
+    }
+  >;
 
 function metadataOf(row: ActivityRow): Record<string, unknown> {
   if (row.metadata === null) return {};
@@ -342,7 +390,7 @@ describe.each(getConfiguredTestDialects())(
         });
 
         const rows = (await workflowActivity()).filter(
-          row => row.entryId === "editorial"
+          row => row.entryId === ENTRY
         );
         expect(rows).toHaveLength(2);
         expect(rows[0]).toMatchObject({
@@ -484,6 +532,16 @@ describe.each(getConfiguredTestDialects())(
           ["read", "pages"],
         ]);
 
+        // Held on one attachment of eight: not among the grants, and not hidden either.
+        const before = await door.read(SAM, "editorial");
+        expect(before.grants).toMatchObject({ clear: [], bounce: [] });
+        expect(stepsOf(before).clear.partialRoles).toEqual([
+          { id: old, name: "old-desk" },
+        ]);
+        expect(stepsOf(before).bounce.partialRoles).toEqual([
+          { id: old, name: "old-desk" },
+        ]);
+
         const saved = await door.update(SAM, "editorial", {
           revision: 0,
           grants: { clear: [desk] },
@@ -500,16 +558,15 @@ describe.each(getConfiguredTestDialects())(
             "pages"
           )
         ).toBe("holds");
-        // Both steps needing sign-off read the roles that hold it.
+        // Both steps needing sign-off read the roles that hold it, and none holds it in part.
         expect(saved.grants).toMatchObject({ clear: [desk], bounce: [desk] });
+        expect(stepsOf(saved).clear.partialRoles).toEqual([]);
         expect(saved.revision).toBe(1);
         expect((await door.read(SAM, "editorial")).grants).toEqual(
           saved.grants
         );
 
-        const [row] = (await workflowActivity()).filter(
-          each => each.entryId === "editorial"
-        );
+        const [row] = await workflowActivity();
         expect(row).toMatchObject({ actorType: "user", userId: SAM });
         expect(metadataOf(row)).toMatchObject({
           changedFields: ["grants.clear"],
@@ -563,6 +620,132 @@ describe.each(getConfiguredTestDialects())(
           emails: { approved: true },
         });
         expect((await roleHoldsOn(desk, "sign-off")).pages).toBe("lacks");
+      });
+
+      it("says which steps share a permission, and refuses them different roles", async () => {
+        current = await bootSteps(dialect);
+        await admin();
+        const desk = await role(app(), "legal-desk", [["read", "pages"]]);
+        const other = await role(app(), "other-desk", [["read", "pages"]]);
+
+        const settings = await door.read(SAM, "editorial");
+        const conflicting = await refusalOf(() =>
+          door.update(SAM, "editorial", {
+            revision: 0,
+            grants: { clear: [desk], bounce: [other] },
+          })
+        );
+
+        expect(stepsOf(settings)).toEqual({
+          clear: {
+            permission: "sign-off",
+            partialRoles: [],
+            sharesPermissionWith: ["bounce"],
+          },
+          bounce: {
+            permission: "sign-off",
+            partialRoles: [],
+            sharesPermissionWith: ["clear"],
+          },
+        });
+        expect(conflicting).toMatchObject({ status: 400 });
+        expect(codesOf(conflicting)).toEqual(["WORKFLOW_CONFLICTING_GRANTS"]);
+        expect((await roleHoldsOn(desk, "sign-off")).pages).toBe("lacks");
+      });
+
+      it("accepts a default reviewer who holds the stage's step through the grants written with it", async () => {
+        current = await bootSteps(dialect);
+        await admin();
+        const desk = await role(app(), "legal-desk", [["read", "pages"]]);
+        // Nina's one role is the desk, which holds no sign-off until this write.
+        await person(app(), "nina", []);
+        await giveRole(app(), "nina", desk);
+
+        const saved = await door.update(SAM, "editorial", {
+          revision: 0,
+          grants: { clear: [desk] },
+          defaultReviewers: {
+            legal: { kind: "user", id: "nina" },
+            cleared: { kind: "role", id: desk },
+          },
+        });
+
+        expect(saved).toMatchObject({
+          revision: 1,
+          grants: { clear: [desk] },
+          defaultReviewers: {
+            legal: { kind: "user", id: "nina" },
+            cleared: { kind: "role", id: desk },
+          },
+        });
+        expect(await roleHoldsOn(desk, "sign-off")).toEqual(holdingEverywhere);
+        expect(metadataOf((await workflowActivity())[0])).toMatchObject({
+          changedFields: expect.arrayContaining([
+            "grants.clear",
+            "defaultReviewers.legal",
+            "defaultReviewers.cleared",
+          ]),
+        });
+      });
+
+      it("writes no grant when the default reviewer written with it is refused", async () => {
+        current = await bootSteps(dialect);
+        await admin();
+        const desk = await role(app(), "legal-desk", [["read", "pages"]]);
+        // Holds sign-off on Pages alone, through a role the grants leave out.
+        await person(app(), "kim", [["sign-off", "pages"]]);
+
+        const refusal = await refusalOf(() =>
+          door.update(SAM, "editorial", {
+            revision: 0,
+            grants: { clear: [desk] },
+            defaultReviewers: { legal: { kind: "user", id: "kim" } },
+          })
+        );
+
+        expect(refusal).toMatchObject({
+          status: 400,
+          code: "VALIDATION_ERROR",
+        });
+        expect(codesOf(refusal)).toEqual(["WORKFLOW_INELIGIBLE_REVIEWER"]);
+        // Nothing of the write landed: the desk gained nothing, Kim's role kept its grant.
+        expect((await roleHoldsOn(desk, "sign-off")).pages).toBe("lacks");
+        expect(
+          await holderAnswer(
+            app().adapter,
+            { kind: "user", id: "kim" },
+            "sign-off",
+            "pages"
+          )
+        ).toBe("holds");
+        expect(await door.read(SAM, "editorial")).toMatchObject({
+          revision: 0,
+          defaultReviewers: {},
+          grants: { clear: [] },
+        });
+        expect(await workflowActivity()).toEqual([]);
+      });
+
+      it("files the change with the settings changes, which a reader of settings sees in the activity feed", async () => {
+        current = await bootSteps(dialect);
+        await admin();
+        await person(app(), "rhea", [["read", "settings"]]);
+        await person(app(), "alice", [
+          ["read", "pages"],
+          ["update", "pages"],
+        ]);
+
+        await door.update(SAM, "editorial", {
+          revision: 0,
+          emails: { approved: false },
+        });
+
+        const isTheChange = (row: Doc) =>
+          row.collection === "settings" && row.entryId === ENTRY;
+        expect((await feed("rhea")).filter(isTheChange)).toEqual([
+          expect.objectContaining({ action: "update", userId: SAM }),
+        ]);
+        expect((await feed("alice")).filter(isTheChange)).toEqual([]);
       });
 
       it("answers a workflow no one registered as not found", async () => {
