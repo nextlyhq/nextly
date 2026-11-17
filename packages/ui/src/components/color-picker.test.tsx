@@ -158,7 +158,7 @@ describe("the eyedropper", () => {
     render(<ColorPicker color="#000000" onColorChange={vi.fn()} />);
 
     expect(
-      screen.queryByRole("button", { name: "Pick a colour from the screen" })
+      screen.queryByRole("button", { name: "Pick from screen" })
     ).toBeNull();
   });
 
@@ -179,7 +179,7 @@ describe("the eyedropper", () => {
       const markup = renderToString(
         <ColorPicker color="#000000" onColorChange={vi.fn()} />
       );
-      expect(markup).not.toContain("Pick a colour from the screen");
+      expect(markup).not.toContain("Pick from screen");
       // The control: this render really did produce a picker, so the assertion
       // above is not passing on empty output.
       expect(markup).toContain("Saturation and brightness");
@@ -211,9 +211,7 @@ describe("the eyedropper", () => {
           }}
         />
       );
-      fireEvent.click(
-        screen.getByRole("button", { name: "Pick a colour from the screen" })
-      );
+      fireEvent.click(screen.getByRole("button", { name: "Pick from screen" }));
       await new Promise(resolve => setTimeout(resolve, 10));
     } finally {
       process.off("unhandledRejection", capture);
@@ -239,9 +237,7 @@ describe("the eyedropper", () => {
     const onColorChange = vi.fn();
     try {
       render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
-      fireEvent.click(
-        screen.getByRole("button", { name: "Pick a colour from the screen" })
-      );
+      fireEvent.click(screen.getByRole("button", { name: "Pick from screen" }));
       await new Promise(resolve => setTimeout(resolve, 10));
     } finally {
       process.off("unhandledRejection", capture);
@@ -264,7 +260,7 @@ describe("the eyedropper", () => {
     try {
       render(<ColorPicker color="#000000" onColorChange={vi.fn()} />);
       expect(
-        screen.getByRole("button", { name: "Pick a colour from the screen" })
+        screen.getByRole("button", { name: "Pick from screen" })
       ).toBeTruthy();
     } finally {
       delete w.EyeDropper;
@@ -831,7 +827,7 @@ describe("a colour typed one character at a time", () => {
     fireEvent.change(field, { target: { value: "#123456" } });
 
     const eyedropper = screen.getByRole("button", {
-      name: "Pick a colour from the screen",
+      name: "Pick from screen",
     });
     eyedropper.dispatchEvent(
       new PointerEvent("pointerdown", { bubbles: true, cancelable: true })
@@ -871,7 +867,7 @@ describe("a colour typed one character at a time", () => {
     fireEvent.change(field, { target: { value: "#123456" } });
 
     const eyedropper = screen.getByRole("button", {
-      name: "Pick a colour from the screen",
+      name: "Pick from screen",
     });
     eyedropper.dispatchEvent(
       new PointerEvent("pointerdown", { bubbles: true, cancelable: true })

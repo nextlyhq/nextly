@@ -426,6 +426,12 @@ export { VisitorUnreadableBadges } from "./visitor-unreadable-badges";
 export type { VisitorUnreadableBadgesProps } from "./visitor-unreadable-badges";
 export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
 /**
+ * @experimental Where the host keeps the signed-in author's Recent colours,
+ * provided once around the shell so every colour picker in it, a block's and
+ * a colour variable's, reads and adds to the one list.
+ */
+export { RecentColoursStore } from "./recent-colours";
+/**
  * @experimental A template's document with an entry's own blocks composed
  * into its Entry content block, as the canvas draws it, for a host asking
  * for the sources the drawn page's bindings read.
