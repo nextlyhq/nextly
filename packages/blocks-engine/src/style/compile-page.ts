@@ -42,6 +42,7 @@ import { describeValue, pointer } from "../issue-text";
 import { isPlainRecord } from "../plain-record";
 import type { ValidationIssue } from "../validation";
 
+import { starredLookSelector } from "./block-looks";
 import { childGapForms } from "./child-gap";
 import {
   breakpointContexts,
@@ -84,6 +85,7 @@ import {
   orderedNamedClasses,
   orderedNamedClassPositions,
   ownLooksRead,
+  starredLooksOf,
   usableNamedClassPositions,
 } from "./named-class";
 import {
@@ -627,6 +629,21 @@ export function compilePageCss(
       ...named,
     });
   }
+  // Each block type's ★ look, for its blocks wearing none of the type's looks: ahead of the
+  // class tier, so a shared style a block wears still wins over it.
+  rules.push(
+    ...starredLookRules(usableClasses, {
+      pageRoot,
+      contexts,
+      tokenPrefix,
+      warningAllowance,
+      previewStates,
+      trace,
+      mayFetchUrl,
+      routing,
+      blockParts: ctx.blockParts,
+    })
+  );
   for (const position of writtenPositions) {
     const cls = library[position];
     rules.push(
@@ -970,4 +987,65 @@ function withOverlayReset(
   // Joined only to what is there: a sheet whose every rule is gated is the
   // reset alone, so the page put back together has no blank line in it.
   return css === "" ? OVERLAY_RESET : `${OVERLAY_RESET}\n${css}`;
+}
+
+/** What the ★ tier is written with: the compile's own reading of each. */
+interface StarredLookCompile {
+  readonly pageRoot: string;
+  readonly contexts: ReturnType<typeof breakpointContexts>;
+  readonly tokenPrefix: string;
+  readonly warningAllowance: ReturnType<typeof newWarningAllowance>;
+  readonly previewStates: boolean;
+  readonly trace: StyleTraceEntry[] | undefined;
+  readonly mayFetchUrl: StyleCompileContext["mayFetchUrl"];
+  readonly routing: ReturnType<typeof partRouting>;
+  readonly blockParts: StyleCompileContext["blockParts"];
+}
+
+/**
+ * Each block type's ★ look, written again for the blocks of its type that wear none of the
+ * type's looks, under the page root as a worn look is, in type order. Nothing while no look is
+ * starred, so a site that never moved ★ compiles as it did.
+ *
+ * Its value problems were reported once already, by the look's own rule, so they are not
+ * reported twice.
+ */
+function starredLookRules(
+  written: readonly NamedClass[],
+  about: StarredLookCompile
+): CssRule[] {
+  const starred = starredLooksOf(written);
+  const rules: CssRule[] = [];
+  for (const type of [...starred.keys()].sort()) {
+    const look = starred.get(type) as NamedClass;
+    const typeLooks = written.filter(
+      cls => isLook(cls) && !isDefaultLook(cls) && cls.blockType === type
+    );
+    const parts = about.blockParts?.[type];
+    rules.push(
+      ...envelopeRules(
+        look.styles,
+        `${about.pageRoot} ${starredLookSelector(type, typeLooks, parts)}`,
+        pointer("/classes", look.id),
+        about.contexts,
+        about.tokenPrefix,
+        [],
+        newStyleIssueBudget(),
+        about.warningAllowance,
+        {
+          origin: {
+            kind: "class",
+            id: look.id,
+            slug: look.slug,
+            blockType: type,
+          },
+          previewStates: about.previewStates,
+          trace: about.trace,
+          mayFetchUrl: about.mayFetchUrl,
+          routing: about.routing,
+        }
+      )
+    );
+  }
+  return rules;
 }
