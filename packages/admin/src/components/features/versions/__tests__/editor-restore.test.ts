@@ -200,4 +200,22 @@ describe("createEditorRestore, after the form is reset", () => {
     applied.undo();
     expect(values).toEqual({ title: "Now", body: "Stored" });
   });
+
+  it("does not bring back a restore from before the reset when the one it kept is undone", () => {
+    const { values, form } = fakeForm({ title: "Now" });
+    const restore = createEditorRestore(form);
+
+    const first = restore.apply({ title: "Then" }, 3);
+    const second = restore.apply({ title: "Earlier" }, 2);
+    // A reset that keeps unsaved edits keeps the second restore; the first,
+    // which it displaced, belongs to the form from before the reset.
+    restore.formReset(form.getValues(), new Set(["title"]));
+    second.undo();
+
+    expect(values.title).toBe("Then");
+    // The first restore names no source, and its Undo writes nothing.
+    expect(restore.restoredFromForSave(form.getValues())).toBeUndefined();
+    first.undo();
+    expect(values.title).toBe("Then");
+  });
 });

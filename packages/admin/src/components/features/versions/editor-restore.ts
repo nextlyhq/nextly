@@ -63,14 +63,18 @@ export interface EditorRestore {
 }
 
 /**
- * A field's restore: the value put in, its version, which restore, and the
- * field's type, which every later "does it still hold it?" is asked by.
+ * A field's restore: the value put in, its version, which restore, the
+ * field's type, which every later "does it still hold it?" is asked by, and
+ * the earlier restore of the field it displaced, which its Undo gives back.
+ * The displaced restore is kept here rather than in the Undo, so a reset
+ * that keeps this restore can let go of what it displaced.
  */
 interface RestoredField {
   value: unknown;
   versionNo: number;
   restore: number;
   type: string | undefined;
+  displaced: RestoredField | undefined;
 }
 
 /** Whether a field's value now is still the value its restore put there. */
@@ -88,17 +92,10 @@ export function createEditorRestore(form: RestorableForm): EditorRestore {
     apply(values, versionNo, typeOf) {
       const restore = ++restores;
       const before = form.getValues();
-      // What each field held before: its value, and the earlier restore this
-      // one displaced, which its Undo gives back.
-      const previous = new Map<
-        string,
-        { value: unknown; displaced: RestoredField | undefined }
-      >();
+      // What each field held before, which its Undo puts back.
+      const previous = new Map<string, unknown>();
       for (const [name, value] of Object.entries(values)) {
-        previous.set(name, {
-          value: before[name],
-          displaced: restored.get(name),
-        });
+        previous.set(name, before[name]);
         // An unsaved edit, like any other the person makes.
         form.setValue(name, value, { shouldDirty: true });
         restored.set(name, {
@@ -106,12 +103,13 @@ export function createEditorRestore(form: RestorableForm): EditorRestore {
           versionNo,
           restore,
           type: typeOf?.(name),
+          displaced: restored.get(name),
         });
       }
       return {
         undo() {
           const now = form.getValues();
-          for (const [name, { value, displaced }] of previous) {
+          for (const [name, value] of previous) {
             const entry = restored.get(name);
             // Only what this restore still holds: a later restore of the
             // field, a reset since, or the person's own edit since, is theirs
@@ -123,8 +121,8 @@ export function createEditorRestore(form: RestorableForm): EditorRestore {
             }
             form.setValue(name, value, { shouldDirty: true });
             // The restore this one displaced holds the field again, with its
-            // source and its own Undo.
-            if (displaced) restored.set(name, displaced);
+            // source and its own Undo, unless a reset since let go of it.
+            if (entry.displaced) restored.set(name, entry.displaced);
             else restored.delete(name);
           }
         },
@@ -155,6 +153,11 @@ export function createEditorRestore(form: RestorableForm): EditorRestore {
       for (const [name, entry] of restored) {
         if (!dirty.has(name) || !stillHolds(entry, current[name])) {
           restored.delete(name);
+        } else if (entry.displaced) {
+          // A restore the reset kept stays, but the one it displaced belongs
+          // to the form before the reset: its Undo no longer brings that one
+          // back, so neither its source nor its own Undo outlives the reset.
+          restored.set(name, { ...entry, displaced: undefined });
         }
       }
     },
