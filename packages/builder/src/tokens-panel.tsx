@@ -34,19 +34,9 @@ import {
   type NamedClass,
   type SiteToken,
   type SiteTokenSet,
-  type TokenKind,
   type TokenMode,
 } from "@nextlyhq/blocks-engine";
-import { Button, Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
-import {
-  Braces,
-  Bold,
-  Hash,
-  Ruler,
-  SquareRoundCorner,
-  Timer,
-  Type,
-} from "lucide-react";
+import { Button } from "@nextlyhq/ui";
 import * as React from "react";
 import { createPortal } from "react-dom";
 
@@ -61,33 +51,26 @@ import {
 } from "./design-group-toggle";
 import { isHTMLElement } from "./dom-kind";
 import { ShowMore, withOpenRow } from "./panel-actions";
-import { colourHexOf, colourPairOf } from "./style-colour";
-import { lengthInPx, variableValueText } from "./style-variables";
 import {
   addVariable,
+  duplicateVariable,
   labelNewVariable,
-  lengthFamilyOf,
   searchVariableGroups,
   type NewVariable,
   type VariableEntry,
   type VariableGroup,
 } from "./tokens-studio";
 import { ADDS, AddButton, EmptyGroup } from "./variable-adds";
-import { VariableEditor } from "./variable-editor";
-import { ColourPair, swatchStyle } from "./variable-swatch";
+import { VariableRow } from "./variable-row";
 import {
   combinedReach,
-  variableCount,
   type VariableReach,
   type VariablesAccess,
 } from "./variable-usage";
 import {
-  CountTip,
   useVariableUsage,
-  VariableRowCount,
   type VariableUsageHere,
 } from "./variable-usage-view";
-import { CloseVariableEditor } from "./variable-value-controls";
 import { useVariablesTransfer } from "./variables-transfer";
 
 /** A save's note to the author, and the way to read the variables again. */
@@ -334,13 +317,14 @@ function VariablesView({
     hosted.search,
     hosted.onSearch
   );
-  const { root, openKey, toggle, add, forget, commitFrom } = useOpenVariable({
-    tokens,
-    onChange,
-    currentTokens,
-    onAdded: clear,
-    onSettle,
-  });
+  const { root, openKey, toggle, add, duplicate, forget, commitFrom } =
+    useOpenVariable({
+      tokens,
+      onChange,
+      currentTokens,
+      onAdded: clear,
+      onSettle,
+    });
   const ownSearch = React.useRef<HTMLInputElement>(null);
   // Where focus goes once a variable is removed: the host's search where it
   // keeps one, else the view's own.
@@ -397,6 +381,7 @@ function VariablesView({
             supplied,
             toggle,
             commitFrom,
+            duplicate,
             usage,
             forget,
             search,
@@ -471,6 +456,8 @@ interface RowsHost {
   readonly usage: VariableUsageHere | undefined;
   /** The variable whose row this is was removed. */
   readonly onRemoved: (key: string) => void;
+  /** Adds a copy of a row's variable right below it, and opens it. */
+  readonly duplicate: (entry: VariableEntry) => void;
 }
 
 /** The groups a search leaves, or that none match. */
@@ -519,7 +506,9 @@ function VariableGroups({
                 open={rows.openKey === entry.row.key}
                 onOpenChange={open => rows.toggle(entry.row.key, open)}
                 onChange={rows.commitFrom(entry.row.key)}
+                onDuplicate={() => rows.duplicate(entry)}
                 usage={rows.usage}
+                reach={rowReach(entry, rows.usage)}
                 onRemoved={() => rows.onRemoved(entry.row.key)}
               />
             )}
@@ -739,6 +728,7 @@ function useOpenVariable({
   openKey: string | null;
   toggle: (key: string, open: boolean) => void;
   add: (what: NewVariable) => void;
+  duplicate: (entry: VariableEntry) => void;
   forget: (key: string) => void;
   /** Each row editor's commit; see {@link useCommitsSettled}. */
   commitFrom: (key: string) => (next: SiteTokenSet) => void;
@@ -770,15 +760,27 @@ function useOpenVariable({
       ?.scrollIntoView({ block: "nearest" });
   }, [openKey, tokens]);
 
-  const add = (what: NewVariable): void => {
-    const made = addVariable(currentTokens() ?? tokens, what);
+  // A variable just made, new or a copy, opens; its code name follows its
+  // name until the editor closes.
+  const opened = (made: { tokens: SiteTokenSet; at: number }): void => {
     const added = made.tokens.tokens[made.at];
     if (added === undefined) return;
     onChange(made.tokens);
-    onAdded();
     const key = tokenIdentity(added);
     fresh.current.add(key);
     setOpenKey(key);
+  };
+
+  const add = (what: NewVariable): void => {
+    const made = addVariable(currentTokens() ?? tokens, what);
+    onAdded();
+    opened(made);
+  };
+
+  const duplicate = (entry: VariableEntry): void => {
+    const set = currentTokens() ?? tokens;
+    if (set === undefined) return;
+    opened(duplicateVariable(set, entry.row.at, entry.label));
   };
 
   const close = (key: string): void => {
@@ -811,7 +813,7 @@ function useOpenVariable({
   };
 
   const commitFrom = useCommitsSettled(onChange, onSettle, openKey);
-  return { root, openKey, toggle, add, forget, commitFrom };
+  return { root, openKey, toggle, add, duplicate, forget, commitFrom };
 }
 
 /**
@@ -1003,14 +1005,6 @@ function Group({
             searching={searching}
           />
         </h3>
-        {/* The two small swatches on a colour row are its light and dark
-            values; this names those columns for sight. Each row's accessible
-            name already says which value is which, so it is not read. */}
-        {group === "colours" ? (
-          <span className="nx-vars__group-hint" aria-hidden="true">
-            Light / Dark
-          </span>
-        ) : null}
         {/* An empty type scale offers its add in the line below instead. */}
         {readOnly || (group === "type" && entries.length === 0) ? null : (
           <AddButton
@@ -1113,344 +1107,6 @@ function GroupRows({
       />
     </>
   );
-}
-
-/**
- * One variable: a button that opens its editor beside the panel.
- *
- * The button's name is the plain name followed by the values in words, so a
- * screen reader hears what the swatches show.
- */
-function VariableRow({
-  entry,
-  tokens,
-  mode,
-  suppliedOf,
-  readOnly,
-  open,
-  onOpenChange,
-  onChange,
-  onRemoved,
-  usage,
-}: {
-  entry: VariableEntry;
-  tokens: SiteTokenSet;
-  mode: TokenMode;
-  suppliedOf: (identity: string) => SiteToken | undefined;
-  readOnly: boolean;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onChange: (tokens: SiteTokenSet) => void;
-  onRemoved: () => void;
-  /** How widely it is used, where the host reads it. */
-  usage: VariableUsageHere | undefined;
-}): React.JSX.Element {
-  const token = tokens.tokens[entry.row.at];
-  const reach = rowReach(entry, usage);
-  const handOff = useHandOff(onOpenChange);
-  return (
-    <li>
-      <Popover open={open} onOpenChange={onOpenChange} modal>
-        <CountTip reach={reach} quiet={open}>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              className="nx-vars__row"
-              data-variable-key={entry.row.key}
-              // The visible name first, then the values the swatches show, so
-              // a screen reader hears both and speech input still matches.
-              aria-label={`${shownName(entry)}${describe(entry, token, tokens, mode)}${countWords(reach)}`}
-              data-kind={entry.row.kind}
-              // A fourth column for the count, only where usage is read.
-              data-counted={usage === undefined ? undefined : ""}
-              // Drawn as chosen while its editor is open. Its own mark: the
-              // row's tooltip sets `data-state` too, over the popover's.
-              data-open={open ? "" : undefined}
-              onKeyDown={renameOnF2(readOnly, onOpenChange)}
-            >
-              <RowLead
-                entry={entry}
-                token={token}
-                tokens={tokens}
-                mode={mode}
-              />
-              <span className="nx-vars__name">
-                {entry.label}
-                {entry.kindWord === undefined ? null : (
-                  <span className="nx-vars__name-kind">{` · ${entry.kindWord}`}</span>
-                )}
-              </span>
-              <RowTail
-                entry={entry}
-                token={token}
-                tokens={tokens}
-                mode={mode}
-              />
-              <VariableRowCount reach={reach} />
-            </button>
-          </PopoverTrigger>
-        </CountTip>
-        <PopoverContent
-          side="right"
-          align="start"
-          sideOffset={12}
-          // Kept inside the window, clear of its edges.
-          collisionPadding={8}
-          className="nx-vars-editor"
-          aria-label={`${readOnly ? "" : "Edit "}${entry.label}`}
-          onCloseAutoFocus={handOff.onCloseAutoFocus}
-        >
-          <CloseVariableEditor.Provider value={handOff.close}>
-            <VariableEditor
-              entry={entry}
-              tokens={tokens}
-              suppliedOf={suppliedOf}
-              readOnly={readOnly}
-              onChange={onChange}
-              onRemoved={onRemoved}
-              {...(usage === undefined ? {} : { usage })}
-            />
-          </CloseVariableEditor.Provider>
-        </PopoverContent>
-      </Popover>
-    </li>
-  );
-}
-
-/**
- * Closing a row's editor for a control that sends the author elsewhere: the
- * editor closes without handing focus back to the row, which would take it
- * from the place the author was sent to.
- */
-function useHandOff(onOpenChange: (open: boolean) => void): {
-  close: () => void;
-  onCloseAutoFocus: (event: Event) => void;
-} {
-  const handingOff = React.useRef(false);
-  const close = React.useCallback(() => {
-    handingOff.current = true;
-    onOpenChange(false);
-  }, [onOpenChange]);
-  const onCloseAutoFocus = React.useCallback((event: Event) => {
-    if (!handingOff.current) return;
-    handingOff.current = false;
-    event.preventDefault();
-  }, []);
-  return { close, onCloseAutoFocus };
-}
-
-/**
- * F2 on a row opens its editor to rename it, as F2 renames in a file list.
- * The editor's focus scope selects the name on opening, so typing replaces
- * it. Nothing on a read-only row, which has no name to change.
- */
-function renameOnF2(
-  readOnly: boolean,
-  onOpenChange: (open: boolean) => void
-): ((event: React.KeyboardEvent) => void) | undefined {
-  if (readOnly) return undefined;
-  return event => {
-    if (event.key !== "F2") return;
-    event.preventDefault();
-    onOpenChange(true);
-  };
-}
-
-/** The row's count in words, after its name and values, once it is read. */
-function countWords(reach: VariableReach | undefined): string {
-  return reach === undefined ? "" : `. ${variableCount(reach).words}`;
-}
-
-/**
- * The row's name as it is read: its label, and its kind when another row is
- * shown under the same name.
- */
-function shownName(entry: VariableEntry): string {
-  return entry.kindWord === undefined
-    ? entry.label
-    : `${entry.label} · ${entry.kindWord}`;
-}
-
-/** The value a variable shows for the preview mode, falling back to light. */
-function valueFor(token: SiteToken | undefined, mode: TokenMode): string {
-  if (token === undefined) return "";
-  return mode === "dark"
-    ? (token.values.dark ?? token.values.light)
-    : token.values.light;
-}
-
-/** The row's leading preview: a swatch, a type specimen, or a kind icon. */
-function RowLead({
-  entry,
-  token,
-  tokens,
-  mode,
-}: {
-  entry: VariableEntry;
-  token: SiteToken | undefined;
-  tokens: SiteTokenSet;
-  mode: TokenMode;
-}): React.JSX.Element {
-  const kind = entry.row.kind;
-  if (kind === "color") {
-    return (
-      <span
-        className="nx-vars__swatch nx-vars__swatch--main"
-        aria-hidden="true"
-        data-mode={mode}
-        style={swatchStyle(
-          entry.row.written
-            ? colourHexOf(valueFor(token, mode), undefined)
-            : undefined
-        )}
-      />
-    );
-  }
-  if (entry.row.name.startsWith("font-size.")) {
-    return (
-      <span
-        className="nx-vars__specimen"
-        aria-hidden="true"
-        style={{
-          fontSize: `${String(specimenSize(valueFor(token, mode)))}px`,
-          fontFamily: siteFamily(tokens, mode),
-        }}
-      >
-        Aa
-      </span>
-    );
-  }
-  // A radius draws a corner, so it is told from a spacing step at a glance.
-  const radius = lengthFamilyOf(entry.row) === "radius";
-  const Icon = radius ? SquareRoundCorner : KIND_ICONS[kind];
-  return (
-    <span
-      className="nx-vars__kind"
-      aria-hidden="true"
-      data-variable-icon={lengthFamilyOf(entry.row) ?? kind}
-    >
-      {kind === "shadow" ? (
-        <span
-          className="nx-vars__shadow"
-          style={{ boxShadow: valueFor(token, mode) }}
-        />
-      ) : (
-        <Icon size={14} />
-      )}
-    </span>
-  );
-}
-
-const KIND_ICONS: Readonly<
-  Record<TokenKind, React.ComponentType<{ size?: number }>>
-> = {
-  color: Hash,
-  dimension: Ruler,
-  fontFamily: Type,
-  fontWeight: Bold,
-  number: Hash,
-  shadow: Hash,
-  duration: Timer,
-  custom: Braces,
-};
-
-/**
- * The specimen's drawn size: the type size scaled into the row, so a heading
- * still reads larger than body text without growing the row.
- */
-function specimenSize(value: string): number {
-  // Read through the inspector's own reading of a length, so a type size is
-  // measured the same way in both places; a value it cannot measure is drawn
-  // at body size, as before.
-  const px = lengthInPx(value) ?? 16;
-  return Math.min(18, Math.max(11, Math.round(10 + px * 0.2)));
-}
-
-/** The site's body font, when it names a family this panel can draw. */
-function siteFamily(tokens: SiteTokenSet, mode: TokenMode): string | undefined {
-  // By identity, the one a rename leaves alone: the body font keeps drawing
-  // after an author renames it.
-  const body = tokens.tokens.find(
-    token => tokenIdentity(token) === "font.body"
-  );
-  const family = valueFor(body, mode);
-  return family === "" || /var\s*\(/i.test(family) ? undefined : family;
-}
-
-/** The row's trailing values: the light and dark swatches, or a value chip. */
-function RowTail({
-  entry,
-  token,
-  mode,
-}: {
-  entry: VariableEntry;
-  token: SiteToken | undefined;
-  tokens: SiteTokenSet;
-  mode: TokenMode;
-}): React.JSX.Element | null {
-  if (token === undefined) return null;
-  if (entry.row.kind === "color") {
-    return <ColourPair {...colourPairOf(token)} />;
-  }
-  const own = valueFor(token, mode);
-  const words = chipText(entry, own);
-  return (
-    <span
-      className="nx-vars__chip"
-      aria-hidden="true"
-      // The whole value on hover when the chip says it in fewer words, as
-      // "Fluid" does; the row's name says it to a screen reader already.
-      title={words === chipText(entry, own, "raw") ? undefined : own}
-    >
-      {words}
-    </span>
-  );
-}
-
-/**
- * "16 / 26" for a type size with its line height, or the value itself, in
- * the picker's words: "Fluid" for a length that changes with the page, whose
- * whole `clamp()` crowded the name out of the row. `raw` keeps the value as
- * written, to tell whether the words shortened it.
- */
-function chipText(
-  entry: VariableEntry,
-  own: string,
-  form: "words" | "raw" = "words"
-): string {
-  const text =
-    form === "raw"
-      ? own
-      : variableValueText({ kind: entry.row.kind, value: own });
-  if (entry.lineHeight === undefined) return text;
-  return `${bare(text)} / ${bare(entry.lineHeight.value)}`;
-}
-
-/** A px value without its unit, as designers write a type scale. */
-function bare(value: string): string {
-  return value.trim().replace(/^(-?\d*\.?\d+)px$/, "$1");
-}
-
-/** The row's values in words, for the button's accessible name. */
-function describe(
-  entry: VariableEntry,
-  token: SiteToken | undefined,
-  tokens: SiteTokenSet,
-  mode: TokenMode
-): string {
-  if (token === undefined) return "";
-  // A colour row shows both its swatches, so both values are said whatever
-  // the preview; every other row shows the preview mode's value, so that is
-  // the one said, read through the same projection the row draws with.
-  if (entry.row.kind === "color") {
-    const dark = token.values.dark;
-    return `, light ${token.values.light}, dark ${dark ?? "same as light"}`;
-  }
-  if (entry.lineHeight !== undefined) {
-    const line = valueFor(tokens.tokens[entry.lineHeight.at], mode);
-    return `, size ${valueFor(token, mode)}, line height ${line}`;
-  }
-  return `, ${valueFor(token, mode)}`;
 }
 
 /** The supplied version of a variable, matched the way the merge does. */
