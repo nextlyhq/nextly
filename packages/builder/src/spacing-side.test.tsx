@@ -276,14 +276,24 @@ describe("a spacing-box side", () => {
   it("tells apart two spacing presets that share a name", () => {
     mount(undefined, {
       tokens: [
-        { name: "space.card", kind: "dimension", values: { light: "8px" } },
-        { name: "spacing.card", kind: "dimension", values: { light: "8px" } },
+        {
+          name: "space.card",
+          label: "Card",
+          kind: "dimension",
+          values: { light: "8px" },
+        },
+        {
+          name: "spacing.card",
+          label: "Card",
+          kind: "dimension",
+          values: { light: "8px" },
+        },
       ],
     } as SiteTokenSet);
     fireEvent.click(side("Padding top"));
-    const cards = radios("Presets").filter(preset => preset.includes("Card"));
-    expect(cards).toHaveLength(2);
-    expect(new Set(cards).size).toBe(2);
+    const presets = radios("Presets");
+    expect(presets).toContain("Card (space.card) 8px");
+    expect(presets).toContain("Card (spacing.card) 8px");
   });
 
   it("offers Left & right for a left side", () => {
