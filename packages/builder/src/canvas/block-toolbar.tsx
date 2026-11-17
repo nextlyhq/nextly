@@ -57,6 +57,8 @@ import {
 import {
   ArrowDown,
   ArrowUp,
+  ClipboardCopy,
+  ClipboardPaste,
   Component,
   Copy,
   CopyPlus,
@@ -67,6 +69,7 @@ import {
   LockOpen,
   Palette,
   RefreshCw,
+  Scissors,
   SquarePen,
   Trash2,
   Unlink,
@@ -466,6 +469,10 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   "move-up": ArrowUp,
   "move-down": ArrowDown,
   duplicate: Copy,
+  // The clipboard's own glyphs, as every editor's Edit menu draws them.
+  copy: ClipboardCopy,
+  cut: Scissors,
+  paste: ClipboardPaste,
   // A page outline rather than a bookmark or a star: what is stored is a piece
   // of layout, and the same glyph names the Patterns tier in the insert panel.
   "save-as-pattern": LayoutTemplate,

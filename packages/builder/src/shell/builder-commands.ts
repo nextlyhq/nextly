@@ -35,6 +35,10 @@ export interface CommandVerbs {
   readonly move: (direction: "up" | "down") => void;
   readonly delete: () => void;
   readonly duplicate: () => void;
+  /** Copy, Cut and Paste of blocks, through the clipboard. */
+  readonly copy: () => void;
+  readonly cut: () => void;
+  readonly paste: () => void;
   readonly selectParent: () => void;
   /**
    * Begin storing the selection in the pattern library.
@@ -124,6 +128,20 @@ const BLOCK_COMMAND_COPY: Record<
   duplicate: {
     label: "Duplicate block",
     keywords: ["duplicate", "copy", "clone", "repeat"],
+  },
+  // "Copy" and "Cut" put blocks on the clipboard; "Paste" places them where
+  // a clicked block would land, on this page or another.
+  copy: {
+    label: "Copy block",
+    keywords: ["copy", "clipboard"],
+  },
+  cut: {
+    label: "Cut block",
+    keywords: ["cut", "clipboard", "move"],
+  },
+  paste: {
+    label: "Paste blocks",
+    keywords: ["paste", "clipboard", "insert"],
   },
   // The conversions are named with the bar's own words, so the palette and
   // the menus offer one verb for each.
@@ -218,6 +236,9 @@ export function blockActionRunners(
     "move-up": () => verbs.move("up"),
     "move-down": () => verbs.move("down"),
     duplicate: verbs.duplicate,
+    copy: verbs.copy,
+    cut: verbs.cut,
+    paste: verbs.paste,
     "save-as-pattern": verbs.saveAsPattern,
     "save-as-shared-style": () => verbs.saveAsSharedStyle?.(),
     "edit-component": () => verbs.editComponent?.(),

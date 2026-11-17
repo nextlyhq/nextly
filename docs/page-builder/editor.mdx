@@ -434,6 +434,39 @@ were.
 
 While you are typing in a block's text, <kbd>/</kbd> is just a character.
 
+## Copy, cut and paste
+
+Select one or more blocks and press <kbd>Ctrl</kbd>+<kbd>C</kbd> to copy them, or
+<kbd>Ctrl</kbd>+<kbd>X</kbd> to cut them, then <kbd>Ctrl</kbd>+<kbd>V</kbd> to paste. On
+a Mac, use <kbd>⌘</kbd>. **Copy**, **Cut** and **Paste** are also in the block's
+toolbar under **More actions**, in its right-click menu and in search
+(<kbd>Ctrl</kbd>+<kbd>K</kbd>).
+
+- Blocks are copied with their content, styles and the blocks inside them.
+- A paste lands where a clicked block would (see
+  [Where a clicked block lands](#where-a-clicked-block-lands)): inside a selected
+  container at the end, after a selected block that holds none, and at the end of the
+  page with nothing selected. The pasted blocks are selected, and one undo takes the
+  whole paste back.
+- You can paste on the same page, on another page, or in another browser tab of the
+  same site. Pasted blocks keep using the site's shared styles, block styles, variables,
+  components and media.
+- Cut copies the blocks, then removes them, as one undo step. A block locked in Layers
+  can't be cut, as it can't be deleted.
+- If the place can't take the blocks (a Column belongs only inside Columns, say), the
+  paste is refused with the reason, and nothing changes.
+- A pasted block bound to a list item's field, pasted outside a Collection list, is kept
+  with its binding and listed under [Bindings to fix](#bindings-to-fix).
+- Blocks copied on another site can't be pasted here: they use that site's styles,
+  components and media. Save them as a section, then use **Export** and **Import** on
+  the Saved sections list instead.
+
+While you are typing in a text field, or in a block's text on the canvas, the keys copy,
+cut and paste the text, as usual. The same goes for text you have highlighted.
+
+The first time you use **Paste** from a menu, the browser may ask to let the site see
+what you copied. The keys never ask.
+
 ## Adding an image
 
 A new Image starts empty: on the canvas it is a box, 16:9 unless you set its own
@@ -954,6 +987,8 @@ On a Mac, <kbd>⌘</kbd> replaces <kbd>Ctrl</kbd>.
 | <kbd>Ctrl</kbd>+<kbd>Z</kbd>                                                                | Undo the last change                                                                                                              |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> or <kbd>Ctrl</kbd>+<kbd>Y</kbd>               | Redo the last undone change                                                                                                       |
 | <kbd>Ctrl</kbd>+<kbd>D</kbd>                                                                | Duplicate the selected block                                                                                                      |
+| <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>X</kbd>                                 | Copy or cut the selected blocks                                                                                                   |
+| <kbd>Ctrl</kbd>+<kbd>V</kbd>                                                                | Paste copied blocks where a clicked block would land                                                                              |
 | <kbd>Delete</kbd> or <kbd>Backspace</kbd>                                                   | Delete the selected block                                                                                                         |
 | <kbd>Enter</kbd>                                                                            | Edit the selected block's text                                                                                                    |
 | <kbd>/</kbd>                                                                                | Add a block here: open the small picker beside the selected block, or at the end of the page                                      |

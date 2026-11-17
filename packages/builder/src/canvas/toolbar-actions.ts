@@ -123,6 +123,9 @@ export type ToolbarActionId =
   | "move-up"
   | "move-down"
   | "duplicate"
+  | "copy"
+  | "cut"
+  | "paste"
   | "save-as-pattern"
   | "save-as-shared-style"
   | "edit-component"
@@ -766,6 +769,11 @@ function manyBlockActions(
       ask,
       opsOf(selectionDuplication(document, ids))
     ),
+    ...clipboardActions(
+      deleteLock?.locked === undefined
+        ? undefined
+        : lockedBy(deleteLock.locked, deleteLock.id, "delete")
+    ),
     saveAction(document, ids, nesting, mayCreate, planned),
     ...sharedStyleActions(document, ids, sharedStyles),
     ...compositionActions(document, ids, nesting, components, ask, planned),
@@ -924,6 +932,11 @@ export function toolbarActions(
       duplicateAction(document, selectedId, duplication !== null),
       lockRefusalFor,
       duplication?.ops
+    ),
+    ...clipboardActions(
+      deleteLock === undefined
+        ? undefined
+        : lockedBy(deleteLock, selectedId, "delete")
     ),
     saveAction(document, ids, rules, mayCreatePattern, planned),
     ...sharedStyleActions(document, ids, sharedStyles),
@@ -1211,6 +1224,31 @@ export function depthMoveActions(
           direction: move.direction,
         }
   );
+}
+
+/**
+ * Copy, Cut and Paste, kept in the menu so the bar stays one short row.
+ *
+ * Copy is always offered: copying changes nothing on the page, so no lock
+ * stands in its way. Cut removes what it copies, so it is dimmed by the lock
+ * that dims Delete, in Delete's words. Paste is always offered, since what
+ * the clipboard holds is read only when it is pressed; a paste the page
+ * refuses says why then.
+ */
+function clipboardActions(cutLock: string | undefined): ToolbarAction[] {
+  return [
+    { id: "copy", label: "Copy", enabled: true, inMenu: true },
+    cutLock === undefined
+      ? { id: "cut", label: "Cut", enabled: true, inMenu: true }
+      : {
+          id: "cut",
+          label: "Cut",
+          enabled: false,
+          reason: cutLock,
+          inMenu: true,
+        },
+    { id: "paste", label: "Paste", enabled: true, inMenu: true },
+  ];
 }
 
 /**

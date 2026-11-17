@@ -38,6 +38,11 @@ import {
   type ToolbarFocusSlot,
 } from "./block-actions-context";
 import {
+  BlockClipboardEvents,
+  CLIPBOARD_KEY_HELP,
+} from "./block-clipboard-events";
+import { useBlockClipboardVerbs } from "./block-clipboard-verbs";
+import {
   CANVAS_ESCAPE_PRIORITY,
   escapeOutcome,
   modalIsOpen,
@@ -88,6 +93,7 @@ import {
   selectionMove,
 } from "./selection-ops";
 import { blockActionRunners } from "./shell/builder-commands";
+import { useNoticeSink } from "./shell/builder-notices";
 
 // The keys and what is announced, the contexts the toolbar and menus read,
 // and what the hook takes and returns live in modules of their own beside
@@ -218,6 +224,20 @@ export function useBlockKeyboardActions({
     editorNow.select(plan.nextSelection);
     announce(deletionAnnouncement(plan.subject, plan.descendants));
   }, [announce]);
+
+  /*
+   * Copy, Cut and Paste, through the clipboard. A refused paste is shown as
+   * a notice as well as said, since a paste from the keys has no control to
+   * dim beside it and nothing on the page says why nothing arrived.
+   */
+  const notify = useNoticeSink();
+  const clipboard = useBlockClipboardVerbs({
+    latest,
+    announce,
+    notify,
+    nesting: nestingSource,
+    components: definitions,
+  });
 
   const duplicateSelected = React.useCallback(() => {
     const editorNow = latest.current;
@@ -637,10 +657,19 @@ export function useBlockKeyboardActions({
     [hasAddBlockHere]
   );
 
-  useShortcuts([...bindings, ...editing, ...inlineEditing, ...adding], {
-    name: "builder-block-actions",
-    enabled,
-  });
+  useShortcuts(
+    [
+      ...bindings,
+      ...editing,
+      ...inlineEditing,
+      ...adding,
+      ...CLIPBOARD_KEY_HELP,
+    ],
+    {
+      name: "builder-block-actions",
+      enabled,
+    }
+  );
 
   /*
    * Escape, claimed for the editor and registered as its OWN layer.
@@ -883,6 +912,15 @@ export function useBlockKeyboardActions({
       move: moveSelected,
       delete: deleteSelected,
       duplicate: duplicateSelected,
+      // Run from a menu, where no clipboard event is under way: Copy and Cut
+      // write to the system clipboard themselves.
+      copy: () => {
+        clipboard.copy();
+      },
+      cut: () => {
+        clipboard.cut();
+      },
+      paste: clipboard.paste,
       selectParent,
       saveAsPattern: saveSelectionAsPattern,
       editComponent: editSelectedComponent,
@@ -897,6 +935,7 @@ export function useBlockKeyboardActions({
       moveSelected,
       deleteSelected,
       duplicateSelected,
+      clipboard,
       selectParent,
       saveSelectionAsPattern,
       editSelectedComponent,
@@ -913,6 +952,7 @@ export function useBlockKeyboardActions({
     depthMoves: offer.depthMoves,
     toolbarFocus,
     canvasFrame: latestFrame,
+    clipboard,
   };
 }
 
@@ -1002,6 +1042,7 @@ export function BlockKeyboardActions({
     offer,
     toolbarFocus,
     canvasFrame,
+    clipboard,
   } = useBlockKeyboardActions(options);
 
   /*
@@ -1060,6 +1101,10 @@ export function BlockKeyboardActions({
         <BlockActionsContext.Provider value={actions}>
           <ToolbarFocusContext.Provider value={toolbarFocus}>
             <CanvasFrameReader into={canvasFrame} />
+            <BlockClipboardEvents
+              verbs={clipboard}
+              enabled={options.enabled ?? true}
+            />
             <p aria-live="polite" role="status" className="nx-sr-only">
               {announcement}
             </p>
