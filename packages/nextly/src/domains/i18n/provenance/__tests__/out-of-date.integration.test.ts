@@ -47,6 +47,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
     ],
     singles: [
+      // A Single whose translated field has a default, written when a read first creates it.
+      defineSingle({
+        slug: "promo",
+        localized: true,
+        fields: [
+          text({ name: "tagline", localized: true, defaultValue: "Sale" }),
+        ],
+      }),
       defineSingle({
         slug: "notice",
         localized: true,
@@ -339,6 +347,36 @@ describe.each(getConfiguredTestDialects())(
       };
       expect(await copyAt(englishNow)).toMatchObject({ outOfDate: false });
       expect(await copyAt(undefined)).toMatchObject({ outOfDate: true });
+    });
+
+    it("marks a translation of a Single's default out of date once the default changes", async () => {
+      // A read creates the Single with its default in the default language. That value is the
+      // source a translation is made from, so it is recorded with it: changed later, the
+      // translation made from it reads out of date, field by field.
+      await boot(dialect);
+      const singles = container.get<SingleEntryService>("singleEntryService");
+      const created = await singles.get("promo", {
+        overrideAccess: true,
+        locale: "en",
+      });
+      expect((created.data as Record<string, unknown>).tagline).toBe("Sale");
+      await singles.update(
+        "promo",
+        { tagline: "Rebajas", _overwrite: true },
+        { overrideAccess: true, locale: "es" }
+      );
+      await singles.update(
+        "promo",
+        { tagline: "Big sale", _overwrite: true },
+        { overrideAccess: true, locale: "en" }
+      );
+      const read = await singles.get("promo", {
+        overrideAccess: true,
+        translationStatus: true,
+      });
+      const overview = (read.data as Record<string, unknown>)
+        ._translations as Record<string, LocaleTranslationMeta>;
+      expect(overview.es.fields?.tagline).toMatchObject({ outOfDate: true });
     });
 
     it("never marks a field its language has cleared", async () => {
