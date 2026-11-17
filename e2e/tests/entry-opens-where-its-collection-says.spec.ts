@@ -181,7 +181,10 @@ test("a reader who may only read opens the form, read-only", async ({
   }
 });
 
-/** Admin metadata with every plugin's document views taken out. */
+/**
+ * The workspace half of the admin's metadata, which lists the plugins, with
+ * every plugin's document views taken out.
+ */
 async function withoutDocumentViews(route: Route): Promise<void> {
   try {
     const response = await route.fetch();
@@ -201,8 +204,20 @@ test("with the builder's views not published, a row opens the form", async ({
   const title = `No builder ${RUN}`;
   const id = await savePage(page, title);
 
+  // The startup request carries the same answer in one batch; refused, the
+  // admin asks each path on its own, so the metadata comes from the route below.
   await page.route(
-    url => url.pathname.endsWith("/admin-meta"),
+    url => url.pathname.endsWith("/startup"),
+    async route => {
+      try {
+        await route.abort();
+      } catch {
+        // The page went away mid-request.
+      }
+    }
+  );
+  await page.route(
+    url => url.pathname.endsWith("/admin-meta/workspace"),
     withoutDocumentViews
   );
   await gotoAdmin(page, LIST);
