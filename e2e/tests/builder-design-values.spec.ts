@@ -121,7 +121,8 @@ test("a size is a number with a unit menu, saves a bare number as pixels, and it
     await expect
       .poll(async () => Math.round((await panel.boundingBox())?.width ?? 0))
       .toBeLessThanOrEqual(240);
-    const last = panel.locator(".nx-vars__row").last();
+    // The last size row: the tab's last row is an Other value with no unit.
+    const last = panel.locator('.nx-vars__row[data-kind="dimension"]').last();
     await last.scrollIntoViewIfNeeded();
     await last.click();
     await expect(editor).toBeVisible();

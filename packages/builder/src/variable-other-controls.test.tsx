@@ -156,6 +156,17 @@ describe("a duration", () => {
     expect(savedValue(onChange, "duration.fast")).toBe("450s");
   });
 
+  it("swaps the unit of a duration typed with its own", async () => {
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const editor = await openEditor(/^Fast/);
+    enter(within(editor).getByLabelText("Light"), "200s");
+    expect(savedValue(onChange, "duration.fast")).toBe("200s");
+    fireEvent.click(within(editor).getByLabelText("Unit for Light"));
+    fireEvent.click(screen.getByRole("option", { name: "ms", hidden: true }));
+    expect(savedValue(onChange, "duration.fast")).toBe("200ms");
+  });
+
   it("keeps a refused duration refused when only its unit is changed", async () => {
     const onChange = vi.fn();
     render(<Hosted tokens={SITE} onChange={onChange} />);

@@ -390,6 +390,16 @@ function durationOf(typed: string, unit: string): string {
 }
 
 /**
+ * A draft in another unit: a duration typed with its own unit (`200s`) takes
+ * the one chosen, as a bare number does. Anything else stays as typed, so a
+ * refused draft is still refused.
+ */
+function durationInUnit(draft: string, unit: string): string {
+  const typed = DURATION.exec(draft);
+  return durationOf(typed?.[1] ?? draft, unit);
+}
+
+/**
  * A duration: a number with a menu of ms and s. The number box and the menu
  * share one draft, so the menu changes the unit of the number on screen,
  * typed or refused, never of the value stored before it; a refused draft
@@ -432,7 +442,7 @@ function DurationValue(props: ValueFieldProps): React.JSX.Element {
           value={unit}
           onValueChange={next => {
             if (next !== unit || draft.trim() !== number) {
-              onCommit(durationOf(draft, next));
+              onCommit(durationInUnit(draft, next));
             }
           }}
         >
