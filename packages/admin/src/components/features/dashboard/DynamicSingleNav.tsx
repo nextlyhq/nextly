@@ -20,6 +20,7 @@ import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useSidebarSingleList } from "@admin/hooks/useSidebarContentLists";
 import { contentIcon } from "@admin/lib/content-icons";
+import { useDocumentAddress } from "@admin/lib/navigation/useDocumentAddress";
 import {
   searchSidebarSingles,
   singleDisplayName,
@@ -36,7 +37,9 @@ interface DynamicSingleNavProps {
  * DynamicSingleNav Component
  *
  * Renders each Single entity directly in the sidebar for easy access.
- * Each item links directly to its content editing page.
+ * Each item links where the admin's one "open this document" rule opens it:
+ * its form, or the view its main field opens first in (a Homepage whose main
+ * field is a page layout opens in the Page Builder).
  */
 
 export function DynamicSingleNav({
@@ -52,6 +55,7 @@ export function DynamicSingleNav({
     togglePin,
   } = useSidebarSingleList();
 
+  const addressOf = useDocumentAddress();
   const { state } = useSidebar();
   const isCollapsed = state === "collapsed";
 
@@ -66,8 +70,16 @@ export function DynamicSingleNav({
   return (
     <>
       {singles.map(single => {
-        const href = buildRoute(ROUTES.SINGLE_EDIT, { slug: single.slug });
-        const isItemActive = isActive(href);
+        // Opened by the one rule, read from the Single the list holds; marked
+        // current by its form's address, which its views' addresses sit
+        // under, so the item stays current in the form and in a view alike.
+        const href = addressOf(
+          { kind: "single", slug: single.slug },
+          { collection: single }
+        );
+        const isItemActive = isActive(
+          buildRoute(ROUTES.SINGLE_EDIT, { slug: single.slug })
+        );
         const singlePinned = isPinned(single.slug);
         const displayName = singleDisplayName(single);
         // A Single removed from code stays listed, marked, with the step that

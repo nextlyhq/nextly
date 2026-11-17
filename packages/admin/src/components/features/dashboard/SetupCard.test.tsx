@@ -37,6 +37,8 @@ vi.mock("@admin/services/seedApi", () => ({
   },
 }));
 vi.mock("@admin/hooks/queries/useSingles", () => ({
+  // No Single's fields are known here, so "Fill in" opens each one's form.
+  useEverySingle: () => ({ data: [] }),
   useSingles: () => ({
     data: {
       items: [

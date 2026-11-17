@@ -54,6 +54,16 @@ vi.mock("@admin/hooks/useSidebarContentLists", () => ({
 }));
 vi.mock("@admin/hooks/queries/useSingles", () => ({
   useSingles: () => ({ data: { items: [] } }),
+  useEverySingle: () => ({ data: [] }),
+}));
+// What the admin's "open this document" rule reads for each Single's link:
+// with no plugin's views published, every Single opens as its form.
+vi.mock("@admin/hooks/queries/useCollections", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  useEveryNavCollection: () => ({ data: [] }),
+}));
+vi.mock("@admin/hooks/useLocalization", () => ({
+  useLocalization: () => ({ defaultLocale: "en" }),
 }));
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => ({}),
@@ -68,6 +78,7 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
         lists.singles.map(s => [s.slug, { canRead: true }])
       ),
     },
+    canAccessCollection: () => true,
   }),
 }));
 vi.mock("@admin/components/ui/link", () => ({

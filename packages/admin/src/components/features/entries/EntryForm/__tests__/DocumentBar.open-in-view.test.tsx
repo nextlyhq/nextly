@@ -1,8 +1,8 @@
 /**
  * A document open as its form offers each view it may be opened in, beside
  * History, in the view's own words: "Open in builder" on a page or a post with
- * a blocks field, at the address the admin's one rule gives that view, and
- * nothing on a document no view applies to.
+ * a blocks field, a Single's included, at the address the admin's one rule
+ * gives that view, and nothing on a document no view applies to.
  */
 import userEvent from "@testing-library/user-event";
 import type { FieldConfig } from "nextly/config";
@@ -30,6 +30,12 @@ const COLLECTIONS = [
   { name: "authors", fields: [title, excerpt] },
 ];
 
+/** A Homepage Single, a page layout after its title; and one with no blocks. */
+const SINGLES = [
+  { slug: "home", fields: [title, { name: "layout", type: "blocks" }] },
+  { slug: "contact", fields: [{ name: "email", type: "email" }] },
+];
+
 const access = vi.hoisted(() => ({ mayUpdate: true }));
 
 vi.mock("@admin/lib/navigation", async importOriginal => ({
@@ -50,6 +56,10 @@ vi.mock("@admin/hooks/useLocalization", () => ({
 vi.mock("@admin/hooks/queries/useCollections", async importOriginal => ({
   ...(await importOriginal<object>()),
   useEveryNavCollection: () => ({ data: COLLECTIONS }),
+}));
+vi.mock("@admin/hooks/queries/useSingles", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  useEverySingle: () => ({ data: SINGLES }),
 }));
 vi.mock("@admin/hooks/useCurrentUserPermissions", async importOriginal => {
   const original = await importOriginal<{
@@ -214,8 +224,23 @@ describe("DocumentBar — opening the document in its other view", () => {
     );
   });
 
-  it("offers nothing on a Single, which opens as its form", () => {
-    renderBar("posts", { scope: "single" });
+  it("offers a Single's form the builder at the Single's own address", () => {
+    renderBar("home", { scope: "single" });
+    expect(openInBuilder()).toHaveAttribute(
+      "href",
+      "/admin/singles/home/builder?field=layout"
+    );
+  });
+
+  it("offers a Single read here, or with no blocks field, nothing", () => {
+    renderBar("contact", { scope: "single" });
     expect(openInBuilder()).not.toBeInTheDocument();
+    access.mayUpdate = false;
+    renderBar("home", { scope: "single" });
+    expect(openInBuilder()).not.toBeInTheDocument();
+    // The control: the bar itself drew.
+    expect(
+      screen.getAllByRole("button", { name: "History" }).length
+    ).toBeGreaterThan(0);
   });
 });
