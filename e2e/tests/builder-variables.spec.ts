@@ -605,8 +605,25 @@ test("a role that may read Design but not change it sees the variables read-only
       await expect(field).toBeEnabled();
       await expect(field).not.toBeEditable();
     }
-    // No Reset, Remove, "Remove dark value" or colour picker: no button at all.
-    await expect(editor.getByRole("button")).toHaveCount(0);
+    // Only what reads, never what changes: copying the code name and listing
+    // where it is used. No Reset, Remove, "Remove dark value" or colour
+    // picker.
+    const buttons = await editor
+      .getByRole("button")
+      .evaluateAll(found =>
+        found.map(
+          button =>
+            button.getAttribute("aria-label") ??
+            button.textContent?.trim() ??
+            ""
+        )
+      );
+    expect(buttons).toContain("Copy code name");
+    expect(
+      buttons.filter(
+        label => !/^(Copy code name|Show where|Show all \d+)$/.test(label)
+      )
+    ).toEqual([]);
     await name.selectText();
     expect(
       await name.evaluate(field => {
