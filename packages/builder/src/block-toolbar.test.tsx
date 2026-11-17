@@ -19,7 +19,13 @@
  * @module block-toolbar.test
  */
 import type { NestingSource } from "@nextlyhq/blocks-engine";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { ShortcutProvider } from "@nextlyhq/ui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as React from "react";
@@ -38,6 +44,7 @@ import type { EditorState } from "./editor-state";
 import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
 import { BlockKeyboardActions } from "./keyboard-actions";
 import { toolbarActions } from "./toolbar-actions";
+import { EDITING_ATTRIBUTE } from "./use-inline-text";
 import { VisitorUnreadableBadges } from "./visitor-unreadable-badges";
 
 afterEach(() => {
@@ -105,6 +112,8 @@ function editorSpy(
     canRedo: false,
     undoDepth: 0,
     lockRefusalFor: () => undefined,
+    // Nothing composed around the page: its own tree is all there is.
+    composed: () => undefined,
   } as unknown as EditorState & {
     apply: ReturnType<typeof vi.fn>;
     select: ReturnType<typeof vi.fn>;
@@ -155,6 +164,51 @@ function mount(
     reselect: (id: string) =>
       result.rerender(tree({ ...editor, selectedId: id }, props)),
   };
+}
+
+/**
+ * A button of an unmeasured bar by its name: its label, or else its text. The
+ * bar is out of sight until measured, and no accessible name is computed for
+ * what is out of sight.
+ */
+function unseenButton(name: string): HTMLButtonElement | null {
+  return (
+    [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        ".nx-block-toolbar button"
+      ),
+    ].find(
+      button =>
+        (button.getAttribute("aria-label") ?? button.textContent?.trim()) ===
+        name
+    ) ?? null
+  );
+}
+
+/**
+ * The boxes of a page whose first block, `top`, is at the very top of a
+ * 900px screen and 60px tall, so its bar is drawn inside it.
+ */
+function topBlockBoxes(top = "a") {
+  return vi
+    .spyOn(Element.prototype, "getBoundingClientRect")
+    .mockImplementation(function (this: Element) {
+      const box = (y: number, width: number, height: number) =>
+        new DOMRect(0, y, width, height);
+      if (this.matches("[data-scroller]")) return box(0, 1000, 900);
+      if (this.matches(".nx-canvas")) return box(0, 1000, 3000);
+      if (this.matches(`[data-nx-node="${top}"]`)) return box(0, 1000, 60);
+      if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
+      return box(0, 0, 0);
+    });
+}
+
+/** A block's element, marked as the text being typed into. */
+function typedText(id: string): HTMLElement {
+  const text = document.querySelector(`[data-nx-node="${id}"]`);
+  if (!(text instanceof HTMLElement)) throw new Error(`no block ${id}`);
+  text.setAttribute(EDITING_ATTRIBUTE, "text");
+  return text;
 }
 
 describe("BlockToolbar", () => {
@@ -333,14 +387,153 @@ describe("BlockToolbar", () => {
     );
   });
 
-  it("says on the bar that the selected block is locked, or locked by the block around it", () => {
+  it("offers Unlock on a block locked in Layers, which unlocks it as one edit", () => {
     register();
-    mount(editorSpy(pair({ locked: true }), "a"));
-    expect(document.querySelector("[data-lock-note]")?.textContent).toBe(
-      "Locked"
-    );
+    const editor = editorSpy(pair({ locked: true }), "a");
+    mount(editor);
+
+    const bar = screen.getByRole("toolbar", { name: "Block actions" });
+    const unlock = screen.getByRole("button", { name: "Unlock" });
+    expect(bar.contains(unlock)).toBe(true);
+    expect(unlock.textContent).toBe("Unlock");
+    // Unlock replaces the note: no plain "Locked" beside it.
+    expect(bar.textContent).not.toContain("Locked");
+    // One stop of the bar's roving set, the first: the lock is what an author
+    // meets first on a locked block.
+    expect(unlock.getAttribute("tabindex")).toBe("0");
+
+    fireEvent.click(unlock);
+    // The very op Layers' padlock applies, through the store's one apply, so
+    // undo puts the lock back.
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: {},
+      unset: ["locked"],
+    });
     cleanup();
 
+    // The control: nothing locks the block, so the bar offers no Unlock.
+    mount(editorSpy(pair(), "a"));
+    expect(screen.queryByRole("button", { name: "Unlock" })).toBeNull();
+    expect(
+      screen.getByRole("toolbar", { name: "Block actions" }).textContent
+    ).not.toContain("Locked");
+  });
+
+  it("keeps a keyboard author in the bar after Unlock, on its new first stop", async () => {
+    register();
+    const editor = editorSpy(pair({ locked: true }), "a");
+    const { rerender } = render(tree(editor, {}));
+    const unlock = screen.getByRole("button", { name: "Unlock" });
+    unlock.focus();
+    // Arrows move across the lock as across any stop.
+    fireEvent.keyDown(unlock, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Select parent" })
+    );
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Home",
+    });
+    expect(document.activeElement).toBe(unlock);
+
+    fireEvent.click(unlock);
+    // The store's answer: the block, unlocked, drawn again.
+    rerender(tree({ ...editor, document: pair() }, {}));
+    expect(screen.queryByRole("button", { name: "Unlock" })).toBeNull();
+    const bar = screen.getByRole("toolbar", { name: "Block actions" });
+    await waitFor(() =>
+      expect(document.activeElement).toBe(bar.querySelector('[tabindex="0"]'))
+    );
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Select parent" })
+    );
+  });
+
+  it("keeps the bar's tab stop when it loses a stop under the last one", () => {
+    // The stop on the last button, then the lock lifted elsewhere (Layers):
+    // one stop fewer, and the bar still holds exactly one tab stop.
+    register();
+    const editor = editorSpy(pair({ locked: true }), "a");
+    const { rerender } = render(tree(editor, {}));
+    const bar = screen.getByRole("toolbar", { name: "Block actions" });
+    const first = bar.querySelector<HTMLElement>('[tabindex="0"]');
+    first?.focus();
+    fireEvent.keyDown(first ?? bar, { key: "End" });
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    rerender(tree({ ...editor, document: pair() }, {}));
+    expect(bar.querySelectorAll('[tabindex="0"]')).toHaveLength(1);
+  });
+
+  it("says Locked, with the reason, where the author may not lift the lock", () => {
+    const HELD =
+      "This area of Frame is locked to its content. Leaf's design and settings can't change here.";
+    // A block locked in Layers inside a contentOnly area: the area pins the
+    // block's own lock with its design, so the save would refuse an unlock.
+    register();
+    registerBlocks(
+      [
+        {
+          name: "acme/frame",
+          version: 1,
+          description: "A frame whose children keep their design.",
+          example: { props: {} },
+          editor: { label: "Frame" },
+          props: {},
+          slots: {
+            children: {
+              lock: "contentOnly",
+              defaultBlock: [{ type: "acme/leaf" }],
+            },
+          },
+          render: () => null,
+        },
+      ] as never,
+      { source: "block-toolbar-test" }
+    );
+    const held = documentOf([
+      {
+        id: "frame",
+        type: "acme/frame",
+        version: 1,
+        props: {},
+        slots: {
+          children: [
+            {
+              id: "a",
+              type: "acme/leaf",
+              version: 1,
+              props: {},
+              locked: true,
+            },
+          ],
+        },
+      } as BlockNode,
+    ]);
+    const editor = editorSpy(held, "a");
+    mount(editor);
+    // The frame draws no children here, so the bar is mounted unmeasured, out
+    // of sight, where a name is not computed: its buttons found by name here.
+
+    expect(unseenButton("Unlock")).toBeNull();
+    const locked = unseenButton("Locked");
+    if (locked === null) throw new Error("no Locked button");
+    // Dimmed but reachable, as the bar's other unavailable verbs, so the
+    // reason reaches a keyboard author as well as a pointer.
+    expect(locked.getAttribute("aria-disabled")).toBe("true");
+    expect(locked.getAttribute("title")).toBe(HELD);
+    const describedBy = locked.getAttribute("aria-describedby");
+    expect(
+      describedBy === null ? null : document.getElementById(describedBy)
+    ).toHaveProperty("textContent", HELD);
+    fireEvent.click(locked);
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("says Locked by the block around it, with Select it and no Unlock", () => {
+    register();
     const inside = documentOf([
       {
         id: "hero",
@@ -354,16 +547,24 @@ describe("BlockToolbar", () => {
         },
       } as BlockNode,
     ]);
-    mount(editorSpy(inside, "a"));
-    const note = document.querySelector("[data-lock-note]");
-    expect(note?.textContent).toBe("Locked by Hero");
-    // Text, not a control: the bar's one tab stop stays on its buttons.
-    expect(note?.closest("button")).toBeNull();
-    cleanup();
+    const editor = editorSpy(inside, "a");
+    mount(editor);
+    // Hero draws no children here, so the bar is mounted unmeasured, out of
+    // sight, where a name is not computed: its buttons found by name here.
+    const note = document.querySelector(
+      '[role="toolbar"][aria-label="Block actions"] [data-lock-note]'
+    );
+    expect(note?.textContent).toBe("Locked by Hero · Select it");
+    // The toolbar's Unlock is for the block's own lock only; Hero's is lifted
+    // on Hero.
+    expect(unseenButton("Unlock")).toBeNull();
+    const choose = unseenButton("Select it");
+    if (choose === null) throw new Error("no Select it button");
+    expect(note?.contains(choose)).toBe(true);
 
-    // The control: nothing locks the block, so the bar says nothing.
-    mount(editorSpy(pair(), "a"));
-    expect(document.querySelector("[data-lock-note]")).toBeNull();
+    fireEvent.click(choose);
+    expect(editor.select).toHaveBeenCalledWith("hero");
+    expect(editor.apply).not.toHaveBeenCalled();
   });
 
   it("keeps an unavailable button FOCUSABLE, and says why", () => {
@@ -606,10 +807,11 @@ describe("BlockToolbar", () => {
     }
   });
 
-  it("goes below the LAST part a placement draws, never over its content", () => {
+  it("goes inside a placement's top-left corner, never under its last part", () => {
     // A placement whose definition draws two elements, a headline and an
-    // intro, each carrying the placement's address. Anchored to the first
-    // alone, a bar flipped below sits over the intro's line.
+    // intro, each carrying the placement's address. With no room above, the
+    // bar is drawn inside the placement's corner, not under its intro, where
+    // the next block would be.
     registerBlocks(
       [
         {
@@ -664,10 +866,10 @@ describe("BlockToolbar", () => {
         </div>
       );
       const bar = screen.getByRole("toolbar", { name: "Block actions" });
-      // No room above a block 10px down, so below: under the intro's bottom
-      // (34 + 24) and the 6px gap, not under the headline's.
-      expect(bar.getAttribute("data-side")).toBe("below");
-      expect(bar.style.top).toBe("64px");
+      // No room above a block 10px down, so inside its corner, 4px in.
+      expect(bar.getAttribute("data-side")).toBe("inside");
+      expect(bar.style.top).toBe("14px");
+      expect(bar.style.left).toBe("4px");
     } finally {
       boxes.mockRestore();
     }
@@ -808,18 +1010,19 @@ describe("BlockToolbar", () => {
   });
 
   it("moves when the window resizes the part of the page on screen", () => {
-    // A block 10px down a scroller: the bar goes below it while that fits on
-    // screen, and to the screen's top once the window is too short for it.
-    // Nothing the bar observes resizes: only the scroller's visible part.
-    let shown = 900;
+    // A block 100px down a scroller: the bar goes above it while the screen
+    // starts at the page's top, and inside it once the part of the page on
+    // screen starts below the room above it. Nothing the bar observes
+    // resizes: only the scroller's visible part.
+    let top = 0;
     const boxes = vi
       .spyOn(Element.prototype, "getBoundingClientRect")
       .mockImplementation(function (this: Element) {
         const box = (y: number, width: number, height: number) =>
           new DOMRect(0, y, width, height);
-        if (this.matches("[data-scroller]")) return box(0, 1000, shown);
+        if (this.matches("[data-scroller]")) return box(top, 1000, 900);
         if (this.matches(".nx-canvas")) return box(0, 1000, 3000);
-        if (this.matches('[data-nx-node="a"]')) return box(10, 1000, 100);
+        if (this.matches('[data-nx-node="a"]')) return box(100, 1000, 100);
         if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
         return box(0, 0, 0);
       });
@@ -830,10 +1033,255 @@ describe("BlockToolbar", () => {
         </div>
       );
       const bar = screen.getByRole("toolbar", { name: "Block actions" });
-      expect(bar.getAttribute("data-side")).toBe("below");
-      shown = 150;
+      expect(bar.getAttribute("data-side")).toBe("above");
+      top = 80;
       fireEvent(window, new Event("resize"));
-      expect(bar.getAttribute("data-side")).toBe("pinned");
+      expect(bar.getAttribute("data-side")).toBe("inside");
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
+  it("steps aside while the author types in a block whose bar is inside it, until the pointer moves", async () => {
+    // A block at the very top: its bar is drawn inside it, over its first
+    // line, so typing there hides it; a pointer move brings it back.
+    const boxes = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const box = (y: number, width: number, height: number) =>
+          new DOMRect(0, y, width, height);
+        if (this.matches("[data-scroller]")) return box(0, 1000, 900);
+        if (this.matches(".nx-canvas")) return box(0, 1000, 3000);
+        if (this.matches('[data-nx-node="a"]')) return box(0, 1000, 60);
+        if (this.matches('[data-nx-node="b"]')) return box(60, 1000, 60);
+        if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
+        return box(0, 0, 0);
+      });
+    try {
+      render(
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(pair(), "a"), {})}
+        </div>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      expect(bar.getAttribute("data-side")).toBe("inside");
+      // Stepped aside is `data-typing`, which the stylesheet draws
+      // transparent and lets presses through.
+      const aside = () => bar.hasAttribute("data-typing");
+      expect(aside()).toBe(false);
+
+      // Typing in the block's own text, as inline editing marks it.
+      const text = document.querySelector('[data-nx-node="a"]');
+      if (!(text instanceof HTMLElement)) throw new Error("no block a");
+      text.setAttribute(EDITING_ATTRIBUTE, "text");
+      fireEvent.keyDown(text, { key: "h" });
+      expect(aside()).toBe(true);
+
+      fireEvent.pointerMove(document);
+      expect(aside()).toBe(false);
+
+      // Typing again, then the editing ends: back without a pointer move.
+      fireEvent.keyDown(text, { key: "i" });
+      expect(aside()).toBe(true);
+      text.removeAttribute(EDITING_ATTRIBUTE);
+      await waitFor(() => expect(aside()).toBe(false));
+
+      // The controls: a key pressed outside the text being edited, and a
+      // shortcut or a key that writes nothing pressed in it, are not typing.
+      fireEvent.keyDown(document.body, { key: "j" });
+      text.setAttribute(EDITING_ATTRIBUTE, "text");
+      fireEvent.keyDown(text, { key: "z", metaKey: true });
+      fireEvent.keyDown(text, { key: "ArrowLeft" });
+      fireEvent.keyDown(text, { key: "Shift" });
+      expect(aside()).toBe(false);
+      // And a key that does write still counts, held with Shift.
+      fireEvent.keyDown(text, { key: "H", shiftKey: true });
+      expect(aside()).toBe(true);
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
+  it("comes back when Alt+F10 takes focus to it from the text being typed", () => {
+    // The keyboard route to the bar while editing: a stepped-aside bar is
+    // transparent, not hidden, so it can take focus, and focus brings it back.
+    const boxes = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const box = (y: number, width: number, height: number) =>
+          new DOMRect(0, y, width, height);
+        if (this.matches("[data-scroller]")) return box(0, 1000, 900);
+        if (this.matches(".nx-canvas")) return box(0, 1000, 3000);
+        if (this.matches('[data-nx-node="a"]')) return box(0, 1000, 60);
+        if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
+        return box(0, 0, 0);
+      });
+    try {
+      render(
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(pair(), "a"), {})}
+        </div>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      const text = document.querySelector('[data-nx-node="a"]');
+      if (!(text instanceof HTMLElement)) throw new Error("no block a");
+      text.setAttribute(EDITING_ATTRIBUTE, "text");
+      fireEvent.keyDown(text, { key: "h" });
+      expect(bar.hasAttribute("data-typing")).toBe(true);
+
+      fireEvent.keyDown(text, { key: "F10", code: "F10", altKey: true });
+      expect(bar.contains(document.activeElement)).toBe(true);
+      expect(bar.hasAttribute("data-typing")).toBe(false);
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
+  it("steps aside for text an input method or a software keyboard puts in", () => {
+    // Composition sends keydown as "Process" (or none at all), then the text
+    // as input: the input is what counts.
+    const boxes = topBlockBoxes();
+    try {
+      render(
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(pair(), "a"), {})}
+        </div>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      const text = typedText("a");
+      fireEvent.keyDown(text, { key: "Process" });
+      expect(bar.hasAttribute("data-typing")).toBe(false);
+      fireEvent(
+        text,
+        new InputEvent("beforeinput", {
+          bubbles: true,
+          inputType: "insertCompositionText",
+          data: "日",
+        })
+      );
+      expect(bar.hasAttribute("data-typing")).toBe(true);
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
+  it("steps aside again after a drag has hidden and redrawn the bar", () => {
+    // A drag unmounts the bar's element and draws a new one after; the
+    // selection, the side and the document stay as they were.
+    const boxes = topBlockBoxes();
+    try {
+      const editor = editorSpy(pair(), "a");
+      const shown = (hidden: boolean) => (
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editor, { hidden })}
+        </div>
+      );
+      const { rerender } = render(shown(false));
+      rerender(shown(true));
+      rerender(shown(false));
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      expect(bar.getAttribute("data-side")).toBe("inside");
+      const text = typedText("a");
+      fireEvent.keyDown(text, { key: "h" });
+      expect(bar.hasAttribute("data-typing")).toBe(true);
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
+  it("steps aside for typing in a component's text, addressed by its placement", () => {
+    // A placement's text carries the component's own minted id, and the
+    // placement's address in data-nx-instance: the placement is selected.
+    const boxes = topBlockBoxes();
+    try {
+      render(
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(pair(), "a"), {})}
+        </div>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      const placement = document.querySelector('[data-nx-node="a"]');
+      const minted = document.createElement("span");
+      minted.setAttribute("data-nx-node", "a::heading");
+      minted.setAttribute("data-nx-instance", "a");
+      minted.setAttribute(EDITING_ATTRIBUTE, "text");
+      placement?.append(minted);
+      fireEvent.keyDown(minted, { key: "h" });
+      expect(bar.hasAttribute("data-typing")).toBe(true);
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
+  it("stays, and pressable, while the pointer is over a block inside the selection whose bar is inside it", () => {
+    // A Section at the top holding a Heading: the bar is drawn over the
+    // Section's own content, so pointing at the Heading under it does not
+    // fade it; pointing at the next block does.
+    function PointAt({ id }: { id: string | null }) {
+      const point = useHoveredBlockSetter();
+      React.useEffect(() => point(id), [id, point]);
+      return null;
+    }
+    const boxes = topBlockBoxes("hero");
+    const doc = documentOf([
+      {
+        id: "hero",
+        type: "acme/leaf",
+        version: 1,
+        props: {},
+        slots: {
+          children: [{ id: "inner", type: "acme/leaf", version: 1, props: {} }],
+        },
+      } as BlockNode,
+      { id: "b", type: "acme/leaf", version: 1, props: {} } as BlockNode,
+    ]);
+    const drawn = (hovered: string) => (
+      <HoveredBlockProvider>
+        <PointAt id={hovered} />
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(doc, "hero"), {})}
+        </div>
+      </HoveredBlockProvider>
+    );
+    try {
+      const { rerender } = render(drawn("inner"));
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      expect(bar.getAttribute("data-side")).toBe("inside");
+      expect(bar.hasAttribute("data-faded")).toBe(false);
+      rerender(drawn("b"));
+      expect(bar.hasAttribute("data-faded")).toBe(true);
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
+  it("stays while the author types in a block whose bar is above it", () => {
+    // The control: a bar above the block covers none of its text.
+    const boxes = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const box = (y: number, width: number, height: number) =>
+          new DOMRect(0, y, width, height);
+        if (this.matches("[data-scroller]")) return box(0, 1000, 900);
+        if (this.matches(".nx-canvas")) return box(0, 1000, 3000);
+        if (this.matches('[data-nx-node="a"]')) return box(200, 1000, 60);
+        if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
+        return box(0, 0, 0);
+      });
+    try {
+      render(
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(pair(), "a"), {})}
+        </div>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      expect(bar.getAttribute("data-side")).toBe("above");
+      const text = document.querySelector('[data-nx-node="a"]');
+      if (!(text instanceof HTMLElement)) throw new Error("no block a");
+      text.setAttribute(EDITING_ATTRIBUTE, "text");
+      fireEvent.keyDown(text, { key: "h" });
+      expect(bar.hasAttribute("data-typing")).toBe(false);
+      expect(bar.style.visibility).toBe("");
     } finally {
       boxes.mockRestore();
     }
@@ -1023,6 +1471,16 @@ describe("a press on the toolbar and the canvas's own click handling", () => {
   });
 });
 
+/**
+ * What the bar's Save says when pressed. The bar plans a save only when it
+ * runs, since planning it builds the pattern a save would store, so a refused
+ * save is said in the live region rather than drawn dimmed on selection.
+ */
+function savePressed(): string {
+  fireEvent.click(screen.getByLabelText("Save as section…"));
+  return screen.getByRole("status").textContent ?? "";
+}
+
 describe("the rules the bar judges a save by", () => {
   it("asks the HOST's nesting source, not the registry", () => {
     /*
@@ -1042,13 +1500,7 @@ describe("the rules the bar judges a save by", () => {
 
     mount(editorSpy(pair(), "a"), {}, rootIsForbidden);
 
-    // `aria-disabled`, not the attribute: this bar keeps an unavailable verb in
-    // the tab sequence deliberately, so the reason is reachable. Asserting
-    // `disabled` checks something this component never sets, and passes either
-    // way — which is how the first version of this case read as green.
-    const save = screen.getByLabelText("Save as pattern");
-    expect(save.getAttribute("aria-disabled")).toBe("true");
-    expect(save.getAttribute("title")).toContain("belongs inside");
+    expect(savePressed()).toContain("belongs inside");
   });
 
   it("judges a SET by the whole selection, not by the primary block", () => {
@@ -1074,9 +1526,7 @@ describe("the rules the bar judges a save by", () => {
 
     mount(editor);
 
-    const save = screen.getByLabelText("Save as pattern");
-    expect(save.getAttribute("aria-disabled")).toBe("true");
-    expect(save.getAttribute("title")).toContain("no gaps");
+    expect(savePressed()).toContain("no gaps");
   });
 
   it("offers the save for a set that IS one run", () => {
@@ -1097,8 +1547,10 @@ describe("the rules the bar judges a save by", () => {
     mount(editor);
 
     expect(
-      screen.getByLabelText("Save as pattern").getAttribute("aria-disabled")
+      screen.getByLabelText("Save as section…").getAttribute("aria-disabled")
     ).toBeNull();
+    // Pressed, it goes on to the host's form: nothing is refused.
+    expect(savePressed()).toBe("");
   });
 
   it("offers the save under the registry's own rules", () => {
@@ -1109,8 +1561,8 @@ describe("the rules the bar judges a save by", () => {
 
     mount(editorSpy(pair(), "a"));
 
-    const save = screen.getByLabelText("Save as pattern");
+    const save = screen.getByLabelText("Save as section…");
     expect(save.getAttribute("aria-disabled")).toBeNull();
-    expect(save.getAttribute("title")).toBe("Save as pattern");
+    expect(save.getAttribute("title")).toBe("Save as section…");
   });
 });

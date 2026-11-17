@@ -1,11 +1,16 @@
 import {
   COMPONENT_INSTANCE_TYPE,
+  createBlockRegistry,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import { planImport, renamedSlugs, type ImportSite } from "./import-plan";
 import type { TransferFile } from "./transfer-contract";
+import { registryMediaProps } from "./transfer-references";
+
+/** The site's block registry the site is read with: it holds none. */
+const blocks = createBlockRegistry();
 
 function site(overrides: Partial<ImportSite> = {}): ImportSite {
   const none = { bySlug: new Map(), taken: new Set<string>() };
@@ -16,6 +21,7 @@ function site(overrides: Partial<ImportSite> = {}): ImportSite {
     breakpoints: { viewport: [], container: [] },
     media: new Map(),
     isRegistered: () => true,
+    mediaProps: type => registryMediaProps(blocks, type),
     mayAddBreakpoints: true,
     ...overrides,
   };

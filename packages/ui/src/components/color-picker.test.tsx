@@ -55,6 +55,20 @@ function Controlled({
   );
 }
 
+describe("its size", () => {
+  it("fills the popup it sits in, up to its own width, rather than a fixed 256px", () => {
+    const { container } = render(
+      <ColorPicker color="#1d2b6b" onColorChange={() => undefined} />
+    );
+    const root = container.firstElementChild;
+    const classes = root?.className.split(/\s+/) ?? [];
+    // A popup narrower than the picker no longer leaves it overflowing.
+    expect(classes).toContain("w-full");
+    expect(classes).toContain("max-w-64");
+    expect(classes).not.toContain("w-64");
+  });
+});
+
 describe("choosing a preset", () => {
   it("hands back the swatch's own value, not a colour", () => {
     const onSwatchSelect = vi.fn();

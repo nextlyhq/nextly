@@ -1356,8 +1356,9 @@ export {
 
 /**
  * Filter/action registry (D63) — `ctx.filters` / `ctx.actions` surface + seam types.
- * @experimental No first-party plugin contributes a filter/action through this
- *   surface yet (see STABILITY.md).
+ * @experimental The form builder contributes one: an `email.templateReferences`
+ *   handler reporting the notification rules that send a template (see
+ *   STABILITY.md).
  */
 export {
   FilterSeams,
@@ -1380,6 +1381,8 @@ export {
   type ListQueryWhere,
   type ListQueryFilterContext,
   type PublicAddressTemplateContext,
+  type EmailTemplateReference,
+  type EmailTemplateReferencesContext,
 } from "nextly";
 
 /**

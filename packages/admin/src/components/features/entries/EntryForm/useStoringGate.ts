@@ -42,6 +42,11 @@ export interface StoringGate {
   lastStore: LastStore;
   /** Whether a storing action is readying the work or a tracked write is in flight. */
   inFlight: boolean;
+  /**
+   * The storing action under way (`save`, `publish`), or null when none is:
+   * a tracked write alone is in flight then, or nothing is.
+   */
+  storingAction: string | null;
   /** Whether a tracked write is still on its way. */
   writesPending: boolean;
   /** The label and message of a tracked write whose latest attempt failed. */
@@ -268,6 +273,9 @@ export function useStoringGate(scope: string): StoringGate {
    */
   const [lastStore, setLastStore] = useState<LastStore>({ kind: "none" });
   const [readying, setReadying] = useState(0);
+  // Which action is storing, for a surface that says so on that action's own
+  // control ("Publishing…" rather than "Saving…").
+  const [storingAction, setStoringAction] = useState<string | null>(null);
   // Another document or language clears it, and coming back does not bring it
   // back: the answer was about the work as it stood, and that work has since
   // been replaced on screen. Cleared while rendering, so no render offers a
@@ -312,6 +320,7 @@ export function useStoringGate(scope: string): StoringGate {
       storingNow.current = true;
       const startedIn = currentVisit.current;
       setReadying(n => n + 1);
+      setStoringAction(action);
       try {
         // Readying awaits the editor's work, and the editor can move to
         // another document or language meanwhile: asked once it is ready.
@@ -329,6 +338,7 @@ export function useStoringGate(scope: string): StoringGate {
       } finally {
         storingNow.current = false;
         setReadying(n => n - 1);
+        setStoringAction(null);
       }
     };
 
@@ -338,6 +348,7 @@ export function useStoringGate(scope: string): StoringGate {
     storing,
     lastStore,
     inFlight: readying > 0 || writes.current.pending.size > 0,
+    storingAction,
     writesPending: writes.current.pending.size > 0,
     trackedFailure: firstFailure(writes.current.failed),
   };

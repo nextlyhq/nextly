@@ -74,9 +74,9 @@ export interface ListQueryJudgement {
   /** How many nodes to visit at most, as the rest of validation is bounded. */
   readonly maxNodes?: number;
   /**
-   * What the document is (`page`, `component`, `region`, …). A component
-   * or a Layout region shows on many pages, so no list in one may be split
-   * into pages; absent, where its lists sit is not judged.
+   * What the document is (`page`, `component`, …). A component, a Layout's
+   * header and footer among them, shows on many pages, so no list in one may
+   * be split into pages; absent, where its lists sit is not judged.
    */
   readonly documentKind?: string;
 }

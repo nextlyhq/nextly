@@ -516,18 +516,18 @@ describe("a style row's reset", () => {
   });
 });
 
-describe("the Content tab's Advanced", () => {
-  it("draws the panel's chevron, not the browser's triangle", () => {
-    const summary = ruleBody(".nx-inspector__advanced > summary");
-    expect(summary).toContain("list-style: none");
-    expect(FLAT).toContain(
-      ".nx-inspector__advanced > summary::-webkit-details-marker { display: none; }"
+describe("a tab's sections", () => {
+  it("divides each from the one before it by the builder's own line", () => {
+    const divided = ruleBody(".nx-inspector__group + .nx-inspector__group");
+    expect(divided).toContain(
+      "border-block-start: 1px solid var(--nx-builder-border)"
     );
-    expect(
-      ruleBody(
-        ".nx-inspector__advanced[open] > summary > .nx-inspector__advanced-chevron"
-      )
-    ).toContain("rotate: 90deg");
+    // The first section draws no line of its own under the tab list.
+    expect(ruleBody(".nx-inspector__group")).not.toContain("border");
+  });
+
+  it("no longer folds an Advanced section into Content", () => {
+    expect(FLAT).not.toContain(".nx-inspector__advanced");
   });
 });
 
@@ -604,14 +604,11 @@ describe("the inspector at the editor's density", () => {
   });
 
   it("sizes the controls that set their own size to the density too", () => {
-    // A row's name that is not a <label>, the Advanced toggle and the font
-    // picker each kept their own size beside the 28px, 12px rows.
+    // A row's name that is not a <label> and the font picker each kept
+    // their own size beside the 28px, 12px rows.
     expect(ruleBody(".nx-inspector__field-name")).toContain(
       "font-size: var(--nx-builder-font-size)"
     );
-    const advanced = ruleBody(".nx-inspector__advanced > summary");
-    expect(advanced).toContain("font-size: var(--nx-builder-title-size)");
-    expect(advanced).toContain("font-weight: var(--nx-builder-title-weight)");
     expect(ruleBody(".nx-style-inspector .nx-font-pick__trigger")).toContain(
       "height: var(--nx-control-height)"
     );

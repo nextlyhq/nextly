@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
 import { useCurrentUserId } from "@admin/hooks/useCurrentUserId";
+import { emptyThePoint } from "@admin/hooks/useDocumentAutosave";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { canonicalJson } from "@admin/lib/canonical-json";
 import {
@@ -169,6 +170,41 @@ function pointValues(snapshot: unknown): unknown {
 }
 
 /**
+ * Whether a point holds no values at all: what a Discard, and edits undone
+ * back to the stored document, leave behind (see `emptyThePoint`). Nothing in
+ * it can be restored, so it is never offered, whatever the document holds
+ * since.
+ */
+function holdsNoValues(point: AutosaveDetail): boolean {
+  const values = pointValues(point.snapshot);
+  return (
+    typeof values === "object" &&
+    values !== null &&
+    Object.keys(values).length === 0
+  );
+}
+
+/**
+ * Whether the form holds edits, as its subscription last said: read when an
+ * answer is acted on, after a round trip, rather than at render.
+ */
+function useFormHoldsEdits(
+  form: UseFormReturn<Record<string, unknown>>
+): () => boolean {
+  const dirty = useRef(false);
+  useEffect(() => {
+    dirty.current = form.formState.isDirty;
+    return form.subscribe({
+      formState: { isDirty: true },
+      callback: ({ isDirty }) => {
+        dirty.current = isDirty === true;
+      },
+    });
+  }, [form]);
+  return useCallback(() => dirty.current, []);
+}
+
+/**
  * A string's 53-bit hash (cyrb53), to name a recovery point's content in a
  * short key rather than storing the whole document.
  */
@@ -298,6 +334,14 @@ export interface UseAutosaveRecoveryResult {
    * offer returning on every load of the editor.
    */
   dismiss: () => void;
+  /**
+   * Discard: stop offering this recovery point for good, in this tab and in
+   * every later session or tab. Unlike `dismiss`, the point is emptied on the
+   * server (see `emptyThePoint`). Only while the form holds no edits, and
+   * only while the stored point is still the one offered: edits made since,
+   * here or in another tab, are newer work, which their recording keeps.
+   */
+  discard: () => void;
   /**
    * Accept the offer: write the recovered values into the form and stop
    * offering. A no-op when there is nothing on offer, so a caller may wire it
@@ -490,6 +534,8 @@ function offerOf(
   defaultLocale: string | null
 ): AutosaveRecoveryOffer | null {
   if (dismissed || !data) return null;
+  // Discarded, or edits undone back to the stored document: nothing to offer.
+  if (holdsNoValues(data)) return null;
   // Offered only in the language it was typed in: see `recordedIn`.
   if (!recordedIn(data, locale, defaultLocale)) return null;
   const savedAt = new Date(data.updatedAt);
@@ -582,6 +628,25 @@ export function useAutosaveRecovery({
     if (data) putOff(pointIdentity(data));
   }, [data, putOff]);
 
+  const holdsEdits = useFormHoldsEdits(form);
+  const discard = useCallback(() => {
+    // Put off at once, as Not now is, so the offer goes in this tab whatever
+    // the write below answers.
+    dismiss();
+    if (!scope || !data || holdsEdits()) return;
+    // Emptied only while it is still the point offered: one rewritten since,
+    // by another tab or by a field recording its own state, is newer work.
+    void emptyThePoint(scope, data.locale, async () => {
+      if (holdsEdits()) return false;
+      try {
+        const now = await versionApi.getAutosave(scope);
+        return now !== null && pointIdentity(now) === pointIdentity(data);
+      } catch {
+        return false;
+      }
+    });
+  }, [dismiss, scope, data, holdsEdits]);
+
   // The document as stored, which the form was loaded with.
   const stored = form.formState.defaultValues;
 
@@ -630,5 +695,14 @@ export function useAutosaveRecovery({
     void queryClient.invalidateQueries({ queryKey });
   }, [queryClient, queryKey]);
 
-  return { offer, isResolved, dismiss, restore, restoreChecked, take, recheck };
+  return {
+    offer,
+    isResolved,
+    dismiss,
+    discard,
+    restore,
+    restoreChecked,
+    take,
+    recheck,
+  };
 }

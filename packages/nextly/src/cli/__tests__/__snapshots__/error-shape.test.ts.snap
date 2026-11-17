@@ -506,6 +506,13 @@ exports[`each code, as a command ends with it > BUILD_STRICT_WARNINGS 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/build-strict-warnings  (BUILD_STRICT_WARNINGS)"
 `;
 
+exports[`each code, as a command ends with it > BUILDER_DEFINITION_MISSING 1`] = `
+"✗ The newest migration snapshot records a Builder collection 'articles' that neither \`nextly.config.ts\` nor \`./ui-schema.json\` declares.
+  Why:  \`./ui-schema.json\` is part of the code: \`migrate:create\` reads the Builder's entities from it. Without them, a migration written now would drop each one's table and its content.
+  Next: Restore \`./ui-schema.json\` from version control and commit it with your migrations. To remove an entity, delete it in the Schema Builder, which writes the migration that drops it. Then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-definition-missing  (BUILDER_DEFINITION_MISSING)"
+`;
+
 exports[`each code, as a command ends with it > BUILDER_MIGRATION_SNAPSHOT_MISSING 1`] = `
 "✗ nextly migrate does not apply a file with a Schema Builder name that is not recognised as an earlier Builder's: 1761732000000_update_posts.sql, which has a statement on a table that is not its own entity's, or one that cannot be read.
   Why:  1761732000000_update_posts.sql was written by the Schema Builder and has no snapshot beside it (meta/1761732000000_update_posts.snapshot.json), so nothing says what the database should look like once it has run.
@@ -514,9 +521,9 @@ exports[`each code, as a command ends with it > BUILDER_MIGRATION_SNAPSHOT_MISSI
 `;
 
 exports[`each code, as a command ends with it > BUILDER_RELATION_TARGET_UNKNOWN 1`] = `
-"✗ A field in \`ui-schema.json\` relates to a collection that does not exist.
+"✗ A field in \`./ui-schema.json\` relates to a collection that does not exist.
   Why:  articles.author relates to unknown target 'authors'
-  Next: Point each field listed at a collection in \`nextly.config.ts\` or \`ui-schema.json\`, or create the collection it names, then run the command again.
+  Next: Point each field listed at a collection in \`nextly.config.ts\` or \`./ui-schema.json\`, or create the collection it names, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/builder-relation-target-unknown  (BUILDER_RELATION_TARGET_UNKNOWN)"
 `;
 
@@ -671,6 +678,14 @@ exports[`each code, as a command ends with it > DATABASE_ADAPTER_MISSING 1`] = `
   Why:  \`DATABASE_URL\` names a MySQL database, and Nextly reaches it through that package.
   Next: Install it in the project, for example \`pnpm add @nextlyhq/adapter-mysql\`, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/database-adapter-missing  (DATABASE_ADAPTER_MISSING)"
+`;
+
+exports[`each code, as a command ends with it > DATABASE_BEHIND_MIGRATIONS 1`] = `
+"✗ The database lacks 2 tables or columns its applied migrations created, so it no longer matches its ledger. Nothing was changed.
+  Why:  - table dc_posts (created by 20261116_120000_000_create_posts)
+        - column dc_tags.label (created by 20261116_120000_001_add_label)
+  Next: Restore what is missing (from a backup, or by running again the statements of the migration named), then run \`nextly migrate\` again. Nothing applies until the database holds what its ledger says it does.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-behind-migrations  (DATABASE_BEHIND_MIGRATIONS)"
 `;
 
 exports[`each code, as a command ends with it > DATABASE_CATALOG_UNREADABLE 1`] = `

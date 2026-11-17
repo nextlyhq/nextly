@@ -247,8 +247,6 @@ export interface UpdateSingleOptions {
    * The fields this write restored, and the version each came from, as server
    * code states it. A client states it as `_restoredFrom` in the body, read
    * at the write's boundary when this is absent.
-   *
-   * @experimental
    */
   restoredFrom?: FieldSources;
   /**

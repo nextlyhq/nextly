@@ -294,6 +294,40 @@ describe("units offered", () => {
     expect(unitChoicesFor(OPACITY)).toEqual([]);
   });
 
+  it("offers the small, dynamic and large screen heights on a height", () => {
+    // Where a phone's moving toolbar matters: `100vh` is taller than the
+    // screen while the toolbar shows, and `svh` is what Full screen writes.
+    for (const property of ["height", "minHeight", "maxHeight"]) {
+      const leaf = entry(property).shape as unknown as StyleLeaf;
+      expect(unitChoicesFor(leaf), property).toEqual([
+        "px",
+        "rem",
+        "em",
+        "vw",
+        "vh",
+        "svh",
+        "dvh",
+        "lvh",
+        "%",
+      ]);
+    }
+  });
+
+  it("keeps the screen-height variants off every other length", () => {
+    // Still typeable there, as any unit the engine accepts is; only the menu
+    // stays short.
+    for (const leaf of [
+      PADDING,
+      MARGIN,
+      entry("width").shape as unknown as StyleLeaf,
+    ]) {
+      const units = unitChoicesFor(leaf);
+      for (const unit of ["svh", "dvh", "lvh"]) {
+        expect(units, leaf.cssProperty).not.toContain(unit);
+      }
+    }
+  });
+
   it("carries the number across a unit change rather than converting it", () => {
     // A conversion would need the font size and the viewport, neither knowable
     // from here. `16px` becoming `16rem` is what was asked for; inventing

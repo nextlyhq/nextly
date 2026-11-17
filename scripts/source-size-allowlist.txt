@@ -12,18 +12,6 @@
 # When a file shrinks, its count may be lowered to its new size.
 
 
-packages/blocks-engine/src/document.ts 1543
-
-packages/blocks-engine/src/index.ts 1533
-
-
-
-
-packages/blocks-engine/src/style/compile-page.ts 2761
-
-packages/blocks-engine/src/style/css-value.ts 1803
-
-packages/blocks-engine/src/style/dtcg.ts 2362
 
 
 
@@ -31,39 +19,30 @@ packages/blocks-engine/src/style/dtcg.ts 2362
 
 
 
-packages/builder/src/binding-controls.tsx 1632
-
-packages/builder/src/builder-shell.tsx 2301
-
-packages/builder/src/canvas-drag.tsx 1698
-
-packages/builder/src/canvas.tsx 2705
-
-packages/builder/src/content-controls.tsx 1591
-
-packages/builder/src/editor-state.ts 1510
-
-packages/builder/src/geometry-dom.ts 2034
-
-packages/builder/src/insert-panel.tsx 1857
-
-packages/builder/src/inserter.ts 1559
-
-packages/builder/src/inspector-panel.tsx 1805
-
-packages/builder/src/keyboard-actions.tsx 1549
-
-packages/builder/src/list-query-controls.tsx 3230
-
-packages/builder/src/shared-styles-panel.tsx 1643
 
 
 
 
-packages/plugin-page-builder/src/admin/editor/BlocksEditor.tsx 2099
-
-packages/plugin-page-builder/src/admin/editor/site-style-studios.tsx 2038
 
 
 
-packages/plugin-page-builder/src/plugin.ts 4723
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

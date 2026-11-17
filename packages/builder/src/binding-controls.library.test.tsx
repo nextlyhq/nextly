@@ -99,8 +99,16 @@ describe("the core block library's bind buttons", () => {
     const unbound: string[] = [];
     for (const block of coreBlocks) {
       const document = drawn(block);
-      const props = (inspectSelection(document, "n")?.props ?? []).filter(
-        prop => prop.offered
+      const inspection = inspectSelection(document, "n");
+      // A Style setting (a container's Content width) is the block's own,
+      // drawn by its Style control, and never filled from a field.
+      const styled = new Set(
+        (inspection?.sections.styleProps ?? []).flatMap(section =>
+          section.rows.map(row => row.name)
+        )
+      );
+      const props = (inspection?.props ?? []).filter(
+        prop => prop.offered && !styled.has(prop.name)
       );
       // The groups as the panel finds them, so the walk follows each group's
       // own statement of what it binds rather than a copy of it.

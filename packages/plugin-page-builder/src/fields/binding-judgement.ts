@@ -21,7 +21,6 @@
 import {
   bindingSchemaIssues,
   isErrorIssue,
-  registryBlockSource,
   SITE_SETTING_FIELD_SHAPES,
   walkNodes,
   type BlockNode,
@@ -31,6 +30,7 @@ import {
   type BindingSchemaRef,
   type BindingSchemaSource,
   type BlockDocument,
+  type BlockRegistryReader,
   type NamedQuerySource,
 } from "@nextlyhq/blocks-engine";
 import type {
@@ -245,6 +245,8 @@ async function bindingErrors(
     readonly entry: BindingSchemaRef | undefined;
     readonly stored: readonly BlockDocument[];
     readonly maxNodes: number | undefined;
+    /** The site's block registry, whose definitions the bindings are read by. */
+    readonly blocks: BlockRegistryReader;
   }
 ): Promise<ReturnType<typeof bindingSchemaIssues>> {
   for (let round = 0; ; round += 1) {
@@ -253,7 +255,7 @@ async function bindingErrors(
     const issues = bindingSchemaIssues(document, {
       schema: schemaSoFar(judging.reads, wanted),
       ...(judging.entry === undefined ? {} : { entry: judging.entry }),
-      definitions: registryBlockSource(),
+      definitions: judging.blocks.blockSource(),
       ...(judging.stored.length === 0 ? {} : { stored: judging.stored }),
       ...(judging.maxNodes === undefined ? {} : { maxNodes: judging.maxNodes }),
       ...(judging.reads.namedQueries === undefined
@@ -277,7 +279,10 @@ type BindingError = Awaited<ReturnType<typeof bindingErrors>>[number];
 async function judgedErrors(
   document: BindingDocument,
   entry: BindingSchemaRef | undefined,
-  site: BindingJudging & { readonly shapesOf: DeclaredShapesReader },
+  site: BindingJudging & {
+    readonly shapesOf: DeclaredShapesReader;
+    readonly blocks: BlockRegistryReader;
+  },
   keep: (issue: BindingError) => boolean
 ): Promise<{ readonly found: BindingError[]; readonly overflowed: boolean }> {
   // One read of each source, for the write and its stored forms alike, so
@@ -290,7 +295,12 @@ async function judgedErrors(
       ? {}
       : { namedQueries: site.namedQueries }),
   };
-  const judging = { reads, entry, maxNodes: site.maxNodes };
+  const judging = {
+    reads,
+    entry,
+    maxNodes: site.maxNodes,
+    blocks: site.blocks,
+  };
   const found = (
     await bindingErrors(document, { ...judging, stored: [] })
   ).filter(keep);
@@ -339,6 +349,8 @@ export async function currentBindingProblems(
     readonly shapesOf: DeclaredShapesReader;
     readonly maxNodes?: number;
     readonly namedQueries?: NamedQuerySource;
+    /** The site's block registry. */
+    readonly blocks: BlockRegistryReader;
   }
 ): Promise<CurrentBindingProblems> {
   const reads: SchemaReads = {
@@ -354,6 +366,7 @@ export async function currentBindingProblems(
     entry,
     maxNodes: site.maxNodes,
     stored: [],
+    blocks: site.blocks,
   });
   return {
     found: reads.overflowed ? [] : found,
@@ -387,7 +400,8 @@ export async function newBindingIssues(
     readonly write?: WriteTarget | undefined;
   },
   label: string,
-  site: BindingJudging
+  /** With the site's block registry. */
+  site: BindingJudging & { readonly blocks: BlockRegistryReader }
 ): Promise<PluginFieldIssue[]> {
   const nodes = nodesOf(value);
   const shapesOf = site.shapesOf;
@@ -444,7 +458,8 @@ export async function composedBindingIssues(
   composed: unknown,
   host: BlockDocument,
   write: PluginFieldWrite,
-  site: BindingJudging,
+  /** With the site's block registry. */
+  site: BindingJudging & { readonly blocks: BlockRegistryReader },
   /** The write's data, where a template names the collection it draws. */
   data: Readonly<Record<string, unknown>> = {}
 ): Promise<ComposedBindingIssue[]> {

@@ -81,6 +81,7 @@ import {
 } from "../../pages-search-contract";
 import type { PublishReadinessResponse } from "../../publish-readiness-contract";
 import { PAGE_BUILDER_SETTINGS_PLACE } from "../../settings-place-contract";
+import { lazyPart } from "../lazy-part";
 import {
   askReadiness,
   publishChosen,
@@ -95,7 +96,7 @@ import { UndoStatusRow, UndoStepPanel } from "./breakpoint-undo-step";
 import type { SettingsAddress } from "./settings-address";
 import type { SettingsPlace } from "./settings-place";
 import type { SharePreview } from "./share-preview";
-import { SiteCodeSection } from "./site-code-settings";
+import type { SiteCodeSection as SiteCodeSectionPart } from "./site-code-settings";
 import {
   useBreakpointRemoval,
   type BreakpointRemoval,
@@ -105,6 +106,15 @@ import {
   type BreakpointUndo,
   type UndoStep,
 } from "./use-breakpoint-undo";
+
+/**
+ * The site's code, fetched when the Site tab first draws it rather than with
+ * the editor: it carries the code's own checks and words, which an author
+ * who never opens the tab has no use for.
+ */
+const SiteCodeSection: typeof SiteCodeSectionPart = lazyPart(() =>
+  import("./site-code-settings").then(m => m.SiteCodeSection)
+);
 
 /** What the shell hands the dialog. */
 type DialogState = Parameters<
@@ -922,7 +932,7 @@ function DefaultLayout({
     setSave({ kind: "saving" });
     publishChosen(choice.dependencies).then(
       result => {
-        reportLeftUnpublished(result, asked.readiness, "Layout");
+        reportLeftUnpublished(result, asked.readiness, "header & footer set");
         makeDefault(asked.id);
       },
       (reason: unknown) => {
@@ -955,7 +965,7 @@ function DefaultLayout({
           message:
             reason instanceof Error
               ? reason.message
-              : "The default Layout could not be changed.",
+              : "The default header & footer set could not be changed.",
           retry: () => choose(id),
         });
       }
@@ -965,10 +975,10 @@ function DefaultLayout({
   return (
     <section aria-labelledby={`${selectId}-title`} className="space-y-2">
       <h3 id={`${selectId}-title`} className="text-sm font-semibold">
-        Default Layout
+        Default header & footer set
       </h3>
       <label htmlFor={selectId} className="block text-sm">
-        Pages without a Layout of their own use
+        Pages without a header & footer set of their own use
       </label>
       <div className="flex flex-wrap items-center gap-3">
         <Select
@@ -991,7 +1001,7 @@ function DefaultLayout({
       </div>
       <PublishOfferDialog
         readiness={offer?.readiness ?? null}
-        subject="Layout"
+        subject="header & footer set"
         onAnswer={answer}
         onlyLabel="Make default anyway"
         withLabel={count =>
@@ -1004,7 +1014,7 @@ function DefaultLayout({
         <p className="text-xs text-muted-foreground">
           {current === undefined ? "" : `${current.title}. `}You can see the
           default but not change it: that needs the rights to update and publish
-          Layouts.
+          header & footer sets.
         </p>
       )}
     </section>

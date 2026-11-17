@@ -61,7 +61,11 @@ describe("the editor's surfaces read the catalogue", () => {
   it("names the rail's panels and the inspector's tabs from it", () => {
     expect(panelLabel("layers")).toBe("«layers»");
     expect(panelLabel("design")).toBe("«design»");
-    expect(inspectorTabLabels()).toEqual(["«content»", "«style»"]);
+    expect(inspectorTabLabels()).toEqual([
+      "«content»",
+      "«style»",
+      "«advanced»",
+    ]);
   });
 
   it("names the Add panel, its tabs and the Layers tree from it", () => {
@@ -99,7 +103,7 @@ describe("the editor's surfaces read the catalogue", () => {
     fireEvent.mouseDown(screen.getByRole("tab", { name: "«sections»" }), {
       button: 0,
     });
-    expect(screen.getByText("No «sections» are saved yet.")).toBeTruthy();
+    expect(screen.getByText("No «sections» yet.")).toBeTruthy();
     clearBlocks();
   });
 

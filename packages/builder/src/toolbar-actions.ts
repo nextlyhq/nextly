@@ -51,6 +51,7 @@ import {
 import { compositionRefusalReason } from "./composition-refusal";
 import { blockDeletion } from "./delete-block";
 import type { RefusalWording } from "./drag-refusal";
+import { CONVERSION_WORDS } from "./editor-words";
 import {
   compositionEntryContentRefusal,
   duplicationRefusal,
@@ -185,9 +186,9 @@ export interface ComponentVerbsOffer {
   readonly mayUpdatePattern?: boolean;
 }
 
-/** What an author without the grant to update a pattern is told. */
+/** What an author without the grant to update a saved section is told. */
 const UPDATE_PATTERN_GRANT_REFUSAL =
-  "You do not have permission to update and publish patterns.";
+  "You do not have permission to update and publish saved sections.";
 
 /** What an author without the grant to make a component is told. */
 const MAKE_COMPONENT_GRANT_REFUSAL =
@@ -261,18 +262,20 @@ function componentActions(
   ids: readonly string[],
   nesting: NestingSource,
   offer: ComponentVerbsOffer | undefined,
-  ask: LockQuestion | undefined
+  ask: LockQuestion | undefined,
+  planned: boolean
 ): ToolbarAction[] {
   if (offer === undefined) return [];
   const turn: ToolbarAction = {
     id: "turn-into-component",
-    label: "Turn into component…",
+    label: CONVERSION_WORDS.turnIntoComponent,
     enabled: true,
     inMenu: true,
   };
   if (!offer.mayCreate) {
     return [{ ...turn, enabled: false, reason: MAKE_COMPONENT_GRANT_REFUSAL }];
   }
+  if (!planned) return [turn];
   const choice = turnIntoChoice(document, ids, nesting, ask);
   if (choice.replaceRefused !== undefined && choice.keepRefused !== undefined) {
     return [{ ...turn, enabled: false, reason: choice.replaceRefused }];
@@ -291,27 +294,25 @@ function placementActions(
   ids: readonly string[],
   nesting: NestingSource,
   offer: ComponentVerbsOffer | undefined,
-  ask: LockQuestion | undefined
+  ask: LockQuestion | undefined,
+  planned: boolean
 ): ToolbarAction[] {
   const only = ids.length === 1 ? ids[0] : undefined;
   if (offer === undefined || only === undefined) return [];
   const node = findNode(document.nodes, only);
   if (node === undefined || !isComponentInstance(node)) return [];
-  const actions: ToolbarAction[] = [];
-  if (offer.definitions !== undefined) {
-    const detach: ToolbarAction = {
-      id: "detach-component",
-      label: "Detach from component",
-      enabled: true,
-      inMenu: true,
-    };
-    const plan = planDetach(document, only, offer.definitions, nesting);
-    actions.push(
-      plan.problem === undefined
-        ? heldByLock(detach, ask, plan.pageOps)
-        : { ...detach, enabled: false, reason: compositionRefusalReason(plan) }
-    );
-  }
+  const actions: ToolbarAction[] =
+    offer.definitions === undefined
+      ? []
+      : [
+          detachAction(
+            document,
+            only,
+            offer.definitions,
+            nesting,
+            planned ? ask : null
+          ),
+        ];
   const duplicate: ToolbarAction = {
     id: "duplicate-component",
     label: "Duplicate component",
@@ -365,6 +366,32 @@ function placementActions(
 }
 
 /**
+ * "Detach from component" for one placement: planned in full against the
+ * definitions the canvas draws, its ops put to the editor's lock question,
+ * where `ask` is not `null`; offered as it stands where it is (the plan is
+ * then made when a menu opens, or when the verb runs).
+ */
+function detachAction(
+  document: BlockDocument,
+  only: string,
+  definitions: DefinitionsById,
+  nesting: NestingSource,
+  ask: LockQuestion | undefined | null
+): ToolbarAction {
+  const detach: ToolbarAction = {
+    id: "detach-component",
+    label: CONVERSION_WORDS.detachFromComponent,
+    enabled: true,
+    inMenu: true,
+  };
+  if (ask === null) return detach;
+  const plan = planDetach(document, only, definitions, nesting);
+  return plan.problem === undefined
+    ? heldByLock(detach, ask, plan.pageOps)
+    : { ...detach, enabled: false, reason: compositionRefusalReason(plan) };
+}
+
+/**
  * "Update pattern" for a selection that could be saved as one, where the host
  * offers it: the selection replaces a pattern's content.
  */
@@ -372,12 +399,13 @@ function updatePatternAction(
   document: BlockDocument,
   ids: readonly string[],
   nesting: NestingSource,
-  offer: ComponentVerbsOffer | undefined
+  offer: ComponentVerbsOffer | undefined,
+  planned: boolean
 ): ToolbarAction[] {
   if (offer?.mayUpdatePattern === undefined) return [];
   const action: ToolbarAction = {
     id: "update-pattern",
-    label: "Update a pattern",
+    label: "Update a saved section",
     enabled: true,
     inMenu: true,
   };
@@ -386,7 +414,7 @@ function updatePatternAction(
       { ...action, enabled: false, reason: UPDATE_PATTERN_GRANT_REFUSAL },
     ];
   }
-  const reason = patternSaveRefusal(document, ids, nesting);
+  const reason = patternRefusal(document, ids, nesting, planned);
   return [
     reason === undefined ? action : { ...action, enabled: false, reason },
   ];
@@ -398,12 +426,13 @@ function compositionActions(
   ids: readonly string[],
   nesting: NestingSource,
   offer: ComponentVerbsOffer | undefined,
-  ask: LockQuestion | undefined
+  ask: LockQuestion | undefined,
+  planned: boolean
 ): ToolbarAction[] {
   return [
-    ...componentActions(document, ids, nesting, offer, ask),
-    ...placementActions(document, ids, nesting, offer, ask),
-    ...updatePatternAction(document, ids, nesting, offer),
+    ...componentActions(document, ids, nesting, offer, ask, planned),
+    ...placementActions(document, ids, nesting, offer, ask, planned),
+    ...updatePatternAction(document, ids, nesting, offer, planned),
   ];
 }
 
@@ -592,15 +621,16 @@ function moveAction(
  * and the drift would be invisible — each reads correctly on its own.
  */
 export const SAVE_PATTERN_GRANT_REFUSAL =
-  "You do not have permission to save patterns.";
+  "You do not have permission to save to Saved sections.";
 
 function saveAction(
   document: BlockDocument,
   ids: readonly string[],
   nesting: NestingSource,
-  mayCreate: boolean
+  mayCreate: boolean,
+  planned: boolean
 ): ToolbarAction {
-  const label = "Save as pattern";
+  const label = CONVERSION_WORDS.saveAsSection;
   // The GRANT first, and it is the one refusal not asked of the planner —
   // because it is not about this selection. Every other reason a save is
   // refused describes the blocks in hand, so a planner that learns a new one
@@ -615,7 +645,7 @@ function saveAction(
       enabled: false,
       reason: SAVE_PATTERN_GRANT_REFUSAL,
     };
-  const reason = patternSaveRefusal(document, ids, nesting);
+  const reason = patternRefusal(document, ids, nesting, planned);
   if (reason === undefined)
     return { id: "save-as-pattern", label, enabled: true };
   return { id: "save-as-pattern", label, enabled: false, reason };
@@ -637,6 +667,23 @@ export function patternSaveRefusal(
   if (entryContent !== undefined) return entryContent;
   const refusal = saveAsPatternRefusal(document, ids, nesting);
   return refusal === undefined ? undefined : compositionRefusalReason(refusal);
+}
+
+/**
+ * {@link patternSaveRefusal} where the save is `planned`; otherwise only the
+ * Entry content rule, which reads the selection without building the pattern
+ * a save would store. The planner's other refusals are then said when the
+ * verb runs, or in a menu, which plans it as it opens.
+ */
+function patternRefusal(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  planned: boolean
+): string | undefined {
+  return planned
+    ? patternSaveRefusal(document, ids, nesting)
+    : compositionEntryContentRefusal(document, ids, "pattern");
 }
 
 /**
@@ -692,9 +739,10 @@ function manyBlockActions(
   ids: readonly string[],
   nesting: NestingSource,
   mayCreate: boolean,
-  ask?: LockQuestion,
-  components?: ComponentVerbsOffer,
-  sharedStyles?: SharedStyleOffer
+  ask: LockQuestion | undefined,
+  components: ComponentVerbsOffer | undefined,
+  sharedStyles: SharedStyleOffer | undefined,
+  planned: boolean
 ): ToolbarAction[] {
   const many = oneAtATime(ids.length);
   const deleteLock = ids
@@ -717,9 +765,9 @@ function manyBlockActions(
       ask,
       opsOf(selectionDuplication(document, ids))
     ),
-    saveAction(document, ids, nesting, mayCreate),
+    saveAction(document, ids, nesting, mayCreate, planned),
     ...sharedStyleActions(document, ids, sharedStyles),
-    ...compositionActions(document, ids, nesting, components, ask),
+    ...compositionActions(document, ids, nesting, components, ask, planned),
     deleteLock?.locked === undefined
       ? heldByLock(
           { id: "delete", label: "Delete", enabled: true },
@@ -803,7 +851,16 @@ export function toolbarActions(
    * right to change them, or nothing where it has none: then "Save as shared
    * style…" is not offered.
    */
-  sharedStyles?: SharedStyleOffer
+  sharedStyles?: SharedStyleOffer,
+  /**
+   * Whether to plan the verbs whose availability is answered by planning
+   * them in full: saving as a pattern, and the component verbs, which build
+   * the document they would store. Defaults to true. False for what a
+   * surface shows as the selection changes, so a click plans nothing; the
+   * grant and Entry content still dim them, and a menu that opens, or the
+   * verb when it runs, plans them and says why it refuses.
+   */
+  planned: boolean = true
 ): ToolbarAction[] {
   if (selectedId === null) return [];
 
@@ -820,7 +877,8 @@ export function toolbarActions(
       mayCreatePattern,
       lockRefusalFor,
       components,
-      sharedStyles
+      sharedStyles,
+      planned
     );
 
   const deleteLock = lockBlockingDelete(document, selectedId);
@@ -866,10 +924,17 @@ export function toolbarActions(
       lockRefusalFor,
       duplication?.ops
     ),
-    saveAction(document, ids, rules, mayCreatePattern),
+    saveAction(document, ids, rules, mayCreatePattern, planned),
     ...sharedStyleActions(document, ids, sharedStyles),
     ...editComponentAction(document, selectedId, offersEditComponent),
-    ...compositionActions(document, ids, rules, components, lockRefusalFor),
+    ...compositionActions(
+      document,
+      ids,
+      rules,
+      components,
+      lockRefusalFor,
+      planned
+    ),
     deleteLock === undefined
       ? heldByLock(
           { id: "delete", label: "Delete", enabled: deletion !== null },
@@ -950,10 +1015,11 @@ export interface ToolbarPlacement {
   readonly x: number;
   readonly y: number;
   /**
-   * Above the block, below it, or pinned to the top of the screen over a tall
-   * block whose own top is scrolled out of view.
+   * Above the block; inside its top-left corner where there is no room above
+   * it on screen; or pinned to the top of the screen over a tall block whose
+   * own top is scrolled out of view.
    */
-  readonly side: "above" | "below" | "pinned";
+  readonly side: "above" | "inside" | "pinned";
 }
 
 /**
@@ -976,13 +1042,19 @@ const WHOLE_PAGE: ToolbarScreen = {
 /** The gap between the bar and the block it names, in pixels. */
 export const TOOLBAR_GAP_PX = 6;
 
+/** How far inside the block's top-left corner an `inside` bar is drawn. */
+export const TOOLBAR_INSET_PX = 4;
+
 /**
  * Where to draw the bar for a block, in the canvas's own content coordinates.
  *
- * **Above by default, below when there is no room.** Above keeps the bar off
- * the block's own content, which is what an author is looking at; the first
- * block on a page has nothing above it, and a bar clamped to the canvas top
- * would sit ON that block instead of beside it.
+ * **Above by default, inside the block when there is no room.** Above keeps
+ * the bar off the block's own content, which is what an author is looking at.
+ * The first block on a page has nothing above it, and there the bar is drawn
+ * just inside the block's top-left corner: over the block it names, and never
+ * below it, where it would cover the next block. Whatever is drawn above the
+ * block on the canvas counts as room, a Layout's header included, since the
+ * bar may cover that but no other block of the page.
  *
  * **Left-aligned to the block, never centred.** A centred bar moves whenever
  * the block's width changes — which happens while an author is editing its
@@ -991,13 +1063,12 @@ export const TOOLBAR_GAP_PX = 6;
  *
  * **Clamped horizontally, never vertically.** A bar pushed off the right edge
  * is unreachable, so it slides back in. Vertical overflow is handled by the
- * side flip above rather than by clamping, because a clamped bar overlaps the
- * block and a flipped one does not.
+ * side chosen rather than by clamping.
  *
  * **Kept to what is on screen** (`screen`, the whole page when not given):
  * room above is room above on screen, so a block just below the screen's top
- * flips its bar below it; and a tall block whose top is scrolled away keeps
- * its bar pinned at the top of the screen, over the block, where an author
+ * takes its bar inside; and a tall block whose top is scrolled away keeps its
+ * bar pinned at the top of the screen, over the block, where an author
  * working in its middle can reach it.
  */
 export function toolbarPlacement(
@@ -1009,8 +1080,8 @@ export function toolbarPlacement(
   parts: readonly Rect[] = [block]
 ): ToolbarPlacement {
   const above = block.y - toolbar.height - gap;
-  const below = block.y + block.height + gap;
-  const side = toolbarSide(block, toolbar, gap, screen, above, below);
+  const side = toolbarSide(block, toolbar, gap, screen, above);
+  const inset = side === "inside" ? TOOLBAR_INSET_PX : 0;
 
   // Kept to the canvas, and to the part of it on screen where that is given
   // and the block crosses it: a block wholly off the side keeps its bar with
@@ -1030,43 +1101,38 @@ export function toolbarPlacement(
   const maxX =
     Math.min(canvas.width, crosses ? right : Number.POSITIVE_INFINITY) -
     toolbar.width;
-  const x = maxX <= minX ? minX : Math.min(Math.max(block.x, minX), maxX);
+  const start = block.x + inset;
+  const x = maxX <= minX ? minX : Math.min(Math.max(start, minX), maxX);
 
   const y =
-    side === "above" ? above : side === "below" ? below : screen.top + gap;
+    side === "above"
+      ? above
+      : side === "inside"
+        ? block.y + inset
+        : screen.top + gap;
   return { x, y, side };
 }
 
 /**
- * Which side the bar takes. Below only when above would leave the screen, the
- * block is on it (its top, or a short end of it too little to pin over) and
- * the bar fits on screen under the block; a block
- * near the BOTTOM keeps the bar above it, where it is still visible, since
- * flipping there would push it under the fold for no gain. Pinned to the
- * screen's top over a block that fills the screen below the bar: one whose top
- * is scrolled away, or one too tall for the bar to fit under it on screen.
- * Above for a block wholly out of view.
+ * Which side the bar takes. Above wherever that is on screen. Inside the block
+ * when above would leave the screen and the block's top is on it. Pinned to
+ * the screen's top over a block whose top is scrolled away while enough of it
+ * is still on screen to hold the bar. Above for anything else: a block wholly
+ * out of view, or a short end of one too little to pin the bar over, which
+ * takes its bar out of view with its top rather than over the next block.
  */
 function toolbarSide(
   block: Rect,
   toolbar: ToolbarSize,
   gap: number,
   screen: ToolbarScreen,
-  above: number,
-  below: number
+  above: number
 ): ToolbarPlacement["side"] {
   if (above >= screen.top) return "above";
+  if (block.y >= screen.top) return "inside";
   const stillShown =
     block.y + block.height >= screen.top + toolbar.height + gap;
-  const fitsBelow = below + toolbar.height <= screen.bottom;
-  if (block.y >= screen.top) {
-    return fitsBelow || !stillShown ? "below" : "pinned";
-  }
-  if (stillShown) return "pinned";
-  // A short block whose top is just off the screen, with a little of it
-  // still on: too little to pin the bar over, so below it where that fits.
-  const partlyShown = block.y + block.height > screen.top;
-  return partlyShown && fitsBelow ? "below" : "above";
+  return stillShown ? "pinned" : "above";
 }
 
 /** A plan's ops, or undefined for no plan or a refusal. */

@@ -9,7 +9,7 @@ import {
   type BlockDocument,
   type BuilderOp,
 } from "@nextlyhq/blocks-engine";
-import { ShortcutProvider } from "@nextlyhq/ui";
+import { ShortcutProvider, toast } from "@nextlyhq/ui";
 import {
   act,
   cleanup,
@@ -137,6 +137,7 @@ afterEach(() => {
 describe("converting from the editor", () => {
   it("applies the page ops once the canvas holds the new definition, as one step", async () => {
     stubWriter();
+    const success = vi.spyOn(toast, "success");
     const { applyAll, select, retry, onClose, props, view } = mount();
 
     await confirm();
@@ -160,6 +161,9 @@ describe("converting from the editor", () => {
     expect(applyAll).toHaveBeenCalledWith(CONVERT_OPS);
     expect(select).toHaveBeenCalledWith("placed", "replace");
     expect(onClose).toHaveBeenCalled();
+    expect(success).toHaveBeenCalledWith(
+      "Turned into a component. Edit it once and every page updates."
+    );
   });
 
   it("leaves the page unchanged when it refuses the ops, and the component unused", async () => {

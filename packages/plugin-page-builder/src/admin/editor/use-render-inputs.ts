@@ -67,7 +67,7 @@ import {
 } from "react";
 
 import { classUsageOf } from "../../class-usage";
-import { withBlockLooks } from "../../core-looks";
+import { withRegisteredLooks } from "../../core-looks";
 import {
   hostFetchPolicy,
   readRemotePatterns,
@@ -156,10 +156,14 @@ export function useSiteStyleInputs(
    */
   // With every registered block's looks, other plugins' among them: the
   // published config is a copy taken before those blocks registered, so the
-  // editor reads them from its own registry, by the same rule the server does.
+  // editor reads them from its own registry, through the one function the
+  // published page's site style takes its looks from too.
   const configSiteStyle = useMemo(
     () =>
-      withBlockLooks(readSiteStyleRecord(clientConfig?.siteStyle), allBlocks()),
+      withRegisteredLooks(
+        readSiteStyleRecord(clientConfig?.siteStyle),
+        allBlocks()
+      ),
     [clientConfig]
   );
   const {

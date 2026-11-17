@@ -134,6 +134,7 @@ function layOut(frame: HTMLIFrameElement): void {
 function framed(ui: React.ReactElement): {
   container: HTMLElement;
   frame: HTMLIFrameElement;
+  rerender: (ui: React.ReactElement) => void;
 } {
   const result = render(ui);
   const frame = result.container.querySelector("iframe");
@@ -143,7 +144,7 @@ function framed(ui: React.ReactElement): {
     frame.contentDocument?.documentElement.setAttribute(PAGE_MARKER, "");
     frame.dispatchEvent(new Event("load"));
   });
-  return { container: result.container, frame };
+  return { container: result.container, frame, rerender: result.rerender };
 }
 
 describe("the space chrome is drawn in over a frame", () => {
@@ -250,6 +251,59 @@ describe("chrome drawn over a frame lines up with the page", () => {
     expect(layer?.style.width).toBe(painted(viewport?.width));
     expect(layer?.style.height).toBe(painted(viewport?.height));
     expect(content?.style.transform).toMatch(/^translate\(4px, 4px\)/);
+  });
+
+  it("follows a selection on a canvas drawn again under a new root, the layer kept", async () => {
+    // The page in the frame can replace where the canvas is mounted, which
+    // draws a new canvas root while the layer over the frame stays: the
+    // marks' watchers have to move to the new root to hear its selection.
+    const twoBlocks: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "box", type: "frame/box", version: 1, props: {} },
+        { id: "other", type: "frame/box", version: 1, props: {} },
+      ],
+    };
+    const drawn = (root: string, selectedId: string) => (
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        source={TEST_SOURCE}
+        overlay={<CanvasMarks />}
+      >
+        <Canvas
+          key={root}
+          document={twoBlocks}
+          siteStyles={false}
+          selectedId={selectedId}
+        />
+      </CanvasFrame>
+    );
+    const ringLeft = () =>
+      container.querySelector<HTMLElement>(
+        '.nx-canvas-mark[data-mark="selected"]'
+      )?.style.left;
+    const { container, frame, rerender } = framed(drawn("first", "box"));
+    await act(async () => undefined);
+    // The control: the ring is over "box", at the frame's scale.
+    await vi.waitFor(() => expect(ringLeft()).toBe("46px"));
+    const before = frame.contentDocument?.querySelector(
+      `.${CANVAS_ROOT_CLASS}`
+    );
+
+    rerender(drawn("second", "box"));
+    await act(async () => undefined);
+    // A new root, in the same frame.
+    expect(
+      frame.contentDocument?.querySelector(`.${CANVAS_ROOT_CLASS}`)
+    ).not.toBe(before);
+    layOut(frame);
+
+    // Selected on the new root: the ring moves to the other block.
+    rerender(drawn("second", "other"));
+    await act(async () => undefined);
+    await vi.waitFor(() => expect(ringLeft()).toBe("-4px"));
   });
 
   it("draws the drop line at the frame's scale", () => {

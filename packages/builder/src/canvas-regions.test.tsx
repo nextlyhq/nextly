@@ -32,9 +32,16 @@ import {
 } from "vitest";
 
 import { CHROME_ATTRIBUTE, CONDITIONED_ATTRIBUTE, Canvas } from "./canvas";
+import { CANVAS_FRAME_SHEET } from "./canvas-frame-sheet";
 import { CANVAS_REGION_CLASS, type CanvasRegion } from "./canvas-regions";
 
 afterEach(cleanup);
+
+/** How often the async block has run, across every draw. */
+const lateRenders = { count: 0 };
+
+/** How often the counting block has been drawn, across every draw. */
+const countedDraws = { count: 0 };
 
 beforeAll(() => {
   registerBlocks(
@@ -54,6 +61,27 @@ beforeAll(() => {
           props.href === undefined
             ? createElement("p", { className }, props.text)
             : createElement("a", { className, href: props.href }, props.text),
+      },
+      {
+        name: "acme/late",
+        version: 1,
+        description: "A block that draws after a promise, as an image does.",
+        example: { props: {} },
+        render: async ({ className }: { className: string }) => {
+          lateRenders.count += 1;
+          await Promise.resolve();
+          return createElement("img", { className, alt: "Logo" });
+        },
+      },
+      {
+        name: "acme/counted",
+        version: 1,
+        description: "A block that counts how often it is drawn.",
+        example: { props: {} },
+        render: ({ className }: { className: string }) => {
+          countedDraws.count += 1;
+          return createElement("span", { className });
+        },
       },
       {
         name: "acme/where",
@@ -342,10 +370,16 @@ describe("the regions of a page's Layout on the canvas", () => {
     const badge = header.querySelector(".nx-canvas-region__badge");
     expect(badge?.textContent).toBe("Header · from Layout");
     expect(badge?.getAttribute("aria-hidden")).toBe("true");
+    // The pointer widens it through the stylesheet alone, so resting or
+    // moving the pointer on a region never draws it again.
     fireEvent.mouseEnter(header);
-    expect(header.dataset.state).toBe("hover");
+    expect(header.dataset.state).toBe("rest");
     fireEvent.mouseLeave(header);
     expect(header.dataset.state).toBe("rest");
+    expect(CANVAS_FRAME_SHEET).toMatch(
+      /\.nx-canvas-region:is\(:hover, :focus-within\):not\(\[data-state="open"\]\)\s+\.nx-canvas-region__badge\s*\{\s*display: inline;/
+    );
+    expect(CANVAS_FRAME_SHEET).not.toContain('[data-state="hover"]');
     fireEvent.click(header);
     expect(header.dataset.state).toBe("open");
     // The lock closes what it opened.
@@ -505,6 +539,94 @@ describe("the regions of a page's Layout on the canvas", () => {
       }
     });
     frame.remove();
+  });
+
+  it("keeps a region's async blocks drawn, without running them again, when the page changes", async () => {
+    const header = regionOf("header", "Top");
+    const component = [...(header.definitions?.values() ?? [])][0];
+    const withLogo: CanvasRegion = {
+      ...header,
+      definitions: new Map([
+        [
+          "header-component",
+          {
+            ...component,
+            nodes: [
+              { id: "logo", type: "acme/late", version: 1, props: {} },
+              { id: "count", type: "acme/counted", version: 1, props: {} },
+            ],
+          } as BlockDocument,
+        ],
+      ]),
+    };
+    const regions = [withLogo];
+    const render1 = { styleContext: sheet };
+    const canvasOf = (document: BlockDocument, rendered: object) => (
+      <Canvas
+        document={document}
+        siteStyles={sheet as never}
+        regions={regions}
+        onSelect={vi.fn()}
+        render={rendered as never}
+      />
+    );
+    const view = await act(async () => render(canvasOf(page, render1)));
+    const logo = screen.getByRole("img", { name: "Logo" });
+    const before = lateRenders.count;
+    expect(before).toBeGreaterThan(0);
+    const drawn = countedDraws.count;
+    expect(drawn).toBeGreaterThan(0);
+    // An insert on the page, and the canvas's inputs handed again as a new
+    // object with the same values, as the editor does after an edit.
+    const inserted = {
+      ...page,
+      nodes: [
+        ...page.nodes,
+        { id: "q", type: "acme/text", version: 1, props: { text: "New" } },
+      ],
+    } as BlockDocument;
+    await act(async () => {
+      view.rerender(canvasOf(inserted, { ...render1 }));
+    });
+    expect(screen.getByText("New")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Logo" })).toBe(logo);
+    expect(lateRenders.count).toBe(before);
+    // Nor was the header drawn again at all: its inputs held the same values.
+    expect(countedDraws.count).toBe(drawn);
+  });
+
+  it("draws a region's async blocks again when the region's own content changes", async () => {
+    const header = regionOf("header", "Top");
+    const component = [...(header.definitions?.values() ?? [])][0];
+    const regionWith = (alt: string): CanvasRegion => ({
+      ...header,
+      definitions: new Map([
+        [
+          "header-component",
+          {
+            ...component,
+            nodes: [
+              { id: "logo", type: "acme/late", version: 1, props: { alt } },
+            ],
+          } as BlockDocument,
+        ],
+      ]),
+    });
+    const canvasOf = (region: CanvasRegion) => (
+      <Canvas
+        document={page}
+        siteStyles={sheet as never}
+        regions={[region]}
+        onSelect={vi.fn()}
+        render={{ styleContext: sheet } as never}
+      />
+    );
+    const view = await act(async () => render(canvasOf(regionWith("a"))));
+    const before = lateRenders.count;
+    await act(async () => {
+      view.rerender(canvasOf(regionWith("b")));
+    });
+    expect(lateRenders.count).toBe(before + 1);
   });
 
   it("draws the page alone, as before, with no regions", () => {

@@ -11,7 +11,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 
-import { unsavedAddresses } from "@admin/lib/builder/unsaved-entities";
+import { unsavedAddressesBesides } from "@admin/lib/builder/unsaved-entities";
 import {
   addressCheckApi,
   type AddressCheckAnswer,
@@ -33,9 +33,10 @@ const CHECK_DELAY_MS = 250;
 /**
  * How long an ask may go unanswered before the address is left to the create,
  * which checks it again; a request that never settles would otherwise hold
- * Create unavailable.
+ * Create unavailable. An unsaved entity's address move waits as long for its
+ * final check.
  */
-const CHECK_TIMEOUT_MS = 8000;
+export const CHECK_TIMEOUT_MS = 8000;
 
 const NO_PENDING_CREATES: readonly PendingAddress[] = [];
 
@@ -89,11 +90,12 @@ function stateOf(
  */
 export async function checkAddressAgain(
   kind: BuilderKind,
-  address: string
+  address: string,
+  // The address this entity holds now, left out of what it is checked
+  // against. The address asked about, unless the entity is moving to it.
+  ownAddress: string = address
 ): Promise<string | null> {
-  const others = unsavedAddresses().filter(
-    held => !(held.kind === CHECK_KIND[kind] && held.address === address)
-  );
+  const others = unsavedAddressesBesides(kind, ownAddress);
   const answer = await addressCheckApi.check(CHECK_KIND[kind], address, others);
   return refusalWords(kind, answer);
 }

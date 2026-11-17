@@ -43,6 +43,12 @@ import type { ContentServices } from "./content-controls";
 import { editedStyleState, InspectorPanel } from "./inspector-panel";
 import { applyOp } from "./ops";
 import type { EditorState } from "./editor-state";
+import type { SharedBlockVerbs } from "./keyboard-actions";
+
+/** Verbs as a host shares them: the menu's locked answers are the same list. */
+function shared(verbs: Omit<SharedBlockVerbs, "withLocks">): SharedBlockVerbs {
+  return { ...verbs, withLocks: () => verbs.actions };
+}
 
 afterEach(() => {
   cleanup();
@@ -377,18 +383,11 @@ function choose(name: string | RegExp): void {
   fireEvent.click(screen.getByRole("menuitem", { name }));
 }
 
-/**
- * Bring Content's Advanced section on screen, as an author does: back to the
- * Content tab if another is showing, then the summary, if it is closed.
- */
+/** Bring the Advanced tab on screen, as an author does, if another is showing. */
 function openAdvanced(): void {
-  const content = screen.getByRole("tab", { name: "Content" });
-  if (content.getAttribute("aria-selected") !== "true") {
-    fireEvent.mouseDown(content);
-  }
-  const summary = screen.getByText("Advanced", { selector: "summary" });
-  if (!(summary.parentElement as HTMLDetailsElement).open) {
-    fireEvent.click(summary);
+  const advanced = screen.getByRole("tab", { name: "Advanced" });
+  if (advanced.getAttribute("aria-selected") !== "true") {
+    fireEvent.mouseDown(advanced);
   }
 }
 
@@ -689,7 +688,7 @@ describe("InspectorPanel block card", () => {
     render(
       <InspectorPanel
         editor={editorFor(documentOf({}))}
-        verbs={{
+        verbs={shared({
           actions: [
             { id: "duplicate", label: "Duplicate", enabled: true },
             {
@@ -701,7 +700,7 @@ describe("InspectorPanel block card", () => {
             { id: "move-up", label: "Move up", enabled: true },
           ],
           run,
-        }}
+        })}
       />
     );
     openCardMenu("Heading");
@@ -1754,7 +1753,7 @@ describe("the Advanced tab stays mounted without staying on screen", () => {
     return panel as HTMLElement;
   };
 
-  it("is hidden under the Style tab, and shown again under Content", () => {
+  it("is hidden under the Style and Content tabs, and shown again under Advanced", () => {
     mount({});
     openAdvanced();
     // The control: it really is on screen when chosen, so `hidden` below is
@@ -1765,17 +1764,20 @@ describe("the Advanced tab stays mounted without staying on screen", () => {
     expect(panelOf(screen.getByLabelText("CSS id")).hidden).toBe(true);
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Content" }));
+    expect(panelOf(screen.getByLabelText("CSS id")).hidden).toBe(true);
+
+    openAdvanced();
     expect(panelOf(screen.getByLabelText("CSS id")).hidden).toBe(false);
   });
 
-  it("keeps a half-typed row across a collapse of Advanced", () => {
+  it("keeps a half-typed row across a look at another tab", () => {
     mount({});
     openAdvanced();
     fireEvent.change(screen.getByLabelText("CSS id"), {
       target: { value: "her" },
     });
 
-    fireEvent.click(screen.getByText("Advanced", { selector: "summary" }));
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Content" }));
     openAdvanced();
 
     expect((screen.getByLabelText("CSS id") as HTMLInputElement).value).toBe(
@@ -1783,11 +1785,12 @@ describe("the Advanced tab stays mounted without staying on screen", () => {
     );
   });
 
-  it("names no section of either tab Advanced but Content's", () => {
-    // One "Advanced": the Style tab's sections end at Effects.
+  it("names one place Advanced: its tab, with no section of another tab called that", () => {
+    // One "Advanced": the Style tab's sections end at Effects, and Content
+    // has no Advanced fold.
     register();
     render(<InspectorPanel editor={editorFor(documentOf({}))} />);
-    expect(screen.queryByRole("tab", { name: "Advanced" })).toBeNull();
+    expect(screen.getByRole("tab", { name: "Advanced" })).toBeTruthy();
     expect(screen.getAllByText("Advanced")).toHaveLength(1);
   });
 
@@ -2254,7 +2257,7 @@ describe("a block inside an area locked to its content", () => {
     expect(held?.getAttribute("aria-describedby")).toBe(reason.id);
   });
 
-  it("shows the Style tab and the Advanced section read-only", () => {
+  it("shows the Style and Advanced tabs read-only", () => {
     mountHeld();
 
     // Controls that change something. A section's toggle, the state
@@ -2269,10 +2272,7 @@ describe("a block inside an area locked to its content", () => {
       );
 
     openAdvanced();
-    const content = screen.getByRole("tabpanel", { name: "Content" });
-    const advanced = content.querySelector(
-      ".nx-inspector__advanced"
-    ) as Element;
+    const advanced = screen.getByRole("tabpanel", { name: "Advanced" });
     expect(editingControls(advanced).length).toBeGreaterThan(0);
     expect(
       editingControls(advanced).filter(control => !isDisabled(control))
@@ -2339,6 +2339,7 @@ describe("Show when, as the selection moves", () => {
     await act(async () => {
       await Promise.resolve();
     });
+    openAdvanced();
     act(() => {
       screen.getByRole("button", { name: "Add condition" }).click();
     });

@@ -42,6 +42,13 @@ export const emailQueuePg = pgTable(
     principalId: varchar("principal_id", { length: 191 }),
     /** The last failed attempt's failure, as JSON, with no address. */
     failure: text("failure"),
+    /**
+     * The template it is sent from, in clear so the Activity list can show
+     * and filter by it: a slug names a kind of message, never a person. Null
+     * for a message queued without a template, and for one queued before
+     * this column existed.
+     */
+    templateSlug: varchar("template_slug", { length: 255 }),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
     updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
     /** When it was sent, failed for good, or was cancelled. */
@@ -50,5 +57,8 @@ export const emailQueuePg = pgTable(
   t => [
     index("email_queue_state_idx").on(t.state, t.settledAt),
     index("email_queue_principal_idx").on(t.principalKind, t.principalId),
+    // The Activity list: newest first, by cursor, and by template.
+    index("email_queue_created_idx").on(t.createdAt, t.id),
+    index("email_queue_template_idx").on(t.templateSlug, t.createdAt),
   ]
 );

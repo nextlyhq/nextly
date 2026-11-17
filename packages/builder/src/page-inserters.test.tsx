@@ -228,7 +228,7 @@ describe("an empty page", () => {
     expect(screen.getByRole("button", { name: "Add block" })).toBeTruthy();
   });
 
-  it.each(["pattern", "region", "template"])(
+  it.each(["pattern", "template"])(
     "speaks of blocks in an empty %s, which has no sections either",
     async kind => {
       // Only a page is built of sections; every other kind of document holds

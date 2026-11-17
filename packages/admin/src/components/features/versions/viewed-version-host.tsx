@@ -50,6 +50,7 @@ import {
   layoutFor,
   useChangesLayoutPreference,
 } from "./diff/changes-layout";
+import { fieldPathLabel } from "./diff/field-path";
 import {
   useDocumentHistory,
   type DocumentHistoryValue,
@@ -684,6 +685,11 @@ function ViewedVersionFrame({
     [changes, layout]
   );
   const { position, current, move } = useChangeNavigation(order);
+  // The change the position is on, named as its field is in the list below.
+  const currentNode = current ? changes?.byField.get(current) : undefined;
+  const currentChangeLabel = currentNode
+    ? fieldPathLabel(currentNode, 0)
+    : undefined;
   const [preference, setChangesLayout] = useChangesLayoutPreference();
   const { layout: changesLayout, splittable } = layoutFor(
     preference,
@@ -717,6 +723,7 @@ function ViewedVersionFrame({
             comparedWith={viewing.comparedWith}
             changes={state}
             position={position}
+            currentLabel={currentChangeLabel}
             onMove={move}
             onBackToHistory={restore?.backToHistory}
             onOpenComparison={restore?.compare}
