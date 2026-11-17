@@ -97,6 +97,15 @@ describe("a layer's fields", () => {
     expect(onWrite).toHaveBeenLastCalledWith(`inset ${ONE}`);
   });
 
+  it("shows an unset blur and spread as 0, which is what CSS draws", () => {
+    render(<Host initial="2px 2px" />);
+    for (const label of ["Blur", "Spread"]) {
+      expect(
+        (within(layer(1)).getByLabelText(label) as HTMLInputElement).placeholder
+      ).toBe("0");
+    }
+  });
+
   it("refuses a negative blur where it is typed, saying why", () => {
     const onWrite = vi.fn();
     render(<Host initial={ONE} onWrite={onWrite} />);

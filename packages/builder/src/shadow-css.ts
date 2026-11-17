@@ -90,26 +90,44 @@ function layerOf(
   parts: readonly ShadowPart[],
   tokens: SiteTokenSet | undefined
 ): ShadowLayer | undefined {
-  const sizes: string[] = [];
-  let inset = false;
-  let colour: ShadowColour | undefined;
-  for (const part of parts) {
-    if (part.kind === "length") {
-      sizes.push(part.text);
-      continue;
-    }
-    // At most one of each; a second is a layer CSS reads differently.
-    if (part.kind === "inset" && !inset) {
-      inset = true;
-      continue;
-    }
-    const read = colour === undefined ? colourOf(part, tokens) : undefined;
-    if (read === undefined) return undefined;
-    colour = read;
+  const sizes = sizesOf(parts);
+  const colour = layerColourOf(parts, tokens);
+  const insets = parts.filter(part => part.kind === "inset").length;
+  // At most one "inset"; a second is a layer CSS reads differently.
+  if (sizes === undefined || colour === undefined || insets > 1) {
+    return undefined;
   }
-  const [x, y, blur, spread, ...more] = sizes;
+  return { inset: insets === 1, ...sizes, colour: colour.colour };
+}
+
+/** A layer's sizes: X and Y, then a blur and a spread where it sets them. */
+function sizesOf(
+  parts: readonly ShadowPart[]
+): Pick<ShadowLayer, "x" | "y" | "blur" | "spread"> | undefined {
+  const [x, y, blur, spread, ...more] = parts
+    .filter(part => part.kind === "length")
+    .map(part => part.text);
   if (x === undefined || y === undefined || more.length > 0) return undefined;
-  return { inset, x, y, blur, spread, colour };
+  return { x, y, blur, spread };
+}
+
+/**
+ * A layer's colour, `{ colour: undefined }` where it sets none, or
+ * `undefined` where its one remaining part is no colour of the site's, or
+ * there are two.
+ */
+function layerColourOf(
+  parts: readonly ShadowPart[],
+  tokens: SiteTokenSet | undefined
+): { colour: ShadowColour | undefined } | undefined {
+  const rest = parts.filter(
+    part => part.kind !== "length" && part.kind !== "inset"
+  );
+  const [only, ...more] = rest;
+  if (only === undefined) return { colour: undefined };
+  if (more.length > 0) return undefined;
+  const colour = colourOf(only, tokens);
+  return colour === undefined ? undefined : { colour };
 }
 
 /** A part as a layer's colour, or `undefined` where it is none of the site's. */

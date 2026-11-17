@@ -58,6 +58,8 @@ export interface ValueFieldProps {
   css?: string | undefined;
   /** Which of the variable's values this field edits. */
   mode?: "light" | "dark";
+  /** What an empty field shows: what CSS draws with nothing set. */
+  placeholder?: string | undefined;
 }
 
 /**
@@ -348,6 +350,7 @@ function NumericValue({
   onCommit,
   css,
   control,
+  placeholder,
 }: ValueFieldProps & { control: StyleControl | undefined }): React.JSX.Element {
   const id = React.useId();
   if (readOnly || control === undefined) {
@@ -370,7 +373,7 @@ function NumericValue({
         id={id}
         label={label}
         value={value}
-        placeholder={undefined}
+        placeholder={placeholder}
         refusedBy={refusedBy}
         onCommit={onCommit}
         control={control}

@@ -63,7 +63,7 @@ import {
   toggleShows,
 } from "./style-numeric";
 import { textNumber, UnitWords, NumericField } from "./style-numeric-field";
-import { drawsShadow, ShadowField } from "./style-shadow-field";
+import { BOX_SHADOW, drawsShadow, ShadowField } from "./style-shadow-field";
 import { useDraft, arrowStep, storedText } from "./style-text-field";
 import { tokenForTypedName } from "./style-variables";
 import { VariableChoice } from "./variable-choice";
@@ -426,7 +426,13 @@ const OWN_FIELDS: Readonly<
     string,
     {
       draws: (stored: StyleValue | undefined) => boolean;
-      Field: typeof AspectRatioField;
+      /** Given the control and the site's variables too, for a field that offers them. */
+      Field: (
+        props: Parameters<typeof AspectRatioField>[0] & {
+          control: StyleControl;
+          tokens: SiteTokenSet | undefined;
+        }
+      ) => React.JSX.Element;
       /** Whether its tab stop is a button a label's `for` would click. */
       buttons: boolean;
     }
@@ -441,6 +447,13 @@ const OWN_FIELDS: Readonly<
     draws: drawsDecoration,
     Field: DecorationField,
     buttons: true,
+  },
+  // A shadow is built with the shadow control, as a shadow variable is; a
+  // held shadow variable keeps its chip.
+  [BOX_SHADOW]: {
+    draws: drawsShadow,
+    Field: ShadowField,
+    buttons: false,
   },
   // Any position: the nine points, or one written as CSS beside them.
   "object-position": {
@@ -562,20 +575,6 @@ export function ValueField({
       />
     );
   }
-  // A shadow is built with the shadow control, as a shadow variable is.
-  if (drawsShadow(control.leaf, stored)) {
-    return (
-      <ShadowField
-        id={id}
-        control={control}
-        stored={stored}
-        actionName={actionName}
-        tokens={tokens}
-        describedBy={describedBy}
-        onCommit={onCommit}
-      />
-    );
-  }
   // A property with a field of its own, where the stored value is one that
   // field can draw; any other spelling keeps the text field.
   const own = OWN_FIELDS[control.leaf.cssProperty];
@@ -584,8 +583,10 @@ export function ValueField({
       <own.Field
         id={id}
         labelledBy={labelledBy}
+        control={control}
         stored={stored}
         actionName={actionName}
+        tokens={tokens}
         describedBy={describedBy}
         onCommit={onCommit}
       />

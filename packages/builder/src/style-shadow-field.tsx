@@ -19,17 +19,11 @@ import { VariableChoice } from "./variable-choice";
 export const BOX_SHADOW = "box-shadow";
 
 /**
- * Whether the shadow control draws a stored value: a shadow written as CSS,
- * or none yet. A held variable keeps its chip.
+ * Whether the shadow control draws a box shadow's stored value: one written
+ * as CSS, or none yet. A held variable keeps its chip.
  */
-export function drawsShadow(
-  leaf: StyleControl["leaf"],
-  stored: StyleValue | undefined
-): boolean {
-  return (
-    leaf.cssProperty === BOX_SHADOW &&
-    (stored === undefined || typeof stored === "string")
-  );
+export function drawsShadow(stored: StyleValue | undefined): boolean {
+  return stored === undefined || typeof stored === "string";
 }
 
 export function ShadowField({
@@ -42,6 +36,8 @@ export function ShadowField({
   onCommit,
 }: {
   id: string;
+  /** The field label's id; the control is a group named by its own label. */
+  labelledBy: string;
   control: StyleControl;
   stored: StyleValue | undefined;
   actionName: string;

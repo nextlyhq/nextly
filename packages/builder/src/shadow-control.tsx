@@ -391,6 +391,8 @@ function LayerFields({
             <SizeValue
               label={label}
               value={layer[part] ?? ""}
+              // An unset blur or spread draws as 0.
+              placeholder="0"
               readOnly={readOnly}
               onCommit={typed => onChange({ ...layer, [part]: typed })}
             />

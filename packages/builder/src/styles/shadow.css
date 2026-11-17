@@ -88,6 +88,12 @@
   min-width: 0;
 }
 
+/* A colour's notes ("Not adapted to dark mode") at the panel's small size,
+   in Design too, where the inspector's own size is not set. */
+.nx-shadow .nx-inspector__note {
+  font-size: var(--text-xs);
+}
+
 .nx-shadow__inside {
   display: flex;
   align-items: center;
