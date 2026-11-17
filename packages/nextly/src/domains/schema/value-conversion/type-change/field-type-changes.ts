@@ -7,6 +7,7 @@
  *
  * @module domains/schema/value-conversion/type-change/field-type-changes
  */
+import { NextlyError } from "../../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import {
   type ColumnOrigin,
@@ -191,4 +192,84 @@ export function pendingMigrationRefusal(
     code: "TYPE_CHANGE_BLOCKED",
     message: `Finish the pending migration of ${entity} first, then change the field's type.`,
   };
+}
+
+/** One entity a save changes, as the precondition reads it. */
+export interface EntityTypeChangeInput {
+  /** How a refusal names the entity: "Collection 'products'", "Single 'home'". */
+  label: string;
+  table: string;
+  /** Its translations table, where a field translated before the save keeps each language's value. */
+  translationsTable?: string;
+  /** The fields translated before the save. */
+  translatedBefore?: ReadonlySet<string>;
+  /** The fields as the database holds them before the save: the registry row's. */
+  previous: readonly FieldDefinition[];
+  /** The fields as the save leaves them. */
+  next: readonly FieldDefinition[];
+  renamed?: ReadonlyMap<string, string>;
+  /** The registry row's status: a definition still awaiting its migration is not judged against. */
+  migrationStatus?: string | null;
+  builtBy: ColumnOrigin;
+  /** The fields whose lost values the owner consented to clearing, by name. */
+  acknowledged?: ReadonlySet<string>;
+}
+
+/**
+ * Refuse, before any statement of the save runs, every field type change of `entity` that is
+ * blocked, or lossy with no consent naming its field, and any type change while the entity's
+ * definition still awaits its migration. Every refusal is named at once, so the owner sees them all
+ * in one save. A save with no field type change reads no row.
+ *
+ * @throws {NextlyError} a validation error listing each refusal by its field
+ */
+export async function refuseFieldTypeChanges(
+  db: unknown,
+  dialect: SupportedDialect,
+  entity: EntityTypeChangeInput
+): Promise<void> {
+  const changes = fieldTypeChangesOf({
+    previous: entity.previous,
+    next: entity.next,
+    ...(entity.renamed !== undefined ? { renamed: entity.renamed } : {}),
+    dialect,
+    builtBy: entity.builtBy,
+  });
+  if (changes.length === 0) return;
+  const pending =
+    entity.migrationStatus === undefined
+      ? null
+      : pendingMigrationRefusal(entity.label, entity.migrationStatus, changes);
+  const refusals =
+    pending !== null
+      ? [pending]
+      : typeChangeRefusals(
+          entity.label,
+          await judgeFieldTypeChanges({
+            db,
+            dialect,
+            builtBy: entity.builtBy,
+            table: entity.table,
+            ...(entity.translationsTable !== undefined
+              ? { translationsTable: entity.translationsTable }
+              : {}),
+            ...(entity.translatedBefore !== undefined
+              ? { translated: entity.translatedBefore }
+              : {}),
+            changes,
+          }),
+          entity.acknowledged
+        );
+  if (refusals.length === 0) return;
+  throw NextlyError.validation({
+    errors: refusals.map(refusal => ({
+      path: `fields.${refusal.path}`,
+      code: refusal.code,
+      message: refusal.message,
+    })),
+    logContext: {
+      entity: entity.label,
+      fields: refusals.map(refusal => refusal.path),
+    },
+  });
 }
