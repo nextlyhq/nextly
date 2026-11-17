@@ -54,12 +54,13 @@ describe("collection entry unpublish-all route", () => {
     // Every language moves at once, so a trailing segment names nothing either route can act on:
     // `.../unpublish-all/de` is refused rather than read as taking every language down. Both
     // routes refuse it alike, so the same URL shape means the same thing to each.
-    expect(
-      parseRestRoute([...ENTRY, "unpublish-all", "de"], "POST").method
-    ).not.toBe("unpublishAllLocales");
-    expect(
-      parseRestRoute([...ENTRY, "publish-all", "de"], "POST").method
-    ).not.toBe("publishAllLocales");
+    // Neither all-language method claims either URL, so a trailing segment never moves every
+    // language through the other route either.
+    for (const route of ["unpublish-all", "publish-all"]) {
+      const { method } = parseRestRoute([...ENTRY, route, "de"], "POST");
+      expect(method).not.toBe("publishAllLocales");
+      expect(method).not.toBe("unpublishAllLocales");
+    }
   });
 
   it("does not shadow publish-all, and is not shadowed by it", () => {

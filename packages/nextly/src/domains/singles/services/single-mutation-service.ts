@@ -2532,6 +2532,7 @@ export class SingleMutationService extends BaseService {
       const gate = await writeGateFor(
         data,
         "single",
+        singleMeta.tableName,
         () => (singleMeta as { status?: boolean }).status === true
       );
       // Handed on as the status alone: the system columns a status-only body

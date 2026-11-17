@@ -16273,6 +16273,7 @@ export class CollectionMutationService extends BaseService {
       const gate = await writeGateFor(
         body,
         "collection",
+        await this.collectionTableNameOf(params.collectionName),
         async () =>
           (
             (await this.collectionService.getCollection(
@@ -24320,6 +24321,17 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The table a collection's entries are stored in, as its record names it: what a write's gate
+   * reads the contributed columns of.
+   */
+  async collectionTableNameOf(collectionName: string): Promise<string> {
+    return collectionTableName(
+      await this.collectionService.getCollection(collectionName),
+      collectionName
+    );
+  }
+
+  /**
    * A row's own gate and its answer: a write that changes only the status of
    * an entry with a lifecycle asks the publish or unpublish its status names,
    * any other update. Asked on `executor` where the caller owns a
@@ -24346,7 +24358,12 @@ export class CollectionMutationService extends BaseService {
     >[0]["executor"],
     appliesFilter = false
   ): Promise<RowVerdict> {
-    const gate = await writeGateFor(body, "collection", hasLifecycle);
+    const gate = await writeGateFor(
+      body,
+      "collection",
+      await this.collectionTableNameOf(params.collectionName),
+      hasLifecycle
+    );
     const gateParams = {
       collectionName: params.collectionName,
       operation: gate,
