@@ -1,9 +1,14 @@
 "use client";
 
 /**
- * The page reads meter, as the editor's top bar draws it: what the page being
- * edited reads when it is published, against the allowance a published page
- * renders under, warning from 80% of it.
+ * The page data meter: what the page being edited reads when it is
+ * published, against the site's page data limit, counted once and drawn in
+ * two places. The top bar shows it only from 80% of the limit (or when the
+ * count fails); Page settings shows it at every level.
+ *
+ * The limit is the site's: `pageBuilder({ maxQueries })`, sent to the editor
+ * in the admin's client config, which the page routes render under too where
+ * they set no `maxQueries` of their own. Unset, it is the default, 500.
  *
  * ## How the count is made
  *
@@ -58,6 +63,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactElement,
@@ -71,8 +77,29 @@ import {
 
 import { useCanvasEntryIdentity } from "./canvas-entry";
 
-/** How long the page must stay unchanged before it is counted again. */
-const COUNT_AFTER_MS = 600;
+/**
+ * How long the page must stay unchanged before it is counted again. A count
+ * draws the whole page on the main thread, so it waits for the author to
+ * stop working rather than competing with what they are doing.
+ */
+const COUNT_AFTER_MS = 2000;
+
+/**
+ * The longest a count, once the page has rested, waits for the browser to be
+ * idle: past it, the count is made anyway, so a page kept busy by something
+ * other than the author is still counted.
+ */
+const IDLE_WITHIN_MS = 1000;
+
+/** Run `run` when the browser is next idle, or at once where it cannot say. */
+function whenIdle(run: () => void): () => void {
+  if (typeof requestIdleCallback === "function") {
+    const handle = requestIdleCallback(run, { timeout: IDLE_WITHIN_MS });
+    return () => cancelIdleCallback(handle);
+  }
+  run();
+  return () => undefined;
+}
 
 /**
  * Draw a page to nowhere, every async block settled. A count given up on
@@ -225,13 +252,6 @@ function routeBindings(
 }
 
 /**
- * The longest a count waits for the page to stop changing, from the first
- * change it waits on: a page whose inputs change more often than
- * {@link COUNT_AFTER_MS} is still counted, rather than put off for good.
- */
-const COUNT_WITHIN_MS = 3000;
-
-/**
  * How long a count may take before the meter says it could not be made: a
  * read that never answers (a stalled request, a block that never settles)
  * would otherwise leave it counting for good. A count of a page at its
@@ -253,15 +273,6 @@ interface PageReads {
   readonly report: PageReadReport | undefined;
   /** Given when the latest count could not be made: counts again now. */
   readonly retry: (() => void) | undefined;
-}
-
-/**
- * How long a count waits now, a change having been made: the moment the
- * page is given to settle, but never past {@link COUNT_WITHIN_MS} from the
- * first change it has waited on (`since`).
- */
-function countWait(since: number, now: number): number {
-  return Math.min(COUNT_AFTER_MS, Math.max(0, since + COUNT_WITHIN_MS - now));
 }
 
 /**
@@ -287,38 +298,39 @@ type MakeCount = (signal: AbortSignal) => Promise<PageReadReport>;
 /**
  * When the page's counts are made, and what the meter is told of them.
  *
- * - **A change waits.** A count is made {@link COUNT_AFTER_MS} after the
- *   page last changed, and never more than {@link COUNT_WITHIN_MS} after the
- *   first change it waited on.
- * - **One count at a time.** A change made while a count is being made is
- *   remembered, and exactly one count is made with the latest inputs once
- *   that one answers. Counts started over one another would each be
- *   overtaken before it answered, and the meter would wait on them all.
- * - **One deadline per wait.** From the first change the meter waits on, it
- *   is told a count or a failure within {@link COUNT_GIVES_UP_MS}, however
- *   the page goes on changing: a read that never answers would otherwise
- *   leave it counting for good.
+ * - **A count waits for the author to rest.** It is made once the page has
+ *   gone {@link COUNT_AFTER_MS} without a change, when the browser is next
+ *   idle. A page that keeps changing is not counted until it rests: a count
+ *   draws the whole page on the main thread, and while the author works that
+ *   draw would compete with them.
+ * - **An edit stops a count being made.** A change made while a count is
+ *   being made aborts it, since its answer would already be out of date, and
+ *   the count waits for the page to rest again. So at most one count is ever
+ *   being made.
+ * - **A count has its while.** From when a count begins, the meter is told
+ *   a count or a failure within {@link COUNT_GIVES_UP_MS}: a read that never
+ *   answers would otherwise leave it counting for good.
  * - **A count given up on stops the counting.** The meter says the count
  *   could not be made, and no count is made again until Retry, which aborts
- *   the one given up on: one started after each deadline would leave a
- *   stalled count running for every 20 seconds the page stays open. Should
- *   the count given up on answer after all, its answer is told if the page
- *   has not changed since it began.
+ *   the one given up on, as an edit does: one started after each deadline
+ *   would leave a stalled count running for every 20 seconds the page stays
+ *   open. Should the count given up on answer after all, its answer is told
+ *   if the page has not changed since it began.
  * - **A failure is said.** A count that fails is told as one that could not
- *   be made; one asked for by a change made meanwhile is still made, and the
- *   meter reads as counting while it is.
+ *   be made.
  */
 class CountScheduler {
   private make: MakeCount | undefined;
   private waitTimer: ReturnType<typeof setTimeout> | undefined;
-  private waitingSince: number | undefined;
+  /** Stops the wait for the browser to be idle, while one is in hand. */
+  private cancelIdle: (() => void) | undefined;
   /** The count being made, by its number; 0 when none is. */
   private inFlight = 0;
   /** What aborts the latest count begun. */
   private controller: AbortController | undefined;
-  /** The page changed since the latest count began. */
+  /** The page changed since the count given up on began. */
   private changedSince = false;
-  /** The deadline of the wait in hand; `undefined` when none is. */
+  /** The deadline of the count being made; `undefined` when none is. */
   private deadline: ReturnType<typeof setTimeout> | undefined;
   /** A count was given up on: nothing is counted until Retry. */
   private stopped = false;
@@ -338,13 +350,15 @@ class CountScheduler {
   /** The page changed: `make` counts it as it is now. */
   changed(make: MakeCount): void {
     this.make = make;
-    if (this.stopped || this.inFlight !== 0) {
+    if (this.stopped) {
+      // The count given up on is stopped too: its draw would otherwise go on
+      // while the author works, for an answer the change has made stale.
       this.changedSince = true;
-      if (this.stopped) return;
+      this.controller?.abort();
+      return;
     }
-    this.awaitAnswer();
-    if (this.inFlight !== 0) return;
-    this.wait(countWait(this.since(), Date.now()));
+    if (this.inFlight !== 0) this.stopCount();
+    this.wait(COUNT_AFTER_MS);
   }
 
   /**
@@ -352,46 +366,50 @@ class CountScheduler {
    * being made, one given up on among them, is aborted.
    */
   retry(): void {
-    this.controller?.abort();
+    this.stopCount();
     this.stopped = false;
-    this.inFlight = 0;
+    this.changedSince = false;
     this.show(NOT_COUNTED);
-    this.awaitAnswer();
     this.wait(0);
   }
 
   dispose(): void {
     this.disposed = true;
-    clearTimeout(this.waitTimer);
+    this.stopWaiting();
     clearTimeout(this.deadline);
     this.controller?.abort();
   }
 
-  private since(): number {
-    this.waitingSince ??= Date.now();
-    return this.waitingSince;
-  }
-
-  private wait(ms: number): void {
-    clearTimeout(this.waitTimer);
-    this.waitTimer = setTimeout(() => this.start(), ms);
-  }
-
-  private awaitAnswer(): void {
-    this.deadline ??= setTimeout(() => this.giveUp(), COUNT_GIVES_UP_MS);
-  }
-
-  private answered(): void {
+  /** Abort the count being made, if one is; its answer is not told. */
+  private stopCount(): void {
+    this.controller?.abort();
+    this.inFlight = 0;
     clearTimeout(this.deadline);
     this.deadline = undefined;
   }
 
+  private stopWaiting(): void {
+    clearTimeout(this.waitTimer);
+    this.waitTimer = undefined;
+    this.cancelIdle?.();
+    this.cancelIdle = undefined;
+  }
+
+  /** Count once `ms` pass with no change, when the browser is next idle. */
+  private wait(ms: number): void {
+    this.stopWaiting();
+    this.waitTimer = setTimeout(() => {
+      this.waitTimer = undefined;
+      this.cancelIdle = whenIdle(() => {
+        this.cancelIdle = undefined;
+        this.start();
+      });
+    }, ms);
+  }
+
   private start(): void {
     const make = this.make;
-    this.waitTimer = undefined;
-    this.waitingSince = undefined;
-    this.changedSince = false;
-    if (make === undefined) return;
+    if (make === undefined || this.disposed) return;
     // A failure said is no longer the meter's to say once another count is
     // under way: it reads as counting. A count shown stays shown, so the
     // meter does not blink while it is counted again.
@@ -399,7 +417,9 @@ class CountScheduler {
     this.counts += 1;
     const count = this.counts;
     this.inFlight = count;
+    this.changedSince = false;
     this.controller = new AbortController();
+    this.deadline = setTimeout(() => this.giveUp(), COUNT_GIVES_UP_MS);
     make(this.controller.signal).then(
       report => this.settle(count, { report, failed: false }),
       () => this.settle(count, FAILED)
@@ -418,9 +438,9 @@ class CountScheduler {
     }
     if (this.inFlight !== count) return;
     this.inFlight = 0;
-    this.answered();
+    clearTimeout(this.deadline);
+    this.deadline = undefined;
     this.show(shown);
-    this.next();
   }
 
   private giveUp(): void {
@@ -428,17 +448,8 @@ class CountScheduler {
     if (this.disposed) return;
     this.stopped = true;
     this.inFlight = 0;
-    clearTimeout(this.waitTimer);
-    this.waitTimer = undefined;
-    this.waitingSince = undefined;
+    this.stopWaiting();
     this.show(FAILED);
-  }
-
-  /** The one count the changes made meanwhile ask for, made now. */
-  private next(): void {
-    if (!this.changedSince) return;
-    this.awaitAnswer();
-    this.start();
   }
 }
 
@@ -458,7 +469,11 @@ class CountScheduler {
 function usePageReads(
   drawnWith: CountedDrawing,
   document: BlockDocument,
-  regions: readonly CountedRegion[]
+  regions: readonly CountedRegion[],
+  /** The site's page data limit; the default where it sets none. */
+  cap: number | undefined,
+  /** Whether to count at all: a page is counted, nothing else is. */
+  counts: boolean
 ): PageReads {
   const [shown, setShown] = useState<ShownCount>(NOT_COUNTED);
   // The entry the canvas is drawn as, and the person reading it, so the
@@ -486,23 +501,49 @@ function usePageReads(
     };
   }, []);
   useEffect(() => {
+    if (!counts) return;
     scheduler.current?.changed(signal =>
-      countPageReads(drawnWith, document, regions, undefined, {
+      countPageReads(drawnWith, document, regions, cap, {
         ...readsNow.current,
         signal,
       })
     );
-  }, [drawnWith, document, regions, reader]);
+  }, [drawnWith, document, regions, reader, cap, counts]);
   const retry = useCallback(() => scheduler.current?.retry(), []);
   return { report: shown.report, retry: shown.failed ? retry : undefined };
 }
 
-export function PageReadMeter({
-  editor,
-  drawnWith,
-  regions,
-  componentTitle,
-}: Pick<ReadBudgetMeterProps, "editor" | "componentTitle"> & {
+/**
+ * The site's page data limit as the admin's client config carries it:
+ * a whole number from 0, `null` for no limit, or `undefined` (the default)
+ * for anything else, as the plugin sends nothing else.
+ */
+export function readPageDataLimit(
+  clientConfig: Readonly<Record<string, unknown>> | undefined
+): number | undefined {
+  const sent = clientConfig?.maxQueries;
+  if (sent === null) return Number.POSITIVE_INFINITY;
+  return typeof sent === "number" && Number.isInteger(sent) && sent >= 0
+    ? sent
+    : undefined;
+}
+
+/** The page's count, made once, for the top bar's meter and Page settings'. */
+export interface PageDataCount
+  extends Pick<ReadBudgetMeterProps, "editor" | "componentTitle"> {
+  readonly report: PageReadReport | undefined;
+  readonly retry: (() => void) | undefined;
+  readonly regions: NonNullable<ReadBudgetMeterProps["regions"]>;
+}
+
+/** What the page's count is made with. */
+export interface PageDataCountInputs
+  extends Pick<ReadBudgetMeterProps, "editor" | "componentTitle"> {
+  /**
+   * Whether the open document is counted: a page is; a component or a
+   * Layout is read as part of each page placing it, so it has no count.
+   */
+  readonly counts: boolean;
   /** What the canvas draws the page with. */
   readonly drawnWith: CountedDrawing;
   /**
@@ -511,14 +552,59 @@ export function PageReadMeter({
    * with the Layout it comes from.
    */
   readonly regions: NonNullable<ReadBudgetMeterProps["regions"]>;
-}): React.JSX.Element {
-  const { report, retry } = usePageReads(drawnWith, editor.document, regions);
+  /** The site's page data limit (`readPageDataLimit`); 500 when unset. */
+  readonly cap?: number | undefined;
+}
+
+/**
+ * Counts the page, once, for every meter that draws it: the top bar's and
+ * Page settings' read the same count, so they cannot disagree, and the page
+ * is not drawn twice to count it. The count runs while the bar's meter is
+ * hidden, since the bar must know when to show it. `null` where the open
+ * document is not counted.
+ */
+export function usePageDataCount({
+  counts,
+  editor,
+  drawnWith,
+  regions,
+  componentTitle,
+  cap,
+}: PageDataCountInputs): PageDataCount | null {
+  const { report, retry } = usePageReads(
+    drawnWith,
+    editor.document,
+    regions,
+    cap,
+    counts
+  );
+  return useMemo(
+    () => (counts ? { report, retry, editor, regions, componentTitle } : null),
+    [counts, report, retry, editor, regions, componentTitle]
+  );
+}
+
+/**
+ * The page data meter, drawing `count`: in the top bar (the default), shown
+ * from 80% of the limit or when the count fails; in Page settings, at every
+ * level. Nothing for a document that is not counted.
+ */
+export function PageReadMeter({
+  count,
+  place = "bar",
+}: {
+  readonly count: PageDataCount | null;
+  readonly place?: "bar" | "settings";
+}): React.JSX.Element | null {
+  if (count === null) return null;
+  const { report, retry, editor, regions, componentTitle } = count;
   return (
     <ReadBudgetMeter
       report={report}
       failed={retry === undefined ? undefined : { retry }}
       editor={editor}
       regions={regions}
+      place={place}
       {...(componentTitle === undefined ? {} : { componentTitle })}
     />
   );

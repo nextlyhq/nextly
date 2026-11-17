@@ -71,6 +71,15 @@ expectTypeOf<ComponentPath>().toEqualTypeOf<string>();
 expectTypeOf(adminEntry.useCurrentUserId).returns.toEqualTypeOf<
   string | null
 >();
+// The schema version, unknown until an answer carried one, and a listener
+// for its moves that answers the call stopping it.
+expectTypeOf(adminEntry.schemaVersion).returns.toEqualTypeOf<
+  number | undefined
+>();
+expectTypeOf(adminEntry.onSchemaChange)
+  .parameter(0)
+  .toEqualTypeOf<(version: number) => void>();
+expectTypeOf(adminEntry.onSchemaChange).returns.toEqualTypeOf<() => void>();
 expectTypeOf<PluginAdminContributions>().toMatchTypeOf<{
   menu?: PluginMenuItem[];
   pages?: PluginAdminPage[];
@@ -542,3 +551,41 @@ expectTypeOf<adminEntry.FileDropAreaProps>().toMatchTypeOf<{
 expectTypeOf<adminEntry.FormActionsProps["message"]>().toEqualTypeOf<
   React.ReactNode | undefined
 >();
+
+// The template declaration and how a plugin contributes templates
+// (@experimental): a plain declaration a plugin's admin module registers under
+// its own name, getting the removal back.
+expectTypeOf(adminEntry.registerSchemaTemplates).toEqualTypeOf<
+  (
+    source: string,
+    templates: readonly adminEntry.SchemaTemplate[]
+  ) => () => void
+>();
+expectTypeOf<adminEntry.SchemaTemplate["kind"]>().toEqualTypeOf<
+  "collection" | "single" | "fieldGroup"
+>();
+expectTypeOf<adminEntry.SchemaTemplate>().toMatchTypeOf<{
+  id: string;
+  category: string;
+  name: string;
+  description: string;
+  fields: readonly adminEntry.SchemaTemplateField[];
+}>();
+expectTypeOf<adminEntry.SchemaTemplateField["fields"]>().toEqualTypeOf<
+  readonly adminEntry.SchemaTemplateField[] | undefined
+>();
+// A link may name several collections, and a field several field groups, as
+// the Builder's own fields may.
+expectTypeOf<adminEntry.SchemaTemplateField["relationTo"]>().toEqualTypeOf<
+  string | readonly string[] | undefined
+>();
+expectTypeOf<adminEntry.SchemaTemplateField["components"]>().toEqualTypeOf<
+  readonly string[] | undefined
+>();
+// A plugin's own field type carries its settings, as the Builder stores them.
+expectTypeOf<adminEntry.SchemaTemplateField["pluginOptions"]>().toEqualTypeOf<
+  Readonly<Record<string, unknown>> | undefined
+>();
+// What a template needs is read from its fields, so a declaration has no
+// separate list of what it needs to keep in agreement with them.
+expectTypeOf<adminEntry.SchemaTemplate>().not.toHaveProperty("needs");

@@ -9,6 +9,7 @@
  * writers; here it is recorded, so the order of the lock and the read shows.
  */
 import {
+  createBlockRegistry,
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
 } from "@nextlyhq/blocks-engine";
@@ -81,6 +82,8 @@ const setupReading = (
 ): CompositionSetup => ({
   store: { collection: "components", field: "content" },
   limits: DEFAULT_LIMITS,
+  // The site's block registry: it holds none.
+  blocks: createBlockRegistry(),
   composesDocuments: false,
   ...(definitions === undefined ? {} : { siteDefinitions: definitions }),
 });

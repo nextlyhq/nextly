@@ -126,15 +126,15 @@ function open(section: string): void {
     fireEvent.click(heading);
 }
 
-describe("a Section's Min height presets", () => {
-  it("are the Min height row while no min height draws the field", () => {
+describe("a Section's Height", () => {
+  it("is the Height row, Fit content or Full screen, while no min height draws the field", () => {
     const editor = mount("core/section");
     open("Size");
+    expect(screen.getByRole("radiogroup", { name: "Height" })).toBeDefined();
     expect(
-      screen.getByRole("radiogroup", { name: "Min height" })
-    ).toBeDefined();
-    expect(
-      screen.getByRole("radio", { name: "Auto" }).getAttribute("aria-checked")
+      screen
+        .getByRole("radio", { name: "Fit content" })
+        .getAttribute("aria-checked")
     ).toBe("true");
     fireEvent.click(screen.getByRole("radio", { name: "Full screen" }));
     expect(JSON.stringify(editor.apply.mock.calls[0]?.[0])).toContain(
@@ -142,7 +142,7 @@ describe("a Section's Min height presets", () => {
     );
   });
 
-  it("stand over the Min height field once it is drawn, one label for both", () => {
+  it("stands over the Min height field once it is drawn, one label on screen", () => {
     mount("core/section", {
       base: { [BASE_BREAKPOINT]: { minHeight: "100svh" } },
     });
@@ -152,9 +152,7 @@ describe("a Section's Min height presets", () => {
         .getByRole("radio", { name: "Full screen" })
         .getAttribute("aria-checked")
     ).toBe("true");
-    expect(
-      screen.getByRole("radiogroup", { name: "Min height presets" })
-    ).toBeDefined();
+    expect(screen.getByRole("radiogroup", { name: "Height" })).toBeDefined();
     // The field's label is the one on screen; no second "Height" row.
     expect(screen.getAllByText("Min height")).toHaveLength(1);
     const presets = document.querySelector('[data-control="section-height"]');
@@ -163,10 +161,11 @@ describe("a Section's Min height presets", () => {
   });
 });
 
-describe("a Section's Min height presets, chosen from the keyboard", () => {
-  it("keep focus on the chosen preset as the field they stand over comes and goes", () => {
+describe("a Section's Height, chosen from the keyboard", () => {
+  it("keeps focus on the chosen choice as the field it stands over comes and goes", () => {
     // A live editor: each write redraws the panel, so Full screen draws the
-    // Min height field and the presets move over it, and Auto moves them back.
+    // Min height field and the presets move over it, and Fit content moves
+    // them back.
     const editor = mount("core/section");
     let document = editor.document;
     const view = (): React.JSX.Element => (
@@ -183,23 +182,19 @@ describe("a Section's Min height presets, chosen from the keyboard", () => {
       rendered.rerender(view());
     }
     open("Size");
-    const auto = screen.getByRole("radio", { name: "Auto" });
-    auto.focus();
-    fireEvent.keyDown(auto, { key: "ArrowRight" });
-    expect(
-      screen.getByRole("radiogroup", { name: "Min height presets" })
-    ).toBeDefined();
+    const fitContent = screen.getByRole("radio", { name: "Fit content" });
+    fitContent.focus();
+    fireEvent.keyDown(fitContent, { key: "ArrowRight" });
+    expect(screen.getByRole("radiogroup", { name: "Height" })).toBeDefined();
     expect(globalThis.document.activeElement).toBe(
       screen.getByRole("radio", { name: "Full screen" })
     );
     fireEvent.keyDown(globalThis.document.activeElement as Element, {
       key: "ArrowLeft",
     });
-    expect(
-      screen.getByRole("radiogroup", { name: "Min height" })
-    ).toBeDefined();
+    expect(screen.getByRole("radiogroup", { name: "Height" })).toBeDefined();
     expect(globalThis.document.activeElement).toBe(
-      screen.getByRole("radio", { name: "Auto" })
+      screen.getByRole("radio", { name: "Fit content" })
     );
   });
 });

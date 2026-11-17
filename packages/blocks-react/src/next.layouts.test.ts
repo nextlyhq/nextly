@@ -120,6 +120,14 @@ const heading = (id: string, text: string, level = "h2") => ({
   props: { text, level },
 });
 
+/** One line of prose: what describes a page, since a heading never titles it. */
+const prose = (id: string, text: string) => ({
+  id,
+  type: "core/text",
+  version: 1,
+  props: { text },
+});
+
 const instance = (id: string, componentId: string) => ({
   id,
   type: COMPONENT_INSTANCE_TYPE,
@@ -648,11 +656,11 @@ describe("a page drawn inside its Layout", () => {
   });
 
   it("spends a tight budget in metadata as the render does, when the page's conditions read the entry", async () => {
-    // A heading shown by a condition on the entry: no binding, but the entry
+    // Prose shown by a condition on the entry: no binding, but the entry
     // read it needs comes after the Layout's, in the render and in metadata.
     const content = doc([
       {
-        ...heading("c", "Conditioned title", "h1"),
+        ...prose("c", "Conditioned line"),
         visibility: {
           conditions: [
             [{ field: "title", op: "equals", value: "Entry title" }],
@@ -669,7 +677,7 @@ describe("a page drawn inside its Layout", () => {
         blocks: createBlockResolver(coreBlocks),
         layouts: provider("main"),
         metadata: (_entry, _context, derived) => ({
-          title: derived.title ?? "No derived title",
+          description: derived.description ?? "No derived description",
         }),
         ...(maxQueries === undefined ? {} : { maxQueries }),
       });
@@ -682,18 +690,21 @@ describe("a page drawn inside its Layout", () => {
       const meta = await routeWith(maxQueries).generateMetadata({
         params: { slug: ["about"] },
       });
-      return { drawn: html.includes("Conditioned title"), title: meta.title };
+      return {
+        drawn: html.includes("Conditioned line"),
+        description: meta.description,
+      };
     };
     // One claim: the Layout takes it, so the entry can't be read and the
     // block fails closed; metadata, reading in the same order, agrees.
     expect(await outcome(1)).toEqual({
       drawn: false,
-      title: "No derived title",
+      description: "No derived description",
     });
-    // CONTROL: with room for both, the block shows and names the page.
+    // CONTROL: with room for both, the block shows and describes the page.
     expect(await outcome()).toEqual({
       drawn: true,
-      title: "Conditioned title",
+      description: "Conditioned line",
     });
   });
 
@@ -968,6 +979,8 @@ describe("the layouts option at boot", () => {
   it("refuses a bare function", () => {
     expect(() =>
       createBlocksPage({
+        // No blocks registered, as the page needs none.
+        blocks: createBlockResolver([]),
         collections: ["pages"],
         field: "content",
         layouts: (async () => "main") as never,
@@ -978,6 +991,8 @@ describe("the layouts option at boot", () => {
   it("refuses a provider that names no singles", () => {
     expect(() =>
       createBlocksPage({
+        // No blocks registered, as the page needs none.
+        blocks: createBlockResolver([]),
         collections: ["pages"],
         field: "content",
         layouts: { readDefault: async () => "main" } as never,
@@ -991,6 +1006,8 @@ describe("the layouts option at boot", () => {
     const route = createSinglePage({
       slug: "homepage",
       field: "content",
+      // No blocks registered, as the page needs none.
+      blocks: createBlockResolver([]),
       nextly: {
         ...(r.nextly as object),
         findSingle: async () => ({ id: "h", content: PAGE_BODY }),

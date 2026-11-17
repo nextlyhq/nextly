@@ -94,6 +94,10 @@ import type {
   ContributedElements,
   TableSpec,
 } from "../../domains/schema/pipeline/diff/types";
+import {
+  BUILDER_DEFINITION_MISSING_ISSUE,
+  RELATION_TARGET_MISSING_ISSUE,
+} from "../../domains/schema/ui-schema/definition-issues";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../../plugins/plugin-context";
@@ -109,7 +113,11 @@ import {
   migrationNameRequired,
   recordSnapshotNeedsAppMigration,
 } from "../errors/areas/migrate-create";
-import { exitWithError } from "../errors/index";
+import {
+  configDeclarationError,
+  exitWithError,
+  toCliError,
+} from "../errors/index";
 import {
   type CLIDatabaseAdapter,
   createCliAdapter,
@@ -288,10 +296,34 @@ const PLAN_REFUSAL_CODES: ReadonlySet<string> = new Set([
   "NEXTLY_MIGRATION_RESOLVE_DRIFT",
 ]);
 
+/**
+ * The issues the Builder's definitions are refused with (`judgeBuilderDefinitions`). Their public
+ * message is the generic one every validation error carries; what the real run prints is the CLI
+ * code they map to, naming the entity, the file and the fix.
+ */
+const BUILDER_DEFINITION_ISSUES: ReadonlySet<string> = new Set([
+  RELATION_TARGET_MISSING_ISSUE,
+  BUILDER_DEFINITION_MISSING_ISSUE,
+]);
+
 /** The refusal a dry run reports for `error`, in the real run's own words. */
 export function dryRunRefusalOf(error: unknown): string | undefined {
   if (!NextlyError.is(error) || !PLAN_REFUSAL_CODES.has(error.code)) {
     return undefined;
+  }
+  const issues =
+    (error.publicData as { errors?: Array<{ code?: unknown }> } | undefined)
+      ?.errors ?? [];
+  if (
+    issues.some(
+      issue =>
+        typeof issue.code === "string" &&
+        BUILDER_DEFINITION_ISSUES.has(issue.code)
+    )
+  ) {
+    // As the real run prints it: the CLI error it maps to, with its code.
+    const printed = toCliError(error);
+    return `${printed.what} ${printed.why} ${printed.next} (${printed.code})`;
   }
   return error.publicMessage;
 }
@@ -672,6 +704,12 @@ export async function runMigrateCreate(
       logger,
     });
   } catch (error) {
+    // A field declaration Nextly cannot use ends the run as `migrate:check`
+    // ends it, a dry run included, so one definition ends both commands with
+    // one message. It is a validation error too, so it is read before the
+    // plan refusals below, which would otherwise take it.
+    const declaration = configDeclarationError(error);
+    if (declaration !== undefined) exitWithError(logger, declaration);
     stopOnPlanError(error, logger, options.dryRun, () => {
       if (dryRunRefusalOf(error) !== undefined) throw error;
       exitWithError(logger, error);

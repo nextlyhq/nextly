@@ -13,7 +13,7 @@ process.env.NEXTLY_SECRET =
 import { randomUUID } from "node:crypto";
 
 import sharp from "sharp";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { createMediaHandlers } from "../../../api/media-handlers";
 import { Nextly } from "../../../direct-api/nextly";
@@ -227,6 +227,88 @@ describe.each(getConfiguredTestDialects())(
       ).toBe(404);
     });
 
+    it("lists every copy up to a width with one read and one check, storing nothing", async () => {
+      const item = await uploadPhoto("listed.jpg");
+      const service = t.nextly.mediaService;
+      const reads = vi.spyOn(service, "findById");
+      // The one place an item is read and judged for its copies.
+      const judged = vi.spyOn(
+        service as unknown as { copySourceItem: () => unknown },
+        "copySourceItem"
+      );
+      const stored = mediaStorage();
+      const writes = vi.spyOn(stored, "uploadAt");
+      try {
+        const copies = await t.nextly.media.copiesOf({
+          id: item.id,
+          upTo: 1000,
+        });
+        // Narrowest first, capped at `upTo`: every allowed width to 960.
+        expect(copies.map(copy => copy.width)).toEqual([
+          96, 160, 240, 320, 640, 960,
+        ]);
+        // The same addresses `copyOf` gives, one width at a time.
+        expect(copies[4]).toEqual(await service.copyOf({ id: item.id }, 640));
+        reads.mockClear();
+        judged.mockClear();
+        await t.nextly.media.copiesOf({ id: item.id, upTo: 4000 });
+        expect(reads).toHaveBeenCalledTimes(1);
+        expect(judged).toHaveBeenCalledTimes(1);
+        // Never wider than the 2200px original, and nothing resized or kept.
+        const widest = await t.nextly.media.copiesOf({
+          id: item.id,
+          upTo: 4000,
+        });
+        expect(widest.at(-1)?.width).toBe(1920);
+        expect(writes).not.toHaveBeenCalled();
+        expect(await stored.exists(`${item.filename}.w240.jpg`)).toBe(false);
+        // By its address on the media route too.
+        expect(
+          (
+            await t.nextly.media.copiesOf({
+              url: `/api/media/${item.id}/raw`,
+              upTo: 320,
+            })
+          ).map(copy => copy.width)
+        ).toEqual([96, 160, 240, 320]);
+      } finally {
+        reads.mockRestore();
+        judged.mockRestore();
+        writes.mockRestore();
+      }
+    });
+
+    it("lists no copies where none can be had", async () => {
+      expect(
+        await t.nextly.media.copiesOf({
+          url: "https://images.example.com/photo.jpg",
+          upTo: 640,
+        })
+      ).toEqual([]);
+      const pdf = pdfDocument("listed");
+      const document = await t.nextly.media.upload({
+        file: {
+          data: pdf,
+          name: "listed.pdf",
+          mimetype: "application/pdf",
+          size: pdf.length,
+        },
+      });
+      expect(
+        await t.nextly.media.copiesOf({ id: document.id, upTo: 640 })
+      ).toEqual([]);
+      const held = await publicHolds();
+      await setPublic(held.filter(slug => slug !== "read-media"));
+      try {
+        const item = await uploadPhoto("unread.jpg");
+        expect(
+          await t.nextly.media.copiesOf({ id: item.id, upTo: 640 })
+        ).toEqual([]);
+      } finally {
+        await setPublic(held);
+      }
+    });
+
     it("gives the copy's address through the Direct API, and no copy where none can be had", async () => {
       const item = await uploadPhoto();
       expect(await t.nextly.media.copyOf({ id: item.id, width: 700 })).toEqual({
@@ -340,10 +422,19 @@ describe.each(getConfiguredTestDialects())(
       ["S3", "s3"],
       ["Vercel Blob", "vercel-blob"],
     ] as const)("kept on %s", (_label, scheme) => {
-      it("is removed with its original", async () => {
+      /** Runs `check` with the media collection's files on this storage. */
+      async function onThisStorage(check: () => Promise<void>): Promise<void> {
         const local = mediaStorage();
         if (scheme) storeMediaIn(new Bucket(scheme), scheme);
         try {
+          await check();
+        } finally {
+          if (scheme) storeMediaIn(local, "local");
+        }
+      }
+
+      it("is removed with its original", async () => {
+        await onThisStorage(async () => {
           const item = await uploadPhoto();
           expect(
             (await get([item.id, "copy", "960"], { accept: "image/avif" }))
@@ -356,9 +447,75 @@ describe.each(getConfiguredTestDialects())(
 
           expect(await mediaStorage().exists(item.filename)).toBe(false);
           expect(await mediaStorage().exists(kept)).toBe(false);
-        } finally {
-          if (scheme) storeMediaIn(local, "local");
-        }
+        });
+      });
+
+      it("is removed when its original is replaced, and the old address turns stale", async () => {
+        await onThisStorage(async () => {
+          const item = await uploadPhoto();
+          const oldVersion = copyVersionOf(item.filename);
+          expect(
+            (
+              await get([item.id, "copy", "640"], {
+                accept: WEBP,
+                query: `?v=${oldVersion}`,
+              })
+            ).headers.get("cache-control")
+          ).toBe("private, max-age=31536000, immutable");
+          const oldCopy = `${item.filename}.w640.webp`;
+          expect(await mediaStorage().exists(oldCopy)).toBe(true);
+
+          const square = await photo(1200, 1200);
+          const replaced = await t.getService("mediaService").replaceFile(
+            item.id,
+            {
+              buffer: square,
+              filename: "square.jpg",
+              mimeType: "image/jpeg",
+              size: square.length,
+            },
+            {}
+          );
+
+          expect(replaced.filename).not.toBe(item.filename);
+          expect(await mediaStorage().exists(item.filename)).toBe(false);
+          expect(await mediaStorage().exists(oldCopy)).toBe(false);
+
+          // The old address is answered with the new picture, revalidated.
+          const stale = await get([item.id, "copy", "640"], {
+            accept: WEBP,
+            query: `?v=${oldVersion}`,
+          });
+          expect(stale.status).toBe(200);
+          expect(stale.headers.get("cache-control")).toBe("private, no-cache");
+          const meta = await sharp(
+            Buffer.from(await stale.arrayBuffer())
+          ).metadata();
+          expect([meta.width, meta.height]).toEqual([640, 640]);
+          expect(
+            await mediaStorage().exists(`${replaced.filename}.w640.webp`)
+          ).toBe(true);
+
+          // The address given now names the new file's version.
+          const newVersion = copyVersionOf(replaced.filename);
+          expect(newVersion).not.toBe(oldVersion);
+          expect(
+            await t.nextly.media.copyOf({ id: item.id, width: 640 })
+          ).toEqual({
+            url: `/api/media/${item.id}/copy/640?v=${newVersion}`,
+            width: 640,
+          });
+          expect(
+            (
+              await get([item.id, "copy", "640"], {
+                accept: WEBP,
+                query: `?v=${newVersion}`,
+              })
+            ).headers.get("cache-control")
+          ).toBe("private, max-age=31536000, immutable");
+
+          await t.nextly.media.delete({ id: item.id });
+        });
       });
     });
 

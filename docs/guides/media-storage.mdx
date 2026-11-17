@@ -445,8 +445,8 @@ GET /api/media/:id/copy/:width
 - **Widths are fixed.** Copies come at 96, 160, 240, 320, 640, 960, 1280 and
   1920 pixels wide, and any other width is served the nearest one: ask for 700
   and you get 640. A copy is never wider than its original: past its width the
-  route sends the image at its own width, and `media.copyOf()` answers `null`
-  so you use the original. The fixed list is what stops anyone making the
+  route redirects to the original, and `media.copyOf()` answers `null` so you
+  use the original. The fixed list is what stops anyone making the
   server resize an image to every width there is.
 - **The format follows the browser.** A JPEG or PNG is sent as AVIF to a browser
   that accepts it, otherwise as WebP, otherwise in its own format. A WebP or AVIF
@@ -474,12 +474,14 @@ const copy = await nextly.media.copyOf({ id: "abc-123", width: 700 });
 const src = copy?.url ?? media.url;
 ```
 
-It answers `null` for an address that is not one of your media items (an image on
-another site, or an item since deleted), for a width past the original's, while
-visitors may not read media (the copy's address is on the public route), for a
-type that is not resized (GIF, SVG, any file that is not an
-image), when the image library `sharp` is not installed, and when the storage
-cannot keep copies.
+An address names a media item only as a path on your site, such as
+`/api/media/<id>/raw`. It answers `null` for an address that is not one of your
+media items (an image on another site, any full address with a host, or an item
+since deleted), for a width past the original's, for an image whose width was
+never recorded, while visitors may not read media (the copy's address is on the
+public route), for a type that is not resized (GIF, SVG, any file that is not
+an image), when the image library `sharp` is not installed, and when the
+storage cannot keep copies.
 
 The `v` in the address is the original file's version. While it is current the
 copy is cached for a year; once the file is replaced, an old address still
@@ -489,13 +491,17 @@ answers, with the new picture, and is checked again rather than kept.
 | ----------------- | ---------------------------------------------------------- |
 | Local disk        | Yes                                                        |
 | S3 and compatible | Yes                                                        |
-| Vercel Blob       | Yes                                                        |
+| Vercel Blob       | Yes, for files in the store its token writes to            |
 | Uploadthing       | No: it chooses every file's key, so the original is served |
 
 When a copy cannot be made at the moment it is asked for (an original too large
-to resize, an animated WebP or PNG, which is sent whole rather than as its first
-frame, a file missing from storage, or storage not answering), the route
-redirects to the original, so the image still shows.
+to resize or to read, an animated WebP or PNG, which is sent whole rather than
+as its first frame, a file missing from storage, storage not answering or not
+keeping the copy, or more copies asked for at once than the server makes), the
+route redirects to the original, so the image still shows. Each server makes
+two copies at a time and keeps up to 16 more waiting; past that, an ask gets the
+original. A copy that could not be kept, or an original that cannot be resized,
+is not tried again for a minute.
 
 A photo's `width` and `height` are recorded as it is shown: one its camera marked
 as turned a quarter is stored on its side, and recorded turned upright, as every

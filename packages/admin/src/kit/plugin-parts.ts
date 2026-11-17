@@ -127,3 +127,14 @@ export type {
   PageContainerProps,
   PageContainerRef,
 } from "../types/layout/page-container";
+
+// Templates for a new collection, Single or field group: the declaration and
+// the registry a plugin's admin module offers its own through, re-exported by
+// `@nextlyhq/plugin-sdk/admin` as the table's registries are.
+export { registerSchemaTemplates } from "../lib/builder/schema-templates";
+
+export type {
+  SchemaTemplate,
+  SchemaTemplateField,
+  SchemaTemplateKind,
+} from "../lib/builder/schema-templates";

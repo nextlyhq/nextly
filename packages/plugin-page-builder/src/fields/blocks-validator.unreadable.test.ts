@@ -1,6 +1,10 @@
+import { createBlockRegistry } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import { validateBlocksValue } from "./blocks-validator";
+
+/** The site's block registry these tests judge against: it holds none. */
+const blocks = createBlockRegistry();
 
 describe("an unreadable document is not serialized afterwards", () => {
   it("does not invoke an accessor the byte survey refused to read", () => {
@@ -25,7 +29,7 @@ describe("an unreadable document is not serialized afterwards", () => {
       nodes: [{ id: "n1", type: "core/text", version: 1, props }],
     };
 
-    const issues = validateBlocksValue(doc, "blocks", "Blocks", {});
+    const issues = validateBlocksValue(doc, "blocks", "Blocks", {}, blocks);
 
     expect(issues.some(i => i.code === "document-unreadable")).toBe(true);
     // Zero, not "few". One invocation is the whole defect.

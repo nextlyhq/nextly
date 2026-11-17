@@ -135,7 +135,9 @@ import {
   parseRichTextFormat,
   parseRichTextStyles,
   isTruthyParam,
+  parseFallbackParam,
   parseStatusParam,
+  parseTranslationsParam,
   requireParam,
   toNumber,
 } from "../helpers/validation";
@@ -770,12 +772,24 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // the language pills. All no-op for non-localized singles.
         locale: p.locale,
         fallbackLocale: p["fallback-locale"],
+        // `?fallback=document`: answer in the first published language of the
+        // chain where the Single is not published in the requested one.
+        wholeDocumentFallback: parseFallbackParam(p.fallback),
+        // `?source-locales=1` attaches `_sources`, each translatable value's language.
+        sourceLocales: isTruthyParam(p["source-locales"]),
+        // `?translations=all` attaches every language's values (`_allLocales`).
+        translations: parseTranslationsParam(p.translations),
         translationStatus: p["translation-status"] === "1",
         // `?draft=1` opts into the working-draft overlay, matching the entry
         // read. Gated server-side on an actual update-capability probe, so a
         // read-only caller passing it still sees the published document.
         includeWorkingDraft: isTruthyParam(p.draft),
         status,
+        // `?details=1` attaches `_details` (who changed it, where it is
+        // served), only for a signed-in admin user: anyone else gets the
+        // plain Single.
+        details:
+          isTruthyParam(p.details) && readAuthenticatedActor()?.type === "user",
       });
 
       // Transform rich text fields to requested format when not JSON.

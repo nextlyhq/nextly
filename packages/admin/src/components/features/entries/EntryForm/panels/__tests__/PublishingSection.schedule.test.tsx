@@ -250,6 +250,26 @@ describe("scheduling from the Publishing section", () => {
     expect(screen.queryByRole("button", { name: "Schedule…" })).toBeNull();
   });
 
+  it("draws the check with valid nesting, so React reports no hydration error", async () => {
+    // A bar is a block element, and HTML closes a paragraph at one: the
+    // server's markup and the browser's tree then differ, and React says so.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      fetchMock.mockImplementationOnce(() => new Promise<Response>(() => {}));
+      showEditor();
+      const checking = await screen.findByText("Checking releases");
+      const body = checking.parentElement!;
+      expect(body.querySelector("p div, p p, p ul")).toBeNull();
+      expect(
+        errors.mock.calls.filter(call =>
+          call.some(arg => String(arg).includes("cannot be a descendant of"))
+        )
+      ).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   it("holds the place of the reason the offer is off, too, while the schedule is checked", async () => {
     // A reader who may not schedule now (a colleague holds the document):
     // the answer draws the offer with the reason under it, so the place

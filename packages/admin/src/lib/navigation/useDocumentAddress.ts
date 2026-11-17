@@ -1,0 +1,77 @@
+/**
+ * The shared "open this document" rule (`documentAddress`) with what it needs
+ * read from the signed-in admin: each collection as the admin lists it, whether
+ * the reader may update it, the site's default language and the published
+ * document views.
+ *
+ * @module lib/navigation/useDocumentAddress
+ */
+import { useCallback, useMemo } from "react";
+
+import { useBranding } from "@admin/context/providers/BrandingProvider";
+import { useEveryNavCollection } from "@admin/hooks/queries/useCollections";
+import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { useLocalization } from "@admin/hooks/useLocalization";
+
+import {
+  documentAddress,
+  type OpenableCollection,
+  type OpenedDocument,
+} from "./document-address";
+
+/** What a link may add to the document it opens. */
+export interface OpenOptions {
+  /** The language to open it in. */
+  locale?: string;
+  /**
+   * The collection as the caller already holds it (a list holds its own
+   * schema); read from the admin's list of collections otherwise.
+   */
+  collection?: OpenableCollection;
+}
+
+/** The address a link to a document opens, for the signed-in reader. */
+export type DocumentAddressOf = (
+  document: OpenedDocument,
+  options?: OpenOptions
+) => string;
+
+export function useDocumentAddress(): DocumentAddressOf {
+  const { data } = useEveryNavCollection();
+  const { canAccessCollection } = useCurrentUserPermissions();
+  // The default language whenever the site names one, multilingual or not: on
+  // a one-language site a saved row still names it, and it is the default.
+  const { defaultLocale } = useLocalization();
+  // The views the admin's metadata publishes, enabled plugins' only: read
+  // here so a link is drawn again when they arrive.
+  const { plugins } = useBranding();
+  const views = useMemo(
+    () => (plugins ?? []).flatMap(plugin => plugin.documentViews ?? []),
+    [plugins]
+  );
+  const bySlug = useMemo(
+    () =>
+      new Map<string, OpenableCollection>(
+        (data ?? []).map(collection => [collection.name, collection])
+      ),
+    [data]
+  );
+  return useCallback(
+    (document, options = {}) =>
+      documentAddress(
+        document,
+        options.collection ?? bySlug.get(document.slug),
+        {
+          // A view edits the default language, whatever language the screen
+          // the link is on was asked in: `update` answers for that one.
+          canUpdate:
+            document.kind === "collection" &&
+            canAccessCollection(document.slug, "updateInDefaultLanguage"),
+          ...(options.locale === undefined ? {} : { locale: options.locale }),
+          ...(defaultLocale ? { defaultLocale } : {}),
+        },
+        views
+      ),
+    [bySlug, canAccessCollection, defaultLocale, views]
+  );
+}

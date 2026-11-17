@@ -242,8 +242,10 @@ test("names the page's unpublished Layout, and publishes it with the page", asyn
 
   await openBuilder(page, pageId);
   await pressPublish(page);
-  await expect(offer(page)).toContainText("This page's Layout isn't published");
-  await expect(offer(page)).toContainText("site's default Layout");
+  await expect(offer(page)).toContainText(
+    "This page's header & footer set isn't published"
+  );
+  await expect(offer(page)).toContainText("site's default header & footer set");
   await expect(offer(page)).toContainText(`Landing ${s}`);
   await offer(page).getByRole("button", { name: "Publish both" }).click();
   await expect(pageStatus(page)).toHaveText("Page status: Published");
@@ -301,7 +303,7 @@ test("asks about a Layout chosen on the form while the question was out", async 
   const pageId = await draftPage(api, `Edited while asked ${s}`, []);
 
   await gotoAdmin(page, `/collections/pages/${pageId}`);
-  const picker = page.getByRole("combobox", { name: "Layout" });
+  const picker = page.getByRole("combobox", { name: "Header & footer" });
   await expect(picker).toBeVisible({ timeout: 30_000 });
 
   // The first question is held until the Layout has changed, so its answer is
@@ -334,7 +336,9 @@ test("asks about a Layout chosen on the form while the question was out", async 
   await page.getByRole("option", { name: new RegExp(`^Late ${s}`) }).click();
   release();
 
-  await expect(offer(page)).toContainText("This page's Layout isn't published");
+  await expect(offer(page)).toContainText(
+    "This page's header & footer set isn't published"
+  );
   await expect(offer(page)).toContainText(`Late ${s}`);
   expect(questions).toBe(2);
   await offer(page).getByRole("button", { name: "Cancel" }).click();
@@ -366,13 +370,13 @@ test("warns before a Layout with an unpublished header becomes the default", asy
     await settings.getByRole("tab", { name: "Site" }).click();
     await settings
       .getByRole("combobox", {
-        name: "Pages without a Layout of their own use",
+        name: "Pages without a header & footer set of their own use",
       })
       .click();
     await page.getByRole("option", { name: `Site ${s}` }).click();
 
     await expect(offer(page)).toContainText(
-      "This Layout uses 1 component that isn't published"
+      "This header & footer set uses 1 component that isn't published"
     );
     await offer(page)
       .getByRole("button", { name: "Publish it, then make default" })

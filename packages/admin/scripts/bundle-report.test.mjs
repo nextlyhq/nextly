@@ -14,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -23,7 +24,9 @@ import {
   findJsFiles,
   formatKB,
   formatReport,
+  formatScreens,
   measureBundle,
+  measureScreens,
   parseArgs,
   parseChunkImports,
   readCommit,
@@ -583,5 +586,201 @@ describe("bundle-report", () => {
         }
       }
     );
+  });
+});
+
+describe("measureScreens", () => {
+  const ROUTE = "/admin/[[...params]]";
+
+  /** A factory of a chunk: its ids, the sources it maps to, its size. */
+  function factory(id, sources, { bytes = 100, loader = null } = {}) {
+    return { ids: [id], bytes, sources: new Set(sources), loader };
+  }
+
+  /**
+   * A chunk whose code is `bytes` long, holding `factories`, each factory's
+   * code shared evenly between its sources, as a source map would say.
+   */
+  function chunk(factories, bytes = 1000) {
+    const sourceLength = new Map();
+    for (const { sources, bytes: written } of factories) {
+      for (const source of sources) {
+        sourceLength.set(
+          source,
+          (sourceLength.get(source) ?? 0) + written / sources.size
+        );
+      }
+    }
+    return {
+      factories,
+      code: "x".repeat(bytes),
+      sources: new Set(factories.flatMap(f => [...f.sources])),
+      sourceLength,
+    };
+  }
+
+  /**
+   * An admin build: the first load holds the shell and the loader of the
+   * dashboard route; the dashboard's chunk holds the loader of a plugin part,
+   * whose chunk holds the plugin's editor.
+   */
+  function build() {
+    return {
+      firstLoads: new Map([[ROUTE, ["shell.js"]]]),
+      chunks: new Map([
+        [
+          "shell.js",
+          chunk([
+            factory(1, ["packages/admin/src/shell.tsx"], { bytes: 600 }),
+            factory(2, ["packages/plugin/src/admin/index.ts"], { bytes: 200 }),
+            factory(3, [], {
+              bytes: 100,
+              loader: { chunks: ["dashboard.js"], target: 10 },
+            }),
+          ]),
+        ],
+        [
+          "dashboard.js",
+          chunk([
+            factory(10, ["packages/admin/src/pages/dashboard/index.tsx"]),
+            factory(11, [], {
+              loader: { chunks: ["editor.js"], target: 20 },
+            }),
+          ]),
+        ],
+        [
+          "editor.js",
+          chunk([
+            factory(20, [
+              "packages/plugin/src/admin/Editor.tsx",
+              "node_modules/css-tree/lib/index.js",
+            ]),
+          ]),
+        ],
+        ["unrelated.js", chunk([factory(30, ["packages/other/src/a.ts"])])],
+      ]),
+    };
+  }
+
+  const groups = [
+    { name: "plugin", matches: source => source.startsWith("packages/plugin/") },
+    { name: "css parser", matches: source => source.includes("/css-tree/") },
+  ];
+
+  it("takes the first load and the loaders a screen opens through, in order", () => {
+    const [signIn, dashboard, editor] = measureScreens({
+      output: build(),
+      route: ROUTE,
+      groups,
+      screens: [
+        { name: "sign-in", opens: [] },
+        { name: "dashboard", opens: [/pages\/dashboard\//] },
+        { name: "editor", opens: [/pages\/dashboard\//, /Editor\.tsx$/] },
+      ],
+    });
+
+    expect(signIn.chunks).toEqual(["shell.js"]);
+    expect(dashboard.chunks).toEqual(["dashboard.js", "shell.js"]);
+    expect(editor.chunks).toEqual(["dashboard.js", "editor.js", "shell.js"]);
+    expect(dashboard.groups["css parser"].sources).toEqual([]);
+    expect(editor.groups["css parser"].sources).toEqual([
+      "node_modules/css-tree/lib/index.js",
+    ]);
+  });
+
+  it("counts a group's share of a chunk by the code its sources account for", () => {
+    const output = build();
+    const [signIn] = measureScreens({
+      output,
+      route: ROUTE,
+      groups,
+      screens: [{ name: "sign-in", opens: [] }],
+    });
+    const zipped = gzipSync(output.chunks.get("shell.js").code).length;
+
+    // 200 of the chunk's 1000 characters are the plugin's.
+    expect(signIn.gzippedBytes).toBe(zipped);
+    expect(signIn.groups.plugin.gzippedBytes).toBe(Math.round(zipped * 0.2));
+    expect(signIn.groups.plugin.sources).toEqual([
+      "packages/plugin/src/admin/index.ts",
+    ]);
+  });
+
+  it("refuses a screen whose loader sits only in a chunk not yet reached", () => {
+    // The editor's loader is in the dashboard's chunk, which the sign-in
+    // page never fetches: opening the editor straight from the first load is
+    // not a screen the browser can reach.
+    expect(() =>
+      measureScreens({
+        output: build(),
+        route: ROUTE,
+        groups,
+        screens: [{ name: "editor", opens: [/Editor\.tsx$/] }],
+      })
+    ).toThrow(/editor: no loader in the chunks reached so far runs a module matching/);
+  });
+
+  it("refuses a build that names no first load for the route", () => {
+    expect(() =>
+      measureScreens({
+        output: { ...build(), firstLoads: new Map() },
+        route: ROUTE,
+        groups,
+        screens: [],
+      })
+    ).toThrow(`the build names no first load for ${ROUTE}`);
+  });
+
+  it("formats each screen with its groups", () => {
+    const text = formatScreens(
+      measureScreens({
+        output: build(),
+        route: ROUTE,
+        groups,
+        screens: [{ name: "sign-in", opens: [] }],
+      }),
+      { title: "Screens" }
+    );
+
+    expect(text).toContain("sign-in: 1 chunks");
+    expect(text).toMatch(/plugin\s+\d+\.\d\d KB gzip {2}1 modules/);
+  });
+
+  it("counts only a group's own code in a factory that merges several packages", () => {
+    const merged = {
+      ids: [1],
+      bytes: 1000,
+      sources: new Set([
+        "packages/admin/src/shell.tsx",
+        "packages/plugin/src/admin/index.ts",
+      ]),
+      loader: null,
+    };
+    const output = {
+      firstLoads: new Map([[ROUTE, ["merged.js"]]]),
+      chunks: new Map([
+        [
+          "merged.js",
+          {
+            factories: [merged],
+            code: "x".repeat(1000),
+            sources: merged.sources,
+            sourceLength: new Map([
+              ["packages/admin/src/shell.tsx", 900],
+              ["packages/plugin/src/admin/index.ts", 100],
+            ]),
+          },
+        ],
+      ]),
+    };
+    const [screen] = measureScreens({
+      output,
+      route: ROUTE,
+      groups,
+      screens: [{ name: "sign-in", opens: [] }],
+    });
+    const zipped = gzipSync(output.chunks.get("merged.js").code).length;
+
+    expect(screen.groups.plugin.gzippedBytes).toBe(Math.round(zipped * 0.1));
   });
 });

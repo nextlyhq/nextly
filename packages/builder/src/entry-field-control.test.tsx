@@ -24,7 +24,7 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 
-import { useEntryContentDrawing } from "./entry-content-canvas";
+import { useEntryContentDrawing } from "./canvas/entry-content-canvas";
 import { EntryFieldControl } from "./entry-field-control";
 import type { EditableProp } from "./inspector";
 import {

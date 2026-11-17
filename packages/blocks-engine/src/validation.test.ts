@@ -1764,10 +1764,37 @@ describe("the document-kind vocabulary", () => {
       "page",
       "pattern",
       "component",
-      "region",
       "template",
     ]);
   });
+
+  it("refuses a region document, a kind the format no longer has", () => {
+    // Headers and footers are components a Layout points at, so nothing
+    // writes a `region` document; the format refuses one like any kind it
+    // does not know.
+    const issues = validate(
+      invalidDoc({ formatVersion: 1, kind: "region", nodes: [] }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    );
+    expect(issues).toContainEqual(
+      expect.objectContaining({
+        path: "/kind",
+        code: "invalid-kind",
+        severity: "error",
+      })
+    );
+  });
+
+  it.each(["page", "pattern", "component", "template"])(
+    "accepts a %s document",
+    kind => {
+      const issues = validate(
+        { formatVersion: 1, kind, nodes: [] } as BlockDocument,
+        { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+      );
+      expect(issues.filter(i => i.code === "invalid-kind")).toEqual([]);
+    }
+  );
 
   it("has a corpus fixture for every kind in it", () => {
     for (const kind of DOCUMENT_KINDS) {

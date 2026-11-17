@@ -20,7 +20,7 @@ import {
   type ComponentLookup,
 } from "@nextlyhq/blocks-engine";
 
-import type { SavedComponent } from "./inserter";
+import type { SavedComponent } from "./panels/add/inserter";
 import {
   EDITABLE_EXPOSED_TYPES,
   inspectInstance,

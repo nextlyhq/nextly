@@ -11,9 +11,9 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 import type { ActivityEvent } from "nextly/widget-result";
 
-import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import { describeActivityActor } from "@admin/lib/dashboard";
+import type { DocumentAddressOf } from "@admin/lib/navigation/useDocumentAddress";
 import type {
   Activity,
   ActivityCategory,
@@ -221,23 +221,25 @@ export function activityFromRow(
 }
 
 /**
- * Where an activity row leads: the entry it is about, or the Single. Nothing for a deletion,
+ * Where an activity row leads: the entry it is about, where the admin's one rule for opening a
+ * document opens it, or the Single. Nothing for a deletion,
  * whose subject is gone, for a change to settings, or for a row naming no entry. The feed holds
  * only events about what the reader may read, so the link opens something they may open.
  */
-export function activityHref(row: Record<string, unknown>): string | undefined {
+export function activityHref(
+  row: Record<string, unknown>,
+  /** Where a link to a document opens, by the admin's one rule. */
+  addressOf: DocumentAddressOf
+): string | undefined {
   const collection = textOrNull(row.collection);
   if (!collection || row.action === "delete") return undefined;
   if (row.subjectKind === "single") {
-    return buildRoute(ROUTES.SINGLE_EDIT, { slug: collection });
+    return addressOf({ kind: "single", slug: collection });
   }
   if (row.subjectKind === "settings") return undefined;
   const entryId = textOrNull(row.entryId);
   return entryId
-    ? buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
-        slug: collection,
-        id: entryId,
-      })
+    ? addressOf({ kind: "collection", slug: collection, id: entryId })
     : undefined;
 }
 

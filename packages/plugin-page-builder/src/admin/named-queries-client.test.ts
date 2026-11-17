@@ -29,6 +29,10 @@ const writePluginRoute = vi.hoisted(() => vi.fn());
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   readPluginRoute,
   writePluginRoute,
+  // The schema never moves here: the sources' keeping is
+  // `session-answers.test`'s.
+  schemaVersion: () => 1,
+  onSchemaChange: () => () => {},
 }));
 
 import type {
@@ -233,6 +237,12 @@ describe("the canvas's runs of a named query", () => {
     await ask(4);
     expect(run).toHaveBeenCalledWith({
       named: expect.objectContaining({ allowance: 4 }) as unknown,
+    });
+    // A site with no limit: sent as `null`, which JSON carries, never as
+    // `Infinity`, which it turns into a `null` the route reads as nothing.
+    await ask(Number.POSITIVE_INFINITY);
+    expect(run).toHaveBeenLastCalledWith({
+      named: expect.objectContaining({ allowance: null }) as unknown,
     });
   });
 

@@ -26,13 +26,22 @@ import type {
 } from "nextly/runtime";
 
 import { readWasRefused } from "./blocks/list-read-refusal";
-import { createDefaultDataProvider } from "./context";
+import { createDefaultDataProvider, DEFAULT_MAX_QUERIES } from "./context";
 import type {
   BlocksDataProvider,
   BlocksDataProviderFactory,
   BlocksPublicReader,
+  NamedQueryLookup,
 } from "./context";
 import type { BlocksPageConfig } from "./next-page-config";
+import {
+  offeredSiteBlocks,
+  offeredSitePageDataLimit,
+  SITE_BLOCKS_SERVICE,
+  SITE_NAMED_QUERIES_SERVICE,
+  siteCopyOf,
+  type BlockResolver,
+} from "./resolver";
 
 /**
  * The instance this route reads through.
@@ -51,6 +60,105 @@ import type { BlocksPageConfig } from "./next-page-config";
  */
 export function readerFor(config: BlocksPageConfig): NextlyContentReader {
   return config.nextly ?? requireNextly();
+}
+
+/**
+ * The blocks of the site this process serves, for a route given no `blocks`:
+ * the page builder's registry, read from the process's instance on each
+ * lookup. The route reads its entry first, which starts the site and fills
+ * its registry, so a page draws its registered blocks before any admin has
+ * opened.
+ *
+ * Read per lookup rather than captured, because a dev-server hot reload
+ * starts the site again with a new registry. Refused, never answered empty,
+ * when the instance has no page builder: every block would otherwise draw as
+ * an unknown one, on a page that looks served correctly.
+ *
+ * The process's instance, because the services an instance offers are kept
+ * once per process. A host serving two sites from one process binds each
+ * route to its site's page builder with `blocks: blocksOf(builder)`.
+ */
+export function siteBlocks(): BlockResolver {
+  return { get: type => siteRegistry().get(type) };
+}
+
+/**
+ * The route's config with its site-bound blocks and named queries read
+ * through the started instance wherever the page builder they are bound to
+ * did not start in this module copy, as in a production build, where each
+ * route holds its own copy of the plugin. Anything else is used as given.
+ */
+export function siteBoundConfig<T extends BlocksPageConfig>(config: T): T {
+  const blocksMark = siteCopyOf(config.blocks);
+  const queriesMark = siteCopyOf(config.namedQueries);
+  if (blocksMark === undefined && queriesMark === undefined) return config;
+  const own = config.blocks;
+  const ownQueries = config.namedQueries;
+  return {
+    ...config,
+    ...(blocksMark === undefined || own === undefined
+      ? {}
+      : {
+          blocks: {
+            get: (type: string) =>
+              (blocksMark.started() ? own : siteRegistry()).get(type),
+          },
+        }),
+    ...(queriesMark === undefined || ownQueries === undefined
+      ? {}
+      : {
+          namedQueries: {
+            definitionOf: (name: string) =>
+              (queriesMark.started()
+                ? ownQueries
+                : (siteQueries() ?? ownQueries)
+              ).definitionOf(name),
+          },
+        }),
+  };
+}
+
+/**
+ * How many reads one render of this route may make: its own `maxQueries`,
+ * else the site's page data limit (`pageBuilder({ maxQueries })`), which the
+ * editor's meter counts against too, else {@link DEFAULT_MAX_QUERIES}.
+ *
+ * Read per render, after the route has read its entry, which starts the site.
+ * A process with no instance registered (a route reading through its own
+ * `nextly` only) has no site limit to take, and takes the default.
+ */
+export function routeMaxQueries(config: BlocksPageConfig): number {
+  if (config.maxQueries !== undefined) return config.maxQueries;
+  let plugins: Parameters<typeof offeredSitePageDataLimit>[0];
+  try {
+    plugins = requireNextly().plugins;
+  } catch {
+    return DEFAULT_MAX_QUERIES;
+  }
+  return offeredSitePageDataLimit(plugins) ?? DEFAULT_MAX_QUERIES;
+}
+
+/** The started site's named queries, or `undefined` where none is offered. */
+function siteQueries(): NamedQueryLookup | undefined {
+  const offered: unknown =
+    requireNextly().plugins[SITE_NAMED_QUERIES_SERVICE.plugin]?.[
+      SITE_NAMED_QUERIES_SERVICE.service
+    ];
+  return typeof offered === "object" &&
+    offered !== null &&
+    typeof (offered as { definitionOf?: unknown }).definitionOf === "function"
+    ? (offered as NamedQueryLookup)
+    : undefined;
+}
+
+function siteRegistry(): BlockResolver {
+  const offered = offeredSiteBlocks(requireNextly().plugins);
+  if (offered !== undefined) return offered;
+  throw new Error(
+    "[blocks-react] This route has no `blocks`, and the Nextly instance has no " +
+      `page builder to read them from. Install "${SITE_BLOCKS_SERVICE.plugin}", ` +
+      "or pass `blocks` to the route."
+  );
 }
 
 /**

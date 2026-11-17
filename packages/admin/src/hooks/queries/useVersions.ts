@@ -22,6 +22,7 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
+import { useState } from "react";
 
 import {
   versionApi,
@@ -104,6 +105,31 @@ export const versionKeys = {
     [...versionKeys.details(), ...scopeKey(scope), versionNo] as const,
   diffs: (): readonly ["versions", "diff"] =>
     [...versionKeys.all(), "diff"] as const,
+  // What every comparison of one document starts with, so a cached
+  // answer can be told to belong to that document by its key alone.
+  documentDiffs: (scope: VersionScope): readonly string[] =>
+    [...versionKeys.diffs(), ...scopeKey(scope)] as const,
+  // A comparison with a baseline the server resolves: named by the baseline,
+  // the version compared (or none, for the server's own choice), and the
+  // language the server pairs in when no version is named. A baseline resolved
+  // once per visit also carries that visit, so the next visit asks again.
+  // No language is `null` in the key, not a word: a language code is whatever
+  // the app configures, so any word could also be a code, and that language
+  // would be answered with the default part's comparison.
+  baselineDiff: (
+    scope: VersionScope,
+    baseline: string,
+    to: number | undefined,
+    locale: string | undefined,
+    visit: number | undefined
+  ): readonly unknown[] =>
+    [
+      ...versionKeys.documentDiffs(scope),
+      baseline,
+      to ?? "auto",
+      locale ?? null,
+      ...(visit !== undefined ? [`visit-${visit}`] : []),
+    ] as const,
   // A diff is identified by the document (scope), the ordered version pair
   // (from, to), and whether unchanged fields are filtered out (modifiedOnly).
   // The result also depends on the live schema, which the query treats as
@@ -265,6 +291,13 @@ export interface UseVersionDiffOptions {
   /** Return only changed fields. */
   modifiedOnly?: boolean;
   enabled?: boolean;
+  /**
+   * The baseline whose answer fills this pair's comparison
+   * (`useBaselineDiff`), when one does. That answer is the whole comparison,
+   * so the pair is not asked for again when it mounts, nor on a return while
+   * the baseline itself is asked again then.
+   */
+  seededBy?: string;
 }
 
 /**
@@ -284,7 +317,14 @@ export function useVersionDiff({
   to,
   modifiedOnly = false,
   enabled = true,
+  seededBy,
 }: UseVersionDiffOptions): UseQueryResult<VersionDiff, Error> {
+  // A pair a baseline's answer fills is revalidated on a return only when that
+  // baseline is not: one resolved once per visit leaves the live schema's
+  // reclassification to the pair, and any other is asked again on a return,
+  // and its answer fills the pair once more.
+  const revalidatesOnReturn =
+    seededBy === undefined || resolvedOncePerVisit(seededBy);
   return useQuery<VersionDiff, Error>({
     queryKey:
       from === null || to === null
@@ -299,13 +339,143 @@ export function useVersionDiff({
     },
     enabled: enabled && from !== null && to !== null && isAddressable(scope),
     staleTime: 0,
+    // Filled by the baseline's answer just before it mounts, so not asked
+    // again then (see `seededBy`).
+    refetchOnMount: seededBy === undefined,
     // The provider disables focus refetch app-wide; re-enable it here so a
     // schema edited in another tab reclassifies the diff on return (see above).
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: revalidatesOnReturn,
+    refetchOnReconnect: revalidatesOnReturn,
     // Toggling "Changed only" switches to a different cache entry; keep the
     // prior diff on screen while the new one loads rather than flashing a
     // skeleton over a comparison the user is already reading.
     placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * Whether a baseline is resolved once per visit rather than again on every
+ * return: "the version you last looked at", which its own showing moves (see
+ * `useBaselineDiff`).
+ */
+function resolvedOncePerVisit(baseline: string): boolean {
+  return baseline === "last-viewed";
+}
+
+/** Numbers each visit to a baseline comparison; see `useBaselineDiff`. */
+let visitCount = 0;
+function nextVisit(): number {
+  visitCount += 1;
+  return visitCount;
+}
+
+/**
+ * A baseline's answer as the comparison of the pair it resolved: the same
+ * fields, without the note about the baseline, which an explicit pair's own
+ * answer never carries.
+ */
+function pairComparisonOf(answer: VersionDiff): VersionDiff {
+  const pair = { ...answer };
+  delete pair.baseline;
+  return pair;
+}
+
+/**
+ * A version compared with a baseline the server resolves (see
+ * `versionApi.diffFromBaseline`). Null asks for nothing.
+ *
+ * The answer is the whole comparison of the pair it resolved, so it also
+ * fills that pair's own comparison (`useVersionDiff`, with `seededBy`), which
+ * then draws it without asking the server to compute it a second time.
+ *
+ * What is published and the current draft are resolved again whenever the
+ * reader returns, the network does, or the comparison mounts: a publish or a
+ * draft saved in another tab changes what they name, and the comparison and
+ * the restore it offers should follow.
+ *
+ * "The version you last looked at" is the exception, resolved once per visit
+ * and never refetched by focus or reconnection within it. Showing the
+ * comparison marks its newer version seen, which moves that baseline onto the
+ * version itself: asked again, the server would answer that there is nothing
+ * to compare, replacing the comparison the reader is looking at. Freezing it
+ * costs no freshness the reader can see, because the pair's own comparison
+ * (`useVersionDiff`) still revalidates its fields against the live schema.
+ * Marking a version seen invalidates nothing, so it cannot refetch this
+ * either.
+ *
+ * A visit is one mount of the hook, which the comparison page holds for as
+ * long as it is open, across changes of address. Its key carries the visit,
+ * so a reader who leaves and comes back is answered afresh: the version seen
+ * on the last visit is the baseline of this one, and an answer cached from
+ * then would compare the previous visit's pair instead.
+ *
+ * `locale` is the language the server pairs in when `to` is absent, and is
+ * part of the key, so one language's answer never stands for another's.
+ */
+export function useBaselineDiff({
+  scope,
+  baseline,
+  to,
+  locale,
+  enabled = true,
+}: {
+  scope: VersionScope;
+  baseline: string | null;
+  to?: number;
+  locale?: string;
+  enabled?: boolean;
+}): UseQueryResult<VersionDiff, Error> {
+  const queryClient = useQueryClient();
+  // Taken once, as the visit begins (see above).
+  const [visit] = useState(nextVisit);
+  // The start every baseline key of this document shares, so a previous
+  // answer can be told apart from another document's.
+  const documentKey = versionKeys.documentDiffs(scope);
+  // The one baseline its own showing moves (see above).
+  const resolvedOnce = baseline !== null && resolvedOncePerVisit(baseline);
+  return useQuery<VersionDiff, Error>({
+    queryKey:
+      baseline === null
+        ? ([...versionKeys.diffs(), "none"] as const)
+        : versionKeys.baselineDiff(
+            scope,
+            baseline,
+            to,
+            locale,
+            resolvedOnce ? visit : undefined
+          ),
+    queryFn: async () => {
+      // Guarded by `enabled`; this is defence against a direct queryFn call.
+      if (baseline === null) throw new Error("A baseline is required");
+      const answer = await versionApi.diffFromBaseline(scope, baseline, {
+        ...(to !== undefined ? { to } : {}),
+        ...(locale !== undefined ? { locale } : {}),
+      });
+      // Every field is in the answer, as in the pair's own comparison of
+      // every field (see above).
+      queryClient.setQueryData(
+        versionKeys.diff(scope, answer.from, answer.to, false),
+        pairComparisonOf(answer)
+      );
+      return answer;
+    },
+    enabled: enabled && baseline !== null && isAddressable(scope),
+    // Frozen for the visit, or re-resolved on every return (see above). Focus
+    // refetch is opted into explicitly: the provider turns it off app-wide.
+    staleTime: resolvedOnce ? Infinity : 0,
+    refetchOnWindowFocus: !resolvedOnce,
+    refetchOnReconnect: !resolvedOnce,
+    // The previous comparison stays on screen while another baseline of the
+    // SAME document loads. Never another document's: the router can move from
+    // one document's comparison to another's without unmounting, and that
+    // pair, drawn under the new document's heading, would also be marked
+    // seen on the new document, moving its "last looked at" to a version
+    // never shown.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery !== undefined &&
+      documentKey.every((part, i) => previousQuery.queryKey[i] === part)
+        ? previous
+        : undefined,
   });
 }
 

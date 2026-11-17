@@ -99,15 +99,52 @@ function styleWrite(page: Page) {
 const bar = (page: Page) =>
   page.getByRole("region", { name: "What you're editing" });
 
-/** One target chip in the bar, by its name. */
-const chip = (page: Page, name: string) =>
-  bar(page).getByRole("button", { name, exact: true });
+/** The bar's target chip: the menu button that says what an edit changes. */
+const targetChip = (page: Page) =>
+  bar(page).getByRole("button", { name: /^Editing: / });
 
-/** Select a block and open the inspector's Style tab with Typography open. */
+/** The target chip's menu, opened. */
+async function openTargets(page: Page) {
+  await targetChip(page).click();
+  const menu = page.getByRole("menu");
+  await expect(menu).toBeVisible();
+  return menu;
+}
+
+/** A target in the open menu, by the name it starts with. */
+const targetItem = (page: Page, name: string) =>
+  page.getByRole("menuitemradio", { name: new RegExp(`^${name}\\b`) });
+
+/** Make a worn style, or "This block", the target from the menu. */
+async function chooseTarget(page: Page, name: string): Promise<void> {
+  await openTargets(page);
+  await targetItem(page, name).click();
+  await expect(page.getByRole("menu")).toHaveCount(0);
+}
+
+/** The targets the menu lists, by their label line. */
+async function targetLabels(page: Page): Promise<string[]> {
+  const menu = await openTargets(page);
+  const labels = await menu
+    .getByRole("menuitemradio")
+    .evaluateAll(items =>
+      items.map(
+        item =>
+          item.querySelector(".nx-editing-bar__item-words > span")
+            ?.textContent ?? ""
+      )
+    );
+  await page.keyboard.press("Escape");
+  return labels;
+}
+
+/** Select a block and open the inspector's Style tab with Text open. */
 async function styleOf(page: Page, id: string): Promise<void> {
   await clickBlock(page, id);
   await page.getByRole("tab", { name: "Style" }).click();
-  const section = page.getByRole("button", { name: "Typography", exact: true });
+  const section = page
+    .getByTestId("inspector")
+    .getByRole("button", { name: /^Text(\s?has changes)?$/ });
   if ((await section.getAttribute("aria-expanded")) !== "true") {
     await section.click();
   }
@@ -134,12 +171,12 @@ async function groundsOf(page: Page, dark: boolean): Promise<[string, string]> {
 }
 
 /**
- * The Typography section's Colour field. Its name carries where its value
+ * The Text section's Colour field. Its name carries where its value
  * comes from ("Colour From Card"), so it is matched by its start.
  */
 const colourField = (page: Page) =>
   page
-    .getByRole("region", { name: /^Typography/ })
+    .getByRole("region", { name: /^Text(\s?has changes)?$/ })
     .getByRole("textbox", { name: /^Colour( |$)/ });
 
 test.describe("shared styles on a block", () => {
@@ -196,7 +233,8 @@ test.describe("shared styles on a block", () => {
       }),
     ]);
     await page.getByRole("tab", { name: "Style" }).click();
-    await expect(chip(page, "Card")).toHaveAttribute("aria-pressed", "false");
+    await expect(targetChip(page)).toHaveAccessibleName("Editing: This block");
+    expect(await targetLabels(page)).toEqual(["● This block", "◆ Card"]);
 
     // The bar's box stands apart from the inspector it sits on, in both
     // schemes, read from the computed colours rather than by eye.
@@ -208,26 +246,33 @@ test.describe("shared styles on a block", () => {
 
     // Another block wears it.
     await styleOf(page, B);
-    await bar(page).getByRole("button", { name: "Apply shared style" }).click();
+    await openTargets(page);
+    await page
+      .getByRole("menuitem", { name: /^Apply a shared style…/ })
+      .click();
     const search = page.getByRole("combobox", { name: "Search shared styles" });
     await search.fill("card");
     await search.press("Enter");
     await expect(await block(page, B)).toHaveCSS("color", NAVY.rgb);
 
     // The style becomes the target by keyboard, and says how far it reaches.
-    await chip(page, "This block").focus();
-    await page.keyboard.press("ArrowRight");
-    await expect(chip(page, "Card")).toBeFocused();
-    await page.keyboard.press("Space");
-    await expect(chip(page, "Card")).toHaveAttribute("aria-pressed", "true");
+    await targetChip(page).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("menu")).toBeVisible();
+    await page.keyboard.press("ArrowDown");
+    await expect(targetItem(page, "Card")).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(targetChip(page)).toHaveAccessibleName(
+      "Editing: shared style Card"
+    );
     await expect(bar(page).getByRole("status")).toHaveText(
       "Now editing shared style Card"
     );
-    await expect(bar(page)).toContainText(
-      "Editing shared style Card · .nx-c-card"
+    await expect(bar(page).locator("[data-shared-reach]")).toContainText(
+      "Shared style · 2 blocks on this page"
     );
     await expect(bar(page).locator("[data-shared-reach]")).toContainText(
-      "2 blocks on this page"
+      "Changes here change all of them."
     );
 
     // A change to the style reaches both blocks.
@@ -253,12 +298,9 @@ test.describe("shared styles on a block", () => {
     expect((await storedClasses(page))?.[0]?.styles).toEqual(colour(BROWN.hex));
 
     // Escape on the shared target goes back to this block.
-    await chip(page, "Card").focus();
+    await targetChip(page).focus();
     await page.keyboard.press("Escape");
-    await expect(chip(page, "This block")).toHaveAttribute(
-      "aria-pressed",
-      "true"
-    );
+    await expect(targetChip(page)).toHaveAccessibleName("Editing: This block");
   });
 
   test("says a value comes from the shared style, overrides it on the block, resets, and moves a value into it", async ({
@@ -277,7 +319,7 @@ test.describe("shared styles on a block", () => {
     await styleOf(page, A);
 
     // Only Colour holds a value in this test, so the section is its scope.
-    const field = page.getByRole("region", { name: /^Typography/ });
+    const field = page.getByRole("region", { name: /^Text(\s?has changes)?$/ });
     await expect(field.getByRole("img", { name: "From Card" })).toBeVisible();
 
     // Overridden on this block.
@@ -296,7 +338,7 @@ test.describe("shared styles on a block", () => {
     // Move to: the block's value goes into the style.
     await colourField(page).fill(BLACK.hex);
     await colourField(page).press("Enter");
-    await chip(page, "Card").click();
+    await chooseTarget(page, "Card");
     // The words, then the action on its own line.
     await expect(
       field.locator('[data-shared-line="move"] [data-shared-line-text]')
@@ -326,15 +368,23 @@ test.describe("shared styles on a block", () => {
     );
     await styleOf(page, A);
 
-    const chips = bar(page).locator("[data-target-chip]");
-    await expect(chips).toHaveText(["This block", "one", "two", "three"]);
+    expect(await targetLabels(page)).toEqual([
+      "● This block",
+      "◆ one",
+      "◆ two",
+      "◆ three",
+    ]);
     // One shared style per block in this release: no second one is offered.
+    await openTargets(page);
     await expect(
-      bar(page).getByRole("button", { name: "Apply shared style" })
-    ).toHaveCount(0);
+      page.getByRole("menuitem", { name: /^Apply a shared style…/ })
+    ).toHaveAttribute("aria-disabled", "true");
+    await page.keyboard.press("Escape");
     // Any of them can be the target.
-    await chip(page, "two").click();
-    await expect(chip(page, "two")).toHaveAttribute("aria-pressed", "true");
+    await chooseTarget(page, "two");
+    await expect(targetChip(page)).toHaveAccessibleName(
+      "Editing: shared style two"
+    );
 
     // Opening and saving the block drops none.
     await pressSave(page);
@@ -343,26 +393,20 @@ test.describe("shared styles on a block", () => {
       .toEqual(["e2e-three", "e2e-one", "e2e-two"]);
 
     // Taken off: the others stay.
-    await bar(page)
-      .getByRole("button", { name: "Actions for shared style one" })
-      .click();
-    await page
-      .getByRole("menuitem", { name: "Remove one from this block" })
-      .click();
-    await expect(chips).toHaveText(["This block", "two", "three"]);
+    await openTargets(page);
+    await page.getByRole("menuitem", { name: /^Remove one/ }).click();
+    expect(await targetLabels(page)).toEqual([
+      "● This block",
+      "◆ two",
+      "◆ three",
+    ]);
     // Back to this block, to read what the block itself holds.
-    await chip(page, "This block").click();
+    await chooseTarget(page, "This block");
 
     // Detached: the look stays on the block, the style goes.
-    await bar(page)
-      .getByRole("button", { name: "Actions for shared style three" })
-      .click();
-    await page
-      .getByRole("menuitem", {
-        name: /^Detach: keep the look on this block only/,
-      })
-      .click();
-    await expect(chips).toHaveText(["This block", "two"]);
+    await openTargets(page);
+    await page.getByRole("menuitem", { name: /^Detach three/ }).click();
+    expect(await targetLabels(page)).toEqual(["● This block", "◆ two"]);
     await expect(await block(page, A)).toHaveCSS("color", NAVY.rgb);
     await expect(colourField(page)).toHaveValue(NAVY.hex);
 

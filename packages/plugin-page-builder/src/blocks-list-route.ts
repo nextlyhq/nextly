@@ -18,9 +18,7 @@
  * @module blocks-list-route
  */
 import {
-  allBlocks,
   blockLabelFrom,
-  getBlockSource,
   slotAdmits,
   type AnyBlockDefinition,
 } from "@nextlyhq/blocks-engine";
@@ -36,16 +34,11 @@ import {
 import { readBodyWith } from "./composition-route-kit";
 import { onePage } from "./loop-collections-route";
 
-/** What the listing reads: the running registry, unless a test hands its own. */
+/** What the listing reads: the site's registry, unless a test hands its own. */
 export interface BlocksListReads {
   blocks(): readonly AnyBlockDefinition[];
   sourceOf(name: string): string | undefined;
 }
-
-const REGISTRY_READS: BlocksListReads = {
-  blocks: allBlocks,
-  sourceOf: getBlockSource,
-};
 
 /**
  * The body: the field's allow-list exactly as stored, or `null` for a field
@@ -64,7 +57,7 @@ const REQUEST_SCHEMA = z.object({
  */
 export function listAcceptedBlocks(
   allow: readonly string[] | undefined,
-  reads: BlocksListReads = REGISTRY_READS
+  reads: BlocksListReads
 ): BlockListItem[] {
   return reads
     .blocks()
@@ -96,7 +89,7 @@ export function listAcceptedBlocks(
 }
 
 /** The route the plugin contributes. */
-export function blocksListRoute(reads: BlocksListReads = REGISTRY_READS): {
+export function blocksListRoute(reads: BlocksListReads): {
   method: "POST";
   siteWide: false;
   path: string;

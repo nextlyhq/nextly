@@ -1,0 +1,585 @@
+"use client";
+
+/**
+ * The numeric field: a number with its unit, the keywords offered beside
+ * it, scrubbing its label, and how a unit is read, shown and described.
+ *
+ * @module style-numeric-field
+ */
+import {
+  trimCssWhitespace,
+  type SiteTokenSet,
+  type StyleLeaf,
+  type StyleValue,
+} from "@nextlyhq/blocks-engine";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from "@nextlyhq/ui";
+import * as React from "react";
+
+import { useCanvasTokenMode } from "./canvas/prefers-dark";
+import { useFieldDescription } from "./css-hint";
+import { InheritedValue } from "./inherited-value";
+import { useLabelScrub } from "./label-scrub";
+import { CompactSides } from "./spacing-box";
+import type { StyleControl } from "./style-controls";
+import type { CommitOutcome } from "./style-field-surroundings";
+import { keywordLabel } from "./style-keyword-labels";
+import {
+  CSS_NUMBER,
+  measurementOf,
+  measurementOfText,
+  scrubbedValue,
+  scrubOrigin,
+  steppedValue,
+  unitChoicesFor,
+  withDefaultUnit,
+  withUnit,
+} from "./style-numeric";
+import {
+  useDraft,
+  useHeldBlur,
+  commitDraft,
+  TextField,
+  storedText,
+  placeholderFor,
+} from "./style-text-field";
+import { VariableChoice } from "./variable-choice";
+
+/**
+ * Keywords a menu leaves out, still accepted when typed and still shown when
+ * stored: a font size's absolute sizes say no size an author can picture
+ * ("x-large"), where the type scale above them does.
+ */
+const UNOFFERED_KEYWORDS: Readonly<Record<string, readonly string[]>> = {
+  "font-size": [
+    "xx-small",
+    "x-small",
+    "small",
+    "medium",
+    "large",
+    "x-large",
+    "xx-large",
+    "xxx-large",
+  ],
+};
+
+/**
+ * A number written as text, as CSS reads one (`0.5`, `1e-7`), with only the
+ * whitespace CSS trims around it: not JavaScript's `\s`, which also takes a
+ * no-break space the engine refuses. `undefined` for anything else.
+ */
+export function textNumber(text: string): number | undefined {
+  const trimmed = trimCssWhitespace(text);
+  return CSS_NUMBER.test(trimmed) ? Number(trimmed) : undefined;
+}
+
+/**
+ * What describes a number field: its own description, and the words for its
+ * unit while what it shows is a number, or nothing at all. What it shows is
+ * the draft, or, while that is empty, the inherited value it hints. A keyword
+ * such as `inherit` has no unit to be said in.
+ */
+export function describedWithUnit(
+  describedBy: string | undefined,
+  unitWords: string | undefined,
+  draft: string,
+  inherited: string | undefined
+): string | undefined {
+  const shown = trimCssWhitespace(draft) === "" ? (inherited ?? "") : draft;
+  const keyword =
+    trimCssWhitespace(shown) !== "" && textNumber(shown) === undefined;
+  return unitWords === undefined || keyword
+    ? describedBy
+    : [describedBy, unitWords].filter(Boolean).join(" ");
+}
+
+/**
+ * The id of words naming a field's unit for a screen reader, where the unit
+ * shows only as a sign beside it (opacity's %). Read by the number field and
+ * added to what describes it, never to what marks it invalid.
+ */
+export const UnitWords: React.Context<string | undefined> = React.createContext<
+  string | undefined
+>(undefined);
+
+/**
+ * The text field, plus the affordances a value that is one measurement earns.
+ *
+ * The input stays a TEXT field whatever the value is, which is the whole design:
+ * `auto`, `clamp(...)`, a shorthand and a token all remain typeable and none is
+ * rewritten. The numeric behaviour is LAYERED on — arrow keys step the quantity
+ * and a menu swaps the unit — and both disengage silently when the current value
+ * is not a single measurement, so nothing an author can express is taken away by
+ * the field being clever about the common case.
+ */
+export function NumericField({
+  id,
+  control,
+  stored,
+  actionName,
+  tokens,
+  describedBy,
+  onCommit,
+}: {
+  id: string;
+  control: StyleControl;
+  stored: StyleValue | undefined;
+  tokens: SiteTokenSet | undefined;
+  /**
+   * This control's own name, position included.
+   *
+   * Taken from the caller rather than derived from the property here: a
+   * composite draws one of these per side, and a name built from the property
+   * alone would give all four of `padding`'s menus the same accessible name,
+   * leaving a screen reader no way to tell which side one edits.
+   */
+  actionName: string;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
+  // Words for a unit shown only as a sign beside the field, for its description.
+  const unitWords = React.useContext(UnitWords);
+  // The value reaching the field from another tier, which it shows as a hint.
+  const inheritedHint = React.useContext(InheritedValue);
+  const units = unitChoicesFor(control.leaf);
+  // The draft lives HERE rather than inside the text field, because two
+  // controls edit one value and the unit menu was reading the other copy. An
+  // author who types `20` over `12px` and then picks `rem` had the blur refuse
+  // the unitless draft, leaving `12px` stored — and the menu composed from
+  // THAT, committing `12rem` and discarding the 20 they were looking at.
+  const { draft, setDraft } = useDraft(stored);
+  // Read from the DRAFT, so the menu offers units for the quantity on screen
+  // and swaps the unit on that quantity rather than on a superseded one.
+  const measurement = measurementOfText(draft);
+  // The menu is shown only where it can act. Rendered against a value it cannot
+  // decompose, every choice in it would be a no-op, and a disabled-looking
+  // control that silently does nothing is worse than one that is not there.
+  //
+  // A UNITLESS draft keeps the menu rather than losing it, because typing the
+  // quantity and then choosing the unit is an ordinary way to write one — and a
+  // control that vanishes mid-edit is worse than one showing no selection. A
+  // leaf with no units to offer never reaches this: `unitChoicesFor` answers
+  // empty for anything that is not a dimension, so `line-height` as a number
+  // has no menu to gain a unit from.
+  // Not in the spacing box, whose sides take the unit as typed.
+  const compact = React.useContext(CompactSides);
+  const unitMenu = useFieldUnit({
+    leaf: control.leaf,
+    stored,
+    draft,
+    setDraft,
+    onCommit,
+  });
+  const { unit, keywords } = unitMenu;
+  const showUnits = !compact && unitMenu.acts;
+  const hold = useHeldBlur(storedText(stored));
+  // Owned here rather than by the field, so the suffix can step aside while
+  // the field shows a unit being typed.
+  const [typing, setTyping] = React.useState(false);
+  const suffix = suffixState(unitMenu, typing, measurement);
+  // A stored unit the candidate list does not carry — `ch`, or an uppercase
+  // `PX` the validator folds — is live and compiles while matching no item, and
+  // a controlled select over it renders an EMPTY trigger above a value that is
+  // doing something. Offered verbatim as its own item, which is what the
+  // keyword select above already does for a value outside its vocabulary.
+  const extraUnit = unlistedUnit(measurement, units);
+  const commitText = useNumericLabelScrub({
+    control,
+    stored,
+    draft,
+    unit,
+    setDraft,
+    setTyping,
+    onCommit,
+  });
+
+  return (
+    <div className="nx-style-inspector__numeric">
+      <TextField
+        id={id}
+        control={control}
+        stored={stored}
+        draft={draft}
+        setDraft={setDraft}
+        tokens={tokens}
+        describedBy={describedWithUnit(
+          describedBy,
+          unitWords,
+          draft,
+          inheritedHint
+        )}
+        invalid={describedBy !== undefined}
+        // With no menu drawn there is nothing to hold for: its refs are empty.
+        editing={{ holdBlur: hold.holdBlur, typing, setTyping }}
+        onCommit={commitText}
+        // The unit shown in the suffix is left out of the field.
+        {...suffixedText(control, unit, unitMenu.isKeyword, showUnits)}
+        onStep={(draft, delta) => {
+          const next = steppedValue(
+            control.leaf,
+            withDefaultUnit(control.leaf, draft, unit) ?? draft,
+            delta
+          );
+          // `undefined` means this value cannot be stepped or the result would
+          // be refused, so the key does nothing rather than writing a value the
+          // document then rejects.
+          if (next === undefined) return null;
+          onCommit(next);
+          return String(next);
+        }}
+      />
+      {showUnits ? (
+        <Select
+          // The empty string, never `undefined`. Radix reads `""` as "no
+          // selection" and shows the placeholder, while `undefined` switches it
+          // from controlled to UNCONTROLLED — where it keeps whatever was last
+          // picked, so a unit added and then undone leaves the trigger still
+          // displaying it while the draft has none. The draft is the only unit
+          // state, and passing `undefined` would give it a second one.
+          value={suffix.value}
+          onValueChange={hold.choosing(unitMenu.choose)}
+          onOpenChange={hold.onOpenChange}
+        >
+          <SelectTrigger
+            ref={hold.trigger}
+            onBlur={hold.onTriggerBlur}
+            className="nx-style-inspector__unit"
+            aria-label={`Unit for ${actionName}`}
+            // A unit change can be refused — a document at its byte limit, a
+            // value the validator rejects — and the message that explains it is
+            // rendered once for the field. Pointed at from HERE as well as from
+            // the text input, because a screen-reader user who returns to the
+            // menu is otherwise on the control that failed with nothing saying
+            // so and no way to reach the reason.
+            aria-describedby={described}
+            aria-invalid={describedBy === undefined ? undefined : true}
+          >
+            <SelectValue placeholder={suffix.placeholder} />
+          </SelectTrigger>
+          <SelectContent ref={hold.content}>
+            {extraUnit === null ? null : (
+              <SelectItem value={extraUnit}>{extraUnit}</SelectItem>
+            )}
+            {units.map(choice => (
+              <SelectItem key={choice} value={choice}>
+                {choice}
+              </SelectItem>
+            ))}
+            <KeywordItems
+              cssProperty={control.leaf.cssProperty}
+              keywords={keywords}
+              draft={draft}
+            />
+          </SelectContent>
+        </Select>
+      ) : null}
+      {/* The site's variables for this field, after its unit; nothing where
+          the site has none the property takes. */}
+      <VariableChoice
+        leaf={control.leaf}
+        tokens={tokens}
+        bound={false}
+        empty={stored === undefined}
+        current={undefined}
+        label={actionName}
+        onPick={identity => onCommit({ $token: identity })}
+      />
+    </div>
+  );
+}
+
+/**
+ * A unit menu's keywords after a line, in words with the CSS spelling in the
+ * tooltip; see style-keyword-labels. Those a menu leaves out are left out
+ * unless the field holds one.
+ */
+function KeywordItems({
+  cssProperty,
+  keywords,
+  draft,
+}: {
+  cssProperty: string;
+  keywords: readonly string[];
+  draft: string;
+}): React.JSX.Element | null {
+  const unoffered = UNOFFERED_KEYWORDS[cssProperty] ?? [];
+  const offered = keywords.filter(
+    keyword => keyword === draft || !unoffered.includes(keyword)
+  );
+  if (offered.length === 0) return null;
+  return (
+    <>
+      <SelectSeparator />
+      {offered.map(keyword => (
+        <SelectItem key={keyword} value={keyword} title={keyword}>
+          {keywordLabel(cssProperty, keyword)}
+        </SelectItem>
+      ))}
+    </>
+  );
+}
+
+/**
+ * The unit a measurement carries that the menu does not list, or `null`.
+ * Its own function so the field reads as what it draws, not as the test.
+ */
+function unlistedUnit(
+  measurement: ReturnType<typeof measurementOfText>,
+  units: readonly string[]
+): string | null {
+  const unit = unitOf(measurement);
+  return unit !== undefined && !units.includes(unit) ? unit : null;
+}
+
+/**
+ * The number field's value, offered to its row's label to drag: shown in the
+ * field while the pointer is down, and written once on release through the
+ * same commit as a typed value, so one drag is one undo step.
+ *
+ * @returns the field's own commit for its text: a bare number given the unit
+ *   the field shows ("24" is 24px), and nothing written while a drag owns the
+ *   value — a blur mid-drag would write the preview, and the release again.
+ */
+function useNumericLabelScrub({
+  control,
+  stored,
+  draft,
+  unit,
+  setDraft,
+  setTyping,
+  onCommit,
+}: {
+  control: StyleControl;
+  stored: StyleValue | undefined;
+  draft: string;
+  unit: string;
+  setDraft: (value: string) => void;
+  setTyping: (typing: boolean) => void;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): (value: StyleValue | null) => CommitOutcome {
+  const inherited = React.useContext(InheritedValue);
+  const mode = useCanvasTokenMode();
+  const commitText = (value: StyleValue | null): CommitOutcome =>
+    onCommit(withDefaultUnit(control.leaf, value, unit));
+  const owning = useLabelScrub({
+    origin: scrubOrigin(control.leaf, draft, unit, inherited),
+    at: (from, delta) => scrubbedValue(control.leaf, from, delta),
+    draft,
+    show: text => {
+      // Shown as a value, not as typing, so the unit stays beside it.
+      setTyping(false);
+      setDraft(text);
+    },
+    reset: () => {
+      setTyping(false);
+      setDraft(storedText(stored));
+    },
+    commit: value =>
+      commitDraft({
+        draft: String(value),
+        stored,
+        kind: control.kind,
+        leaf: control.leaf,
+        // A drag writes a quantity, never a variable's name, so no variable
+        // is matched against it.
+        tokens: undefined,
+        mode,
+        onCommit: commitText,
+        setDraft,
+      }),
+  });
+  // "refused" keeps the text on screen, which is the drag's live value.
+  return value => (owning() ? "refused" : commitText(value));
+}
+
+/**
+ * A field's hint while it shows its unit: what an unset value IS where the
+ * property's initial value is a word ("Auto" for a width, a height or an
+ * inset, "None" for a max size), so the hint never reads like a real default;
+ * otherwise the leaf's own hint as a number alone ("16", a border's "1").
+ * Margin allows `auto` but starts at 0, so it keeps a number.
+ */
+function bareNumberHint(control: StyleControl): string {
+  const { leaf } = control;
+  const keywords = leaf.kind === "dimension" ? (leaf.keywords ?? []) : [];
+  const css = leaf.cssProperty;
+  if (keywords.includes("none") && /^max-/.test(css)) return "None";
+  if (keywords.includes("auto") && !/^(margin|padding)/.test(css)) {
+    return "Auto";
+  }
+  return /^-?[\d.]+/.exec(placeholderFor(control))?.[0] ?? "";
+}
+
+/**
+ * Whether a choice in the unit menu can act: on a measurement, a keyword, or
+ * any bare number the commit will give the unit (".5", "1e3" included, by the
+ * same grammar). On an empty field only when what shows there is a
+ * measurement or nothing: an inherited "auto" or "clamp(…)" beside "px"
+ * would read as one value it is not.
+ */
+function unitActs(
+  draft: string,
+  measurement: ReturnType<typeof measurementOfText>,
+  inherited: string | undefined,
+  isKeyword: boolean
+): boolean {
+  const text = trimCssWhitespace(draft);
+  if (text === "") {
+    return (
+      inherited === undefined || measurementOfText(inherited) !== undefined
+    );
+  }
+  return measurement !== undefined || isKeyword || CSS_NUMBER.test(text);
+}
+
+/** The first unit that says one, in order of precedence, else px. */
+function shownUnit(candidates: readonly (string | undefined)[]): string {
+  return candidates.find(candidate => candidate !== undefined) ?? "px";
+}
+
+/**
+ * How the field reads beside its unit suffix: the unit left out of the value
+ * and the hint ("2" beside "rem"), a keyword shown once, in the suffix, and a
+ * hint that says what an unset value is. Nothing when no suffix is shown.
+ */
+function suffixedText(
+  control: StyleControl,
+  unit: string,
+  isKeyword: boolean,
+  shown: boolean
+): { display?: (text: string) => string; fallbackHint?: string } {
+  if (!shown) return {};
+  const fallbackHint = bareNumberHint(control);
+  return {
+    display: isKeyword
+      ? () => ""
+      : text => {
+          // A length in another unit (an inherited "2px" beside a pending
+          // "rem") is not shown beside this one, which would read as one
+          // value it is not; the plain hint takes its place.
+          const other = unitOf(measurementOfText(text));
+          return other !== undefined && other !== unit
+            ? fallbackHint
+            : withoutUnit(text, unit);
+        },
+    fallbackHint,
+  };
+}
+
+/** A measurement's unit, or `undefined` for none or a bare number. */
+function unitOf(
+  measurement: ReturnType<typeof measurementOfText>
+): string | undefined {
+  return measurement === undefined || measurement.unit === ""
+    ? undefined
+    : measurement.unit;
+}
+
+/** A length's text without the unit shown beside it: "2rem" beside "rem" reads "2". */
+function withoutUnit(text: string, unit: string): string {
+  const trimmed = trimCssWhitespace(text);
+  const number = trimmed.slice(0, trimmed.length - unit.length);
+  return trimmed.toLowerCase().endsWith(unit.toLowerCase()) &&
+    CSS_NUMBER.test(number)
+    ? number
+    : text;
+}
+
+/**
+ * The unit a length field shows and a bare number takes: the one the draft
+ * already carries, else the one the author last chose, else the leaf's first
+ * (px). Its keywords, `auto` and the rest, are offered after the units.
+ *
+ * `acts` says whether a choice in the menu can do anything: an empty field,
+ * whose bare number will take the unit shown, one measurement, or one of the
+ * keywords. Over anything else — `calc()`, scientific notation — every choice
+ * would be a no-op, and a control that silently does nothing is worse than
+ * none.
+ */
+function useFieldUnit({
+  leaf,
+  stored,
+  draft,
+  setDraft,
+  onCommit,
+}: {
+  leaf: StyleLeaf;
+  stored: StyleValue | undefined;
+  draft: string;
+  setDraft: (value: string) => void;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): {
+  unit: string;
+  keywords: readonly string[];
+  isKeyword: boolean;
+  acts: boolean;
+  value: string;
+  choose: (choice: string) => void;
+} {
+  const [chosen, setChosen] = React.useState<string | undefined>(undefined);
+  const measurement = measurementOfText(draft);
+  const units = unitChoicesFor(leaf);
+  const keywords = leaf.kind === "dimension" ? (leaf.keywords ?? []) : [];
+  const inherited = React.useContext(InheritedValue);
+  // The unit the draft says, else the one just chosen, else the stored
+  // value's, else the inherited value's, so a new number keeps the unit the
+  // author sees; px only when nothing says another.
+  const unit = shownUnit([
+    unitOf(measurement),
+    chosen,
+    unitOf(measurementOf(stored)),
+    unitOf(inherited === undefined ? undefined : measurementOfText(inherited)),
+    units[0],
+  ]);
+  const isKeyword = keywords.includes(draft);
+  const write = (value: string) => {
+    if (onCommit(value) !== "refused") setDraft(value);
+  };
+  return {
+    unit,
+    keywords,
+    isKeyword,
+    acts:
+      units.length > 0 && unitActs(draft, measurement, inherited, isKeyword),
+    // A unit chosen over a stored keyword shows at once, though nothing is
+    // written until a number is typed.
+    value: isKeyword && chosen === undefined ? draft : unit,
+    choose: choice => {
+      // A keyword is a whole value, written as chosen.
+      if (keywords.includes(choice)) {
+        setChosen(undefined);
+        return write(choice);
+      }
+      setChosen(choice);
+      // Composed from the draft, which is what the author is looking at;
+      // with no number on screen yet, the unit waits for one.
+      const next = withUnit(leaf, draft, choice);
+      if (next !== undefined) write(next);
+    },
+  };
+}
+
+/**
+ * What the unit suffix shows. While the field shows typed text that carries
+ * its own unit or a keyword ("2ch", "auto"), nothing: the text says it once,
+ * where the suffix beside it read as "2ch ch".
+ */
+function suffixState(
+  unitMenu: { value: string; isKeyword: boolean },
+  typing: boolean,
+  measurement: ReturnType<typeof measurementOfText>
+): { value: string; placeholder: string } {
+  const typedOwn =
+    typing && (unitMenu.isKeyword || unitOf(measurement) !== undefined);
+  return typedOwn
+    ? { value: "", placeholder: "" }
+    : { value: unitMenu.value, placeholder: "unit" };
+}

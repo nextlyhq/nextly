@@ -173,6 +173,9 @@ export {
  * For a field that shows the page it holds — the page builder's entry view —
  * and offers to open it whole. `open` is the editor's own Preview handler, so
  * the field opens the page the header would, in the language being edited.
+ * `openBeside` opens the preview beside the form, as the header's Preview
+ * press does, folding the document panel; it is absent where the editor has
+ * no such pane, and a control then opens the preview with `open`.
  *
  * `null` wherever the editor offers no Preview action: no preview configured,
  * an entry never saved, a reader, and outside a form. A field shows no such
@@ -196,6 +199,20 @@ export {
  * `string | null` answer stable.
  */
 export { useCurrentUserId } from "@nextlyhq/admin/kit/core";
+
+/**
+ * The schema version this tab was last answered with, and a listener told
+ * each time it moves (@experimental).
+ *
+ * For a plugin that keeps an answer the schema decides, such as the
+ * collections an author may pick from: keep it with `schemaVersion()` as it
+ * was read, and read it again once the version differs. `onSchemaChange`
+ * tells of every move this tab learns of (its own Schema Builder apply,
+ * another tab's, a code-first change) and answers the call that stops it.
+ * `schemaVersion()` is `undefined` until an answer carried a version.
+ * Experimental while its first consumer settles.
+ */
+export { onSchemaChange, schemaVersion } from "@nextlyhq/admin/kit/core";
 
 /**
  * How the surrounding document stands (@experimental).
@@ -247,7 +264,11 @@ export { useReportUnsavedWork } from "@nextlyhq/admin/kit/document";
  *   same leading action, the same reasons one cannot run — with `run(id)`,
  *   which does what that action's control does and resolves to what it came
  *   to, and `saveState`, the one answer to whether the work is stored. Null
- *   outside a document editor.
+ *   outside a document editor. `saveWithoutPublishing` runs Save the same
+ *   way, and is undefined wherever that Save is not offered or would publish,
+ *   for a surface that must never publish, such as a preview that saves
+ *   first. `useDocumentPreview().open(before)` runs such a step once its tab
+ *   is claimed, and opens nothing when the step answers false.
  * - `useBeforeDocumentAction(handler)` runs `handler` before every action that
  *   stores the editor's work, from any control, the shortcut or `run`, while
  *   the caller is mounted: commit work held outside the form there. Throwing
@@ -304,6 +325,33 @@ export {
 export {
   DocumentSaveIndicator,
   DocumentPrimaryAction,
+} from "@nextlyhq/admin/kit/document";
+
+/**
+ * The document's Save and Publish as one builder-density pair whose controls
+ * say the document's state themselves (@experimental), for a full-window
+ * view that replaces the header.
+ *
+ * - `<DocumentSaveAndPublish />`: Save reads "Save", "Saving…", "Retry save"
+ *   or a quiet "✓ Saved" (when, in its tooltip); beside it, where the
+ *   collection keeps drafts and the person may publish, Publish reads
+ *   "Publish", "Publish changes", "Publishing…", "Published" or
+ *   "Scheduled", with its arrow keeping Schedule, Add to release and
+ *   Unpublish. Elsewhere Save leads alone. Inert states stay focusable, so
+ *   their tooltips can be read by keyboard; failures are announced
+ *   assertively with their reason and shown in a notice with Retry.
+ * - `useDocumentLifeStage()`: where the document is in its life (Draft,
+ *   Published or Scheduled), never "Changed" or "Modified", for a pill
+ *   beside the pair; null outside a document editor or where the
+ *   collection has no lifecycle.
+ *
+ * Drawn by the admin from the same model as the entry header, so the two
+ * can't disagree. Nothing outside a document editor.
+ */
+export {
+  DocumentSaveAndPublish,
+  useDocumentLifeStage,
+  type DocumentLifeStage,
 } from "@nextlyhq/admin/kit/document";
 
 /**
@@ -883,6 +931,31 @@ export type {
   PlaceTabProps,
   PlaceTabsProps,
   TargetSlotProps,
+} from "@nextlyhq/admin/kit/plugin-parts";
+
+/**
+ * Templates for a new collection, Single or field group, offered in the Schema
+ * Builder's new-entity dialog beside the built-in ones (@experimental).
+ *
+ * A template is a plain declaration: its kind, the gallery's category, name,
+ * description and icon, and the fields it adds, in the shape the Builder
+ * stores a field. Register a plugin's own from its admin module under the
+ * plugin's name, which the gallery shows beside each one; the call returns the
+ * function that takes them back. What a template needs (a collection a link
+ * points at, a field group a field uses) is read from its fields, never
+ * declared beside them. A picked template is checked as a typed field is (its
+ * names by the save's own rule, its types against what the Builder offers),
+ * so a mistake shows on the template and nothing reaches the save.
+ *
+ * @experimental The template declaration and the way a plugin contributes
+ * templates may change before the Schema Builder's redesign is complete. A
+ * plugin pins the SDK version it builds against.
+ */
+export { registerSchemaTemplates } from "@nextlyhq/admin/kit/plugin-parts";
+export type {
+  SchemaTemplate,
+  SchemaTemplateField,
+  SchemaTemplateKind,
 } from "@nextlyhq/admin/kit/plugin-parts";
 
 /**
