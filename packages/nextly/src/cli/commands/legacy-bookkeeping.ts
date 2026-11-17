@@ -52,7 +52,7 @@ import type { DryRunPlan } from "../dry-run";
 import type { UpgradeAdapter, UpgradeDialect } from "./upgrade-step";
 
 /** What the move is handed: the database, the run's busy-table bounds and its log. */
-export interface LegacyBookkeepingContext {
+interface LegacyBookkeepingContext {
   adapter: UpgradeAdapter;
   db: unknown;
   dialect: UpgradeDialect;

@@ -525,6 +525,86 @@ function orFail<T>(read: () => T, fail: (error: unknown) => never): T {
   }
 }
 
+/** What a run says of itself before it connects: its configuration, its dialect, and a dry run. */
+function announceRun(
+  logger: CommandContext["logger"],
+  configPath: string | undefined,
+  dialect: SupportedDialect,
+  dryRun: boolean | undefined
+): void {
+  if (configPath) {
+    logger.success(`Loaded config from ${configPath}`);
+  } else {
+    logger.warn("No config file found, using defaults");
+  }
+
+  logger.keyValue("Dialect", getDialectDisplayName(dialect));
+
+  if (dryRun) {
+    logger.keyValue("Mode", "Dry Run (no changes will be made)");
+  }
+}
+
+/**
+ * Moves the migration records an earlier release kept in `nextly_migrations`
+ * and `nextly_migration_journal` into `nextly_schema_events`, where the
+ * database still has either table: under the schema lock, and once a backup
+ * is confirmed by `--backup-confirmed` or a yes at a terminal
+ * (`consolidateLegacyBookkeeping`). A database with neither is left alone,
+ * whatever the flag says.
+ *
+ * Answers whether the run ends here: true for a dry run on such a database,
+ * which lists the move alone, since which files are pending is not known
+ * until the records are moved.
+ */
+async function moveEarlierRecords(args: {
+  adapter: DrizzleAdapter;
+  db: unknown;
+  dialect: SupportedDialect;
+  bounds: ReturnType<typeof busyTableBounds>;
+  options: Pick<
+    MigrateCommandOptions,
+    "backupConfirmed" | "dryRun" | "forceUnlock"
+  >;
+  lockTtlSeconds: number | undefined;
+  logger: CommandContext["logger"];
+}): Promise<boolean> {
+  const { adapter, dialect, options, logger } = args;
+  const legacy = await detectLegacyBookkeeping(adapter);
+  if (!legacy.hasLegacy) return false;
+  // Loaded only for a database that needs it.
+  const { consolidateLegacyBookkeeping, previewLegacyConsolidation } =
+    await import("./legacy-bookkeeping");
+  const backupConfirmed = options.backupConfirmed === true;
+  if (options.dryRun) {
+    reportDryRun(
+      logger,
+      await previewLegacyConsolidation({
+        adapter,
+        dialect,
+        backupConfirmed,
+        interactive: canPrompt(),
+      })
+    );
+    return true;
+  }
+  await consolidateLegacyBookkeeping({
+    adapter,
+    dialect,
+    bounds: args.bounds,
+    backupConfirmed,
+    interactive: canPrompt(),
+    askBackedUp: () =>
+      askYesInTerminal("Have you backed up your database? [y/N]: "),
+    // A stale lock is cleared before this lock as before the run's own.
+    beforeLock: () => maybeForceUnlock(options, args.db, dialect),
+    lockTtlSeconds: args.lockTtlSeconds,
+    log: message => logger.info(message),
+    warn: message => logger.warn(message),
+  });
+  return false;
+}
+
 /**
  * Execute the migrate command
  *
@@ -579,17 +659,7 @@ export async function runMigrate(
     fail(error);
   }
 
-  if (configResult.configPath) {
-    logger.success(`Loaded config from ${configResult.configPath}`);
-  } else {
-    logger.warn("No config file found, using defaults");
-  }
-
-  logger.keyValue("Dialect", getDialectDisplayName(dialect));
-
-  if (options.dryRun) {
-    logger.keyValue("Mode", "Dry Run (no changes will be made)");
-  }
+  announceRun(logger, configResult.configPath, dialect, options.dryRun);
 
   logger.newline();
   logger.info(`Connecting to ${getDialectDisplayName(dialect)}...`);
@@ -630,44 +700,19 @@ export async function runMigrate(
     });
 
     // Phase 0: a database that still keeps its migration records the way an
-    // earlier release did has them moved into `nextly_schema_events` first,
-    // under the schema lock and once a backup is confirmed. Before every
-    // check below, since each reads the run's history from the events table.
-    const legacy = await detectLegacyBookkeeping(
-      adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
-    );
-    if (legacy.hasLegacy) {
-      const { consolidateLegacyBookkeeping, previewLegacyConsolidation } =
-        await import("./legacy-bookkeeping");
-      const backupConfirmed = options.backupConfirmed === true;
-      if (options.dryRun) {
-        // The move alone: which files are pending is not known until it ran.
-        reportDryRun(
-          logger,
-          await previewLegacyConsolidation({
-            adapter: adapter as unknown as DrizzleAdapter,
-            dialect,
-            backupConfirmed,
-            interactive: canPrompt(),
-          })
-        );
-        return;
-      }
-      await consolidateLegacyBookkeeping({
-        adapter: adapter as unknown as DrizzleAdapter,
-        dialect,
-        bounds,
-        backupConfirmed,
-        interactive: canPrompt(),
-        askBackedUp: () =>
-          askYesInTerminal("Have you backed up your database? [y/N]: "),
-        // A stale lock is cleared before this lock as before the run's own.
-        beforeLock: () => maybeForceUnlock(options, db, dialect),
-        lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
-        log: message => logger.info(message),
-        warn: message => logger.warn(message),
-      });
-    }
+    // earlier release did has them moved into `nextly_schema_events` first.
+    // Before every check below, since each reads the run's history from the
+    // events table. A dry run lists the move and ends here.
+    const ended = await moveEarlierRecords({
+      adapter: adapter as unknown as DrizzleAdapter,
+      db,
+      dialect,
+      bounds,
+      options,
+      lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
+      logger,
+    });
+    if (ended) return;
 
     // What the declared schema names, with the ledger's old Builder marks:
     // the one value every reader of the folder below reads it through.
