@@ -212,7 +212,11 @@ describe("the canvas surface is the site's, not the admin's", () => {
     const naming = [
       ...CANVAS_FRAME_SHEET.matchAll(/([^{}]+)\{([^{}]*)\}/g),
     ].filter(([, , body]) =>
-      /var\(--nx-(?!canvas-site-|canvas-zoom)/.test(body ?? "")
+      // The empty body's room is a length the overlay measures, not a
+      // colour: it paints nothing.
+      /var\(--nx-(?!canvas-site-|canvas-zoom|canvas-start-room)/.test(
+        body ?? ""
+      )
     );
     // The control: the region's rules are found, so the scan reads rules.
     expect(naming.length).toBeGreaterThan(0);

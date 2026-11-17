@@ -9,8 +9,9 @@
  * recovery offer, the leave guard and saving — so this binds the editor to the
  * field through the form's own `control` and draws nothing else. "Open as
  * form" goes through the view's `exit`, back to the document's edit form,
- * which keeps the same form mounted. The exit arrow does too, except on an
- * entry whose collection opens in the builder, where it goes to the list.
+ * which keeps the same form mounted. The exit arrow does too, except on a
+ * document that opens in the builder, where it goes back to where it was
+ * opened from: a collection's list, or the Content screen for a Single.
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/PageBuilderView
  */
@@ -245,12 +246,14 @@ function useLeaveToField(
 }
 
 /**
- * The exit arrow's way out on an entry whose collection opens in the builder:
- * its list, named as the list names itself ("Back to Pages"). A click on such
- * an entry lands here, so the form would be a screen the author never opened;
- * the list is where the click started. Moving there leaves the document, so
- * the admin asks first about unsaved work, as any leave does. Elsewhere,
- * nothing: the arrow is "Exit editor" and goes back to the form.
+ * The exit arrow's way out on a document that opens in the builder: where it
+ * was opened from, as the admin names it, so an entry goes back to its list
+ * ("Back to Pages") and a Single to the Content screen ("Back to content"). A
+ * click on such a document lands here, so the form would be a screen the
+ * author never opened; the place the click started is. Moving there leaves
+ * the document, so the admin asks first about unsaved work, as any leave
+ * does. Elsewhere, nothing: the arrow is "Exit editor" and goes back to the
+ * form.
  */
 function useBackToList(): { label: string; go: () => void } | undefined {
   const opens = useDocumentOpensIn();

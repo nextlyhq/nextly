@@ -59,6 +59,7 @@ import {
   type UnsavedEntity,
   useUnsavedEntity,
 } from "@admin/lib/builder/unsaved-entities";
+import { useDocumentAddress } from "@admin/lib/navigation/useDocumentAddress";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 import { singleApi } from "@admin/services/singleApi";
 import type { FieldDefinition } from "@admin/types/collection";
@@ -157,6 +158,7 @@ export default function SingleBuilderEditPage({
   );
   // The tab names the Single being edited once it has arrived.
   useDocumentTitle(single ? singleName(single) : undefined);
+  const addressOf = useDocumentAddress();
 
   const builder = useFieldBuilder<FormData>({
     resolver: zodResolver(singleFormSchema),
@@ -462,9 +464,14 @@ export default function SingleBuilderEditPage({
       pending={pendingChanges}
       pageBuilderHref={
         // Once saved, an entity laid out from blocks opens in the Page Builder
-        // from a new entry (a Single, from its document).
+        // from a new entry (a Single, from its document, where the admin's one
+        // rule opens it: the builder when that is its main field, as the
+        // sidebar opens it, else its form, whose card leads on).
         !unsaved && hasPageBuilderField(pending.saved)
-          ? buildRoute(ROUTES.SINGLE_EDIT, { slug: entitySlug })
+          ? addressOf(
+              { kind: "single", slug: entitySlug },
+              savedSingle === undefined ? {} : { collection: savedSingle }
+            )
           : undefined
       }
       onDiscard={() => {

@@ -470,7 +470,11 @@ export interface FormFieldOption {
  *   feature needs a change here, which is why the contract stays experimental.
  */
 export interface FormFieldDescription {
-  /** The name its answer is sent under; unique within the form. */
+  /**
+   * The name its answer is sent under; unique within the form. A name
+   * starting with `_` is the form receiver's own, and a form naming a field
+   * with one is not drawn.
+   */
   readonly name: string;
   /** What its label says. */
   readonly label: string;

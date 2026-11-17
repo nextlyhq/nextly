@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * The controls that add a block to the page itself: a start card on an empty
- * page, and a "+" in each gap between blocks.
+ * The controls that add a block to the page itself: the start area on an
+ * empty page (`page-start-area.tsx`), and a "+" in each gap between blocks.
  *
  * An empty page used to be a blank frame with nothing on it to press, and a
  * block could only be added after the selected one, by opening Add first.
@@ -17,7 +17,8 @@
  * chrome, so showing one never moves, resizes or reflows the page.
  *
  * Like the empty-container appenders beside it, this only REPORTS: pressing
- * the start card calls {@link PageInsertersProps.onStart}, and pressing a "+"
+ * the start area's "＋ Add a block" calls {@link PageInsertersProps.onStart},
+ * and pressing a "+"
  * calls {@link PageInsertersProps.onAddAfter} with the block before its gap
  * and the control itself, which the host opens the in-place picker beside,
  * aimed at exactly that gap. Nothing is selected on the way.
@@ -67,11 +68,10 @@ import { blockNameOf, type ComponentTitleOf } from "../panels/layers/layers";
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
-import { watchCanvasFor, watchScreenBand } from "./canvas-geometry-watch";
+import { watchCanvasFor } from "./canvas-geometry-watch";
 import {
   boxInFrameViewport,
   canvasContentPoint,
-  onScreenOf,
   overlaySpaceOf,
 } from "./geometry-dom";
 import {
@@ -82,7 +82,29 @@ import {
   measureGaps,
   type Gap,
 } from "./page-gaps";
-import { gapWords, startWords } from "./page-start-words";
+import { StartArea, startPlaceIn, type StarterPage } from "./page-start-area";
+import { gapWords } from "./page-start-words";
+
+/**
+ * What an empty page's start area says and reports.
+ *
+ * @experimental
+ */
+export interface StartOptions {
+  /** The page's title, which a page's start area is headed with. */
+  readonly title?: string;
+  /** "＋ Add a block" was pressed; `control` is the button. */
+  readonly onStart: (control: HTMLElement) => void;
+  /**
+   * "Insert a saved section" was pressed. Absent where a saved section cannot
+   * be inserted, and so is the button.
+   */
+  readonly onSavedSection?: () => void;
+  /** Starter pages an empty page can begin from; none, no row. */
+  readonly starters?: readonly StarterPage[];
+  /** A starter page was chosen. */
+  readonly onStarter?: (id: string) => void;
+}
 
 /** @experimental */
 export interface PageInsertersProps {
@@ -98,8 +120,13 @@ export interface PageInsertersProps {
    * adding at all.
    */
   readonly hidden?: boolean;
-  /** The empty page's start card was pressed. */
-  readonly onStart: () => void;
+  /**
+   * A block is dragged over the canvas: no "+" shows, and an empty page's
+   * start area is drawn as where it drops.
+   */
+  readonly dragging?: boolean;
+  /** What an empty page's start area says and reports. */
+  readonly start: StartOptions;
   /**
    * A gap's "+" was pressed: add a block in that gap, after `nodeId`, beside
    * it. `control` is the "+" pressed, for the host to open its picker beside.
@@ -112,15 +139,10 @@ export interface PageInsertersProps {
   readonly componentTitle?: ComponentTitleOf;
 }
 
-/**
- * Where the start card is centred: the middle of what of the canvas is on
- * screen, as an empty page's root is only as tall as nothing in it.
- */
+/** Where the start area goes on an empty page, or `null` outside a canvas. */
 function measureStart(layer: HTMLElement): Point | null {
   const space = overlaySpaceOf(layer, CANVAS_ROOT_CLASS);
-  if (space === null) return null;
-  const band = onScreenOf(space);
-  return { x: band.x + band.width / 2, y: band.y + band.height / 2 };
+  return space === null ? null : startPlaceIn(space);
 }
 
 /** The gaps measured in `layer`'s chrome, or none outside a canvas. */
@@ -134,7 +156,7 @@ function gapsIn(
   return space === null ? [] : measureGaps(space, document, selectedId);
 }
 
-/** What the gaps and the start card are measured from, and what moves them. */
+/** What the gaps and the start area are measured from, and what moves them. */
 interface Measured {
   readonly gaps: readonly Gap[];
   readonly start: Point | null;
@@ -143,10 +165,9 @@ interface Measured {
 const NOTHING_MEASURED: Measured = { gaps: [], start: null };
 
 /**
- * The gaps, or the start card's place on an empty page, measured now and
- * again on everything that moves the canvas: a change inside it, a resize, a
- * zoom, and a scroll of what is on screen, which the start card is centred
- * on.
+ * The gaps, or the start area's place on an empty page, measured now and
+ * again on everything that moves the canvas: a change inside it, a resize and
+ * a zoom.
  */
 function useMeasured(
   layer: React.RefObject<HTMLDivElement | null>,
@@ -174,15 +195,6 @@ function useMeasured(
     return watchCanvasFor(() => layer.current, measure);
   }, [layer, measure, hidden, canvasFrame]);
 
-  // And what moves the part of the canvas on screen, which the start card is
-  // centred on: the scroller around the canvas, and the host's around a frame.
-  React.useEffect(() => {
-    const element = layer.current;
-    const space =
-      element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
-    if (hidden || space === null) return;
-    return watchScreenBand(space.root, space.frame, measure);
-  }, [layer, measure, hidden, canvasFrame]);
   return measured;
 }
 
@@ -356,44 +368,8 @@ function GapControl({
   );
 }
 
-/** The empty page's start card, centred where the component measured. */
-function StartCard({
-  document,
-  start,
-  onStart,
-}: {
-  readonly document: BlockDocument;
-  readonly start: Point | null;
-  readonly onStart: () => void;
-}): React.JSX.Element {
-  const words = startWords(document.kind);
-  return (
-    <div
-      className="nx-page-inserters__start"
-      // Kept out of sight until it has been placed, rather than drawn at the
-      // layer's corner for a frame.
-      style={
-        start === null
-          ? { visibility: "hidden" }
-          : { left: start.x, top: start.y }
-      }
-    >
-      <p className="nx-page-inserters__title">{words.title}</p>
-      <p className="nx-page-inserters__hint">{words.hint}</p>
-      <button
-        type="button"
-        className="nx-page-inserters__start-button"
-        onClick={onStart}
-      >
-        <Plus size={16} aria-hidden="true" />
-        {words.start}
-      </button>
-    </div>
-  );
-}
-
 /**
- * The start card on an empty page and the "+" in the gaps between blocks.
+ * The start area on an empty page and the "+" in the gaps between blocks.
  *
  * @experimental
  */
@@ -401,14 +377,20 @@ export function PageInserters({
   document,
   selectedId = null,
   hidden = false,
-  onStart,
+  dragging = false,
+  start,
   onAddAfter,
   componentTitle,
 }: PageInsertersProps): React.JSX.Element | null {
   const layer = React.useRef<HTMLDivElement | null>(null);
-  const { gaps, start } = useMeasured(layer, document, selectedId, hidden);
-  const [near, setNear] = useNearGap(layer, gaps, hidden);
-  useTabToGap(layer, hidden ? [] : gaps, selectedId);
+  const empty = document.nodes.length === 0;
+  // While a block is dragged no "+" shows: the drag's own line says where it
+  // lands. An empty page's start area stays, as where it drops.
+  const noGaps = hidden || dragging;
+  const measured = useMeasured(layer, document, selectedId, hidden);
+  const gaps = noGaps ? NO_GAPS : measured.gaps;
+  const [near, setNear] = useNearGap(layer, gaps, noGaps);
+  useTabToGap(layer, gaps, selectedId);
   // The gap whose "+" the pointer is on: a pointer moving onto the "+"
   // leaves the canvas's frame, which then reports no further move, so the
   // "+" holds itself shown while it is pointed at.
@@ -422,7 +404,6 @@ export function PageInserters({
     },
     [setNear]
   );
-  const empty = document.nodes.length === 0;
   const nameOf = (id: string): string =>
     blockNameOf(document, id, componentTitle) ?? "this block";
 
@@ -439,7 +420,12 @@ export function PageInserters({
         {...{ [CHROME_ATTRIBUTE]: "" }}
       >
         {empty ? (
-          <StartCard document={document} start={start} onStart={onStart} />
+          <StartArea
+            document={document}
+            place={measured.start}
+            dragging={dragging}
+            {...start}
+          />
         ) : (
           gaps.map(gap => (
             <GapControl
@@ -459,3 +445,6 @@ export function PageInserters({
     </TooltipProvider>
   );
 }
+
+/** No gaps, the one value, so a drag's render changes no gap watcher. */
+const NO_GAPS: readonly Gap[] = [];

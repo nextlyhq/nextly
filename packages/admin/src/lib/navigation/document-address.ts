@@ -1,30 +1,33 @@
 /**
  * Where a link meant to open a document goes: the one rule every such link in
- * the admin uses (a list row, a dashboard card's row), so the same click
- * always opens the same place, whoever made the link.
+ * the admin uses (a list row, a dashboard card's row, the sidebar's Singles),
+ * so the same click always opens the same place, whoever made the link.
  *
- * For a collection's entry:
+ * For a collection's entry, or a Single:
  *
- * 1. The collection's `admin.opensIn`, when it declares one: the form, or a
- *    document view it has.
+ * 1. Its `admin.opensIn`, when it declares one: the form, or a document view
+ *    it has.
  * 2. Else the view that asks to open first (`opensFirst: "mainField"`) for
- *    the field type of the collection's main field.
+ *    the field type of its main field.
  * 3. Else the form.
  *
  * Then the form, whatever those say, for a reader who may not update the
- * entry (a view edits it) and for an entry asked for in a language other than
- * the default (a view edits the default language). A view that is not
+ * document (a view edits it) and for a document asked for in a language other
+ * than the default (a view edits the default language). A view that is not
  * published, because its plugin is off or gone, leaves the form too.
  *
- * Read from the collection as it is now, so a collection made in the Schema
+ * A Single follows the same rule as a collection of the same shape, so a
+ * Homepage whose main field is a page layout opens where a page does. A view
+ * declared on a slug (`views[slug]`) is a collection's, so it is never a
+ * Single's, whatever slug the two share; a view offered on a field type is
+ * either's.
+ *
+ * Read from the collection or Single as it is now, so one made in the Schema
  * Builder follows the rule as its fields change, and from the views the
  * admin's metadata publishes (enabled plugins' only), handed in rather than
  * read from the route registry, which fills in an effect after that metadata
  * renders. Nothing is remembered per person. The form's own address is never
  * changed by any of this.
- *
- * A Single opens as its form for now; the rule takes the kind so a Single can
- * follow it later.
  *
  * @module lib/navigation/document-address
  */
@@ -49,8 +52,9 @@ export interface OpenedDocument {
 }
 
 /**
- * What the rule reads of a collection: its fields (either shape the admin is
- * given them in), the field it titles entries by and its declared `opensIn`.
+ * What the rule reads of a collection or a Single: its fields (either shape
+ * the admin is given them in), the field it titles entries by and its
+ * declared `opensIn`.
  */
 export interface OpenableCollection {
   fields?: readonly object[];
@@ -130,17 +134,27 @@ export function mainFieldOf(
   return shownTopLevelFields(collection).find(({ path }) => !skipped.has(path));
 }
 
-/** The published view at `path` on a collection: its own first, else a field type's. */
+/** Which document the rule is read for: its kind and slug. */
+type RuleDocument = Pick<OpenedDocument, "kind" | "slug">;
+
+/**
+ * The published view at `path` on a document: a collection's own first, else
+ * a field type's. A view declared on a slug is a collection's, so a Single
+ * sharing that slug never has it, as `matchDocumentView` routes it.
+ */
 function viewAt(
   views: readonly RegisteredDocumentView[],
-  slug: string,
+  document: RuleDocument,
   path: string
 ): RegisteredDocumentView | undefined {
-  return (
-    views.find(
-      view => "slug" in view && view.slug === slug && view.path === path
-    ) ?? views.find(view => "fieldType" in view && view.path === path)
-  );
+  const own =
+    document.kind === "collection"
+      ? views.find(
+          view =>
+            "slug" in view && view.slug === document.slug && view.path === path
+        )
+      : undefined;
+  return own ?? views.find(view => "fieldType" in view && view.path === path);
 }
 
 /** The published view asking to open first for `fieldType`; boot allows one. */
@@ -156,15 +170,15 @@ function viewOpeningFirstFor(
   );
 }
 
-/** Where a declared `opensIn` opens the entry, or the form when it can't. */
+/** Where a declared `opensIn` opens the document, or the form when it can't. */
 function declaredDestination(
-  slug: string,
+  document: RuleDocument,
   collection: OpenableCollection,
   opensIn: string,
   views: readonly RegisteredDocumentView[]
 ): Destination {
   if (opensIn === FORM) return {};
-  const view = viewAt(views, slug, opensIn);
+  const view = viewAt(views, document, opensIn);
   if (view === undefined) return {};
   if (!("fieldType" in view)) return { view: view.path };
   return fieldTypeDestination(collection, view);
@@ -187,15 +201,15 @@ function fieldTypeDestination(
   return field === undefined ? {} : { view: view.path, field: field.path };
 }
 
-/** Where a collection's entries open by the rule, before the fallbacks. */
+/** Where a collection's entries, or a Single, open by the rule, before the fallbacks. */
 function ruleDestination(
-  slug: string,
+  document: RuleDocument,
   collection: OpenableCollection,
   views: readonly RegisteredDocumentView[]
 ): Destination {
   const opensIn = collection.admin?.opensIn;
   if (typeof opensIn === "string") {
-    return declaredDestination(slug, collection, opensIn, views);
+    return declaredDestination(document, collection, opensIn, views);
   }
   const main = mainFieldOf(collection);
   const type = main === undefined ? undefined : typeOf(main.field);
@@ -206,18 +220,19 @@ function ruleDestination(
 }
 
 /**
- * The document view a collection's entries open in by the rule above, before
- * the fallbacks for one reader or one language, or `undefined` where they open
- * as the form. The same reading every link uses, so a view that asks whether
- * it is where its document opens gets the answer a list row acts on.
+ * The document view a collection's entries, or a Single, open in by the rule
+ * above, before the fallbacks for one reader or one language, or `undefined`
+ * where they open as the form. The same reading every link uses, so a view
+ * that asks whether it is where its document opens gets the answer a list
+ * row or the sidebar acts on.
  */
-export function collectionOpeningView(
-  slug: string,
+export function documentOpeningView(
+  document: RuleDocument,
   collection: OpenableCollection,
   views: readonly RegisteredDocumentView[]
 ): RegisteredDocumentView | undefined {
-  const { view } = ruleDestination(slug, collection, views);
-  return view === undefined ? undefined : viewAt(views, slug, view);
+  const { view } = ruleDestination(document, collection, views);
+  return view === undefined ? undefined : viewAt(views, document, view);
 }
 
 /** A language other than the site's default, which only the form edits. */
@@ -235,67 +250,95 @@ function withLocale(path: string, locale: string | undefined): string {
     : `${path}?${new URLSearchParams({ [LOCALE_PARAM]: locale }).toString()}`;
 }
 
-/** The form's address for an entry, in the language asked for. */
-function formAddress(slug: string, id: string, locale?: string): string {
+/**
+ * The form's address for a document, in the language asked for: a
+ * collection's entry by its id, else the Single's by its slug.
+ */
+function formAddress(document: OpenedDocument, locale?: string): string {
+  const { slug, id } = document;
   return withLocale(
-    buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, { slug, id }),
+    document.kind === "collection" && id !== undefined
+      ? buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, { slug, id })
+      : buildRoute(ROUTES.SINGLE_EDIT, { slug }),
     locale
   );
 }
 
-/** A view's address for an entry, naming the field it edits where it has one. */
+/**
+ * A view's address for a document, naming the field it edits where it has
+ * one: under a collection's entry, or under the Single, which has one
+ * document and so no id.
+ */
 function viewAddress(
-  slug: string,
-  id: string,
+  document: ViewableDocument["document"],
   destination: { view: string; field?: string }
 ): string {
-  const address = buildRoute(ROUTES.COLLECTION_ENTRY_VIEW, {
-    slug,
-    id,
-    view: destination.view,
-  });
+  const { view } = destination;
+  const address =
+    document.kind === "collection"
+      ? buildRoute(ROUTES.COLLECTION_ENTRY_VIEW, {
+          slug: document.slug,
+          id: document.id,
+          view,
+        })
+      : buildRoute(ROUTES.SINGLE_VIEW, { slug: document.slug, view });
   return destination.field === undefined
     ? address
     : `${address}?${new URLSearchParams({ field: destination.field }).toString()}`;
 }
 
 /**
- * The collection, when a document of it may be opened in a view at all: a
- * collection's (not a Single's) whose collection is known, for a reader who
- * may update it (a view edits it), asked for in the default language (a view
- * edits that one). The one statement of those conditions, which where an
- * entry opens, its other ways in and the list's create dialog all read.
+ * The collection or Single, when a document of it may be opened in a view at
+ * all: one that is known, for a reader who may update it (a view edits it),
+ * asked for in the default language (a view edits that one). The one
+ * statement of those conditions, which where a document opens, its other ways
+ * in and the list's create dialog all read.
  */
 function viewableCollection(
-  document: OpenedDocument,
   collection: OpenableCollection | undefined,
   request: OpenRequest
 ): OpenableCollection | undefined {
-  return document.kind !== "collection" ||
-    collection === undefined ||
+  return collection === undefined ||
     !request.canUpdate ||
     otherLanguage(request)
     ? undefined
     : collection;
 }
 
-/** A collection entry that may be opened in a view, with its collection. */
-interface ViewableEntry {
-  slug: string;
-  id: string;
+/**
+ * A document that may be opened in a view, with its collection or Single: a
+ * collection's entry by its id, or a Single, which has one document.
+ */
+interface ViewableDocument {
+  document:
+    | { kind: "collection"; slug: string; id: string }
+    | { kind: "single"; slug: string };
   collection: OpenableCollection;
 }
 
-/** The entry, when it may be opened in a view at all (`viewableCollection`). */
-function viewableEntry(
+/**
+ * The document, when it may be opened in a view at all
+ * (`viewableCollection`): a Single, or a collection's saved entry.
+ */
+function viewableDocument(
   document: OpenedDocument,
   collection: OpenableCollection | undefined,
   request: OpenRequest
-): ViewableEntry | undefined {
-  const viewable = viewableCollection(document, collection, request);
-  return viewable === undefined || document.id === undefined
+): ViewableDocument | undefined {
+  const viewable = viewableCollection(collection, request);
+  if (viewable === undefined) return undefined;
+  if (document.kind === "single") {
+    return {
+      document: { kind: "single", slug: document.slug },
+      collection: viewable,
+    };
+  }
+  return document.id === undefined
     ? undefined
-    : { slug: document.slug, id: document.id, collection: viewable };
+    : {
+        document: { kind: "collection", slug: document.slug, id: document.id },
+        collection: viewable,
+      };
 }
 
 /**
@@ -310,20 +353,14 @@ export function documentAddress(
   request: OpenRequest,
   views: readonly RegisteredDocumentView[]
 ): string {
-  if (document.kind === "single" || document.id === undefined) {
-    return withLocale(
-      buildRoute(ROUTES.SINGLE_EDIT, { slug: document.slug }),
-      request.locale
-    );
-  }
-  const entry = viewableEntry(document, collection, request);
+  const viewable = viewableDocument(document, collection, request);
   const destination =
-    entry === undefined
+    viewable === undefined
       ? {}
-      : ruleDestination(entry.slug, entry.collection, views);
-  return destination.view === undefined
-    ? formAddress(document.slug, document.id, request.locale)
-    : viewAddress(document.slug, document.id, destination);
+      : ruleDestination(viewable.document, viewable.collection, views);
+  return viewable === undefined || destination.view === undefined
+    ? formAddress(document, request.locale)
+    : viewAddress(viewable.document, destination);
 }
 
 /**
@@ -353,14 +390,20 @@ function wordsFor(view: RegisteredDocumentView): string | undefined {
     : `Open in ${view.label}`;
 }
 
-/** Where `view` opens an entry of `collection`, or `undefined` where it does not apply. */
+/**
+ * Where `view` opens `document`, or `undefined` where it does not apply. A
+ * view declared on a slug is a collection's own, never a Single's.
+ */
 function viewDestination(
-  slug: string,
+  document: RuleDocument,
   collection: OpenableCollection,
   view: RegisteredDocumentView
 ): { view: string; field?: string } | undefined {
-  if ("slug" in view)
-    return view.slug === slug ? { view: view.path } : undefined;
+  if ("slug" in view) {
+    return document.kind === "collection" && view.slug === document.slug
+      ? { view: view.path }
+      : undefined;
+  }
   if (!documentViewApplies(view, fieldsOf(collection))) return undefined;
   const destination = fieldTypeDestination(collection, view);
   if (destination.view !== undefined) return destination;
@@ -374,20 +417,24 @@ function viewDestination(
   return atTopLevel ? undefined : { view: view.path };
 }
 
-/** Each published view applying to the entry, as a way in, by its path. */
+/** Each published view applying to the document, as a way in, by its path. */
 function waysIntoViews(
-  entry: ViewableEntry,
+  viewable: ViewableDocument,
   views: readonly RegisteredDocumentView[]
 ): (WayIn & { view: string })[] {
   return views.flatMap(view => {
     const label = wordsFor(view);
-    const destination = viewDestination(entry.slug, entry.collection, view);
+    const destination = viewDestination(
+      viewable.document,
+      viewable.collection,
+      view
+    );
     if (label === undefined || destination === undefined) return [];
     return [
       {
         view: destination.view,
         label,
-        address: viewAddress(entry.slug, entry.id, destination),
+        address: viewAddress(viewable.document, destination),
         opens: "view" as const,
       },
     ];
@@ -403,8 +450,8 @@ function asWayIn({ label, address, opens }: WayIn): WayIn {
  * The views `document` may be opened in, as the form offers them (beside
  * History): each published view applying to it, worded by the view, at the
  * address the rule above gives a view. None for a reader who may not update
- * the entry, in a language other than the default, or on a Single, as those
- * open as the form.
+ * the document or in a language other than the default, as those open as the
+ * form.
  */
 export function viewsToOpenIn(
   document: OpenedDocument,
@@ -412,8 +459,10 @@ export function viewsToOpenIn(
   request: OpenRequest,
   views: readonly RegisteredDocumentView[]
 ): WayIn[] {
-  const entry = viewableEntry(document, collection, request);
-  return entry === undefined ? [] : waysIntoViews(entry, views).map(asWayIn);
+  const viewable = viewableDocument(document, collection, request);
+  return viewable === undefined
+    ? []
+    : waysIntoViews(viewable, views).map(asWayIn);
 }
 
 /**
@@ -427,17 +476,21 @@ export function rowWaysIn(
   request: OpenRequest,
   views: readonly RegisteredDocumentView[]
 ): WayIn[] {
-  const entry = viewableEntry(document, collection, request);
-  if (entry === undefined) return [];
-  const opened = ruleDestination(entry.slug, entry.collection, views).view;
-  const others = waysIntoViews(entry, views)
+  const viewable = viewableDocument(document, collection, request);
+  if (viewable === undefined) return [];
+  const opened = ruleDestination(
+    viewable.document,
+    viewable.collection,
+    views
+  ).view;
+  const others = waysIntoViews(viewable, views)
     .filter(way => way.view !== opened)
     .map(asWayIn);
   if (opened === undefined) return others;
   return [
     {
       label: EDIT_DETAILS,
-      address: formAddress(entry.slug, entry.id, request.locale),
+      address: formAddress(document, request.locale),
       opens: "form",
     },
     ...others,
@@ -457,8 +510,10 @@ export function createDialogOf(
   request: OpenRequest,
   views: readonly RegisteredDocumentView[]
 ): string | undefined {
-  const viewable = viewableCollection(document, collection, request);
+  // A Single has one document, made with it, so "+ New" never applies.
+  if (document.kind !== "collection") return undefined;
+  const viewable = viewableCollection(collection, request);
   if (viewable === undefined) return undefined;
   // The view the entries open in, read as every other reading of it is.
-  return collectionOpeningView(document.slug, viewable, views)?.createDialog;
+  return documentOpeningView(document, viewable, views)?.createDialog;
 }

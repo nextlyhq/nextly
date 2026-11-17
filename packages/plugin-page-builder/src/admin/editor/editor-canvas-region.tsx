@@ -344,19 +344,35 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                   }
                 />
                 {/*
-                  The empty page's start card and the "+" in each gap. A gap's
+                  The empty page's start area and the "+" in each gap. A gap's
                   "+" opens the in-place picker beside it, aimed at exactly
                   that gap, after the block before it, with nothing selected
-                  on the way. The start card opens Add on a page with nothing
-                  to select. Hidden mid-drag, when the drag's own line says
-                  where a block lands.
+                  on the way; mid-drag no "+" shows, as the drag's own line
+                  says where a block lands. The start area's "＋ Add a block"
+                  opens the picker at the page's top level, and "Insert a
+                  saved section" opens Add on its Saved sections tab, with
+                  its search ready.
                 */}
                 <PageInserters
                   document={editor.document}
                   selectedId={editor.selectedId}
                   componentTitle={componentLibrary.titleOf}
-                  hidden={dragging}
-                  onStart={() => view.openInsertPanel()}
+                  dragging={dragging}
+                  start={{
+                    ...(pageTitle === undefined ? {} : { title: pageTitle }),
+                    onStart: control =>
+                      insertPicker.open(
+                        {
+                          kind: "place",
+                          place: {
+                            at: { index: editor.document.nodes.length },
+                          },
+                        },
+                        elementAnchor(control)
+                      ),
+                    onSavedSection: () =>
+                      view.openInsertPanel(undefined, "sections"),
+                  }}
                   onAddAfter={(nodeId, control) =>
                     insertPicker.open(
                       { kind: "place", place: { after: nodeId } },

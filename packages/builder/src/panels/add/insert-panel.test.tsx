@@ -2508,6 +2508,29 @@ describe("the panel answering an add control", () => {
     expect(placement()?.hasAttribute("data-flash")).toBe(true);
   });
 
+  it("opens the Saved sections tab a press asks for, with its search ready", () => {
+    // "Insert a saved section" on an empty page: the panel goes to the tab
+    // that holds saved sections, and its search takes focus.
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        summoned={1}
+        summonedTab="sections"
+        onSummoned={() => undefined}
+      />
+    );
+    expect(
+      screen
+        .getByRole("tab", { name: "Saved sections" })
+        .getAttribute("aria-selected")
+    ).toBe("true");
+    expect(document.activeElement).toBe(screen.getByRole("combobox"));
+  });
+
   it("answers a press even with nowhere to add, so it cannot replay later", () => {
     registerBlocks(
       [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
