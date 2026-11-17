@@ -51,6 +51,7 @@ import {
 } from "@nextlyhq/ui";
 import { AlertCircle, TriangleAlert } from "lucide-react";
 import {
+  useContext,
   useEffect,
   useState,
   type ComponentProps,
@@ -74,6 +75,7 @@ import { lazyPart } from "../lazy-part";
 import { RemovalStatusRow, RemovalStepPanel } from "./breakpoint-removal-step";
 import { undoableHint } from "./breakpoint-undo-flow";
 import { UndoStatusRow, UndoStepPanel } from "./breakpoint-undo-step";
+import { ManageSetsContext } from "./manage-sets";
 import { useSavedAddress, type SettingsAddress } from "./settings-address";
 import type { SettingsPlace } from "./settings-place";
 import type { SharePreview } from "./share-preview";
@@ -858,6 +860,9 @@ function useSetListHref(): string | undefined {
  */
 function SiteDefaultLine({ read }: { read: SiteSettingsRead }): JSX.Element {
   const href = useSetListHref();
+  // Inside the builder, the list of sets is the Pages panel, in this window:
+  // Settings closes and the panel opens on its Header & footer sets.
+  const openSets = useContext(ManageSetsContext);
   const name =
     read.layouts.find(layout => layout.id === read.defaultLayout)?.title ??
     "none set";
@@ -872,7 +877,15 @@ function SiteDefaultLine({ read }: { read: SiteSettingsRead }): JSX.Element {
         </span>{" "}
         <span className="font-medium">{name}</span>
       </p>
-      {href === undefined ? null : (
+      {openSets !== null ? (
+        <button
+          type="button"
+          onClick={openSets}
+          className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+        >
+          Change in Pages ▸ Header & footer
+        </button>
+      ) : href === undefined ? null : (
         <a
           href={href}
           target="_blank"

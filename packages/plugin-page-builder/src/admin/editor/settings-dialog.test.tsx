@@ -130,6 +130,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => ({
   ),
 }));
 
+import { ManageSetsContext } from "./manage-sets";
 const { SettingsDialog } = await import("./settings-dialog");
 
 // What Radix's Select reaches for and jsdom lacks.
@@ -556,6 +557,41 @@ describe("the Settings dialog", () => {
     expect(change.getAttribute("target")).toBe("_blank");
     // The default is no longer chosen here.
     expect(screen.queryByRole("combobox")).toBeNull();
+  });
+
+  it("opens the builder's own list of sets from the site default line, inside the builder", async () => {
+    const openSets = vi.fn();
+    render(
+      <ManageSetsContext.Provider value={openSets}>
+        <SettingsDialog
+          open
+          onOpenChange={vi.fn()}
+          returnFocus={() => null}
+          pageFields={<input aria-label="Title" defaultValue="About us" />}
+          place={null}
+          share={{ title: "Who we are", description: "We build tools." }}
+          seoFields
+          address={null}
+          breakpoints={{
+            value: { viewport: [], container: [] },
+            onSave: vi.fn(),
+            status: "ready",
+            refresh: vi.fn(),
+          }}
+        />
+      </ManageSetsContext.Provider>
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    const line = screen.getByRole("region", {
+      name: "Site default header & footer",
+    });
+    expect(within(line).queryByRole("link")).toBeNull();
+    await userEvent.click(
+      within(line).getByRole("button", {
+        name: "Change in Pages ▸ Header & footer",
+      })
+    );
+    expect(openSets).toHaveBeenCalledTimes(1);
   });
 
   it("says when the site has no default", async () => {
