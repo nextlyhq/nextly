@@ -189,6 +189,26 @@ describe("the canvas's light and dark preview", () => {
     expect(canvasTheme()).toBe(before);
   });
 
+  it("still switches where the browser reads session storage but refuses a write", () => {
+    // A full storage: reads answer, writes throw.
+    sessionStorage.setItem("nextly:page-builder:canvas-preview-mode", "light");
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("full", "QuotaExceededError");
+    });
+    render(<Editor tokens={ONE_DARK} />);
+    // Which mode it starts in depends on the presses earlier in this file,
+    // as above; each press must still flip it.
+    const before = canvasTheme();
+    act(() => {
+      fireEvent.click(darkSwitch() as HTMLElement);
+    });
+    expect(canvasTheme()).not.toBe(before);
+    act(() => {
+      fireEvent.click(darkSwitch() as HTMLElement);
+    });
+    expect(canvasTheme()).toBe(before);
+  });
+
   it("stores nothing but the session's pick", () => {
     render(<Editor tokens={ONE_DARK} />);
     fireEvent.click(darkSwitch() as HTMLElement);

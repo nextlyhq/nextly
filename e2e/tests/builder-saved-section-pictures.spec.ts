@@ -28,6 +28,7 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 
 const PAGES = "/admin/api/collections/pages/entries";
@@ -160,7 +161,10 @@ async function pictureLook(target: Locator) {
 }
 
 test.describe("saved section pictures in the Add panel", () => {
-  test.describe.configure({ timeout: 180_000 });
+  // The pictures are drawn in the site's variables, and the dark preview is
+  // offered only while one has a dark value, so no other file may change
+  // them meanwhile.
+  test.describe.configure({ timeout: 180_000, lock: [LOCK.siteStyle] });
 
   test("each saved section shows its own picture, which follows the dark preview", async ({
     page,

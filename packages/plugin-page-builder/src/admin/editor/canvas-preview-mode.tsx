@@ -44,9 +44,13 @@ const SESSION_KEY = "nextly:page-builder:canvas-preview-mode";
 
 /**
  * The pick where the browser keeps no session storage (a private window,
- * blocked site data): kept for the page's lifetime instead.
+ * blocked site data) or refused the last write (a full storage): kept for the
+ * page's lifetime instead.
  */
 let unstored: TokenMode = "light";
+
+/** Whether the last write was refused, so storage no longer holds the pick. */
+let writeRefused = false;
 
 const listeners = new Set<() => void>();
 
@@ -56,6 +60,7 @@ function subscribe(listener: () => void): () => void {
 }
 
 function sessionPick(): TokenMode {
+  if (writeRefused) return unstored;
   try {
     return sessionStorage.getItem(SESSION_KEY) === "dark" ? "dark" : "light";
   } catch {
@@ -67,8 +72,10 @@ function pick(mode: TokenMode): void {
   unstored = mode;
   try {
     sessionStorage.setItem(SESSION_KEY, mode);
+    writeRefused = false;
   } catch {
     // Storage refused: the page-lifetime copy above holds it.
+    writeRefused = true;
   }
   for (const listener of listeners) listener();
 }
