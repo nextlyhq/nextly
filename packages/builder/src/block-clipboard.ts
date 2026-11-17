@@ -26,6 +26,7 @@
 import {
   ENTRY_CONTENT_TYPE,
   entryContentFieldOf,
+  entryContentPlacements,
   findNode,
   holdsEntryContent,
   isPlainRecord,
@@ -86,15 +87,6 @@ const ENTRY_CONTENT_TEMPLATE_ONLY =
 /** Said when copied Entry content draws a field this template's collection lacks. */
 const ENTRY_CONTENT_FIELD_MISSING =
   "This Entry content block draws a field this template’s collection doesn’t have, so it can’t be pasted here.";
-
-/** How many Entry content blocks a run holds, at any depth. */
-function entryContentCount(blocks: readonly BlockNode[]): number {
-  let count = 0;
-  walkNodes([...blocks], node => {
-    if (node.type === ENTRY_CONTENT_TYPE) count += 1;
-  });
-  return count;
-}
 
 /**
  * Why pasted Entry content can't go in this template: a block naming a
@@ -268,7 +260,11 @@ function entryContentPasteRefusal(
   }
   // One Entry content block per template, counted in what is pasted as well
   // as in what the template already holds.
-  if (entryContentCount(blocks) > 1) return ENTRY_CONTENT_ONE_REASON;
+  // Counted from the engine's own list of placements, the one the save
+  // judges a template by.
+  if (entryContentPlacements(blocks).length > 1) {
+    return ENTRY_CONTENT_ONE_REASON;
+  }
   const fields = sources.entryFields;
   return (
     entryContentRefusal(document, ENTRY_CONTENT_TYPE, fields !== undefined) ??
