@@ -80,7 +80,7 @@ async function openImage(page: Page, id: string): Promise<void> {
     timeout: 60_000,
   });
   await canvasFrame(page)
-    .locator(`.nx-canvas [data-nx-node="${IMAGE}"] img`)
+    .locator(`.nx-canvas [data-nx-node="${IMAGE}"]`)
     .first()
     .click();
   await expect(page.locator("[data-block-card]")).toBeVisible();
