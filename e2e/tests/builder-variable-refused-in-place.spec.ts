@@ -96,10 +96,12 @@ test("a value the save would refuse is refused in its field, and the page still 
       )
     ).toBeVisible();
     await expect(light).toHaveAttribute("aria-invalid", "true");
-    // A bare number becomes a length.
+    // A bare number becomes a length: the number in the field, its unit in
+    // the menu beside it.
     await light.fill("20");
     await light.press("Enter");
-    await expect(light).toHaveValue("20px");
+    await expect(light).toHaveValue("20");
+    await expect(editor.getByLabel("Unit for Light")).toHaveText("px");
     await expect(light).not.toHaveAttribute("aria-invalid", "true");
     await page.keyboard.press("Escape");
     await expect(editor).toBeHidden();
