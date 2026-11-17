@@ -233,7 +233,7 @@ export interface WaitingQuery {
     slug: string
   ) => Promise<boolean>;
   /** Whether the caller may read one document, asked of each item of the page. */
-  readable: (document: ReviewDocument) => Promise<boolean>;
+  readable: (document: ReviewDocument, part: string | null) => Promise<boolean>;
 }
 
 /** One stage of one attached collection or Single. */
@@ -322,7 +322,7 @@ export async function waitingFor(
       scopeSlug: row.scopeSlug,
       entryId: row.entryId,
     };
-    if (!row.assignee || !(await query.readable(document))) continue;
+    if (!row.assignee || !(await query.readable(document, row.part))) continue;
     items.push(waitingItem(row, row.assignee));
   }
   return { items, total };

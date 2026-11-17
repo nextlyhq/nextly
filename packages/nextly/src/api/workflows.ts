@@ -69,7 +69,10 @@ import {
   respondMutation,
 } from "./response-shapes";
 import { requireRouteAuthentication } from "./route-auth";
-import { assertVersionDocumentReadable } from "./versions-access";
+import {
+  assertVersionDocumentReadable,
+  readableHistoryLocales,
+} from "./versions-access";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -352,10 +355,11 @@ async function assertReadable(
 /** Whether the asker may read `document`; refusals other than not found are thrown. */
 async function readableBy(
   asker: WorkflowAsker,
-  document: ReviewDocument
+  document: ReviewDocument,
+  parts: readonly (string | null)[] = []
 ): Promise<boolean> {
   try {
-    await assertReadable(asker, document);
+    await assertReadable(asker, document, parts);
     return true;
   } catch (error) {
     if (NextlyError.isNotFound(error)) return false;
@@ -401,7 +405,24 @@ export const workflowOperations = {
   async reviewState(asker: WorkflowAsker, input: unknown) {
     const document = await documentOf(parse(DocumentRef, input));
     await assertReadable(asker, document);
-    return reviewStateOf(adapter(), document);
+    const review = await reviewStateOf(adapter(), document);
+    if (asker === null) return review;
+    // Only the parts in a language the caller may read the document in, and the shared part,
+    // which the read above allowed: where a language stands, who it waits for and its last move
+    // (with its comment) are that language's to tell.
+    const languages = await readableHistoryLocales(
+      document.scopeKind,
+      document.scopeSlug,
+      document.entryId,
+      asker.user,
+      asker.scope
+    );
+    return {
+      ...review,
+      parts: review.parts.filter(
+        each => each.part === null || languages.has(each.part)
+      ),
+    };
   },
 
   /** One step on one document, as the caller saw it. */
@@ -519,7 +540,10 @@ export const workflowOperations = {
       limit: query.limit,
       offset: (query.page - 1) * query.limit,
       readsEntity: (_kind, slug) => Promise.resolve(readable.has(slug)),
-      readable: document => readableBy(asker, document),
+      // Each item in the language its part names: an item about a language the caller may not
+      // read the document in is left out, as a read of that language would be refused.
+      readable: (document, part) =>
+        readableBy(asker, document, part === null ? [] : [part]),
     });
     const totalPages = Math.max(1, Math.ceil(total / query.limit));
     return {
