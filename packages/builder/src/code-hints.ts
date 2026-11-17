@@ -131,6 +131,29 @@ export const BUILT_IN_WRITES = {
   searchPreviews: "data-nosnippet",
 } as const;
 
+/** The widths a device covers: from its lower bound up to its upper one. */
+export interface DeviceRange {
+  /** Its narrowest width, `undefined` for the narrowest device. */
+  readonly from?: number | undefined;
+  /** Its widest width, `undefined` for the widest device. */
+  readonly to?: number | undefined;
+}
+
+/**
+ * What Hide on writes for one device: `display: none` at that device's widths
+ * alone. "display: none at 768–1023px"; the widest device has no upper bound
+ * and the narrowest no lower one.
+ */
+export function hideOnWrites({ from, to }: DeviceRange): string {
+  const hidden = declarationsText([{ property: "display", value: "none" }]);
+  if (from !== undefined && to !== undefined) {
+    return `${hidden} at ${String(from)}–${String(to)}px`;
+  }
+  if (from !== undefined) return `${hidden} at ${String(from)}px and wider`;
+  if (to !== undefined) return `${hidden} at ${String(to)}px and narrower`;
+  return hidden;
+}
+
 /** What an HTML tag menu writes for a tag: the element, `<section>`. */
 export function tagWrites(tag: string): string {
   return `<${tag}>`;

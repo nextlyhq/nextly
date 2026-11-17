@@ -56,6 +56,7 @@ import {
   checkCssValue,
   checkUrlValue,
   decodeIdentifier,
+  referencesCustomProperty,
 } from "./css-value";
 import {
   MAX_TOKEN_NAME_LENGTH,
@@ -1277,6 +1278,13 @@ export function emitTokenBlocks(
   // The light values of the variables that have a dark one: what a light
   // marker has to restore, and nothing else.
   const undoDark: string[] = [];
+  // The light declarations of the variables with no dark value of their own
+  // that read another variable, such as a shadow coloured by a colour
+  // variable. A custom property's `var()` is resolved where it is declared
+  // and inherited as the result, so one declared only on the root keeps the
+  // light colour under a dark marker on <body> or a wrapper. Declared again in
+  // every mode block, it resolves on the same element as what it reads.
+  const reread: string[] = [];
   const seen = new Map<string, string>();
   /*
    * The tokens this call actually WROTE.
@@ -1395,6 +1403,8 @@ export function emitTokenBlocks(
         `${property}:${writtenTokenValue(token.kind, token.values.dark)}`
       );
       undoDark.push(`${property}:${lightValue}`);
+    } else if (referencesCustomProperty(lightValue)) {
+      reread.push(`${property}:${lightValue}`);
     }
   }
 
@@ -1425,9 +1435,9 @@ export function emitTokenBlocks(
   // dark one the nearer marker decides.
   if (dark.length > 0) {
     css +=
-      deviceDarkBlockFor(selector, dark) +
-      darkSelectorFor(selector, dark) +
-      markerBlockFor(selector, "light", undoDark);
+      deviceDarkBlockFor(selector, [...dark, ...reread]) +
+      darkSelectorFor(selector, [...dark, ...reread]) +
+      markerBlockFor(selector, "light", [...undoDark, ...reread]);
   }
   return { css, issues, emitted };
 }

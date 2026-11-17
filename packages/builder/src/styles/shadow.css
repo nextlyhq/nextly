@@ -1,0 +1,161 @@
+/*
+ * The shadow control: a shadow variable's value in Design, and a block's
+ * shadow in its Style tab. Laid out for the panel at its narrowest, 240px:
+ * a layer's four sizes two to a row, its Colour and Inside below them.
+ */
+.nx-shadow {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nx-shadow__previews {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-radius: var(--radius-sm);
+  background: var(--nx-muted);
+}
+
+.nx-shadow__preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.375rem;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* The site's background for its mode is set on the card itself; this is
+   what shows where the site has none. */
+.nx-shadow__card {
+  width: 100%;
+  max-width: 5rem;
+  height: 2.5rem;
+  border-radius: var(--radius-sm);
+  background: var(--nx-card);
+}
+
+.nx-shadow__mode {
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+.nx-shadow__layer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+
+.nx-shadow__layer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.25rem;
+  min-height: 1.5rem;
+}
+
+.nx-shadow__layer-name {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-shadow__layer-actions {
+  display: flex;
+  gap: 0.125rem;
+}
+
+.nx-shadow__sizes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.nx-shadow__field {
+  min-width: 0;
+}
+
+.nx-shadow__colour {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+/* A colour's notes ("Not adapted to dark mode") at the panel's small size,
+   in Design too, where the inspector's own size is not set. */
+.nx-shadow .nx-inspector__note {
+  font-size: var(--text-xs);
+}
+
+.nx-shadow__inside {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 1.5rem;
+  font-size: var(--text-xs);
+}
+
+.nx-shadow__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.nx-shadow__css {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.nx-shadow__css-field {
+  width: 100%;
+  min-height: 4.5rem;
+  padding: 0.375rem 0.5rem;
+  resize: vertical;
+  border: 1px solid var(--nx-input);
+  border-radius: var(--radius-sm);
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font-size: var(--text-xs);
+}
+
+.nx-shadow__css-field:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-shadow__css-field[aria-invalid="true"] {
+  border-color: var(--nx-destructive);
+}
+
+.nx-shadow__note {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+.nx-shadow__refusal {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: color-mix(in oklch, var(--nx-destructive), var(--nx-foreground) 35%);
+}
+
+/* A block's shadow: the control, with the ◇ for a shadow variable beside its
+   top edge. */
+.nx-shadow-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-shadow-field > .nx-shadow {
+  flex: 1 1 auto;
+}

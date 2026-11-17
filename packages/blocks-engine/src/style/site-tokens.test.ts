@@ -622,6 +622,86 @@ describe("emitTokenBlocks", () => {
     expect(css).toContain("--site-color-text:#eee");
   });
 
+  describe("a shadow coloured by a colour variable", () => {
+    // A custom property's `var()` is resolved where it is DECLARED and then
+    // inherited as the result. Declared once on the root, a shadow keeps the
+    // light colour under a dark marker on <body> or a wrapper, where only the
+    // colour is declared again. So it is declared again wherever modes switch.
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.text",
+          kind: "color",
+          values: { light: "#111111", dark: "#eeeeee" },
+        },
+        {
+          name: "shadow.card",
+          kind: "shadow",
+          values: { light: "0 4px 12px var(--site-color-text)" },
+        },
+        {
+          name: "shadow.plain",
+          kind: "shadow",
+          values: { light: "0 1px 2px #000" },
+        },
+      ],
+    };
+    /** Each block's selector and its declarations, as the sheet lists them. */
+    function blocksOf(css: string): { selector: string; body: string }[] {
+      return [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(match => ({
+        selector: (match[1] ?? "").replace(/^@media[^{]*\{/, "").trim(),
+        body: match[2] ?? "",
+      }));
+    }
+    const SHADOW = "--site-shadow-card:0 4px 12px var(--site-color-text)";
+
+    it.each([":root", SCOPE])(
+      "is declared in the light, device-dark, dark and light-marker blocks under %s",
+      selector => {
+        const blocks = blocksOf(emitTokenBlocks(set, selector).css);
+        expect(blocks).toHaveLength(4);
+        for (const block of blocks) {
+          expect(block.body, block.selector).toContain(SHADOW);
+          // The colour it reads is declared beside it in every block, so
+          // the two resolve on the same element.
+          expect(block.body, block.selector).toMatch(/--site-color-text:#/);
+        }
+      }
+    );
+
+    it("is not declared again where it reads no variable", () => {
+      const [light, ...modes] = blocksOf(emitTokenBlocks(set, ":root").css);
+      expect(light?.body).toContain("--site-shadow-plain:0 1px 2px #000");
+      for (const block of modes) {
+        expect(block.body).not.toContain("--site-shadow-plain");
+      }
+    });
+
+    it("writes its own dark value in dark, and its light one again for light", () => {
+      const own: SiteTokenSet = {
+        tokens: [
+          set.tokens[0] as SiteToken,
+          {
+            name: "shadow.card",
+            kind: "shadow",
+            values: {
+              light: "0 4px 12px var(--site-color-text)",
+              dark: "0 4px 12px #000",
+            },
+          },
+        ],
+      };
+      const blocks = blocksOf(emitTokenBlocks(own, ":root").css);
+      expect(blocks[1]?.body).toContain("--site-shadow-card:0 4px 12px #000");
+      expect(blocks[2]?.body).toContain("--site-shadow-card:0 4px 12px #000");
+      expect(blocks[3]?.body).toContain(SHADOW);
+      // Once per block: never its own dark value and the re-declaration both.
+      for (const block of blocks) {
+        expect(block.body.split("--site-shadow-card:")).toHaveLength(2);
+      }
+    });
+  });
+
   it("qualifies every member of a scoped selector LIST", () => {
     // Appending the attribute to `.a,.b` qualifies only the last member, so
     // `.a` would take the dark values with no attribute anywhere and a scoped

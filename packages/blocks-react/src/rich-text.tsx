@@ -620,3 +620,31 @@ export function RichText({
   };
   return <>{children(value.root.children, draw)}</>;
 }
+
+/**
+ * Draw the words of a ONE-PARAGRAPH value: its runs, links and line breaks,
+ * without the paragraph's own element.
+ *
+ * For a block whose own element IS the paragraph, as `core/text`'s `<p>` is:
+ * drawing the stored paragraph node too would put a `<p>` inside a `<p>`. The
+ * runs are drawn by the same views a passage is drawn by, so a bold word, an
+ * italic one and a link look the same in a Text and in a Rich text, and a link
+ * crosses the same address check (`url()`) and gets the same `rel` as every
+ * other.
+ *
+ * Takes `unknown` and draws only the first paragraph's children, so a caller
+ * hands it a value already restricted to one paragraph (`toOneParagraph`) and
+ * anything else draws nothing rather than throwing on a live page.
+ */
+export function RichTextParagraphContent({
+  value,
+}: {
+  /** A one-paragraph value, as `toOneParagraph` answers it. */
+  value: unknown;
+}): ReactNode {
+  if (!isRichTextValue(value)) return null;
+  const first = value.root.children[0];
+  if (!isRichTextNode(first) || first.type !== "paragraph") return null;
+  const draw: DrawSettings = { host: undefined, parts: partsReader() };
+  return <>{children(draw.parts(first).inside, draw)}</>;
+}

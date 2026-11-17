@@ -171,6 +171,31 @@ describe("the add rows", () => {
   });
 });
 
+describe("adding a shadow", () => {
+  it("starts it as a shadow that shows, built with the shadow's fields", async () => {
+    // A new shadow once started as `0 0 0 rgba(0, 0, 0, 0)`, which draws
+    // nothing, typed in one text box.
+    render(<Host />);
+    fireEvent.click(
+      within(group("shadows")).getByRole("button", { name: "Add shadow" })
+    );
+    const editor = await screen.findByRole("dialog", {
+      name: "Edit New shadow",
+    });
+    const light = within(editor).getByRole("group", { name: "Light" });
+    const layer = within(light).getByRole("group", { name: "Layer 1" });
+    expect(
+      (within(layer).getByLabelText("Y offset") as HTMLInputElement).value
+    ).toBe("4");
+    expect(
+      (within(layer).getByLabelText("Blur") as HTMLInputElement).value
+    ).toBe("12");
+    expect(
+      within(editor).getByRole("button", { name: "+ Add layer" })
+    ).toBeDefined();
+  });
+});
+
 describe("pressing an add row", () => {
   it("adds the colour as the last row of its group and opens it with the name focused", async () => {
     render(<Host />);

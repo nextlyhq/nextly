@@ -11,6 +11,7 @@ import * as _p2 from "@/plugins/contributions-fixture/components";
 import * as _p3 from "@/plugins/widget-kit-fixture/admin";
 import * as _p4 from "@nextlyhq/plugin-form-builder/admin";
 import * as _p5 from "@nextlyhq/plugin-page-builder/admin";
+import * as _p6 from "@nextlyhq/plugin-seo/admin";
 import { registeredComponentPaths as listed } from "./plugin-admin-components.generated";
 import type { DeclaredComponentMap } from "nextly";
 import type * as siteConfig from "../../nextly.config";
@@ -41,10 +42,24 @@ const registered = {
   "@nextlyhq/plugin-page-builder/admin#PageBuilderOverview": _p5.PageBuilderOverview,
   "@nextlyhq/plugin-page-builder/admin#PageBuilderView": _p5.PageBuilderView,
   "@nextlyhq/plugin-page-builder/admin#RemoveLayoutToolbarSlot": _p5.RemoveLayoutToolbarSlot,
+  "@nextlyhq/plugin-page-builder/admin#ShownOnSection": _p5.ShownOnSection,
   "@nextlyhq/plugin-page-builder/admin#TemplateDeleteAction": _p5.TemplateDeleteAction,
   "@nextlyhq/plugin-page-builder/admin#TemplateDesignDetails": _p5.TemplateDesignDetails,
   "@nextlyhq/plugin-page-builder/admin#TemplateOwnDesigns": _p5.TemplateOwnDesigns,
   "@nextlyhq/plugin-page-builder/admin#TransferImport": _p5.TransferImport,
+  "@nextlyhq/plugin-seo/admin#PageBuilderSeoTab": _p6.PageBuilderSeoTab,
+  "@nextlyhq/plugin-seo/admin#SeoBulkMoved": _p6.SeoBulkMoved,
+  "@nextlyhq/plugin-seo/admin#SeoDisplaySection": _p6.SeoDisplaySection,
+  "@nextlyhq/plugin-seo/admin#SeoImportPage": _p6.SeoImportPage,
+  "@nextlyhq/plugin-seo/admin#SeoInspectPage": _p6.SeoInspectPage,
+  "@nextlyhq/plugin-seo/admin#SeoOverviewPage": _p6.SeoOverviewPage,
+  "@nextlyhq/plugin-seo/admin#SeoPagesPage": _p6.SeoPagesPage,
+  "@nextlyhq/plugin-seo/admin#SeoProblemsPage": _p6.SeoProblemsPage,
+  "@nextlyhq/plugin-seo/admin#SeoReceivedMoved": _p6.SeoReceivedMoved,
+  "@nextlyhq/plugin-seo/admin#SeoRedirectsPage": _p6.SeoRedirectsPage,
+  "@nextlyhq/plugin-seo/admin#SeoSettingsPage": _p6.SeoSettingsPage,
+  "@nextlyhq/plugin-seo/admin#SeoStatusSection": _p6.SeoStatusSection,
+  "@nextlyhq/plugin-seo/admin#SeoTab": _p6.SeoTab,
 } satisfies DeclaredComponentMap<typeof siteConfig>;
 
 /** The modules exporting each plugin's block definitions, for the page builder's editor. */

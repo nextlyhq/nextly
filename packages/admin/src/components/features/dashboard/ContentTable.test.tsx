@@ -20,6 +20,61 @@ import {
 
 import { ContentTable, type ContentTableProps } from "./ContentTable";
 
+// What the admin's one "open this document" rule reads for a Single's row:
+// every Single's fields, the published views, and whether the reader may
+// update it. One Single's main field is a page layout; the others are not
+// known here, so they open as their forms.
+vi.mock("@admin/hooks/queries/useSingles", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  useEverySingle: () => ({
+    data: [
+      {
+        slug: "landing",
+        fields: [
+          { name: "title", type: "text" },
+          { name: "layout", type: "blocks" },
+        ],
+      },
+    ],
+  }),
+}));
+vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => {
+  const original = await importOriginal<{
+    useBranding: () => Record<string, unknown>;
+  }>();
+  return {
+    ...original,
+    useBranding: () => ({
+      ...original.useBranding(),
+      plugins: [
+        {
+          name: "@acme/builder",
+          documentViews: [
+            {
+              fieldType: "blocks",
+              path: "builder",
+              component: "@acme/builder#View",
+              opensFirst: "mainField",
+            },
+          ],
+        },
+      ],
+    }),
+  };
+});
+vi.mock("@admin/hooks/useCurrentUserPermissions", async importOriginal => {
+  const original = await importOriginal<{
+    useCurrentUserPermissions: () => Record<string, unknown>;
+  }>();
+  return {
+    ...original,
+    useCurrentUserPermissions: () => ({
+      ...original.useCurrentUserPermissions(),
+      canAccessCollection: () => true,
+    }),
+  };
+});
+
 /** One row of the card's data, as JSON carries it. */
 type Row = CoreListWidgetData["items"][number];
 
@@ -198,6 +253,19 @@ describe("the Content table", () => {
     expect(
       within(row).queryByRole("link", { name: /^New entry/ })
     ).not.toBeInTheDocument();
+  });
+
+  it("opens a Single whose main field is a page layout where the sidebar does, by the admin's one rule", () => {
+    draw([{ ...HOME, slug: "landing", label: "Landing" }]);
+    const row = rowOf("Landing");
+    const builder = "/admin/singles/landing/builder?field=layout";
+    expect(within(row).getByRole("link", { name: "Landing" })).toHaveAttribute(
+      "href",
+      builder
+    );
+    expect(
+      within(row).getByRole("link", { name: "Edit Landing" })
+    ).toHaveAttribute("href", builder);
   });
 
   it("names one draft in the singular, in the table and stacked", () => {

@@ -18,6 +18,7 @@
  * - A role that may not change Design sees the section with no action, and
  *   its writes are refused.
  * - Undo and Redo reverse a block style's rename.
+ * - The style editor's State switch moves to Hover, with no block selected.
  *
  * Safe to write against: the suite owns its database. The homepage and the
  * site's stored styles are put back after each test.
@@ -30,7 +31,9 @@ import {
   clickBlock,
   emptyHomepage,
   layerRow,
+  OPEN_BUILDER_ACTION,
   openEditorWith,
+  PAGE_BUILDER_CARD,
   openLayers,
   pressSave,
   selection,
@@ -595,15 +598,37 @@ test.describe("block styles in the Styles tab", () => {
       await openEditorWith(page, [button("bs-plain", "Plain")], "bs-plain");
       if (theme === "dark") {
         await gotoAdmin(page, "/singles/homepage", "dark");
+        // The way into the builder, named as the shared driver names it.
         await page
-          .getByRole("link", {
-            name: /^(?:Build this page|Open Page Builder)$/,
-          })
+          .locator(PAGE_BUILDER_CARD)
+          .getByRole("link", { name: OPEN_BUILDER_ACTION })
           .click();
       }
       await openStyles(page);
       await expectNoAxeViolations(page, { include: ".nx-block-styles" });
     }
+  });
+
+  test("edits a block style at Hover from the style editor's State switch", async ({
+    page,
+  }) => {
+    await openEditorWith(page, [button("bs-plain", "Plain")], "bs-plain");
+    await openStyles(page);
+    await styleRow(page, "Outline").click();
+    const bar = page.getByRole("group", { name: "Editing Outline" });
+    await expect(bar).toBeVisible();
+    await expect(bar).toContainText(
+      "Changes every Button using Outline on every page"
+    );
+    await bar.getByRole("button", { name: /^State: Normal/ }).click();
+    await page.getByRole("menuitemradio", { name: /^Hover/ }).click();
+    // The host keeps no block selected here, and the switch still moves.
+    await expect(
+      bar.getByRole("button", { name: /^State: Hover/ })
+    ).toBeVisible();
+    await expect(
+      page.getByText("You are editing the Hover look. Normal stays as it is.")
+    ).toBeVisible();
   });
 
   test("Undo and Redo reverse a block style's rename", async ({ page }) => {

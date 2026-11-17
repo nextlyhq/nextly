@@ -37,8 +37,6 @@ export interface UpgradeAdapter {
 export interface RunUpgradeOptions {
   confirmBackedUp?: boolean;
   force?: boolean;
-  /** Advanced: override the events table name on a foreign-table collision. */
-  targetTableName?: string;
 }
 
 /** What a step is handed: the database, the command's options and its log. */

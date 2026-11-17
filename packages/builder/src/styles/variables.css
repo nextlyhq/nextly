@@ -441,6 +441,10 @@
 [data-slot="popover-content"].nx-vars-editor {
   width: 240px;
   padding: 0.75rem;
+  /* Inside the window, scrolling within: a shadow of several layers is
+     taller than a laptop window. */
+  max-height: var(--radix-popover-content-available-height, 100vh);
+  overflow-y: auto;
 }
 
 .nx-vars-editor__body,

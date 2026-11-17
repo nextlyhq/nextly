@@ -170,6 +170,9 @@ vi.mock("../commands/upgrade-steps", () => ({
 
 vi.mock("../../domains/schema/events/legacy-detection", () => ({
   assertNoLegacyBookkeeping: () => Promise.resolve(),
+  // `nextly migrate` reads which legacy tables there are: none here.
+  detectLegacyBookkeeping: () =>
+    Promise.resolve({ hasLegacy: false, tables: [] }),
 }));
 
 vi.mock("../../domains/field-groups/storage/resolve-storage-names", () => ({

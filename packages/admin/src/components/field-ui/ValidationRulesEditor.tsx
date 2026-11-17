@@ -226,6 +226,7 @@ export function ValidationRulesEditor({
           value={value.message}
           disabled={disabled}
           describes={messageDescribes}
+          patternSet={(value.pattern ?? "").trim() !== ""}
           onChange={message => onChange({ message })}
         />
       )}
@@ -264,14 +265,24 @@ function MessageRow({
   value,
   disabled,
   describes,
+  patternSet,
   onChange,
 }: {
   value: string | undefined;
   disabled?: boolean;
   describes: "pattern" | "validation";
+  /** Whether a Pattern is written, which a message is then wanted for. */
+  patternSet: boolean;
   onChange: (v: string) => void;
 }) {
   const id = useId();
+  const nudgeId = `${id}-nudge`;
+  // A pattern cannot be put into words for the editor who fails it, so with
+  // none written they are told only that the value "does not match the
+  // required format" — not what is missing. The author is the one who knows,
+  // so they are asked here, once a pattern exists and while the box is blank.
+  const nudge =
+    describes === "pattern" && patternSet && (value ?? "").trim() === "";
   return (
     <div className="space-y-1">
       <Label htmlFor={id}>Custom error message</Label>
@@ -279,8 +290,18 @@ function MessageRow({
         id={id}
         value={value ?? ""}
         disabled={disabled}
+        placeholder={
+          describes === "pattern" ? "e.g. Must contain @123" : undefined
+        }
+        aria-describedby={nudge ? nudgeId : undefined}
         onChange={e => onChange(e.target.value)}
       />
+      {nudge && (
+        <p id={nudgeId} className="text-xs text-foreground">
+          Without a message, editors only see that the value does not match the
+          required format. Say what it needs.
+        </p>
+      )}
       {/* Which failure this message describes is the caller's, not something
           this component can see. Naming the Pattern is right where the runtime
           applies the message to that rule, and wrong where the same string also

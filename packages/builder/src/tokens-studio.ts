@@ -92,13 +92,21 @@ export const TOKEN_KIND_LABELS: Readonly<Record<TokenKind, string>> = {
  * author did not cause. These are the smallest valid value of each kind, chosen
  * to be obviously placeholder rather than plausibly deliberate.
  */
+/**
+ * A new shadow: one soft layer under the box, so it shows from the start.
+ * It is also the layer the shadow control's "+ Add layer" adds.
+ */
+export const NEW_SHADOW_VALUE = "0 4px 12px rgba(0, 0, 0, 0.12)";
+
 const TOKEN_KIND_SEEDS: Readonly<Record<TokenKind, string>> = {
   color: "#000000",
   dimension: "0px",
   fontFamily: "sans-serif",
   fontWeight: "400",
   number: "0",
-  shadow: "0 0 0 rgba(0, 0, 0, 0)",
+  // A shadow that draws nothing read as a mistake; one that shows is what an
+  // author starts building from.
+  shadow: NEW_SHADOW_VALUE,
   duration: "0ms",
   // NOT a CSS-wide keyword. `initial` passes the emitter and is written without
   // complaint, and then behaves as the guaranteed-invalid value at SUBSTITUTION
