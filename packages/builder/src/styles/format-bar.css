@@ -21,7 +21,7 @@
   color: var(--nx-builder-ink-text);
   box-shadow: 0 6px 18px
     color-mix(in srgb, var(--nx-builder-ink) 35%, transparent);
-  font-size: 0.75rem;
+  font-size: var(--nx-builder-font-size);
   line-height: 1;
   white-space: nowrap;
 }
@@ -132,7 +132,7 @@
   color: var(--nx-builder-text);
   box-shadow: 0 4px 12px
     color-mix(in srgb, var(--nx-builder-text) 12%, transparent);
-  font-size: 0.75rem;
+  font-size: var(--nx-builder-font-size);
   line-height: 1.4;
 }
 
