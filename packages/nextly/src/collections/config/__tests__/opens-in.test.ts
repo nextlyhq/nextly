@@ -1,14 +1,15 @@
 /**
- * The boot's judgement of a collection's `admin.opensIn`: "form", or the path
- * of a document view the collection has. A path no view answers, or a view
- * offered on a field type the collection does not hold at its top level, stops
- * the boot naming the collection and the view.
+ * The boot's judgement of a collection's or a Single's `admin.opensIn`:
+ * "form", or the path of a document view it has. A path no view answers, or a
+ * view offered on a field type it does not hold at its top level, stops the
+ * boot naming the collection or Single and the view. A view declared on a
+ * slug is a collection's, so it is never a Single's.
  */
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
-import { assertCollectionOpensIn } from "../opens-in";
+import { assertOpensIn } from "../opens-in";
 
 /** A plugin contributing a `blocks` field type with a `builder` view on it, and a `review` view on `posts`. */
 function viewPlugin(extra: Record<string, unknown> = {}): PluginDefinition {
@@ -63,11 +64,12 @@ function refusal(run: () => void): NextlyError {
   throw new Error("the declaration was accepted");
 }
 
-describe("assertCollectionOpensIn", () => {
+describe("assertOpensIn", () => {
   it("accepts the form, and a collection that declares nothing", () => {
     expect(() =>
-      assertCollectionOpensIn(
+      assertOpensIn(
         [collection("posts", "form"), { slug: "tags", fields: [title] }],
+        [],
         []
       )
     ).not.toThrow();
@@ -75,29 +77,30 @@ describe("assertCollectionOpensIn", () => {
 
   it("accepts a view declared on the collection itself", () => {
     expect(() =>
-      assertCollectionOpensIn([collection("posts", "review")], [viewPlugin()])
+      assertOpensIn([collection("posts", "review")], [viewPlugin()], [])
     ).not.toThrow();
   });
 
   it("accepts a field-type view whose field type the collection holds at its top level", () => {
     expect(() =>
-      assertCollectionOpensIn([collection("notes", "builder")], [viewPlugin()])
+      assertOpensIn([collection("notes", "builder")], [viewPlugin()], [])
     ).not.toThrow();
   });
 
   it("reads into an unnamed group, as the form lays it out", () => {
     const fields = [title, { type: "group", fields: [sections] }];
     expect(() =>
-      assertCollectionOpensIn(
+      assertOpensIn(
         [collection("notes", "builder", fields)],
-        [viewPlugin()]
+        [viewPlugin()],
+        []
       )
     ).not.toThrow();
   });
 
   it("refuses a view the collection does not have, naming the collection and the view", () => {
     const error = refusal(() =>
-      assertCollectionOpensIn([collection("posts", "nope")], [viewPlugin()])
+      assertOpensIn([collection("posts", "nope")], [viewPlugin()], [])
     );
     expect(error.logMessage ?? error.message).toContain('"posts"');
     expect(error.logMessage ?? error.message).toContain('"nope"');
@@ -105,7 +108,7 @@ describe("assertCollectionOpensIn", () => {
 
   it("refuses a slug view declared on another collection", () => {
     const error = refusal(() =>
-      assertCollectionOpensIn([collection("notes", "review")], [viewPlugin()])
+      assertOpensIn([collection("notes", "review")], [viewPlugin()], [])
     );
     expect(error.message).toContain('"notes"');
     expect(error.message).toContain('"review"');
@@ -116,9 +119,10 @@ describe("assertCollectionOpensIn", () => {
     // would open on a field the form shows one level down.
     const fields = [title, { type: "group", name: "hero", fields: [sections] }];
     const error = refusal(() =>
-      assertCollectionOpensIn(
+      assertOpensIn(
         [collection("notes", "builder", fields)],
-        [viewPlugin()]
+        [viewPlugin()],
+        []
       )
     );
     expect(error.message).toContain('"notes"');
@@ -128,9 +132,10 @@ describe("assertCollectionOpensIn", () => {
 
   it("refuses a field-type view on a collection with no field of its type", () => {
     const error = refusal(() =>
-      assertCollectionOpensIn(
+      assertOpensIn(
         [collection("tags", "builder", [title])],
-        [viewPlugin()]
+        [viewPlugin()],
+        []
       )
     );
     expect(error.message).toContain('"tags"');
@@ -138,23 +143,24 @@ describe("assertCollectionOpensIn", () => {
 
   it("judges against a disabled plugin's views too, so switching it off never stops a boot", () => {
     expect(() =>
-      assertCollectionOpensIn(
+      assertOpensIn(
         [collection("notes", "builder")],
-        [viewPlugin({ enabled: false })]
+        [viewPlugin({ enabled: false })],
+        []
       )
     ).not.toThrow();
   });
 
   it("refuses a view once its plugin is removed", () => {
     const error = refusal(() =>
-      assertCollectionOpensIn([collection("notes", "builder")], [])
+      assertOpensIn([collection("notes", "builder")], [], [])
     );
     expect(error.message).toContain('"builder"');
   });
 
   it("refuses a value that is not text", () => {
     const error = refusal(() =>
-      assertCollectionOpensIn([collection("posts", 3)], [viewPlugin()])
+      assertOpensIn([collection("posts", 3)], [viewPlugin()], [])
     );
     expect(error.message).toContain('"posts"');
   });
@@ -164,9 +170,10 @@ describe("assertCollectionOpensIn", () => {
     const loop: Record<string, unknown> = { type: "group", fields: [] };
     (loop.fields as unknown[]).push(loop);
     const error = refusal(() =>
-      assertCollectionOpensIn(
+      assertOpensIn(
         [collection("notes", "builder", [title, loop])],
-        [viewPlugin()]
+        [viewPlugin()],
+        []
       )
     );
     expect(error.message).toContain('"notes"');
@@ -175,7 +182,77 @@ describe("assertCollectionOpensIn", () => {
   it("reads a plugin's slug view on the slug it is routed under, after a rename", () => {
     const renamed = viewPlugin({ renameMap: { posts: "articles" } });
     expect(() =>
-      assertCollectionOpensIn([collection("articles", "review")], [renamed])
+      assertOpensIn([collection("articles", "review")], [renamed], [])
     ).not.toThrow();
+  });
+});
+
+describe("assertOpensIn on a Single", () => {
+  /** A Homepage: a title and a page layout. */
+  const homepage = (
+    opensIn: unknown,
+    fields: unknown[] = [title, sections]
+  ) => ({
+    slug: "homepage",
+    fields,
+    admin: { opensIn },
+  });
+
+  it("accepts the form, a field-type view it holds a field of, and nothing", () => {
+    expect(() =>
+      assertOpensIn(
+        [],
+        [viewPlugin()],
+        [
+          homepage("form"),
+          homepage("builder"),
+          { slug: "site", fields: [title] },
+        ]
+      )
+    ).not.toThrow();
+  });
+
+  it("refuses a field-type view whose field type it does not hold, naming the Single", () => {
+    const error = refusal(() =>
+      assertOpensIn([], [viewPlugin()], [homepage("builder", [title])])
+    );
+    expect(error.message).toContain('The Single "homepage"');
+    expect(error.message).toContain('"builder"');
+  });
+
+  it("refuses a view declared on a collection's slug, even one named like the Single", () => {
+    // `views.posts` declares a collection's `review`; a Single called
+    // "posts" has no view of it to open in.
+    const error = refusal(() =>
+      assertOpensIn(
+        [],
+        [viewPlugin()],
+        [{ slug: "posts", fields: [title], admin: { opensIn: "review" } }]
+      )
+    );
+    expect(error.message).toContain('The Single "posts"');
+    expect(error.message).toContain('"review"');
+  });
+
+  it("refuses a view no plugin declares, and a value that is not text", () => {
+    expect(
+      refusal(() => assertOpensIn([], [viewPlugin()], [homepage("nope")]))
+        .message
+    ).toContain('"nope"');
+    expect(
+      refusal(() => assertOpensIn([], [viewPlugin()], [homepage(3)])).message
+    ).toContain('The Single "homepage"');
+  });
+
+  it("names a collection and a Single together when both are refused", () => {
+    const error = refusal(() =>
+      assertOpensIn(
+        [collection("posts", "nope")],
+        [viewPlugin()],
+        [homepage("nope")]
+      )
+    );
+    expect(error.message).toContain('The collection "posts"');
+    expect(error.message).toContain('The Single "homepage"');
   });
 });
