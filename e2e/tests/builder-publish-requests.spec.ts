@@ -27,7 +27,7 @@ const IMAGE = "00000000-0000-4000-8000-0000000c0102";
 async function seed(
   page: Page,
   status: "published" | "draft"
-): Promise<string> {
+): Promise<{ id: string; imageFile: string }> {
   const run = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
   const media = await uploadImage(page.request, run);
   const created = await page.request.post(PAGES, {
@@ -59,16 +59,27 @@ async function seed(
     created.ok(),
     `seeding the page: ${created.status()} ${await created.text()}`
   ).toBe(true);
-  return ((await created.json()) as { item: { id: string } }).item.id;
+  return {
+    id: ((await created.json()) as { item: { id: string } }).item.id,
+    imageFile: new URL(media.url, "http://localhost").pathname,
+  };
 }
 
-/** Every admin API request the page sends once `start` is called. */
-function apiRequests(page: Page): { sent: string[]; start: () => void } {
+/**
+ * Every admin API request the page sends once `start` is called, and every
+ * fetch of the image's file.
+ */
+function apiRequests(
+  page: Page,
+  imageFile: string
+): { sent: string[]; imageFetches: string[]; start: () => void } {
   const sent: string[] = [];
+  const imageFetches: string[] = [];
   let counting = false;
   page.on("request", (request: Request) => {
     if (!counting) return;
     const url = new URL(request.url());
+    if (url.pathname === imageFile) imageFetches.push(url.href);
     if (!url.pathname.startsWith("/admin/api/")) return;
     // Taken and renewed on its own schedule.
     if (url.pathname.endsWith("/document-lock")) return;
@@ -78,6 +89,7 @@ function apiRequests(page: Page): { sent: string[]; start: () => void } {
   });
   return {
     sent,
+    imageFetches,
     start: () => {
       counting = true;
     },
@@ -88,9 +100,8 @@ function apiRequests(page: Page): { sent: string[]; start: () => void } {
 async function editLead(page: Page, text: string): Promise<void> {
   await canvasBlock(page, LEAD).click();
   const field = page
-    .getByTestId("inspector")
-    .locator('[data-content-control="textarea"] textarea')
-    .first();
+    .getByRole("complementary", { name: "Inspector" })
+    .getByRole("textbox", { name: "Text" });
   await field.fill(text);
   await page.keyboard.press("Tab");
   await expect(canvasBlock(page, LEAD)).toHaveText(text);
@@ -122,37 +133,50 @@ async function watchCanvas(page: Page): Promise<() => Promise<number>> {
     );
 }
 
+/** One of the top bar's actions, by what it does. */
+const barAction = (page: Page, action: "save" | "publish") =>
+  page.locator(`[data-topbar="end"] [data-action="${action}"]`);
+
 /** The editor says the page is saved and has nothing left to save. */
-async function expectSaved(page: Page): Promise<void> {
-  await expect(page.getByTestId("save-state-indicator")).toHaveAttribute(
-    "data-tone",
-    "saved",
-    { timeout: 30_000 }
-  );
-  await expect(
-    page.locator('[data-publish-split] [data-primary="true"]')
-  ).toBeDisabled();
+async function expectSaved(
+  page: Page,
+  status: "published" | "draft"
+): Promise<void> {
+  await expect(barAction(page, "save")).toHaveText("Saved", {
+    timeout: 30_000,
+  });
+  await expect(barAction(page, "save")).toBeDisabled();
+  if (status === "published") {
+    await expect(barAction(page, "publish")).toHaveText("Published");
+  }
 }
 
+/** Publishing a published page's change, and saving a draft's. */
 for (const status of ["published", "draft"] as const) {
-  test(`a ${status} page's save writes once and reads the entry at most once`, async ({
+  const verb = status === "published" ? "publishing" : "saving";
+  test(`${verb} a ${status} page writes once and reads the entry at most once`, async ({
     page,
   }) => {
     test.setTimeout(120_000);
     await gotoAdmin(page, "/");
-    const id = await seed(page, status);
-    const { sent, start } = apiRequests(page);
+    const { id, imageFile } = await seed(page, status);
+    const { sent, imageFetches, start } = apiRequests(page, imageFile);
     await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
     await expect(canvasBlock(page, LEAD)).toBeVisible({ timeout: 60_000 });
-    await expect(canvasBlock(page, IMAGE).locator("img")).toBeVisible();
+    // The picture is the block's own root, or inside it.
+    await expect(
+      canvasFrame(page)
+        .locator(`img[data-nx-node="${IMAGE}"], [data-nx-node="${IMAGE}"] img`)
+        .first()
+    ).toBeVisible();
     await page.waitForLoadState("networkidle");
 
     await editLead(page, "A page published once");
     await page.waitForLoadState("networkidle");
     const changes = await watchCanvas(page);
     start();
-    await page.locator('[data-publish-split] [data-primary="true"]').click();
-    await expectSaved(page);
+    await barAction(page, status === "published" ? "publish" : "save").click();
+    await expectSaved(page, status);
     await page.waitForLoadState("networkidle");
 
     const entryPath = `${PAGES}/${id}`;
@@ -173,6 +197,7 @@ for (const status of ["published", "draft"] as const) {
       (line.split(" ")[1] ?? "").startsWith("/admin/api/media")
     );
     expect(media, "media reads").toEqual([]);
+    expect(imageFetches, "the image fetched again").toEqual([]);
     // The read matches what is shown: the canvas keeps its drawn blocks.
     expect(await changes(), "canvas elements replaced").toBe(0);
   });
