@@ -180,11 +180,17 @@ refused instead of replacing it.
 Hiding a side gives the canvas its room. The left panel you had open comes back when
 you use the rail again. The editor remembers which sides you hid, for you.
 
-The device buttons show Desktop and the site's two widest breakpoints. A site with more
-puts the rest in a menu beside them, under **More devices**. While you style one of those,
-the menu's button shows its name and width. The buttons never change places.
+The device buttons show Desktop and the site's two widest breakpoints, each as an icon.
+Point at one, or move to it with the keyboard, and its tooltip gives the device's name,
+width and the widths it styles, for example "Desktop · 1280px · styles for 1024px and
+wider". The width you are styling is always shown as text beside the buttons ("1280px").
+A site with more breakpoints puts the rest in a menu beside them, under **More devices**.
+While you style one of those, the menu's button shows its icon. The buttons never change
+places.
 
-When the bar is narrow, the device buttons drop their label first and keep their icons.
+The canvas draws the page at the real width of the device you are styling, scaled to fit
+between the panels, edge to edge: no margin and no shadow around it. A device narrower
+than the space, such as a phone, is centred with a thin line along its edge.
 
 ## From the entry's form
 
@@ -534,6 +540,40 @@ Circle, never around the caption.
 The shapes **Square**, **Rounded** and **Circle** are block styles, at the top of the
 **Style** tab. **Circle** crops the picture to a square first, so a wide picture is a
 circle, never an oval.
+
+## Adding pictures to a gallery
+
+A new Gallery starts empty: on the canvas it reads **Add images**, with **Upload** and
+**Media library**, and **or drop files here**. Each picture becomes an Image inside the
+gallery, so every picture keeps its own alt text, caption and settings.
+
+- **Upload** opens your computer's file chooser, where you can choose several files.
+- **Media library** opens the library to pick several pictures. They are added in the
+  order you pick them.
+- **Dropping files** on a gallery, empty or not, uploads them and adds them after the
+  pictures it already holds, in the order they were dropped. Several files dropped on one
+  of its pictures go to the gallery too; one file dropped on a picture replaces it. A file
+  that isn't a picture is left out with **That file isn't an image**.
+
+With the gallery selected, its **Content** tab holds:
+
+- **Pictures**: **Add images** opens the media library to pick several more.
+- **Layout**: **Columns** (**2**, **3** or **4**) and **On mobile** (**1** or **2**), how
+  many pictures sit side by side. A gallery you have not set shows three across and one on
+  a phone. Choosing **Columns** also sets **On mobile** to **1** while it is unset, so a
+  phone never shows three or four across. **On mobile** applies at your site's widest
+  device at a phone's width (640px or narrower), and is not offered when the site has
+  none.
+- **When clicked**: **Nothing** or **Enlarge**, for every picture in the gallery that says
+  nothing itself and has no link. A picture's own **When clicked** then reads **Same as
+  the gallery (Enlarge)**; choose another option to set that picture alone, or **Same as
+  the gallery** again to follow the gallery. A picture with a link follows its link, so
+  its **When clicked** offers **Nothing**, **Link** and **Enlarge** only.
+
+Adding several pictures at once is one step: one **Undo** takes them all away. Drag a
+picture on the canvas or in **Layers** to change its place. With a picture selected, the
+inspector names it by its place, **Picture 2 · in Gallery**, and **← Back to the
+gallery** selects the gallery.
 
 ## Bold, italic and links in a Text
 

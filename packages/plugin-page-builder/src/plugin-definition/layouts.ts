@@ -10,6 +10,7 @@ import type { PluginRoute } from "@nextlyhq/plugin-sdk";
 import { COMPONENTS_SLUG } from "../collections/components";
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { PAGES_SLUG } from "../collections/pages";
+import { fillNoticesRoute } from "../default-layout/fill-notice-route";
 import { makeDefaultRoute } from "../default-layout/make-default-route";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "../default-layout/settings-single";
 import { layoutChoicesRoute } from "../layout-choices-route";
@@ -60,6 +61,7 @@ export function routesForLayouts(def: Definition): {
   readonly removeLayout: PluginRoute;
   readonly layoutChoices: PluginRoute;
   readonly layoutCounts: PluginRoute;
+  readonly fillNotices: PluginRoute;
   readonly layoutWrites: PluginRoute[];
 } {
   const { opts } = def;
@@ -85,6 +87,9 @@ export function routesForLayouts(def: Definition): {
     // How many pages use each set the caller may read, counted as the
     // system and answered as numbers only.
     layoutCounts: layoutCountsRoute(),
+    // The publisher of the first header or footer, told once that it now
+    // fills the default: asked by the screen they published from.
+    fillNotices: fillNoticesRoute(),
     // A set's rename and copy from the builder's Pages panel, each gated by
     // the set write it makes and written as the caller.
     layoutWrites: layoutWriteRoutes(),

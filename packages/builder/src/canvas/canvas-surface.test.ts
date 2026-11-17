@@ -117,7 +117,26 @@ describe("the canvas's frame as a sheet on the editor's surface", () => {
     expect(declared(frame, "outline")).toBe(
       "1px solid var(--nx-builder-frame-edge)"
     );
-    expect(declared(frame, "box-shadow")).toBe("var(--shadow-md)");
+  });
+
+  it("casts no shadow, so the page reads as the page and not a card", () => {
+    // The frame meets the panels' dividers, and a narrower one is told from
+    // the well by its hairline edge alone.
+    const frame = ruleFor(".nx-canvas-frame");
+    // The control: this is the frame's own rule, the one stating its edge.
+    expect(declared(frame, "outline")).toBeDefined();
+    expect(frame).not.toMatch(/(?:^|\s)box-shadow\s*:/);
+  });
+
+  it("keeps the chrome drawn past the frame from scrolling the region", () => {
+    /*
+     * The layer the editor's chrome is drawn in reaches a ring's distance
+     * past the frame. With the frame at the region's own width, that reach
+     * was content past the region's edge: the region scrolled by it and took
+     * focus as a scroller, which F6 and Tab then stopped on instead of
+     * passing into the page.
+     */
+    expect(declared(ruleFor(".nx-canvas-stage"), "overflow")).toBe("clip");
   });
 
   it("draws that edge OUTSIDE the box the frame is fitted into", () => {
@@ -238,9 +257,11 @@ describe("the canvas surface is the site's, not the admin's", () => {
     }
   });
 
-  it("sets the page in the site's body font, not the admin's face", () => {
+  it("sets the page in a plain base face, neither the admin's nor a site variable", () => {
+    // The site's Body font is the page sheet's rule on the page root, on
+    // every surface, so the blank frame reads no font variable of its own.
     const family = declared(canvasRule(), "font-family");
-    expect(family).toBe("var(--nx-canvas-site-font, system-ui), sans-serif");
+    expect(family).toBe("system-ui, sans-serif");
     expect(family?.includes("--font-sans"), "the admin's own face").toBe(false);
   });
 

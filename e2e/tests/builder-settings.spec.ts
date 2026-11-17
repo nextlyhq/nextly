@@ -404,8 +404,8 @@ test.describe("Settings", () => {
 
       // The device chosen is now Tablet, shown as the active button.
       const chosen = devices(page).getByRole("radio", { checked: true });
-      await expect(chosen).toHaveAccessibleName(/^Tablet/);
-      await expect(chosen).toHaveText("Tablet · 1024px");
+      await expect(chosen).toHaveAccessibleName(/^Tablet · 1024px · /);
+      await expect(page.locator("[data-nx-active-width]")).toHaveText("1024px");
 
       await paintText(page);
       const saved = entryWrite(page, id);
@@ -431,12 +431,16 @@ test.describe("Settings", () => {
       await openEditor(page, id);
       // The site's own three: Desktop, Tablet and Mobile, and no menu.
       await expect(devices(page).getByRole("radio")).toHaveCount(3);
-      // The chosen device shows its label and width once the canvas has
+      // The chosen device is named with its width once the canvas has
       // measured it; read the buttons after that, not while it is drawing.
       await expect(
         devices(page).getByRole("radio", { checked: true })
-      ).toHaveText(/^Desktop · \d+px$/);
-      const labels = await devices(page).getByRole("radio").allTextContents();
+      ).toHaveAccessibleName(/^Desktop · \d+px · /);
+      const labels = await devices(page)
+        .getByRole("radio")
+        .evaluateAll(radios =>
+          radios.map(radio => radio.getAttribute("aria-label"))
+        );
 
       const dialog = await editBreakpoints(page);
       await dialog
@@ -453,12 +457,20 @@ test.describe("Settings", () => {
 
       // The narrowest goes in the menu; the three buttons are unchanged.
       await expect(devices(page).getByRole("radio")).toHaveCount(3);
-      await expect(devices(page).getByRole("radio")).toHaveText(labels);
+      await expect
+        .poll(() =>
+          devices(page)
+            .getByRole("radio")
+            .evaluateAll(radios =>
+              radios.map(radio => radio.getAttribute("aria-label"))
+            )
+        )
+        .toEqual(labels);
       const more = page.getByRole("button", { name: /^More devices/ });
       await more.click();
       await page.getByRole("menuitemradio", { name: /^Small phone/ }).click();
       await expect(more).toHaveAccessibleName(
-        "More devices, styling Small phone, up to 400 pixels"
+        "More devices, styling Small phone · 400px · styles for 400px and narrower"
       );
 
       await paintText(page);

@@ -27,6 +27,7 @@ import {
   APPEAR_LOAD_GATE,
   APPEAR_SCROLL_GATE,
   DEFAULT_TOKEN_PREFIX,
+  blockTypeClassName,
   tokenCustomProperty,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -34,6 +35,7 @@ import {
   ENTRY_CONTENT_NOTE_ATTRIBUTE,
 } from "@nextlyhq/blocks-react";
 
+import { GALLERY_BLOCK } from "../gallery-pictures";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { APPEAR_REPLAY_RULES } from "./appear-replay";
@@ -46,6 +48,9 @@ const ROOT = `.${CANVAS_ROOT_CLASS}`;
 function siteToken(name: string, fallback: string): string {
   return `var(${tokenCustomProperty(name, DEFAULT_TOKEN_PREFIX)}, ${fallback})`;
 }
+
+/** The class every Gallery's root wears, its block type's. */
+const EMPTY_GALLERY_CLASS = blockTypeClassName(GALLERY_BLOCK);
 
 /** A collection list drawing its empty state while that state holds nothing. */
 const EMPTY_LIST = `${EMPTY_CONTAINER_SELECTOR}[data-nx-list-shows]`;
@@ -139,13 +144,15 @@ ${ROOT} {
 ${BLANK} ${ROOT} {
   /* Fills the viewport: see the body above. */
   flex: 1 0 auto;
-  /* The site's background, text and body font, which the canvas root names
-     under the site's token prefix (see \`canvas.tsx\`); they follow the site's
-     dark values by themselves. */
+  /* The site's background and text, which the canvas root names under the
+     site's token prefix (see \`canvas.tsx\`); they follow the site's dark
+     values by themselves. The face is a plain base, not a site variable: the
+     site's Body font is the page sheet's rule on the page root, the same rule
+     a published page and a page the site serves carry. */
   color-scheme: light;
   background-color: var(--nx-canvas-site-ground, Canvas);
   color: var(--nx-canvas-site-ink, CanvasText);
-  font-family: var(--nx-canvas-site-font, system-ui), sans-serif;
+  font-family: system-ui, sans-serif;
 }
 
 /* The site's own dark mode, the one thing that darkens the blank page. The
@@ -221,6 +228,15 @@ ${EMPTY_TEXT_SELECTOR} { min-height: 1lh; }
    they are set, edge to edge. In the page's own text colour, so it reads on
    a light page and a dark section alike. */
 :where(${EMPTY_CONTAINER_SELECTOR}) { min-height: 2.75rem; }
+/* An empty Gallery is the room its "Add images" plate is drawn in, its two
+   buttons and its drop hint with it (\`image-states.tsx\`): a third of its
+   width tall, as a row of pictures would be, so the plate keeps its words
+   on a zoomed-out canvas, and never less than a small picture. At no
+   specificity, as the height above. */
+:where(${EMPTY_CONTAINER_SELECTOR}.${EMPTY_GALLERY_CLASS}) {
+  min-height: 12rem;
+  aspect-ratio: 3 / 1;
+}
 ${EMPTY_CONTAINER_SELECTOR} {
   display: block;
   outline: 1px dashed color-mix(in srgb, currentColor 45%, transparent);
