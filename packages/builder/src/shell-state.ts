@@ -264,6 +264,12 @@ export interface ShellPreferences {
    * remembered.
    */
   sectionFolds?: SectionFolds;
+  /**
+   * Whether the block panel prints each control's CSS names under its label
+   * ("Show CSS names" in the panel's options menu). Off by default, and
+   * optional in this published type, as `panelKeys` is: absent reads as off.
+   */
+  showCssNames?: boolean;
 }
 
 /**
@@ -326,6 +332,7 @@ export const DEFAULT_PREFERENCES: ShellPreferences = {
   layouts: {},
   panelKeys: true,
   sectionFolds: {},
+  showCssNames: false,
 };
 
 /**
@@ -558,6 +565,8 @@ export function readPreferences(store: PreferenceStore): ShellPreferences {
     // written before the keys could be turned off.
     panelKeys: record.panelKeys !== false,
     sectionFolds: readSectionFolds(record.sectionFolds),
+    // Off unless a stored true says otherwise.
+    showCssNames: record.showCssNames === true,
   };
 }
 

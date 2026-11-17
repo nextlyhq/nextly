@@ -12,10 +12,12 @@
  *
  * @module css-hint
  */
+import { TooltipProvider } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { ChromeTooltip } from "./chrome-tooltip";
 import { useCssNames } from "./css-names-context";
+import { isElement } from "./dom-kind";
 
 /** A control's tooltip: what it does in words, then what it writes. */
 function HintContent({
@@ -50,18 +52,98 @@ export function CssHint({
   /** What the control does, in words, said above the code. */
   summary?: string | undefined;
   /** The control: one element, which becomes the tooltip's trigger. */
-  children: React.ReactElement;
+  children: React.ReactElement<TriggerHandlers>;
 }): React.JSX.Element {
+  // Noted once per document: whether the last key moved between controls.
+  React.useEffect(() => noteNavigation(document), []);
   if (writes === undefined && summary === undefined) return children;
   return (
-    <ChromeTooltip
-      content={<HintContent summary={summary} writes={writes} />}
-      side="left"
-      align="start"
-    >
-      {children}
-    </ChromeTooltip>
+    // Its own provider, so a control drawn outside the panel still has one; a
+    // provider above keeps the shell's shared delay.
+    <TooltipProvider delayDuration={300}>
+      <ChromeTooltip
+        content={<HintContent summary={summary} writes={writes} />}
+        side="left"
+        align="start"
+      >
+        {React.cloneElement(children, ownElementsOnly(children.props))}
+      </ChromeTooltip>
+    </TooltipProvider>
   );
+}
+
+/** The handlers the trigger's own element passes on, composed below. */
+interface TriggerHandlers {
+  onFocus?: (event: React.FocusEvent<HTMLElement>) => void;
+  onPointerMove?: (event: React.PointerEvent<HTMLElement>) => void;
+}
+
+/** The keys that move focus from one control to the next. */
+const NAVIGATION_KEYS: ReadonlySet<string> = new Set([
+  "Tab",
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "Home",
+  "End",
+]);
+
+/** The documents a key listener is on, so each gets one. */
+const LISTENING: WeakSet<Document> = new WeakSet();
+
+/** Whether the last key pressed in a document moved focus between controls. */
+const NAVIGATED: WeakMap<Document, boolean> = new WeakMap();
+
+/** Start noting, for a document, whether its last key press navigated. */
+function noteNavigation(at: Document): void {
+  if (LISTENING.has(at)) return;
+  LISTENING.add(at);
+  const note = (event: Event) =>
+    NAVIGATED.set(at, NAVIGATION_KEYS.has((event as KeyboardEvent).key));
+  at.addEventListener("keydown", note, true);
+  // A press of the pointer is not navigation, whatever key came before it.
+  const pressed = () => NAVIGATED.set(at, false);
+  at.addEventListener("pointerdown", pressed, true);
+  at.addEventListener("mousedown", pressed, true);
+}
+
+/**
+ * Whether focus arrived by the author moving from control to control with the
+ * keyboard. Focus handed back after a menu or picker closes, by pointer or by
+ * Escape, opens no tooltip, so the Escape that follows still reaches the
+ * editor.
+ */
+function keyboardFocus(target: EventTarget): boolean {
+  if (!isElement(target)) return false;
+  const at = target.ownerDocument;
+  const navigated = NAVIGATED.get(at) === true;
+  // Spent on the one focus it moved: a later focus is judged by a later key.
+  NAVIGATED.set(at, false);
+  return navigated;
+}
+
+/**
+ * The trigger's focus and hover, answered only for what is inside its own
+ * element on the page. A menu or picker it opens is portalled elsewhere in the
+ * page but stays inside it in React's tree, where its events bubble through:
+ * answered there, the field's tooltip opened over the picker and took the
+ * Escape that should close it. Marked handled, the tooltip leaves them.
+ */
+function ownElementsOnly(props: TriggerHandlers): TriggerHandlers {
+  const outside = (event: React.SyntheticEvent<HTMLElement>) =>
+    !isElement(event.target) || !event.currentTarget.contains(event.target);
+  return {
+    onFocus: event => {
+      props.onFocus?.(event);
+      if (outside(event) || !keyboardFocus(event.target))
+        event.preventDefault();
+    },
+    onPointerMove: event => {
+      props.onPointerMove?.(event);
+      if (outside(event)) event.preventDefault();
+    },
+  };
 }
 
 /**
