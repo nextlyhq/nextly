@@ -1113,6 +1113,21 @@ export interface BlocksSiteSettings {
 }
 
 /**
+ * What a page's site bindings read: the settings, and the values the route
+ * works out beside them, which no setting stores.
+ *
+ * @experimental
+ */
+export interface BlocksSiteValues extends BlocksSiteSettings {
+  /**
+   * The year the page is drawn in, in its time zone ("2026"). Worked out by
+   * the route where it reads the settings, inside a cached read; absent
+   * where nothing worked it out.
+   */
+  readonly currentYear?: string;
+}
+
+/**
  * Whose field shapes: a collection's entries, or one Single.
  *
  * @experimental
@@ -1159,7 +1174,7 @@ export interface PageBindings {
     Readonly<Record<string, unknown>> | null
   >;
   /** The site settings a page may show; `null` when there are none. */
-  readonly site?: BlocksSiteSettings | null;
+  readonly site?: BlocksSiteValues | null;
   readonly fieldShapes?: BlocksFieldShapes;
   /**
    * The time zone a date-time is shown in. UTC when absent, and when it is
