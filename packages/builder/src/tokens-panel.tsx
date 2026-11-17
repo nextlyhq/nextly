@@ -320,8 +320,7 @@ function VariablesView({
   const groups = useListedGroups(tokens, mode, hosted.groups);
   // A row just added stays shown while its editor is open, though the
   // search would hide it: added where the author is, it is not lost.
-  const shown = searched(groups, needle, fresh);
-  const held = heldOutside(groups, needle, fresh);
+  const { shown, held } = searched(groups, needle, fresh);
   const usage = useUsageOfRows(hosted, groups, issue);
 
   if (tokens === undefined) {
@@ -915,42 +914,39 @@ const SHOWN_WHEN_FILLED: ReadonlySet<VariableGroup> = new Set<VariableGroup>([
  * The groups narrowed to a search, through the one search rule; with no
  * search, "Fonts and weights" and "Other values" only when they have rows.
  * The row `kept` is listed at the end of its group whatever the search, so
- * a variable just added stays in view while its editor is open.
+ * a variable just added stays in view while its editor is open; `held` is
+ * that row when the search alone would have hidden it, so it is marked
+ * "New". One search decides both, so the row kept and the row marked never
+ * disagree.
  */
 function searched<
   G extends { group: VariableGroup; entries: readonly VariableEntry[] },
->(groups: readonly G[], needle: string, kept: string | null): G[] {
+>(
+  groups: readonly G[],
+  needle: string,
+  kept: string | null
+): { shown: G[]; held: string | null } {
   if (needle === "") {
-    return groups.filter(
-      group => !SHOWN_WHEN_FILLED.has(group.group) || group.entries.length > 0
-    );
+    return {
+      shown: groups.filter(
+        group => !SHOWN_WHEN_FILLED.has(group.group) || group.entries.length > 0
+      ),
+      held: null,
+    };
   }
   const found = searchVariableGroups(groups, needle);
-  if (kept === null) return found;
-  return groups.flatMap(group => {
+  if (kept === null) return { shown: found, held: null };
+  let held: string | null = null;
+  const shown = groups.flatMap(group => {
     const hit = found.find(candidate => candidate.group === group.group);
     const keep = group.entries.find(entry => entry.row.key === kept);
     if (keep === undefined || hit?.entries.includes(keep) === true) {
       return hit === undefined ? [] : [hit];
     }
+    held = kept;
     return [{ ...group, entries: [...(hit?.entries ?? []), keep] }];
   });
-}
-
-/**
- * The just-added row a search would hide, marked "New" while it is held in
- * view; `null` when there is none or the search matches it.
- */
-function heldOutside(
-  groups: readonly { entries: readonly VariableEntry[] }[],
-  needle: string,
-  kept: string | null
-): string | null {
-  if (needle === "" || kept === null) return null;
-  const matched = searchVariableGroups(groups, needle).some(group =>
-    group.entries.some(entry => entry.row.key === kept)
-  );
-  return matched ? null : kept;
+  return { shown, held };
 }
 
 /**
