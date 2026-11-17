@@ -1,9 +1,10 @@
 /**
  * Make sure the site has a usable default Layout: the seed, and its repair.
  *
- * A site always has one published default. A fresh site gets a seeded
- * "Site layout" Layout with no areas, which draws pages with no regions
- * until an author fills it or chooses another. When the default stops being
+ * A site always has one published default. A fresh site gets a seeded set
+ * called "Main" holding a starter header and footer (`starter-seed`), so its
+ * first page already looks like a website; a site that draws its header and
+ * footer in code gets Main with no areas. When the default stops being
  * usable — deleted or unpublished by a path the guards could not see, such as
  * an import that skips hooks — this re-points it at the seed, publishing the
  * seed again or re-creating it if it is gone.
@@ -11,9 +12,21 @@
  * ## The seed is known by id, never by name
  *
  * The settings Single records the id of the Layout this seeded. Nothing here
- * matches a Layout by title or slug, so an author's own "Default" or
- * "Site layout" is never adopted, renamed or republished: when one holds the
- * seed's name, the seed takes the next free one.
+ * matches a Layout by title or slug, so an author's own "Main" is never
+ * adopted, renamed or republished: when one holds the seed's name, the seed
+ * takes the next free one.
+ *
+ * ## The starter, once
+ *
+ * Only the first-ever seed makes the starter: no seed was ever recorded, and
+ * no starter either. A repair that re-seeds a lost default creates an empty
+ * set, so a site that deleted its starter on purpose never gets it back. The
+ * order is the starter's two components, then the set naming them, then the
+ * starter's record, then the settings. The record's row is the claim between
+ * two processes seeding at once: the run whose insert lands made the site's
+ * one starter, and the other removes its set and components and stops. A
+ * failure at any step removes what the run made and rethrows, so the sweep
+ * tries again with nothing half-made left behind.
  *
  * ## Idempotent
  *
@@ -45,6 +58,12 @@ import { deleteUnrecordedLayout } from "../layout-removal/system-remove";
 
 import { moveEmptySeedPages, type EmptySeedParts } from "./empty-seed";
 import { seedSlug, seedTitle } from "./seed-names";
+import type { StarterRecord } from "./starter-record";
+import {
+  createStarterComponents,
+  removeStarterComponents,
+  type StarterParts,
+} from "./starter-seed";
 import {
   layoutExists,
   publishedLayoutIds,
@@ -94,6 +113,13 @@ export interface EnsureDefaultDeps {
    * the repair's own tests build one, repairs the default and moves nothing.
    */
   readonly emptySeed?: EmptySeedParts;
+  /**
+   * What a fresh site's first seed makes its starter header and footer with.
+   * Absent where the site draws its header and footer in code, whose seed is
+   * an empty set, and in a run built without it, as the repair's own tests
+   * build one.
+   */
+  readonly starter?: StarterParts;
 }
 
 /**
@@ -224,21 +250,144 @@ async function reseed(
     return "kept";
   }
 
-  const created = await createSeed(deps, settings.seededLayout);
+  const starter = await starterToMake(deps, settings);
+  const made =
+    starter === null
+      ? null
+      : await createStarterComponents({ ...deps, starter });
+  const undoStarter = async (): Promise<void> => {
+    if (starter === null || made === null) return;
+    await removeStarterComponents({ ...deps, starter }, [
+      made.header.id,
+      made.footer.id,
+    ]);
+  };
+
+  let created: string | null;
+  try {
+    created = await createSeed(deps, settings.seededLayout, areasOf(made));
+  } catch (error) {
+    await undoStarter();
+    throw error;
+  }
   // Another run's seed landed while this one was creating: it is the seed.
-  if (created === null) return "kept";
-  await recordSeed(deps, created, settings.defaultLayout);
+  if (created === null) {
+    await undoStarter();
+    return "kept";
+  }
+  if (starter !== null && made !== null) {
+    const claimed = await claimStarter(deps, starter, made, created);
+    if (!claimed) {
+      // Another process made the site's starter first, and its seed is the
+      // one to keep: this run removes what it made and stops.
+      await removeSeed(deps, created);
+      await undoStarter();
+      return "kept";
+    }
+  }
+  await recordSeed(deps, created, settings.defaultLayout, async () => {
+    if (starter !== null && made !== null) {
+      await starter.record.release(made).catch((error: unknown) => {
+        deps.warn(
+          "[page-builder] the starter's record from a seed that did not finish could not be removed",
+          { error: error instanceof Error ? error.message : String(error) }
+        );
+      });
+    }
+    await undoStarter();
+  });
   deps.warn(
     settings.seededLayout === null
-      ? "[page-builder] the site had no usable default Layout, so a Layout called 'Site layout' was created and made the default"
-      : "[page-builder] the seeded default Layout no longer exists, so it was created again and made the default",
+      ? made === null
+        ? "[page-builder] the site had no usable default header & footer set, so an empty set called 'Main' was created and made the default"
+        : "[page-builder] the site had no usable default header & footer set, so a set called 'Main' with a starter header and footer was created and made the default"
+      : "[page-builder] the seeded default header & footer set no longer exists, so an empty one was created and made the default",
     {
       previous: settings.defaultLayout,
       previousSeed: settings.seededLayout,
       seededLayout: created,
+      ...(made === null
+        ? {}
+        : { starterHeader: made.header.id, starterFooter: made.footer.id }),
     }
   );
   return "seeded";
+}
+
+/**
+ * The starter to make with this seed, or null: only for the first-ever seed
+ * (no seed recorded, no starter recorded) on a site whose header and footer
+ * the page builder draws.
+ */
+async function starterToMake(
+  deps: EnsureDefaultDeps,
+  settings: LayoutSettings
+): Promise<StarterParts | null> {
+  const starter = deps.starter;
+  if (starter === undefined || settings.seededLayout !== null) return null;
+  return (await starter.record.read()) === null ? starter : null;
+}
+
+/** The seed's areas: the starter's header and footer, or none. */
+function areasOf(
+  made: StarterRecord | null
+): readonly { area: string; component: string }[] {
+  return made === null
+    ? []
+    : [
+        { area: "header", component: made.header.id },
+        { area: "footer", component: made.footer.id },
+      ];
+}
+
+/**
+ * Record the starter as the site's one, answering whether this run's insert
+ * landed. A failure that is not a lost race removes the set and the starter
+ * and rethrows.
+ */
+async function claimStarter(
+  deps: EnsureDefaultDeps,
+  starter: StarterParts,
+  made: StarterRecord,
+  created: string
+): Promise<boolean> {
+  try {
+    return await starter.record.claim(made);
+  } catch (error) {
+    await removeSeed(deps, created);
+    await removeStarterComponents({ ...deps, starter }, [
+      made.header.id,
+      made.footer.id,
+    ]);
+    throw error;
+  }
+}
+
+/**
+ * Delete a set this run created and recorded nowhere, best effort: a failure
+ * is logged for someone to delete it by hand. Through the Layout fence, as
+ * every delete of a set must be.
+ */
+async function removeSeed(
+  deps: EnsureDefaultDeps,
+  created: string
+): Promise<void> {
+  await deleteUnrecordedLayout(
+    {
+      nextly: deps.nextly,
+      store: deps.removals,
+      layouts: deps.slugs.layouts,
+    },
+    created
+  ).catch((cleanup: unknown) => {
+    deps.warn(
+      "[page-builder] a seeded default Layout could not be recorded or removed; delete it by hand",
+      {
+        seededLayout: created,
+        error: cleanup instanceof Error ? cleanup.message : String(cleanup),
+      }
+    );
+  });
 }
 
 /**
@@ -274,11 +423,15 @@ async function settingsBeforeRepair(
  * the unusable one this run set out to replace; a make-default that landed
  * while the seed was being created keeps its choice, and the seed is recorded
  * as the seed alone (see {@link settingsBeforeRepair}).
+ *
+ * `undo` removes whatever else this run made for the seed (the starter and
+ * its record), after the set itself is gone.
  */
 async function recordSeed(
   deps: EnsureDefaultDeps,
   created: string,
-  observed: string | null
+  observed: string | null,
+  undo: () => Promise<void>
 ): Promise<void> {
   try {
     const before = await settingsBeforeRepair(deps, observed);
@@ -290,23 +443,8 @@ async function recordSeed(
         : {}),
     });
   } catch (error) {
-    // Through the Layout fence, as every delete of a Layout must be.
-    await deleteUnrecordedLayout(
-      {
-        nextly: deps.nextly,
-        store: deps.removals,
-        layouts: deps.slugs.layouts,
-      },
-      created
-    ).catch((cleanup: unknown) => {
-      deps.warn(
-        "[page-builder] a seeded default Layout could not be recorded or removed; delete it by hand",
-        {
-          seededLayout: created,
-          error: cleanup instanceof Error ? cleanup.message : String(cleanup),
-        }
-      );
-    });
+    await removeSeed(deps, created);
+    await undo();
     throw error;
   }
 }
@@ -327,13 +465,14 @@ async function recordSeed(
  */
 async function createSeed(
   deps: EnsureDefaultDeps,
-  observedSeed: string | null
+  observedSeed: string | null,
+  areas: readonly { area: string; component: string }[]
 ): Promise<string | null> {
   const { titles, slugs } = await takenNames(deps);
   for (let attempt = 1; ; attempt += 1) {
     const slug = seedSlug(slugs);
     try {
-      return await createNamed(deps, seedTitle(titles), slug);
+      return await createNamed(deps, seedTitle(titles), slug, areas);
     } catch (error) {
       if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
       // The refusal may be another run's seed taking this very slug: then the
@@ -399,16 +538,18 @@ async function takenNames(
 async function createNamed(
   deps: EnsureDefaultDeps,
   title: string,
-  slug: string
+  slug: string,
+  areas: readonly { area: string; component: string }[]
 ): Promise<string> {
   const created = await deps.nextly.create({
     collection: deps.slugs.layouts,
     data: {
       title,
       slug,
-      // No areas: a seed that named components would be choosing a header for
-      // the site. Empty, it draws pages with no regions until someone fills it.
-      areas: [],
+      // The starter's header and footer on a fresh site; none on a re-seed or
+      // where the site draws its own, which then draws pages with no regions
+      // until someone fills the set.
+      areas: [...areas],
       status: "published",
     },
     overrideAccess: true,

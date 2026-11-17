@@ -55,6 +55,7 @@ import { walkForest } from "./forest-walk";
 import type { DocumentLimits } from "./limits";
 import { isPlainRecord } from "./plain-record";
 import { defineEntry, ownEntry, ownKeys } from "./safe-record";
+import { siteComputedValues } from "./site-setting-fields";
 import { isImageAddress } from "./url-policy";
 
 /**
@@ -176,7 +177,7 @@ export function bindingFormatEnv(
 export function createBindingRun(input: BindingRunInput): BindingRun {
   const { env, timeZoneValid } = bindingFormatEnv(input);
   return {
-    sources: input.sources,
+    sources: withSiteValues(input.sources, env.timeZone),
     ...(input.entryRef === undefined ? {} : { entryRef: input.entryRef }),
     ...(input.schema === undefined ? {} : { schema: input.schema }),
     props: input.props,
@@ -186,6 +187,29 @@ export function createBindingRun(input: BindingRunInput): BindingRun {
     ...(input.mediaCollection === undefined
       ? {}
       : { mediaCollection: input.mediaCollection }),
+  };
+}
+
+/**
+ * The sources with the site's worked-out values (the current year) beside its
+ * stored settings, worked out once per render in the render's time zone.
+ *
+ * Only where the site was read: a page that binds nothing of the site reads
+ * nothing of it, and an unread source stays unread. A site read as holding
+ * nothing a visitor may see still has its worked-out values, which hold no
+ * one's data.
+ */
+function withSiteValues(
+  sources: BindingSources,
+  timeZone: string
+): BindingSources {
+  if (sources.site === undefined) return sources;
+  return {
+    ...sources,
+    site: {
+      ...sources.site,
+      ...siteComputedValues(new Date(), timeZone),
+    },
   };
 }
 

@@ -6,7 +6,7 @@
  * And the language and zone a render formats in, which the editor's previews
  * ask of the same rule.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BindingSchemaSource } from "./binding-rules";
 import {
@@ -21,6 +21,10 @@ import {
   createBindingRun,
   resolveNodeBindings,
 } from "./resolve-bindings";
+import {
+  SITE_SETTING_FIELD_SHAPES,
+  SITE_SETTING_LABELS,
+} from "./site-setting-fields";
 
 /** A bound heading under `depth` nested boxes, built without recursion. */
 function nestedUnder(depth: number): BlockDocument {
@@ -262,5 +266,75 @@ describe("the language and time zone a render formats in", () => {
     });
     expect(run.env).toEqual({ locale: "ar-EG", timeZone: "UTC" });
     expect(run.timeZoneValid).toBe(false);
+  });
+});
+
+describe("the site's current year", () => {
+  const textProps = {
+    get: (type: string) =>
+      type === "core/text" ? { props: { text: { type: "text" } } } : undefined,
+  } as const;
+  const schema: BindingSchemaSource = {
+    fieldsOf: ref => ("site" in ref ? SITE_SETTING_FIELD_SHAPES : undefined),
+  };
+  const yearText: BlockNode = {
+    id: "year",
+    type: "core/text",
+    version: 1,
+    props: { text: "" },
+    bindings: { text: { $bind: "currentYear", source: "site" } },
+  } as unknown as BlockNode;
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("is the year the render is drawn in, as written, in the site's time zone", () => {
+    // Late on New Year's Eve in UTC is already the next year in Tokyo.
+    vi.useFakeTimers({ now: new Date("2026-12-31T20:00:00Z") });
+    const inUtc = resolveNodeBindings(
+      yearText,
+      createBindingRun({
+        sources: { site: { applicationName: "Acme" } },
+        schema,
+        props: textProps,
+      }),
+      { phase: "page" }
+    );
+    expect(inUtc.issues).toEqual([]);
+    expect(inUtc.props.text).toBe("2026");
+    const inTokyo = resolveNodeBindings(
+      yearText,
+      createBindingRun({
+        sources: { site: { applicationName: "Acme" } },
+        schema,
+        timeZone: "Asia/Tokyo",
+        props: textProps,
+      }),
+      { phase: "page" }
+    );
+    expect(inTokyo.props.text).toBe("2027");
+  });
+
+  it("is there for a site read as holding nothing, and never for a site not read", () => {
+    vi.useFakeTimers({ now: new Date("2031-06-01T12:00:00Z") });
+    const empty = createBindingRun({
+      sources: { site: null },
+      schema,
+      props: textProps,
+    });
+    expect(
+      resolveNodeBindings(yearText, empty, { phase: "page" }).props.text
+    ).toBe("2031");
+    const unread = createBindingRun({ sources: {}, schema, props: textProps });
+    expect(unread.sources.site).toBeUndefined();
+  });
+
+  it("can be bound wherever the site's settings can, under its own words", () => {
+    expect(SITE_SETTING_FIELD_SHAPES).toContainEqual({
+      name: "currentYear",
+      type: "text",
+    });
+    expect(SITE_SETTING_LABELS.currentYear).toBe("Current year");
   });
 });

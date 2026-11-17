@@ -13,11 +13,15 @@ import type {
 } from "@nextlyhq/plugin-sdk";
 import type { PluginDatabase } from "@nextlyhq/plugin-sdk/schema";
 
+import { COMPONENTS_SLUG } from "../collections/components";
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { PAGES_SLUG } from "../collections/pages";
+import { deleteUnplacedComponent } from "../component-delete/system-delete";
+import { fenceStore } from "../host-rewrite/fence";
 import { registerLayoutRemovalGuard } from "../layout-removal/layout-removal-guard";
 import { registerPageReferenceGuard } from "../layout-removal/page-reference-guard";
 import { fenceOnExecutor, layoutRemovalStore } from "../layout-removal/store";
+import type { SiteHeaderFooter } from "../site-header-footer";
 
 import { registerDefaultLayoutGuard } from "./default-layout-guard";
 import {
@@ -28,6 +32,8 @@ import {
 import { registerEmptySeedWriteHook } from "./empty-seed-write";
 import { ensureDefaultLayout, type EnsureDefaultDeps } from "./ensure-default";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./settings-single";
+import { starterRecordStore } from "./starter-record";
+import type { StarterParts } from "./starter-seed";
 
 /**
  * What the repair needs from the installed plugin, the Direct API aside, with
@@ -74,7 +80,10 @@ interface InstallContext {
  * default is told to choose another default before it is told to use Remove
  * Layout: that is what the author has to do either way.
  */
-export function installDefaultLayout(ctx: InstallContext): DefaultLayoutSetup {
+export function installDefaultLayout(
+  ctx: InstallContext,
+  options: { readonly siteHeaderFooter: SiteHeaderFooter }
+): DefaultLayoutSetup {
   const setup: DefaultLayoutSetup = {
     slugs: {
       layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
@@ -92,6 +101,11 @@ export function installDefaultLayout(ctx: InstallContext): DefaultLayoutSetup {
       rewrite: request =>
         ctx.services.collections.rewriteField(request, { as: "system" }),
     },
+    // A site that draws its header and footer in code is seeded an empty
+    // set: no starter for it to draw twice.
+    ...(options.siteHeaderFooter === "page-builder"
+      ? { starter: starterParts(ctx) }
+      : {}),
   };
   registerDefaultLayoutGuard({ ctx, slugs: setup.slugs, warn: setup.warn });
   registerLayoutRemovalGuard({
@@ -120,6 +134,20 @@ export function installDefaultLayout(ctx: InstallContext): DefaultLayoutSetup {
     warn: setup.warn,
   });
   return setup;
+}
+
+/** What a fresh site's seed makes its starter header and footer with. */
+function starterParts(ctx: InstallContext): StarterParts {
+  const components = ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG;
+  return {
+    components,
+    record: starterRecordStore(ctx.db, ctx.dialect),
+    removeComponent: (nextly, id) =>
+      deleteUnplacedComponent(
+        { nextly, runs: fenceStore(ctx.db, ctx.dialect), components },
+        id
+      ),
+  };
 }
 
 /**
