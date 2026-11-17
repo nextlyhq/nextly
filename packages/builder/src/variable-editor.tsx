@@ -106,7 +106,7 @@ export function VariableEditor({
   isNew = false,
 }: VariableEditorProps): React.JSX.Element {
   const id = React.useId();
-  const { row, lineHeight } = entry;
+  const { row } = entry;
   const token = tokens.tokens[row.at];
   const [nameIssue, setNameIssue] = React.useState<string | undefined>();
   const [name, setName] = useDraft(entry.label);
