@@ -1464,18 +1464,59 @@ export function emitTokenBlocks(
   }
   if (light.length === 0) return { css: "", issues, emitted: [] };
 
-  let css = `${selector}{${light.join(";")}}`;
-  // Both forms, always, and in this order. The device block makes dark values
-  // work with no setup; the marker block after it lets a host choose dark on a
-  // light device. `set.darkMode` is deliberately not read: it once picked one
-  // of the two, and its default picked the form nothing set.
-  // The light marker block comes last, so where a light marker sits inside a
-  // dark one the nearer marker decides.
-  if (dark.length > 0) {
-    css +=
-      deviceDarkBlockFor(selector, [...dark, ...reread]) +
-      darkSelectorFor(selector, [...dark, ...reread]) +
-      markerBlockFor(selector, "light", [...undoDark, ...reread]);
+  // A site with no dark values writes its one block as it always has: there
+  // is no second scheme to state.
+  if (dark.length === 0) {
+    return { css: `${selector}{${light.join(";")}}`, issues, emitted };
   }
-  return { css, issues, emitted };
+  return {
+    css: darkModeSheet(
+      selector,
+      light,
+      [...dark, ...reread],
+      [...undoDark, ...reread]
+    ),
+    issues,
+    emitted,
+  };
+}
+
+/** The declaration telling the browser which scheme to draw its own controls in. */
+function colorSchemeOf(mode: TokenMode): string {
+  return `color-scheme:${mode}`;
+}
+
+/**
+ * The token blocks of a site with dark values: the light root, then both dark
+ * forms, then the light marker.
+ *
+ * Both forms, always, and in this order. The device block makes dark values
+ * work with no setup; the marker block after it lets a host choose dark on a
+ * light device. `set.darkMode` is deliberately not read: it once picked one of
+ * the two, and its default picked the form nothing set. The light marker block
+ * comes last, so where a light marker sits inside a dark one the nearer marker
+ * decides.
+ *
+ * Each block also states its `color-scheme`. A checkbox, a radio, a select's
+ * list and a scrollbar are drawn by the browser from the scheme the page
+ * states, not from these variables, so without it a dark page draws them
+ * light: a white box on a dark form. The property is inherited, so stating it
+ * where the values are declared carries it to every element they reach, and
+ * the light marker states light again for the same reason it restores the
+ * light values: a marker below the root would otherwise inherit dark.
+ */
+function darkModeSheet(
+  selector: string,
+  light: readonly string[],
+  dark: readonly string[],
+  undoDark: readonly string[]
+): string {
+  const lightScheme = colorSchemeOf("light");
+  const darkScheme = colorSchemeOf("dark");
+  return (
+    `${selector}{${[...light, lightScheme].join(";")}}` +
+    deviceDarkBlockFor(selector, [...dark, darkScheme]) +
+    darkSelectorFor(selector, [...dark, darkScheme]) +
+    markerBlockFor(selector, "light", [...undoDark, lightScheme])
+  );
 }
