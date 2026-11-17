@@ -39,7 +39,11 @@ export function sameSiteToken(a: SiteToken, b: SiteToken): boolean {
     // an export written by an older build still carries what a newer one wrote
     // — and a comparison blind to it would drop it on the next unrelated edit,
     // which is the loss it exists to prevent.
-    sameJsonValue(a.unreadExtension, b.unreadExtension)
+    sameJsonValue(a.unreadExtension, b.unreadExtension) &&
+    // A fluid size's two sizes: a change of them alone, as making a supplied
+    // size fluid with the value it already has, is a change, so a save keeps
+    // it rather than filtering it out as the config default.
+    sameJsonValue(a.fluid, b.fluid)
   );
 }
 
