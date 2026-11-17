@@ -281,12 +281,14 @@ describe("the picker's fields", () => {
       public: true,
       preview: "Northwind Academy",
     });
-    // Named as the settings screen names them.
+    // Named as the settings screen names them, then the year the site
+    // works out when a page is drawn.
     expect(site.map(field => field.label)).toEqual([
       "Application name",
       "Site URL",
       "Logo URL",
       "Time zone",
+      "Current year",
     ]);
   });
 

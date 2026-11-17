@@ -46,6 +46,11 @@ export interface SettingEntry {
   readonly css: readonly string[];
   /** Whether it holds its own value for what is being edited. */
   readonly set: boolean;
+  /**
+   * A CSS property this block can use but doesn't show yet: found, it is
+   * listed with "Add" in "CSS properties" rather than drawn as a row.
+   */
+  readonly addable?: true;
 }
 
 /** What the panel is filtered by. Empty and off: nothing is filtered. */
@@ -176,6 +181,8 @@ export interface IndexedRow {
   /** The CSS properties or HTML attributes it writes, where it says. */
   readonly css?: readonly string[];
   readonly set: boolean;
+  /** Whether it is offered to add rather than drawn. */
+  readonly addable?: boolean;
 }
 
 /** A section's rows as entries. */
@@ -193,6 +200,7 @@ export function sectionEntries(
     options: row.options ?? [],
     css: row.css ?? [],
     set: row.set,
+    ...(row.addable === true ? { addable: true as const } : {}),
   }));
 }
 

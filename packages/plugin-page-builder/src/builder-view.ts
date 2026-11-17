@@ -9,6 +9,12 @@
 /** The view's address segment, after the document's own address. */
 export const BUILDER_VIEW_PATH = "builder";
 
+/**
+ * The words the admin offers the view by where a document opens elsewhere: a
+ * list row's menu and the form's document bar, beside History.
+ */
+export const OPEN_IN_BUILDER = "Open in builder";
+
 /** The component the admin draws at that address. */
 export const BUILDER_VIEW_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#PageBuilderView";

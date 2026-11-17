@@ -120,7 +120,11 @@ test.describe("a page's entry screen", () => {
     // The control for every case below: without a section in the address the
     // editor opens at the top, and the fourth section is below the fold.
     await gotoAdmin(page, FORM_PATH);
-    await page.getByRole("link", { name: "Open in builder" }).click();
+    await page
+      // The card's way in, not the document bar's of the same name.
+      .locator('[data-slot="page-builder-card"]')
+      .getByRole("link", { name: "Open in builder", exact: true })
+      .click();
     await expect(await block(page, "s1")).toBeVisible({ timeout: 30_000 });
 
     await expect(await block(page, `${FOURTH}-h`)).not.toBeInViewport();

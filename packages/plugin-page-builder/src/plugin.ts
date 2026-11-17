@@ -295,7 +295,10 @@ export const pageBuilder = (
 
       // The site's one default Layout: refuse deleting or unpublishing it, and
       // queue the repair when a write gets past that.
-      state.defaultLayoutSetup = installDefaultLayout(ctx);
+      state.defaultLayoutSetup = installDefaultLayout(ctx, {
+        siteHeaderFooter: def.siteHeaderFooter,
+        componentStore: componentStoreOf(opts),
+      });
 
       // How a blocks value is judged, and judged again in each write's
       // transaction; with the site style reads the judgement uses.

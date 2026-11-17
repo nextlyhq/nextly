@@ -130,6 +130,14 @@ export interface SiteToken {
    */
   extensions?: Readonly<Record<string, unknown>>;
   /**
+   * The two sizes a fluid size was made from, in px: on the smallest screen
+   * of the site's fluid range and on its largest. Kept beside the value it
+   * gave, so the size can be made again when the range changes; a value
+   * typed by hand has none, and a range change leaves it as it is. Never
+   * read by the emitter: the value is what reaches the page.
+   */
+  fluid?: { readonly small: number; readonly large: number };
+  /**
    * Fields found under THIS system's own extension key that this build does not
    * read, kept so it can write them back out.
    *
