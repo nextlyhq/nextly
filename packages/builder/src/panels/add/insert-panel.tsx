@@ -198,20 +198,7 @@ export function InsertPanel({
   const usage = useInsertUsage();
   const [query, setQuery] = React.useState("");
   // Blocks first: what an author adds most. Sections holds the patterns.
-  // Opened for a press that names a tab, on that tab.
-  const [tab, setTab] = React.useState<PanelTab>(() =>
-    summoned !== undefined && summonedTab !== undefined ? summonedTab : "blocks"
-  );
-  // A press that names a tab opens it in the very render that answers the
-  // press, so the search the answer focuses is that tab's, not one a later
-  // render would replace.
-  const [tabbedPress, setTabbedPress] = React.useState(summoned);
-  if (tabbedPress !== summoned) {
-    setTabbedPress(summoned);
-    if (summoned !== undefined && summonedTab !== undefined) {
-      setTab(summonedTab);
-    }
-  }
+  const [tab, setTab] = usePanelTab(summoned, summonedTab);
   /*
    * Whether the author has moved through the tiles, and with what.
    *
@@ -579,6 +566,29 @@ export function InsertPanel({
       </Tabs>
     </div>
   );
+}
+
+/**
+ * The tab the panel shows, and the way to change it. A canvas press that
+ * names a tab opens it in the very render that answers the press, so the
+ * search the answer focuses is that tab's, not one a later render would
+ * replace; opened for such a press, the panel starts on that tab.
+ */
+function usePanelTab(
+  summoned: number | undefined,
+  summonedTab: PanelTab | undefined
+): readonly [PanelTab, (tab: PanelTab) => void] {
+  const [tab, setTab] = React.useState<PanelTab>(() =>
+    summoned !== undefined && summonedTab !== undefined ? summonedTab : "blocks"
+  );
+  const [tabbedPress, setTabbedPress] = React.useState(summoned);
+  if (tabbedPress !== summoned) {
+    setTabbedPress(summoned);
+    if (summoned !== undefined && summonedTab !== undefined) {
+      setTab(summonedTab);
+    }
+  }
+  return [tab, setTab];
 }
 
 /** Whether a tab's tiles draw pictures: the saved sections, given a host's. */
