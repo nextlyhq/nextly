@@ -127,6 +127,7 @@ import {
 } from "./settings-index";
 import { stateLabel } from "./state-switcher";
 import { breakpointLabel } from "./style-provenance-indicators";
+import type { PlainFlow } from "./plain-layout";
 import { inspectStyle, type StyleSection } from "./style-inspector";
 import { placedDefinition } from "./variant-picker";
 
@@ -611,6 +612,12 @@ function SelectionInspector({
     breakpoints: styleOnly.breakpoints,
     reported:
       reportedStyle?.nodeId === block.nodeId ? reportedStyle : undefined,
+    // Which way the block's lines run, as the canvas measured it: what
+    // Inside its parent's Width and Height are sized by.
+    flow: {
+      writingMode: canvas.orientation?.writingMode ?? "horizontal-tb",
+      rtl: canvas.orientation?.direction === "rtl",
+    },
   });
 
   return (
@@ -823,18 +830,27 @@ function blockMatch(
     breakpoints: BreakpointSet | undefined;
     /** What the Style tab draws, while it is open, for its target. */
     reported: ReportedStyle | undefined;
+    flow: PlainFlow;
   }
 ): SettingsMatch {
   if (!filtering(filter)) return settingsMatch([], filter);
   // The Style tab's own sections while it is open: the target it edits may
   // be a shared style. Closed, it edits the block, read here the same way.
-  const styleSections =
-    at.reported?.sections ??
-    inspectStyle(document, block.nodeId, {
-      state: at.state ?? "base",
-      breakpoint: at.breakpoint ?? BASE_BREAKPOINT,
-    })?.sections ??
-    [];
+  const inspected =
+    at.reported === undefined
+      ? inspectStyle(document, block.nodeId, {
+          state: at.state ?? "base",
+          breakpoint: at.breakpoint ?? BASE_BREAKPOINT,
+        })
+      : undefined;
+  const styleSections = at.reported?.sections ?? inspected?.sections ?? [];
+  // What "Inside its parent" offers: none for a shared style, worn wherever.
+  const parent =
+    at.reported === undefined
+      ? inspected?.parent
+      : at.reported.shared
+        ? undefined
+        : at.reported.parent;
   const node = findNode(document.nodes, block.nodeId);
   return settingsMatch(
     [
@@ -851,7 +867,9 @@ function blockMatch(
                 state: at.state ?? "base",
                 breakpoint: at.breakpoint ?? BASE_BREAKPOINT,
               },
-            }
+            },
+        parent,
+        at.flow
       ),
       ...advancedEntries(block, node),
     ],

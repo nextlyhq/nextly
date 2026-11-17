@@ -97,6 +97,7 @@ import type { ContributedAction } from "./DocumentActionBar";
 import {
   DocumentActionsHost,
   DocumentSaveShortcuts,
+  NoDocumentActions,
   SaveWithoutPublishingBridge,
   SaveActionFormProvider,
 } from "./DocumentActionsContext";
@@ -1368,87 +1369,92 @@ export function EntryForm({
         // So a field recording its own state stays quiet where this does.
         keepsRecoveryPoints={keepsRecoveryPoints}
       >
-        <DocumentFormSource form={form} contentHeld={contentHeld}>
-          <EntryFormProvider
-            form={form}
-            recovering={recovering}
-            // The quick-edit form submits natively and reports through its own
-            // toasts, so what the save came to is not read here. A caller who
-            // may not save sends nothing: Enter in a field submits even with
-            // no Save on screen.
-            onSubmit={async event => {
-              if (!canSave) {
-                event?.preventDefault();
-                return;
-              }
-              await handleSubmit(event);
-            }}
-            className={className}
-          >
-            <div className="space-y-6">
-              {/* 🔴 Here too, not only in the standalone layout. Quick-edit from a
+        {/* No header, so no document actions of its own: without this the
+            fields in the modal would read the surrounding document's, and a
+            field's own save would store that document instead of this one. */}
+        <NoDocumentActions>
+          <DocumentFormSource form={form} contentHeld={contentHeld}>
+            <EntryFormProvider
+              form={form}
+              recovering={recovering}
+              // The quick-edit form submits natively and reports through its own
+              // toasts, so what the save came to is not read here. A caller who
+              // may not save sends nothing: Enter in a field submits even with
+              // no Save on screen.
+              onSubmit={async event => {
+                if (!canSave) {
+                  event?.preventDefault();
+                  return;
+                }
+                await handleSubmit(event);
+              }}
+              className={className}
+            >
+              <div className="space-y-6">
+                {/* 🔴 Here too, not only in the standalone layout. Quick-edit from a
                 relationship picker claims the related entry exactly as the full
                 editor does, so without this a colleague's claim renders every
                 field in the modal uneditable with nothing saying why and no way
                 to take it over — a locked form that reads as a broken one. */}
-              <DocumentLockBanner
-                notice={lock.notice}
-                onTakeOver={lock.takeOver}
-                onRequestAccess={lock.requestAccess}
-                onRetry={lock.retryLoad}
-                onChoose={lock.answerChange}
-              />
-              {/* No page around a modal to carry the removed-from-code notice in
-                a document banner, so the modal says it itself. */}
-              {removedFromCode && (
-                <RemovedFromCodeNotice
-                  entity={{
-                    kind: "collection",
-                    label:
-                      collection.labels?.plural ||
-                      collection.label ||
-                      collection.name,
-                    slug: collection.name,
-                  }}
-                  state={collection.removedFromCodeState}
+                <DocumentLockBanner
+                  notice={lock.notice}
+                  onTakeOver={lock.takeOver}
+                  onRequestAccess={lock.requestAccess}
+                  onRetry={lock.retryLoad}
+                  onChoose={lock.answerChange}
                 />
-              )}
-              {/* Error summary at top of form */}
-              <FormErrorSummary errors={errors} submitCount={submitCount} />
-              {/* This branch renders every collection field, the editable slug among them, but not
+                {/* No page around a modal to carry the removed-from-code notice in
+                a document banner, so the modal says it itself. */}
+                {removedFromCode && (
+                  <RemovedFromCodeNotice
+                    entity={{
+                      kind: "collection",
+                      label:
+                        collection.labels?.plural ||
+                        collection.label ||
+                        collection.name,
+                      slug: collection.name,
+                    }}
+                    state={collection.removedFromCodeState}
+                  />
+                )}
+                {/* Error summary at top of form */}
+                <FormErrorSummary errors={errors} submitCount={submitCount} />
+                {/* This branch renders every collection field, the editable slug among them, but not
                 the meta strip that carries the notice in the standalone layout. Quick-edit from a
                 relationship picker lands here on existing entries, so without this the one place
                 the warning is skipped is also a place a live URL can be rewritten and saved. */}
-              {slugField && (
-                <PublicUrlChangeNotice
-                  slugName={slugField.name ?? "slug"}
-                  active={hasPublicAddress}
-                  className="block"
-                />
-              )}
-              {/* Forward the form mode so write-only password fields render
+                {slugField && (
+                  <PublicUrlChangeNotice
+                    slugName={slugField.name ?? "slug"}
+                    active={hasPublicAddress}
+                    className="block"
+                  />
+                )}
+                {/* Forward the form mode so write-only password fields render
                 their edit-mode affordance: on edit a blank password input
                 means "keep the current password" (the stored hash never
                 round-trips), so it is not treated as a required-field miss. */}
-              <EntryFormContent
-                fields={allFields}
-                disabled={savePending}
-                // Without the permission to save, the entry is shown as it is
-                // rather than as a form whose changes go nowhere.
-                readOnly={lock.readOnly || !canSave}
-                mode={mode}
-              />
-              <EntryFormActions
-                mode={mode}
-                isSubmitting={isSubmitting}
-                onCancel={handleCancel}
-                canSave={canSave}
-              />
-            </div>
-            {conflictDialog}
-            {pluginSurfaces.replacement}
-          </EntryFormProvider>
-        </DocumentFormSource>
+                <EntryFormContent
+                  fields={allFields}
+                  disabled={savePending}
+                  // Without the permission to save, the entry is shown as it is
+                  // rather than as a form whose changes go nowhere.
+                  readOnly={lock.readOnly || !canSave}
+                  mode={mode}
+                />
+                <EntryFormActions
+                  mode={mode}
+                  isSubmitting={isSubmitting}
+                  onCancel={handleCancel}
+                  canSave={canSave}
+                />
+              </div>
+              {conflictDialog}
+              {pluginSurfaces.replacement}
+            </EntryFormProvider>
+          </DocumentFormSource>
+        </NoDocumentActions>
       </EntryFormContextProvider>
     );
   }

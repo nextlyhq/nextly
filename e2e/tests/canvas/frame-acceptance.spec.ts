@@ -37,7 +37,7 @@ import { openEditorWith, selection, structure } from "./editor-driver";
 // The homepage document and the site's breakpoints are both written here.
 test.describe.configure({ lock: [LOCK.homepage, LOCK.siteStyle] });
 
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
 
 // The editor reads `mod` as Control in the Desktop Chrome device this suite
 // runs as, whatever the host; see `editor-acceptance.spec.ts`.

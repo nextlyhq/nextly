@@ -241,6 +241,7 @@ export {
   type CustomEditViewProps,
   type DocumentActionReplacementProps,
   type DocumentChangeResult,
+  type DocumentCreateDialogProps,
   type DocumentPanelSectionProps,
   type DocumentTabProps,
   type SidebarSectionProps,

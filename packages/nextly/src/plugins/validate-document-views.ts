@@ -45,6 +45,8 @@ interface ContributedViewBase {
   label?: string;
   /** The words of a way into the view, carried only when declared. */
   openLabel?: string;
+  /** The dialog "+ New" opens, carried only when declared. */
+  createDialog?: ComponentPath;
   /** The contributing plugin's name, for the admin's diagnostics. */
   plugin: string;
 }
@@ -100,6 +102,15 @@ function openLabelOf(view: { openLabel?: string }): { openLabel?: string } {
   return view.openLabel === undefined ? {} : { openLabel: view.openLabel };
 }
 
+/** The dialog "+ New" opens, carried only when declared. */
+function createDialogOf(view: { createDialog?: ComponentPath }): {
+  createDialog?: ComponentPath;
+} {
+  return view.createDialog === undefined
+    ? {}
+    : { createDialog: view.createDialog };
+}
+
 /** `opensFirst`, carried only when it asks to open first for a main field. */
 function opensFirstOf(view: object): { opensFirst?: "mainField" } {
   return "opensFirst" in view && view.opensFirst === OPENS_FIRST_MAIN_FIELD
@@ -118,6 +129,7 @@ function viewsOf(plugin: PluginDefinition): ContributedDocumentView[] {
         component: documentView.component,
         ...labelOf(documentView),
         ...openLabelOf(documentView),
+        ...createDialogOf(documentView),
         plugin: plugin.name,
       }))
   );
@@ -127,6 +139,7 @@ function viewsOf(plugin: PluginDefinition): ContributedDocumentView[] {
     component: documentView.component,
     ...labelOf(documentView),
     ...openLabelOf(documentView),
+    ...createDialogOf(documentView),
     ...opensFirstOf(documentView),
     plugin: plugin.name,
   }));
@@ -161,6 +174,21 @@ function wordsReason(view: ContributedDocumentView): string | undefined {
   return undefined;
 }
 
+/** Why a view's `createDialog` is refused, or `undefined` when it is not. */
+function createDialogReason(view: ContributedDocumentView): string | undefined {
+  // Read through `unknown`, as the words are: the list opens the dialog by
+  // this path, so one naming no component would leave "+ New" opening
+  // nothing.
+  const createDialog: unknown = view.createDialog;
+  if (
+    createDialog !== undefined &&
+    (typeof createDialog !== "string" || createDialog.trim() === "")
+  ) {
+    return `${scopeOf(view)} at "${view.path}" has a createDialog that names no component`;
+  }
+  return undefined;
+}
+
 /** Why one view is refused on its own, or `undefined` when it is not. */
 function unroutableReason(view: ContributedDocumentView): string | undefined {
   if (typeof view.component !== "string" || view.component === "") {
@@ -168,6 +196,8 @@ function unroutableReason(view: ContributedDocumentView): string | undefined {
   }
   const words = wordsReason(view);
   if (words !== undefined) return words;
+  const dialog = createDialogReason(view);
+  if (dialog !== undefined) return dialog;
   if (typeof view.path !== "string" || !VIEW_PATH.test(view.path)) {
     return (
       `${scopeOf(view)} has the path ${JSON.stringify(view.path)}, which is ` +
