@@ -112,3 +112,24 @@ describe("Inside its parent's Width and Height under Only changed", () => {
     expect(byId.get("child:height")?.set).toBe(false);
   });
 });
+
+describe("Inside its parent's entries with lines running down", () => {
+  it("give a vertical Row's grow to Height, as its controls draw it", async () => {
+    const { styleEntries } = await import("./settings-entries");
+    const { inspectStyle } = await import("./style-inspector");
+    const document = pageWith({
+      type: "core/button",
+      props: { type: "button" },
+    } as never);
+    const entries = styleEntries(
+      inspectStyle(document, "a")?.sections ?? [],
+      inspectSelection(document, "a"),
+      undefined,
+      "row",
+      { writingMode: "vertical-rl", rtl: false }
+    );
+    const byId = new Map(entries.map(entry => [entry.id, entry]));
+    expect(byId.get("child:height")?.css).toContain("flex-grow");
+    expect(byId.get("child:width")?.css).not.toContain("flex-grow");
+  });
+});

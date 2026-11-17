@@ -31,6 +31,7 @@ import {
   offersChildAxis,
   type ChildAxis,
   type ParentArrangement,
+  type PlainFlow,
 } from "./plain-layout";
 import { CHILD_SIZE_IDS } from "./plain-parent-controls";
 import { CONTENT_WIDTH_CHOICES } from "./content-width-control";
@@ -329,7 +330,8 @@ function shortcutRows(
  */
 function childSizeRows(
   parent: ParentArrangement | undefined,
-  sections: readonly StyleSection[]
+  sections: readonly StyleSection[],
+  flow: PlainFlow | undefined
 ): IndexedRow[] {
   if (parent === undefined) return [];
   const choices = ["Fill", "Fit", "Fixed"];
@@ -351,7 +353,7 @@ function childSizeRows(
       css: cssNamesOf(written("width")),
       set: holds(written("width")),
     },
-    ...(offersChildAxis(parent, "height")
+    ...(offersChildAxis(parent, "height", flow)
       ? [
           {
             id: CHILD_SIZE_IDS.height,
@@ -366,7 +368,7 @@ function childSizeRows(
 
   /** What a size's choices write, its own size included. */
   function written(axis: ChildAxis): string[] {
-    return [axis, ...childAxisRows(parent as ParentArrangement, axis)];
+    return [axis, ...childAxisRows(parent as ParentArrangement, axis, flow)];
   }
 }
 
@@ -413,14 +415,15 @@ export function styleEntries(
   sections: readonly StyleSection[],
   inspection: BlockInspection | null,
   shortcuts?: { node: BlockNode | undefined; at: ShortcutAt },
-  parent?: ParentArrangement
+  parent?: ParentArrangement,
+  flow?: PlainFlow
 ): SettingEntry[] {
   const props = inspection?.sections.styleProps ?? [];
   return sections.flatMap(section => {
     const own = props.find(each => each.key === section.key)?.rows ?? [];
     return sectionEntries("style", section, [
       ...(section.key === "inside-parent"
-        ? childSizeRows(parent, sections)
+        ? childSizeRows(parent, sections, flow)
         : []),
       ...(section.key === "size" && shortcuts !== undefined
         ? shortcutRows(shortcuts.node, shortcuts.at)

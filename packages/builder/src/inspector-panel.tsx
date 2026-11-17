@@ -127,6 +127,7 @@ import {
 } from "./settings-index";
 import { stateLabel } from "./state-switcher";
 import { breakpointLabel } from "./style-provenance-indicators";
+import type { PlainFlow } from "./plain-layout";
 import { inspectStyle, type StyleSection } from "./style-inspector";
 import { placedDefinition } from "./variant-picker";
 
@@ -611,6 +612,12 @@ function SelectionInspector({
     breakpoints: styleOnly.breakpoints,
     reported:
       reportedStyle?.nodeId === block.nodeId ? reportedStyle : undefined,
+    // Which way the block's lines run, as the canvas measured it: what
+    // Inside its parent's Width and Height are sized by.
+    flow: {
+      writingMode: canvas.orientation?.writingMode ?? "horizontal-tb",
+      rtl: canvas.orientation?.direction === "rtl",
+    },
   });
 
   return (
@@ -823,6 +830,7 @@ function blockMatch(
     breakpoints: BreakpointSet | undefined;
     /** What the Style tab draws, while it is open, for its target. */
     reported: ReportedStyle | undefined;
+    flow: PlainFlow;
   }
 ): SettingsMatch {
   if (!filtering(filter)) return settingsMatch([], filter);
@@ -860,7 +868,8 @@ function blockMatch(
                 breakpoint: at.breakpoint ?? BASE_BREAKPOINT,
               },
             },
-        parent
+        parent,
+        at.flow
       ),
       ...advancedEntries(block, node),
     ],
