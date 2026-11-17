@@ -697,7 +697,13 @@ function SelectionInspector({
             <TabsContent value="style">
               <FilterNote tab="style" onChoose={choose} />
               <StyleChangedElsewhere
-                node={styleNode}
+                styles={
+                  // The Style tab's target, a shared style's own values
+                  // while one is edited; the block's otherwise.
+                  reportedStyle?.nodeId === block.nodeId
+                    ? reportedStyle.styles
+                    : styleNode?.styles
+                }
                 state={styleState}
                 breakpoint={breakpoint}
                 breakpoints={styleOnly.breakpoints}
@@ -751,20 +757,20 @@ function SelectionInspector({
  * is on: by device at the edited state, by state at the edited device.
  */
 function StyleChangedElsewhere({
-  node,
+  styles,
   state,
   breakpoint,
   breakpoints,
   onJumpToBreakpoint,
 }: {
-  node: { readonly styles?: unknown } | null;
+  styles: unknown;
   state: StyleStateBinding | undefined;
   breakpoint: BreakpointId | undefined;
   breakpoints: BreakpointSet | undefined;
   onJumpToBreakpoint: ((breakpoint: BreakpointId) => void) | undefined;
 }): React.JSX.Element | null {
   const { onlyChanged } = useFilterState();
-  if (!onlyChanged || node === null) return null;
+  if (!onlyChanged || styles === undefined) return null;
   const devices = [
     BASE_BREAKPOINT,
     ...(breakpoints?.viewport ?? [])
@@ -772,7 +778,7 @@ function StyleChangedElsewhere({
       .filter(id => id !== BASE_BREAKPOINT),
   ];
   const counts = changedElsewhere(
-    node.styles as StoredStyles | undefined,
+    styles as StoredStyles | undefined,
     {
       state: state?.state ?? "base",
       device: breakpoint ?? BASE_BREAKPOINT,

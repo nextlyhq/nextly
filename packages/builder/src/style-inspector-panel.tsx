@@ -490,7 +490,11 @@ function StyleInspectorBody({
   useReportStyle(
     inspection?.nodeId,
     inspection?.sections,
-    target.kind === "shared"
+    target.kind === "shared",
+    targetStyles(target) ??
+      (editor.selectedId === null
+        ? undefined
+        : findNode(editor.document.nodes, editor.selectedId)?.styles)
   );
 
   const chooseForm = (property: string, path: readonly string[], arm: number) =>
