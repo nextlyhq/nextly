@@ -532,6 +532,71 @@ describe("BlockToolbar", () => {
     expect(editor.apply).not.toHaveBeenCalled();
   });
 
+  /**
+   * A block the page holds, in a place the editor composes around the page:
+   * the slot a placed component exposes and locks, or the page's area in its
+   * header and footer. The page alone doesn't say it is held; the composed
+   * document does, so the bar has to read the editor's composed view.
+   */
+  function heldOnceComposed(holder: { name: string; label: string }) {
+    register();
+    if (!hasBlock(holder.name)) {
+      registerBlocks(
+        [
+          {
+            name: holder.name,
+            version: 1,
+            description: `${holder.label}, holding the page's blocks.`,
+            example: { props: {} },
+            editor: { label: holder.label },
+            props: {},
+            slots: { content: { lock: "contentOnly" } },
+            render: () => null,
+          },
+        ] as never,
+        { source: "block-toolbar-test" }
+      );
+    }
+    const page = pair({ locked: true });
+    const composed = documentOf([
+      {
+        id: "holder",
+        type: holder.name,
+        version: 1,
+        props: {},
+        slots: { content: page.nodes },
+      } as BlockNode,
+    ]);
+    const editor = editorSpy(page, "a");
+    return Object.assign(editor, { composed: () => composed });
+  }
+
+  it.each([
+    [
+      "a placed component's locked slot",
+      { name: "acme/promo", label: "Promo card" },
+    ],
+    [
+      "the page's area in its header and footer",
+      { name: "acme/site-frame", label: "Header & footer" },
+    ],
+  ])(
+    "says Locked, with the reason, where %s holds the block, and offers no Unlock",
+    (_where, holder) => {
+      const editor = heldOnceComposed(holder);
+      mount(editor);
+
+      expect(unseenButton("Unlock")).toBeNull();
+      const locked = unseenButton("Locked");
+      if (locked === null) throw new Error("no Locked button");
+      expect(locked.getAttribute("aria-disabled")).toBe("true");
+      // The reason names what holds it, so the author knows where to go.
+      expect(locked.getAttribute("title")).toContain(holder.label);
+      fireEvent.click(locked);
+      expect(editor.apply).not.toHaveBeenCalled();
+    }
+  );
+
   it("says Locked by the block around it, with Select it and no Unlock", () => {
     register();
     const inside = documentOf([
