@@ -194,14 +194,19 @@ function isColumn(values: LayoutValues): boolean {
 /** Each keyword's place on its axis: start, centre or end. */
 const AXIS_PLACES: Readonly<Record<string, 0 | 1 | 2>> = {
   start: 0,
-  "flex-start": 0,
-  left: 0,
-  top: 0,
   center: 1,
   end: 2,
+};
+
+/**
+ * The flex-relative keywords, read as the logical edge they name only where
+ * the main axis runs its own way: reversed, `flex-start` is the far edge.
+ * Physical `left` and `right` name no logical edge at all, so with these
+ * anything else reads as Custom rather than as a point it doesn't make.
+ */
+const FLEX_PLACES: Readonly<Record<string, 0 | 2>> = {
+  "flex-start": 0,
   "flex-end": 2,
-  right: 2,
-  bottom: 2,
 };
 
 /** A keyword's place on its axis, or `undefined` for one with none. */
@@ -302,12 +307,14 @@ export function spreadAxis(stacked: boolean, flow: PlainFlow = LTR): "x" | "y" {
  */
 function axisRead(
   value: string | undefined,
-  spreadHere: boolean
+  spreadHere: boolean,
+  flexRelative = false
 ): 0 | 1 | 2 | "custom" {
   if (value === undefined || value === "normal" || value === "stretch") {
     return 0;
   }
-  const place = axisPlace(value);
+  const place =
+    axisPlace(value) ?? (flexRelative ? FLEX_PLACES[value] : undefined);
   if (place !== undefined) return place;
   return spreadHere && SPREADS.has(value) ? 0 : "custom";
 }
@@ -330,8 +337,12 @@ function readAlign(
     return undefined;
   }
   // A spread on the main axis is Spread's, not Align's.
-  const inline = axisRead(inlineValue, kind === "row");
-  const block = axisRead(blockValue, kind === "column");
+  // Flex-relative keywords read as their edge only while the main axis
+  // isn't reversed; a grid has none.
+  const forward =
+    kind !== "grid" && !(values.flexDirection ?? "").endsWith("-reverse");
+  const inline = axisRead(inlineValue, kind === "row", forward);
+  const block = axisRead(blockValue, kind === "column", forward);
   if (inline === "custom" || block === "custom") return "custom";
   return physicalPoint(inline, block, flow);
 }
@@ -429,6 +440,8 @@ export function readArrange(tiers: LayoutTiers, editing: string): PlainArrange {
 
 /** A flex column that is a Stack, with its own settings. */
 function readStack(values: LayoutValues, flow?: PlainFlow): PlainArrange {
+  // A Stack has no Spread: a distribution on its main axis is Custom's.
+  if (SPREADS.has(values.justifyContent ?? "")) return { mode: "custom" };
   const align = readAlign(values, "column", flow);
   if (align === "custom") return { mode: "custom" };
   return {
@@ -548,7 +561,16 @@ export function planStackOn(
   // The old stack device gives up its column, undone there where a shared
   // style or a wider device would keep it.
   if (current !== undefined && current !== device) {
-    writes.push(settled(tiers, current, "flexDirection", null));
+    // Moved to a wider device, whose column reaches the old one: only the old
+    // one's own column goes. Otherwise it is undone there.
+    const wider =
+      device !== null &&
+      tiers.order.indexOf(device) < tiers.order.indexOf(current);
+    writes.push(
+      wider
+        ? { device: current, property: "flexDirection", value: null }
+        : settled(tiers, current, "flexDirection", null)
+    );
   }
   if (device !== null) {
     const reversed =
@@ -757,9 +779,11 @@ function unplainAlign(
   kind: "row" | "column" | "grid"
 ): LayoutProperty[] {
   const axes = alignAxes(kind);
+  const forward =
+    kind !== "grid" && !(values.flexDirection ?? "").endsWith("-reverse");
   return [axes.inline, axes.block].filter(property => {
     const spreadHere = property === "justifyContent" && kind !== "grid";
-    return axisRead(values[property], spreadHere) === "custom";
+    return axisRead(values[property], spreadHere, forward) === "custom";
   });
 }
 

@@ -1020,6 +1020,7 @@
  */
 .nx-align-grid__wrap {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
   min-width: 0;

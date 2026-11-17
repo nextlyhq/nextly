@@ -481,3 +481,46 @@ describe("wrapping in reverse", () => {
     expect(block.read()).toMatchObject({ mode: "row", wrap: false });
   });
 });
+
+describe("a flex Stack spreading its blocks", () => {
+  it("reads as Custom, since a Stack has no Spread to show it", () => {
+    const block = new Block({
+      display: "flex",
+      flexDirection: "column",
+      justifyContent: "space-between",
+    });
+    expect(block.read()).toEqual({ mode: "custom" });
+  });
+});
+
+describe("Stack on moved to a wider device", () => {
+  it("leaves the narrower device stacked under the new column", () => {
+    const block = new Block({ display: "flex" });
+    block.shared.sm = { flexDirection: "column" };
+    block.apply(planStackOn(block.tiers(), "md"));
+    expect(block.own.md.flexDirection).toBe("column");
+    expect(block.own.sm.flexDirection).toBeUndefined();
+    expect(block.read("sm")).toMatchObject({ stackOn: "md", stacked: true });
+  });
+});
+
+describe("flex-relative and physical alignment keywords", () => {
+  it("reads flex-start as the start of a Row running its own way", () => {
+    const block = new Block({ display: "flex", justifyContent: "flex-start" });
+    expect(block.read()).toMatchObject({ align: { x: "left", y: "top" } });
+  });
+
+  it("reads flex-start in a reversed Row as Custom, not as a point", () => {
+    const block = new Block({
+      display: "flex",
+      flexDirection: "row-reverse",
+      justifyContent: "flex-start",
+    });
+    expect(block.read()).toEqual({ mode: "custom" });
+  });
+
+  it("reads a physical left as Custom", () => {
+    const block = new Block({ display: "flex", justifyContent: "left" });
+    expect(block.read()).toEqual({ mode: "custom" });
+  });
+});
