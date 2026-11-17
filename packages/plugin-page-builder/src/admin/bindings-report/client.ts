@@ -79,12 +79,15 @@ export function useBindingsToFix(
     meta !== undefined && (meta.checkedAt === null || meta.checking);
   const { refetch } = read;
   useEffect(() => {
-    if (!unsettled) return undefined;
+    // Only while the read is on: an unfinished scan kept in the cache must
+    // not keep asking for a report nobody has open, and `refetch` asks even
+    // a disabled read.
+    if (!enabled || !unsettled) return undefined;
     const timer = setInterval(refetch, CHECKING_POLL_MS);
     return () => clearInterval(timer);
     // `refetch` is a new function each render, which an answer arriving
     // causes, so the timer restarts from each answer: ten seconds after it.
-  }, [unsettled, refetch]);
+  }, [enabled, unsettled, refetch]);
   return read;
 }
 
