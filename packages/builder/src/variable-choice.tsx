@@ -255,6 +255,17 @@ export function focusVariableAfterPick(from: Element | null): void {
 }
 
 /**
+ * After Unlink, focus what the field draws in the chip's place once it is
+ * drawn (its typed field, or the control that stayed), rather than letting
+ * it fall to the page with the Unlink that held it.
+ */
+export function focusAfterUnlink(
+  find: () => HTMLElement | null | undefined
+): void {
+  requestAnimationFrame(() => find()?.focus());
+}
+
+/**
  * A field's own way to its variables where it has no menu to list them in:
  * a chevron at its end, or a held variable's name, opening the list.
  *

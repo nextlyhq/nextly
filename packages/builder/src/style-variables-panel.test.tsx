@@ -509,6 +509,17 @@ function LivePanel({
 }
 
 describe("where focus goes as a field changes shape", () => {
+  it("lands on the colour field, holding the colour, once Unlink keeps it", async () => {
+    register({ color: { text: true } });
+    render(<LivePanel values={{ color: { $token: "color.ink" } }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Unlink Colour" }));
+    const field = (await waitFor(() =>
+      fieldsOf("color").getByRole("textbox")
+    )) as HTMLInputElement;
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    expect(field.value).toBe("#111111");
+  });
+
   it("lands on the chip's name once a pick from the unit menu turns the field into the chip", async () => {
     register({ typography: true });
     render(<LivePanel values={{}} />);

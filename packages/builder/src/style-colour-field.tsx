@@ -51,7 +51,12 @@ import type { StyleControl } from "./style-controls";
 import type { CommitOutcome } from "./style-field-surroundings";
 import { useDraft, TextField } from "./style-text-field";
 import { readStyleValue, type StyleAddress } from "./style-values";
-import { UnlinkButton, VariableTipped, variableTip } from "./variable-choice";
+import {
+  focusAfterUnlink,
+  UnlinkButton,
+  VariableTipped,
+  variableTip,
+} from "./variable-choice";
 import { ColourPair, swatchStyle } from "./variable-swatch";
 
 /**
@@ -500,7 +505,11 @@ export function ColourField({
             held={held}
             fieldId={id}
             actionName={actionName}
-            onUnlink={commitInstead}
+            onUnlink={value => {
+              commitInstead(value);
+              // The typed field takes Unlink's place, holding the colour.
+              focusAfterUnlink(() => document.getElementById(id));
+            }}
           />
         )}
       </div>

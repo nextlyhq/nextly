@@ -42,7 +42,12 @@ import { ChoiceList } from "./choice-list";
 import { familyStack, siteFamilies } from "./font-library";
 import { InheritedValue } from "./inherited-value";
 import { variableFor, type SiteVariable } from "./style-colour";
-import { UnlinkButton, VariableTipped, variableTip } from "./variable-choice";
+import {
+  focusAfterUnlink,
+  UnlinkButton,
+  VariableTipped,
+  variableTip,
+} from "./variable-choice";
 
 export interface FontFamilyFieldProps {
   /** The control's id, so its label can point at it. */
@@ -266,6 +271,9 @@ export function FontFamilyField({
   const current = currentChoice(stored, choices);
   const unknown = stored !== undefined && current === undefined;
   const [open, setOpen] = React.useState(false);
+  // The trigger, which stays when Unlink makes the family plain: focus
+  // returns to it from the Unlink that goes.
+  const triggerRef = React.useRef<HTMLButtonElement>(null);
   const inheritedFamily = useInheritedFamily(choices);
   const shownValue = unknown
     ? `${storedText(stored)} · not on this site`
@@ -289,6 +297,7 @@ export function FontFamilyField({
         >
           <PopoverTrigger asChild>
             <FontTrigger
+              ref={triggerRef}
               id={id}
               labelledBy={labelledBy}
               open={open}
@@ -329,11 +338,22 @@ export function FontFamilyField({
           label="Font"
           // The family the variable gives in the mode the canvas shows, kept
           // as a plain one in one commit.
-          onUnlink={() => onCommit(held.value)}
+          onUnlink={() => {
+            onCommit(held.value);
+            focusAfterUnlink(() => triggerRef.current);
+          }}
         />
       )}
     </div>
   );
+}
+
+/** Ids that describe an element, joined, or `undefined` for none. */
+function describedBy(
+  ...ids: readonly (string | undefined)[]
+): string | undefined {
+  const joined = ids.filter(Boolean).join(" ");
+  return joined === "" ? undefined : joined;
 }
 
 /**
@@ -364,7 +384,10 @@ function FontTrigger({
       aria-haspopup="listbox"
       aria-expanded={open}
       aria-label={`Font, ${shownValue}`}
-      aria-describedby={labelledBy}
+      // The label's words, and the tooltip's while it shows: the tooltip
+      // hands its id in through the trigger props, and the label's alone
+      // would replace it.
+      aria-describedby={describedBy(trigger["aria-describedby"], labelledBy)}
     >
       <span
         className="nx-font-pick__value"

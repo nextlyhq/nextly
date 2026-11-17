@@ -31,7 +31,7 @@ import type { StyleControl } from "./style-controls";
 import type { CommitOutcome } from "./style-field-surroundings";
 import { displayText, editableText } from "./style-text-field";
 import { variableLeafOf, FoldedUnion, ValueField } from "./style-value-fields";
-import { VariableChip } from "./variable-choice";
+import { focusAfterUnlink, VariableChip } from "./variable-choice";
 
 /** No faces, as one value, so the Font control's list is not rebuilt each render. */
 const NO_FACES: readonly FontFaceDef[] = Object.freeze([]);
@@ -289,9 +289,7 @@ function HeldVariable({
     // once it is drawn, rather than falling to the page. One commit, so one
     // undo puts the variable back.
     if (onCommit(value) === "refused") return;
-    requestAnimationFrame(() => {
-      document.getElementById(id)?.focus();
-    });
+    focusAfterUnlink(() => document.getElementById(id));
   };
   return (
     <div className="nx-style-inspector__numeric">

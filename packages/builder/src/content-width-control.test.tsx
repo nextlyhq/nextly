@@ -14,16 +14,18 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { typedWidth } from "./content-width-control";
+import { ContentWidthControl, typedWidth } from "./content-width-control";
 import type { EditorState } from "./editor-state";
 import { StyleInspectorPanel } from "./style-inspector-panel";
 
@@ -376,5 +378,29 @@ describe("a site variable as the width", () => {
     fireEvent.click(screen.getByRole("button", { name: "Unlink Width" }));
     expect(editor.apply).toHaveBeenCalledTimes(1);
     expect(written(editor)).toMatchObject({ contentWidth: "1600px" });
+  });
+});
+
+describe("focus after Unlink", () => {
+  it("lands on the width field, holding the width, once Unlink keeps it", async () => {
+    const props = {
+      contained: true,
+      tokens: siteTokens("1152px"),
+      variables: [],
+      held: undefined,
+      onContained: vi.fn(),
+      onWidth: vi.fn(),
+    };
+    const { rerender } = render(
+      <ContentWidthControl {...props} width={{ $token: "content.wide" }} />
+    );
+    const unlink = screen.getByRole("button", { name: "Unlink Width" });
+    act(() => unlink.focus());
+    fireEvent.click(unlink);
+    expect(props.onWidth).toHaveBeenCalledWith("1600px");
+    rerender(<ContentWidthControl {...props} width="1600px" />);
+    const field = screen.getByLabelText("Width") as HTMLInputElement;
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    expect(field.value).toBe("1600px");
   });
 });

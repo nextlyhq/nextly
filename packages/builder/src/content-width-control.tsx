@@ -33,7 +33,11 @@ import { CssHint } from "./css-hint";
 import { arrowTo } from "./segment-choices";
 import { variablesFor, type SiteVariable } from "./style-colour";
 import { variableValueText } from "./style-variables";
-import { VariableChip, VariableChoice } from "./variable-choice";
+import {
+  focusAfterUnlink,
+  VariableChip,
+  VariableChoice,
+} from "./variable-choice";
 
 /** The site token that holds the site's content width. */
 const SITE_WIDTH_TOKEN = "content.width";
@@ -243,7 +247,10 @@ function OwnWidthField({
           onUnlink={value => {
             const kept =
               typeof value === "string" ? typedWidth(value) : undefined;
-            if (kept !== undefined) onWidth(kept);
+            if (kept === undefined) return;
+            onWidth(kept);
+            // The typed field takes the chip's place, holding the width.
+            focusAfterUnlink(() => document.getElementById(id));
           }}
         />
       ) : (
