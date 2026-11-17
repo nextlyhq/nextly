@@ -123,6 +123,7 @@ export {
   isRichTextNode,
   isRichTextValue,
   ONE_PARAGRAPH_OPTION,
+  oneParagraphLines,
   oneParagraphWords,
   RICH_TEXT_PROP_TYPE,
   richTextToPlainText,

@@ -836,3 +836,28 @@ export function toOneParagraph(value: unknown): OneParagraph {
 export function oneParagraphWords(value: unknown): string {
   return richTextToPlainText(toOneParagraph(value).value);
 }
+
+/**
+ * The words of a one-paragraph value with its lines kept: every run, a
+ * link's included, and `\n` for each line break, with the marks left out.
+ *
+ * What a plain-text field edits a Text's words as, where the value is held as
+ * a string with its lines (a component placement's override): reading it
+ * back through {@link toOneParagraph} gives the same lines, so editing one
+ * word keeps the breaks. {@link oneParagraphWords} is for a summary, and
+ * folds the lines into spaces.
+ */
+export function oneParagraphLines(value: unknown): string {
+  const first = toOneParagraph(value).value.root.children[0];
+  const parts: string[] = [];
+  const stack: unknown[] = [];
+  pushReversed(stack, first === undefined ? [] : kidsOf(first));
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!isRichTextNode(node)) continue;
+    if (node.type === "linebreak") parts.push("\n");
+    else if (typeof node.text === "string") parts.push(node.text);
+    else pushReversed(stack, kidsOf(node));
+  }
+  return parts.join("");
+}

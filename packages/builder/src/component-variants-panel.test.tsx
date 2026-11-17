@@ -452,3 +452,45 @@ describe("a variant of a component holding a Text", () => {
     });
   });
 });
+
+describe("a variant of a component holding a Text with lines", () => {
+  it("keeps the lines in its field", () => {
+    mount(
+      component({
+        nodes: [
+          {
+            id: "h1",
+            type: "core/text",
+            version: 2,
+            props: {
+              text: {
+                root: {
+                  type: "root",
+                  children: [
+                    {
+                      type: "paragraph",
+                      children: [
+                        { type: "text", text: "One", format: 0 },
+                        { type: "linebreak" },
+                        { type: "text", text: "Two", format: 0 },
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+        variants: { a: { label: "Night", overrides: {} } },
+      })
+    );
+    fireEvent.click(
+      within(section()).getByRole("button", {
+        name: "Show the values of Night",
+      })
+    );
+    const value = within(section()).getByRole("textbox", { name: "Headline" });
+    expect(value.localName).toBe("textarea");
+    expect(value).toHaveProperty("value", "One\nTwo");
+  });
+});

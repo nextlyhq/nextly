@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   isOneParagraphProp,
   isRichTextValue,
+  oneParagraphLines,
   oneParagraphWords,
   richTextToPlainText,
   TEXT_FORMAT,
@@ -328,5 +329,20 @@ describe("toOneParagraph: one leaf with very many lines", () => {
     );
     const kids = restricted.value.root.children[0]?.children ?? [];
     expect(kids.filter(kid => kid.type === "linebreak")).toHaveLength(150_000);
+  });
+});
+
+describe("oneParagraphLines", () => {
+  it("reads a Text's words with its lines kept, and back to the same lines", () => {
+    const stored = value([
+      paragraph(
+        text("First", TEXT_FORMAT.BOLD),
+        { type: "linebreak" },
+        { type: "link", url: "/a", children: [text("Second")] }
+      ),
+    ]);
+    expect(oneParagraphLines(stored)).toBe("First\nSecond");
+    expect(oneParagraphLines(oneParagraphLines(stored))).toBe("First\nSecond");
+    expect(oneParagraphLines("Old\nstring")).toBe("Old\nstring");
   });
 });

@@ -390,7 +390,10 @@ function holdsText(field: WalkableField): boolean {
     field.type === "radio" ||
     field.type === "date" ||
     // An array or a bare string are both legitimate JSON values.
-    field.type === "json"
+    field.type === "json" ||
+    // A one-paragraph textarea prop holds its words as a string, blank ones
+    // included, as well as editor content.
+    field.validate === isTextOrEditorContent
   );
 }
 
@@ -413,6 +416,8 @@ interface WalkableField {
   hasMany?: boolean;
   minRows?: number;
   fields?: readonly WalkableField[];
+  /** The field's own value check, which marks a one-paragraph prop. */
+  validate?: unknown;
 }
 
 function buildFieldConfigs(

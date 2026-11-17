@@ -1743,3 +1743,44 @@ describe("an exposed Text, whose component holds one paragraph", () => {
     expect(editor.apply).not.toHaveBeenCalled();
   });
 });
+
+describe("an exposed Text with lines", () => {
+  it("is edited with its lines in a field that keeps them", () => {
+    const lines = header({
+      nodes: [
+        {
+          id: "h1",
+          type: "acme/heading",
+          version: 1,
+          props: {
+            text: {
+              root: {
+                type: "root",
+                children: [
+                  {
+                    type: "paragraph",
+                    children: [
+                      { type: "text", text: "First", format: 1 },
+                      { type: "linebreak" },
+                      { type: "text", text: "Second", format: 0 },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+    });
+    const editor = mount(instance(), lines);
+    const field = screen.getByRole("textbox", { name: "Title" });
+    expect(field.localName).toBe("textarea");
+    expect((field as HTMLTextAreaElement).value).toBe("First\nSecond");
+    fireEvent.change(field, { target: { value: "First\nChanged" } });
+    fireEvent.blur(field);
+    expect(appliedProps(editor)).toEqual({
+      componentId: "header",
+      overrides: { title: "First\nChanged" },
+    });
+  });
+});

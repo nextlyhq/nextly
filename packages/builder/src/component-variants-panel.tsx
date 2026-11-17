@@ -22,7 +22,7 @@
 import {
   isRichTextValue,
   isUnsetOverride,
-  oneParagraphWords,
+  oneParagraphLines,
   variantOptions,
   type ComponentDocument,
   type ExposedProperty,
@@ -39,6 +39,7 @@ import {
   DialogHeader,
   DialogTitle,
   Input,
+  Textarea,
   Label,
   Select,
   SelectContent,
@@ -499,7 +500,7 @@ function VariantValueControl({
             typeof value === "string"
               ? value
               : isRichTextValue(value)
-                ? oneParagraphWords(value)
+                ? oneParagraphLines(value)
                 : ""
           }
           onCommit={onCommit}
@@ -604,6 +605,18 @@ function TextValue({
   const send = () => {
     if (draft !== value) onCommit(draft);
   };
+  // Words holding lines (a Text's) are edited in a field that keeps them.
+  if (value.includes("\n")) {
+    return (
+      <Textarea
+        id={id}
+        rows={3}
+        value={draft}
+        onChange={event => setDraft(event.target.value)}
+        onBlur={send}
+      />
+    );
+  }
   return (
     <Input
       id={id}

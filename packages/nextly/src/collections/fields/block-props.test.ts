@@ -1531,6 +1531,11 @@ describe("a one-paragraph Text prop", () => {
     ).toEqual([]);
   });
 
+  it("holds an empty or blank string, a Text cleared of its words", async () => {
+    expect(await validateBlockPropValues({ text: "" }, source)).toEqual([]);
+    expect(await validateBlockPropValues({ text: "  " }, source)).toEqual([]);
+  });
+
   it("holds one paragraph of editor content", async () => {
     expect(await validateBlockPropValues({ text: paragraph }, source)).toEqual(
       []

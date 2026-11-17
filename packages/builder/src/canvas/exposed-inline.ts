@@ -25,10 +25,9 @@ import {
   findNode,
   getBlock,
   isComponentInstance,
-  isRichTextNode,
   isRichTextValue,
+  oneParagraphLines,
   registryBlockSource,
-  toOneParagraph,
   type BlockDocument,
   type BlockNode,
   type ResolvedBlockNode,
@@ -155,7 +154,7 @@ export function composedTextAt(
   // A one-paragraph value is drawn with its marks and line breaks, and read
   // back as the element's text, which holds its words and no breaks.
   const own = (node.props as Record<string, unknown> | undefined)?.[prop];
-  const shown = kind === "line" ? drawnWords(own) : authoredText(own);
+  const shown = kind === "line" ? oneParagraphLines(own) : authoredText(own);
   return {
     kind: "exposed",
     target: {
@@ -167,27 +166,6 @@ export function composedTextAt(
       value: shown,
     },
   };
-}
-
-/**
- * The words a one-paragraph value draws, as the plain surface reads them back
- * (`elementWords`): every run, a link's included, and `\n` for a line break,
- * so an edit that changes one word keeps the lines.
- */
-function drawnWords(value: unknown): string {
-  const words: string[] = [];
-  const stack: unknown[] = [
-    ...(toOneParagraph(value).value.root.children[0]?.children ?? []),
-  ].reverse();
-  while (stack.length > 0) {
-    const node = stack.pop();
-    if (!isRichTextNode(node)) continue;
-    if (typeof node.text === "string") words.push(node.text);
-    if (node.type === "linebreak") words.push("\n");
-    const kids = Array.isArray(node.children) ? node.children : [];
-    for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
-  }
-  return words.join("");
 }
 
 /**

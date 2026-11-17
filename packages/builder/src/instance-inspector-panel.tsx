@@ -34,7 +34,7 @@ import {
   isRichTextValue,
   isUnsetOverride,
   neededFor,
-  oneParagraphWords,
+  oneParagraphLines,
   richTextToPlainText,
   type BlockDocument,
   type ComponentDocument,
@@ -50,6 +50,7 @@ import {
   SelectTrigger,
   SelectValue,
   Switch,
+  Textarea,
 } from "@nextlyhq/ui";
 import {
   CircleSlash,
@@ -782,7 +783,54 @@ function storedText(value: OverrideValue): string {
  * text always is; an untouched field writes nothing.
  */
 function textRowValue(value: OverrideValue): string {
-  return isRichTextValue(value) ? oneParagraphWords(value) : storedText(value);
+  return isRichTextValue(value) ? oneParagraphLines(value) : storedText(value);
+}
+
+/** Words with lines, edited in a field that keeps them; leaving commits. */
+function LinesField({
+  id,
+  draft,
+  problem,
+  onDraft,
+  onLeave,
+}: {
+  id: string;
+  draft: string;
+  problem: string | null;
+  onDraft: (next: string) => void;
+  onLeave: () => void;
+}): React.JSX.Element {
+  const problemId = `${id}-problem`;
+  return (
+    <>
+      <Textarea
+        id={id}
+        rows={3}
+        value={draft}
+        aria-invalid={problem === null ? undefined : true}
+        aria-describedby={problem === null ? undefined : problemId}
+        onChange={event => onDraft(event.target.value)}
+        onBlur={onLeave}
+      />
+      <RefusedValue id={problemId} problem={problem} />
+    </>
+  );
+}
+
+/** Why a typed value was refused, under its field, while it is. */
+function RefusedValue({
+  id,
+  problem,
+}: {
+  id: string;
+  problem: string | null;
+}): React.JSX.Element | null {
+  if (problem === null) return null;
+  return (
+    <p id={id} className="nx-inspector__problem" role="alert">
+      {problem}
+    </p>
+  );
 }
 
 function ExposedTextField({
@@ -826,6 +874,19 @@ function ExposedTextField({
     onSet(row.id, next);
   };
 
+  // A Text's lines, or words already holding one, are edited in a field that
+  // keeps them; Enter is a new line there, and leaving the field commits.
+  if (textParagraph(row) || stored.includes("\n")) {
+    return (
+      <LinesField
+        id={id}
+        draft={draft}
+        problem={problem}
+        onDraft={setDraft}
+        onLeave={send}
+      />
+    );
+  }
   return (
     <>
       <Input
