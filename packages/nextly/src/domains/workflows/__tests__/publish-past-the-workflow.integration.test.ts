@@ -41,6 +41,7 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import { ContentEventsRepository } from "../../content-events/repository";
 import type { ApiKeyService } from "../../auth/services/api-key-service";
 import type { CollectionService } from "../../collections/services/collection-service";
+import { WITHOUT_REVIEW_KEY } from "../../collections/services/save-door-gate";
 import {
   ANY_EDITABLE_STATE,
   lockServerOf,
@@ -97,6 +98,10 @@ const PAGES = "pw_pages";
 const POSTS = "pw_posts";
 const LOOSE = "pw_loose";
 const BANNER = "pw_banner";
+const HOOKED = "pw_hooked";
+
+/** How many times Hooked's hooks ran, so a create the gate holds back can be seen to run none. */
+const hookCalls = { count: 0 };
 const drafts = { status: true, versions: { drafts: true } } as const;
 /** Visitors may read whatever is published, so a visitor's read shows what went live. */
 const visitorsRead = { access: { read: () => true } } as const;
@@ -144,6 +149,25 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           text({ name: "title", localized: true }),
           text({ name: "code", localized: false }),
         ],
+      }),
+      defineCollection({
+        slug: HOOKED,
+        ...drafts,
+        ...visitorsRead,
+        workflow: gated,
+        fields: [text({ name: "title" })],
+        hooks: {
+          beforeOperation: [
+            () => {
+              hookCalls.count += 1;
+            },
+          ],
+          beforeChange: [
+            () => {
+              hookCalls.count += 1;
+            },
+          ],
+        },
       }),
       defineCollection({
         slug: LOOSE,
@@ -674,6 +698,50 @@ describe.each(getConfiguredTestDialects())(
         } as never);
         expect((listed as { items: Doc[] }).items).toEqual([]);
       });
+
+      it("is refused before any of its hooks run, from the workflow alone, with no entry yet", async () => {
+        await boot(dialect);
+        hookCalls.count = 0;
+
+        const error = await app()
+          .nextly.create({
+            collection: HOOKED as never,
+            data: { title: "Straight out", status: "published" },
+          } as never)
+          .then(
+            () => null,
+            (reason: unknown) => reason
+          );
+
+        // Held back by the early answer, which has no entry to read: its first stage does not
+        // allow publishing, so nothing ran and nothing was written.
+        expect(JSON.stringify(error)).toContain("NOT_APPROVED");
+        expect(hookCalls.count).toBe(0);
+        const listed = await app().nextly.find({
+          collection: HOOKED as never,
+          status: "all",
+        } as never);
+        expect((listed as { items: Doc[] }).items).toEqual([]);
+      });
+
+      it("creates as published for trusted code that names a reason, which is the control", async () => {
+        await boot(dialect);
+        hookCalls.count = 0;
+
+        const created = (await app().nextly.create({
+          collection: HOOKED as never,
+          data: {
+            title: "Straight out",
+            status: "published",
+            [WITHOUT_REVIEW_KEY]: { reason: "Nightly import" },
+          },
+        } as never)) as Doc;
+
+        expect(hookCalls.count).toBeGreaterThan(0);
+        expect((await visitorRead(HOOKED, String(created.id)))?.title).toBe(
+          "Straight out"
+        );
+      });
     });
 
     describe("Singles", () => {
@@ -924,7 +992,8 @@ describe.each(getConfiguredTestDialects())(
         const answer = await rest("PATCH", ["singles", BANNER], session, {
           status: "published",
           _overwrite: true,
-          withoutReview: { reason: "Storm warning" },
+          // A save names it beside its values under the system key, so a field of that name works.
+          [WITHOUT_REVIEW_KEY]: { reason: "Storm warning" },
         });
 
         expect(answer.status, JSON.stringify(answer.json)).toBe(200);
