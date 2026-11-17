@@ -88,11 +88,7 @@ import type {
   InspectorPanelProps,
   StyleStateBinding,
 } from "./inspector-panel-types";
-import {
-  editedStyleState,
-  openingTabFor,
-  shownTab,
-} from "./inspector-style-state";
+import { openingTabFor, shownTab } from "./inspector-style-state";
 import { StyleTab } from "./inspector-style-tab";
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
@@ -322,10 +318,6 @@ export function InspectorPanel({
         onExit={panel.lookEditing.onExit}
         library={panel.classLibrary ?? []}
         canvasRoot={panel.canvasRoot}
-        state={editedStyleState(panel.styleState)}
-        // The binding itself too, so the look's bar offers the State switch
-        // a block's Style tab offers.
-        styleState={panel.styleState}
         policy={panel.policy}
         breakpoint={panel.breakpoint}
         cascade={panel.cascade}

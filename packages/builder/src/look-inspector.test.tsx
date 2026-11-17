@@ -552,27 +552,33 @@ describe("a block style's states and devices, in the style editor", () => {
   };
 
   /**
-   * The look editor as the host draws it, holding the State choice the way a
-   * host holds a block's: changed through the switch, drawn again with it.
+   * The look editor as the page builder's host draws it: no block is
+   * selected while a look is edited, so the host's own state choice, which
+   * the selected block shows on the canvas, answers Normal whatever is asked.
    */
+  const STAYS_NORMAL: StyleStateBinding = {
+    state: "base",
+    onChange: () => {},
+  };
   function Host({
     writeStyles,
-    initial = "base",
+    lookId = ghost.id,
+    library = [ghost],
   }: {
     writeStyles: SharedStylesHost["writeStyles"];
-    initial?: StyleStateBinding["state"];
+    lookId?: string;
+    library?: NamedClass[];
   }): React.JSX.Element {
-    const [state, setState] = React.useState(initial);
     return (
       <InspectorPanel
         editor={editorFor(null)}
-        classLibrary={[ghost]}
+        classLibrary={library}
         sharedStyles={{ mayChange: true, writeStyles }}
         lookEditing={{
-          look: { id: ghost.id, blockType: "acme/button" },
+          look: { id: lookId, blockType: "acme/button" },
           onExit: () => {},
         }}
-        styleState={{ state, onChange: setState }}
+        styleState={STAYS_NORMAL}
       />
     );
   }
@@ -620,7 +626,7 @@ describe("a block style's states and devices, in the style editor", () => {
     ]);
   });
 
-  it("draws no State switch while the host can't act on one", () => {
+  it("offers the switch with no state choice from the host at all", () => {
     render(
       <InspectorPanel
         editor={editorFor(null)}
@@ -632,7 +638,34 @@ describe("a block style's states and devices, in the style editor", () => {
         }}
       />
     );
-    expect(screen.queryByRole("button", { name: /^State: / })).toBeNull();
+    expect(screen.getByRole("button", { name: /^State: Normal/ })).toBeTruthy();
+  });
+
+  it("starts another look at Normal, and says the state beside the controls", async () => {
+    const other: NamedClass = {
+      ...ghost,
+      id: "look:acme/button:soft",
+      slug: "button-soft",
+      label: "Soft",
+      orderIndex: 1,
+    };
+    const view = render(
+      <Host writeStyles={vi.fn()} library={[ghost, other]} />
+    );
+    await chooseState("Hover");
+    expect(
+      screen.getByText("You are editing the Hover look. Normal stays as it is.")
+    ).toBeTruthy();
+    view.rerender(
+      <Host writeStyles={vi.fn()} library={[ghost, other]} lookId={other.id} />
+    );
+    expect(
+      within(screen.getByRole("group", { name: "Editing Soft" })).getByRole(
+        "button",
+        { name: /^State: Normal/ }
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText(/You are editing the Hover look/)).toBeNull();
   });
 
   it("writes a hover colour set while Hover is chosen under :hover on the page", async () => {

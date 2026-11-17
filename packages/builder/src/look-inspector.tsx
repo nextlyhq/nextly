@@ -5,9 +5,11 @@
  * look.
  *
  * The bar carries the same State switch a block's Style tab has (Normal,
- * Hover, Focus, Pressed), bound to the host's choice, and names the device
- * the top bar edits, so a look's hover and other states, at each device, are
- * set where its normal values are.
+ * Hover, Focus, Pressed) and names the device the top bar edits, so a look's
+ * hover and other states, at each device, are set where its normal values
+ * are. The choice is the look editor's own, held per look: no block is
+ * selected while a look is edited, so the host's choice, which is what the
+ * selected block shows on the canvas, stays Normal.
  *
  * The controls are the Style tab's own, read and written as a shared style
  * is. They are drawn over a stand-in editor holding one block of the look's
@@ -43,7 +45,6 @@ import {
 import { useSiteOrientation } from "./canvas/use-canvas-reading";
 import { stateLookLine } from "./editing-bar";
 import type { EditorState } from "./editor-state";
-import type { StyleStateBinding } from "./inspector-panel-types";
 import { lookReach, markLookReach } from "./look-reach";
 import { blockLabel } from "./panels/add/inserter";
 import { deviceLabel } from "./shell/breakpoint-switcher";
@@ -66,7 +67,7 @@ export interface LookEditing {
 export interface LookInspectorProps
   extends Omit<
     StyleInspectorPanelProps,
-    "editor" | "target" | "sideOrientation"
+    "editor" | "target" | "sideOrientation" | "state"
   > {
   readonly editor: EditorState;
   readonly look: BlockLookRow;
@@ -79,11 +80,6 @@ export interface LookInspectorProps
    * says which way the site runs.
    */
   readonly canvasRoot?: HTMLElement | null;
-  /**
-   * The host's state choice, as a block's Style tab is handed it: the State
-   * switch is drawn only while the host can act on one.
-   */
-  readonly styleState?: StyleStateBinding;
 }
 
 /** Why an own look whose id another entry in the library carries is held. */
@@ -164,19 +160,38 @@ function editedDevice(
 }
 
 /**
+ * Which state the look editor edits, held per look: a look opened afresh, or
+ * another one chosen, starts at Normal.
+ */
+function useLookState(
+  look: LookKey
+): readonly [StyleState, (state: StyleState) => void] {
+  const key = JSON.stringify([look.blockType, look.id]);
+  const [chosen, setChosen] = React.useState<{
+    readonly key: string;
+    readonly state: StyleState;
+  }>({ key, state: "base" });
+  const choose = React.useCallback(
+    (state: StyleState) => setChosen({ key, state }),
+    [key]
+  );
+  return [chosen.key === key ? chosen.state : "base", choose];
+}
+
+/**
  * Where the look's edit lands: the device the top bar edits, and the State
  * switch, its dots read from the look's own styles, so a state is marked
  * where the look sets something.
  */
 function LookPlace({
   state,
-  styleState,
+  onState,
   styles,
   breakpoints,
   breakpoint,
 }: {
   readonly state: StyleState;
-  readonly styleState: StyleStateBinding | undefined;
+  readonly onState: (state: StyleState) => void;
   readonly styles: BlockLookRow["styles"] | undefined;
   readonly breakpoints: BreakpointSet | undefined;
   readonly breakpoint: BreakpointId | undefined;
@@ -188,7 +203,7 @@ function LookPlace({
       </span>
       <StyleStateField
         state={state}
-        onSelect={styleState?.onChange}
+        onSelect={onState}
         node={styles === undefined ? null : { styles }}
         breakpoints={breakpoints}
       />
@@ -203,10 +218,10 @@ export function LookInspector({
   onExit,
   library,
   canvasRoot,
-  styleState,
   ...style
 }: LookInspectorProps): React.JSX.Element {
   const read = useLookTarget(look, host);
+  const [state, setState] = useLookState(look);
   // An own look whose id another look or shared style carries is held: a
   // write by id would reach both, so the bar says why and nothing is written.
   const target =
@@ -232,7 +247,7 @@ export function LookInspector({
   // own. Re-read on the signals that can restyle the page.
   const sideOrientation = useSiteOrientation(canvasRoot, {
     document: editor.document,
-    state: style.state,
+    state,
     breakpoint: style.breakpoint,
     cascade: style.cascade,
     previewContainer: style.previewContainer,
@@ -253,8 +268,8 @@ export function LookInspector({
         readOnly={target?.kind === "shared" ? target.readOnly : undefined}
         place={
           <LookPlace
-            state={style.state ?? "base"}
-            styleState={styleState}
+            state={state}
+            onState={setState}
             styles={target?.kind === "shared" ? target.style.styles : undefined}
             breakpoints={style.breakpoints}
             breakpoint={style.breakpoint}
@@ -268,9 +283,10 @@ export function LookInspector({
           }
         </p>
       ) : (
-        <StateTint state={style.state ?? "base"}>
+        <StateTint state={state}>
           <StyleInspectorPanel
             {...style}
+            state={state}
             editor={stand}
             target={target}
             sideOrientation={sideOrientation}
