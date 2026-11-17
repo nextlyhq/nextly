@@ -154,6 +154,13 @@ function fieldOf(page: Page, id: string, prop: string): Locator {
     .first();
 }
 
+/** The selected block's toolbar "More actions" button. */
+function blockMenu(page: Page): Locator {
+  return page
+    .getByTestId("canvas")
+    .getByRole("button", { name: "More actions" });
+}
+
 /** Select a block from its Layers row. */
 async function selectInLayers(page: Page, id: string): Promise<void> {
   await openLayers(page);
@@ -294,11 +301,11 @@ test.describe("copying, cutting and pasting blocks", () => {
     await openBuilder(page, await createPage(page.request));
 
     await clickBlock(page, HEADING);
-    await page.getByRole("button", { name: "More actions" }).click();
+    await blockMenu(page).click();
     await page.getByRole("menuitem", { name: "Copy", exact: true }).click();
 
     await selectInLayers(page, PRICING);
-    await page.getByRole("button", { name: "More actions" }).click();
+    await blockMenu(page).click();
     await page.getByRole("menuitem", { name: "Paste", exact: true }).click();
 
     await expect.poll(() => childrenOf(page, PRICING)).toHaveLength(1);
@@ -315,6 +322,10 @@ test.describe("copying, cutting and pasting blocks", () => {
     await clickBlock(page, HEADING);
     await expect.poll(() => selection(page)).toEqual([HEADING]);
     await page.keyboard.press("Control+c");
+    // Cleared, so the block's toolbar is not drawn over the words to press.
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    await expect.poll(() => selection(page)).toEqual([]);
     const before = await pageIds(page, HERO);
 
     const text = fieldOf(page, HEADING, "text");
