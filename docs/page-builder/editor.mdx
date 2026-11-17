@@ -232,6 +232,19 @@ Inside its parent, Spacing, Size, Position, Text, Background, Border, Effects, I
 CSS properties, each shown only where the block offers it. Advanced lists Visibility, then
 HTML.
 
+**Animation when it appears**, in Effects, gives a block an entrance: **None** (the
+default), **Fade in**, **Rise**, **Slide in from the left**, **Slide in from the right** or
+**Zoom in**. **Duration** and **Delay** are in milliseconds (600 and 0 when you leave them
+empty), and **Start** is **When scrolled into view** (the default) or **When the page
+loads**. Like any style, it's set per device: a block can rise on desktop and stay still on
+mobile with **None** there. Scrolled into view, the block moves in as it enters the window,
+following the scroll, and a delay holds it back for part of that. The published page
+animates with CSS alone and adds no script, and only the block's opacity and position move,
+so nothing around it shifts. The canvas always shows blocks where they end, and so does the
+published page for a visitor whose device asks for reduced motion, for a printed page, and,
+for **When scrolled into view**, in a browser that can't run scroll-driven animation. A page
+using a slide clips what sticks out past its sides.
+
 ## Search
 
 **Search** in the top bar, or <kbd>Ctrl</kbd>+<kbd>K</kbd> (<kbd>⌘</kbd>+<kbd>K</kbd> on a

@@ -589,6 +589,8 @@ const SHORT_LABELS: Readonly<Record<string, string>> = {
   flexGrow: "Grow",
   flexShrink: "Shrink",
   flexBasis: "Starting size",
+  // What it is in an author's words: an entrance animation.
+  appear: "Animation when it appears",
 };
 
 /**
