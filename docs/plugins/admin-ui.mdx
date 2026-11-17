@@ -1021,6 +1021,30 @@ reader who may not update the entry, on an entry opened in a language other
 than the default, or on a Single. Startup is refused when `openLabel` isn't
 text with words in it.
 
+#### A create dialog for "+ New"
+
+> **Experimental.** `createDialog` and `DocumentCreateDialogProps` may change
+> before they are marked stable.
+
+A view can offer its own short create dialog: declare `createDialog`, a
+component path like `component`, on the view. On a collection whose entries
+open in that view (by the rule above), the list's "+ New" opens a dialog over
+the list instead of going to the create form. The admin draws the dialog,
+titled "New" and the collection's singular name ("New page"), with its focus, Escape and overlay
+handling; your component draws its body, including its own buttons, creates
+the entry through its own route or the REST API, and receives
+`DocumentCreateDialogProps` from `@nextlyhq/plugin-sdk/admin`: the
+`collection` (its `slug` and `labels`) and `close(createdId?)`. Call
+`close(id)` with the new entry's id and the admin opens it where its
+collection opens entries; call `close()` to leave the list as it was.
+
+The dialog opens only where "+ New" is offered at all, and only for a reader
+whose entries open in the view (one who may update them, in the default
+language). A collection that opens as the form, a view without a
+`createDialog`, or a dialog component the admin can't load keeps the create
+form, whose address, `/admin/collections/<slug>/create`, keeps working.
+Startup is refused when `createDialog` names no component.
+
 #### The header's controls in your view
 
 > **Experimental.** These may change before they are marked stable.
@@ -1041,6 +1065,23 @@ Place `<DocumentSaveIndicator />` and `<DocumentPrimaryAction />`, from
 
 Both are the admin's own controls, run through the same actions as the
 header. Outside a document they render nothing.
+
+Your view also replaces the header's **More actions** menu. Two more exports
+let it offer what that menu offers and word its way out:
+
+- `useDocumentOpensIn()` answers where the entry being edited opens, by the
+  rule in [Where an entry opens](#where-an-entry-opens): `opensIn` is `"form"`
+  or the path of the view a click on one of the collection's entries opens,
+  and `list` is the collection's list, its `label` (the plural label, as the
+  list's heading shows it) and its `address`. A view the entry opens in has no
+  form to go back to, so its way out is the list: "Back to Pages", through
+  `navigateTo(list.address)`, which asks first about unsaved work as any leave
+  does. It answers `null` outside a collection entry's editor, on a new entry,
+  on a Single and while the collection is still loading.
+- `PIN_TO_DASHBOARD_ACTION` is the id of the header's **Pin to dashboard** /
+  **Unpin from dashboard** among `useDocumentActions().actions`. Find it there
+  and run it with `run(id)`, so the pin, its words, its toast and its Undo are
+  the admin's own, and any reason it can't run now comes with it.
 
 ### Document actions and panel sections
 

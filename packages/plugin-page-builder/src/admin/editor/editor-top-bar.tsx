@@ -2,8 +2,8 @@
 
 /**
  * The editor's top bar: the page's title and state with its history at the
- * start, the devices in the centre, and search, Preview and the document's
- * actions at the end.
+ * start, the devices in the centre, and search, Preview, the document's
+ * actions and its ⋯ menu at the end.
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-top-bar
  */
@@ -14,6 +14,7 @@ import { BindingsToFixChip } from "../bindings-report/BindingsToFixChip";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import { OwnDesignsChip } from "../TemplateOwnDesigns";
 
+import { EditorMoreMenu } from "./editor-more-menu";
 import { SearchButton } from "./editor-search";
 import type { EditorView } from "./editor-view";
 import { HistoryButtons } from "./history-buttons";
@@ -61,7 +62,8 @@ export function editorTopBar(
    * address, where that field sits in words when below the top level, and
    * the canvas, which a binding's Select brings its block into view in,
    * and "Preview as visitor", which Preview's menu holds, and the page's
-   * data count, which the bar shows only near the limit.
+   * data count, which the bar shows only near the limit, and the way to the
+   * document's form, which the ⋯ menu offers.
    */
   page: {
     title: string | undefined;
@@ -70,6 +72,7 @@ export function editorTopBar(
     canvas: HTMLElement | null;
     visitor: VisitorPreview;
     pageData: PageDataCount | null;
+    openAsForm: (() => void) | undefined;
   }
 ): {
   topBar: React.JSX.Element;
@@ -160,6 +163,10 @@ export function editorTopBar(
           the builder's taking the window would otherwise leave reachable
           only from the keyboard. */}
         <DocumentSaveAndPublish />
+        {/* After them, as the entry page's own ⋯ follows its Publish: the
+          form and the pin, which a page that opens here would otherwise
+          leave out of reach. */}
+        <EditorMoreMenu onOpenAsForm={page.openAsForm} />
       </>
     ),
   };

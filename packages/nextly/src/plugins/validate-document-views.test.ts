@@ -21,6 +21,7 @@ function plugin(
     component?: string;
     label?: string;
     openLabel?: unknown;
+    createDialog?: unknown;
   }[],
   extra: Record<string, unknown> = {}
 ): unknown {
@@ -196,6 +197,7 @@ function fieldTypePlugin(
     fieldType: string;
     label?: string;
     openLabel?: string;
+    createDialog?: string;
     opensFirst?: string;
   }[],
   slugViews: Record<string, { path: string; opensFirst?: string }[]> = {}
@@ -502,6 +504,89 @@ describe("the words a way into a view shows (`openLabel`)", () => {
         asPlugins([
           plugin("@acme/builder", "pages", [
             { path: "builder", openLabel: "Open in builder" },
+          ]),
+        ])
+      )
+    ).not.toThrow();
+  });
+});
+
+describe("a view's own create dialog (`createDialog`)", () => {
+  it("publishes a declared createDialog on a slug view and on a field-type view", () => {
+    const slugView = plugin("@acme/forms", "submissions", [
+      { path: "review", createDialog: "@acme/forms/admin#NewSubmission" },
+    ]);
+    const typeView = fieldTypePlugin(
+      "@acme/builder",
+      ["blocks"],
+      [
+        {
+          path: "builder",
+          fieldType: "blocks",
+          createDialog: "@acme/builder/admin#NewPage",
+        },
+      ]
+    );
+    expect(contributedDocumentViews(asPlugins([slugView, typeView]))).toEqual([
+      {
+        slug: "submissions",
+        path: "review",
+        component: "@acme/forms/admin#View",
+        createDialog: "@acme/forms/admin#NewSubmission",
+        plugin: "@acme/forms",
+      },
+      {
+        fieldType: "blocks",
+        path: "builder",
+        component: "@acme/builder/admin#View",
+        createDialog: "@acme/builder/admin#NewPage",
+        plugin: "@acme/builder",
+      },
+    ]);
+  });
+
+  it("leaves createDialog off a view that does not declare it", () => {
+    const [view] = contributedDocumentViews(
+      asPlugins([plugin("@acme/forms", "submissions", [{ path: "review" }])])
+    );
+    expect(view).not.toHaveProperty("createDialog");
+  });
+
+  it.each([
+    ["a number", 42],
+    ["an object", { component: "@acme/x#New" }],
+    ["empty", ""],
+    ["only spaces", "   "],
+  ])("refuses a createDialog that is %s, naming it", (_case, createDialog) => {
+    // The list opens the dialog by this path, so one that names no component
+    // would leave "+ New" opening nothing.
+    const error = refusal([
+      plugin("@acme/builder", "pages", [{ path: "builder", createDialog }]),
+    ]);
+    expect(error.code).toBe("NEXTLY_PLUGIN_DOCUMENT_VIEW_INVALID");
+    expect(error.logMessage).toContain("createDialog");
+  });
+
+  it("refuses a blank createDialog on a field-type view too", () => {
+    // Both declaration sites reach the same check.
+    const error = refusal([
+      fieldTypePlugin(
+        "@acme/builder",
+        ["blocks"],
+        [{ path: "builder", fieldType: "blocks", createDialog: " " }]
+      ),
+    ]);
+    expect(error.code).toBe("NEXTLY_PLUGIN_DOCUMENT_VIEW_INVALID");
+    expect(error.logMessage).toContain("createDialog");
+  });
+
+  it("accepts a view with a create dialog to open", () => {
+    // The control for the refusals above.
+    expect(() =>
+      assertDocumentViews(
+        asPlugins([
+          plugin("@acme/builder", "pages", [
+            { path: "builder", createDialog: "@acme/builder/admin#NewPage" },
           ]),
         ])
       )

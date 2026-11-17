@@ -36,6 +36,7 @@ import {
   clearDarkValue,
   removeToken,
   renameToken,
+  setFluidSize,
   setTokenValue,
   tokenNameIssue,
   tokenRowsFor,
@@ -43,6 +44,7 @@ import {
   LINE_HEIGHT_MIXED,
   DARK_FOLLOWS_LIGHT,
 } from "./tokens-studio";
+import { fluidValue } from "./fluid-size";
 
 const BREAKPOINTS = { base: { id: "base", label: "Base" } } as never;
 
@@ -558,12 +560,15 @@ describe("variables, grouped as the Design panel shows them", () => {
       ])
     );
 
-  it("puts each variable in one of five groups, in the panel's order", () => {
+  it("puts each variable in one of eight groups, in the panel's order", () => {
     expect(variableGroups(SET).map(group => group.heading)).toEqual([
       "Colours",
       "Type scale",
       "Fonts and weights",
-      "Spacing, radius & shadows",
+      "Spacing",
+      "Radius",
+      "Shadows",
+      "Content width",
       "Other values",
     ]);
     // A font sits with the type, and only what belongs to no other group is
@@ -572,8 +577,11 @@ describe("variables, grouped as the Design panel shows them", () => {
       colours: ["Brand"],
       type: ["Body", "Loose"],
       fonts: ["Body"],
-      spacing: ["Space 4", "Card", "Card"],
-      other: ["Content width"],
+      spacing: ["Space 4"],
+      radius: ["Card"],
+      shadows: ["Card"],
+      content: ["Content width"],
+      other: [],
     });
   });
 
@@ -581,7 +589,7 @@ describe("variables, grouped as the Design panel shows them", () => {
     expect(DESIGN_TAB_GROUPS).toEqual({
       colours: ["colours"],
       type: ["type", "fonts"],
-      spacing: ["spacing", "other"],
+      spacing: ["spacing", "radius", "shadows", "content", "other"],
       styles: [],
     });
     // Every group is under exactly one tab.
@@ -659,12 +667,16 @@ describe("variables, grouped as the Design panel shows them", () => {
     expect(emitTokenBlocks(made.tokens, ":root").issues).toEqual([]);
   });
 
-  it("adds spacing, radius and shadow to their shared group", () => {
-    for (const kind of ["spacing", "radius", "shadow"] as const) {
+  it("adds spacing, radius and shadow each to its own group", () => {
+    for (const [kind, group] of [
+      ["spacing", "spacing"],
+      ["radius", "radius"],
+      ["shadow", "shadows"],
+    ] as const) {
       const made = addVariable({ tokens: [] }, kind);
       expect(
         variableGroups(made.tokens).map(g => [g.group, g.entries.length])
-      ).toContainEqual(["spacing", 1]);
+      ).toContainEqual([group, 1]);
     }
   });
 
@@ -863,5 +875,57 @@ describe("duplicating a variable", () => {
     expect(label.length).toBeLessThanOrEqual(MAX_TOKEN_LABEL_LENGTH);
     expect(label.endsWith(" copy")).toBe(true);
     expect(variableLabelIssue(made.tokens, made.at, label)).toBeUndefined();
+  });
+});
+
+describe("a size made fluid from two sizes", () => {
+  const set: SiteTokenSet = {
+    tokens: [
+      { name: "font-size.lead", kind: "dimension", values: { light: "18px" } },
+    ],
+  };
+  const range = { min: 360, max: 1280 };
+
+  it("stores the value made from them and keeps the two sizes beside it", () => {
+    const made = setFluidSize(set, 0, { small: 16, large: 20 }, range);
+    expect(made.tokens[0]?.values.light).toBe(
+      fluidValue({ small: 16, large: 20 }, range)
+    );
+    expect(made.tokens[0]?.fluid).toEqual({ small: 16, large: 20 });
+  });
+
+  it("becomes a value typed by hand once its light value is typed, and drops the two sizes", () => {
+    const made = setFluidSize(set, 0, { small: 16, large: 20 }, range);
+    const typed = setTokenValue(made, 0, "light", "22px");
+    expect(typed.tokens[0]?.fluid).toBeUndefined();
+    // A dark value leaves the fluid light value as it was made.
+    const dark = setTokenValue(made, 0, "dark", "24px");
+    expect(dark.tokens[0]?.fluid).toEqual({ small: 16, large: 20 });
+  });
+});
+
+describe("a fluid line height typed by hand", () => {
+  it("drops its two sizes, as any other size does", () => {
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "line-height.loose",
+          kind: "dimension",
+          values: { light: "24px" },
+        },
+      ],
+    };
+    const made = setFluidSize(
+      set,
+      0,
+      { small: 24, large: 32 },
+      {
+        min: 360,
+        max: 1280,
+      }
+    );
+    const typed = writeTokenValue(made, 0, "light", "28px");
+    if (!("tokens" in typed)) throw new Error("the write was refused");
+    expect(typed.tokens.tokens[0]?.fluid).toBeUndefined();
   });
 });

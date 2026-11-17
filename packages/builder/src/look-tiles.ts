@@ -102,7 +102,12 @@ export function lookTiles(
   );
   const none: LookTile =
     starred === undefined
-      ? { id: null, name: ownName ?? "Default", styles: undefined, hidden: false }
+      ? {
+          id: null,
+          name: ownName ?? "Default",
+          styles: undefined,
+          hidden: false,
+        }
       : {
           id: null,
           name: sharedStyleName(starred),

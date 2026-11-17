@@ -61,7 +61,11 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 // The one header & footer picker, tested where it lives.
 vi.mock("../page-layout", () => ({
   PageLayoutPicker: ({ disabled }: { disabled?: boolean }) => (
-    <p>{disabled === true ? "Header & footer picker, held" : "Header & footer picker"}</p>
+    <p>
+      {disabled === true
+        ? "Header & footer picker, held"
+        : "Header & footer picker"}
+    </p>
   ),
 }));
 
@@ -145,9 +149,9 @@ describe("a page's settings in the right panel", () => {
     expect(form().getValues("title")).toBe("Plans");
     // The summary follows the title as it is typed.
     expect(
-      within(
-        screen.getByRole("region", { name: "Search result" })
-      ).getByText("Plans")
+      within(screen.getByRole("region", { name: "Search result" })).getByText(
+        "Plans"
+      )
     ).toBeTruthy();
   });
 
@@ -223,7 +227,9 @@ describe("a page's settings in the right panel", () => {
     const view = panel("Page settings");
     const line = within(view).getByText("Page data line");
     const result = within(view).getByRole("region", { name: "Search result" });
-    const all = within(view).getByRole("button", { name: "All page settings…" });
+    const all = within(view).getByRole("button", {
+      name: "All page settings…",
+    });
     expect(
       result.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
@@ -253,9 +259,9 @@ describe("a title or address the panel must not change", () => {
     expect(title.value).toBe("42");
     expect(title.readOnly).toBe(true);
     expect(
-      within(
-        screen.getByRole("region", { name: "Search result" })
-      ).getByText("42")
+      within(screen.getByRole("region", { name: "Search result" })).getByText(
+        "42"
+      )
     ).toBeTruthy();
   });
 });

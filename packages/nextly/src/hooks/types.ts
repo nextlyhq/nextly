@@ -148,6 +148,35 @@ export interface HookHttpFacts {
 }
 
 /**
+ * What a hook is told about languages, beside its own context: the language
+ * its operation is for, every language it involves, and whether it moves the
+ * shared part (the fields kept the same in every language). Filled where the
+ * hook is called, from the languages the operation's rules are told.
+ *
+ * @experimental
+ */
+export interface HookLanguageContext {
+  /**
+   * The language the operation is for: the one a write stores or a read
+   * reads. Absent for an operation of every language (a delete, a publish of
+   * every language) and on a site without languages.
+   */
+  locale?: string;
+  /**
+   * Every language the operation involves: the one written, a read's
+   * fallback chain, or every configured language. Empty on a site without
+   * languages.
+   */
+  locales?: readonly string[];
+  /**
+   * Whether the operation moves the shared part: a write that sets a shared
+   * field, a create or delete, or a publish that moves the shared part.
+   * Absent for a read, which moves nothing.
+   */
+  shared?: boolean;
+}
+
+/**
  * Context object passed to hook handlers containing operation metadata.
  *
  * The context provides all information needed for hooks to make decisions:
@@ -187,7 +216,7 @@ export interface HookHttpFacts {
  * ```
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic default requires `any` for type-erased hook registry
-export interface HookContext<T = any> {
+export interface HookContext<T = any> extends HookLanguageContext {
   /**
    * Collection name (e.g., "posts", "users", "products")
    *
@@ -447,7 +476,7 @@ export type HookHandler<T = any> = (
  * `data` and has no single field in view, while a field hook is called once per
  * field and returns that field's replacement value.
  */
-export interface FieldHookContext<T = unknown> {
+export interface FieldHookContext<T = unknown> extends HookLanguageContext {
   /** Collection or single the field belongs to. */
   collection: string;
 
@@ -592,7 +621,7 @@ export interface BeforeOperationArgs<T = any> {
  * ```
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic default requires `any` for type-erased hook registry
-export interface BeforeOperationContext<T = any> {
+export interface BeforeOperationContext<T = any> extends HookLanguageContext {
   /**
    * Collection name (e.g., "posts", "users", "products")
    *
@@ -724,7 +753,8 @@ export type BeforeOperationHandler<T = any> = (
  * runs the phase again, so whatever a handler does here must be undone by a
  * rollback: writes on the transaction it is handed, nothing outside it.
  */
-export interface InTransactionWrite<T = Record<string, unknown>> {
+export interface InTransactionWrite<T = Record<string, unknown>>
+  extends HookLanguageContext {
   /** The collection written to, or `single:<slug>` for a Single. */
   collection: string;
   /** What the write did. A Single is only ever updated. */

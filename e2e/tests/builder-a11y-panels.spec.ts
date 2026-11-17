@@ -134,19 +134,19 @@ const SURFACES: ReadonlyArray<{
     },
   },
   {
-    name: "the Style tab's More menu",
+    name: "the Style tab's Add CSS property list",
     open: async page => {
       await selectHeading(page);
       await page.getByRole("tab", { name: "Style", exact: true }).click();
-      // The section's "More" button shows once the section is open.
-      const typography = page.locator(
-        '.nx-style-inspector [data-section="typography"]'
+      // "+ Add CSS property" shows once its section is open.
+      const css = page.locator(
+        '.nx-style-inspector [data-section="css-properties"]'
       );
-      if ((await typography.getAttribute("data-state")) !== "open") {
-        await typography.locator("button").first().click();
+      if ((await css.getAttribute("data-state")) !== "open") {
+        await css.locator("button").first().click();
       }
-      await page.getByRole("button", { name: "More text properties" }).click();
-      await expect(page.getByRole("menu")).toBeVisible();
+      await page.getByRole("button", { name: "+ Add CSS property" }).click();
+      await expect(page.getByRole("listbox")).toBeVisible();
     },
   },
   {

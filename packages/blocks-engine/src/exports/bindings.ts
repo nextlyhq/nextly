@@ -102,10 +102,14 @@ export type {
 // with the field shapes a visitor may read, for an editor to say so.
 export { visitorUnreadableBindings } from "../visitor-unreadable-bindings";
 export {
+  SITE_COMPUTED_FIELD_TYPES,
   SITE_SETTING_FIELD_SHAPES,
   SITE_SETTING_FIELD_TYPES,
   SITE_SETTING_LABELS,
+  siteComputedValues,
+  type SiteComputedName,
   type SiteSettingName,
+  type SiteValueName,
 } from "../site-setting-fields";
 export type {
   VisitorUnreadableBinding,

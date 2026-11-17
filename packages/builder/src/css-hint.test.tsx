@@ -194,6 +194,18 @@ describe("a control's tooltip says what it writes", () => {
   });
 });
 
+describe("Inside its parent's hints", () => {
+  it("say what each Width choice writes", async () => {
+    mount();
+    openTab("Style");
+    openSection("inside-parent");
+    const width = screen.getByRole("radiogroup", { name: "Width" });
+    expect(
+      await hintOn(within(width).getByRole("radio", { name: "Fit" }))
+    ).toBe("width: fit-content");
+  });
+});
+
 describe("the tooltip on keyboard focus", () => {
   it("opens when the author reaches the control with the keyboard", async () => {
     mount();
