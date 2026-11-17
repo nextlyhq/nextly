@@ -382,10 +382,14 @@ export default defineConfig({
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [releaseNotesFixturePlugin, whatsNewFixturePlugin]
       : []),
-    // Always on, because its widgets are drawn by their own components, which
-    // the committed component map must hold; offered only from the add panel,
-    // named as test fixtures.
-    widgetKitFixturePlugin,
+    // The test fixtures' "Test fixture: …" dashboard widgets, for the
+    // dashboard and widget-kit specs: on the suite's own server only, so a
+    // contributor's dashboard never offers them. The committed component map
+    // is written with them off; `widget-kit-fixture/admin.tsx` registers
+    // their components from the admin route instead.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [widgetKitFixturePlugin]
+      : []),
     // The widget check's page, where the e2e suite draws every widget from its
     // preview cases and checks each state's accessibility. A test page, so it
     // exists only on that suite's own server.
@@ -398,16 +402,18 @@ export default defineConfig({
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [startupReadFixturePlugin]
       : []),
-    // Always on, for the same reason: the blocks it contributes reach the
-    // editor through the committed component map. Offered only in the Add
-    // panel, named as test fixtures, for plugin-blocks.spec.ts.
-    blockFixturePlugin,
-    // Always on: the plugin contributions a page offers (today one entry-list
-    // filter on Posts) appear only in its menus until someone chooses them,
-    // and their screenshots, and the browser tests to come, need them in every
-    // build.
-    // Named as a fixture, and inert: no tables, routes, jobs or hooks.
-    contributionsFixturePlugin,
+    // The "Test fixture: …" blocks in the builder's Add panel, for
+    // plugin-blocks.spec.ts, by the same switch; `block-fixture/admin.tsx`
+    // hands their editor modules over, as the map would.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [blockFixturePlugin]
+      : []),
+    // The plugin contributions fixture (the dashed card on the dashboard, its
+    // pieces on Posts, its proxy header), for the contributions specs, by the
+    // same switch; `contributions-fixture/admin.tsx` registers its components.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [contributionsFixturePlugin]
+      : []),
     // The SEO plugin as it ships, for the browser test of its dashboard card
     // and its Needs attention line, by the switch above. No sitemap: a public
     // route is not what that test is about.
