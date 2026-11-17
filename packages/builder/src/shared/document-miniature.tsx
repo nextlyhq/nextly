@@ -235,6 +235,99 @@ function useDrawnDocuments(
   );
 }
 
+/**
+ * Whether the drawing of `documents` with `render` found a placeholder, and
+ * how the drawing says it did. Held for the inputs it was drawn with: new
+ * documents or a new rendering (a component's definition read after the
+ * panel opened) are drawn again rather than kept as the icon.
+ */
+function useBrokenDrawing(
+  documents: readonly BlockDocument[],
+  render: MiniatureRender
+): { readonly broken: boolean; readonly broke: () => void } {
+  const [brokenFor, setBrokenFor] = React.useState<{
+    documents: readonly BlockDocument[];
+    render: MiniatureRender;
+  } | null>(null);
+  const broke = React.useCallback(
+    () => setBrokenFor({ documents, render }),
+    [documents, render]
+  );
+  const broken =
+    brokenFor !== null &&
+    brokenFor.documents === documents &&
+    brokenFor.render === render;
+  return { broken, broke };
+}
+
+/**
+ * Whether the picture has come on screen, or `first`, its first document,
+ * was already seen in the editor's session, which is then told it was.
+ */
+function useSeenInSession(
+  frame: React.RefObject<HTMLSpanElement | null>,
+  first: BlockDocument | undefined,
+  session: MiniatureSession
+): boolean {
+  const seen = useFirstSeen(
+    frame,
+    first !== undefined && session.seen.has(first)
+  );
+  React.useEffect(() => {
+    if (seen && first !== undefined) session.seen.add(first);
+  }, [seen, first, session]);
+  return seen;
+}
+
+/**
+ * The drawing itself, mounted only once the picture has come on screen and
+ * has documents to draw: measured, scaled and composed here, so a tile not
+ * yet drawn costs no observer and no render beneath it.
+ */
+function DrawnPicture({
+  frame,
+  documents,
+  render,
+  mode,
+  session,
+  renderWidth,
+  onBroken,
+}: {
+  frame: React.RefObject<HTMLSpanElement | null>;
+  documents: readonly BlockDocument[];
+  render: MiniatureRender;
+  mode: DocumentMiniatureProps["mode"];
+  session: MiniatureSession;
+  renderWidth: number;
+  onBroken: () => void;
+}): React.JSX.Element {
+  const scaled = React.useRef<HTMLDivElement>(null);
+  const scale = useWidthScale(frame, renderWidth, true);
+  const composed = useDrawnLayout(scaled, true, onBroken);
+  const pages = useDrawnDocuments(documents, render, session);
+  const boxHeight = frame.current?.clientHeight ?? 0;
+  // A document shorter than the box sits in its middle; a taller one is
+  // shown from its top.
+  const offsetTop = Math.max(0, (boxHeight - composed * scale) / 2);
+  return (
+    <MiniatureSurface
+      scaledRef={scaled}
+      renderWidth={renderWidth}
+      scale={scale}
+      previewContainer={render.styleContext?.previewContainer}
+      offsetTop={offsetTop}
+      slot="picture"
+    >
+      <div
+        className="nx-picture__page"
+        {...(mode === undefined ? {} : { [DARK_MODE_ATTRIBUTE]: mode })}
+      >
+        {pages}
+      </div>
+    </MiniatureSurface>
+  );
+}
+
 export function DocumentMiniature({
   documents,
   render,
@@ -245,46 +338,13 @@ export function DocumentMiniature({
   renderWidth = MINIATURE_RENDER_WIDTH,
 }: DocumentMiniatureProps): React.JSX.Element {
   const frame = React.useRef<HTMLSpanElement>(null);
-  const scaled = React.useRef<HTMLDivElement>(null);
   const drawnDocuments = useSameDocuments(documents);
-  /*
-   * A placeholder found in the drawing, for the inputs it was drawn with: new
-   * documents or a new rendering (a component's definition read after the
-   * panel opened) are drawn again rather than kept as the icon.
-   */
-  const [brokenFor, setBrokenFor] = React.useState<{
-    documents: readonly BlockDocument[];
-    render: MiniatureRender;
-  } | null>(null);
-  const broke = React.useCallback(
-    () => setBrokenFor({ documents: drawnDocuments, render }),
-    [drawnDocuments, render]
-  );
-  const broken =
-    brokenFor !== null &&
-    brokenFor.documents === drawnDocuments &&
-    brokenFor.render === render;
+  const { broken, broke } = useBrokenDrawing(drawnDocuments, render);
   const state = stateOf(drawnDocuments, failed || broken);
-  const first = drawnDocuments[0];
-  const seen = useFirstSeen(
-    frame,
-    first !== undefined && session.seen.has(first)
-  );
-  React.useEffect(() => {
-    if (seen && first !== undefined) session.seen.add(first);
-  }, [seen, first, session]);
+  const seen = useSeenInSession(frame, drawnDocuments[0], session);
   const drawn = seen && state === "drawn";
-  // Measured only once there is a drawing to scale, so a list of tiles not
-  // yet on screen costs no observer and no second render each.
-  const scale = useWidthScale(frame, renderWidth, drawn);
-  const composed = useDrawnLayout(scaled, drawn, broke);
-  const pages = useDrawnDocuments(drawnDocuments, render, session);
   const device = useDeviceScheme(mode === undefined);
   const scheme = mode ?? device;
-  const boxHeight = frame.current?.clientHeight ?? 0;
-  // A document shorter than the box sits in its middle; a taller one is
-  // shown from its top.
-  const offsetTop = Math.max(0, (boxHeight - composed * scale) / 2);
 
   return (
     <span
@@ -300,21 +360,15 @@ export function DocumentMiniature({
       {state === "empty" ? <EmptyFrameIcon /> : null}
       {state === "failed" ? <BlockIconMark icon={icon} size={20} /> : null}
       {drawn ? (
-        <MiniatureSurface
-          scaledRef={scaled}
+        <DrawnPicture
+          frame={frame}
+          documents={drawnDocuments}
+          render={render}
+          mode={mode}
+          session={session}
           renderWidth={renderWidth}
-          scale={scale}
-          previewContainer={render.styleContext?.previewContainer}
-          offsetTop={offsetTop}
-          slot="picture"
-        >
-          <div
-            className="nx-picture__page"
-            {...(mode === undefined ? {} : { [DARK_MODE_ATTRIBUTE]: mode })}
-          >
-            {pages}
-          </div>
-        </MiniatureSurface>
+          onBroken={broke}
+        />
       ) : null}
     </span>
   );

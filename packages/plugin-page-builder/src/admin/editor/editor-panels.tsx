@@ -427,6 +427,23 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
 }
 
 /**
+ * What the canvas and the pictures are drawn in, held above the panels so
+ * both outlast them: the site mode the canvas is previewed in (picked in the
+ * Design panel; plain state, never stored, so a reload draws the page's own
+ * mode again) and the editor's picture session (what pictures' async blocks
+ * drew, and which sections were already seen).
+ */
+function useDrawnLook(): {
+  readonly previewMode: CanvasPreviewMode;
+  readonly pictureSession: MiniatureSession;
+} {
+  return {
+    previewMode: useCanvasPreviewMode(),
+    pictureSession: useMiniatureSession(),
+  };
+}
+
+/**
  * The panels' side of the editor: what the rail offers, the entry's own
  * fields, the getting-started card, the offered library and the requests.
  */
@@ -499,13 +516,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   // Which look the inspector edits on its own: chosen in the Design panel,
   // left by selecting a block, by the bar's Back, or by Esc.
   const lookEditing = useLookEditing(editor);
-  // The site mode the canvas is previewed in: picked in the Design panel and
-  // held here, above it, so it outlasts the panel; plain state, never stored,
-  // so a reload draws the page's own mode again.
-  const previewMode = useCanvasPreviewMode();
-  // What the editor's pictures share while it is open: what their async
-  // blocks drew, and which sections were already seen.
-  const pictureSession = useMiniatureSession();
+  const { previewMode, pictureSession } = useDrawnLook();
   return {
     entryFields,
     lookEditing,
