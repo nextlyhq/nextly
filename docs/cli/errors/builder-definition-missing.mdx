@@ -1,0 +1,27 @@
+---
+title: BUILDER_DEFINITION_MISSING
+description: "The newest migration snapshot records a Schema Builder entity that neither `nextly.config.ts` nor `ui-schema.json` declares."
+---
+
+## Cause
+
+The newest migration snapshot records a Schema Builder entity that neither `nextly.config.ts` nor `ui-schema.json` declares.
+
+The Schema Builder writes each collection, Single and field group it saves into the definition file (`db.uiSchemaFile`, `./ui-schema.json` by default), and `nextly migrate:create` reads the Builder's entities from it. When the newest snapshot in the migrations folder records a Builder entity that the file no longer holds, and the configuration does not declare it either, the file lost it: it was not committed, it was overwritten, or the entry was removed by hand. A migration written from what is left would drop that entity's table and its content, so `nextly migrate:create` and `nextly migrate:check` both refuse, naming each entity and the file.
+
+A Builder delete is not refused: it writes the migration that drops the entity itself, and the snapshot beside that migration no longer records it. An entity moved into `nextly.config.ts` is not refused either.
+
+## Fix
+
+- Restore the definition file from version control, and commit it with your migrations from now on. It is part of the code.
+- To remove an entity, delete it in the Schema Builder, which writes the migration that drops it.
+- Run the command again.
+
+## Example
+
+```text
+✗ The newest migration snapshot records a Builder collection 'articles' that neither `nextly.config.ts` nor `./ui-schema.json` declares.
+  Why:  `./ui-schema.json` is part of the code: `migrate:create` reads the Builder's entities from it. Without them, a migration written now would drop each one's table and its content.
+  Next: Restore `./ui-schema.json` from version control and commit it with your migrations. To remove an entity, delete it in the Schema Builder, which writes the migration that drops it. Then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-definition-missing  (BUILDER_DEFINITION_MISSING)
+```

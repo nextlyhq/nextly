@@ -37,7 +37,6 @@ import {
   ToolbarFocusContext,
   type ToolbarFocusSlot,
 } from "./block-actions-context";
-import { blockActionRunners } from "./builder-commands";
 import {
   CANVAS_ESCAPE_PRIORITY,
   escapeOutcome,
@@ -80,6 +79,7 @@ import {
   selectionDuplication,
   selectionMove,
 } from "./selection-ops";
+import { blockActionRunners } from "./shell/builder-commands";
 import {
   patternSaveRefusal,
   SAVE_PATTERN_GRANT_REFUSAL,

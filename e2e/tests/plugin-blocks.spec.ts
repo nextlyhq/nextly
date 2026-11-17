@@ -170,9 +170,9 @@ test.describe("blocks a plugin contributes", () => {
     await headline.press("Enter");
     await expect(fixture(page, "custom")).toHaveText("Edited headline");
 
-    // What every block keeps beside its own inspector.
-    // Content's last section, where the CSS id and attributes live.
-    await page.getByText("Advanced", { exact: true }).click();
+    // What every block keeps beside its own inspector: the Advanced tab,
+    // where the CSS id and attributes live.
+    await page.getByRole("tab", { name: "Advanced" }).click();
     const cssId = page.getByRole("textbox", { name: "CSS id" });
     await cssId.fill("fixture-anchor");
     await cssId.press("Enter");

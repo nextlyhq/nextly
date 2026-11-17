@@ -69,7 +69,6 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
-import { blockActionRunners } from "./builder-commands";
 import {
   CANVAS_ROOT_CLASS,
   CHROME_ATTRIBUTE,
@@ -105,6 +104,7 @@ import { layerLabel, pathTo } from "./layers";
 import { lockBlockingEdit } from "./locking";
 import { clearanceWith } from "./scroll-clearance";
 import { useSelectionActions } from "./selection-actions";
+import { blockActionRunners } from "./shell/builder-commands";
 import {
   TOOLBAR_GAP_PX,
   type ToolbarAction,

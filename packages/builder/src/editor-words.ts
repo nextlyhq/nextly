@@ -32,6 +32,7 @@ export const EDITOR_WORDS = {
   sections: "Saved sections",
   content: "Content",
   style: "Style",
+  advanced: "Advanced",
   settings: "Settings",
   help: "Help",
   blocks: "Blocks",

@@ -1,6 +1,7 @@
 import {
   blockPartClassName,
   blockTypeClassName,
+  renderedCssClassNames,
   type BlockNode,
   type ComponentUnresolvedReason,
   type ResolvedBlockNode,
@@ -160,6 +161,13 @@ export interface BlockBoundaryProps {
  * block-type class carries the shared defaults the compiler emits once per type
  * rather than copying into every node. A block given only its node class loses
  * every default its type defines.
+ *
+ * Then the author's own names (`cssClasses`), after every generated class, so
+ * a site's stylesheet can target the block. Carried in the class the block is
+ * handed rather than attached to its root afterwards, so every block, a
+ * plugin's included, wears them on the element it already puts its class on.
+ * Only the names a save accepts are drawn; a node without any draws exactly
+ * the two classes it did before.
  */
 function classNameFor(
   node: BlockNode,
@@ -167,7 +175,9 @@ function classNameFor(
 ): string {
   const nodeClass = classes[node.id];
   const typeClass = blockTypeClassName(node.type);
-  return nodeClass ? `${nodeClass} ${typeClass}` : typeClass;
+  const generated = nodeClass ? `${nodeClass} ${typeClass}` : typeClass;
+  const own = renderedCssClassNames(node.cssClasses);
+  return own.length === 0 ? generated : `${generated} ${own.join(" ")}`;
 }
 
 /**

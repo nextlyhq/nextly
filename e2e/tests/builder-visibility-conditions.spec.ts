@@ -195,6 +195,8 @@ test.describe("a block's visibility conditions in the editor", () => {
     await openLayers(page);
     await layerRow(page, PACK).click();
 
+    // Show when is on the Advanced tab, under Visibility.
+    await page.getByRole("tab", { name: "Advanced" }).click();
     const showWhen = page.getByRole("region", { name: "Show when" });
     await expect(showWhen.getByText("Always shown.")).toBeVisible();
     await showWhen.getByRole("button", { name: "Add condition" }).click();

@@ -17,10 +17,13 @@
 import { FIT_ZOOM, readZoom, writeZoom, type CanvasZoom } from "./canvas-zoom";
 
 /**
- * The panels the left rail switches between.
+ * The panels the left rail switches between, in the order an author meets
+ * them.
  *
  * One at a time, by decision (PB-D17 D10-1): fixed sides, no docking, no
  * floating. The rail selects; it never opens a second panel beside the first.
+ * Settings and Help sit at the rail's foot as dialogs, never panels, so
+ * neither is one of these.
  */
 export const LEFT_PANELS = [
   "add",
@@ -28,54 +31,30 @@ export const LEFT_PANELS = [
   "pages",
   "components",
   "design",
-  "settings",
 ] as const;
 
 export type LeftPanel = (typeof LEFT_PANELS)[number];
 
 /**
- * The rail's two groups, in the order an author meets them: the daily tools at
- * the top, and the page's settings at the bottom with Help, which opens a
- * dialog rather than a panel and so is not one of these.
+ * The panel and view a stored preference names.
+ *
+ * A panel this shell no longer has, renamed or removed, opens the default
+ * panel with no part chosen: no table of old names is kept, since no site
+ * stored them for long, and the part chosen belonged to the old panel. With
+ * no panel open, the part an author last chose is kept, so the panel reopens
+ * on it, as it does when a panel is closed and opened again in one session.
  */
-export const RAIL_GROUPS: {
-  readonly top: readonly LeftPanel[];
-  readonly bottom: readonly LeftPanel[];
-} = {
-  top: ["add", "layers", "pages", "components", "design"],
-  bottom: ["settings"],
-};
-
-/**
- * Where a panel stored under an id from before the rail was relabelled lives
- * now: Insert became Add, and Tokens, Classes and Fonts became the tabs of one
- * Design panel. Mapped explicitly rather than dropped as unknown, which would
- * close the panel an author left open.
- */
-const RENAMED_PANELS: Readonly<
-  Record<string, { panel: LeftPanel; view: string | null }>
-> = {
-  insert: { panel: "add", view: null },
-  tokens: { panel: "design", view: "variables" },
-  classes: { panel: "design", view: "classes" },
-  fonts: { panel: "design", view: "fonts" },
-};
-
-/** The panel and view a stored preference names, renamed ids included. */
 function storedPanel(
   panel: unknown,
   view: unknown
 ): { panel: LeftPanel | null; view: string | null } {
-  if (isLeftPanel(panel)) {
-    return { panel, view: typeof view === "string" ? view : null };
-  }
-  if (typeof panel === "string" && Object.hasOwn(RENAMED_PANELS, panel)) {
-    return RENAMED_PANELS[panel];
-  }
-  // No panel open, or one this shell no longer has: the part an author last
-  // chose is kept, so the panel reopens on it, as it does when a panel is
-  // closed and opened again in one session.
-  return { panel: null, view: typeof view === "string" ? view : null };
+  const shown = typeof view === "string" ? view : null;
+  if (isLeftPanel(panel)) return { panel, view: shown };
+  if (panel === null || panel === undefined) return { panel: null, view: shown };
+  return {
+    panel: DEFAULT_PREFERENCES.leftPanel,
+    view: DEFAULT_PREFERENCES.leftPanelView,
+  };
 }
 
 /**

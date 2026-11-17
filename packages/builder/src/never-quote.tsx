@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * "Never quote this" in the Content tab: one switch that marks a Section or
+ * "Never quote this" in the Advanced tab: one switch that marks a Section or
  * a Box so its root element carries `data-nosnippet`, which keeps its text
  * out of search snippets, Google's AI Overviews and AI Mode among them,
  * while visitors still see it. A Page Builder setting about the block's own

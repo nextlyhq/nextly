@@ -9,12 +9,6 @@
  * inert summary rather than as the door to the editor — the confusion
  * Gutenberg's own design discussion of editor switching warns about.
  *
- * `BlocksSummary` is NOT deleted. It remains exported and registered at the
- * component path `@nextlyhq/plugin-page-builder/admin#BlocksSummary`, which a
- * host may address by string, so removing it would break a published surface.
- * It stays a pure read-only account of the document; both it and the card ask
- * `page-summary` what the document holds, so they cannot disagree.
- *
  * ## Why the editor is a screen of its own
  *
  * A block canvas needs the window. Rendered inline it would compete with the
