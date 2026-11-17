@@ -412,7 +412,8 @@ async function starterPlan(
 
 /**
  * Record the set a stopped run made for the starter as the seed, and as the
- * default while the default is still unusable. No person chose it, so nobody
+ * default while the default is still unusable, publishing it first when it
+ * is not published. No person chose it, so nobody
  * is credited.
  */
 async function adoptStarterSet(
@@ -421,6 +422,16 @@ async function adoptStarterSet(
 ): Promise<EnsureOutcome> {
   const latest = await readLayoutSettings(deps.nextly, deps.slugs);
   if (latest.seededLayout !== null) return "kept";
+  // Published before it is recorded, as a re-pointed seed is: a default
+  // that is not published draws no header or footer.
+  if (!(await publishedLayoutIds(deps.nextly, deps.slugs, [set])).has(set)) {
+    await deps.nextly.update({
+      collection: deps.slugs.layouts,
+      id: set,
+      data: asOverwrite({ status: "published" }),
+      overrideAccess: true,
+    });
+  }
   const keepDefault =
     latest.defaultLayout !== null &&
     (

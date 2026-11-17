@@ -62,8 +62,8 @@ export async function deleteUnplacedComponent(
       logContext: { reason: "component-system-delete-busy", componentId: id },
     });
   }
-  await deps.runs.advance(run.id, "preflight", "deleting", null);
   try {
+    await deps.runs.advance(run.id, "preflight", "deleting", null);
     await deps.nextly.delete({
       collection: deps.components,
       id,

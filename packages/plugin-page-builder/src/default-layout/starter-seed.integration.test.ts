@@ -258,6 +258,30 @@ describe.each(getConfiguredTestDialects())(
       expect(await recordRow()).toBeNull();
     }
 
+    /** Unpublish a set past every hook, as an import or a script might. */
+    async function unpublishPastHooks(
+      t: TestNextly,
+      id: string
+    ): Promise<void> {
+      const entries = (
+        t.getService("collectionsHandler") as unknown as {
+          getEntryService(): {
+            updateEntries(
+              params: { collectionName: string; overrideAccess?: boolean },
+              entries: { id: string; data: Record<string, unknown> }[],
+              options?: { skipHooks?: boolean }
+            ): Promise<{ successful: number; failed: number }>;
+          };
+        }
+      ).getEntryService();
+      const result = await entries.updateEntries(
+        { collectionName: LAYOUTS_SLUG, overrideAccess: true },
+        [{ id, data: { status: "draft", _overwrite: true } }],
+        { skipHooks: true }
+      );
+      expect(result.successful, JSON.stringify(result)).toBe(1);
+    }
+
     /** Remove a set past every hook, as an import or a script might. */
     async function removeSetPastHooks(
       t: TestNextly,
@@ -497,14 +521,18 @@ describe.each(getConfiguredTestDialects())(
       const main = await defaultSet(t);
       // Deleted by a path that runs no hooks, as an import or a script might.
       await removeSetPastHooks(t, String(main.id));
-      const components = (await all(t, COMPONENTS_SLUG)).length;
+      const idsOf = async () =>
+        (await all(t, COMPONENTS_SLUG)).map(c => String(c.id)).sort();
+      const starter = await idsOf();
+      expect(starter).toHaveLength(2);
       expect(await ensureDefaultLayout(deps(t))).toBe("seeded");
 
       const reseeded = await defaultSet(t);
       expect(reseeded.id).not.toBe(main.id);
       expect(reseeded.title).toBe("Main");
       expect(areasOf(reseeded)).toEqual({});
-      expect((await all(t, COMPONENTS_SLUG)).length).toBe(components);
+      // The same two components: none replaced, none added.
+      expect(await idsOf()).toEqual(starter);
       expect(await ensureDefaultLayout(deps(t))).toBe("kept");
     });
 
@@ -697,8 +725,10 @@ describe.each(getConfiguredTestDialects())(
       expect(await ensureDefaultLayout(deps(t))).toBe("seeded");
       const record = await starterRecordStore(db(), dialectOf()).read();
       if (record === null || record === "made") throw new Error("no record");
-      // The run stopped between its claim and its settings write.
+      // The run stopped between its claim and its settings write, and its
+      // set was unpublished since, past every hook.
       await asNeverSeeded(t, { components: "kept" });
+      await unpublishPastHooks(t, record.set);
       const sets = (await all(t, LAYOUTS_SLUG)).length;
 
       // Fresh: another run may still be finishing, so nothing is made.
@@ -715,6 +745,10 @@ describe.each(getConfiguredTestDialects())(
         seededLayout: record.set,
         defaultLayout: record.set,
       });
+      // Published again before it became the default, so pages draw it.
+      expect(
+        (await all(t, LAYOUTS_SLUG)).find(row => row.id === record.set)?.status
+      ).toBe("published");
       expect((await all(t, LAYOUTS_SLUG)).length).toBe(sets);
 
       // A claim whose set was lost: an empty re-seed, and no second starter.
@@ -777,6 +811,27 @@ describe.each(getConfiguredTestDialects())(
       await remove(t.nextly, kept);
       expect((await all(t, COMPONENTS_SLUG)).map(c => c.id)).not.toContain(
         kept
+      );
+
+      // The move to the delete step refused: nothing is left open either.
+      const stuck = await create("stuck");
+      await expect(
+        deleteUnplacedComponent(
+          {
+            nextly: t.nextly,
+            runs: {
+              ...runs,
+              advance: () => Promise.reject(new Error("the advance failed")),
+            },
+            components: COMPONENTS_SLUG,
+          },
+          stuck
+        )
+      ).rejects.toThrow("the advance failed");
+      expect(await runs.runFor(stuck, "delete")).toBeNull();
+      await remove(t.nextly, stuck);
+      expect((await all(t, COMPONENTS_SLUG)).map(c => c.id)).not.toContain(
+        stuck
       );
 
       // Committed, then failed: done, with its tombstone.
