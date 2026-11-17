@@ -88,7 +88,7 @@ import { usePreviewedCollection } from "../../previewed-entry";
 
 import { LibraryNotices, type LibraryTier } from "./insert-panel-notices";
 import { useInsertOffers } from "./insert-panel-offers";
-import { SummonAnswerOnly } from "./insert-panel-summon";
+import { useSummonAnswer } from "./insert-panel-summon";
 import {
   beginEntryDrag,
   InsertAnnouncement,
@@ -196,7 +196,6 @@ export function InsertPanel({
   const { editor, nesting, onInsert } = offerInputs;
   // Where a dragged block's insert is counted, as a clicked one's is.
   const usage = useInsertUsage();
-  const summons = { summoned, onSummoned };
   const [query, setQuery] = React.useState("");
   // Blocks first: what an author adds most. Sections holds the patterns.
   // Opened for a press that names a tab, on that tab.
@@ -238,6 +237,10 @@ export function InsertPanel({
   // The panel's own element, which the popover anchors inside and treats as
   // "not outside".
   const root = React.useRef<HTMLDivElement | null>(null);
+  // The panel answers a canvas press once, here, rather than in the line
+  // that shows it: the line is drawn again with the tab a press opens, and
+  // the highlight has to last through that.
+  const flash = useSummonAnswer(root, summoned, onSummoned);
   // What can be added, where, and the act of adding it: shared with the
   // editor's search, so a row there and a tile here are one answer.
   const { catalog, rest, announcement, offers, blockSource, insert } =
@@ -324,8 +327,6 @@ export function InsertPanel({
     // on the page.)
     return (
       <div className="nx-insert-panel" data-empty="unplaceable">
-        {/* A press is still answered, with nothing to focus, so it waits for no later open. */}
-        <SummonAnswerOnly {...summons} />
         {header}
         <p className="nx-insert-panel__note">
           The container chosen to add into is no longer on the page. Select a
@@ -359,8 +360,7 @@ export function InsertPanel({
       />
       <PlacementLine
         document={editor.document}
-        root={root}
-        summons={summons}
+        flash={flash}
         first={firstPlace}
         shown={moved !== null}
         groups={groups}

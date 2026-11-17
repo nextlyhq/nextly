@@ -173,6 +173,10 @@ test.describe("the canvas's add controls", () => {
       exact: true,
     });
     for (const open of [false, true]) {
+      if (open) {
+        // Back on Blocks, whose list is long enough to scroll down first.
+        await page.getByRole("tab", { name: "Blocks" }).click();
+      }
       await setAdd(page, open);
       await start.click();
       await expectAnswered(page, "Adding at the end of the page");

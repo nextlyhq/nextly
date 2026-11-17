@@ -203,6 +203,8 @@ test.describe("the start area of an empty page", () => {
     }
     // At the builder's own size whatever the zoom.
     expect(sizes[0]).toBe(sizes[1]);
+    // Back to Fit, which the author's preferences keep for the next test.
+    await chooseZoom(page, "Fit");
   });
 
   test("adds a block at the top level through the picker, with the left side open and hidden", async ({
@@ -274,6 +276,7 @@ test.describe("the start area of an empty page", () => {
     ) {
       await railButton(page, "Add").click();
     }
+    await startArea(page).scrollIntoViewIfNeeded();
     const from = await page
       .getByRole("option", { name: "Heading", exact: true })
       .boundingBox();
@@ -282,10 +285,11 @@ test.describe("the start area of an empty page", () => {
     await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
     await page.mouse.down();
     await page.mouse.move(from.x + 40, from.y + 10, { steps: 4 });
+    // The drag under way: the area shows as where it drops.
+    await expect(startArea(page)).toHaveAttribute("data-drop-target", "");
     await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, {
       steps: 12,
     });
-    await expect(startArea(page)).toHaveAttribute("data-drop-target", "");
     await page.mouse.up();
     await expect.poll(() => topLevel(page)).toHaveLength(1);
   });
