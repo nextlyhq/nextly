@@ -85,6 +85,8 @@ const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
  *   refuses it.
  * - `admin-hydration`: React reports invalid nesting in a development build
  *   only. The spec also watches the document itself, which holds anywhere.
+ * - `builder-publish-requests`: it counts the engine's whole-document survey
+ *   by the function's name, which a production build minifies away.
  */
 const DEV_SPECS = [
   "**/setup-*.spec.ts",
@@ -103,6 +105,7 @@ const DEV_SPECS = [
   "**/removed-from-code-singles-list.spec.ts",
   "**/builder-fonts.spec.ts",
   "**/admin-hydration.spec.ts",
+  "**/builder-publish-requests.spec.ts",
 ];
 
 /** Only the dev specs, for the run beside a production one. */
