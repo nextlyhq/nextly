@@ -331,6 +331,19 @@ afterEach(() => {
   cleanup();
 });
 
+describe("an editor opening on an empty page", () => {
+  it("asks the shell for Add, unless the author hid the left side", () => {
+    // The document here holds no blocks: Add is what it needs first, and
+    // the shell keeps a left side the author hid.
+    openEditor();
+    expect(seen.builderShell?.openPanelRequest).toEqual({
+      panel: "add",
+      count: 1,
+      unlessHidden: true,
+    });
+  });
+});
+
 describe("the empty-container appender's visibility", () => {
   it("is shown outside a drag, since empty containers always show", () => {
     openEditor();
@@ -384,9 +397,12 @@ describe('the empty-container appender\'s "+"', () => {
     expect(
       (seen.picker?.request as { target?: unknown } | null)?.target
     ).toEqual({ kind: "place", place: { inside: "box" } });
-    // Not by way of the Add panel, and with nothing selected on the way.
-    expect(seen.builderShell?.openPanelRequest).not.toMatchObject({
+    // Not by way of the Add panel: the only request is the one an empty
+    // page made on opening, and nothing was selected on the way.
+    expect(seen.builderShell?.openPanelRequest).toEqual({
       panel: "add",
+      count: 1,
+      unlessHidden: true,
     });
     expect(selectedId).toBeNull();
   });

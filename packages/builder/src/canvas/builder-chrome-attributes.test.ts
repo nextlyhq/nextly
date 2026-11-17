@@ -178,6 +178,20 @@ describe("an empty container's marker leaves the block as styled", () => {
   });
 });
 
+describe("an empty page's body is held open in the editor alone", () => {
+  it("adds the start area's room above the footer, or below the header", () => {
+    // The overlay sets the room on the root only while the page holds no
+    // blocks; unset, both rules add nothing.
+    const css = collapsed(SHEET);
+    expect(css).toContain(
+      '.nx-canvas > [data-nx-region="footer"] { margin-block-start: var(--nx-start-room, 0px); }'
+    );
+    expect(css).toContain(
+      '.nx-canvas:not(:has(> [data-nx-region="footer"])) { padding-block-end: var(--nx-start-room, 0px); }'
+    );
+  });
+});
+
 describe("the canvas keeps the platform's own callout for text", () => {
   it("restores the touch callout the menu trigger suppresses", () => {
     /*

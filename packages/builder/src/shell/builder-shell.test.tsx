@@ -2547,6 +2547,39 @@ describe("hiding the side panels", () => {
     expect(screen.getByText("layers panel")).toBeTruthy();
   });
 
+  /** The shell over a stored record, asked by the editor itself to open Add. */
+  function askedForAdd(stored: Record<string, unknown>) {
+    stubContainerFits(true);
+    const store = memoryStore(
+      JSON.stringify({ ...DEFAULT_PREFERENCES, ...stored })
+    );
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        availablePanels={["add", "layers"]}
+        renderPanel={panel => <p>{panel} panel</p>}
+        inspector={<p>inspector body</p>}
+        openPanelRequest={{ panel: "add", count: 1, unlessHidden: true }}
+      />
+    );
+    return store;
+  }
+
+  it("opens Add for the editor's own request, over the panel last open", () => {
+    // An empty page opens on Add, whichever left panel was last open.
+    askedForAdd({ leftPanel: "layers" });
+    expect(screen.getByText("add panel")).toBeTruthy();
+    expect(screen.queryByText("layers panel")).toBeNull();
+  });
+
+  it("leaves a left side the author hid hidden, for the editor's own request", () => {
+    const store = askedForAdd({ leftPanel: "layers", leftPanelHidden: true });
+    expect(screen.queryByText("add panel")).toBeNull();
+    expect(screen.queryByText("layers panel")).toBeNull();
+    expect(stored(store)).toMatchObject({ leftPanelHidden: true });
+  });
+
   it("opens Add when the left panel is shown with none chosen", () => {
     sidesShell({ leftPanel: null, leftPanelHidden: true });
     fireEvent.click(toggle(/^Left panel$/));

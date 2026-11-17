@@ -44,6 +44,7 @@ import {
   type ComponentTitleOf,
 } from "../panels/layers/layers";
 import { PageInserters } from "./page-inserters";
+import type { StarterPage } from "./page-start-area";
 
 afterEach(cleanup);
 
@@ -143,7 +144,12 @@ function mount(
   props: {
     hidden?: boolean;
     hovered?: string | null;
-    onStart?: () => void;
+    onStart?: (control: HTMLElement) => void;
+    onSavedSection?: () => void;
+    title?: string;
+    starters?: readonly StarterPage[];
+    onStarter?: (id: string) => void;
+    dragging?: boolean;
     onAddAfter?: (id: string, control: HTMLElement) => void;
     componentTitle?: ComponentTitleOf;
     selectedId?: string | null;
@@ -162,7 +168,22 @@ function mount(
             {...(props.selectedId === undefined
               ? {}
               : { selectedId: props.selectedId })}
-            onStart={props.onStart ?? (() => undefined)}
+            {...(props.dragging === undefined
+              ? {}
+              : { dragging: props.dragging })}
+            start={{
+              onStart: props.onStart ?? (() => undefined),
+              ...(props.onSavedSection === undefined
+                ? {}
+                : { onSavedSection: props.onSavedSection }),
+              ...(props.title === undefined ? {} : { title: props.title }),
+              ...(props.starters === undefined
+                ? {}
+                : { starters: props.starters }),
+              ...(props.onStarter === undefined
+                ? {}
+                : { onStarter: props.onStarter }),
+            }}
             onAddAfter={props.onAddAfter ?? (() => undefined)}
             {...(props.componentTitle === undefined
               ? {}
@@ -181,135 +202,125 @@ const gapNames = () =>
   gapButtons().map(button => button.getAttribute("aria-label"));
 
 describe("an empty page", () => {
-  it("offers a start card whose button starts the page", async () => {
+  it("greets a page by its title, with both ways in and the line about dragging", async () => {
     const onStart = vi.fn();
-    mount(page([]), { onStart });
+    const onSavedSection = vi.fn();
+    mount(page([]), { onStart, onSavedSection, title: "About us" });
     await act(async () => undefined);
-    expect(screen.getByText("Start your page")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Add section" }));
-    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByRole("heading", { name: "Start building About us" })
+    ).toBeTruthy();
+    expect(screen.getByText("or drag a block here")).toBeTruthy();
+    const add = screen.getByRole("button", { name: "Add a block" });
+    fireEvent.click(add);
+    expect(onStart).toHaveBeenCalledWith(add);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Insert a saved section" })
+    );
+    expect(onSavedSection).toHaveBeenCalledTimes(1);
     expect(gapButtons()).toHaveLength(0);
+    // None of the old card's words.
+    expect(screen.queryByText("Start your page")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add section" })).toBeNull();
   });
 
-  it("centres the start card on the part of the page on screen", async () => {
-    // An empty page's root is only as tall as nothing in it, so the card is
-    // placed in the middle of what the scroller shows, not of the root.
-    const boxes = vi
-      .spyOn(Element.prototype, "getBoundingClientRect")
-      .mockImplementation(function (this: Element) {
-        if (this.hasAttribute("data-scroller")) {
-          return new DOMRect(0, 0, 1000, 800);
-        }
-        if (this.classList.contains("nx-canvas")) {
-          return new DOMRect(0, 0, 1000, 40);
-        }
-        return new DOMRect(0, 0, 0, 0);
+  it("greets a page with no title yet as your page", async () => {
+    mount(page([]));
+    await act(async () => undefined);
+    expect(
+      screen.getByRole("heading", { name: "Start building your page" })
+    ).toBeTruthy();
+  });
+
+  it.each(["component", "pattern", "template", "a-future-kind", "toString"])(
+    "heads an empty %s with Add the first block",
+    async kind => {
+      // Only a page has a title to build; every other document starts with
+      // its first block. A kind newer than this editor reads the same.
+      mount({ formatVersion: 1, kind, nodes: [] } as never, {
+        title: "Ignored",
       });
-    try {
-      render(
-        <div data-scroller="" style={{ overflowY: "auto" }}>
-          <Canvas
-            document={page([])}
-            siteStyles={{ breakpoints: { viewport: [], container: [] } }}
-            overlay={
-              <PageInserters
-                document={page([])}
-                onStart={() => undefined}
-                onAddAfter={() => undefined}
-              />
-            }
-          />
-        </div>
-      );
       await act(async () => undefined);
-      const card = screen.getByText("Start your page").parentElement;
-      expect(card?.style.left).toBe("500px");
-      expect(card?.style.top).toBe("400px");
-    } finally {
-      boxes.mockRestore();
+      expect(
+        screen.getByRole("heading", { name: "Add the first block" })
+      ).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Add a block" })).toBeTruthy();
     }
-  });
+  );
 
-  it("speaks of blocks, not of a page, in an empty component", async () => {
-    // A component is not a page and has no sections: its card says what an
-    // author adds to it.
+  it("offers no saved section where the host offers none", async () => {
     mount({ formatVersion: 1, kind: "component", nodes: [] } as never);
     await act(async () => undefined);
-    expect(screen.queryByText("Start your page")).toBeNull();
-    expect(screen.getByText("Add the first block")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Add block" })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Insert a saved section" })
+    ).toBeNull();
   });
 
-  it.each(["pattern", "template"])(
-    "speaks of blocks in an empty %s, which has no sections either",
-    async kind => {
-      // Only a page is built of sections; every other kind of document holds
-      // blocks at its top level.
-      mount({ formatVersion: 1, kind, nodes: [] } as never);
-      await act(async () => undefined);
-      expect(screen.queryByText("Start your page")).toBeNull();
-      expect(screen.getByText("Add the first block")).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Add block" })).toBeTruthy();
-    }
-  );
+  it("draws starter pages under their heading, and none with none", async () => {
+    const onStarter = vi.fn();
+    const { unmount } = mount(page([]), { starters: [] });
+    await act(async () => undefined);
+    expect(screen.queryByText("or start from a page")).toBeNull();
+    unmount();
+    mount(page([]), {
+      starters: [
+        { id: "home", title: "Home" },
+        { id: "landing", title: "Landing page" },
+      ],
+      onStarter,
+    });
+    await act(async () => undefined);
+    expect(screen.getByText("or start from a page")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Landing page" }));
+    expect(onStarter).toHaveBeenCalledWith("landing");
+  });
 
-  it.each(["a-future-kind", "toString"])(
-    "speaks of blocks in a document of a kind it does not know (%s)",
-    async kind => {
-      // A stored document can carry a kind newer than this editor: the
-      // engine's forgiving read lets it through, and the card still draws.
-      mount({ formatVersion: 1, kind, nodes: [] } as never);
-      await act(async () => undefined);
-      expect(screen.getByText("Add the first block")).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Add block" })).toBeTruthy();
-    }
-  );
-
-  it("follows the scroller when it scrolls the empty page", async () => {
-    // The scroller around the canvas is outside it, and its scroll reaches no
-    // listener on the canvas: the card is re-centred on what it now shows.
-    let shownTop = 0;
+  it("sits near the top of the body, under the header, and holds the body open", async () => {
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
       function (this: Element) {
-        if (this.hasAttribute("data-scroller")) {
-          return new DOMRect(0, 0, 1000, 800);
+        if (this.getAttribute("data-nx-region") === "header") {
+          return new DOMRect(0, 0, 1000, 120);
         }
-        if (this.classList.contains("nx-canvas")) {
-          return new DOMRect(0, -shownTop, 1000, 2000);
-        }
-        return new DOMRect(0, 0, 0, 0);
+        return new DOMRect(0, 0, 1000, 400);
       }
     );
-    render(
-      <div data-scroller="" style={{ overflowY: "auto" }}>
-        <Canvas
-          document={page([])}
-          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
-          overlay={
-            <PageInserters
-              document={page([])}
-              onStart={() => undefined}
-              onAddAfter={() => undefined}
-            />
-          }
-        />
-      </div>
-    );
+    mount(page([]));
     await act(async () => undefined);
-    const card = screen.getByText("Start your page").parentElement;
-    expect(card?.style.top).toBe("400px");
-    shownTop = 600;
-    const scroller = document.querySelector("[data-scroller]");
-    if (scroller === null) throw new Error("no scroller");
-    fireEvent.scroll(scroller);
+    const root = document.querySelector<HTMLElement>(".nx-canvas");
+    if (root === null) throw new Error("no canvas");
+    const header = document.createElement("div");
+    header.setAttribute("data-nx-region", "header");
+    root.prepend(header);
     await act(async () => undefined);
-    expect(card?.style.top).toBe("1000px");
+    const area = document.querySelector<HTMLElement>(".nx-page-start");
+    // Centred across the page, 32px under the header's bottom edge.
+    expect(area?.style.left).toBe("500px");
+    expect(area?.style.top).toBe("152px");
+    // The body is held open by the area and its room above and below, in
+    // the page's own pixels (jsdom draws the area 0px tall).
+    expect(root.style.getPropertyValue("--nx-start-room")).toBe("64px");
   });
 
-  it("draws nothing while a block is dragged, so the drop line shows", async () => {
+  it("lets go of the body once the page has a block", async () => {
+    const view = mount(page([]));
+    await act(async () => undefined);
+    const root = document.querySelector<HTMLElement>(".nx-canvas");
+    expect(root?.style.getPropertyValue("--nx-start-room")).not.toBe("");
+    view.unmount();
+    expect(root?.style.getPropertyValue("--nx-start-room")).toBe("");
+  });
+
+  it("stays while a block is dragged, drawn as where it drops", async () => {
+    mount(page([]), { dragging: true });
+    await act(async () => undefined);
+    const area = document.querySelector(".nx-page-start");
+    expect(area?.hasAttribute("data-drop-target")).toBe(true);
+  });
+
+  it("draws nothing where the host offers no adding", async () => {
     mount(page([]), { hidden: true });
     await act(async () => undefined);
-    expect(screen.queryByText("Start your page")).toBeNull();
+    expect(document.querySelector(".nx-page-start")).toBeNull();
   });
 });
 

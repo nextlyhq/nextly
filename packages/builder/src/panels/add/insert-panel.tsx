@@ -189,6 +189,7 @@ export function InsertPanel({
   // A canvas press to answer, handed to the line that answers it.
   summoned,
   onSummoned,
+  summonedTab,
   // What it offers, and where: the sources the offers are judged from.
   ...offerInputs
 }: InsertPanelProps): React.JSX.Element {
@@ -199,6 +200,13 @@ export function InsertPanel({
   const [query, setQuery] = React.useState("");
   // Blocks first: what an author adds most. Sections holds the patterns.
   const [tab, setTab] = React.useState<PanelTab>("blocks");
+  // A press that names a tab opens it, before the press is answered below
+  // (a layout effect runs before the effect that focuses the search).
+  React.useLayoutEffect(() => {
+    if (summoned !== undefined && summonedTab !== undefined) {
+      setTab(summonedTab);
+    }
+  }, [summoned, summonedTab]);
   /*
    * Whether the author has moved through the tiles, and with what.
    *

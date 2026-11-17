@@ -110,55 +110,128 @@
   pointer-events: none;
 }
 
-/* Centred on the part of the canvas on screen, where the component puts it. */
-.nx-page-inserters__start {
+/*
+ * The start area of an empty page: in the builder's own surfaces, text,
+ * accent and focus ring, at the screen's size, its top centre where the
+ * component places it in the page's body. No colour of its own, and no
+ * decoration: a calm panel with three ways in.
+ */
+.nx-page-start {
   position: absolute;
-  transform: translate(-50%, -50%);
+  transform: translateX(-50%);
   display: grid;
   justify-items: center;
-  gap: 0.25rem;
-  padding: 1.25rem 1.5rem;
-  border: 1px solid var(--nx-border);
+  gap: 0.75rem;
+  width: max-content;
+  max-width: min(28rem, calc(100% - 2rem));
+  padding: 1.5rem 2rem;
+  border: 1px solid var(--nx-builder-border);
   border-radius: var(--radius-md);
-  background: var(--nx-card);
-  color: var(--nx-card-foreground);
+  background: var(--nx-builder-panel);
+  color: var(--nx-builder-text);
   text-align: center;
   font-family: var(--font-sans, system-ui), sans-serif;
+  pointer-events: auto;
 }
 
-.nx-page-inserters__title {
+/* While a block is dragged: drawn as where it drops, taking no pointer so
+   the drag reaches the page under it. */
+.nx-page-start[data-drop-target] {
+  outline: 2px dashed var(--nx-builder-select);
+  outline-offset: 4px;
+  pointer-events: none;
+}
+
+.nx-page-start__title {
   margin: 0;
-  font-size: 0.9375rem;
-  font-weight: 600;
+  font-size: var(--nx-builder-title-size, 0.9375rem);
+  font-weight: var(--nx-builder-title-weight, 600);
 }
 
-.nx-page-inserters__hint {
-  margin: 0 0 0.5rem;
-  font-size: 0.78125rem;
-  color: var(--nx-muted-foreground);
+.nx-page-start__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
 }
 
-.nx-page-inserters__start-button {
+.nx-page-start__add,
+.nx-page-start__saved,
+.nx-page-start__tile {
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
-  height: 2rem;
+  min-height: 2rem;
   padding: 0 0.75rem;
-  border: none;
   border-radius: var(--radius-sm);
-  background: var(--nx-builder-select);
-  color: var(--nx-builder-select-text);
   font:
     500 0.8125rem/1 var(--font-sans, system-ui),
     sans-serif;
   cursor: pointer;
-  pointer-events: auto;
 }
 
-.nx-page-inserters__start-button:focus-visible,
+.nx-page-start__add {
+  border: 1px solid transparent;
+  background: var(--nx-builder-accent);
+  color: var(--nx-builder-accent-text);
+}
+
+.nx-page-start__saved,
+.nx-page-start__tile {
+  border: 1px solid var(--nx-builder-border);
+  background: transparent;
+  color: var(--nx-builder-text);
+}
+
+.nx-page-start__add:focus-visible,
+.nx-page-start__saved:focus-visible,
+.nx-page-start__tile:focus-visible,
 .nx-page-inserters__add:focus-visible {
   outline: 2px solid var(--nx-ring);
   outline-offset: 2px;
+}
+
+.nx-page-start__line {
+  margin: 0;
+  font-size: 0.78125rem;
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-page-start__starters {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.nx-page-start__tiles {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-page-start__tile {
+  flex-direction: column;
+  padding: 0.5rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-page-start__add,
+  .nx-page-start__saved,
+  .nx-page-start__tile {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .nx-page-start__add {
+    border-color: ButtonText;
+  }
+  .nx-page-start[data-drop-target] {
+    outline-color: Highlight;
+  }
 }
 
 /*
