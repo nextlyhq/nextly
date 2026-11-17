@@ -54,10 +54,24 @@ const { ImageStates } = await import("./image-states");
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.restoreAllMocks();
 });
 
 beforeEach(() => {
   loads.mockResolvedValue(true);
+  // jsdom lays nothing out, so every element reports no box. The canvas
+  // lays out each one here except an element marked as drawn nowhere, as a
+  // box inside a closed accordion item is.
+  vi.spyOn(Element.prototype, "getClientRects").mockImplementation(function (
+    this: Element
+  ) {
+    const boxes = this.hasAttribute("data-test-undrawn")
+      ? []
+      : [new DOMRect(0, 0, 320, 180)];
+    return Object.assign(boxes, {
+      item: (i: number) => boxes[i] ?? null,
+    }) as unknown as DOMRectList;
+  });
 });
 
 function page(...nodes: BlockNode[]): BlockDocument {
@@ -434,5 +448,66 @@ describe("an Image whose picture is set elsewhere", () => {
       '<div data-nx-node="img" data-nx-instance="placed" data-nx-image-empty="empty"></div>'
     );
     expect(screen.queryByText("Add an image")).toBeNull();
+  });
+});
+
+describe("an answer that comes after the author moved on", () => {
+  it("stores no link whose check was cancelled", async () => {
+    let answer: ((loaded: boolean) => void) | undefined;
+    loads.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          answer = resolve;
+        })
+    );
+    const { apply } = mount(page(imageNode("img")), EMPTY_BOX);
+    fireEvent.click(screen.getByRole("button", { name: "Link" }));
+    fireEvent.change(screen.getByLabelText("Image address"), {
+      target: { value: "https://cdn.example/slow.png" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(loads).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await act(async () => answer?.(true));
+    expect(apply).not.toHaveBeenCalled();
+    expect(screen.getByText("Add an image")).toBeTruthy();
+  });
+
+  it("stores the newer of two files dropped on one Image, whichever answers last", async () => {
+    const finishes: ((media: PickedMedia) => void)[] = [];
+    const upload = vi.fn<Upload>(
+      () =>
+        new Promise(resolve => {
+          finishes.push(resolve);
+        })
+    );
+    const { apply, root } = mount(
+      page(imageNode("img", { src: "https://cdn.example/old.png" })),
+      '<img data-nx-node="img" src="https://cdn.example/old.png" alt="">',
+      { upload }
+    );
+    const picture = root.querySelector('[data-nx-node="img"]');
+    await act(async () => {
+      picture?.dispatchEvent(fileDrag("drop", [PNG()]));
+    });
+    await act(async () => {
+      picture?.dispatchEvent(fileDrag("drop", [PNG()]));
+    });
+    expect(upload).toHaveBeenCalledTimes(2);
+    await act(async () => finishes[1]?.({ id: "newer" }));
+    await act(async () => finishes[0]?.({ id: "older" }));
+    expect(writtenProps(apply)).toEqual({
+      src: "https://cdn.example/old.png",
+      mediaId: "newer",
+    });
+  });
+
+  it("draws nothing over a box the canvas lays out nowhere", () => {
+    mount(
+      page(imageNode("img")),
+      '<div data-nx-node="img" data-nx-image-empty="empty" data-test-undrawn></div>'
+    );
+    expect(screen.queryByText("Add an image")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });

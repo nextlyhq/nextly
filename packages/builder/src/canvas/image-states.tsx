@@ -54,7 +54,12 @@ import { nodeAddressOf, nodeElement } from "./canvas-addressing";
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
-import { canvasContentRect, overlaySpaceOf } from "./geometry-dom";
+import {
+  canvasContentRect,
+  layoutFragments,
+  overlaySpaceOf,
+  renderSkips,
+} from "./geometry-dom";
 import {
   carriesFiles,
   chosenFile,
@@ -154,6 +159,20 @@ export function ImageStates({
     []
   );
 
+  /*
+   * Each Image's latest choice, by a number every choice moves on. An upload
+   * or a link check answers later, and only the choice it was made for may
+   * act on its answer: one the author has since cancelled, or replaced with
+   * another (a library pick, a new link, another file), must not store
+   * anything or bring its state back.
+   */
+  const choices = React.useRef(new Map<string, number>());
+  const choose = React.useCallback((nodeId: string): (() => boolean) => {
+    const ticket = (choices.current.get(nodeId) ?? 0) + 1;
+    choices.current.set(nodeId, ticket);
+    return () => choices.current.get(nodeId) === ticket;
+  }, []);
+
   // Notes and stored pictures clear themselves after a while.
   React.useEffect(() => {
     const timers: ReturnType<typeof setTimeout>[] = [];
@@ -206,6 +225,7 @@ export function ImageStates({
     (nodeId: string, files: FileList | null) => {
       const chosen = chosenFile(files);
       if (chosen === undefined || upload === undefined) return;
+      const current = choose(nodeId);
       if (!chosen.image) {
         setFor(nodeId, { kind: "note", words: WORDS.notImage });
         return;
@@ -214,10 +234,10 @@ export function ImageStates({
       const { file } = chosen;
       setFor(nodeId, { kind: "uploading", name: file.name, percent: 0 });
       upload(file, percent =>
-        setActivity(current => {
-          const now = current.get(nodeId);
-          if (now?.kind !== "uploading") return current;
-          const map = new Map(current);
+        setActivity(shown => {
+          const now = shown.get(nodeId);
+          if (!current() || now?.kind !== "uploading") return shown;
+          const map = new Map(shown);
           map.set(nodeId, {
             ...now,
             percent: Math.max(0, Math.min(100, percent)),
@@ -225,26 +245,31 @@ export function ImageStates({
           return map;
         })
       ).then(
-        (media: PickedMedia) =>
+        (media: PickedMedia) => {
+          if (!current()) return;
           setFor(
             nodeId,
             place(nodeId, { mediaId: media.id })
               ? { kind: "placing" }
               : undefined
-          ),
-        (error: unknown) =>
+          );
+        },
+        (error: unknown) => {
+          if (!current()) return;
           setFor(nodeId, {
             kind: "note",
             words: failureWords(error),
-          })
+          });
+        }
       );
     },
-    [place, setFor, upload, writable]
+    [choose, place, setFor, upload, writable]
   );
 
   /** Check a typed link, and store it once it loads as a picture. */
   const tryLink = React.useCallback(
     (nodeId: string, typed: string) => {
+      const current = choose(nodeId);
       const address = linkAddress(typed, remotePatterns);
       const root = canvasRootOf(layer.current);
       if (address === undefined || root === null) {
@@ -253,6 +278,7 @@ export function ImageStates({
       }
       setFor(nodeId, { kind: "link", typed, checking: true });
       void loadsAsImage(address, root.ownerDocument).then(loaded => {
+        if (!current()) return;
         if (!loaded) {
           setFor(nodeId, { kind: "bad-link", typed });
           return;
@@ -263,7 +289,7 @@ export function ImageStates({
         );
       });
     },
-    [place, remotePatterns, setFor]
+    [choose, place, remotePatterns, setFor]
   );
 
   const measure = React.useCallback(() => {
@@ -344,7 +370,7 @@ export function ImageStates({
     };
   }, [take, upload, writable, canvasFrame, editor.document]);
 
-  const choose = (nodeId: string): void => editor.select(nodeId);
+  const selectImage = (nodeId: string): void => editor.select(nodeId);
 
   return (
     <div
@@ -363,7 +389,7 @@ export function ImageStates({
           dragging={dragging}
           canUpload={upload !== undefined}
           canPick={Picker !== undefined}
-          onSelect={() => choose(plate.nodeId)}
+          onSelect={() => selectImage(plate.nodeId)}
           onFiles={files => take(plate.nodeId, files)}
           onHeld={held =>
             setDropTarget(current =>
@@ -371,18 +397,22 @@ export function ImageStates({
             )
           }
           onLibrary={() => {
-            choose(plate.nodeId);
+            selectImage(plate.nodeId);
             setPicking(plate.nodeId);
           }}
           onLink={typed => {
-            choose(plate.nodeId);
+            selectImage(plate.nodeId);
             setFor(plate.nodeId, { kind: "link", typed, checking: false });
           }}
           onTypeLink={typed =>
             setFor(plate.nodeId, { kind: "link", typed, checking: false })
           }
           onSubmitLink={typed => tryLink(plate.nodeId, typed)}
-          onCancel={() => setFor(plate.nodeId, undefined)}
+          onCancel={() => {
+            // A link still being checked is let go with it.
+            choose(plate.nodeId);
+            setFor(plate.nodeId, undefined);
+          }}
         />
       ))}
       {/*
@@ -402,7 +432,10 @@ export function ImageStates({
             const nodeId = picking;
             setPicking(null);
             const first = media[0];
-            if (first !== undefined && place(nodeId, { mediaId: first.id })) {
+            if (first === undefined) return;
+            // The pick wins over an upload or a link check still out.
+            choose(nodeId);
+            if (place(nodeId, { mediaId: first.id })) {
               setFor(nodeId, { kind: "placing" });
             }
           }}
@@ -421,14 +454,27 @@ function canvasRootOf(layer: HTMLElement | null): HTMLElement | null {
 /** The canvas the plates are drawn over, and how a rectangle is placed there. */
 type Space = NonNullable<ReturnType<typeof overlaySpaceOf>>;
 
+/**
+ * Whether the canvas draws an element at all. A box the render keeps but lays
+ * out nowhere (inside a closed accordion item, say) has no place on screen,
+ * so a plate drawn for it would sit over whatever follows, or be a control of
+ * no size that is still in the tab order. Asked as `EmptyContainerAppenders`
+ * asks it.
+ */
+function isDrawn(element: Element): boolean {
+  return layoutFragments(element) > 0 && !renderSkips(element);
+}
+
 /** A plate over each Image box this page owns that waits for a picture. */
 function emptyPlates(space: Space, document: EditorState["document"]): Plate[] {
-  return emptyImageBoxes(space.root, document).map((box, index) => ({
-    key: `${box.nodeId}:${String(index)}`,
-    nodeId: box.nodeId,
-    reason: box.reason,
-    rect: space.place(canvasContentRect(box.element, space.root)),
-  }));
+  return emptyImageBoxes(space.root, document)
+    .filter(box => isDrawn(box.element))
+    .map((box, index) => ({
+      key: `${box.nodeId}:${String(index)}`,
+      nodeId: box.nodeId,
+      reason: box.reason,
+      rect: space.place(canvasContentRect(box.element, space.root)),
+    }));
 }
 
 /**
@@ -451,7 +497,7 @@ function busyPlates(
   for (const nodeId of ids) {
     if (drawn.has(nodeId)) continue;
     const element = nodeElement(space.root, nodeId);
-    if (element === null) continue;
+    if (element === null || !isDrawn(element)) continue;
     plates.push({
       key: `${nodeId}:filled`,
       nodeId,
