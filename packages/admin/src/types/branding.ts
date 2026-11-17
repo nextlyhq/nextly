@@ -277,6 +277,11 @@ export interface PluginMetadata {
       path: string;
       component: string;
       label?: string;
+      /**
+       * The words of the way into the view a list row's menu and the
+       * document bar offer, as in "Open in builder". Present when declared.
+       */
+      openLabel?: string;
     } & (
       | { slug: string }
       /**

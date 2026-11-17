@@ -50,7 +50,10 @@ import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ListResponse } from "@admin/lib/api/response-types";
 import { revsFor } from "@admin/lib/document-version";
 import { navigateTo } from "@admin/lib/navigation";
-import { useDocumentAddress } from "@admin/lib/navigation/useDocumentAddress";
+import {
+  useDocumentAddress,
+  useRowWaysIn,
+} from "@admin/lib/navigation/useDocumentAddress";
 import {
   hasComponent,
   type InjectionPointProps,
@@ -528,6 +531,17 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       navigateTo(entryHref(entryId, locale)),
     [entryHref]
   );
+  // The other ways into a row's entry its menu offers, by the same rule and
+  // the same copy of the collection as the row's own link.
+  const waysInOf = useRowWaysIn();
+  const rowWaysIn = useCallback(
+    (entryId: string) =>
+      waysInOf(
+        { kind: "collection", slug: collectionSlug, id: entryId },
+        collection === undefined ? {} : { collection }
+      ),
+    [waysInOf, collectionSlug, collection]
+  );
 
   const handleDelete = useCallback((entryId: string) => {
     setSelectedForDelete([entryId]);
@@ -887,6 +901,7 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
                     onSearchChange={handleSearchChange}
                     onEdit={handleEdit}
                     entryHref={entryHref}
+                    rowWaysIn={rowWaysIn}
                     onDelete={handleDelete}
                     onBulkDelete={handleBulkDelete}
                     onBulkPublish={handleBulkPublish}
