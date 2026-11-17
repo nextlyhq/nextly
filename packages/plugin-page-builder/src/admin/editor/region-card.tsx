@@ -109,12 +109,7 @@ export function RegionCard({
           {`You can't change the site ${word}. Ask someone who can edit components.`}
         </p>
       ) : (
-        <Button
-          type="button"
-          size="sm"
-          className="self-start"
-          onClick={onEdit}
-        >
+        <Button type="button" size="sm" className="self-start" onClick={onEdit}>
           {word === "header" ? "Edit header" : "Edit footer"}
         </Button>
       )}

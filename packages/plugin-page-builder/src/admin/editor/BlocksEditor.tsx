@@ -863,11 +863,13 @@ function escapeWithoutSelection(
 }
 
 /** What the block keys are told of a selected header or footer. */
-function selectedRegionKeys(
-  region: SelectedRegion
-): { selectedRegion?: { readonly refusal: string } } {
+function selectedRegionKeys(region: SelectedRegion): {
+  selectedRegion?: { readonly refusal: string };
+} {
   const area = region.selection.area;
-  return area === null ? {} : { selectedRegion: { refusal: regionRefusal(area) } };
+  return area === null
+    ? {}
+    : { selectedRegion: { refusal: regionRefusal(area) } };
 }
 
 /**

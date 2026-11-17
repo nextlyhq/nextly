@@ -29,7 +29,11 @@ describe("which corner inside a region its tag sits in", () => {
   it("drops to the bottom left where the top is scrolled off screen", () => {
     // A tall footer scrolled so its top edge is above the canvas.
     expect(
-      regionMarkPlacement({ edge: { top: -200, bottom: 300 }, height, viewport })
+      regionMarkPlacement({
+        edge: { top: -200, bottom: 300 },
+        height,
+        viewport,
+      })
     ).toBe("bottom");
     // A header scrolled the same way.
     expect(
@@ -39,7 +43,11 @@ describe("which corner inside a region its tag sits in", () => {
 
   it("keeps the top where the bottom is no better: a region scrolled away", () => {
     expect(
-      regionMarkPlacement({ edge: { top: -300, bottom: -100 }, height, viewport })
+      regionMarkPlacement({
+        edge: { top: -300, bottom: -100 },
+        height,
+        viewport,
+      })
     ).toBe("top");
     expect(
       regionMarkPlacement({ edge: { top: 900, bottom: 972 }, height, viewport })

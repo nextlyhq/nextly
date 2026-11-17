@@ -332,9 +332,13 @@ describe("the regions of a page's Layout on the canvas", () => {
 
   it("is one Tab stop named for it, which Enter or Space selects", () => {
     const onSelectRegion = vi.fn();
-    renderCanvas([regionOf("header", "Top"), regionOf("footer", "Bottom")], vi.fn(), {
-      onSelectRegion,
-    });
+    renderCanvas(
+      [regionOf("header", "Top"), regionOf("footer", "Bottom")],
+      vi.fn(),
+      {
+        onSelectRegion,
+      }
+    );
     const header = regionNamed("Site header, from the Main header & footer");
     const footer = regionNamed("Site footer, from the Main header & footer");
     expect(header.tabIndex).toBe(0);

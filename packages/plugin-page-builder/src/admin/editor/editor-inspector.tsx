@@ -191,9 +191,7 @@ export function editorInspector<TFieldValues extends FieldValues>(
  * The selected header or footer's card, drawn afresh for each region chosen
  * so its pages are counted as they stand; nothing while none is selected.
  */
-function regionCardOf(
-  view: EditorView
-): { regionCard?: React.ReactNode } {
+function regionCardOf(view: EditorView): { regionCard?: React.ReactNode } {
   const facts = view.selectedRegion.card;
   if (facts === undefined) return {};
   return {
