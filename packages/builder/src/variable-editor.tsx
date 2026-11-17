@@ -125,14 +125,7 @@ export function VariableEditor({
   const saidId = `${id}-said`;
   const refused: Refused = { fields: refusals, describedBy: saidId };
 
-  const said = [
-    ...(nameIssue === undefined ? [] : [nameIssue]),
-    // Once each: two fields refused for the same reason say it once.
-    ...new Set([...refusals.values()].map(refusal => refusal.message)),
-    ...(note === undefined ? [] : [note]),
-    ...row.issues,
-    ...(lineHeight?.issues ?? []),
-  ];
+  const said = saidUnder({ nameIssue, refusals, note, entry });
 
   return (
     <div
@@ -163,7 +156,7 @@ export function VariableEditor({
         />
         <CodeName
           id={`${id}-code`}
-          property={codeNameOf(tokens, row.at, isNew ? name : undefined)}
+          property={codeNameOf(tokens, row.at, name, isNew)}
           isNew={isNew}
         />
       </div>
@@ -204,6 +197,32 @@ export function VariableEditor({
       )}
     </div>
   );
+}
+
+/**
+ * What is said under the fields, in order: why the name was refused, why a
+ * value was (once each: two fields refused for the same reason say it
+ * once), what a write changed beyond its own field, and what the engine
+ * reports about the variable and its line height.
+ */
+function saidUnder({
+  nameIssue,
+  refusals,
+  note,
+  entry,
+}: {
+  nameIssue: string | undefined;
+  refusals: ReadonlyMap<string, { readonly message: string }>;
+  note: string | undefined;
+  entry: VariableEntry;
+}): string[] {
+  return [
+    ...(nameIssue === undefined ? [] : [nameIssue]),
+    ...new Set([...refusals.values()].map(refusal => refusal.message)),
+    ...(note === undefined ? [] : [note]),
+    ...entry.row.issues,
+    ...(entry.lineHeight?.issues ?? []),
+  ];
 }
 
 /**
@@ -253,10 +272,10 @@ function EditorDetails({
 function codeNameOf(
   tokens: SiteTokenSet,
   at: number,
-  typed: string | undefined
+  typed: string,
+  isNew: boolean
 ): string {
-  const named =
-    typed === undefined ? tokens : labelNewVariable(tokens, at, typed);
+  const named = isNew ? labelNewVariable(tokens, at, typed) : tokens;
   const token = named.tokens[at];
   if (token === undefined) return "";
   const { prefix } = resolveTokenPrefix(tokens.prefix);
