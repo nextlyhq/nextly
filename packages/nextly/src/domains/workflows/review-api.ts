@@ -18,15 +18,12 @@ import { NextlyError } from "../../errors";
 import { resolveUserRoles } from "../../services/lib/permissions";
 import { configuredLocales } from "../i18n/configured-locales";
 
+import { primaryStep } from "./define-workflow";
 import { livePartsOf, partStage, pendingPartsOn } from "./implicit-stage";
 import { lastMovesOn, type LastMove } from "./last-moves";
 import { documentTableOn, partVersionOn } from "./part-versions";
 import { partsWaitingFor, type PartWaitingFor } from "./part-waits-for";
-import {
-  registeredWorkflows,
-  workflowAttachedTo,
-  type RegisteredWorkflow,
-} from "./registry";
+import { registeredWorkflows, workflowAttachedTo } from "./registry";
 import {
   countAssignedReviewStates,
   readAssignedReviewStates,
@@ -39,6 +36,7 @@ import {
   allowsPublish,
   assignWorkflowParts,
   primaryAction,
+  stepsTakeableBy,
   takeWorkflowStep,
   workflowCallerActor,
   type Assignment,
@@ -52,7 +50,6 @@ import type { Workflow, WorkflowStepKind } from "./types";
 export const REVIEW_API_ERROR_CODES = {
   /** An approval asked for several documents at once: each is given for the version shown. */
   bulkApproval: "WORKFLOW_BULK_APPROVAL",
-  noWorkflow: "WORKFLOW_NOT_ATTACHED",
 } as const;
 
 /** A step a part may take from where it stands. @experimental */
@@ -61,6 +58,22 @@ export interface AvailableStep {
   label: string;
   kind: WorkflowStepKind;
   to: string;
+  /**
+   * Whether the caller may take it on this part, judged by the checks the step makes of who takes
+   * it (`stepsTakeableBy`): its permission, a person for an approval or a request for changes,
+   * and the self-approval it refuses. True for trusted code but on a step only a person may take.
+   * What the step checks of the content (the version seen, a comment) is asked when it is taken.
+   *
+   * @experimental
+   */
+  mayTake: boolean;
+  /**
+   * Whether it is its stage's primary step: the stage's only step out, or the one marked
+   * `primary`. Exactly one step out of a stage is.
+   *
+   * @experimental
+   */
+  primary: boolean;
 }
 
 /** One part's review state, as a reader is told it. @experimental */
@@ -82,7 +95,7 @@ export interface PartReview {
   revision: number;
   /** The document's version as a reader of this part holds it: what a step says it saw. */
   version: string | null;
-  /** The steps that leave from its stage. Whether the caller may take one is asked when taken. */
+  /** The steps that leave from its stage, each with whether the caller may take it. */
   steps: AvailableStep[];
   /**
    * Who it waits for: its assignee; else its stage's default reviewer, where they may take the
@@ -93,27 +106,15 @@ export interface PartReview {
   lastMove: LastMove | null;
 }
 
-/** A document's review state, part by part. @experimental */
+/**
+ * A document's review state, part by part. With no workflow attached to its collection or Single,
+ * `workflow` is null and `parts` is empty.
+ *
+ * @experimental
+ */
 export interface DocumentReview {
-  workflow: { slug: string; label: string };
+  workflow: { slug: string; label: string } | null;
   parts: PartReview[];
-}
-
-/** The workflow attached to the document's collection or Single, or a refusal. */
-function attachedTo(document: ReviewDocument): RegisteredWorkflow {
-  const registered = workflowAttachedTo(document.scopeKind, document.scopeSlug);
-  if (!registered) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "document",
-          code: REVIEW_API_ERROR_CODES.noWorkflow,
-          message: `No workflow is attached to the ${document.scopeKind} "${document.scopeSlug}".`,
-        },
-      ],
-    });
-  }
-  return registered;
 }
 
 const stageOf = (workflow: Workflow, name: string | null) =>
@@ -121,9 +122,13 @@ const stageOf = (workflow: Workflow, name: string | null) =>
     ? undefined
     : workflow.stages.find(stage => stage.name === name);
 
-/** The steps leaving `stage`, as a reader is told them. */
-function stepsFrom(workflow: Workflow, stage: string | null): AvailableStep[] {
+/** A step leaving a stage, before whether the caller may take it is judged. */
+type StepOut = Omit<AvailableStep, "mayTake">;
+
+/** The steps leaving `stage`, as a reader is told them, its primary step marked. */
+function stepsFrom(workflow: Workflow, stage: string | null): StepOut[] {
   if (stage === null) return [];
+  const primary = primaryStep(workflow, stage)?.name;
   return workflow.steps
     .filter(step => step.from.includes(stage))
     .map(step => ({
@@ -131,23 +136,27 @@ function stepsFrom(workflow: Workflow, stage: string | null): AvailableStep[] {
       label: step.label,
       kind: step.kind,
       to: step.to,
+      primary: step.name === primary,
     }));
 }
 
 /**
  * A document's review state, each part where it stands: its review state's stage, or for a part
  * with none, where its content puts it (`partStage`). Read in one transaction, so every part is
- * read as of one moment, its last move included. Who each part waits for is asked after, on the
- * pool, as every question of who holds a permission is. The caller has already been allowed to
- * read the document.
+ * read as of one moment, its last move included. Who each part waits for, and which steps `caller`
+ * may take, are asked after, on the pool, as every question of who holds a permission is. The
+ * caller has already been allowed to read the document, so a document with no workflow attached
+ * answers as such only to one who may read it.
  *
  * @experimental
  */
 export async function reviewStateOf(
   adapter: DrizzleAdapter,
-  document: ReviewDocument
+  document: ReviewDocument,
+  caller: WorkflowCaller
 ): Promise<DocumentReview> {
-  const registered = attachedTo(document);
+  const registered = workflowAttachedTo(document.scopeKind, document.scopeSlug);
+  if (!registered) return { workflow: null, parts: [] };
   const { workflow } = registered;
   const table = await documentTableOn(document);
   const parts: (string | null)[] = table.localized
@@ -159,7 +168,9 @@ export async function reviewStateOf(
     const states = await readDocumentReviewStates(tx, document);
     const pending = await pendingPartsOn(tx, document);
     const moves = await lastMovesOn(tx, dialect, document);
-    const read: Omit<PartReview, "waitingFor">[] = [];
+    const read: (Omit<PartReview, "waitingFor" | "steps"> & {
+      steps: StepOut[];
+    })[] = [];
     for (const part of parts) {
       const state = states.find(candidate => candidate.part === part) ?? null;
       const stage = partStage(workflow, state, {
@@ -202,10 +213,25 @@ export async function reviewStateOf(
     document.scopeSlug,
     read
   );
+  const mayTake = await stepsTakeableBy(
+    adapter,
+    workflow,
+    document,
+    caller,
+    read.map(part => ({
+      part: part.part,
+      stage: part.stage,
+      enteredBy: part.enteredBy,
+    }))
+  );
   return {
     workflow: { slug: workflow.slug, label: workflow.label },
     parts: read.map((part, index) => ({
       ...part,
+      steps: part.steps.map(step => ({
+        ...step,
+        mayTake: mayTake(part.part, step.name),
+      })),
       waitingFor: waiting[index] ?? null,
     })),
   };

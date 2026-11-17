@@ -401,12 +401,16 @@ async function assignmentsOf(
  * @experimental
  */
 export const workflowOperations = {
-  /** A document's review state, part by part. */
+  /**
+   * A document's review state, part by part, each step marked with whether the caller may take it.
+   * With no workflow attached, none and no parts: answered only after the read check, so a missing
+   * document, or one the caller may not read, is not found whether or not a workflow is attached.
+   */
   async reviewState(asker: WorkflowAsker, input: unknown) {
     const document = await documentOf(parse(DocumentRef, input));
     await assertReadable(asker, document);
-    const review = await reviewStateOf(adapter(), document);
-    if (asker === null) return review;
+    const review = await reviewStateOf(adapter(), document, callerOf(asker));
+    if (asker === null || review.workflow === null) return review;
     // Only the parts in a language the caller may read the document in, and the shared part,
     // which the read above allowed: where a language stands, who it waits for and its last move
     // (with its comment) are that language's to tell.
