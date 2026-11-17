@@ -218,13 +218,17 @@ export const LINK_PROPS = {
     type: "text",
   },
   entryId: { label: "Linked entry", role: "content", type: "text" },
+  // Drawn as one switch, "Open in a new tab", by the inspector's link
+  // control; the options stay the values stored.
   target: {
-    label: "Open link in",
+    label: "Open in a new tab",
     optionLabels: { _self: "This tab", _blank: "New tab" },
     type: "select",
     options: ["_self", "_blank"],
   },
-  rel: { label: "Link relationship", type: "text" },
+  // How the page relates to where it links: an HTML-level detail, so in
+  // Advanced › HTML with the block's other HTML settings.
+  rel: { label: "Link relationship", type: "text", group: "advanced" },
 } as const;
 
 /**

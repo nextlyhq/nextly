@@ -321,7 +321,7 @@ export const tableOfContents: BlockDefinition<
     content: { label: "Content", type: RICH_TEXT_PROP_TYPE },
     title: { label: "Title", role: "content", type: "text", inline: true },
     depth: {
-      label: "Headings listed",
+      label: "Headings",
       optionLabels: {
         h2: "H2 only",
         "h2-h3": "H2 and H3",
@@ -330,7 +330,7 @@ export const tableOfContents: BlockDefinition<
       type: "select",
       options: [...TABLE_OF_CONTENTS_DEPTHS],
     },
-    collapsible: { label: "Can be folded away", type: "checkbox" },
+    collapsible: { label: "Can be folded", type: "checkbox" },
   },
   defaultProps: { title: DEFAULT_TITLE, depth: "h2-h3", collapsible: true },
   example: {

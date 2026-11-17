@@ -220,9 +220,10 @@ export const quote: BlockDefinition<QuoteProps, PageContext> = defineBlock({
       type: "textarea",
       inline: true,
     },
-    attribution: { label: "Attribution", role: "content", type: "text" },
+    attribution: { label: "Who said it", role: "content", type: "text" },
     source: {
-      label: "Source title",
+      label: "Source",
+      section: "Source",
       role: "content",
       type: "text",
       inline: true,
