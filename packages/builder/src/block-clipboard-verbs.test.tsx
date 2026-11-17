@@ -8,15 +8,17 @@
  * @module block-clipboard-verbs.test
  */
 import {
+  clearBlocks,
   DOCUMENT_FORMAT_VERSION,
   findNode,
+  registerBlocks,
   type BlockDocument,
   type BlockNode,
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
 import { act, render, renderHook } from "@testing-library/react";
 import * as React from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FOREIGN_SITE_REFUSAL } from "./block-clipboard";
 import {
@@ -151,6 +153,53 @@ describe("copying and pasting blocks", () => {
     });
     expect(taken).toBe(false);
     expect(notify).not.toHaveBeenCalled();
+  });
+});
+
+describe("a paste with a list showing its empty message", () => {
+  // The list's two regions, as the registry the editor reads declares them.
+  beforeEach(() => {
+    registerBlocks(
+      [
+        {
+          name: "core/collection-loop",
+          version: 1,
+          description: "A list.",
+          example: { props: {} },
+          render: () => null,
+          slots: { children: {}, empty: {} },
+        },
+      ] as never,
+      { source: "test" }
+    );
+  });
+  afterEach(() => clearBlocks());
+
+  it("lands in the empty message the canvas shows", () => {
+    const { result } = setUp(
+      page(
+        node(
+          "list",
+          "core/collection-loop",
+          { props: { limit: 3, collection: "posts" } },
+          { children: [node("entry-h", "core/heading")], empty: [] }
+        )
+      )
+    );
+    act(() => result.current.editor.showListEmpty?.("list", true));
+    act(() => result.current.editor.select("list"));
+    act(() => {
+      result.current.verbs.pasteText(
+        JSON.stringify({
+          nextlyBlocks: 1,
+          origin: globalThis.location.origin,
+          blocks: [node("note", "core/heading")],
+        })
+      );
+    });
+    const list = result.current.editor.document.nodes[0];
+    expect(list?.slots?.empty).toHaveLength(1);
+    expect(list?.slots?.children).toHaveLength(1);
   });
 });
 

@@ -41,7 +41,7 @@ import {
 import { z } from "zod";
 
 import { compositionRefusalReason } from "./composition-refusal";
-import { entryContentRefusal } from "./entry-content-rules";
+import { entryContentRefusal, offeredIn } from "./entry-content-rules";
 import type { BuilderOp, OpPosition } from "./op-vocabulary";
 import type { SlotSource } from "./panels/add/inserter-types";
 import {
@@ -72,6 +72,10 @@ export const FOREIGN_SITE_REFUSAL =
 /** Said when copied blocks were written in a format this builder does not read. */
 export const OTHER_VERSION_REFUSAL =
   "These blocks were copied from a different version of the editor, so they can’t be pasted here. Copy them again.";
+
+/** Said when copied Entry content would land in a page that is not a template. */
+export const ENTRY_CONTENT_TEMPLATE_ONLY =
+  "An Entry content block goes only in a template, so it can’t be pasted here.";
 
 /** Said when Paste finds no copied blocks on the clipboard. */
 export const NOTHING_TO_PASTE =
@@ -223,6 +227,11 @@ export function planPaste(
   // A template holds one Entry content block, so a paste bringing a second
   // is refused as adding one is.
   if (blocks.some(block => holdsEntryContent(block))) {
+    // Only a template draws an entry, so anywhere else the block is refused
+    // here rather than left for the save to refuse.
+    if (!offeredIn(document.kind, ENTRY_CONTENT_TYPE)) {
+      return { refusal: ENTRY_CONTENT_TEMPLATE_ONLY };
+    }
     const held = entryContentRefusal(document, ENTRY_CONTENT_TYPE);
     if (held !== undefined) return { refusal: held };
   }

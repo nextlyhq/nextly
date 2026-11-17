@@ -270,8 +270,11 @@ export function builderCommands({
 }: BuilderCommandsInput): BuilderCommand[] {
   const run = blockActionRunners(verbs);
 
+  // Paste is offered whatever is selected, since with nothing selected it
+  // lands at the end of the page; so it is added once, below, and not taken
+  // from the selection's verbs.
   const blockCommands = actions
-    .filter(action => action.enabled)
+    .filter(action => action.enabled && action.id !== "paste")
     .map(action => {
       const copy = BLOCK_COMMAND_COPY[action.id];
       return {
@@ -282,6 +285,14 @@ export function builderCommands({
         run: run[action.id],
       };
     });
+
+  blockCommands.push({
+    id: "block.paste",
+    label: BLOCK_COMMAND_COPY.paste.label,
+    group: BLOCK_GROUP,
+    keywords: BLOCK_COMMAND_COPY.paste.keywords,
+    run: run.paste,
+  });
 
   const history: BuilderCommand[] = [];
   if (canUndo) {

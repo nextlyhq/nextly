@@ -27,7 +27,10 @@ import {
   serializeCopiedBlocks,
   type PasteSources,
 } from "./block-clipboard";
-import type { SlotSource } from "./panels/add/inserter-types";
+import {
+  slotsShowingEmpty,
+  type SlotSource,
+} from "./panels/add/inserter-types";
 
 const SITE = "https://site.example";
 
@@ -252,6 +255,14 @@ describe("where pasted blocks land", () => {
     expect(plan.ops).toBeUndefined();
   });
 
+  it("refuses Entry content in a page, which only a template can hold", () => {
+    const entry = node("entry", "core/entry-content", {
+      props: { field: "body" },
+    });
+    const plan = planPaste(page(), null, [entry], sources);
+    expect(plan.refusal).toMatch(/only in a template/);
+  });
+
   it("refuses a second Entry content block in a template", () => {
     const entry = node("entry", "core/entry-content", {
       props: { field: "body" },
@@ -263,6 +274,29 @@ describe("where pasted blocks land", () => {
     } as BlockDocument;
     const plan = planPaste(template, null, [entry], sources);
     expect(plan.refusal).toBe("A template holds one Entry content block.");
+  });
+});
+
+describe("a paste into a list showing its empty message", () => {
+  it("goes into the empty message the canvas shows, not the entries", () => {
+    const list = node(
+      "list",
+      "core/collection-loop",
+      { props: { limit: 3, collection: "posts" } },
+      { children: [node("entry-h", "core/heading")], empty: [] }
+    );
+    const document = page(list);
+    const copied = [node("note", "core/heading")];
+    const plan = planPaste(document, "list", copied, {
+      ...sources,
+      slots: slotsShowingEmpty(slots, new Set(["list"])),
+    });
+    if (plan.refusal !== undefined) throw new Error(plan.refusal);
+    const after = applyOps(document, [...plan.ops]).document;
+    expect(after.nodes[0]?.slots?.empty?.map(each => each.id)).toEqual(
+      plan.newIds
+    );
+    expect(after.nodes[0]?.slots?.children).toHaveLength(1);
   });
 });
 

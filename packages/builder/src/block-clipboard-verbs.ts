@@ -25,6 +25,7 @@ import { readClipboard, writeToClipboard } from "./block-clipboard-transport";
 import type { EditorState } from "./editor-state";
 import { lockSentence, UNDO_KEYS_SPOKEN } from "./keyboard-announcements";
 import { registrySlotSource } from "./panels/add/inserter";
+import { slotsShowingEmpty } from "./panels/add/inserter-types";
 import { isRefusal, selectionDeletion, subjectOf } from "./selection-ops";
 
 /** Where copied text goes: the system clipboard, or a clipboard event being handled. */
@@ -141,7 +142,12 @@ export function useBlockClipboardVerbs({
         {
           nesting,
           ...(components === undefined ? {} : { components }),
-          slots: registrySlotSource(),
+          // The region the canvas shows: a list previewing its empty
+          // message takes the paste there, as the Add panel's insert does.
+          slots: slotsShowingEmpty(
+            registrySlotSource(),
+            editorNow.listsShowingEmpty
+          ),
           lockRefusal: ops => lockSentence(editorNow, ops),
         }
       );
