@@ -17,7 +17,7 @@ import { describe, expect, it } from "vitest";
 import { VARIABLE_LOSS_WORDS } from "./editor-words";
 import {
   sharedStyleSets,
-  variableCount,
+  variableCountWords,
   variableLossSentence,
   variableRemoval,
   variableStatus,
@@ -42,56 +42,43 @@ function reach(
   };
 }
 
-describe("the count at the end of a row", () => {
+describe("how widely a row's variable is used, in words", () => {
   it("is the places: the documents and the shared styles together", () => {
     // 12 documents and 2 shared styles: a count of either alone is wrong.
-    expect(variableCount(reach(12, ["c-card", "c-hero"]))).toEqual({
-      text: "14",
-      words: "Used in 14 places",
-      zero: false,
-      floor: false,
-    });
+    expect(variableCountWords(reach(12, ["c-card", "c-hero"]))).toBe(
+      "Used in 14 places"
+    );
   });
 
   it("counts the block types whose default styles name it as places too", () => {
     // 2 documents, 1 shared style and 2 block types: 5 places.
     expect(
-      variableCount(reach(2, ["c-card"], true, ["core/button", "core/heading"]))
-        .words
+      variableCountWords(
+        reach(2, ["c-card"], true, ["core/button", "core/heading"])
+      )
     ).toBe("Used in 5 places");
-    expect(variableCount(reach(0, [], true, ["core/button"])).text).toBe("1");
+    expect(variableCountWords(reach(0, [], true, ["core/button"]))).toBe(
+      "Used in 1 place"
+    );
   });
 
   it("says one place in the singular", () => {
-    expect(variableCount(reach(0, ["c-card"])).words).toBe("Used in 1 place");
-    expect(variableCount(reach(1)).words).toBe("Used in 1 place");
+    expect(variableCountWords(reach(0, ["c-card"]))).toBe("Used in 1 place");
+    expect(variableCountWords(reach(1))).toBe("Used in 1 place");
   });
 
-  it("is a muted zero when nothing uses it", () => {
-    expect(variableCount(reach(0))).toEqual({
-      text: "0",
-      words: "Not used anywhere",
-      zero: true,
-      floor: false,
-    });
+  it('says "Not used" when nothing uses it', () => {
+    expect(variableCountWords(reach(0))).toBe("Not used");
   });
 
-  it("is a floor, 2+, while some pages are not counted yet", () => {
-    expect(variableCount(reach(1, ["c-card"], false))).toEqual({
-      text: "2+",
-      words: "Used in at least 2 places. Some pages aren't counted yet.",
-      zero: false,
-      floor: true,
-    });
-  });
-
-  it("says a zero that is a floor in words, as a shared style's row does", () => {
-    const count = variableCount(reach(0, [], false));
-    expect(count.text).toBe("Not counted yet");
-    expect(count.words).toBe(
-      "No uses counted yet. Some pages aren't counted yet."
+  it("is a floor while some pages are not counted yet", () => {
+    expect(variableCountWords(reach(1, ["c-card"], false))).toBe(
+      "Used in at least 2 places. Some pages aren't counted yet."
     );
-    expect(count.zero).toBe(true);
+  });
+
+  it('says "Not counted yet" for a zero that is a floor', () => {
+    expect(variableCountWords(reach(0, [], false))).toBe("Not counted yet");
   });
 });
 
