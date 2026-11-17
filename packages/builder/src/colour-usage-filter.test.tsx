@@ -113,9 +113,12 @@ function Panel({
   usage,
   usedOnPage,
   site = SITE,
+  search = "",
 }: {
   usage: VariablesAccess;
   usedOnPage?: ReadonlySet<string>;
+  /** A search the host keeps, narrowing what is listed. */
+  search?: string;
   /** The site's variables as a host hands them, changed by a later render. */
   site?: SiteTokenSet;
 }): React.JSX.Element {
@@ -127,6 +130,7 @@ function Panel({
       currentTokens={() => tokens}
       onChange={setTokens}
       groups={["colours"]}
+      search={search}
       usage={usage}
       {...(usedOnPage === undefined ? {} : { usedOnPage })}
     />
@@ -261,6 +265,43 @@ describe("the Colours tab's usage filter", () => {
     await waitFor(() => expect(reads).toBeGreaterThan(before), {
       timeout: 3000,
     });
+  });
+
+  it("reads every colour's count again after a change, not only the ones a search lists", async () => {
+    const counted = access();
+    const asked: string[][] = [];
+    const usage: VariablesAccess = {
+      ...counted,
+      usage: async (ids, signal) => {
+        asked.push([...ids]);
+        return counted.usage(ids, signal);
+      },
+    };
+    const view = render(<Panel usage={usage} search="spare" />);
+    fireEvent.click(option("Unused"));
+    await waitFor(() => expect(asked.length).toBeGreaterThan(0));
+    const before = asked.length;
+    view.rerender(
+      <Panel
+        usage={usage}
+        search="spare"
+        site={{
+          ...SITE,
+          tokens: SITE.tokens.map(token =>
+            token.name === "color.spare"
+              ? { ...token, values: { light: "var(--site-color-button)" } }
+              : token
+          ),
+        }}
+      />
+    );
+    await waitFor(
+      () =>
+        expect(asked.slice(before).flat()).toEqual(
+          expect.arrayContaining(["color.button", "color.brand"])
+        ),
+      { timeout: 3000 }
+    );
   });
 
   it("moves between the choices with the arrow keys", () => {

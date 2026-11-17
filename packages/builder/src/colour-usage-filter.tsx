@@ -11,7 +11,7 @@
  *
  * @module colour-usage-filter
  */
-import type { SiteTokenSet } from "@nextlyhq/blocks-engine";
+import { tokenIdentity, type SiteTokenSet } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import { keepsColour, type ColourFilter } from "./colour-usage";
@@ -53,7 +53,7 @@ export function useColourFilter<G extends Listed>({
 }): { shown: readonly G[]; control: React.ReactNode } {
   const [filter, setFilter] = React.useState<ColourFilter>("all");
   const colours = shown.find(group => group.group === "colours");
-  useCountsAfterChange(filter === "unused", usage, tokens, colours);
+  useCountsAfterChange(filter === "unused", usage, tokens);
   if (colours === undefined) return { shown, control: null };
   const stateOf = (entry: VariableEntry): UsageState =>
     usageState(usage?.reachOf(entry.row.identity));
@@ -96,22 +96,25 @@ const RECOUNT_AFTER_MS = 800;
 function useCountsAfterChange(
   unused: boolean,
   usage: VariableUsageHere | undefined,
-  tokens: SiteTokenSet | undefined,
-  colours: Listed | undefined
+  tokens: SiteTokenSet | undefined
 ): void {
   const seen = React.useRef(tokens);
   const owed = React.useRef(false);
-  const latest = React.useRef({ usage, colours });
-  latest.current = { usage, colours };
+  const latest = React.useRef(usage);
+  latest.current = usage;
   React.useEffect(() => {
     if (seen.current !== tokens) owed.current = true;
     seen.current = tokens;
-    const { usage: read, colours: listed } = latest.current;
-    const due = unused && owed.current;
-    if (!due || read === undefined || listed === undefined) return undefined;
+    const read = latest.current;
+    if (!unused || !owed.current || read === undefined) return undefined;
+    // Every colour the site has, whatever a search lists now: a change can
+    // name, or stop naming, one the search hides.
+    const colours = (tokens?.tokens ?? [])
+      .filter(token => token.kind === "color")
+      .map(tokenIdentity);
     const timer = window.setTimeout(() => {
       owed.current = false;
-      void read.readAgain(listed.entries.map(entry => entry.row.identity));
+      void read.readAgain(colours);
     }, RECOUNT_AFTER_MS);
     return () => window.clearTimeout(timer);
   }, [tokens, unused]);
