@@ -8,10 +8,17 @@
  * - Switching through all four tabs leaves the rows' columns where they were,
  *   at the panel's default width and at its narrowest.
  * - No word for the code underneath ("class", "Classes", "DTCG") is shown.
+ * - F2 on a row opens its editor with the name ready to type over; Escape
+ *   closes it back to the row, and neither press moves the canvas selection.
+ * - At the panel's narrowest, the last row's editor opens whole in the window.
  */
 import { expect, type Page } from "@playwright/test";
 
-import { openEditorWith } from "./canvas/editor-driver";
+import {
+  clickBlock,
+  openEditorWith,
+  selection,
+} from "./canvas/editor-driver";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 
@@ -230,4 +237,77 @@ test("shows no word for the code underneath in any tab", async ({ page }) => {
     expect(text, `${name}: no "class"`).not.toMatch(/\bclass(es)?\b/i);
     expect(text, `${name}: "DTCG" only as a hint`).not.toMatch(/DTCG/);
   }
+});
+
+test("F2 opens a row's editor to rename it, and Escape closes it back to the row without moving the selection", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await openEditorWith(page, NODES, "tabs-text");
+  await clickBlock(page, "tabs-text");
+  await expect.poll(() => selection(page)).toEqual(["tabs-text"]);
+  await openDesign(page);
+  const row = page.locator(".nx-vars__row").first();
+  await row.focus();
+  await page.keyboard.press("F2");
+  const editor = page.locator(".nx-vars-editor");
+  await expect(editor).toBeVisible();
+  const name = editor.getByLabel("Name", { exact: true });
+  await expect(name).toBeFocused();
+  // The whole name is selected, so typing replaces it.
+  expect(
+    await name.evaluate(
+      (input: HTMLInputElement) =>
+        input.selectionStart === 0 &&
+        input.selectionEnd === input.value.length
+    )
+  ).toBe(true);
+
+  await page.keyboard.press("Escape");
+  await expect(editor).toBeHidden();
+  await expect(row).toBeFocused();
+  expect(await selection(page)).toEqual(["tabs-text"]);
+  // Back on the row, its count's tooltip may show again once the counts are
+  // read, and an Escape closes that first. The next leaves the panel for the
+  // canvas, and the block is still selected after every press.
+  const tooltip = page.getByRole("tooltip");
+  if (await tooltip.isVisible()) {
+    await page.keyboard.press("Escape");
+    await expect(tooltip).toBeHidden();
+    await expect(row).toBeFocused();
+    expect(await selection(page)).toEqual(["tabs-text"]);
+  }
+  await page.keyboard.press("Escape");
+  await expect(row).not.toBeFocused();
+  expect(await selection(page)).toEqual(["tabs-text"]);
+});
+
+test("at the panel's narrowest, the last row's editor opens whole inside the window", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await openEditorWith(page, NODES, "tabs-text");
+  await openDesign(page);
+  const divider = page.getByRole("separator", { name: "Panel and canvas" });
+  await divider.focus();
+  await page.keyboard.press("Home");
+  const panel = page.getByRole("region", { name: "Design panel" });
+  await expect
+    .poll(async () => Math.round((await panel.boundingBox())?.width ?? 0))
+    .toBeLessThanOrEqual(240);
+  const last = panel.locator(".nx-vars__row").last();
+  await last.scrollIntoViewIfNeeded();
+  await last.click();
+  const editor = page.locator(".nx-vars-editor");
+  await expect(editor).toBeVisible();
+  const box = await editor.boundingBox();
+  expect(box, "the editor is drawn").not.toBeNull();
+  if (box === null) return;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(1280);
+  expect(box.y + box.height).toBeLessThanOrEqual(720);
+  await page.keyboard.press("Escape");
+  await expect(editor).toBeHidden();
 });

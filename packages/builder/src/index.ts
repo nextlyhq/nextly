@@ -138,7 +138,7 @@ export {
  *
  * A type costs nothing at runtime, so it can be described from here.
  */
-export type { BuilderShellProps, PanelView } from "./builder-shell";
+export type { BuilderShellProps, PanelView } from "./shell/builder-shell";
 
 /**
  * @experimental The shell's own decisions: which panels the rail offers, the
@@ -183,7 +183,10 @@ export { browserStore } from "./shell-state";
  * A type costs nothing at runtime, so a host can describe its command list
  * without reaching for the client entry.
  */
-export type { BuilderCommand, CommandPaletteProps } from "./command-palette";
+export type {
+  BuilderCommand,
+  CommandPaletteProps,
+} from "./shell/command-palette";
 
 /**
  * @experimental The drop rules: where a dragged block can land, and which of
@@ -436,7 +439,7 @@ export {
   builderCommands,
   type BuilderCommandsInput,
   type CommandVerbs,
-} from "./builder-commands";
+} from "./shell/builder-commands";
 
 /**
  * @experimental Why a composition verb refused, in words an author can act on.

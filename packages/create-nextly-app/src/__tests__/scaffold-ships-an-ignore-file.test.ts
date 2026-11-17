@@ -13,7 +13,9 @@
  * ignore file. A test that only asked "does a scaffold have a .gitignore" passes from a checkout
  * while the published package ships without one, which is the state this replaces.
  */
-import { existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -67,6 +69,31 @@ describe("the ignore file survives packing", () => {
       expect(existsSync(join(templates, template, ".gitignore"))).toBe(false);
     }
   );
+
+  // The Schema Builder's definition file (`db.uiSchemaFile`, `ui-schema.json` by default) is part
+  // of the code: `migrate:create` reads the Builder's entities from it, and a clone without it is
+  // refused. Judged by git itself, in a repository holding only the shipped file, so a broad
+  // pattern that happens to match it counts as listing it, and the repository's own ignore file
+  // plays no part. `.env` is the control: the shipped file ignores it, so a git that read nothing
+  // would fail there rather than pass the definition file for the wrong reason.
+  it("lists no Schema Builder definition file in the project's ignore file", () => {
+    const repo = mkdtempSync(join(tmpdir(), "nextly-ignore-"));
+    try {
+      copyFileSync(
+        join(templates, "base", "gitignore"),
+        join(repo, ".gitignore")
+      );
+      const git = (...args: string[]) =>
+        spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+      expect(git("init", "-q").status).toBe(0);
+      const ignored = (path: string) => git("check-ignore", "-q", path).status;
+      // 0: ignored; 1: not ignored; anything else: git could not answer.
+      expect(ignored(".env")).toBe(0);
+      expect(ignored("ui-schema.json")).toBe(1);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
 
   // A control on the two assertions above. Both would also pass if `templates` resolved to a
   // directory that does not exist — `existsSync` would answer false for the dotted name for the

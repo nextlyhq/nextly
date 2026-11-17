@@ -1149,7 +1149,7 @@ function VariableRow({
   return (
     <li>
       <Popover open={open} onOpenChange={onOpenChange} modal>
-        <CountTip reach={reach}>
+        <CountTip reach={reach} quiet={open}>
           <PopoverTrigger asChild>
             <button
               type="button"
@@ -1164,6 +1164,7 @@ function VariableRow({
               // Drawn as chosen while its editor is open. Its own mark: the
               // row's tooltip sets `data-state` too, over the popover's.
               data-open={open ? "" : undefined}
+              onKeyDown={renameOnF2(readOnly, onOpenChange)}
             >
               <RowLead
                 entry={entry}
@@ -1209,6 +1210,23 @@ function VariableRow({
       </Popover>
     </li>
   );
+}
+
+/**
+ * F2 on a row opens its editor to rename it, as F2 renames in a file list.
+ * The editor's focus scope selects the name on opening, so typing replaces
+ * it. Nothing on a read-only row, which has no name to change.
+ */
+function renameOnF2(
+  readOnly: boolean,
+  onOpenChange: (open: boolean) => void
+): ((event: React.KeyboardEvent) => void) | undefined {
+  if (readOnly) return undefined;
+  return event => {
+    if (event.key !== "F2") return;
+    event.preventDefault();
+    onOpenChange(true);
+  };
 }
 
 /** The row's count in words, after its name and values, once it is read. */

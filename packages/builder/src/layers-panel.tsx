@@ -98,7 +98,6 @@ import {
 import * as React from "react";
 
 import { BlockIconMark } from "./block-icon";
-import { deviceLabel } from "./breakpoint-switcher";
 import { DRAG_SOURCE_ATTRIBUTE } from "./canvas";
 import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
@@ -148,6 +147,7 @@ import { lockRefusalWording } from "./lock-refusal";
 import { refusalAnnouncement } from "./move-refusal";
 import type { BuilderOp } from "./op-vocabulary";
 import { revealNode } from "./reveal-node";
+import { deviceLabel } from "./shell/breakpoint-switcher";
 
 export interface LayersPanelProps {
   /** The editor whose document this shows and whose selection it drives. */

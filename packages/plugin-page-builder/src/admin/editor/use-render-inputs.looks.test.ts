@@ -99,8 +99,9 @@ function publishedClientConfig(
   return JSON.parse(
     JSON.stringify({
       siteStyle: {
-        classes: resolveSiteStyle(withRegisteredLooks(HOST_DEFAULTS, site.all()))
-          .classes,
+        classes: resolveSiteStyle(
+          withRegisteredLooks(HOST_DEFAULTS, site.all())
+        ).classes,
       },
     })
   ) as Record<string, unknown>;

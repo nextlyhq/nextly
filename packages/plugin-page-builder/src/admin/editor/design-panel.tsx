@@ -20,6 +20,7 @@ import type { PanelView, PreferenceStore } from "@nextlyhq/builder";
 import {
   EDITOR_WORDS,
   GroupToggle,
+  stylesTabMatches,
   type DesignTab,
   type GroupFolds,
 } from "@nextlyhq/builder/shell";
@@ -379,4 +380,29 @@ export function DesignGroup({
       {folded ? null : children}
     </section>
   );
+}
+
+/**
+ * Reports how many of the Styles tab's styles the panel's search matches,
+ * for the count beside the tab's name whichever tab is open: drawn in the
+ * panel's frame, which every tab shares, from what the Styles tab lists.
+ */
+export function ReportStylesMatches({
+  library,
+  suppliedClassIds,
+  styleContext,
+}: {
+  library: Parameters<typeof stylesTabMatches>[0];
+  suppliedClassIds: Parameters<typeof stylesTabMatches>[1];
+  styleContext: Parameters<typeof stylesTabMatches>[3];
+}): null {
+  const { search, reportMatches } = useDesignBrowse();
+  const count = React.useMemo(
+    () => stylesTabMatches(library, suppliedClassIds, search, styleContext),
+    [library, suppliedClassIds, search, styleContext]
+  );
+  React.useEffect(() => {
+    reportMatches({ styles: count });
+  }, [count, reportMatches]);
+  return null;
 }

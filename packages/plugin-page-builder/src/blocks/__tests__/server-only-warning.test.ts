@@ -124,7 +124,9 @@ describe("a declared editor entry", () => {
       },
     ]);
 
-    expect(() => service.registerDeclaredBlocks(ctx, blocks)).toThrow(/editorEntry/);
+    expect(() => service.registerDeclaredBlocks(ctx, blocks)).toThrow(
+      /editorEntry/
+    );
   });
 });
 

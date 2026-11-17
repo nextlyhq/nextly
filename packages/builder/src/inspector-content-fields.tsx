@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * The Content tab's generated fields: one field per declared prop, grouped,
- * with a list's view and the binding a link group is drawn with.
+ * A tab's generated fields: one field per setting the tab draws, grouped,
+ * with a list's view and the binding a link group is drawn with. Content and
+ * Advanced each draw the block's settings placed in them.
  *
  * @module inspector-content-fields
  */
@@ -115,9 +116,10 @@ function listGroupView(listView: ListView | undefined): {
   };
 }
 
-/** The Content tab: one field per declared prop, or the note that there are none. */
+/** One field per setting in `rows`, or the note that there are none. */
 export function ContentFields({
   inspection,
+  rows,
   onCommit,
   services,
   reasonId,
@@ -129,6 +131,12 @@ export function ContentFields({
   onApply,
 }: {
   inspection: BlockInspection;
+  /**
+   * The settings this list draws, in order: those its tab holds. The rest of
+   * the block's props are still read beside them, for a group or a control
+   * whose choices depend on another prop.
+   */
+  rows: readonly EditableProp[];
   /** Apply one op as an edit: a binding's, which writes props and bindings at once. */
   onApply: (op: BuilderOp) => boolean;
   /** The document the block is in, for a group that reads around it. */
@@ -161,9 +169,7 @@ export function ContentFields({
   const bindings = findNode(document.nodes, inspection.nodeId)?.bindings;
   // A prop the inspector leaves out draws no control, but in a component's
   // view keeps its expose icon: a page may clear what hides it.
-  const drawn = inspection.props.filter(
-    prop => prop.offered || fields !== undefined
-  );
+  const drawn = rows.filter(prop => prop.offered || fields !== undefined);
   if (drawn.length === 0) {
     return (
       <p className="nx-inspector__note">

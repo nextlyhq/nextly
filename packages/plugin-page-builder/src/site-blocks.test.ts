@@ -145,11 +145,15 @@ function serverSources(dir: string): string[] {
 
 /** The names a file imports from the engine or the renderer. */
 function bundleReadsIn(source: string): string[] {
-  const named = /import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+"@nextlyhq\/blocks-(?:engine|react)(?:\/[^"]*)?"/g;
+  const named =
+    /import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+"@nextlyhq\/blocks-(?:engine|react)(?:\/[^"]*)?"/g;
   const reads: string[] = [];
   for (const match of source.matchAll(named)) {
     for (const part of (match[1] ?? "").split(",")) {
-      const name = part.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0];
+      const name = part
+        .trim()
+        .replace(/^type\s+/, "")
+        .split(/\s+as\s+/)[0];
       if (name !== undefined && BUNDLE_READS.has(name)) reads.push(name);
     }
   }
@@ -183,10 +187,14 @@ describe("the server's registry reads", () => {
 
   it("would see such a read, named or through a namespace", () => {
     expect(
-      bundleReadsIn('import { getBlock, type X } from "@nextlyhq/blocks-engine";')
+      bundleReadsIn(
+        'import { getBlock, type X } from "@nextlyhq/blocks-engine";'
+      )
     ).toEqual(["getBlock"]);
     expect(
-      bundleReadsIn('import { registeredBlocks } from "@nextlyhq/blocks-react/x";')
+      bundleReadsIn(
+        'import { registeredBlocks } from "@nextlyhq/blocks-react/x";'
+      )
     ).toEqual(["registeredBlocks"]);
     expect(bundleReadsIn("const r = react.registeredBlocks();")).toEqual([
       "registeredBlocks",

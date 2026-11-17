@@ -30,6 +30,7 @@ import {
   type BlockNode,
   type ComponentPath,
   type NodeLock,
+  type PropGroup,
   type PropSchema,
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
@@ -474,6 +475,67 @@ export function inspectSelection(
     designLock,
     placedWith: insertionPropSets(definition),
   };
+}
+
+/** One of the block panel's tabs, named as a block places a setting in it. */
+export type InspectorTab = PropGroup;
+
+/**
+ * The block panel's tabs, in the order an author reads them: what the block
+ * says, how it looks, then how it is built into the page.
+ */
+const INSPECTOR_TAB_ORDER: readonly InspectorTab[] = [
+  "content",
+  "style",
+  "advanced",
+];
+
+/** Every row of a tab's sections, in the order the sections hold them. */
+function rowsIn(
+  sections: readonly InspectionSection[]
+): readonly EditableProp[] {
+  return sections.flatMap(section => section.rows);
+}
+
+/**
+ * The block's own settings the Content tab draws: those it places in
+ * Content, read from its sections so the tab and the placement are one
+ * answer. A setting placed in Style or Advanced is drawn there instead.
+ */
+export function contentRowsOf(
+  inspection: Pick<BlockInspection, "sections">
+): readonly EditableProp[] {
+  return rowsIn(inspection.sections.content);
+}
+
+/**
+ * The block's own settings the Advanced tab draws above the ones the builder
+ * draws for every block: those it places in Advanced.
+ */
+export function advancedRowsOf(
+  inspection: Pick<BlockInspection, "sections">
+): readonly EditableProp[] {
+  return rowsIn(inspection.sections.advanced);
+}
+
+/**
+ * The tabs the selected block has, in order: a tab that would hold nothing is
+ * left out.
+ *
+ * Style and Advanced are there for every block. Style always offers a shared
+ * style, which any block can carry, and Advanced always holds the settings
+ * the builder draws for every block (where it shows, when, its CSS id and its
+ * attributes). Content is there when the block declares a setting placed in
+ * it, or names its own inspector to draw it. Judged by what the block
+ * declares rather than by which settings show right now, so a setting a
+ * condition hides does not make the tab come and go under the author.
+ */
+export function inspectorTabsOf(
+  inspection: Pick<BlockInspection, "sections" | "inspector">
+): readonly InspectorTab[] {
+  const holdsContent =
+    inspection.inspector !== undefined || contentRowsOf(inspection).length > 0;
+  return INSPECTOR_TAB_ORDER.filter(tab => tab !== "content" || holdsContent);
 }
 
 /** What a Style section is called, by its key, as the Style tab names it. */

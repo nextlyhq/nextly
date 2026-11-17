@@ -467,6 +467,17 @@ async function openEditor(name: RegExp): Promise<HTMLElement> {
   return screen.findByRole("dialog");
 }
 
+/**
+ * A size as its field shows it: the number in the field, then the unit in the
+ * menu beside it.
+ */
+function sizeShown(field: HTMLElement): string {
+  const unit = field
+    .closest(".nx-style-inspector__numeric")
+    ?.querySelector(".nx-style-inspector__unit");
+  return `${(field as HTMLInputElement).value}${unit?.textContent ?? ""}`;
+}
+
 /** Type into a field and press Enter, which commits it. */
 function enter(field: HTMLElement, value: string): void {
   fireEvent.change(field, { target: { value } });
@@ -810,10 +821,7 @@ describe("dark values for every kind", () => {
     const editor = await openEditor(/^Space 4/);
     const darkOf = () =>
       (onChange.mock.calls.at(-1)?.[0] as SiteTokenSet).tokens[4]?.values.dark;
-    expect(within(editor).getByLabelText("Light")).toHaveProperty(
-      "value",
-      "1rem"
-    );
+    expect(sizeShown(within(editor).getByLabelText("Light"))).toBe("1rem");
     expect(within(editor).getByText("Same as light")).toBeDefined();
     fireEvent.click(
       within(editor).getByRole("button", { name: "Add dark value" })
@@ -832,8 +840,7 @@ describe("dark values for every kind", () => {
     render(<Hosted tokens={SITE} onChange={onChange} />);
     const editor = await openEditor(/^Body/);
     const saved = () => onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
-    expect(within(editor).getByLabelText("Size, light")).toHaveProperty(
-      "value",
+    expect(sizeShown(within(editor).getByLabelText("Size, light"))).toBe(
       "16px"
     );
     expect(within(editor).getByLabelText("Line height, light")).toHaveProperty(
@@ -1774,5 +1781,39 @@ describe("a Design tab's view of the variables", () => {
         screen.getByRole("textbox", { name: "Host search" })
       )
     );
+  });
+});
+
+describe("renaming from the keyboard", () => {
+  it("opens a row's editor on F2 with its name ready to type over", async () => {
+    render(<Hosted tokens={SITE} />);
+    const brand = row(/^Brand/);
+    brand.focus();
+    fireEvent.keyDown(brand, { key: "F2" });
+    const editor = await screen.findByRole("dialog");
+    const name = within(editor).getByLabelText("Name") as HTMLInputElement;
+    await waitFor(() => expect(document.activeElement).toBe(name));
+    expect(name.selectionStart).toBe(0);
+    expect(name.selectionEnd).toBe(name.value.length);
+  });
+
+  it("closes the editor on Escape and hands focus back to its row", async () => {
+    render(<Hosted tokens={SITE} />);
+    const brand = row(/^Brand/);
+    brand.focus();
+    fireEvent.keyDown(brand, { key: "F2" });
+    const editor = await screen.findByRole("dialog");
+    const name = within(editor).getByLabelText("Name");
+    await waitFor(() => expect(document.activeElement).toBe(name));
+    fireEvent.keyDown(name, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(row(/^Brand/)));
+  });
+
+  it("offers no rename on F2 where the variables are read-only", () => {
+    render(<Hosted tokens={SITE} readOnly />);
+    const brand = row(/^Brand/);
+    fireEvent.keyDown(brand, { key: "F2" });
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

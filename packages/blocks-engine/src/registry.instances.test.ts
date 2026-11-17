@@ -61,7 +61,9 @@ describe("a block registry", () => {
     const siteA = createBlockRegistry();
     const siteB = createBlockRegistry();
     siteA.registerSupport({ key: "parallax" });
-    siteA.register([block({ name: "acme/hero", supports: { parallax: true } })]);
+    siteA.register([
+      block({ name: "acme/hero", supports: { parallax: true } }),
+    ]);
 
     expect(siteB.support("parallax")).toBeUndefined();
     expect(() =>

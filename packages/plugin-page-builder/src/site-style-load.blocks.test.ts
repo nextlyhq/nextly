@@ -4,7 +4,10 @@
  * module copy, as a production route's are, and from the blocks handed to it
  * otherwise.
  */
-import { createBlockRegistry, type AnyBlockDefinition } from "@nextlyhq/blocks-engine";
+import {
+  createBlockRegistry,
+  type AnyBlockDefinition,
+} from "@nextlyhq/blocks-engine";
 import { SITE_BLOCKS_SERVICE, SITE_COPY } from "@nextlyhq/blocks-react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -31,7 +34,11 @@ function lookBlock(name: string): AnyBlockDefinition {
     example: { props: {} },
     editor: {
       variations: [
-        { name: "dark", label: "Dark", styles: { base: { base: { color: "black" } } } },
+        {
+          name: "dark",
+          label: "Dark",
+          styles: { base: { base: { color: "black" } } },
+        },
       ],
     },
     render: () => null,
@@ -41,7 +48,9 @@ function lookBlock(name: string): AnyBlockDefinition {
 const nothingStored = { findSingle: async () => null };
 
 const lookIds = (classes: readonly { id: string }[] | undefined) =>
-  (classes ?? []).map(entry => entry.id).filter(id => id.startsWith("look:acme"));
+  (classes ?? [])
+    .map(entry => entry.id)
+    .filter(id => id.startsWith("look:acme"));
 
 describe("the site style's looks", () => {
   it("come from the started site where the blocks are bound to a copy that never started", async () => {

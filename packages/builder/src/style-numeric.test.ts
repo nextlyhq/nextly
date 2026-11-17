@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CSS_NUMBER,
+  lineHeightAsPixels,
   measurementOf,
   scrubbedValue,
   scrubOrigin,
@@ -502,5 +503,19 @@ describe("where a drag on a label starts", () => {
   it("does not start on text that is not one measurement", () => {
     expect(scrubOrigin(MARGIN, "auto", "px", undefined)).toBeUndefined();
     expect(scrubOrigin(PADDING, "10px 20px", "px", undefined)).toBeUndefined();
+  });
+});
+
+describe("a line height that reads as pixels", () => {
+  it("is a bare number above 4, offered as that many pixels", () => {
+    expect(lineHeightAsPixels("20")).toBe("20px");
+    expect(lineHeightAsPixels("4.5")).toBe("4.5px");
+    expect(lineHeightAsPixels(" 24 ")).toBe("24px");
+  });
+
+  it("is never 4 or under, a value with a unit, or a function", () => {
+    for (const value of ["4", "1.5", "0", "-6", "20px", "150%", "calc(20px)"]) {
+      expect(lineHeightAsPixels(value), value).toBeUndefined();
+    }
   });
 });
