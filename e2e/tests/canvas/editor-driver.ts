@@ -34,7 +34,7 @@ export { CANVAS_FRAME };
 const HOMEPAGE = "/admin/api/singles/homepage";
 
 /** Either label the builder's card uses, for an empty page and a built one. */
-const OPEN_BUILDER_ACTION = /^Open in builder$/;
+export const OPEN_BUILDER_ACTION = /^Open in builder$/;
 
 /** Something `.locator()` can be asked of: the page, or the canvas frame. */
 type Scope = Page | FrameLocator;

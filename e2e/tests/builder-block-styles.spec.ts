@@ -31,6 +31,7 @@ import {
   clickBlock,
   emptyHomepage,
   layerRow,
+  OPEN_BUILDER_ACTION,
   openEditorWith,
   openLayers,
   pressSave,
@@ -596,11 +597,8 @@ test.describe("block styles in the Styles tab", () => {
       await openEditorWith(page, [button("bs-plain", "Plain")], "bs-plain");
       if (theme === "dark") {
         await gotoAdmin(page, "/singles/homepage", "dark");
-        await page
-          .getByRole("link", {
-            name: /^(?:Build this page|Open Page Builder)$/,
-          })
-          .click();
+        // The way into the builder, named as the shared driver names it.
+        await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
       }
       await openStyles(page);
       await expectNoAxeViolations(page, { include: ".nx-block-styles" });
