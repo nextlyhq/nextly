@@ -19,7 +19,10 @@ export interface SettingPlace {
   readonly label: string;
 }
 
-/** Every core setting, block by block, in the order each block declares them. */
+/**
+ * Every core setting, block by block: its Content and Advanced settings, then
+ * its Style ones, each in the order the block declares them.
+ */
 export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   {
     block: "core/section",
@@ -31,9 +34,16 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   {
     block: "core/section",
     setting: "contained",
-    tab: "content",
-    section: "Section",
-    label: "Constrain content width",
+    tab: "style",
+    section: "Layout",
+    label: "Content width",
+  },
+  {
+    block: "core/section",
+    setting: "contentWidth",
+    tab: "style",
+    section: "Layout",
+    label: "Width for this section",
   },
   {
     block: "core/box",
@@ -41,13 +51,6 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
     tab: "content",
     section: "Box",
     label: "HTML tag",
-  },
-  {
-    block: "core/box",
-    setting: "contained",
-    tab: "content",
-    section: "Box",
-    label: "Constrain content width",
   },
   {
     block: "core/box",
@@ -57,6 +60,20 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
     label: "Link",
   },
   {
+    block: "core/box",
+    setting: "contained",
+    tab: "style",
+    section: "Layout",
+    label: "Content width",
+  },
+  {
+    block: "core/box",
+    setting: "contentWidth",
+    tab: "style",
+    section: "Layout",
+    label: "Width for this section",
+  },
+  {
     block: "core/columns",
     setting: "as",
     tab: "content",
@@ -66,9 +83,16 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   {
     block: "core/columns",
     setting: "contained",
-    tab: "content",
-    section: "Columns",
-    label: "Constrain content width",
+    tab: "style",
+    section: "Layout",
+    label: "Content width",
+  },
+  {
+    block: "core/columns",
+    setting: "contentWidth",
+    tab: "style",
+    section: "Layout",
+    label: "Width for this section",
   },
   {
     block: "core/column",
@@ -80,9 +104,16 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   {
     block: "core/column",
     setting: "contained",
-    tab: "content",
-    section: "Column",
-    label: "Constrain content width",
+    tab: "style",
+    section: "Layout",
+    label: "Content width",
+  },
+  {
+    block: "core/column",
+    setting: "contentWidth",
+    tab: "style",
+    section: "Layout",
+    label: "Width for this section",
   },
   {
     block: "core/card",
@@ -90,13 +121,6 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
     tab: "content",
     section: "Card",
     label: "HTML tag",
-  },
-  {
-    block: "core/card",
-    setting: "contained",
-    tab: "content",
-    section: "Card",
-    label: "Constrain content width",
   },
   {
     block: "core/card",
@@ -106,6 +130,20 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
     label: "Whole card links to",
   },
   {
+    block: "core/card",
+    setting: "contained",
+    tab: "style",
+    section: "Layout",
+    label: "Content width",
+  },
+  {
+    block: "core/card",
+    setting: "contentWidth",
+    tab: "style",
+    section: "Layout",
+    label: "Width for this section",
+  },
+  {
     block: "core/accordion",
     setting: "as",
     tab: "content",
@@ -114,17 +152,24 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   },
   {
     block: "core/accordion",
-    setting: "contained",
-    tab: "content",
-    section: "Accordion",
-    label: "Constrain content width",
-  },
-  {
-    block: "core/accordion",
     setting: "titlesAs",
     tab: "content",
     section: "Accordion",
     label: "Titles as",
+  },
+  {
+    block: "core/accordion",
+    setting: "contained",
+    tab: "style",
+    section: "Layout",
+    label: "Content width",
+  },
+  {
+    block: "core/accordion",
+    setting: "contentWidth",
+    tab: "style",
+    section: "Layout",
+    label: "Width for this section",
   },
   {
     block: "core/accordion-item",
@@ -409,9 +454,16 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   {
     block: "core/gallery",
     setting: "contained",
-    tab: "content",
-    section: "Gallery",
-    label: "Constrain content width",
+    tab: "style",
+    section: "Layout",
+    label: "Content width",
+  },
+  {
+    block: "core/gallery",
+    setting: "contentWidth",
+    tab: "style",
+    section: "Layout",
+    label: "Width for this section",
   },
   {
     block: "core/quote",
@@ -568,10 +620,38 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
     label: "Split into pages",
   },
   {
+    block: "core/collection-loop",
+    setting: "contained",
+    tab: "style",
+    section: "Layout",
+    label: "Content width",
+  },
+  {
+    block: "core/collection-loop",
+    setting: "contentWidth",
+    tab: "style",
+    section: "Layout",
+    label: "Width for this section",
+  },
+  {
     block: "core/entry-content",
     setting: "field",
     tab: "content",
     section: "Entry content",
     label: "Field",
+  },
+  {
+    block: "core/entry-content",
+    setting: "contained",
+    tab: "style",
+    section: "Layout",
+    label: "Content width",
+  },
+  {
+    block: "core/entry-content",
+    setting: "contentWidth",
+    tab: "style",
+    section: "Layout",
+    label: "Width for this section",
   },
 ];

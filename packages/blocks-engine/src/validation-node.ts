@@ -5,6 +5,7 @@
  *
  * @module validation-node
  */
+import { checkCssClassNames } from "./css-class-names";
 import {
   type BlockNode,
   COMPONENT_INSTANCE_TYPE,
@@ -450,6 +451,7 @@ export function validateNode(
   );
   validateAttributes(node, path, issues);
   validateNosnippet(node, path, issues);
+  validateCssClasses(node, path, issues, state.skipValueParsing);
   validateStyles(node, path, state);
   validateVisibility(node, path, state);
   validateBindings(node, path, issues);
@@ -724,6 +726,58 @@ function validateNosnippet(
     code: "invalid-nosnippet",
     severity: "error",
     message: "A node nosnippet mark must be true or false.",
+  });
+}
+
+/** How many refused class names one issue names before counting the rest. */
+const MAX_NAMED_CSS_CLASSES = 5;
+
+/**
+ * The author's own class names: text, every name one a block may carry.
+ *
+ * An ERROR in both modes, unlike an unknown shared class. A save is judged
+ * forgivingly, and it is the one place every writer passes: the editor, the
+ * API, an import and an agent. A name it let through would be drawn on the
+ * published page, so it is refused there, naming each name and why.
+ *
+ * One issue for the field rather than one per name, naming the first few and
+ * counting the rest, so a long list of bad names makes a short report.
+ */
+function validateCssClasses(
+  node: BlockNode,
+  path: string,
+  issues: ValidationIssue[],
+  overLimits = false
+): void {
+  // Skipped for a document a limit already refused, as the shared classes are:
+  // the text is the document's to size, and nothing here would change the
+  // verdict.
+  if (overLimits) return;
+  const text: unknown = node.cssClasses;
+  if (text === undefined) return;
+  if (typeof text !== "string") {
+    issues.push({
+      path: pointer(path, "cssClasses"),
+      code: "invalid-css-classes",
+      severity: "error",
+      message:
+        "A node's CSS classes must be text: class names separated by spaces.",
+    });
+    return;
+  }
+  const { refused } = checkCssClassNames(text);
+  if (refused.length === 0) return;
+  const named = refused.slice(0, MAX_NAMED_CSS_CLASSES).map(r => r.reason);
+  const more = refused.length - named.length;
+  issues.push({
+    path: pointer(path, "cssClasses"),
+    code: "invalid-css-classes",
+    severity: "error",
+    message:
+      more > 0
+        ? `${named.join(" ")} And ${more} more names that can't be used.`
+        : named.join(" "),
+    suggestion: "Rename or remove these class names, then save again.",
   });
 }
 
