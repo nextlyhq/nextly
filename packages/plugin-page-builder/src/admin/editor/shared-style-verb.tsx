@@ -18,10 +18,15 @@ import {
   type SharedStyleVerbHost,
   type SharedStylesHost,
 } from "@nextlyhq/builder/shell";
+import {
+  useDocumentIdentity,
+  type DocumentIdentity,
+} from "@nextlyhq/plugin-sdk/admin";
 import { useCan } from "@nextlyhq/plugin-sdk/client";
 import { toast } from "@nextlyhq/ui";
 import { useMemo, useState, type JSX } from "react";
 
+import type { SharedStyleUsageHere } from "../library-contract";
 import { useSharedStylesClient } from "../shared-styles-client";
 
 import type { ClassSurface } from "./site-style-studios";
@@ -48,7 +53,10 @@ export function useSharedStyleVerb({
   // Asked of the session's grants, which the server enforces on the write
   // anyway; a role without it sees shared styles read-only.
   const mayChange = useCan("update-site-style");
-  const access = useSharedStylesClient();
+  // The document being edited, whose saved blocks the site count swaps for
+  // the open page's live ones. A never-saved entry is in no count yet.
+  const identity = useDocumentIdentity();
+  const access = useSharedStylesClient(usageHere(identity));
   // The block being saved, held from the moment the verb ran, so the
   // dialog saves the block it was opened for.
   const [saving, setSaving] = useState<string | null>(null);
@@ -84,4 +92,15 @@ export function useSharedStyleVerb({
       />
     );
   return { host, verb, dialog };
+}
+
+/** The saved document being edited, as the usage read names it, if any. */
+function usageHere(
+  identity: DocumentIdentity | null
+): SharedStyleUsageHere | undefined {
+  if (identity === null) return undefined;
+  if (identity.kind === "single") return { single: identity.slug };
+  return identity.documentId === undefined
+    ? undefined
+    : { collection: identity.slug, id: identity.documentId };
 }

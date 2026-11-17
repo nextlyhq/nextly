@@ -38,6 +38,7 @@ import {
   type SharedStylesCountResponse,
   type SharedStylesUsageResponse,
   type SharedStyleUseItem,
+  type SharedStyleUsageHere,
 } from "../library-contract";
 
 import { refusalWords } from "./site-style-client";
@@ -165,19 +166,33 @@ export async function countSiteUsage(): Promise<SharedStylesCount> {
  * at once, then the site style is read again, so the tab and the canvas draw
  * what was stored.
  */
-export function useSharedStylesClient(): SharedStylesAccess {
+export function useSharedStylesClient(
+  /**
+   * The document open in the editor, whose saved share of each style's usage
+   * the route reports apart, so its live copy can be counted instead.
+   */
+  here?: SharedStyleUsageHere
+): SharedStylesAccess {
   const { refetch } = useStoredSiteStyle();
+  // Held by its spelling, so a new object naming the same document asks
+  // nothing again.
+  const hereKey = here === undefined ? undefined : JSON.stringify(here);
 
   const usage = useCallback(
     async (ids: readonly string[], signal: AbortSignal) =>
       usageFromResponse(
         await readPluginRoute<SharedStylesUsageResponse>({
           plugin: PAGE_BUILDER_PLUGIN_NAME,
-          path: sharedStyleUsagePath(ids),
+          path: sharedStyleUsagePath(
+            ids,
+            hereKey === undefined
+              ? undefined
+              : (JSON.parse(hereKey) as SharedStyleUsageHere)
+          ),
           signal,
         })
       ),
-    []
+    [hereKey]
   );
 
   const uses = useCallback(

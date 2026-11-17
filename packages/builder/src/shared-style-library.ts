@@ -38,7 +38,20 @@ export interface SharedStyleReach {
   readonly documents: number;
   /** The same documents, by kind. */
   readonly byKind: Readonly<Record<SharedStyleKind, number>>;
-  /** False makes both numbers floors: "at least". */
+  /**
+   * How many blocks wear it across those documents, as saved. Optional, so a
+   * host written before it existed still compiles; absent, the sentence names
+   * the open page's blocks and the documents apart.
+   */
+  readonly blocks?: number;
+  /**
+   * What the open document contributes as saved, when the host could name it:
+   * its blocks wearing the style and its kind. The sentence counts that
+   * document from the open page instead, so an unsaved edit counts at once.
+   * Absent while the open document is saved nowhere yet.
+   */
+  readonly here?: { readonly blocks: number; readonly kind: SharedStyleKind };
+  /** False makes every number a floor: "at least". */
   readonly complete: boolean;
 }
 
@@ -638,16 +651,25 @@ export interface BlocksOnThisPage {
   readonly complete: boolean;
 }
 
+/** What a reach sentence says before the site has answered. */
+export const SHARED_STYLE_COUNTING = "Counting where it’s used…";
+
 /**
- * How widely a style is used, in words: "3 blocks on this page · on 4 pages
- * and 1 component". The blocks come from the open page, the documents from
- * the site's index; "at least" goes before a number that is a floor.
- * Empty while neither is known.
+ * How widely a style is used, in words: "Used on 12 blocks on 4 pages and 1
+ * component". The site's saved counts, with the open page counted from its
+ * live copy in place of its saved one, so an unsaved edit counts at once and
+ * none is counted twice. "At least" goes before a floor; "Counting where it’s
+ * used…" before the site has answered; "Not used anywhere" only when every
+ * count is whole. Empty where there is nothing to count from.
  */
 export function sharedStyleReachSentence(
   blocks: BlocksOnThisPage | undefined,
   reach: SharedStyleReach | undefined
 ): string {
+  if (reach === undefined) {
+    return blocks === undefined ? "" : SHARED_STYLE_COUNTING;
+  }
+  if (reach.blocks !== undefined) return siteWideSentence(blocks, reach);
   const parts: string[] = [];
   if (blocks !== undefined && blocks.count > 0) {
     const count = counted(blocks.count, ["block", "blocks"]);
@@ -670,6 +692,35 @@ export function sharedStyleReachSentence(
   if (reach === undefined) return "";
   const exact = reach.complete && (blocks?.complete ?? true);
   return exact ? "Not used anywhere" : "No uses counted yet";
+}
+
+/**
+ * The site-wide sentence, from a host that counts blocks: the saved counts
+ * with the open document's saved share swapped for the open page's live one.
+ */
+function siteWideSentence(
+  live: BlocksOnThisPage | undefined,
+  reach: SharedStyleReach & { readonly blocks: number }
+): string {
+  const here = reach.here;
+  // The open page counted live where the host could name its saved copy, and
+  // where it is saved nowhere yet (no `here`), live as well: either way it is
+  // counted once.
+  const liveCount = live?.count ?? 0;
+  const savedHere = here?.blocks ?? 0;
+  const blocks = reach.blocks - savedHere + liveCount;
+  const byKind = { ...reach.byKind };
+  const kind = here?.kind ?? "pages";
+  byKind[kind] += (liveCount > 0 ? 1 : 0) - (savedHere > 0 ? 1 : 0);
+  const complete = reach.complete && (live?.complete ?? true);
+  const kinds = (Object.keys(KIND_WORDS) as SharedStyleKind[])
+    .filter(each => byKind[each] > 0)
+    .map(each => counted(byKind[each], KIND_WORDS[each]));
+  if (blocks <= 0 || kinds.length === 0) {
+    return complete ? "Not used anywhere" : "No uses counted yet";
+  }
+  const many = counted(blocks, ["block", "blocks"]);
+  return `Used on ${complete ? "" : "at least "}${many} on ${listedWords(kinds)}`;
 }
 
 /** A row's count in words, and whether it is a zero not counted yet. */

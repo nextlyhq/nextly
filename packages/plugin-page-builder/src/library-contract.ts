@@ -1045,7 +1045,22 @@ export interface SharedStyleUsage {
   readonly documents: number;
   /** The same documents, by kind. */
   readonly byKind: Readonly<Record<SharedStyleUsageKind, number>>;
-  /** False makes both numbers floors: "at least". */
+  /**
+   * How many blocks wear it across those documents, a document's draft and
+   * published copies counted once. Absent where the index counts no blocks.
+   */
+  readonly blocks?: number;
+  /**
+   * What the document named by {@link SHARED_STYLE_HERE_PARAM} contributes as
+   * saved: its blocks wearing the style (0 when it holds none) and its kind,
+   * so the editor can count that document from its live copy instead.
+   * Absent when no document was named.
+   */
+  readonly here?: {
+    readonly blocks: number;
+    readonly kind: SharedStyleUsageKind;
+  };
+  /** False makes every number a floor: "at least". */
   readonly complete: boolean;
 }
 
@@ -1113,12 +1128,37 @@ export const SHARED_STYLE_PAGE_PARAM = "page";
 export const SHARED_STYLE_WHERE_USED_PAGES_MAX = 250;
 
 /**
- * The usage route's path for some shared styles, each named by its own `id`
- * parameter, so the browser asks in the shape the route reads.
+ * The query parameter naming the document open in the editor, as
+ * `<collection>/<id>` or `single:<slug>`, whose saved share of each style's
+ * usage the route reports apart (`SharedStyleUsage.here`).
  */
-export function sharedStyleUsagePath(ids: readonly string[]): string {
+export const SHARED_STYLE_HERE_PARAM = "here";
+
+/**
+ * The saved document open in the editor, as the usage route is told of it:
+ * an entry of a collection by its id, or a Single, which has one document.
+ */
+export type SharedStyleUsageHere =
+  | { readonly collection: string; readonly id: string }
+  | { readonly single: string };
+
+/**
+ * The usage route's path for some shared styles, each named by its own `id`
+ * parameter, so the browser asks in the shape the route reads; with the open
+ * document named, when there is one.
+ */
+export function sharedStyleUsagePath(
+  ids: readonly string[],
+  here?: SharedStyleUsageHere
+): string {
   const params = new URLSearchParams();
   for (const id of ids) params.append(SHARED_STYLE_ID_PARAM, id);
+  if (here !== undefined) {
+    params.set(
+      SHARED_STYLE_HERE_PARAM,
+      "single" in here ? `single:${here.single}` : `${here.collection}/${here.id}`
+    );
+  }
   return `${SHARED_STYLE_USAGE_ROUTE_PATH}?${params.toString()}`;
 }
 

@@ -105,6 +105,7 @@ import {
   SITE_STYLE_SLUG,
   sharedStyleName,
 } from "./site-style-storage";
+import { usageHereOf, usageOf } from "./shared-style-usage-here";
 import { retryOnStale } from "./stale-retry";
 import { readStoredJson } from "./stored-json";
 import type { UncoveredPage } from "./uncovered-pages";
@@ -322,29 +323,6 @@ export const NOTHING_FOUND: DocumentsUsing = {
   complete: false,
 };
 
-const NO_KINDS: Readonly<Record<SharedStyleUsageKind, number>> = {
-  pages: 0,
-  components: 0,
-  patterns: 0,
-  layouts: 0,
-};
-
-/** One listing as a usage: its count, the same documents by kind. */
-export function usageOf(
-  found: DocumentsUsing,
-  kindOf: (collection: string) => SharedStyleUsageKind
-): SharedStyleUsage {
-  const byKind = { ...NO_KINDS };
-  for (const entry of found.collections) {
-    byKind[kindOf(entry.collection)] += entry.documents.length;
-  }
-  return {
-    documents: documentCountOf(found),
-    byKind,
-    complete: found.complete,
-  };
-}
-
 /**
  * How widely each named shared style is used, with the index's health and
  * whether this caller may lock styles.
@@ -358,6 +336,8 @@ export async function readSharedStyleUsage(
   usage: SharedStyleUsageSource
 ): Promise<SharedStylesUsageResponse> {
   const ids = usageIds(req.url);
+  // The document open in the editor, whose saved share is reported apart.
+  const here = usageHereOf(req.url);
   const health = await usage.health();
   // One read for the whole page of styles, not one per style.
   const found = await usage.documentsUsingEach(ids, health);
@@ -366,8 +346,10 @@ export async function readSharedStyleUsage(
   const styles: Record<string, SharedStyleUsage> = Object.fromEntries(
     ids.map(id => [
       id,
-      usageOf(found.get(id) ?? NOTHING_FOUND, collection =>
-        usage.kindOf(collection)
+      usageOf(
+        found.get(id) ?? NOTHING_FOUND,
+        collection => usage.kindOf(collection),
+        here
       ),
     ])
   );
