@@ -60,7 +60,13 @@ import {
   type ViewedVersion,
 } from "./document-history-context";
 import { restoreIntoEditor } from "./restore-into-editor";
-import { removedFieldsOf, restorePlan, restoresInEditor } from "./restore-plan";
+import {
+  removedFieldsOf,
+  restorePlan,
+  restoreRowReason,
+  restoresInEditor,
+  type RestoreRow,
+} from "./restore-plan";
 import { snapshotToFormValues } from "./snapshot-to-form-values";
 import { useChangeNavigation } from "./useChangeNavigation";
 import {
@@ -469,6 +475,26 @@ function baselineOf(viewing: ViewedVersion): number | null {
 }
 
 /**
+ * The comparison the fields a version holds that the content type no longer
+ * has are read from: the one the version view draws, against its predecessor;
+ * for a version with none, against the newest in its language, since the
+ * server names a removed field by the content type as it is now, whichever
+ * pair holds it. None for a version that is both, the only one in its language.
+ */
+export function removedFieldsPairOf(viewing: ViewedVersion | null): {
+  from: number | null;
+  to: number | null;
+} {
+  if (!viewing) return { from: null, to: null };
+  const baseline = baselineOf(viewing);
+  if (baseline !== null) return { from: baseline, to: viewing.versionNo };
+  const newest = viewing.newestInLocale ?? null;
+  return newest === null
+    ? { from: null, to: null }
+    : { from: viewing.versionNo, to: newest };
+}
+
+/**
  * The fields the version on screen holds that the content type no longer has,
  * as the comparison the version view draws names them: the history's restore
  * lists them disabled. Read from the same comparison, so it is fetched once.
@@ -477,8 +503,7 @@ export function useViewedRemovedFields(
   scope: VersionScope,
   viewing: ViewedVersion | null
 ): ReadonlySet<string> {
-  const from = viewing ? baselineOf(viewing) : null;
-  const to = viewing ? viewing.versionNo : null;
+  const { from, to } = removedFieldsPairOf(viewing);
   const diff = useVersionDiff({
     scope,
     from,
@@ -658,19 +683,61 @@ function useFieldRestore(
   }, [offered, editor, viewing, changes]);
   return useMemo(() => {
     if (!rows || !editor) return undefined;
-    const byName = new Map(rows.map(row => [row.name, row]));
-    return {
-      rowFor: name => byName.get(name),
-      restore: name =>
-        restoreIntoEditor({
-          editor,
-          rows,
-          names: [name],
-          versionNo: viewing.versionNo,
-          savedAt: viewing.about?.createdAt ?? null,
-        }),
-    };
+    return fieldRestoreOf(rows, editor, {
+      versionNo: viewing.versionNo,
+      savedAt: viewing.about?.createdAt ?? null,
+    });
   }, [rows, editor, viewing.versionNo, viewing.about]);
+}
+
+/**
+ * "Restore this field" over the rows judged when the version was shown, with
+ * whether the person may still change each field judged again as it is read
+ * and as it is restored: the document can turn read-only after it was shown
+ * (another editor takes it), and the field's restore is then withdrawn as
+ * "Restore…" is; and a field read-only when shown is offered once it may be
+ * changed again.
+ */
+export function fieldRestoreOf(
+  rows: RestoreRow[],
+  editor: EditorRestoreSurface,
+  version: { versionNo: number; savedAt: string | null }
+): VersionFieldRestore {
+  const byName = new Map(rows.map(row => [row.name, row]));
+  const rowNow = (name: string): RestoreRow | undefined => {
+    const row = byName.get(name);
+    // Only whether the person may change the field moves while the version
+    // is on screen; a hidden, removed or language-less field stays as judged.
+    if (!row || (row.disabled && row.disabled !== "read-only")) return row;
+    if (editor.canEdit(name)) {
+      if (!row.disabled) return row;
+      // Read-only when shown, changeable now: offered as any changeable
+      // field is, with the version's value the plan kept for it.
+      const { disabled: _disabled, reason: _reason, ...offered } = row;
+      return { ...offered, chosen: true };
+    }
+    return {
+      ...row,
+      chosen: false,
+      disabled: "read-only",
+      reason: restoreRowReason("read-only"),
+    };
+  };
+  return {
+    rowFor: rowNow,
+    restore: name => {
+      const row = rowNow(name);
+      if (row?.chosen !== true) return;
+      // The row as judged now, so one offered again since it was shown goes in.
+      restoreIntoEditor({
+        editor,
+        rows: [row],
+        names: [name],
+        versionNo: version.versionNo,
+        savedAt: version.savedAt,
+      });
+    },
+  };
 }
 
 /**

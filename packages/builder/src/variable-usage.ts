@@ -207,47 +207,20 @@ function placesWords(count: number): string {
 /** What a floor adds: why the number is a minimum. */
 const NOT_COUNTED_YET = "Some pages aren't counted yet.";
 
-/** A row's count: what it shows, what it says, and how it is drawn. */
-export interface VariableCount {
-  /** What the row shows: "14", "2+", or words for a zero not counted yet. */
-  readonly text: string;
-  /** What it says on hover and to a screen reader. */
-  readonly words: string;
-  /** Drawn muted: nothing found. */
-  readonly zero: boolean;
-  /** A floor: "at least". */
-  readonly floor: boolean;
-}
-
 /**
- * A row's count: a bare number of places, "2+" while that is a floor. A zero
- * that is a floor says "Not counted yet", as a shared style's row does,
- * rather than "0+", a number that says nothing.
+ * How widely a variable is used, in the words its row's tooltip says and
+ * its name says to a screen reader: "Used in 14 places", "Not used", or,
+ * while some pages are not counted, "Not counted yet" or a floor ("Used in
+ * at least 2 places").
  */
-export function variableCount(reach: VariableReach): VariableCount {
+export function variableCountWords(reach: VariableReach): string {
   const places = variablePlaces(reach);
   if (!reach.complete) {
-    if (places === 0) {
-      return {
-        text: "Not counted yet",
-        words: `No uses counted yet. ${NOT_COUNTED_YET}`,
-        zero: true,
-        floor: true,
-      };
-    }
-    return {
-      text: `${String(places)}+`,
-      words: `Used in at least ${placesWords(places)}. ${NOT_COUNTED_YET}`,
-      zero: false,
-      floor: true,
-    };
+    return places === 0
+      ? "Not counted yet"
+      : `Used in at least ${placesWords(places)}. ${NOT_COUNTED_YET}`;
   }
-  return {
-    text: String(places),
-    words: places === 0 ? NOT_USED : `Used in ${placesWords(places)}`,
-    zero: places === 0,
-    floor: false,
-  };
+  return places === 0 ? "Not used" : `Used in ${placesWords(places)}`;
 }
 
 /** What an unused variable's row and editor say. */

@@ -54,6 +54,7 @@ import {
   namedQueriesPath,
   type NamedQueriesResponse,
 } from "../named-queries-contract";
+import { allowanceToWire } from "../page-allowance";
 
 import { sessionAnswer } from "./session-answers";
 import { readStarted } from "./startup-reads";
@@ -325,9 +326,10 @@ export function canvasNamedHost(
           limit: asked.window.limit,
           offset: asked.window.offset,
           ...(locale === undefined ? {} : { locale }),
+          // `null` for a site that sets no limit, which JSON can carry.
           ...(asked.allowance === undefined
             ? {}
-            : { allowance: asked.allowance }),
+            : { allowance: allowanceToWire(asked.allowance) }),
           // The list it is for, so the server's log names it.
           ...(asked.node === undefined ? {} : { node: asked.node }),
         },
