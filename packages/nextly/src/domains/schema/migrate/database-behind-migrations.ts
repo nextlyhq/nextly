@@ -2,16 +2,16 @@
  * The tables and columns the applied migrations made that the database no
  * longer holds: `nextly migrate` never reports such a database as up to date.
  *
- * It compares two end states: the newest applied app snapshot (the whole
- * schema the ledger says the database is at) with the live database. A table
+ * It compares two end states: the newest applied snapshot of a stream (the
+ * whole schema the ledger says that stream left) with the live database. A table
  * or column that snapshot records and the database lacks is named, with the
  * applied migration that last created it. A table or column a later applied
  * migration dropped is in no newest snapshot, so it is never named. What the
  * database holds beyond the snapshot, or holds with another type, is not this
  * check's: those are reported and repaired elsewhere.
  *
- * Read-only. The app's stream alone: a plugin's own migration modules carry
- * their own history, checked as they run.
+ * Read-only. The app's stream, and each declared plugin's: the newest module
+ * the ledger records applied for it says what that plugin's tables hold.
  *
  * **Runtime restriction (F11):** CLI and boot only; never import from runtime
  * code.
@@ -21,6 +21,8 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
 import type { CliError } from "../../../cli/errors";
 import { databaseBehindMigrations } from "../../../cli/errors/areas/migrations";
 import {
@@ -29,6 +31,11 @@ import {
   type SnapshotFile,
 } from "../migrate-create/snapshot-io";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
+
+import {
+  qualifiedFilename,
+  type PluginMigration,
+} from "./plugin/plugin-migration";
 
 import { ledgerNameOfSnapshot, type IsAppliedFn } from "./snapshot-source";
 
@@ -86,6 +93,44 @@ export function appOwnedTables(
     },
     foreign,
   };
+}
+
+/**
+ * One plugin's applied modules as applied snapshots, in the order the plugin
+ * lists them: each module's own tables whole, and of the tables it
+ * contributed to, only the columns it recorded as its own (`contributions`).
+ * A module that records none (generated before they were recorded) gives its
+ * own tables alone, since its part of another owner's table cannot be told
+ * from the owner's.
+ */
+export function appliedPluginSnapshots(args: {
+  pluginName: string;
+  migrations: readonly PluginMigration[];
+  /** Whether the ledger records the module under this key as applied. */
+  isApplied: (ledgerKey: string) => boolean;
+  dialect: SupportedDialect;
+}): AppliedSnapshot[] {
+  return args.migrations.flatMap(migration => {
+    const key = qualifiedFilename(args.pluginName, migration.name);
+    if (!args.isApplied(key)) return [];
+    const contributions = migration.contributions?.[args.dialect] ?? {};
+    return [
+      {
+        migration: key,
+        ...appOwnedTables({
+          snapshot: {
+            tables: [
+              ...(migration.snapshot[args.dialect]?.tables ?? []),
+              ...(migration.contributed?.[args.dialect]?.tables ?? []).filter(
+                table => contributions[table.name] !== undefined
+              ),
+            ],
+          },
+          contributions,
+        }),
+      },
+    ];
+  });
 }
 
 /** Each table's columns, lower-cased, by lower-cased table name. */

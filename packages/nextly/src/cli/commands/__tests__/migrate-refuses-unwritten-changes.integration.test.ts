@@ -32,7 +32,9 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { defineCollection, defineConfig, number, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { loadedDialect } from "../../../database/dialect-tables";
-import { col } from "../../../domains/schema/extension/dsl";
+import { buildExtensionSchema } from "../../../domains/schema/extension/build-extension-schema";
+import { col, defineTable } from "../../../domains/schema/extension/dsl";
+import { buildPluginMigration } from "../../../domains/schema/migrate-create/generate-plugin";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { liveColumnNames } from "../../../domains/schema/pipeline/diff/introspect-live";
 import { definePlugin } from "../../../plugins/plugin-context";
@@ -42,6 +44,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { CORE_TABLE_NAMES } from "../../../schemas/index";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
@@ -509,6 +512,100 @@ describe.each(getConfiguredTestDialects())(
       expect(run.said.match(/- column users\./g)).toHaveLength(1);
       expect(run.said).not.toContain(UP_TO_DATE);
       expect((await usersColumns())?.has("uw_hint")).toBe(false);
+    });
+
+    it("a table and a column a plugin's applied module made, dropped by hand: names both and the module that made each", async () => {
+      // The plugin's tables compiled for this dialect by the real builder,
+      // and its first module written by the real generator.
+      const OWNER = { name: PLUGIN, prefix: "uwp" };
+      const things = defineTable("things", {
+        id: col.id(),
+        label: col.shortText({ nullable: true }),
+      });
+      const extras = defineTable("extras", { id: col.id() });
+      const tablesByDialect = {} as Parameters<
+        typeof buildPluginMigration
+      >[0]["tablesByDialect"];
+      for (const each of ["postgresql", "mysql", "sqlite"] as const) {
+        tablesByDialect[each] = (
+          await buildExtensionSchema({
+            dialect: each,
+            coreTableNames: CORE_TABLE_NAMES,
+            entities: [],
+            pluginPrefixes: new Map([[OWNER.name, OWNER.prefix]]),
+            plugins: [
+              {
+                owner: { kind: "plugin", id: OWNER.name },
+                tables: [things, extras],
+              },
+            ],
+          })
+        ).specs;
+      }
+      const built = buildPluginMigration({
+        pluginName: OWNER.name,
+        schemaVersion: 1,
+        name: "things",
+        now: new Date(Date.UTC(2026, 10, 16, 10, 0, 0)),
+        tablesByDialect,
+        existing: [],
+      });
+      const withPlugin = defineConfig({
+        collections: [],
+        plugins: [
+          definePlugin({
+            name: OWNER.name,
+            version: "1.0.0",
+            nextly: ">=0.0.1",
+            schemaVersion: 1,
+            contributes: {
+              schema: {
+                prefix: OWNER.prefix,
+                tables: [things, extras],
+                migrations: [built!.module],
+              },
+            },
+          }),
+        ],
+        db: { migrationsDir: "./migrations" },
+      });
+      const db = instance!.adapter as unknown as {
+        executeQuery(sql: string): Promise<unknown>;
+      };
+      const q = dialect === "mysql" ? "`" : '"';
+      try {
+        const applied = await migrate(withPlugin);
+        expect(applied.code, applied.said).toBeUndefined();
+        const drizzle = (
+          instance!.adapter as unknown as DrizzleAdapter
+        ).getDrizzle();
+        const live = await liveColumnNames(drizzle, dialect, [
+          "uwp__things",
+          "uwp__extras",
+        ]);
+        expect(live.get("uwp__things")?.has("label")).toBe(true);
+        expect(live.get("uwp__extras")).toBeDefined();
+        await db.executeQuery(`DROP TABLE ${q}uwp__extras${q}`);
+        await db.executeQuery(
+          `ALTER TABLE ${q}uwp__things${q} DROP COLUMN ${q}label${q}`
+        );
+
+        const run = await migrate(withPlugin);
+
+        expect(run.code, run.said).toBe(1);
+        const module = `plugin:${OWNER.name}/${built!.module.name}`;
+        expect(run.said).toContain(
+          `- table uwp__extras (created by ${module})`
+        );
+        expect(run.said).toContain(
+          `- column uwp__things.label (created by ${module})`
+        );
+        expect(run.said).toContain("no longer matches its ledger");
+        expect(run.said).not.toContain(UP_TO_DATE);
+      } finally {
+        await db.executeQuery(`DROP TABLE IF EXISTS ${q}uwp__extras${q}`);
+        await db.executeQuery(`DROP TABLE IF EXISTS ${q}uwp__things${q}`);
+      }
     });
 
     it("a table and a column a later migration dropped, with consent, are not missing", async () => {
