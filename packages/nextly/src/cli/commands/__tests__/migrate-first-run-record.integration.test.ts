@@ -786,6 +786,29 @@ describe.each(getConfiguredTestDialects())(
         expect(run.why).toMatch(/^~ permissions .*export-fr-reports/m);
       }, 240_000);
 
+      it("keeps in the record only the owned permissions that are not orphaned", async () => {
+        const url = await scratch();
+        use(url);
+        await migrate(permissionsOnly(["export", "archive"]));
+        // An earlier build's database: `archive` orphaned, and no record.
+        await on(url, async adapter => {
+          await adapter.executeQuery(
+            `UPDATE ${q}permissions${q} SET ${q}orphaned_at${q} = ${q}created_at${q} WHERE ${q}slug${q} = 'archive-fr-reports'`
+          );
+          await deleteRecord(adapter);
+        });
+
+        await migrate(permissionsOnly(["export"]));
+
+        await on(url, async adapter => {
+          const baseline = (await recordOf(adapter))?.baseline;
+          expect(baseline?.ownedPermissions?.map(p => p.slug)).toEqual([
+            "export-fr-reports",
+          ]);
+          expect(baseline?.permissions).not.toContain("archive-fr-reports");
+        });
+      }, 240_000);
+
       it("names a permission removed where the newest snapshot records settings and no permissions", async () => {
         const withPermissions = (actions: readonly string[]) =>
           defineConfig({

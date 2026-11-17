@@ -17,21 +17,18 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { isNull } from "drizzle-orm";
 
-import { loadedDialect } from "../../../database/dialect-tables";
 import { APP_OWNER } from "../../../plugins/permissions/collect-permissions";
 import type { EntitySettingsChange } from "../migrate-create/entity-settings";
 import type { Operation } from "../pipeline/diff/types";
 
 import { configurationRegistryRows } from "./first-run";
-import { readRegistryRecord } from "./registry-record";
+import { livePermissions, readRegistryRecord } from "./registry-record";
 import { rowsBehindSource, type RowsBySlug } from "./registry-writer";
 import {
   livePermissionsByOwner,
   unwrittenChangesError,
   unwrittenChangesOf,
-  type LivePermissionRow,
   type RecordedInDatabase,
   type UnwrittenChangesArgs,
 } from "./unwritten-changes";
@@ -128,7 +125,7 @@ async function recordedInDatabase(
     return {
       settingsDiffer: await settingsBehindConfiguration(args),
       permissions: livePermissionsByOwner(
-        record.ownedPermissions ?? (await livePermissionRows(db, args.dialect)),
+        record.ownedPermissions ?? (await livePermissions(db, args.dialect)),
         APP_OWNER
       ),
     };
@@ -183,31 +180,4 @@ async function settingsBehindConfiguration(
         ...row.extraFields.map(name => `fields.${name} (removed)`),
       ],
     }));
-}
-
-/** The live permissions not orphaned. */
-async function livePermissionRows(
-  db: unknown,
-  dialect: SupportedDialect
-): Promise<LivePermissionRow[]> {
-  const { permissions } = loadedDialect(dialect).tables;
-  const reader = db as {
-    select(fields: Record<string, unknown>): {
-      from(table: unknown): {
-        where(condition: unknown): Promise<LivePermissionRow[]>;
-      };
-    };
-  };
-  return reader
-    .select({
-      slug: permissions.slug,
-      action: permissions.action,
-      resource: permissions.resource,
-      name: permissions.name,
-      description: permissions.description,
-      permissionGroup: permissions.permissionGroup,
-      owner: permissions.owner,
-    })
-    .from(permissions)
-    .where(isNull(permissions.orphanedAt));
 }

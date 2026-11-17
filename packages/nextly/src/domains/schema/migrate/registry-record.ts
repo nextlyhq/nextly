@@ -119,17 +119,31 @@ function isRowsBySlug(value: unknown): value is Record<string, BaselineRow> {
   );
 }
 
-/** Whether `value` is a list of owned permissions as the baseline keeps them. */
+/** Whether `value` is text, or null where the column allows none. */
+const isTextOrNull = (value: unknown): value is string | null =>
+  value === null || typeof value === "string";
+
+/**
+ * Whether `value` is a list of owned permissions as the record keeps them:
+ * every field the comparison reads, each of its stored type. One that lacks a
+ * field is no record of a permission, and the record holding it is unreadable.
+ */
 function isOwnedPermissions(value: unknown): value is BaselinePermission[] {
   return (
     Array.isArray(value) &&
-    value.every(
-      (row: unknown) =>
-        typeof row === "object" &&
-        row !== null &&
-        typeof (row as { slug?: unknown }).slug === "string" &&
-        typeof (row as { owner?: unknown }).owner === "string"
-    )
+    value.every((row: unknown) => {
+      if (typeof row !== "object" || row === null) return false;
+      const p = row as Record<string, unknown>;
+      return (
+        typeof p.slug === "string" &&
+        typeof p.action === "string" &&
+        typeof p.resource === "string" &&
+        typeof p.name === "string" &&
+        isTextOrNull(p.description) &&
+        isTextOrNull(p.permissionGroup) &&
+        typeof p.owner === "string"
+      );
+    })
   );
 }
 
@@ -243,13 +257,17 @@ function rowsBySlug(
   return bySlug;
 }
 
-/** A permission row as the baseline reads it, owned or not. */
-type LivePermission = Omit<BaselinePermission, "owner"> & {
+/** A permission row as stored, owned or not. */
+export type LivePermission = Omit<BaselinePermission, "owner"> & {
   owner: string | null;
 };
 
-/** The permissions not orphaned, as `db` holds them, sorted by slug. */
-async function livePermissions(
+/**
+ * The permissions not orphaned, as `db` holds them, sorted by slug. The one
+ * read of them: the record is written from it, and a comparison with no
+ * record of them to go by reads the same rows the same way.
+ */
+export async function livePermissions(
   db: unknown,
   dialect: SupportedDialect
 ): Promise<LivePermission[]> {
