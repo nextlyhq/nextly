@@ -520,6 +520,39 @@ describe("a Layout region drawn in the canvas frame", () => {
     // none of these rules.
     expect(CHROME.includes(".nx-canvas-region")).toBe(false);
   });
+
+  it("marks it in the select hue for the page's ground, its tag's words passing AA in both", () => {
+    const region = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region");
+    expect(declared(region, "--nx-region-mark")).toBe(
+      "var(--nx-builder-select-on-light)"
+    );
+    const dark = ruleIn(
+      CANVAS_FRAME_SHEET,
+      '.nx-canvas-region[data-nx-page-scheme="dark"]'
+    );
+    expect(declared(dark, "--nx-region-mark")).toBe(
+      "var(--nx-builder-select-on-dark)"
+    );
+    expect(declared(dark, "--nx-region-mark-text")).toBe(
+      "var(--nx-builder-select-text-on-dark)"
+    );
+    const constants = ruleFor(CONSTANTS);
+    for (const scheme of ["light", "dark"]) {
+      const hue = hexOf(constants, `--nx-builder-select-on-${scheme}`);
+      const text = hexOf(constants, `--nx-builder-select-text-on-${scheme}`);
+      // The tag's words on its hue (WCAG 2.2 SC 1.4.3).
+      expect(contrast(text, hue), `tag on ${scheme}`).toBeGreaterThanOrEqual(
+        4.5
+      );
+    }
+    // The outline on the ground each hue is for (SC 1.4.11).
+    expect(
+      contrast(hexOf(constants, "--nx-builder-select-on-light"), "#ffffff")
+    ).toBeGreaterThanOrEqual(3);
+    expect(
+      contrast(hexOf(constants, "--nx-builder-select-on-dark"), "#0b0f19")
+    ).toBeGreaterThanOrEqual(3);
+  });
 });
 
 describe("the marks drawn over the frame", () => {
