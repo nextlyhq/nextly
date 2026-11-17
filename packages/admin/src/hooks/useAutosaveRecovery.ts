@@ -572,9 +572,44 @@ function offerOf(
 function useRecoveryQueryKey(scope: VersionScope | null): readonly unknown[] {
   const scopeId = scope?.kind === "single" ? scope.documentId : scope?.entryId;
   return useMemo(
-    () => ["autosave-recovery", scope?.kind, scope?.slug, scopeId],
+    () => recoveryQueryKey(scope?.kind, scope?.slug, scopeId),
     [scope?.kind, scope?.slug, scopeId]
   );
+}
+
+/** {@link useRecoveryQueryKey}'s key, outside a component. */
+function recoveryQueryKey(
+  kind: VersionScope["kind"] | undefined,
+  slug: string | undefined,
+  documentId: string | undefined
+): readonly unknown[] {
+  return ["autosave-recovery", kind, slug, documentId];
+}
+
+/**
+ * Start reading the recovery point for `scope` as a page first renders,
+ * under the key and with the request the editor's offer reads it with, so
+ * the editor finds it on its way or answered when it opens. `null` starts
+ * nothing: pass the scope only where the editor would read it, a saved
+ * document whose collection keeps recovery points, for a person who may
+ * change it.
+ */
+export function useStartRecoveryPointRead(scope: VersionScope | null): void {
+  const queryClient = useQueryClient();
+  if (scope === null) return;
+  const queryKey = recoveryQueryKey(
+    scope.kind,
+    scope.slug,
+    scope.kind === "single" ? scope.documentId : scope.entryId
+  );
+  // In render, as `usePrefetchQuery` starts its read; an answer kept, or a
+  // read on its way, is left alone, as the offer keeps its answer for good.
+  if (queryClient.getQueryState(queryKey) !== undefined) return;
+  void queryClient.prefetchQuery({
+    queryKey,
+    queryFn: () => versionApi.getAutosave(scope),
+    staleTime: Infinity,
+  });
 }
 
 /**

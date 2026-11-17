@@ -8,7 +8,10 @@ import { randomBytes } from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-import { assertTopLevelFieldsNamed } from "../../../api/fields-payload";
+import {
+  assertOptionValuesDistinct,
+  assertTopLevelFieldsNamed,
+} from "../../../api/fields-payload";
 import { NextlyError } from "../../../errors";
 import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
@@ -785,6 +788,8 @@ export class DynamicCollectionService extends BaseService {
     // Judged under the names as sent, so a refusal names what the caller wrote; reserved names are
     // dropped first because they are never stored, so they make no pair with anything.
     assertNoNewSiblingClashes({ kind: "collection", slug }, declared, stored);
+    // Nor two options sharing one value, which the stored value could not tell apart.
+    assertOptionValuesDistinct(declared);
     const userDefinedFields = namesKeptFromStored(declared, stored ?? []);
     // And again as they will be stored: a field sent under a spelling of a stored one keeps the
     // stored name, so two fields apart as sent (`metatitle`, `meta_title`) can arrive at one.

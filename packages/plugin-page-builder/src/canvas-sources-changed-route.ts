@@ -346,6 +346,17 @@ async function directSourcesChangedReads(
   };
 }
 
+/** The mark of every source `ask` names, read as the caller. */
+export async function sourcesChangedStampAsCaller(
+  ctx: PluginRouteContext,
+  ask: CanvasSourcesChangedRequest
+): Promise<string> {
+  return sourcesChangedStamp(
+    ask,
+    await directSourcesChangedReads(ctx, ask.locale)
+  );
+}
+
 /**
  * The route the editor's change check asks. A POST because an ask carries
  * what to look at, never because it writes; `noStore` because its answer is
@@ -370,10 +381,7 @@ export function canvasSourcesChangedRoute(): {
         "canvas sources changed"
       );
       const answer: CanvasSourcesChangedResponse = {
-        stamp: await sourcesChangedStamp(
-          body,
-          await directSourcesChangedReads(ctx, body.locale)
-        ),
+        stamp: await sourcesChangedStampAsCaller(ctx, body),
       };
       return respondDoc(answer);
     },
