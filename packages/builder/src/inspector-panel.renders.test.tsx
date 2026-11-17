@@ -258,7 +258,9 @@ describe("the settings panel's work for a selection", () => {
     render(<Host />);
     act(() => editor().select("first"));
     openTab("Style");
-    const typography = screen.getByRole("button", { name: /Typography/ });
+    const typography = screen.getByRole("button", {
+      name: /^Text(has changes)?$/,
+    });
     if (typography.getAttribute("aria-expanded") !== "true") {
       fireEvent.click(typography);
     }
@@ -278,7 +280,9 @@ describe("the settings panel's work for a selection", () => {
     render(<Host />);
     act(() => editor().select("first"));
     openTab("Style");
-    const typography = screen.getByRole("button", { name: /Typography/ });
+    const typography = screen.getByRole("button", {
+      name: /^Text(has changes)?$/,
+    });
     if (typography.getAttribute("aria-expanded") !== "true") {
       fireEvent.click(typography);
     }
@@ -392,7 +396,9 @@ describe("what a Style section shows for the next block", () => {
     render(<Host />);
     act(() => editor().select("first"));
     openTab("Style");
-    const typography = screen.getByRole("button", { name: /Typography/ });
+    const typography = screen.getByRole("button", {
+      name: /^Text(has changes)?$/,
+    });
     if (typography.getAttribute("aria-expanded") !== "true") {
       fireEvent.click(typography);
     }
@@ -427,13 +433,18 @@ describe("what a Style section shows for the next block", () => {
     render(<Host page={page} />);
     act(() => editor().select("first"));
     openTab("Style");
-    const background = () => screen.getByRole("button", { name: /Background/ });
+    const background = () =>
+      screen.getByRole("button", { name: /^Background(has changes)?$/ });
+    // A section holding a value opens; closed by the author, it stays closed
+    // for the next block too.
+    expect(background().getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(background());
     // The control: closed, and marked as holding values.
     expect(background().getAttribute("aria-expanded")).toBe("false");
-    expect(background().textContent).toContain("has values");
+    expect(background().textContent).toContain("has changes");
     counted.sections.clear();
     act(() => editor().select("second"));
-    expect(background().textContent).not.toContain("has values");
+    expect(background().textContent).not.toContain("has changes");
     expect(counted.sections.get("background")).toBe(1);
   });
 });
@@ -441,7 +452,7 @@ describe("what a Style section shows for the next block", () => {
 /** Opens Typography's "+ More" menu. */
 function openMore(): void {
   fireEvent.keyDown(
-    screen.getByRole("button", { name: "More typography properties" }),
+    screen.getByRole("button", { name: "More text properties" }),
     { key: "Enter" }
   );
 }

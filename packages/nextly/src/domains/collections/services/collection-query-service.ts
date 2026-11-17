@@ -6226,7 +6226,7 @@ export class CollectionQueryService extends BaseService {
       // the entry is served and who made and changed it.
       if (params.details) {
         finalData._details = await entryDetails({
-          collection: params.collectionName,
+          type: { kind: "collection", slug: params.collectionName },
           entry: finalData,
           locale: params.locale,
         });

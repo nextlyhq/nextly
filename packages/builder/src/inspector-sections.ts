@@ -5,9 +5,10 @@
  * **The builder's own arrangement, over the engine's vocabulary.** The engine's
  * groups (`STYLE_GROUP_DEFS`) are also the `supports` keys block and plugin
  * authors declare, so they stay exactly as they are. What an author SEES is
- * arranged here: eight sections in the order Webflow and Elementor V4 share —
- * Layout, Spacing, Size, Position, Typography, Background, Border, Effects —
- * with the colour and list properties inside Typography, shadow inside
+ * arranged here: one order for every block, so a section is always in the
+ * same place — Block style, Layout, Inside its parent, Spacing, Size,
+ * Position, Text, Background, Border, Effects, Icon, CSS properties — with
+ * the colour and list properties inside Text, shadow inside
  * Effects, and the container-query and box-sizing properties behind Layout's
  * and Size's "+ More". There is no "Advanced" style section: that name belongs
  * to Content alone, so an author never has to guess which one is meant.
@@ -36,15 +37,18 @@ import type { StyleGroup, StyleState } from "@nextlyhq/blocks-engine";
 
 /** The Style tab's sections, by key. */
 export type InspectorSectionKey =
-  | "icon"
+  | "block-style"
   | "layout"
+  | "inside-parent"
   | "spacing"
   | "size"
   | "position"
   | "typography"
   | "background"
   | "border"
-  | "effects";
+  | "effects"
+  | "icon"
+  | "css-properties";
 
 /**
  * When a property shows without being asked for.
@@ -88,16 +92,10 @@ export interface InspectorSectionDef {
  * weight, then size.
  */
 export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
-  // First, where a block has it: an Accordion's icon is the look an author
-  // sets on one before any other. Only a block offering it shows the section.
-  {
-    key: "icon",
-    label: "Icon",
-    properties: [
-      ["disclosureIcon", "common"],
-      ["disclosurePosition", "icon-drawn"],
-    ],
-  },
+  // Each block's style tiles. Their controls are drawn above the sections
+  // today, so the section holds no property yet; it is in the order so
+  // every block lists its sections the same way.
+  { key: "block-style", label: "Block style", properties: [] },
   {
     key: "layout",
     label: "Layout",
@@ -118,6 +116,9 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
       ["containerType", "more"],
     ],
   },
+  // How a block sits in its parent's row or grid. Its properties are still
+  // in Size; the section is in the order, and draws once it holds them.
+  { key: "inside-parent", label: "Inside its parent", properties: [] },
   {
     key: "spacing",
     label: "Spacing",
@@ -160,7 +161,7 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
   },
   {
     key: "typography",
-    label: "Typography",
+    label: "Text",
     properties: [
       ["fontFamily", "common"],
       ["fontWeight", "common"],
@@ -209,6 +210,18 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
       ["mixBlendMode", "more"],
     ],
   },
+  // Only a block offering it (an Accordion) shows the section.
+  {
+    key: "icon",
+    label: "Icon",
+    properties: [
+      ["disclosureIcon", "common"],
+      ["disclosurePosition", "icon-drawn"],
+    ],
+  },
+  // Any CSS property the sections above do not offer. In the order so every
+  // block lists its sections the same way; it draws once it holds them.
+  { key: "css-properties", label: "CSS properties", properties: [] },
 ];
 
 /**

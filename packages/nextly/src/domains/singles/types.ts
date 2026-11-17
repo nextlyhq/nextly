@@ -87,6 +87,14 @@ export interface GetSingleOptions {
   translationStatus?: boolean;
 
   /**
+   * Attach `_details`: who changed the Single last and when, and where the
+   * site serves it, as an entry read's `details` does. Answered only once
+   * the read is granted; the caller decides who may ask (a signed-in admin
+   * user), so a visitor or an API key is never told.
+   */
+  details?: boolean;
+
+  /**
    * Whole-document fallback: where the Single is not published in the
    * requested language, answer in the first language of its fallback chain it
    * is published in, and say which (`_locale`).

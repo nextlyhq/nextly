@@ -112,7 +112,7 @@ export {
  * a host to hand the canvas so it badges them in red: judged as the save
  * judges them, with the collections the editor's services list.
  */
-export { useConditionsUnchecked } from "./condition-checks";
+export { useConditionsUnchecked } from "./conditions/condition-checks";
 
 /**
  * @experimental The frame the canvas is drawn in, and how the code around the
@@ -497,14 +497,14 @@ export {
   type AppliedConditions,
   type ConditionsPreview,
   type HiddenBlock,
-} from "./applied-conditions";
+} from "./conditions/applied-conditions";
 export {
   conditionsPreviewOf,
   useAppliedConditions,
   useItemHiddenAs,
   type AppliedConditionsOptions,
   type ItemHiddenOptions,
-} from "./use-applied-conditions";
+} from "./conditions/use-applied-conditions";
 export { PageInserters } from "./canvas/page-inserters";
 export type { PageInsertersProps } from "./canvas/page-inserters";
 
@@ -705,6 +705,10 @@ export {
 // and the way a host hands the tab its search.
 export { stylesTabMatches } from "./styles-tab-matches";
 export { SharedStylesHostSearch } from "./shared-styles-panel";
+// The site's fonts, for every Font control the host draws: the block panel's
+// and a font variable's in Design.
+export { FontChoicesContext } from "./font-family-field";
+export type { FontChoices } from "./font-family-field";
 export type { DesignTab, VariableGroup } from "./tokens-studio";
 /*
  * How widely variables are used, as a host reads it for the Variables view.

@@ -173,6 +173,13 @@ test.describe("blocks a plugin contributes", () => {
     // What every block keeps beside its own inspector: the Advanced tab,
     // where the anchor and attributes live.
     await page.getByRole("tab", { name: "Advanced" }).click();
+    // HTML starts closed on a block whose HTML holds nothing.
+    const html = page
+      .getByTestId("inspector")
+      .locator('[data-section="html"] [data-slot="accordion-trigger"]');
+    if ((await html.getAttribute("aria-expanded")) !== "true") {
+      await html.click();
+    }
     const cssId = page.getByRole("textbox", { name: "Anchor (ID)" });
     await cssId.fill("fixture-anchor");
     await cssId.press("Enter");
@@ -185,9 +192,9 @@ test.describe("blocks a plugin contributes", () => {
     await value.press("Tab");
 
     await page.getByRole("tab", { name: "Style" }).click();
-    // Colour sits in Typography, its first and only section here.
+    // Colour sits in Text, its first and only section here.
     const color = page
-      .getByRole("region", { name: /^Typography/ })
+      .getByRole("region", { name: /^Text(\s?has changes)?$/ })
       .getByRole("textbox", { name: "Colour", exact: true });
     await color.fill("#1155cc");
     await color.press("Enter");
