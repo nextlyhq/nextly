@@ -39,13 +39,30 @@ function load(src) {
   return loaded.get(src);
 }
 function turnstile(input, siteKey) {
+  const form = input.form;
   const box = document.createElement("div");
   input.after(box);
+  // A send made before the widget gives its token is held, then sent once
+  // the token arrives: a send without one is kept as spam.
+  let held = false;
+  if (form) {
+    form.addEventListener("submit", event => {
+      if (input.value !== "") return;
+      event.preventDefault();
+      held = true;
+    });
+  }
   load("https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit").then(() => {
     window.turnstile.render(box, {
       sitekey: siteKey,
       "response-field": false,
-      callback: token => { input.value = token; },
+      callback: token => {
+        input.value = token;
+        if (held && form) {
+          held = false;
+          form.submit();
+        }
+      },
     });
   });
 }

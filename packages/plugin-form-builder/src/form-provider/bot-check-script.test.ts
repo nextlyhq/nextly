@@ -62,3 +62,37 @@ describe("the forms plugin's page script", () => {
     expect(draw()).toBe(first);
   });
 });
+
+describe("a Turnstile form", () => {
+  it("holds a send until the widget gives its token, then sends it once", async () => {
+    document.body.innerHTML = `<form><input type="hidden" name="cf-turnstile-response" value="" data-forms-bot-check="turnstile" data-forms-site-key="site-1"></form>`;
+    const form = document.querySelector("form") as HTMLFormElement;
+    let posted = 0;
+    form.submit = () => {
+      posted += 1;
+    };
+    let solved: ((token: string) => void) | undefined;
+    (window as unknown as Record<string, unknown>).turnstile = {
+      render: (
+        _box: unknown,
+        options: { callback: (token: string) => void }
+      ) => {
+        solved = options.callback;
+      },
+    };
+    run();
+    // Sent while Cloudflare's script loads or its check is pending: held.
+    const early = new Event("submit", { cancelable: true });
+    form.dispatchEvent(early);
+    expect(early.defaultPrevented).toBe(true);
+    expect(posted).toBe(0);
+
+    document.head.querySelector("script")?.dispatchEvent(new Event("load"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    solved?.("token-2");
+    expect((document.querySelector("input") as HTMLInputElement).value).toBe(
+      "token-2"
+    );
+    expect(posted).toBe(1);
+  });
+});
