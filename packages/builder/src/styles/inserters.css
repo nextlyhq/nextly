@@ -131,14 +131,18 @@
   color: var(--nx-builder-text);
   text-align: center;
   font-family: var(--font-sans, system-ui), sans-serif;
-  pointer-events: auto;
+  /* Only its buttons take the pointer: a block dragged in from the Add panel
+     passes over the rest to the page under it, where it drops. */
+  pointer-events: none;
 }
 
-/* While a block is dragged: drawn as where it drops, taking no pointer so
-   the drag reaches the page under it. */
+/* While a block is dragged: drawn as where it drops, and nothing in it takes
+   the pointer, its buttons included. */
 .nx-page-start[data-drop-target] {
   outline: 2px dashed var(--nx-builder-select);
   outline-offset: 4px;
+}
+.nx-page-start[data-drop-target] * {
   pointer-events: none;
 }
 
@@ -168,6 +172,7 @@
     500 0.8125rem/1 var(--font-sans, system-ui),
     sans-serif;
   cursor: pointer;
+  pointer-events: auto;
 }
 
 .nx-page-start__add {

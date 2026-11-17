@@ -199,14 +199,20 @@ export function InsertPanel({
   const summons = { summoned, onSummoned };
   const [query, setQuery] = React.useState("");
   // Blocks first: what an author adds most. Sections holds the patterns.
-  const [tab, setTab] = React.useState<PanelTab>("blocks");
-  // A press that names a tab opens it, before the press is answered below
-  // (a layout effect runs before the effect that focuses the search).
-  React.useLayoutEffect(() => {
+  // Opened for a press that names a tab, on that tab.
+  const [tab, setTab] = React.useState<PanelTab>(() =>
+    summoned !== undefined && summonedTab !== undefined ? summonedTab : "blocks"
+  );
+  // A press that names a tab opens it in the very render that answers the
+  // press, so the search the answer focuses is that tab's, not one a later
+  // render would replace.
+  const [tabbedPress, setTabbedPress] = React.useState(summoned);
+  if (tabbedPress !== summoned) {
+    setTabbedPress(summoned);
     if (summoned !== undefined && summonedTab !== undefined) {
       setTab(summonedTab);
     }
-  }, [summoned, summonedTab]);
+  }
   /*
    * Whether the author has moved through the tiles, and with what.
    *

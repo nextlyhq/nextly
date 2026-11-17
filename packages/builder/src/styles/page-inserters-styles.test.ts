@@ -124,6 +124,15 @@ describe("the start area of an empty page", () => {
     expect(add).toMatch(/color: var\(--nx-builder-accent-text\)/);
   });
 
+  it("lets a dragged block pass over it to the page, its buttons too while dragging", () => {
+    // Only the buttons take the pointer at rest; while a block is dragged,
+    // nothing in the area does, so the drag reaches the page under it.
+    expect(ruleExactly(".nx-page-start")).toMatch(/pointer-events: none;/);
+    expect(ruleExactly(".nx-page-start[data-drop-target] *")).toMatch(
+      /pointer-events: none;/
+    );
+  });
+
   it("has no gradient, shadow or image of its own", () => {
     for (const body of rulesNaming("nx-page-start")) {
       expect(body).not.toMatch(/gradient|box-shadow|url\(/);
