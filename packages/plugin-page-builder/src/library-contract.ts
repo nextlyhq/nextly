@@ -859,6 +859,83 @@ export interface SiteSettingsRead {
    * @experimental
    */
   readonly undoable?: SiteBreakpointUndoable | null;
+  /**
+   * The CSS variable prefix the site's variables are written under, and where
+   * it comes from. Absent for a caller who may not manage the site.
+   *
+   * @experimental
+   */
+  readonly prefix?: SiteCssPrefixRead;
+}
+
+/**
+ * Where Settings changes the CSS variable prefix the site's variables are
+ * written under, under the site permission (`manage-page-builder-site`), not
+ * Design's: a change breaks any CSS of the site's own that names the old
+ * prefix. The `site-style` Single refuses every other write that changes it.
+ *
+ * @experimental
+ */
+export const SITE_CSS_PREFIX_ROUTE_PATH = "/site/css-prefix";
+
+/**
+ * The site's CSS variable prefix: the one its pages are written under now,
+ * and the two places it can be set. A prefix saved in Settings replaces the
+ * one the site's code sets.
+ *
+ * @experimental
+ */
+export interface SiteCssPrefixRead {
+  /** The prefix the canvas and published pages are written under now. */
+  readonly current: string;
+  /** The prefix the site's code sets, as written there; absent when none. */
+  readonly code?: string;
+  /** The prefix saved in Settings; absent when none is saved. */
+  readonly stored?: string;
+}
+
+/**
+ * What Settings sends to change the prefix. A prefix equal to the one the
+ * site would use without a saved one clears the saved one.
+ *
+ * @experimental
+ */
+export interface SiteCssPrefixRequest {
+  readonly prefix: string;
+  /**
+   * Save nothing, and answer with what the change would leave behind: how
+   * many places name a variable through the current prefix in CSS text.
+   */
+  readonly dryRun?: boolean;
+}
+
+/**
+ * What a dry run answers: the places that name a variable by the current
+ * prefix in CSS text (a shadow's colour is stored that way), which lose it
+ * once the prefix changes.
+ *
+ * @experimental
+ */
+export interface SiteCssPrefixDryRun {
+  readonly dryRun: true;
+  /** The prefix asked about, as it would be written. */
+  readonly prefix: string;
+  /** Variables, shared styles and documents naming a variable that way. */
+  readonly oldPrefixUses: number;
+  /**
+   * Whether every page could be counted: false while the usage index is
+   * still being filled, so the count is a lower bound.
+   */
+  readonly usesComplete: boolean;
+}
+
+/**
+ * What a saved change answers: the prefix as it now stands.
+ *
+ * @experimental
+ */
+export interface SiteCssPrefixSaved {
+  readonly prefix: SiteCssPrefixRead;
 }
 
 /**

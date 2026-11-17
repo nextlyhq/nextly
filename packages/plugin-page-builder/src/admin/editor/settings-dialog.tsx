@@ -92,6 +92,7 @@ import { useSavedAddress, type SettingsAddress } from "./settings-address";
 import type { SettingsPlace } from "./settings-place";
 import type { SharePreview } from "./share-preview";
 import type { SiteCodeSection as SiteCodeSectionPart } from "./site-code-settings";
+import { SiteCssPrefixSetting } from "./site-css-prefix-setting";
 import {
   useBreakpointRemoval,
   type BreakpointRemoval,
@@ -742,6 +743,7 @@ function SiteSettings({
         <LaterSections
           read={read}
           reread={reread}
+          refreshStyle={refresh}
           codeOpen={codeOpen}
           code={{
             onEditingChange: onEditingCode,
@@ -756,16 +758,20 @@ function SiteSettings({
 
 /**
  * The Site sections after the breakpoints: the default Layout, which steps
- * aside while the code is open, and the code.
+ * aside while the code is open, the code, and Advanced (the CSS variable
+ * prefix), which steps aside with the default Layout.
  */
 function LaterSections({
   read,
   reread,
+  refreshStyle,
   codeOpen,
   code,
 }: {
   read: SiteSettingsRead;
   reread: () => void;
+  /** Reads the site style again, so the canvas follows a new prefix. */
+  refreshStyle: () => void;
   codeOpen: boolean;
   code: ComponentProps<typeof SiteCodeSection>;
 }): JSX.Element {
@@ -773,6 +779,13 @@ function LaterSections({
     <>
       {codeOpen ? null : <DefaultLayout read={read} reread={reread} />}
       <SiteCodeSection {...code} />
+      {codeOpen || read.prefix === undefined ? null : (
+        <SiteCssPrefixSetting
+          prefix={read.prefix}
+          reread={reread}
+          refreshStyle={refreshStyle}
+        />
+      )}
     </>
   );
 }

@@ -195,6 +195,120 @@ describe.each(getConfiguredTestDialects())(
       expect(await storedBreakpoints(t)).toBeNull();
     });
 
+    async function storedTokens(t: TestNextly): Promise<unknown> {
+      const doc = (await t.nextly.findSingle({
+        slug: SITE_STYLE_SLUG,
+        overrideAccess: true,
+      })) as Record<string, unknown> | null;
+      const tokens = doc?.tokens ?? null;
+      // SQLite hands a JSON column back as text.
+      return typeof tokens === "string" ? JSON.parse(tokens) : tokens;
+    }
+
+    it("changes the CSS variable prefix through Settings' route with the site permission alone", async () => {
+      const t = await boot();
+      const cookie = await holding(t, "manage-page-builder-site");
+      const dry = await call("POST", plugin("site", "css-prefix"), cookie, {
+        prefix: "--brand-",
+        dryRun: true,
+      });
+      expect(dry.status).toBe(200);
+      expect(dry.body.item).toMatchObject({
+        dryRun: true,
+        prefix: "--brand-",
+        oldPrefixUses: 0,
+      });
+      // The dry run saves nothing.
+      expect(await storedTokens(t)).toBeNull();
+
+      const saved = await call("POST", plugin("site", "css-prefix"), cookie, {
+        prefix: "--brand-",
+      });
+      expect(saved.status).toBe(200);
+      expect(saved.body.item).toEqual({
+        prefix: { current: "--brand-", stored: "--brand-" },
+      });
+      expect(await storedTokens(t)).toMatchObject({ prefix: "--brand-" });
+      const read = await call("GET", plugin("site", "settings"), cookie);
+      expect(read.body.prefix).toEqual({
+        current: "--brand-",
+        stored: "--brand-",
+      });
+
+      // Back to the default clears the saved prefix rather than storing it.
+      const back = await call("POST", plugin("site", "css-prefix"), cookie, {
+        prefix: "--site-",
+      });
+      expect(back.status).toBe(200);
+      expect(back.body.item).toEqual({ prefix: { current: "--site-" } });
+      expect(await storedTokens(t)).not.toHaveProperty("prefix");
+    });
+
+    it("refuses the prefix route to a role with Design's permission but not the site's", async () => {
+      const t = await boot();
+      const cookie = await holding(t, "read-site-style", "update-site-style");
+      const answer = await call("POST", plugin("site", "css-prefix"), cookie, {
+        prefix: "--brand-",
+      });
+      expect(answer.status).toBe(403);
+      expect(await storedTokens(t)).toBeNull();
+    });
+
+    it.each([
+      ["--nx-", "--nx- is kept for the admin's own styles."],
+      ["--tw-", "--tw- is used by Tailwind."],
+      ["brand", "A prefix starts with two dashes"],
+    ])("refuses the prefix %s with the reason", async (prefix, reason) => {
+      const t = await boot();
+      const cookie = await holding(t, "manage-page-builder-site");
+      const answer = await call("POST", plugin("site", "css-prefix"), cookie, {
+        prefix,
+      });
+      expect(answer.status).toBe(400);
+      expect(JSON.stringify(answer.body)).toContain(reason);
+      expect(await storedTokens(t)).toBeNull();
+    });
+
+    it("refuses a prefix change through the Single, even holding both permissions", async () => {
+      const t = await boot();
+      const cookie = await holding(
+        t,
+        "read-site-style",
+        "update-site-style",
+        "manage-page-builder-site"
+      );
+      const answer = await call("PATCH", ["singles", SITE_STYLE_SLUG], cookie, {
+        tokens: { tokens: [], prefix: "--brand-" },
+        _overwrite: true,
+      });
+      expect(answer.status).toBe(403);
+      expect(JSON.stringify(answer.body)).toContain(
+        "The CSS variable prefix is changed in Settings → Site."
+      );
+      expect(await storedTokens(t)).toBeNull();
+    });
+
+    it("lets Design's save carry a saved prefix through unchanged", async () => {
+      const t = await boot();
+      const site = await holding(t, "manage-page-builder-site");
+      const set = await call("POST", plugin("site", "css-prefix"), site, {
+        prefix: "--brand-",
+      });
+      expect(set.status).toBe(200);
+      const design = await holding(t, "read-site-style", "update-site-style");
+      const answer = await call("PATCH", ["singles", SITE_STYLE_SLUG], design, {
+        tokens: {
+          tokens: [
+            { name: "color.ink", kind: "color", values: { light: "#111" } },
+          ],
+          prefix: "--brand-",
+        },
+        _overwrite: true,
+      });
+      expect(answer.status).toBe(200);
+      expect(await storedTokens(t)).toMatchObject({ prefix: "--brand-" });
+    });
+
     it("tells the Site tab what each role may change", async () => {
       const t = await boot();
       const nobody = await holding(t);
