@@ -205,13 +205,19 @@ export const button: BlockDefinition<ButtonProps, PageContext> = defineBlock({
     // entry link is the collection and the entry together, as the renderer
     // resolves one.
     type: {
-      label: "Acts as",
-      optionLabels: { button: "Button", submit: "Submit", reset: "Reset" },
+      label: "Button type",
+      optionLabels: { button: "Button", submit: "Send form", reset: "Clear form" },
       type: "select",
       options: [...BUTTON_TYPES],
       onlyWithout: ["href", ["entryCollection", "entryId"]],
+      // An HTML-level detail, with the block's other HTML settings.
+      group: "advanced",
     },
-    ariaLabel: { label: "Accessible label", role: "content", type: "text" },
+    ariaLabel: {
+      label: "Screen reader label",
+      role: "content",
+      type: "text",
+    },
   },
   defaultProps: { label: "", type: "button" },
   example: { props: { label: "Get started", href: "/signup" } },
@@ -222,6 +228,8 @@ export const button: BlockDefinition<ButtonProps, PageContext> = defineBlock({
     spacing: true,
     dimensions: true,
     border: true,
+    // A call to action often carries one: Style › Effects › Shadow.
+    shadow: true,
     effects: true,
     position: true,
   },

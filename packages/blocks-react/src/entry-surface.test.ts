@@ -201,6 +201,7 @@ const SOURCE_MODULES: ReadonlyArray<{
     // reads its own stored props: a block author's input is the render
     // arguments, not these.
     internal: [
+      "addressLinkFor",
       "boundImage",
       "boundText",
       "canLink",
@@ -210,6 +211,7 @@ const SOURCE_MODULES: ReadonlyArray<{
       "isTrustedOrigin",
       "LINK_PROPS",
       "linkFor",
+      "linksToEntry",
       "number",
       "oneOf",
       "readClaimOf",
