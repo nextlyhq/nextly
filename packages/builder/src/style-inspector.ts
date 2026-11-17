@@ -331,11 +331,10 @@ export function inspectStyle(
     }
   }
 
-  // Offered only to a block that has a size of its own to set: one that no
-  // longer offers it keeps what it stores as clear-only rows.
-  const parent = offered.has("width")
-    ? laidOutBy(document, node, at, options, context.position)
-    : undefined;
+  const parent = laidOutBy(document, node, at, options, {
+    position: context.position,
+    sized: offered.has("width"),
+  });
   return {
     nodeId: node.id,
     state,
@@ -397,17 +396,19 @@ function appliesContextOf(
 }
 
 /**
- * How the block's parent lays it out, unless the block's own position takes
- * it out of the flow: then its parent doesn't, and nothing is offered.
+ * How the block's parent lays it out, for a block with a size of its own to
+ * set and in its parent's flow. One that no longer offers a size keeps what
+ * it stores as clear-only rows; one its position takes out of the flow isn't
+ * laid out by its parent at all.
  */
 function laidOutBy(
   document: BlockDocument,
   node: BlockNode,
   at: ReadAt,
   options: StyleInspectionOptions | undefined,
-  position: string | undefined
+  block: { readonly position: string | undefined; readonly sized: boolean }
 ): ParentArrangement | undefined {
-  if (OUT_OF_FLOW.has(position ?? "")) return undefined;
+  if (!block.sized || OUT_OF_FLOW.has(block.position ?? "")) return undefined;
   return parentArrangementOf(document, node, at, options);
 }
 
