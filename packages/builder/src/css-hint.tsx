@@ -197,12 +197,24 @@ export function CssNamesLine({
   );
 }
 
-/** A control's description with its CSS names joined while they are shown. */
-export function useDescribedWithNames(
-  describedBy: string | undefined,
-  namesId: string
+/**
+ * The id of the CSS names line of the field a control is drawn in, while the
+ * names are shown; `undefined` otherwise. Lent by the field, so its controls
+ * add it to their description without it ever reading as a refusal.
+ */
+export const FieldNamesId: React.Context<string | undefined> =
+  React.createContext<string | undefined>(undefined);
+
+/**
+ * A control's description: its refusal, if any, and its field's CSS names
+ * while they are shown. The refusal alone still decides whether the control
+ * is invalid, so showing the names never marks a valid field invalid.
+ */
+export function useFieldDescription(
+  describedBy: string | undefined
 ): string | undefined {
+  const namesId = React.useContext(FieldNamesId);
   const { shown } = useCssNames();
-  if (!shown) return describedBy;
+  if (!shown || namesId === undefined) return describedBy;
   return describedBy === undefined ? namesId : `${describedBy} ${namesId}`;
 }

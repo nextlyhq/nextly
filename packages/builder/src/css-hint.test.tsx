@@ -236,6 +236,11 @@ describe("Show CSS names", () => {
       .getByRole("textbox", { name: /^Min height/ })
       .getAttribute("aria-describedby");
     expect(described?.split(" ")).toContain(names?.id);
+    // A description, never a refusal: the field stays valid.
+    const shownInput = within(fieldOf("Min height")).getByRole("textbox", {
+      name: /^Min height/,
+    });
+    expect(shownInput.getAttribute("aria-invalid")).toBe(null);
 
     toggleCssNames();
     expect(fieldOf("Min height").querySelector(".nx-css-names")).toBe(null);

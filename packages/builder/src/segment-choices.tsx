@@ -70,22 +70,22 @@ export function SegmentChoices<T extends string>({
     <div role="radiogroup" aria-labelledby={labelId} className="nx-segment">
       {options.map((option, index) => (
         <CssHint key={option} writes={writes?.[option]}>
-        <button
-          type="button"
-          role="radio"
-          aria-checked={on === option}
-          tabIndex={stop === option ? 0 : -1}
-          className="nx-segment__option"
-          onKeyDown={event =>
-            arrowTo(event, index, allowed, next => {
-              const target = options[next];
-              if (target !== undefined) onChoose(target);
-            })
-          }
-          onClick={() => onChoose(option)}
-        >
-          {labels[option]}
-        </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={on === option}
+            tabIndex={stop === option ? 0 : -1}
+            className="nx-segment__option"
+            onKeyDown={event =>
+              arrowTo(event, index, allowed, next => {
+                const target = options[next];
+                if (target !== undefined) onChoose(target);
+              })
+            }
+            onClick={() => onChoose(option)}
+          >
+            {labels[option]}
+          </button>
         </CssHint>
       ))}
     </div>

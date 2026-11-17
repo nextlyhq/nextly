@@ -19,12 +19,7 @@ import * as React from "react";
 
 import { ChromeTooltip } from "./chrome-tooltip";
 import { controlWrites } from "./code-hints";
-import {
-  CssHint,
-  CssNamesLine,
-  OptionWrites,
-  useDescribedWithNames,
-} from "./css-hint";
+import { CssHint, CssNamesLine, OptionWrites, FieldNamesId } from "./css-hint";
 import type { EditorState } from "./editor-state";
 import { InheritedValue } from "./inherited-value";
 import { LabelScrubRow, useLabelScrubProps } from "./label-scrub";
@@ -244,7 +239,9 @@ export function StyleControlField({
   // of "is there an error" is the shape that drifts into a control described by
   // a message it is not marked invalid for.
   const namesId = `${id}-css`;
-  const describedBy = useDescribedWithNames(issueId(issue, errorId), namesId);
+  // The refusal alone: whether the control is invalid is read from it. The
+  // CSS names join the description through `FieldNamesId` below.
+  const describedBy = issueId(issue, errorId);
   const tokenPrefix = React.useContext(TokenPrefixContext);
 
   if (!control.supported) {
@@ -267,73 +264,75 @@ export function StyleControlField({
     <OptionWrites.Provider
       value={option => controlWrites(control, option, tokenPrefix)}
     >
-      <CssHint
-        summary={summary}
-        writes={controlWrites(control, stored, tokenPrefix)}
-      >
-        <div
-          className="nx-inspector__field"
-          data-control={control.kind}
-          // Absent when this is not a side: React omits an `undefined` attribute, so
-          // the value says whether the field is in a box without a branch here.
-          data-side={side}
-          onKeyDown={sideKeys.onKeyDown}
-          {...writes.caption}
+      <FieldNamesId.Provider value={namesId}>
+        <CssHint
+          summary={summary}
+          writes={controlWrites(control, stored, tokenPrefix)}
         >
-          {/* The label drags the value the number field below offers it. */}
-          <LabelScrubRow subject={`${nodeId} ${targetKey(writes.target)}`}>
-            <StyleFieldLabel
-              id={labelId}
-              htmlFor={id}
-              readOnly={readOnly}
-              focusOnly={labelFocusOnly(control.leaf, stored)}
-              title={undefined}
-              label={label}
-              answer={answer}
-              editing={editing}
-              descendant={control.leaf.descendant}
-            />
-            <InheritedValue.Provider value={inherited}>
-              <ControlOrFont
-                id={id}
-                labelledBy={labelId}
-                control={control}
-                stored={stored}
-                actionName={actionName}
-                clearOnly={clearOnly}
-                tokens={tokens}
-                prefersDark={prefersDark}
-                pairedColour={pairedColour}
-                obscuredBy={obscuredBy}
-                describedBy={describedBy}
-                onCommit={commit}
+          <div
+            className="nx-inspector__field"
+            data-control={control.kind}
+            // Absent when this is not a side: React omits an `undefined` attribute, so
+            // the value says whether the field is in a box without a branch here.
+            data-side={side}
+            onKeyDown={sideKeys.onKeyDown}
+            {...writes.caption}
+          >
+            {/* The label drags the value the number field below offers it. */}
+            <LabelScrubRow subject={`${nodeId} ${targetKey(writes.target)}`}>
+              <StyleFieldLabel
+                id={labelId}
+                htmlFor={id}
+                readOnly={readOnly}
+                focusOnly={labelFocusOnly(control.leaf, stored)}
+                title={undefined}
+                label={label}
+                answer={answer}
+                editing={editing}
+                descendant={control.leaf.descendant}
               />
-            </InheritedValue.Provider>
-          </LabelScrubRow>
-          <CssNamesLine id={namesId} names={[control.leaf.cssProperty]} />
-          <BreakpointAction
-            answer={answer}
-            label={actionName}
-            editing={editing}
-            fieldId={id}
-            onReset={() => commit(null)}
-            stored={stored}
-            readOnly={readOnly}
-            resetByKey={sideKeys.resetByKey}
-          />
-          {sideKeys.hint}
-          <SharedValueLine
-            target={target}
-            answer={answer}
-            nodeStyles={nodeStyles}
-            address={address}
-            actionName={actionName}
-            onResetBlock={writes.resetBlock}
-            onMoveTo={writes.moveTo}
-          />
-          <FieldIssue id={errorId} issue={issue} />
-        </div>
-      </CssHint>
+              <InheritedValue.Provider value={inherited}>
+                <ControlOrFont
+                  id={id}
+                  labelledBy={labelId}
+                  control={control}
+                  stored={stored}
+                  actionName={actionName}
+                  clearOnly={clearOnly}
+                  tokens={tokens}
+                  prefersDark={prefersDark}
+                  pairedColour={pairedColour}
+                  obscuredBy={obscuredBy}
+                  describedBy={describedBy}
+                  onCommit={commit}
+                />
+              </InheritedValue.Provider>
+            </LabelScrubRow>
+            <CssNamesLine id={namesId} names={[control.leaf.cssProperty]} />
+            <BreakpointAction
+              answer={answer}
+              label={actionName}
+              editing={editing}
+              fieldId={id}
+              onReset={() => commit(null)}
+              stored={stored}
+              readOnly={readOnly}
+              resetByKey={sideKeys.resetByKey}
+            />
+            {sideKeys.hint}
+            <SharedValueLine
+              target={target}
+              answer={answer}
+              nodeStyles={nodeStyles}
+              address={address}
+              actionName={actionName}
+              onResetBlock={writes.resetBlock}
+              onMoveTo={writes.moveTo}
+            />
+            <FieldIssue id={errorId} issue={issue} />
+          </div>
+        </CssHint>
+      </FieldNamesId.Provider>
     </OptionWrites.Provider>
   );
 }
