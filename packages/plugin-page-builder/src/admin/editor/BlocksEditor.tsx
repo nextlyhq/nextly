@@ -79,6 +79,7 @@ import {
   useMediaSummaryReader,
 } from "./media-summary-reader";
 import { usePageDataCount } from "./page-read-meter";
+import { useReadBack } from "./read-back";
 import { recentColoursStore } from "./recent-colours-store";
 import { useReveal } from "./reveal-hidden";
 import { useSettingsPlace } from "./settings-place";
@@ -353,10 +354,15 @@ function EditorBody<TFieldValues extends FieldValues>({
   openAt,
   place,
 }: BlocksEditorProps<TFieldValues> & { place: FieldPlace }): JSX.Element {
+  // A save hands the document to the form, and the form takes the entry in
+  // again from the save's answer and the read after it, each a new object
+  // holding the same document. Kept as the object the editor already holds,
+  // so a read that matches what is shown plans and draws nothing again.
+  const readBack = useReadBack(onCommit);
   const mount = useEditorMount(
-    initialValue,
+    readBack.kept("opened", initialValue),
     kinds,
-    useStoredFieldValue(control, name, place.pathIn)
+    readBack.kept("stored", useStoredFieldValue(control, name, place.pathIn))
   );
   const { editor, inline } = mount;
 
@@ -404,7 +410,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     control,
     editor,
     inline,
-    onCommit,
+    onCommit: readBack.handOver,
     onClose,
     savePoint,
     // The count the removal dialog says now; the hold keeps it as it stood
