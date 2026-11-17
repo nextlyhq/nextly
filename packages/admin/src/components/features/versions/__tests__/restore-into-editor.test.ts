@@ -59,11 +59,26 @@ describe("restoreIntoEditor", () => {
 
     restoreIntoEditor({ editor, rows, names: ["bio", "secret"], versionNo: 2 });
 
-    expect(apply).toHaveBeenCalledWith({ bio: "old" }, 2);
+    expect(apply).toHaveBeenCalledWith({ bio: "old" }, 2, expect.any(Function));
     expect(toastSuccess).toHaveBeenCalledWith(
       "1 field restored from version 2",
       expect.anything()
     );
+  });
+
+  it("tells the restore each field's type, so it compares as the field holds values", () => {
+    const { editor, apply } = editorWith({
+      fields: [
+        { name: "bio", type: "json" },
+      ] as unknown as EditorRestoreSurface["fields"],
+    });
+
+    restoreIntoEditor({ editor, rows, names: ["bio"], versionNo: 2 });
+
+    const typeOf = apply.mock.calls[0]?.[2] as
+      | ((name: string) => string | undefined)
+      | undefined;
+    expect(typeOf?.("bio")).toBe("json");
   });
 
   it("names the language the fields went into, on a translated document", () => {

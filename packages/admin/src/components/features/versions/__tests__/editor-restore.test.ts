@@ -100,6 +100,22 @@ describe("createEditorRestore", () => {
     expect(restore.restoredFromForSave(form.getValues())).toEqual({ tags: 2 });
   });
 
+  it("leaves a JSON field edited to another empty value in place on Undo", () => {
+    const { values, form } = fakeForm({ data: { a: 1 } });
+    const restore = createEditorRestore(form);
+
+    const applied = restore.apply({ data: [] }, 3, name =>
+      name === "data" ? "json" : undefined
+    );
+    // A JSON field stores what it is given: `{}` is the person's own value,
+    // not the `[]` the restore put there.
+    form.setValue("data", {}, { shouldDirty: true });
+    applied.undo();
+
+    expect(values.data).toEqual({});
+    expect(restore.restoredFromForSave(form.getValues())).toBeUndefined();
+  });
+
   it("forgets every source once the save is made", () => {
     const { form } = fakeForm({ title: "Now" });
     const restore = createEditorRestore(form);

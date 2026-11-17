@@ -11,7 +11,7 @@
  * @module components/features/versions/editor-restore
  */
 
-import { sameFormValue } from "./same-form-value";
+import { sameFieldValue } from "./same-form-value";
 
 /** What a restore needs of the form. */
 export interface RestorableForm {
@@ -29,7 +29,18 @@ export interface AppliedRestore {
 }
 
 export interface EditorRestore {
-  apply: (values: Record<string, unknown>, versionNo: number) => AppliedRestore;
+  /**
+   * Put `values` into the form. `typeOf` names each field's type, so whether
+   * a field still holds what was put there is asked as the field holds its
+   * values: a JSON field's distinct empty values apart, a relationship by the
+   * documents it names. A field it names no type for is compared as the form
+   * draws it.
+   */
+  apply: (
+    values: Record<string, unknown>,
+    versionNo: number,
+    typeOf?: (name: string) => string | undefined
+  ) => AppliedRestore;
   restoredFromForSave: (
     current: Record<string, unknown>
   ) => Record<string, number> | undefined;
@@ -51,11 +62,20 @@ export interface EditorRestore {
   holds: (name: string) => boolean;
 }
 
-/** A field's restore: the value put in, its version, and which restore. */
+/**
+ * A field's restore: the value put in, its version, which restore, and the
+ * field's type, which every later "does it still hold it?" is asked by.
+ */
 interface RestoredField {
   value: unknown;
   versionNo: number;
   restore: number;
+  type: string | undefined;
+}
+
+/** Whether a field's value now is still the value its restore put there. */
+function stillHolds(entry: RestoredField, now: unknown): boolean {
+  return sameFieldValue(entry.type, now, entry.value);
 }
 
 export function createEditorRestore(form: RestorableForm): EditorRestore {
@@ -65,7 +85,7 @@ export function createEditorRestore(form: RestorableForm): EditorRestore {
   let restores = 0;
 
   return {
-    apply(values, versionNo) {
+    apply(values, versionNo, typeOf) {
       const restore = ++restores;
       const before = form.getValues();
       // What each field held before: its value, and the earlier restore this
@@ -81,7 +101,12 @@ export function createEditorRestore(form: RestorableForm): EditorRestore {
         });
         // An unsaved edit, like any other the person makes.
         form.setValue(name, value, { shouldDirty: true });
-        restored.set(name, { value, versionNo, restore });
+        restored.set(name, {
+          value,
+          versionNo,
+          restore,
+          type: typeOf?.(name),
+        });
       }
       return {
         undo() {
@@ -92,7 +117,7 @@ export function createEditorRestore(form: RestorableForm): EditorRestore {
             // field, a reset since, or the person's own edit since, is theirs
             // to keep.
             if (entry?.restore !== restore) continue;
-            if (!sameFormValue(now[name], entry.value)) {
+            if (!stillHolds(entry, now[name])) {
               restored.delete(name);
               continue;
             }
@@ -110,7 +135,7 @@ export function createEditorRestore(form: RestorableForm): EditorRestore {
       const sources: Record<string, number> = {};
       for (const [name, entry] of restored) {
         // A value edited again since its restore carries no source.
-        if (sameFormValue(current[name], entry.value)) {
+        if (stillHolds(entry, current[name])) {
           sources[name] = entry.versionNo;
         }
       }
@@ -123,15 +148,12 @@ export function createEditorRestore(form: RestorableForm): EditorRestore {
 
     holds(name) {
       const entry = restored.get(name);
-      return (
-        entry !== undefined &&
-        sameFormValue(form.getValues()[name], entry.value)
-      );
+      return entry !== undefined && stillHolds(entry, form.getValues()[name]);
     },
 
     formReset(current, dirty) {
       for (const [name, entry] of restored) {
-        if (!dirty.has(name) || !sameFormValue(current[name], entry.value)) {
+        if (!dirty.has(name) || !stillHolds(entry, current[name])) {
           restored.delete(name);
         }
       }
