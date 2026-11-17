@@ -222,24 +222,29 @@ function CardHeading({ children }: { children: string }): JSX.Element {
       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
         <LayoutTemplate className="h-4 w-4" aria-hidden="true" />
       </span>
-      <p className="min-w-0 truncate text-sm font-semibold" title={children}>
+      <h4 className="min-w-0 truncate text-sm font-semibold" title={children}>
         {children}
-      </p>
+      </h4>
     </div>
   );
 }
 
 /**
- * The card's Preview: the editor's own, beside the form where it offers
- * that, else in a new tab; nothing where the editor offers no preview.
+ * What the card's Preview runs: the editor's own preview, beside the form
+ * where it offers that, else in a new tab; `null` where the editor offers no
+ * preview, and the card then offers none.
  */
-function PreviewButton(): JSX.Element | null {
+function usePreviewOpener(): (() => void) | null {
   const preview = useDocumentPreview();
   if (preview === null) return null;
-  const show = (): void => {
+  return () => {
     if (preview.openBeside !== undefined) preview.openBeside();
     else void preview.open();
   };
+}
+
+/** The card's Preview button, pressing `show`. */
+function PreviewButton({ show }: { show: () => void }): JSX.Element {
   return (
     <Button
       type="button"
@@ -271,6 +276,7 @@ function UsesTemplate({
   onChanged: () => void;
 }): JSX.Element {
   const [busy, setBusy] = useState(false);
+  const showPreview = usePreviewOpener();
   const { meta } = answer;
   const template = meta.template;
   const title = template?.title ?? "";
@@ -295,23 +301,26 @@ function UsesTemplate({
       <p className="text-xs leading-relaxed text-muted-foreground">
         {WORDS.everyUses(meta.names.singular, meta.names.plural)}
       </p>
-      <div className="flex flex-wrap gap-2">
-        <PreviewButton />
-        {meta.mayGiveDesign ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="flex-1"
-            disabled={busy || held}
-            {...(held ? { title: HELD_REASON } : {})}
-            onClick={give}
-          >
-            <Brush className="h-4 w-4" aria-hidden="true" />
-            {busy ? WORDS.giving : WORDS.give(meta.names.singular)}
-          </Button>
-        ) : null}
-      </div>
+      {/* Drawn only with something in it, so an empty row adds no gap. */}
+      {showPreview !== null || meta.mayGiveDesign ? (
+        <div className="flex flex-wrap gap-2">
+          {showPreview === null ? null : <PreviewButton show={showPreview} />}
+          {meta.mayGiveDesign ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="flex-1"
+              disabled={busy || held}
+              {...(held ? { title: HELD_REASON } : {})}
+              onClick={give}
+            >
+              <Brush className="h-4 w-4" aria-hidden="true" />
+              {busy ? WORDS.giving : WORDS.give(meta.names.singular)}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       {meta.mayGiveDesign ? <Note>{WORDS.givenNote}</Note> : null}
       {template === null ? null : (
         <Button
@@ -345,6 +354,7 @@ function OwnDesign({
   held: boolean;
   onChanged: () => void;
 }): JSX.Element {
+  const showPreview = usePreviewOpener();
   const { meta } = answer;
   const template = liveTemplate(answer);
   const published = design.status === "published";
@@ -418,7 +428,7 @@ function OwnDesign({
           <Brush className="h-4 w-4" aria-hidden="true" />
           {WORDS.edit}
         </Button>
-        <PreviewButton />
+        {showPreview === null ? null : <PreviewButton show={showPreview} />}
       </div>
       {/* The admin's destructive text pairing: the base red is lighter
         than the 4.5:1 text minimum on a light card, so light mode reads its

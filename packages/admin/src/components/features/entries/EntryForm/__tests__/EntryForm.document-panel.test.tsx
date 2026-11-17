@@ -11,11 +11,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { act, render, screen, within } from "@admin/__tests__/utils";
 
-const { barProps, paneProps, branding } = vi.hoisted(() => ({
+const { barProps, paneProps, branding, translating } = vi.hoisted(() => ({
   barProps: vi.fn(),
   paneProps: vi.fn(),
   // What admin-meta hands the editor; empty unless a test places a section.
   branding: { current: {} as Record<string, unknown> },
+  // Whether the editor is in translation mode; off unless a test turns it on.
+  translating: { current: false },
 }));
 
 vi.mock("../DocumentBar", () => ({
@@ -33,6 +35,46 @@ vi.mock("@admin/components/features/entries/PreviewMode/PreviewPanes", () => ({
     return <div data-testid="pane">{children}</div>;
   },
 }));
+// Translation mode on, as its page would set it, only where a test asks; the
+// source pane itself is not what these tests read, so it draws the editor.
+vi.mock(
+  "@admin/components/features/entries/TranslationMode/useTranslationSource",
+  async importOriginal => {
+    const real =
+      await importOriginal<
+        typeof import("@admin/components/features/entries/TranslationMode/useTranslationSource")
+      >();
+    return {
+      ...real,
+      useTranslationSource: (
+        input: Parameters<typeof real.useTranslationSource>[0]
+      ) =>
+        translating.current
+          ? {
+              source: {
+                sourceLocale: "fr",
+                sourceLabel: "French",
+                targetLabel: "English",
+                rtl: false,
+                fields: [],
+                values: {},
+              },
+              active: true,
+              onEnter: undefined,
+              onExit: () => {},
+            }
+          : real.useTranslationSource(input),
+    };
+  }
+);
+vi.mock(
+  "@admin/components/features/entries/TranslationMode/TranslationPanes",
+  () => ({
+    TranslationPanes: ({ children }: { children: React.ReactNode }) => (
+      <>{children}</>
+    ),
+  })
+);
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
     enabled: false,
@@ -82,7 +124,7 @@ import {
 } from "@admin/lib/plugins/component-registry";
 
 import { EntryForm } from "../EntryForm";
-import { useDocumentPreview } from "../EntryFormContext";
+import { useDocumentPreview, type DocumentPreview } from "../EntryFormContext";
 
 const collection = {
   name: "posts",
@@ -139,6 +181,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   window.localStorage.clear();
   branding.current = {};
+  translating.current = false;
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -291,8 +334,11 @@ describe("a side panel section declared to sit above the form on a phone", () =>
 describe("a side panel section opening the preview beside the form", () => {
   const SHOWS = "test/designs#Shows";
 
+  const heard: (DocumentPreview | null)[] = [];
+
   function Shows() {
     const preview = useDocumentPreview();
+    heard.push(preview);
     return (
       <button type="button" onClick={() => preview?.openBeside?.()}>
         Preview
@@ -301,6 +347,7 @@ describe("a side panel section opening the preview beside the form", () => {
   }
 
   beforeEach(() => {
+    heard.length = 0;
     registerComponent(SHOWS, Shows as never);
     branding.current = {
       contributions: {
@@ -332,5 +379,28 @@ describe("a side panel section opening the preview beside the form", () => {
     expect(dockedPanel()).not.toBeInTheDocument();
     expect(lastBar().isRailCollapsed).toBe(true);
     expect(lastBar().previewPaneOpen).toBe(true);
+  });
+
+  it("hands the section the same opener while the form only renders again", () => {
+    const { rerender } = renderEditor();
+    const first = heard.at(-1)?.openBeside;
+    expect(typeof first).toBe("function");
+    const renders = heard.length;
+
+    rerender(<EntryForm collection={collection} entry={entry} mode="edit" />);
+
+    // A new opener on every render of the form would hand every section a
+    // new one each time, and redo whatever it keys on it.
+    expect(heard.length).toBeGreaterThan(renders);
+    expect(heard.at(-1)?.openBeside).toBe(first);
+  });
+
+  it("offers no preview beside the form in translation mode, where the pane cannot show", () => {
+    translating.current = true;
+    renderEditor();
+    const preview = heard.at(-1);
+    // The preview itself stands: the section opens it in a tab instead.
+    expect(typeof preview?.open).toBe("function");
+    expect(preview?.openBeside).toBeUndefined();
   });
 });

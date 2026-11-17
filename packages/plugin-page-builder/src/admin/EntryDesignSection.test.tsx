@@ -189,7 +189,10 @@ describe("the entry's Design section", () => {
     read = { data: answer(), error: null };
     section();
 
-    expect(screen.getByText("Design: Blog post")).toBeTruthy();
+    // The card's heading, so a reader moving by headings reaches the name.
+    expect(
+      screen.getByRole("heading", { name: "Design: Blog post" })
+    ).toBeTruthy();
     expect(
       screen.getByText(
         "Every post uses it. Edit the template to change all posts."
@@ -376,7 +379,9 @@ describe("the entry's Design section", () => {
       error: null,
     };
     section();
-    expect(screen.getByText("Design: none yet")).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Design: none yet" })
+    ).toBeTruthy();
     expect(
       screen.getByText(
         "The Blog post template isn't published yet, so this post isn't shown as a page on the site."
@@ -450,6 +455,16 @@ describe("the card's Preview", () => {
     section();
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
     expect(documentPreview?.openBeside).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves no empty row where there is neither a preview nor an offer", () => {
+    read = { data: answer({ mayGiveDesign: false }), error: null };
+    documentPreview = null;
+    const { container } = section();
+    expect(screen.queryByRole("button", { name: "Preview" })).toBeNull();
+    // The actions row is the card's one wrapping row; with nothing to hold
+    // it is not drawn, so the card's spacing has no gap where it was.
+    expect(container.querySelectorAll(".flex-wrap")).toHaveLength(0);
   });
 
   it("is not offered where the editor offers no preview", () => {

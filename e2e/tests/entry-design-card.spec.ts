@@ -5,7 +5,9 @@
  * document panel, headed with the template's name and saying every post uses
  * it. Its Preview opens the post's preview beside the form and folds the
  * panel, the same as the document bar's Preview: the split opens, the panel
- * leaves the screen, and the bar's own pane toggle reads pressed.
+ * leaves the screen, and the bar's own Preview reads open. The pane leaves the
+ * editor under 600px wide, so the bar has folded its Preview into the
+ * document's menu by then, where it offers to hide the pane.
  */
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
@@ -35,9 +37,11 @@ async function useThisSite(page: Page, baseURL: string): Promise<void> {
 
 /**
  * Makes sure Posts has its one template, published, and answers its title
- * with a step that puts back what was there: the template removed when this
- * file made it, or set back to a draft when this file published another
- * spec's.
+ * with a step that sets it back to a draft when this file published it.
+ *
+ * Never deleted, even when this file made it: a collection has one template,
+ * and another file running beside this one may have picked it up as its own
+ * by then. A draft template is what a file making it would have left.
  */
 async function publishedPostsTemplate(
   api: APIRequestContext
@@ -62,27 +66,19 @@ async function publishedPostsTemplate(
   ).toBeDefined();
   const { id, title } = template!;
   const wasPublished = template!.status === "published";
-  if (!wasPublished) {
-    const published = await api.patch(`${TEMPLATES}/${id}`, {
-      data: { status: "published" },
+  // `_overwrite`, so the status moves on the stored row rather than into a
+  // working draft beside it.
+  const setStatus = async (status: "draft" | "published") => {
+    const saved = await api.patch(`${TEMPLATES}/${id}`, {
+      data: { status, _overwrite: true },
     });
-    expect(published.ok(), await published.text()).toBe(true);
-  }
+    expect(saved.ok(), await saved.text()).toBe(true);
+  };
+  if (!wasPublished) await setStatus("published");
   return {
     title,
     restore: async () => {
-      if (made.ok()) {
-        const removed = await api.post(ACTIONS, {
-          data: { action: { kind: "delete-template", id } },
-          headers: await pluginWriteHeaders(api),
-        });
-        expect(removed.ok(), await removed.text()).toBe(true);
-      } else if (!wasPublished) {
-        const draft = await api.patch(`${TEMPLATES}/${id}`, {
-          data: { status: "draft" },
-        });
-        expect(draft.ok(), await draft.text()).toBe(true);
-      }
+      if (!wasPublished) await setStatus("draft");
     },
   };
 }
@@ -130,17 +126,26 @@ test("a post's Design card names its template, and its Preview opens beside the 
     ).toBeVisible();
 
     // The bar's own pane toggle, which the card's Preview must match.
-    const barToggle = page
-      .getByTestId("document-bar")
-      .locator('[data-preview-lead="pane"]');
-    await expect(barToggle).toHaveAttribute("aria-pressed", "false");
+    await expect(
+      page.getByTestId("document-bar").locator('[data-preview-lead="pane"]')
+    ).toHaveAttribute("aria-pressed", "false");
     await expect(page.locator('[data-preview-split="open"]')).toHaveCount(0);
 
     await card.getByRole("button", { name: "Preview", exact: true }).click();
 
     await expect(page.locator('[data-preview-split="open"]')).toBeVisible();
     await expect(panel).toHaveCount(0);
-    await expect(barToggle).toHaveAttribute("aria-pressed", "true");
+    // The bar's state is the pane's: its Preview, folded into the document's
+    // menu at the editor's width beside the pane, now offers to hide it.
+    await expect(page.locator("[data-document-editor-frame]")).toHaveAttribute(
+      "data-panel-mode",
+      "sheet"
+    );
+    await page.getByRole("button", { name: "More actions" }).click();
+    await expect(
+      page.getByRole("menuitem", { name: "Hide preview pane" })
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
   } finally {
     await restore();
   }
