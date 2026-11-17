@@ -21,6 +21,7 @@ import { classUsageIndex } from "./class-usage-reconcile";
 import { componentUsageIndex } from "./component-usage";
 import {
   countDocumentsUsing,
+  blockCountOf,
   listDocumentsUsingEach,
   USAGE_ROW_PAGES_MAX,
   type UsageRowReader,
@@ -303,7 +304,8 @@ describe("counting the documents that use something", () => {
 const classRow = (
   classId: string,
   entity: string | null,
-  entityKey: string
+  entityKey: string,
+  blocks: number | null = 1
 ) => ({
   scope: "collection",
   entity,
@@ -312,6 +314,7 @@ const classRow = (
   locale: "",
   variant: "published",
   classId,
+  blocks,
 });
 
 /**
@@ -330,6 +333,65 @@ function rowReader(rows: readonly Record<string, unknown>[], size = 500) {
   };
   return { read, asked };
 }
+
+describe("the blocks a listing counts", () => {
+  it("adds a copy's fields and takes the largest copy as the page's", async () => {
+    // Published: 2 in the content and 1 in another field, one page of 3.
+    // Its draft has 4; its French copy 2. The page's blocks are its largest
+    // copy, not every copy added up.
+    const { read } = rowReader([
+      classRow("c-0", "pages", "p1", 2),
+      { ...classRow("c-0", "pages", "p1", 1), field: "sidebar" },
+      { ...classRow("c-0", "pages", "p1", 4), variant: "draft" },
+      { ...classRow("c-0", "pages", "p1", 2), locale: "fr" },
+      classRow("c-0", "pages", "p2", 5),
+    ]);
+    const found = await listDocumentsUsingEach({
+      index: classUsageIndex,
+      rows: read,
+      referenceIds: ["c-0"],
+      health: WHOLE,
+    });
+    const listing = found.get("c-0");
+    expect(listing?.collections).toEqual([
+      { collection: "pages", documents: ["p1", "p2"], blocks: [4, 5] },
+    ]);
+    expect(listing && blockCountOf(listing)).toEqual({
+      blocks: 9,
+      complete: true,
+    });
+  });
+
+  it("is a floor while any row holds no count", async () => {
+    // A row stored before the count was kept: the page is counted, its
+    // blocks are not known, so the total is a floor.
+    const { read } = rowReader([
+      classRow("c-0", "pages", "p1", 3),
+      classRow("c-0", "pages", "p2", null),
+    ]);
+    const found = await listDocumentsUsingEach({
+      index: classUsageIndex,
+      rows: read,
+      referenceIds: ["c-0"],
+      health: WHOLE,
+    });
+    const listing = found.get("c-0");
+    expect(listing?.collections[0]?.blocks).toEqual([3, null]);
+    expect(listing && blockCountOf(listing)).toEqual({
+      blocks: 3,
+      complete: false,
+    });
+  });
+
+  it("counts no blocks from a listing the grouped read made", () => {
+    expect(
+      blockCountOf({
+        collections: [{ collection: "pages", documents: ["p1"] }],
+        complete: true,
+      })
+    ).toBeUndefined();
+  });
+});
 
 describe("listDocumentsUsingEach", () => {
   const ids = Array.from({ length: 50 }, (_, n) => `c-${n}`);
@@ -372,8 +434,8 @@ describe("listDocumentsUsingEach", () => {
     });
     expect(found.get("c-1")).toEqual({
       collections: [
-        { collection: "pages", documents: ["p1"] },
-        { collection: "components", documents: ["k1"] },
+        { collection: "pages", documents: ["p1"], blocks: [1] },
+        { collection: "components", documents: ["k1"], blocks: [1] },
       ],
       complete: true,
     });

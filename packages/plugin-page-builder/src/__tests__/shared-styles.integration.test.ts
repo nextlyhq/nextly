@@ -428,6 +428,67 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("counts the blocks wearing a style on the pages, and the open page's share apart", async () => {
+      const { t, tick } = await boot();
+      const styled = (id: string) => text(id, { classes: ["c-hero"] });
+      const home = await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Home",
+          slug: "home",
+          content: pageOf([styled("a"), styled("b")]),
+        },
+        overrideAccess: true,
+      });
+      await t.nextly.create({
+        collection: "pages",
+        data: { title: "About", slug: "about", content: pageOf([styled("c")]) },
+        overrideAccess: true,
+      });
+      await tick();
+      const reader = await holding(t, "read-site-style");
+      const homeId = String(home.item.id);
+      const ask = async () =>
+        (
+          await call(
+            "GET",
+            `${route("usage")}?id=c-hero&here=${encodeURIComponent(`pages/${homeId}`)}`,
+            reader
+          )
+        ).body;
+      expect(await ask()).toMatchObject({
+        whole: true,
+        styles: {
+          "c-hero": {
+            documents: 2,
+            byKind: { pages: 2, components: 0, patterns: 0, layouts: 0 },
+            blocks: 3,
+            here: { blocks: 2, kind: "pages" },
+            complete: true,
+          },
+        },
+      });
+
+      // A save brings the count up to date at once, with no rebuild.
+      await t.nextly.update({
+        collection: "pages",
+        id: homeId,
+        data: { content: pageOf([styled("a"), text("b")]) },
+        overrideAccess: true,
+      });
+      await t.events.settle();
+      expect(await ask()).toMatchObject({
+        styles: {
+          "c-hero": {
+            documents: 2,
+            blocks: 2,
+            here: { blocks: 1, kind: "pages" },
+            complete: true,
+          },
+        },
+      });
+    });
+
     it("names where a style is used only to a caller who may read the page", async () => {
       const { t } = await boot();
       await t.nextly.create({
