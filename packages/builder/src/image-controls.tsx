@@ -7,9 +7,10 @@
  * - Source: "Library | URL". Only the chosen side's field shows: the media
  *   chip, or the address. Switching sides writes nothing; what the author
  *   then picks or types does.
- * - Alt text: "From library | Custom | Decorative". From library shows the
- *   library's words, muted and read-only; Custom an alt text field that grows
- *   with its words; Decorative says screen readers skip the image.
+ * - Alt text: one field that grows with its words, holding the words in use:
+ *   the page's own, else the library's, marked "From the media library";
+ *   and "Decorative, no alt text", which keeps the words for when it is
+ *   cleared.
  *
  * Each offers binding through the inspector's `bindable` wrapper: the Source
  * row binds the image (`mediaId`, which takes a media field or an image
@@ -32,16 +33,7 @@ import {
   type Binding,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
-import {
-  Button,
-  Label,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-  Textarea,
-} from "@nextlyhq/ui";
+import { Button, Checkbox, Label, Textarea } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { useBoundFieldOf } from "./binding-controls";
@@ -55,14 +47,12 @@ import {
 import { HeldByLock } from "./held-by-lock";
 import {
   addressChanges,
-  ALT_MODE_LABELS,
-  ALT_MODES,
-  altModeChanges,
   altModeOf,
+  altTextChanges,
+  decorativeChanges,
   mediaPickChanges,
   sourceModeOf,
   storedAlt,
-  type AltMode,
   type ImageAltGroup,
   type ImageChanges,
   type ImageSourceGroup,
@@ -426,14 +416,17 @@ export function ImageSourceField({
  * so an edit is one step to undo.
  */
 function GrowingText({
+  id,
   value,
-  label,
+  placeholder,
   disabled,
   describedBy,
   onCommit,
 }: {
+  /** The field's id, which its label names it by. */
+  id: string;
   value: string;
-  label: string;
+  placeholder: string;
   disabled: boolean;
   describedBy: string | undefined;
   onCommit: (text: string) => void;
@@ -451,9 +444,10 @@ function GrowingText({
   return (
     <Textarea
       ref={field}
+      id={id}
       rows={1}
       className="nx-inspector__growing"
-      aria-label={label}
+      placeholder={placeholder}
       {...(describedBy === undefined
         ? {}
         : { "aria-describedby": describedBy })}
@@ -508,13 +502,19 @@ function boundPictureOf(
     : { prop: media, binding, document, nodeId, services };
 }
 
-/** What From library says under the menu: the library's words, or why none. */
+/**
+ * What the alt field says under its words, while the page stores none of its
+ * own: whose words they are, or why there are none.
+ */
 function LibraryAltNote({
+  id,
   bound,
   mediaId,
   libraryAlt,
   read,
 }: {
+  /** The note's id, which the field is described by. */
+  id: string;
   /** The picture's binding, whose field is read on the page; none if unbound. */
   bound: BoundPicture | undefined;
   mediaId: string | undefined;
@@ -523,25 +523,29 @@ function LibraryAltNote({
 }): React.JSX.Element | null {
   // A bound picture is read when the page is drawn, so no file is "not
   // chosen": what applies is the bound field's, said by its kind.
-  if (bound !== undefined) return <BoundPictureAltNote {...bound} />;
+  if (bound !== undefined) return <BoundPictureAltNote id={id} {...bound} />;
   if (mediaId === undefined) {
     return (
-      <p className="nx-inspector__note">
-        No library file is chosen, so there is no library alt text and screen
-        readers get none. Choose Custom to describe the image.
+      <p className="nx-inspector__note" id={id}>
+        No library file is chosen, so screen readers get no alt text. Type some
+        to describe the picture.
       </p>
     );
   }
   if (!read) return null;
   if (libraryAlt === undefined) {
     return (
-      <p className="nx-inspector__note">
-        The library has no alt text for this image. Choose Custom to write one.
+      <p className="nx-inspector__note" id={id}>
+        The media library has no alt text for this picture.
       </p>
     );
   }
+  // Marked as the library's: the words in the field are in use, and are the
+  // library's until the author types their own.
   return (
-    <p className="nx-inspector__note nx-inspector__library-alt">{libraryAlt}</p>
+    <p className="nx-inspector__note nx-image-alt__source" id={id}>
+      From the media library
+    </p>
   );
 }
 
@@ -553,12 +557,13 @@ function LibraryAltNote({
  * field they don't list), the note says both, promising neither.
  */
 function BoundPictureAltNote({
+  id,
   prop,
   binding,
   document,
   nodeId,
   services,
-}: BoundPicture): React.JSX.Element {
+}: BoundPicture & { id: string }): React.JSX.Element {
   const field = useBoundFieldOf(binding, document, nodeId, services);
   // A field visitors can't read never fills the published picture: they see
   // the binding's fallback where it keeps one, else the block's own image, as
@@ -569,9 +574,9 @@ function BoundPictureAltNote({
   );
   if (unreadable !== undefined) {
     return (
-      <p className="nx-inspector__note" data-bound-picture="unreadable">
+      <p className="nx-inspector__note" id={id} data-bound-picture="unreadable">
         Visitors can&apos;t read the bound field, so they see{" "}
-        {instead(unreadable.fallback !== undefined)}. Choose Custom to describe
+        {instead(unreadable.fallback !== undefined)}. Type alt text to describe
         the image they see.
       </p>
     );
@@ -581,11 +586,11 @@ function BoundPictureAltNote({
     // The field's type says it holds a file, not that every entry fills it:
     // an empty one shows what the binding falls back to, so the note says so.
     return (
-      <p className="nx-inspector__note" data-bound-picture="media">
+      <p className="nx-inspector__note" id={id} data-bound-picture="media">
         The image comes from a bound library file, so its own alt text is used.
         Where the field is empty, visitors see{" "}
-        {instead("fallback" in binding && binding.fallback !== undefined)}.
-        Choose Custom to describe it here instead.
+        {instead("fallback" in binding && binding.fallback !== undefined)}. Type
+        alt text to describe it here instead.
       </p>
     );
   }
@@ -593,18 +598,18 @@ function BoundPictureAltNote({
     // An empty field, or an address the page refuses, shows what the binding
     // falls back to instead, which may well be a described library file.
     return (
-      <p className="nx-inspector__note" data-bound-picture="address">
+      <p className="nx-inspector__note" id={id} data-bound-picture="address">
         This image comes from an address, which carries no alt text. Where the
         field holds no usable address, visitors see{" "}
-        {instead("fallback" in binding && binding.fallback !== undefined)}.
-        Choose Custom to describe it for screen readers.
+        {instead("fallback" in binding && binding.fallback !== undefined)}. Type
+        alt text to describe it for screen readers.
       </p>
     );
   }
   return (
-    <p className="nx-inspector__note">
+    <p className="nx-inspector__note" id={id}>
       The image comes from a bound field. A library file it holds is described
-      by its own alt text; an image address has none, so choose Custom to
+      by its own alt text; an image address has none, so type alt text to
       describe it.
     </p>
   );
@@ -619,105 +624,29 @@ function instead(hasFallback: boolean): string {
   return hasFallback ? "its fallback" : "the block's own image";
 }
 
-/** What Decorative says under the menu, alt text kept beside it included. */
-function DecorativeNote({ own }: { own: string }): React.JSX.Element {
+/** What the field says while the image is decorative. */
+function DecorativeNote({ id }: { id: string }): React.JSX.Element {
   return (
-    <p className="nx-inspector__note">
-      Screen readers skip this image.
-      {own === ""
-        ? null
-        : ` Its own alt text is kept for if you switch back: ${own}`}
+    <p className="nx-inspector__note" id={id}>
+      Screen readers skip this image. Its alt text is kept for if you clear
+      this.
     </p>
   );
 }
 
-/** The menu of alt modes: a mode a lock would refuse is offered disabled. */
-function AltMenu({
-  id,
-  mode,
-  held,
-  pickable,
-  onPick,
-}: {
-  id: string;
-  mode: AltMode;
-  held: boolean;
-  pickable: (mode: AltMode) => boolean;
-  onPick: (mode: AltMode) => void;
-}): React.JSX.Element {
-  return (
-    <Select
-      disabled={held}
-      value={mode}
-      onValueChange={next => {
-        const chosen = ALT_MODES.find(each => each === next);
-        if (chosen !== undefined && chosen !== mode) onPick(chosen);
-      }}
-    >
-      <SelectTrigger id={id}>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {ALT_MODES.map(each => (
-          <SelectItem key={each} value={each} disabled={!pickable(each)}>
-            {ALT_MODE_LABELS[each]}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-/** Custom's field, and what an empty one means. */
-function CustomAlt({
-  own,
-  libraryAlt,
-  disabled,
-  onCommit,
-}: {
-  own: string;
-  libraryAlt: string | undefined;
-  disabled: boolean;
-  onCommit: (text: string) => void;
-}): React.JSX.Element {
-  const noteId = React.useId();
-  const empty = own.trim() === "";
-  return (
-    <div className="nx-inspector__field">
-      <GrowingText
-        value={own}
-        label="Custom alt text"
-        disabled={disabled}
-        describedBy={empty ? noteId : undefined}
-        onCommit={onCommit}
-      />
-      {empty ? (
-        <p className="nx-inspector__note" id={noteId}>
-          Empty: screen readers skip this image.
-          {libraryAlt === undefined
-            ? null
-            : " The library has alt text for it: choose From library to use it."}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-/** The label the block gives its alt prop, or "Alt text". */
-function altLabel(
-  group: ImageAltGroup,
-  props: readonly EditableProp[]
+/** The label the block gives one of its props, or `fallback`. */
+function labelOf(
+  name: string,
+  props: readonly EditableProp[],
+  fallback: string
 ): string {
-  const altProp = props.find(prop => prop.name === group.alt);
-  return altProp === undefined
-    ? "Alt text"
-    : propLabel(altProp.name, altProp.schema);
+  const prop = props.find(each => each.name === name);
+  return prop === undefined ? fallback : propLabel(prop.name, prop.schema);
 }
 
 /**
  * The library file the picture is picked from, read for its alt text: none
  * for a bound picture, whose file the page reads, or for no file at all.
- * `pending` while the read is still out.
  */
 function useLibraryAlt(
   services: ContentServices | undefined,
@@ -726,24 +655,21 @@ function useLibraryAlt(
   readonly mediaId: string | undefined;
   readonly summary: ReturnType<typeof useMediaSummary>;
   readonly libraryAlt: string | undefined;
-  readonly libraryPending: boolean;
 } {
   const mediaId = picture.kind === "library" ? picture.id : undefined;
   const summary = useMediaSummary(services?.readMedia, mediaId ?? null);
-  return {
-    mediaId,
-    summary,
-    libraryAlt: storedString(summary?.alt),
-    libraryPending:
-      mediaId !== undefined &&
-      services?.readMedia !== undefined &&
-      summary === undefined,
-  };
+  return { mediaId, summary, libraryAlt: storedString(summary?.alt) };
 }
 
 /**
- * What a screen reader is given for an image: the library's alt text, the
- * page's own, or nothing because the image is decorative.
+ * What a screen reader is given for an image: one "Alt text" field holding
+ * the words in use, and "Decorative, no alt text".
+ *
+ * While the page stores no words of its own, the field holds the library
+ * file's, marked "From the media library", so the author sees what screen
+ * readers hear and can change it; what they type is stored as the page's
+ * own, and "Use the media library's alt text" puts the library's back.
+ * Decorative keeps the words, held, for when it is cleared.
  */
 export function ImageAltField({
   group,
@@ -757,16 +683,15 @@ export function ImageAltField({
   nodeId,
 }: ImageGroupFieldProps & { group: ImageAltGroup }): React.JSX.Element {
   const id = React.useId();
+  const decorativeId = React.useId();
+  const noteId = React.useId();
   const values = storedValues(props);
   const picture = pictureSourceOf(
     group.media,
     values,
     boundPropsOf(document, nodeId)
   );
-  const { mediaId, summary, libraryAlt, libraryPending } = useLibraryAlt(
-    services,
-    picture
-  );
+  const { mediaId, summary, libraryAlt } = useLibraryAlt(services, picture);
   // What the alt note reads of a bound picture's field; none if unbound.
   const boundPicture = boundPictureOf(
     picture,
@@ -775,65 +700,92 @@ export function ImageAltField({
   );
   const mode = altModeOf(group, values);
   const own = storedAlt(group, values);
-  const changesFor = (next: AltMode) =>
-    altModeChanges(group, next, values, libraryAlt);
-  const allowed = (next: AltMode) =>
-    next === mode || allWritable(changesFor(next), writable);
-  // Custom starts from the library's words where the page stores none, so it
-  // waits for them: chosen before they arrive, it would store an empty alt
-  // and silence a description the image was being read with.
-  const waiting = (next: AltMode) =>
-    next === "custom" && libraryPending && !isAuthoredText(values[group.alt]);
-  const pickable = (next: AltMode) =>
-    next === mode || (allowed(next) && !waiting(next));
-  // Held is a lock's doing alone: a choice only waiting for the library is
-  // not one a lock refuses.
-  const held = ALT_MODES.every(next => !allowed(next) || next === mode);
+  const ownStored = isAuthoredText(values[group.alt]);
+  // The words in use: the page's own where it stores some (an empty alt
+  // included, which the block draws as none), else the library's.
+  const shown = ownStored ? own : (libraryAlt ?? "");
+  const write = (changes: ImageChanges) => {
+    if (Object.keys(changes).length === 0) return;
+    if (allWritable(changes, writable)) onCommitMany(changes);
+  };
+  const note =
+    mode === "decorative" ? (
+      <DecorativeNote id={noteId} />
+    ) : ownStored ? (
+      own.trim() === "" ? (
+        <p className="nx-inspector__note" id={noteId}>
+          Empty: screen readers skip this image.
+        </p>
+      ) : null
+    ) : (
+      <LibraryAltNote
+        id={noteId}
+        bound={boundPicture}
+        mediaId={mediaId}
+        libraryAlt={libraryAlt}
+        read={summary !== undefined}
+      />
+    );
   const wrap = bindable ?? unwrapped;
-  // The alt text's bind button sits on its menu's row; bound, the chip
-  // stands for the menu and the words alike.
+  const decorativeLabel = labelOf(
+    group.decorative,
+    props,
+    "Decorative, no alt text"
+  );
+  // The alt text's bind button sits on its row; bound, the chip stands for
+  // the words and the decorative mark alike.
   return (
     <>
       {wrap(
         group.alt,
         <div className="nx-image-group" data-image-group="alt">
-          <HeldByLock reasonId={held ? reasonId : undefined}>
+          <HeldByLock reasonId={writable(group.alt) ? undefined : reasonId}>
             <div className="nx-inspector__field" data-content-control="alt">
-              <Label htmlFor={id}>{altLabel(group, props)}</Label>
-              <AltMenu
+              <Label htmlFor={id}>
+                {labelOf(group.alt, props, "Alt text")}
+              </Label>
+              <GrowingText
                 id={id}
-                mode={mode}
-                held={held}
-                pickable={pickable}
-                onPick={next => {
-                  const changes = changesFor(next);
-                  if (allWritable(changes, writable)) onCommitMany(changes);
-                }}
+                value={shown}
+                placeholder="Describe the picture"
+                disabled={!writable(group.alt) || mode === "decorative"}
+                describedBy={note === null ? undefined : noteId}
+                onCommit={typed =>
+                  write(altTextChanges(group, typed, values, libraryAlt))
+                }
               />
-              {mode === "library" ? (
-                <LibraryAltNote
-                  bound={boundPicture}
-                  mediaId={mediaId}
-                  libraryAlt={libraryAlt}
-                  read={summary !== undefined}
-                />
+              {note}
+              {ownStored &&
+              libraryAlt !== undefined &&
+              mode !== "decorative" ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="nx-image-alt__reset"
+                  disabled={!writable(group.alt)}
+                  onClick={() => write({ [group.alt]: undefined })}
+                >
+                  Use the media library&apos;s alt text
+                </Button>
               ) : null}
-              {mode === "decorative" ? <DecorativeNote own={own} /> : null}
             </div>
           </HeldByLock>
-          {mode === "custom" ? (
-            <HeldByLock reasonId={writable(group.alt) ? undefined : reasonId}>
-              <CustomAlt
-                own={own}
-                libraryAlt={libraryAlt}
-                disabled={!writable(group.alt)}
-                // An emptied field keeps an empty alt rather than removing it:
-                // removed, the library's words would apply, which is From
-                // library, not what the author just did.
-                onCommit={text => onCommitMany({ [group.alt]: text })}
+          <HeldByLock
+            reasonId={writable(group.decorative) ? undefined : reasonId}
+          >
+            <div className="nx-image-alt__decorative">
+              <Checkbox
+                id={decorativeId}
+                checked={mode === "decorative"}
+                disabled={!writable(group.decorative)}
+                onCheckedChange={checked =>
+                  write(decorativeChanges(group, checked === true, values))
+                }
               />
-            </HeldByLock>
-          ) : null}
+              <Label htmlFor={decorativeId}>{decorativeLabel}</Label>
+            </div>
+          </HeldByLock>
         </div>,
         // The block reads a decorative image before its alt text, so binding
         // the words lifts the mark in the same edit, or the bound alt would

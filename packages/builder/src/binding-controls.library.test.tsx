@@ -57,10 +57,16 @@ const SOURCES: readonly BindingFieldSource[] = [
  * What a block holds beyond its example, where its example draws only part
  * of its controls: an Image placed with no picture shows the library side of
  * its Source, and its address field (with its own bind button) only once it
- * holds an address.
+ * holds an address; its link (with its bind button) only while a click
+ * follows it; and its Caption section, folded while it holds nothing, opens
+ * on a caption.
  */
 const HOLDING: Readonly<Record<string, Record<string, unknown>>> = {
-  "core/image": { src: "https://cdn.example/a.png" },
+  "core/image": {
+    src: "https://cdn.example/a.png",
+    whenClicked: "link",
+    caption: "A caption",
+  },
 };
 
 /** The block alone on a page, as its example fills it over its defaults. */
@@ -188,6 +194,8 @@ describe("the core block library's bind buttons", () => {
         "core/image.entryId",
         "core/image.rel",
         "core/image.target",
+        // What a click does is chosen, not filled from a field.
+        "core/image.whenClicked",
       ].sort()
     );
   });

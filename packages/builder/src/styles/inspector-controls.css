@@ -689,6 +689,46 @@
   resize: none;
 }
 
+/*
+ * Whose words the alt field holds while the page stores none of its own:
+ * "From the media library", led by a small dot so it reads as a tag on the
+ * words above rather than as another sentence of advice.
+ */
+.nx-inspector .nx-image-alt__source {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-inspector .nx-image-alt__source::before {
+  content: "";
+  inline-size: 0.375rem;
+  block-size: 0.375rem;
+  border-radius: 9999px;
+  background: currentColor;
+}
+
+/* "Use the media library's alt text": sized to its words, under the field. */
+.nx-inspector .nx-image-alt__reset {
+  justify-self: start;
+}
+
+/* "Decorative, no alt text": the box and its words on one line. */
+.nx-image-alt__decorative {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-block-start: 0.5rem;
+}
+
+/* "When clicked", with the link's own settings under Link. */
+.nx-when-clicked {
+  display: grid;
+  gap: 0.5rem;
+  min-inline-size: 0;
+}
+
 /* A note with the action it offers beside it, wrapping when the rail is narrow. */
 .nx-inspector__note-row {
   display: flex;

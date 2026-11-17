@@ -370,7 +370,7 @@ describe("a bound image", () => {
     // It says what to do, not only what is lost.
     expect(note.textContent).toMatch(/carries no alt text\./);
     expect(note.textContent).toMatch(
-      /Choose Custom to describe it for screen readers\./
+      /Type alt text to describe it for screen readers\./
     );
     // An entry's empty or unusable address shows the block's own image here
     // (no fallback kept), which the note names rather than denying all alt.
