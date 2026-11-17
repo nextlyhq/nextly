@@ -890,5 +890,45 @@ describe.each(getConfiguredTestDialects())(
         (await rowsOf(event.item.id, { kind: "collection", slug: "events" })).en
       ).toHaveLength(1);
     });
+    it("records a held draft's changed value when it goes live with no record of its own", async () => {
+      // A draft held before origins were recorded has no record. Going live, a field it changed
+      // must be recorded as the value now live, not keep the record of the value it replaced; a
+      // field it left as it was keeps its record.
+      await boot(dialect);
+      const created = (await t!.nextly.create({
+        collection: "notes",
+        locale: "en",
+        data: { title: "Hi", summary: "Short" },
+      })) as unknown as { item: { id: string } };
+      const id = created.item.id;
+      const notes = { kind: "collection", slug: "notes" };
+      await save(id, "en", { status: "published" }, undefined, "notes");
+      await save(
+        id,
+        "es",
+        { title: "Hola", summary: "Corto", status: "published" },
+        undefined,
+        "notes"
+      );
+      await save(id, "es", { title: "Hola 2" }, undefined, "notes");
+      // As if the draft had been held before recording began.
+      await t!.adapter.delete("nextly_translation_provenance", {
+        and: [
+          { column: "entryId", op: "=", value: id },
+          { column: "partState", op: "=", value: "draft" },
+        ],
+      });
+
+      await save(id, "es", { status: "published" }, undefined, "notes");
+      const live = (await rowsOf(id, notes)).es ?? [];
+      expect(live.find(row => row.fieldPath === "title")).toMatchObject({
+        partState: "live",
+        valueFingerprint: valueFingerprint("Hola 2"),
+      });
+      expect(live.find(row => row.fieldPath === "summary")).toMatchObject({
+        partState: "live",
+        valueFingerprint: valueFingerprint("Corto"),
+      });
+    });
   }
 );

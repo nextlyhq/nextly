@@ -557,33 +557,24 @@ export async function recordWrittenValues(
   if (write.promotesDraft === true) {
     const moved = await promoteDraftProvenance(db, write);
     // The draft's values are the whole language, untouched fields included: a field the draft
-    // recorded nothing for keeps the live record it has. Only a value with none at all (a draft
-    // held before recording began) is recorded as this write's, and a blank one never is.
-    const live = await recordedFields(db, write, "live");
+    // recorded nothing for keeps the live record it has while its value is the one that record
+    // describes. A value the draft changed with no record of its own (a draft held before
+    // recording began) is recorded as this write's, so the live record never describes the value
+    // it replaced; a blank one never is.
+    const live = await liveFingerprints(db, write, write.locale);
     values = Object.fromEntries(
-      Object.entries(values).filter(
-        ([field, value]) =>
-          !moved.has(field) && !live.has(field) && !isBlankValue(value)
-      )
+      Object.entries(values).filter(([field, value]) => {
+        if (moved.has(field) || isBlankValue(value)) return false;
+        const recorded = live.get(field);
+        return (
+          recorded === undefined ||
+          recorded !==
+            valueFingerprint(value, write.jsonFields?.has(field) === true)
+        );
+      })
     );
   }
   await recordTranslationProvenance(db, { ...write, values });
-}
-
-/** The fields one document's language and part has a row for. */
-async function recordedFields(
-  db: ProvenanceDb,
-  write: ProvenanceWrite,
-  partState: ProvenancePartState
-): Promise<ReadonlySet<string>> {
-  const rows = await db.select<{ fieldPath: string }>(
-    TRANSLATION_PROVENANCE_TABLE,
-    {
-      columns: ["fieldPath"],
-      where: documentWhere(write, write.locale, partState),
-    }
-  );
-  return new Set(rows.map(row => row.fieldPath));
 }
 
 /** A value that holds nothing translated: absent, null or an empty string. */
