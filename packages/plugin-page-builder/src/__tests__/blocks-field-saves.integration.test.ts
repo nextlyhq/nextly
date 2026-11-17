@@ -31,6 +31,12 @@ const PAGE = {
   ],
 };
 
+/** The block types a saved blocks value holds, in order. */
+function typesIn(value: unknown): string[] {
+  const nodes = (value as { nodes?: { type?: unknown }[] } | null)?.nodes;
+  return (nodes ?? []).map(node => String(node.type));
+}
+
 describe.each(getConfiguredTestDialects())(
   "a blocks field saving core blocks (%s)",
   (dialect: TestDialect) => {
@@ -85,6 +91,14 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
       });
       expect(made.item.id).toBeDefined();
+      const read = await t.nextly.findByID({
+        collection: "pages",
+        id: String(made.item.id),
+        overrideAccess: true,
+      });
+      expect(typesIn((read as { content?: unknown }).content)).toEqual([
+        "core/text",
+      ]);
     });
 
     it("saves a core block on a collection entry", async () => {
@@ -95,6 +109,12 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
       });
       expect(made.item.id).toBeDefined();
+      const read = await t.nextly.findByID({
+        collection: ARTICLES,
+        id: String(made.item.id),
+        overrideAccess: true,
+      });
+      expect(typesIn((read as { body?: unknown }).body)).toEqual(["core/text"]);
     });
   }
 );
