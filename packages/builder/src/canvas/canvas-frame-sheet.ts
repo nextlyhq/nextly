@@ -227,9 +227,14 @@ ${EMPTY_TEXT_SELECTOR} { min-height: 1lh; }
    a light page and a dark section alike. */
 :where(${EMPTY_CONTAINER_SELECTOR}) { min-height: 2.75rem; }
 /* An empty Gallery is the room its "Add images" plate is drawn in, its two
-   buttons and its drop hint with it (\`image-states.tsx\`): as tall as a
-   small picture, at no specificity, as the height above. */
-:where(${EMPTY_CONTAINER_SELECTOR}.${EMPTY_GALLERY_CLASS}) { min-height: 12rem; }
+   buttons and its drop hint with it (\`image-states.tsx\`): a third of its
+   width tall, as a row of pictures would be, so the plate keeps its words
+   on a zoomed-out canvas, and never less than a small picture. At no
+   specificity, as the height above. */
+:where(${EMPTY_CONTAINER_SELECTOR}.${EMPTY_GALLERY_CLASS}) {
+  min-height: 12rem;
+  aspect-ratio: 3 / 1;
+}
 ${EMPTY_CONTAINER_SELECTOR} {
   display: block;
   outline: 1px dashed color-mix(in srgb, currentColor 45%, transparent);
