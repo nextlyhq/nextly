@@ -14,7 +14,9 @@
  */
 import {
   checkDimensionValue,
+  CONTENT_WIDTH_CLASS,
   CONTENT_WIDTH_PROP,
+  CONTENT_WIDTH_PROPERTY,
   isTokenRef,
   STYLE_CATALOG,
   isStyleLeaf,
@@ -27,6 +29,7 @@ import { Input } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { commitOnEnter } from "./commit-on-enter";
+import { CssHint } from "./css-hint";
 import { arrowTo } from "./segment-choices";
 import { variablesFor, type SiteVariable } from "./style-colour";
 import { variableValueText } from "./style-variables";
@@ -139,35 +142,48 @@ function WidthChoices({
       className="nx-content-width__choices"
     >
       {CHOICES.map((choice, index) => (
-        <button
+        // What a choice writes: Boxed puts the content-width class on the
+        // root; Full width writes nothing.
+        <CssHint
           key={choice.label}
-          type="button"
-          role="radio"
-          aria-checked={choice.contained === contained}
-          tabIndex={choice.contained === contained ? 0 : -1}
-          disabled={held}
-          className="nx-content-width__choice"
-          onKeyDown={event =>
-            arrowTo(event, index, allowed, next => {
-              const to = CHOICES[next];
-              if (to !== undefined) onContained(to.contained);
-            })
+          writes={
+            choice.contained ? `class="${CONTENT_WIDTH_CLASS}"` : undefined
           }
-          onClick={() => onContained(choice.contained)}
         >
-          {/* The result in small: the content held in, or edge to edge. */}
-          <span
-            aria-hidden="true"
-            className="nx-content-width__picture"
-            data-shape={choice.contained ? "boxed" : "full"}
+          <button
+            type="button"
+            role="radio"
+            aria-checked={choice.contained === contained}
+            tabIndex={choice.contained === contained ? 0 : -1}
+            disabled={held}
+            className="nx-content-width__choice"
+            onKeyDown={event =>
+              arrowTo(event, index, allowed, next => {
+                const to = CHOICES[next];
+                if (to !== undefined) onContained(to.contained);
+              })
+            }
+            onClick={() => onContained(choice.contained)}
           >
-            <i />
-          </span>
-          <span>{choice.label}</span>
-        </button>
+            {/* The result in small: the content held in, or edge to edge. */}
+            <span
+              aria-hidden="true"
+              className="nx-content-width__picture"
+              data-shape={choice.contained ? "boxed" : "full"}
+            >
+              <i />
+            </span>
+            <span>{choice.label}</span>
+          </button>
+        </CssHint>
       ))}
     </div>
   );
+}
+
+/** What the width field writes: its typed width, or the site's while empty. */
+function ownWidthWrites(draft: string, siteWords: string): string {
+  return `${CONTENT_WIDTH_PROPERTY}: ${draft === "" ? siteWords : draft}`;
 }
 
 /** The field a width of the container's own is typed or picked in. */
@@ -222,19 +238,22 @@ function OwnWidthField({
         />
       ) : (
         <span className="nx-content-width__entry">
-          <Input
-            id={id}
-            value={draft}
-            placeholder={siteWords}
-            autoComplete="off"
-            autoFocus={autoFocus}
-            disabled={held}
-            aria-invalid={refused ? true : undefined}
-            aria-describedby={refused ? errorId : undefined}
-            onChange={event => setDraft(event.target.value)}
-            onBlur={commit}
-            onKeyDown={event => commitOnEnter(event, commit)}
-          />
+          {/* What it writes: the container's own content width. */}
+          <CssHint writes={ownWidthWrites(draft, siteWords)}>
+            <Input
+              id={id}
+              value={draft}
+              placeholder={siteWords}
+              autoComplete="off"
+              autoFocus={autoFocus}
+              disabled={held}
+              aria-invalid={refused ? true : undefined}
+              aria-describedby={refused ? errorId : undefined}
+              onChange={event => setDraft(event.target.value)}
+              onBlur={commit}
+              onKeyDown={event => commitOnEnter(event, commit)}
+            />
+          </CssHint>
           {variables.length === 0 || held ? null : (
             <VariableChoice
               leaf={WIDTH_LEAF}

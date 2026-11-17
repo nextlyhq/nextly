@@ -151,10 +151,16 @@ describe("the core block library's bind buttons", () => {
     // words' menu; a list's query is chosen, never filled from a field.
     expect(unbound.sort()).toEqual(
       [
+        "core/box.entryCollection",
+        "core/box.entryId",
+        "core/box.target",
         "core/button.entryCollection",
         "core/button.entryId",
         "core/button.rel",
         "core/button.target",
+        "core/card.entryCollection",
+        "core/card.entryId",
+        "core/card.target",
         "core/collection-loop.collection",
         "core/collection-loop.limit",
         "core/collection-loop.offset",

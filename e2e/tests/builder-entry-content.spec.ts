@@ -144,7 +144,7 @@ test.describe("Entry content on a template", () => {
     await expect(card).toHaveText("Entry content");
 
     // 2. Field offers both of the articles' blocks fields, Body chosen.
-    const field = page.getByRole("combobox", { name: "Field" });
+    const field = page.getByRole("combobox", { name: "Show field" });
     await expect(field).toContainText("Body");
     await field.click();
     await expect(page.getByRole("option")).toHaveText(["Body", "Members only"]);

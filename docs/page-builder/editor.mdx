@@ -7,6 +7,23 @@ The editor opens with the page on the canvas, the inspector on the right for the
 selected block, and a rail of named panels on the left. One panel is open at a time.
 Choosing a panel's item again closes it and gives the canvas the room back.
 
+## With nothing selected
+
+Click empty canvas space, or press <kbd>Esc</kbd> until nothing is selected, and the
+inspector shows **Page settings**: the page's **Title**, its **Address** with a button
+that copies it, its **Header & footer**, and the search result the page would show.
+Changes there are the same fields **Settings** edits: the title in the top bar follows
+as you type, and they're saved with the page when you save. **All page settings…**
+opens **Settings** on the page's own tab, for every other field. The inspector keeps
+its width, so the canvas doesn't move as you select and deselect.
+
+The search result is built from the page's title and address. Where the SEO plugin
+sets search and sharing for the page's type, the result is left to it.
+
+A component, a saved section and a collection template show their own settings in
+the same place: **Component settings**, **Saved section settings** and **Collection
+template settings**. A component's lists its fields and variants.
+
 ## The top bar
 
 The top bar runs across the editor in three parts.
@@ -170,6 +187,12 @@ for the block you're editing. Sections stay as you left them, for every block an
 next time you open the editor. A section you've never folded opens if it holds a value or
 is the tab's first. **Expand all** and **Collapse all** in the panel's **⋯** menu fold
 every section of the tab you're on.
+
+Every control says what it writes. Hover it, or reach it with the keyboard, and a tooltip
+shows the CSS or HTML it sets: `min-height: 120px`, `<section>`, `id`. The tooltip stays
+while your pointer is over it, and Escape closes it. If you'd rather always see them,
+turn on **Show CSS names** in the **⋯** menu: each control then prints its CSS property
+names in small type under its label. The editor remembers the choice in this browser.
 
 The Style tab lists its sections in the same order for every block: Block style, Layout,
 Inside its parent, Spacing, Size, Position, Text, Background, Border, Effects, Icon and

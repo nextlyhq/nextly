@@ -201,18 +201,14 @@ describe("FontFamilyField", () => {
     const onManageFonts = vi.fn();
     mount({ onManageFonts });
     open();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Add or manage fonts…" })
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Manage fonts…" }));
     expect(onManageFonts).toHaveBeenCalledTimes(1);
   });
 
   it("offers no way to manage fonts where the host has none", () => {
     mount();
     open();
-    expect(
-      screen.queryByRole("button", { name: "Add or manage fonts…" })
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Manage fonts…" })).toBeNull();
   });
 
   it("moves through the options with the arrow keys, picks with Enter and closes with Escape", async () => {

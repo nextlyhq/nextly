@@ -39,6 +39,8 @@ let editorActions: {
 let resolved = { pagesCollection: "pages", layoutsCollection: "layouts" };
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  // The person signed in, whom the builder's start-up answers are for.
+  useCurrentUserId: () => "ada",
   writePluginRoute: (args: { body: Body }) => {
     calls.push(args);
     return answer(args.body);

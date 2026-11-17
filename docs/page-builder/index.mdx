@@ -27,11 +27,18 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
   fill it in for an icon that says something on its own. A linked icon is named by its
   label, or by the icon's name when there is none. The page stores the icon's id
   (`lucide:star`); an id the set no longer draws renders nothing, and the editor says so.
-- **Accordion titles and icons.** An accordion's **Titles as** (Content tab) draws each
-  section's title as text or as a heading from level 2 to 6, and its **Icon** and
-  **Position** (Style tab) choose a chevron, a plus, no icon or the browser's own triangle,
-  before or after the title. Some screen readers announce a section title as the button's
+- **Accordion titles and icons.** An accordion's **Titles as** (Content tab, Behaviour)
+  draws each section's title as plain text or as a heading from level 2 to 6, and its
+  **Icon** and **Icon position** (Style tab) choose a chevron, a plus, no icon or the
+  browser's own triangle, before or after the title. Some screen readers announce a section title as the button's
   text rather than as a heading; the section still opens and closes as normal.
+- **Columns, sections and linked containers.** A Columns block picks its columns in its
+  Content tab: 2 equal, 3 equal, 4 equal, Wide left, Wide right or Wide middle, adding or
+  removing empty columns to match, and **Stack on** puts the columns one under another on
+  tablets and phones, on phones only, or never. A Section's **Height** (Style tab, Size) is
+  Fit content or Full screen. A Box or a Card can link as a whole to a page on this site or
+  to an address, opening in a new tab if you choose; its link relationship is under
+  Advanced, HTML.
 - **Your own blocks**, defined in code, which the page renderer takes beside the
   built-in ones.
 - **Per-breakpoint styling.** Style a block separately for each breakpoint: the Style tab
@@ -719,9 +726,9 @@ collections and repeats its child blocks once per entry — a post list, a team 
 product row — without anyone writing a query. The developer decides which collections are
 available to it; the editor decides which entries it shows and what each one looks like.
 
-In the editor, the list's Content tab edits its query:
+In the editor, the list's Content tab edits its query, under **Entries**:
 
-- **Source**: a collection, or a to-many relation of the page's entry (on a collection's
+- **Show entries from**: a collection, or a to-many relation of the page's entry (on a collection's
   entry) or of each item of the list around it, such as a post's categories.
 - **Filters**: rows an entry must all meet, each read as one sentence, for example
   Title contains "build" or Published is on or after 1 Sept 2026. Only fields visitors can
@@ -729,13 +736,15 @@ In the editor, the list's Content tab edits its query:
 - **Sort**: one row per key, each with its direction in words (Newest first, A–Z, Highest
   first). Entries with the same values keep a fixed order, and entries with no value come
   last.
-- **How many**: Number of items (1 to 100), Skip the first, and Split into pages. Under
-  Number of items the selected list says how many entries match and how many show, for
+- **Entries shown**: How many (1 to 100), Skip, and Split into pages. Under How many the
+  selected list says how many entries match and how many show, for
   example "4 entries match, so 3 show.", counted as you read them on the canvas. Under
   Split into pages, while it is on, it says how many pages that makes, for example "24
   entries match, so 3 pages of 10." See [Splitting a list into pages](#splitting-a-list-into-pages).
-- **When nothing matches**: Canvas shows Entries or When empty, to design the list's empty
-  state, which visitors see when no entry matches.
+- **When nothing matches**: Preview the empty message, to design the list's empty state,
+  which visitors see when no entry matches.
+
+The list's HTML tag (Advanced, HTML) renders it as a generic box, a section or an article.
 
 A prop bound to the page's own entry or to a Single shows, on the canvas, the value you could
 see in the admin, your drafts included, read with your own access; one you may not read shows
@@ -755,7 +764,7 @@ set through the API with [`set-list-query`](/docs/page-builder/compose-through-t
 
 ### Splitting a list into pages
 
-Turn on **Split into pages** and the list shows Number of items entries on each page, each
+Turn on **Split into pages** and the list shows How many entries on each page, each
 page at its own address: the list on `/news` shows its first page there, the second at
 `/news/page/2`, the third at `/news/page/3`, and so on. Under its entries the list draws
 links to the previous and next pages and the page numbers, as ordinary links a visitor can
@@ -763,7 +772,7 @@ share and a search engine can follow. The links are parts of the list (Pages, Pa
 Current page and Page gap), so the Style tab styles them as it styles the list; by default
 they are outlined boxes, with the current page filled in the site's primary colour.
 
-- Skip the first is applied once, before paging: with 25 entries, 10 skipped and 10 on a
+- Skip is applied once, before paging: with 25 entries, 10 skipped and 10 on a
   page, page 1 shows entries 11 to 20 and page 2 entries 21 to 25, the last.
 - `/news/page/1` redirects permanently to `/news`, so the first page has one address. A
   number past the last page, or written any other way (`/page/0`, `/page/02`,

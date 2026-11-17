@@ -62,6 +62,7 @@ function renderTable(
       onSortChange={vi.fn()}
       onSearchChange={vi.fn()}
       onEdit={vi.fn()}
+      entryHref={id => `/admin/collections/posts/${id}`}
       onDelete={handlers.onDelete ?? vi.fn()}
       onBulkDelete={vi.fn()}
       onBulkPublish={vi.fn()}

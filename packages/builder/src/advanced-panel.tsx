@@ -33,6 +33,8 @@ import { Button, Input, Label } from "@nextlyhq/ui";
 import { Plus } from "lucide-react";
 import * as React from "react";
 
+import { BUILT_IN_WRITES } from "./code-hints";
+import { CssHint } from "./css-hint";
 import {
   domIdsTaken,
   renderedIdIn,
@@ -434,24 +436,27 @@ export function AdvancedPanel({
       )}
       <div className="nx-inspector__field">
         <Label htmlFor="nx-block-css-id">Anchor (ID)</Label>
-        <Input
-          id="nx-block-css-id"
-          value={draft.id}
-          placeholder="none"
-          aria-describedby={
-            idProblem === undefined ? undefined : "nx-css-id-problem"
-          }
-          aria-invalid={idProblem === undefined ? undefined : true}
-          onChange={event =>
-            setDraft(current => ({ ...current, id: event.target.value }))
-          }
-          onBlur={() => settle(latest.current)}
-          onKeyDown={event => {
-            if (event.key !== "Enter") return;
-            event.preventDefault();
-            settle(latest.current);
-          }}
-        />
+        {/* What it writes: the root element's `id`. */}
+        <CssHint writes={BUILT_IN_WRITES.anchor}>
+          <Input
+            id="nx-block-css-id"
+            value={draft.id}
+            placeholder="none"
+            aria-describedby={
+              idProblem === undefined ? undefined : "nx-css-id-problem"
+            }
+            aria-invalid={idProblem === undefined ? undefined : true}
+            onChange={event =>
+              setDraft(current => ({ ...current, id: event.target.value }))
+            }
+            onBlur={() => settle(latest.current)}
+            onKeyDown={event => {
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              settle(latest.current);
+            }}
+          />
+        </CssHint>
         {idProblem === undefined ? (
           <p className="nx-inspector__hint">Lets a link jump here: #your-id</p>
         ) : (
@@ -691,25 +696,28 @@ function CssClassesField({
   return (
     <div className="nx-inspector__field">
       <Label htmlFor={id}>CSS classes</Label>
-      <Input
-        id={id}
-        value={draft}
-        placeholder="none"
-        spellCheck={false}
-        autoComplete="off"
-        aria-describedby={refused.length === 0 ? hintId : refusedId}
-        aria-invalid={refused.length === 0 ? undefined : true}
-        onChange={event => {
-          setDraft(event.target.value);
-          setFinished(false);
-        }}
-        onBlur={() => commit.current()}
-        onKeyDown={event => {
-          if (event.key !== "Enter") return;
-          event.preventDefault();
-          commit.current();
-        }}
-      />
+      {/* What it writes: names on the root element's `class`. */}
+      <CssHint writes={BUILT_IN_WRITES.cssClasses}>
+        <Input
+          id={id}
+          value={draft}
+          placeholder="none"
+          spellCheck={false}
+          autoComplete="off"
+          aria-describedby={refused.length === 0 ? hintId : refusedId}
+          aria-invalid={refused.length === 0 ? undefined : true}
+          onChange={event => {
+            setDraft(event.target.value);
+            setFinished(false);
+          }}
+          onBlur={() => commit.current()}
+          onKeyDown={event => {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            commit.current();
+          }}
+        />
+      </CssHint>
       {refused.length === 0 ? (
         <p className="nx-inspector__hint" id={hintId}>
           Separate names with spaces.
