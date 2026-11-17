@@ -66,13 +66,13 @@ import type {
 } from "../host-rewrite/rewrite";
 
 import { documentBindingReport, type BindingReportRow } from "./rows";
-import { bindingUsesOf } from "./uses";
-import type { DocumentUse } from "./uses-store";
 import type {
   BindingReportStore,
   DirtyDocument,
   ReportedDocument,
 } from "./store";
+import { bindingUsesOf } from "./uses";
+import type { DocumentUse } from "./uses-store";
 
 /** How the report reads a document as stored. */
 export interface DocumentReading {
