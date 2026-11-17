@@ -79,7 +79,10 @@ import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
 import { runMigrateDown } from "../migrate-down";
-import { runPluginInstall } from "../plugin-lifecycle-runner";
+import {
+  runPluginInstall,
+  runPluginInstallAll,
+} from "../plugin-lifecycle-runner";
 
 const ALL = ["postgresql", "mysql", "sqlite"] as const;
 type Dialect = (typeof ALL)[number];
@@ -88,6 +91,8 @@ const run = vi.hoisted(() => ({
   dialect: "sqlite" as string,
   adapter: undefined as unknown,
   plugin: undefined as unknown,
+  /** Plugins the config lists before it. */
+  before: [] as unknown[],
   /** The app's migrations folder: empty, since the app ships no files. */
   migrationsDir: "",
 }));
@@ -106,7 +111,7 @@ vi.mock("../../utils/config-loader", async () => {
             uiSchemaFile: `${run.migrationsDir}/ui-schema.json`,
           },
         }),
-        plugins: [run.plugin],
+        plugins: [...run.before, run.plugin],
       };
       return { config, appConfig: config, pluginConsent: undefined };
     },
@@ -180,8 +185,16 @@ const replies = defineTable(
 
 type Tables = ReturnType<typeof defineTable>[];
 
+/** A second plugin, not yet installed, whose one module creates a table and deletes nothing. */
+const OTHER = { name: "@acme/ha", prefix: "ha" };
+const OTHER_TABLE = "ha__things";
+const things = defineTable("things", { id: col.id() });
+
 /** The plugin's tables compiled for every dialect by the real builder. */
-async function tablesByDialect(tables: Tables) {
+async function tablesByDialect(
+  tables: Tables,
+  owner: { name: string; prefix: string } = { name: PLUGIN, prefix: PREFIX }
+) {
   const out = {} as Parameters<
     typeof buildPluginMigration
   >[0]["tablesByDialect"];
@@ -190,8 +203,8 @@ async function tablesByDialect(tables: Tables) {
       dialect,
       coreTableNames: CORE_TABLE_NAMES,
       entities: [],
-      pluginPrefixes: new Map([[PLUGIN, PREFIX]]),
-      plugins: [{ owner: { kind: "plugin", id: PLUGIN }, tables }],
+      pluginPrefixes: new Map([[owner.name, owner.prefix]]),
+      plugins: [{ owner: { kind: "plugin", id: owner.name }, tables }],
     });
     out[dialect] = built.specs;
   }
@@ -256,6 +269,8 @@ interface Modules {
   addsColumn: Shipped;
   /** `addsColumn`'s module, then one dropping `mc__notes.summary`. */
   addsThenDrops: Shipped;
+  /** The other plugin's only module, which creates `ha__things`. */
+  other: PluginMigration;
 }
 
 async function buildModules(): Promise<Modules> {
@@ -278,7 +293,17 @@ async function buildModules(): Promise<Modules> {
     existing: [base],
   });
   if (!added) throw new Error("no module adding a column generated");
+  const other = buildPluginMigration({
+    pluginName: OTHER.name,
+    schemaVersion: 1,
+    name: "things",
+    now: new Date(Date.UTC(2026, 10, 17, 10, 0, 0)),
+    tablesByDialect: await tablesByDialect([things], OTHER),
+    existing: [],
+  });
+  if (!other) throw new Error("no module generated for the other plugin");
   return {
+    other: other.module,
     base,
     dropsColumn: {
       tables: [notesWithoutSummary, replies],
@@ -460,6 +485,7 @@ describe.each(getConfiguredTestDialects())(
       });
       run.dialect = dialect;
       run.adapter = handle.adapter;
+      run.before = [];
       // Installed at its first module, with rows every case's deletion would take.
       run.plugin = pluginWith([shipped.base], [notes, replies]);
       await runPluginInstall(PLUGIN, {}, context);
@@ -566,6 +592,18 @@ describe.each(getConfiguredTestDialects())(
       return refusalOf(
         runPluginInstall(
           PLUGIN,
+          { consent: targets === undefined ? NO_CONSENT : consentFor(targets) },
+          context
+        )
+      );
+    }
+
+    /** `plugins install` with no name: every configured plugin, in the config's order. */
+    function installAll(targets: string | undefined): Promise<Outcome> {
+      consentInEnvironment(undefined);
+      issued.length = 0;
+      return refusalOf(
+        runPluginInstallAll(
           { consent: targets === undefined ? NO_CONSENT : consentFor(targets) },
           context
         )
@@ -750,6 +788,49 @@ describe.each(getConfiguredTestDialects())(
         );
       }, 180_000);
     });
+
+    it("installs no plugin listed before the one whose module an install of every plugin refuses", async () => {
+      const { module } = shipped.dropsColumn;
+      const consent = `${NOTES}.summary`;
+      ship(shipped.dropsColumn);
+      // Listed first, so its install comes before the refused plugin's.
+      run.before = [
+        definePlugin({
+          name: OTHER.name,
+          version: "1.0.0",
+          nextly: ">=0.0.0",
+          schemaVersion: 1,
+          contributes: {
+            schema: {
+              prefix: OTHER.prefix,
+              tables: [things],
+              migrations: [shipped.other],
+            },
+          },
+        }),
+      ];
+
+      expectRefusal(await installAll(undefined), {
+        module,
+        deletion: consent,
+        consent,
+        flag: true,
+      });
+      expect(await adapter().tableExists(OTHER_TABLE)).toBe(false);
+      expect(await noteValues("summary")).toEqual(["kept", "kept"]);
+      expect(await appliedKeys()).toEqual([key(shipped.base)]);
+
+      expect(await installAll(consent)).toBeUndefined();
+      expect(await adapter().tableExists(OTHER_TABLE)).toBe(true);
+      expect(await noteValues("summary")).toBeUndefined();
+      expect(await appliedKeys()).toEqual(
+        [
+          qualifiedFilename(OTHER.name, shipped.other.name),
+          key(shipped.base),
+          key(module),
+        ].sort()
+      );
+    }, 180_000);
 
     it("refuses migrate:down over a module whose DOWN drops a column, keeping its values, and rolls it back with consent naming the column", async () => {
       const { module } = shipped.addsColumn;

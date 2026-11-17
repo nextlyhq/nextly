@@ -350,6 +350,21 @@ export async function runPluginInstallCommand(
   deps: PluginLifecycleDeps,
   options: InstallOptions = {}
 ): Promise<void> {
+  await installPlugin(name, deps, options);
+}
+
+/**
+ * One plugin's install (`runPluginInstallCommand`). `agreedBefore` is what an
+ * install of every plugin settled for it before installing any
+ * (`judgeEveryInstallDeletions`): given, nobody is asked again here, and the
+ * judgement under the lock accepts only that.
+ */
+async function installPlugin(
+  name: string,
+  deps: PluginLifecycleDeps,
+  options: InstallOptions,
+  agreedBefore?: Agreement
+): Promise<void> {
   const plugin = find(deps.plugins, name);
   deps.logger.info(`Installing ${plugin.name}@${plugin.version}...`);
 
@@ -357,7 +372,8 @@ export async function runPluginInstallCommand(
   // other migration wait, and decided again under it, where it holds. A
   // person is asked about the data its modules delete before the lock too.
   await assertInstallable(plugin, deps);
-  const agreed = await judgeInstallDeletions(plugin, deps, options);
+  const agreed =
+    agreedBefore ?? (await judgeInstallDeletions(plugin, deps, options));
   const outcome = await deps.underMigrateLock(async () => {
     await assertInstallable(plugin, deps);
     await judgeInstallDeletions(plugin, deps, options, agreed);
@@ -469,6 +485,10 @@ async function isRecordedInstalled(
  * A disabled plugin is skipped and named: its install is refused anyway,
  * because its hooks do not run, and refusing the whole run over it would
  * leave every enabled plugin after it uninstalled.
+ *
+ * The data every plugin's pending modules delete is settled first, for the
+ * whole run (`judgeEveryInstallDeletions`): a run that lacks consent for a
+ * later plugin's deletion refuses before it installs an earlier one.
  */
 export async function runPluginInstallAllCommand(
   deps: PluginLifecycleDeps,
@@ -478,6 +498,11 @@ export async function runPluginInstallAllCommand(
     deps.logger.info("No plugins are configured.");
     return;
   }
+  const settled = await judgeEveryInstallDeletions(
+    deps.plugins.filter(plugin => plugin.enabled),
+    deps,
+    options
+  );
   for (const plugin of deps.plugins) {
     if (!plugin.enabled) {
       deps.logger.warn(
@@ -485,7 +510,14 @@ export async function runPluginInstallAllCommand(
       );
       continue;
     }
-    await runPluginInstallCommand(plugin.name, deps, options);
+    await installPlugin(
+      plugin.name,
+      deps,
+      options,
+      // A plugin whose modules could not be read up front is judged, and its
+      // person asked, at its own turn, as one plugin's install is.
+      settled.judged.has(plugin.name) ? settled.agreement : undefined
+    );
   }
 }
 
@@ -637,11 +669,72 @@ async function judgeInstallDeletions(
   options: InstallOptions,
   agreed?: Agreement
 ): Promise<Agreement> {
+  return judgeDeletionSources(
+    await installDeletionSources(plugin, deps),
+    deps,
+    options,
+    agreed
+  );
+}
+
+/**
+ * What an install of every plugin settles before it installs any: the data
+ * the pending modules of all of `plugins` delete, judged as one run, so one
+ * refusal names every module and deletion the consent leaves out with the one
+ * consent that covers them, and a person at a terminal is asked once. Returns
+ * what was agreed and the plugins it was agreed for.
+ *
+ * A plugin whose modules cannot be read yet is left out, and judged at its
+ * own turn: its other refusals (a dependency the configuration lacks, a
+ * rename onto a name taken) are made there, as one plugin's install makes
+ * them, once the plugins before it are installed.
+ */
+async function judgeEveryInstallDeletions(
+  plugins: readonly LifecyclePlugin[],
+  deps: PluginLifecycleDeps,
+  options: InstallOptions
+): Promise<{ agreement: Agreement; judged: ReadonlySet<string> }> {
+  const sources = new Map<Deletion, DeletionSource>();
+  const judged = new Set<string>();
+  for (const plugin of plugins) {
+    let found: Map<Deletion, DeletionSource>;
+    try {
+      found = await installDeletionSources(plugin, deps);
+    } catch (error) {
+      // A refusal of this plugin's own, made again at its turn; anything
+      // else is a failure of the run.
+      if (!NextlyError.is(error)) throw error;
+      continue;
+    }
+    judged.add(plugin.name);
+    for (const [deletion, source] of found) sources.set(deletion, source);
+  }
+  return {
+    agreement: await judgeDeletionSources(sources, deps, options),
+    judged,
+  };
+}
+
+/** Each deletion the pending modules of `plugin` make, with the module it comes from. */
+async function installDeletionSources(
+  plugin: LifecyclePlugin,
+  deps: PluginLifecycleDeps
+): Promise<Map<Deletion, DeletionSource>> {
   const sources = new Map<Deletion, DeletionSource>();
   for (const unit of await deps.installDeletions(plugin)) {
     const source = deletionSource(unit.label, unit.text);
     for (const deletion of unit.deletions) sources.set(deletion, source);
   }
+  return sources;
+}
+
+/** The one judgement of an install's deletions (`judgeRunDeletions`), over `sources`. */
+function judgeDeletionSources(
+  sources: ReadonlyMap<Deletion, DeletionSource>,
+  deps: PluginLifecycleDeps,
+  options: InstallOptions,
+  agreed?: Agreement
+): Promise<Agreement> {
   return judgeRunDeletions({
     sources,
     consent: options.consent ?? resolveDataLossConsent({ env: process.env }),
