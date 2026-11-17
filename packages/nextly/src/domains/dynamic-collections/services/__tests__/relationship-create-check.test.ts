@@ -67,6 +67,14 @@ describe("a relationship's create check", () => {
     }
   });
 
+  it("refuses a relationTo that is neither a string nor a list, though options name a target", () => {
+    for (const relationType of ["manyToOne", "manyToMany"]) {
+      expect(
+        check({ relationTo: 123, options: { target: "authors", relationType } })
+      ).toThrow(/must specify a target/);
+    }
+  });
+
   it("refuses an action on delete or update that is not a string, as a refusal and not a crash", () => {
     expect(
       check({ relationTo: "authors", options: { onDelete: 123 } })

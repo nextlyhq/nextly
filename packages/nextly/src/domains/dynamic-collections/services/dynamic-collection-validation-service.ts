@@ -142,6 +142,7 @@ export const fieldsArraySchema = z
  * - A many-to-many keeps its links in a junction table, which is made only for
  *   a target named in `options.target`, so it must name its target there: a
  *   `relationTo` target alone would leave it nowhere to keep them.
+ * - A `relationTo` that is neither a string nor a list names none.
  * - Otherwise `relationTo` first, one collection or several, each spelled as
  *   an address is (`isAddressSpelling`).
  * - Else the earlier Builder's `options.target`, read as every other reader of
@@ -151,11 +152,21 @@ function namesItsTarget(
   field: FieldDefinition,
   relationType: unknown
 ): boolean {
+  const { relationTo } = field;
+  // Any other value in relationTo names no collection, and the readers that
+  // take relationTo before options.target would take it as one: refused, not
+  // passed over for options.target.
+  if (
+    relationTo !== undefined &&
+    typeof relationTo !== "string" &&
+    !Array.isArray(relationTo)
+  ) {
+    return false;
+  }
   if (relationType === "manyToMany") {
     const target = field.options?.target;
     return typeof target === "string" && target !== "";
   }
-  const { relationTo } = field;
   if (Array.isArray(relationTo)) {
     return relationTo.length > 0 && relationTo.every(isAddressSpelling);
   }
