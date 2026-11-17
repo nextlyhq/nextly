@@ -95,9 +95,15 @@ function OptionFace({
         {picture}
       </span>
       <span className="flex min-w-0 flex-1 flex-col text-left">
-        <span className="truncate font-medium">{option.label}</span>
+        {/* Named by slot, so a reader past the picture finds the words. */}
+        <span data-slot="hf-name" className="truncate font-medium">
+          {option.label}
+        </span>
         {option.note === undefined ? null : (
-          <span className="text-xs font-normal text-muted-foreground">
+          <span
+            data-slot="hf-note"
+            className="text-xs font-normal text-muted-foreground"
+          >
             {option.note}
           </span>
         )}

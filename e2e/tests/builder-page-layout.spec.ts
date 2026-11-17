@@ -181,7 +181,7 @@ async function region(page: Page, area: "header" | "footer") {
 /** The menu's option for the set or choice named `name`, by its bold name. */
 function option(page: Page, name: string) {
   return page.getByRole("option").filter({
-    has: page.locator(".font-medium").getByText(name, { exact: true }),
+    has: page.locator('[data-slot="hf-name"]').getByText(name, { exact: true }),
   });
 }
 
@@ -200,7 +200,10 @@ test("offers one menu with pictures, the same on the entry page and in Settings,
   await gotoAdmin(page, `/collections/pages/${pageId}`);
   const cardPicker = page.getByRole("combobox", { name: "Header & footer" });
   await expect(cardPicker).toBeVisible({ timeout: 30_000 });
-  await expect(cardPicker).toHaveText(`Site default (${MAIN})`);
+  // The name, read past the picture, whose drawn text is the set's own.
+  await expect(cardPicker.locator('[data-slot="hf-name"]')).toHaveText(
+    `Site default (${MAIN})`
+  );
   await expect(
     cardPicker.locator('.nx-pb-hf-picture .nx-picture[data-state="drawn"]')
   ).toHaveCount(1);
@@ -212,7 +215,9 @@ test("offers one menu with pictures, the same on the entry page and in Settings,
   const settings = page.getByRole("dialog", { name: "Settings" });
   const picker = settings.getByRole("combobox", { name: "Header & footer" });
   await expect(picker).toBeVisible();
-  await expect(picker).toHaveText(`Site default (${MAIN})`);
+  await expect(picker.locator('[data-slot="hf-name"]')).toHaveText(
+    `Site default (${MAIN})`
+  );
   await expect(
     picker.locator('.nx-pb-hf-picture .nx-picture[data-state="drawn"]')
   ).toHaveCount(1);
@@ -229,7 +234,7 @@ test("offers one menu with pictures, the same on the entry page and in Settings,
   // these.
   const names = await page
     .getByRole("option")
-    .locator(".font-medium")
+    .locator('[data-slot="hf-name"]')
     .allTextContents();
   expect(names[0]).toBe(`Site default (${MAIN})`);
   await expect(option(page, `Site default (${MAIN})`)).toContainText(
@@ -272,7 +277,7 @@ test("offers one menu with pictures, the same on the entry page and in Settings,
   await expect(await region(page, "header")).toHaveCount(0);
 
   await choose(page, LANDING);
-  await expect(picker).toHaveText(LANDING);
+  await expect(picker.locator('[data-slot="hf-name"]')).toHaveText(LANDING);
 });
 
 test("draws the Layout's regions locked on the canvas, with a way to open the Layout", async ({
@@ -341,5 +346,6 @@ test("draws the Layout's regions locked on the canvas, with a way to open the La
     page
       .getByRole("dialog", { name: "Settings" })
       .getByRole("combobox", { name: "Header & footer" })
+      .locator('[data-slot="hf-name"]')
   ).toHaveText(`Site default (${MAIN})`);
 });

@@ -554,7 +554,7 @@ test.describe("the composition exit tests", () => {
       .getByRole("option")
       .filter({
         has: page
-          .locator(".font-medium")
+          .locator('[data-slot="hf-name"]')
           .getByText(`other ${STAMP}`, { exact: true }),
       })
       .click();

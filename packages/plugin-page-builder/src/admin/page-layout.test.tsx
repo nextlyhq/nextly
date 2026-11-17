@@ -187,7 +187,10 @@ async function openMenu() {
 function optionNamed(name: string): HTMLElement {
   const found = screen
     .getAllByRole("option")
-    .find(option => option.querySelector(".font-medium")?.textContent === name);
+    .find(
+      option =>
+        option.querySelector('[data-slot="hf-name"]')?.textContent === name
+    );
   if (found === undefined) throw new Error(`No option named ${name}`);
   return found;
 }
@@ -202,8 +205,8 @@ async function choose(name: string) {
 /** Each row: its name, its note, and the regions its picture draws. */
 function rows(): { name: string; note: string | null; picture: string }[] {
   return screen.getAllByRole("option").map(option => ({
-    name: option.querySelector(".font-medium")?.textContent ?? "",
-    note: option.querySelector(".text-muted-foreground")?.textContent ?? null,
+    name: option.querySelector('[data-slot="hf-name"]')?.textContent ?? "",
+    note: option.querySelector('[data-slot="hf-note"]')?.textContent ?? null,
     picture:
       option
         .querySelector('[data-testid="picture"]')
@@ -253,7 +256,7 @@ describe("the page's Layout picker", () => {
     ].map(element =>
       element.getAttribute("role") === "separator"
         ? "—"
-        : (element.querySelector(".font-medium")?.textContent ??
+        : (element.querySelector('[data-slot="hf-name"]')?.textContent ??
           element.textContent)
     );
     expect(order).toEqual([
