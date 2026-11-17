@@ -43,7 +43,11 @@ import {
 import { z } from "zod";
 
 import { compositionRefusalReason } from "./composition-refusal";
-import { entryContentRefusal, offeredIn } from "./entry-content-rules";
+import {
+  ENTRY_CONTENT_ONE_REASON,
+  entryContentRefusal,
+  offeredIn,
+} from "./entry-content-rules";
 import type { BuilderOp, OpPosition } from "./op-vocabulary";
 import type { SlotSource } from "./panels/add/inserter-types";
 import {
@@ -82,6 +86,15 @@ const ENTRY_CONTENT_TEMPLATE_ONLY =
 /** Said when copied Entry content draws a field this template's collection lacks. */
 const ENTRY_CONTENT_FIELD_MISSING =
   "This Entry content block draws a field this template’s collection doesn’t have, so it can’t be pasted here.";
+
+/** How many Entry content blocks a run holds, at any depth. */
+function entryContentCount(blocks: readonly BlockNode[]): number {
+  let count = 0;
+  walkNodes([...blocks], node => {
+    if (node.type === ENTRY_CONTENT_TYPE) count += 1;
+  });
+  return count;
+}
 
 /**
  * Why pasted Entry content can't go in this template: a block naming a
@@ -260,6 +273,11 @@ export function planPaste(
     // here rather than left for the save to refuse.
     if (!offeredIn(document.kind, ENTRY_CONTENT_TYPE)) {
       return { refusal: ENTRY_CONTENT_TEMPLATE_ONLY };
+    }
+    // One Entry content block per template, counted in what is pasted as
+    // well as in what the template already holds.
+    if (entryContentCount(blocks) > 1) {
+      return { refusal: ENTRY_CONTENT_ONE_REASON };
     }
     const fields = sources.entryFields;
     const held =

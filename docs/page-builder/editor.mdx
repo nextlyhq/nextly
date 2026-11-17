@@ -471,17 +471,22 @@ toolbar under **More actions**, in its right-click menu and in search
 
 - Blocks are copied with their content, styles and the blocks inside them.
 - A paste lands where a clicked block would (see
-  [Where a clicked block lands](#where-a-clicked-block-lands)): inside a selected
-  container at the end, after a selected block that holds none, and at the end of the
-  page with nothing selected. The pasted blocks are selected, and one undo takes the
-  whole paste back.
+  [Where a clicked block lands](#where-a-clicked-block-lands)). Content blocks
+  (Heading, Text, Image…) go inside a selected container at the end, and after a
+  selected block that holds none. Layout blocks (Box, Columns, Card) go after a selected
+  container, and a Section goes after the top-level block holding the selection. With
+  nothing selected, the paste goes at the end of the page. The pasted blocks are
+  selected, and one undo takes the whole paste back.
 - You can paste on the same page, on another page, or in another browser tab of the
   same site. Pasted blocks keep using the site's shared styles, block styles, variables,
   components and media.
 - Cut copies the blocks, then removes them, as one undo step. A block locked in Layers
   can't be cut, as it can't be deleted.
-- If the place can't take the blocks (a Column belongs only inside Columns, say), the
-  paste is refused with the reason, and nothing changes.
+- If that place can't take the blocks, the paste tries the next one, as a clicked block
+  does: after the selected block, then after each block around it, out to the page. Only
+  when no place takes them (a Column belongs only inside Columns, say) is the paste
+  refused, with the reason, and nothing changes. A paste that would make the page larger
+  or deeper than the site allows is refused too, though the editor doesn't say why yet.
 - A block bound to a list item's field keeps its binding when pasted outside a
   Collection list, though there is no list item for it to read there.
 - Blocks copied on another site can't be pasted here: they use that site's styles,

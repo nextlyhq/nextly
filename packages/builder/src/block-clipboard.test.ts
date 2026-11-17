@@ -285,6 +285,27 @@ describe("where pasted blocks land", () => {
     expect(here.refusal).toBeUndefined();
   });
 
+  it("refuses two Entry content blocks pasted together into an empty template", () => {
+    const entry = (id: string) =>
+      node(id, "core/entry-content", { props: { field: "body" } });
+    const template = {
+      formatVersion: 1,
+      kind: "template",
+      nodes: [],
+    } as unknown as BlockDocument;
+    const both = planPaste(template, null, [entry("e1"), entry("e2")], {
+      ...sources,
+      entryFields: ["body"],
+    });
+    expect(both.refusal).toBe("A template holds one Entry content block.");
+    // The control: one of them pastes.
+    const one = planPaste(template, null, [entry("e1")], {
+      ...sources,
+      entryFields: ["body"],
+    });
+    expect(one.refusal).toBeUndefined();
+  });
+
   it("refuses a second Entry content block in a template", () => {
     const entry = node("entry", "core/entry-content", {
       props: { field: "body" },
