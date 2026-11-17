@@ -788,6 +788,11 @@ export type {
  * `PluginVersionPinHolder`, `PluginVersionPin`, `PluginPinOptions`, `PluginPinTransaction`,
  * `VersionPinHolderDefinition`, what `registerHolder` takes, and `VersionRef`, the document a pin
  * is on). Stable: `plugin-page-builder` depends on both, on every database. See STABILITY.md.
+ * With them, every type their methods take or return, so a plugin names each from here: the
+ * reads' options and rows (`VersionListOptions`, `VersionMeta`, `VersionRow`, `VersionStatus`,
+ * `PendingEditOrder`, `PendingEditCursor`), a recovery point's result (`AutosaveWriteResult`,
+ * `AutosaveSupersession`), a restore's (`RestoreVersionResult`), and the content events
+ * `listEvents` reads (`ContentEventSubject`, `SubjectEventsQuery`, `ContentEventRecord`).
  *
  * @public
  */
@@ -800,6 +805,18 @@ export type {
   PluginPinTransaction,
   VersionPinHolderDefinition,
   VersionRef,
+  VersionListOptions,
+  VersionMeta,
+  VersionRow,
+  VersionStatus,
+  PendingEditOrder,
+  PendingEditCursor,
+  AutosaveWriteResult,
+  AutosaveSupersession,
+  RestoreVersionResult,
+  ContentEventSubject,
+  SubjectEventsQuery,
+  ContentEventRecord,
 } from "nextly";
 
 /**
