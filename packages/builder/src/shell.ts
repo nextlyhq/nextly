@@ -277,6 +277,39 @@ export type { ComponentsPanelProps } from "./components-panel";
 // rows from a plugin's collection and has to know which fields the palette
 // reads before it can map them.
 export type { SavedPattern } from "./panels/add/inserter";
+// What the panel's `renderPicture` is handed: a saved section as offered,
+// carrying the document its picture is drawn from.
+export type { PatternInsertEntry } from "./panels/add/inserter";
+
+/**
+ * A small picture of a document, wherever an author chooses one: drawn by the
+ * canvas's renderer, inert, waiting until it is on screen, with plain icons
+ * for nothing to draw and for a document that can't be drawn. The host
+ * decides what to draw; a session it keeps for as long as it edits lets its
+ * pictures share what async blocks drew. @experimental
+ */
+export { DocumentMiniature } from "./shared/document-miniature";
+export type {
+  DocumentMiniatureProps,
+  MiniatureRender,
+} from "./shared/document-miniature";
+/**
+ * The parts a picture is made of, for a surface that sizes its own box (the
+ * entry page's miniature): when it is first seen, the scale that fits the
+ * composed width, and the inert surface drawn at it. @experimental
+ */
+export {
+  createMiniatureSession,
+  MINIATURE_RENDER_WIDTH,
+  MiniatureSurface,
+  useFirstSeen,
+  useMiniatureSession,
+  useWidthScale,
+} from "./shared/miniature-surface";
+export type {
+  MiniatureSession,
+  MiniatureSurfaceProps,
+} from "./shared/miniature-surface";
 
 /**
  * The site's breakpoints, as a trigger and the dialog behind it.

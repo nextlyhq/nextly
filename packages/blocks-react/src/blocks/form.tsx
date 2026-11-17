@@ -10,6 +10,10 @@
  * choice. This one is for the case that plugin is too much machinery for: a
  * contact form pointed at a route handler, a hosted form service, or `mailto:`.
  *
+ * **Every form carries one hidden spam trap** ({@link FORM_HONEYPOT_FIELD}),
+ * whoever receives it: a field no person fills and a bot does. Drawing it is
+ * the block's part; treating a filled one as spam is the receiver's.
+ *
  * **Every element is a DIRECT child of the form, which is the layout.** The
  * root is a grid, so each label and each control becomes its own row and the
  * label sits above the control it names. Nothing is wrapped: a `<label>` around
@@ -90,6 +94,30 @@ export interface FormProps {
   submitText?: string;
   /** The fields, in order. */
   fields?: FormFieldSpec[];
+}
+
+/**
+ * The name of the hidden spam trap every form carries.
+ *
+ * A person never sees or fills it, and a bot filling every input it finds
+ * does, so whoever receives a post with it filled treats the post as spam:
+ * answered as a success and passed on to nobody. Shared, because the one who
+ * draws the trap and the one who reads it must agree on its name. `_hp` is
+ * among the names the forms plugin already treats as a trap, so a form drawn
+ * here and received there reads the same field.
+ */
+export const FORM_HONEYPOT_FIELD = "_hp";
+
+/** One field as the form draws it and its receiver checks it: every default applied. */
+export interface FormField {
+  /** The `name` the value is sent under. */
+  readonly name: string;
+  /** What the label says. */
+  readonly label: string;
+  /** Which control is drawn. */
+  readonly type: FormFieldType;
+  /** Whether an empty answer is refused. */
+  readonly required: boolean;
 }
 
 /**
@@ -268,11 +296,97 @@ const FORM_PARTS = {
       },
     },
   },
+  /**
+   * The spam trap's box, taken off screen.
+   *
+   * Absolutely positioned, so it leaves the form's grid and takes no row, and
+   * moved far past the inline start by a negative margin, where no scrolling
+   * reaches it in either writing direction. One pixel square with its overflow
+   * clipped, so nothing of it shows at the edge whatever the page's own styles
+   * do to its input.
+   */
+  trap: {
+    baseStyles: {
+      base: {
+        base: {
+          position: { type: "absolute" },
+          margin: { inlineStart: "-10000px" },
+          width: "1px",
+          height: "1px",
+          overflow: "hidden",
+        },
+      },
+    },
+  },
 } as const;
 
 /** Whether a stored array member is shaped like a field at all. */
 function isFieldSpec(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The spam trap: one text input named {@link FORM_HONEYPOT_FIELD}, which a
+ * person never meets and a bot filling every input does.
+ *
+ * Kept from people in every way they meet a form: drawn off screen by its
+ * part (a stylesheet rule, not an inline style, so a content security policy
+ * refusing inline styles cannot bring it back on screen), out of the tab
+ * order, hidden from screen readers with its label, and closed to the
+ * browser's autofill, whose filling it would otherwise read as a bot's. Not
+ * `type="hidden"` or `display: none`: a bot skips those, and the trap only
+ * works while it looks like any other field.
+ */
+function honeypot(nodeId: string, className: string): ReactElement {
+  const id = `${nodeId}-trap`;
+  return (
+    <div key="trap" className={className} aria-hidden="true">
+      <label htmlFor={id}>Leave this empty</label>
+      <input
+        id={id}
+        name={FORM_HONEYPOT_FIELD}
+        type="text"
+        tabIndex={-1}
+        autoComplete="off"
+        aria-hidden="true"
+        defaultValue=""
+      />
+    </div>
+  );
+}
+
+/**
+ * The fields a form's stored props describe, each with its defaults applied:
+ * at most {@link MAX_FIELDS}, a member that is no field read as an empty one,
+ * an unknown type as text, a missing name as `field-<n>`, and a missing label
+ * as the name.
+ *
+ * One reading for the two that must agree on it: the block draws these
+ * fields, and the page builder's receiver checks a post against them. Two
+ * copies of the defaults would let a field drawn under one name be checked
+ * under another.
+ */
+export function formFields(props: FormProps): FormField[] {
+  // A stored array can hold anything: a migration, a hand edit, or an older
+  // version of this block can all leave a member that is not a field. Sliced
+  // BEFORE the walk so an oversized array is never read in full.
+  const stored: unknown = props.fields;
+  const fields = Array.isArray(stored) ? stored.slice(0, MAX_FIELDS) : [];
+  return fields.map((raw: unknown, index) => {
+    const field = isFieldSpec(raw) ? raw : {};
+    const storedName = text(field.name);
+    const name = storedName === "" ? `field-${index}` : storedName;
+    // A label with no text announces nothing, so the submitted name stands in.
+    // It is a worse label than one an author wrote and a far better one than
+    // silence.
+    const labelled = text(field.label);
+    return {
+      name,
+      label: labelled === "" ? name : labelled,
+      type: oneOf(field.type, FORM_FIELD_TYPES, "text"),
+      required: flag(field.required),
+    };
+  });
 }
 
 export function renderForm({
@@ -281,11 +395,7 @@ export function renderForm({
   className,
   partClass,
 }: BlockRenderArgs<FormProps>): ReactElement {
-  // A stored array can hold anything: a migration, a hand edit, or an older
-  // version of this block can all leave a member that is not a field. Sliced
-  // BEFORE the walk so an oversized array is never read in full.
-  const stored: unknown = props.fields;
-  const fields = Array.isArray(stored) ? stored.slice(0, MAX_FIELDS) : [];
+  const fields = formFields(props);
 
   // `url()` refuses any scheme that executes rather than navigates, which is
   // the whole reason this goes through it: an `action` reaches an attribute the
@@ -299,20 +409,10 @@ export function renderForm({
   const submitText = submitted === "" ? "Submit" : submitted;
 
   const rows: ReactNode[] = [];
-  fields.forEach((raw, index) => {
-    const field = isFieldSpec(raw) ? raw : {};
-    const type = oneOf(field.type, FORM_FIELD_TYPES, "text");
-    const required = flag(field.required);
+  fields.forEach(({ name, label, type, required }, index) => {
     // Derived from the NODE's id, so two forms on one page cannot collide. An
     // id that collides silently re-points a label at the earlier form's field.
     const id = `${node.id}-field-${index}`;
-    const storedName = text(field.name);
-    const name = storedName === "" ? `field-${index}` : storedName;
-    // A label with no text announces nothing, so the submitted name stands in.
-    // It is a worse label than one an author wrote and a far better one than
-    // silence.
-    const labelled = text(field.label);
-    const label = labelled === "" ? name : labelled;
 
     rows.push(
       <label key={`${id}-label`} htmlFor={id}>
@@ -351,6 +451,7 @@ export function renderForm({
       {...(action === undefined ? {} : { action })}
     >
       {rows}
+      {honeypot(node.id, partClass("trap"))}
       <button className={partClass("submit")} type="submit">
         {submitText}
       </button>

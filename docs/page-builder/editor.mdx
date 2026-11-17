@@ -86,6 +86,28 @@ default language. A document's draft is checked as well, so a binding broken onl
 draft is listed before that draft is published. Until the first check of every document
 finishes, the list says it hasn't checked yet rather than that every binding fits.
 
+### Where a Single's values are shown
+
+A Single's side panel has a **Shown on (from the builder)** section. It lists each page,
+header & footer set and component where the builder shows one of the Single's values,
+with the block it's in: **Home, Hero section**. Each row opens that document in the editor
+with the block selected. A block takes its name from Layers: the name you gave it, or its
+block's name.
+
+- A binding inside a component is listed once, on the component, not on every page that
+  places it.
+- Bindings in a draft count, so a binding you haven't published yet is listed.
+- You see only the places you're allowed to open. The rest are counted: **and 2 you can't
+  open**.
+- The section shows 10 rows. **and N more** opens the full list.
+- The list knows only documents made with the builder. Code that reads the Single
+  directly isn't listed, and the section says so.
+
+The list comes from an index of every builder document's bindings to Singles. It's kept
+by the same check as **Bindings to fix**, on every save and whenever a field or a block
+changes. After you upgrade and run `nextly migrate`, the section says **Still checking
+pages…** until the first check of every document finishes. That takes a jobs pass or two.
+
 ### Publishing a page whose parts aren't published
 
 A page, the components it places and its header & footer set are published separately. When you
@@ -226,6 +248,21 @@ shows the CSS or HTML it sets: `min-height: 120px`, `<section>`, `id`. The toolt
 while your pointer is over it, and Escape closes it. If you'd rather always see them,
 turn on **Show CSS names** in the **⋯** menu: each control then prints its CSS property
 names in small type under its label. The editor remembers the choice in this browser.
+
+**Find a setting**, under the tabs, finds a setting by its name, the CSS it writes or
+another common word for it: "colour" or "color", "z-index", "corners" for the corner
+radius, "nofollow" for Link relationship. The tab you're on shows only what matches, each
+under its section with the section opened, and each tab's label says how many it holds.
+When the tab you're on has none, it says so and links to the tabs that do ("1 in
+Content"). Press <kbd>/</kbd> anywhere in the panel outside a text field to jump to the
+field, and <kbd>Esc</kbd> or ✕ to clear it; your sections come back as you left them. The
+search stays while you select other blocks.
+
+**Only changed**, beside it, shows only what the block holds a value for: in Content and
+Advanced, settings you've set; in Style, values at the device and state you're editing.
+A line says where else the block holds styles ("Also changed on Tablet (2) · Hover (1)"),
+and each part of it switches to that device or state. With both on, a setting must meet
+both.
 
 The Style tab lists its sections in the same order for every block: Block style, Layout,
 Inside its parent, Spacing, Size, Position, Text, Background, Border, Effects, Icon and
@@ -425,6 +462,27 @@ the container holding them, set per container or by the spacing variables:
 - **Section** pads its content above, below and beside it. **Card** pads its content.
   Box and Column have no padding.
 
+Every container also says how it arranges its blocks, under **Style → Layout →
+Arrange**: **Stack**, **Row** or **Grid**, with the CSS it writes shown small under the
+choice ("display: flex · flex-direction: row"), and the same CSS on hover.
+
+- **Stack** puts blocks one under another. It writes nothing until you set its
+  **Align**, **Space between** or **Reverse order**, which make it a flex column.
+- **Row** puts blocks side by side. **Stack on** stacks it on a device and the smaller
+  ones; it still reads as a Row there, and its **Align**, **Spread** and **Reverse order**
+  then go by the column. **Spread** (Packed, Space between, Space around, Even) shares
+  out the room along the row, and while it isn't Packed the 3×3 **Align** says "Spread is
+  on" for that axis. **Wrap onto new lines** lets blocks run onto a new line.
+- **Grid** sets **Columns**, a number per device or **As many as fit** a minimum width,
+  and **Rows**. **Set rows and columns apart** gives each its own space.
+
+The 3×3 **Align** names its nine points, from Top left to Bottom right; with none chosen,
+blocks fill the width. Values that stop applying after a change are kept, and the
+section says so ("2 settings from Row aren't used · Clear"); **Clear** removes them in one
+step you can undo. A layout set in CSS with no plain equivalent, such as `inline-flex`,
+reads **Arrange: Custom** with the CSS rows that hold it; **Use plain controls** rewrites
+it to the nearest plain choice.
+
 Every container has **Content width** under **Style → Layout**: **Boxed** or **Full
 width**. A new Section starts Boxed, and every other container starts Full width.
 
@@ -466,8 +524,8 @@ layout:
   under a 20px gap leaves 40px.
 - In flex or grid, the gap is the container's `gap`, and a margin on a block **adds**
   to it, as margins do in CSS: the same block sits 60px below its neighbour. To change
-  the spacing of a flex or grid container, set its gap rather than a margin on each
-  block.
+  the spacing of a flex or grid container, set its **Space between** rather than a
+  margin on each block.
 
 A block hidden on a device still counts as a block above the next one. When every
 block above it is hidden, the first block shown in a normal-flow container keeps the

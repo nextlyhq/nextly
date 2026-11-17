@@ -36,6 +36,7 @@ import {
 
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
+import { APPEAR_REPLAY_RULES } from "./appear-replay";
 import { EMPTY_CONTAINER_SELECTOR, EMPTY_TEXT_SELECTOR } from "./empty-slot";
 
 const ROOT = `.${CANVAS_ROOT_CLASS}`;
@@ -174,13 +175,17 @@ ${BLANK} ${ROOT} > .nx-pb-page {
 }
 
 /* Every block in its final state: an animation set to play when it appears
-   never plays here, whichever start it has, so nothing on the canvas waits
-   hidden for a scroll or a load while it is being edited. Both of the page's
-   gates closed, on every page root in the frame. */
+   never plays here by itself, whichever start it has, so nothing on the
+   canvas waits hidden for a scroll or a load while it is being edited. Both
+   of the page's gates closed, on every page root in the frame. */
 ${ROOT} .nx-pb-page {
   ${APPEAR_SCROLL_GATE}: none;
   ${APPEAR_LOAD_GATE}: none;
 }
+
+/* Except the one block played, once, when its animation changes or Play is
+   pressed: see \`appear-replay.ts\`. */
+${APPEAR_REPLAY_RULES}
 
 /* The site's own layout around the canvas, on a page the site serves: there
    to show where the page sits, quietened as a Layout region's content is, and

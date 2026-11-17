@@ -37,7 +37,10 @@ by default); without it, it starts its own server on `BUILDER_SPEED_PORT`
 - `editing.mjs` and `session.mjs`: the measures themselves;
 - `browser.mjs`, `page-agent.mjs`, `server.mjs` and `config.mjs`: the timing
   probe and browser helpers, what runs inside the page, the server it starts,
-  and its settings.
+  and its settings;
+- `long-session.mjs` and `long-session-report.mjs`: the long editing session
+  below, and its judgement (its unit test is
+  `scripts/builder-long-session-report.test.mjs`).
 
 ## The pages it measures
 
@@ -105,6 +108,33 @@ script edits and publishes them.
 
 The budgets themselves are the product's targets. Changing one changes what
 the builder promises, so it is done on purpose, with the reason stated.
+
+## The long session
+
+Half an hour of an author's ordinary editing on the 150-block page, on the
+same production build and server, with the processor slowed 4×. The
+`Builder long session` workflow runs it nightly, on demand, and on a pull
+request that changes the session itself; not on every pull request, since it
+takes half an hour.
+
+```sh
+pnpm --filter @nextlyhq/e2e test:builder-long-session   # build, seed, 30 minutes
+node e2e/builder-speed/long-session.mjs --minutes 3     # a short try, on the last build
+node e2e/builder-speed/long-session.mjs --base-url http://localhost:3000 --rate 1
+```
+
+One round of editing is two selections, the sidebar's Style tab and back to
+Content, a text edit taken back again, an insert from the Add panel and its
+undo, and the pointer swept over the blocks in view; rounds repeat until the
+time is up. It records every long task on the main thread, and once a
+minute the heap (after a forced garbage collection, whose own task is left
+out), the DOM nodes and event listeners, and the editor's lock notice if it
+shows one; and the median selection time at the start and at the end.
+
+It fails when a main-thread task runs longer than 1 s after the first
+minute, or the editor's lock notice offers to take the document back (the
+lock was lost). The results, with every long task and every reading, go to
+`e2e/.playwright/builder-speed/long-session.json` (`--json` to change it).
 
 ## The counters
 

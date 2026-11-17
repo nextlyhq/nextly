@@ -42,7 +42,11 @@ import { isBuiltInFieldType } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { addressableFields } from "../../../shared/addressable-fields";
 import { isFieldGroupFieldType } from "../../field-groups/storage/field-group-field-type";
-import { toSnakeCase } from "../field-rules";
+import {
+  relationHoldsReferenceList,
+  toSnakeCase,
+  usesJunctionTable,
+} from "../field-rules";
 import { getFieldType } from "../field-types/field-type-registry";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
@@ -172,6 +176,9 @@ export function columnsThatMayHoldNull(
 // The name-to-column rule lives in the browser-safe field rules, which the
 // Builder reaches too; re-exported so this module stays its home for callers.
 export { toSnakeCase } from "../field-rules";
+// Whether a relation holds a list, and whether it is junction-backed: rules the Builder asks too,
+// so they live in the browser-safe field rules, re-exported for this module's callers.
+export { relationHoldsReferenceList, usesJunctionTable } from "../field-rules";
 
 /**
  * The fields whose columns sit on one row: those at the top of `fields`, and those inside a group
@@ -252,35 +259,6 @@ export function fieldProducesColumn(field: {
   // row. Every other relationship shape does get a column.
   if (usesJunctionTable(field)) return false;
   return true;
-}
-
-/**
- * Whether a field's values live in a junction table instead of a column on its own row.
- *
- * The DDL generator asks this to decide whether to emit a junction table, and `fieldProducesColumn`
- * asks it to decide there is no parent column — one rule, so the two cannot disagree about the same
- * field. They did disagree, and the disagreement was resolved toward the row: an `upload` carrying
- * `relationType: "manyToMany"` had no descriptor column while the generator emitted one.
- *
- * **Junction storage is a `relationship` feature only**, deliberately, because that is the only
- * shape the persistence layer implements. Both halves select junction-backed fields by type:
- * `collection-mutation-service` filters `f.type === "relationship" && relationType === "manyToMany"`
- * on every write, and `collection-relationship-service` builds its relation set from
- * `isRelationshipField`, which is `field.type === "relationship"`. Treating an upload as
- * junction-backed would give it a table that nothing writes to and nothing reads from, so an upload
- * keeps its column and the option is inert on it.
- */
-export function usesJunctionTable(field: {
-  type?: unknown;
-  options?: unknown;
-}): boolean {
-  if (field.type !== "relationship") return false;
-  const options: unknown = field.options;
-  const relationType =
-    typeof options === "object" && options !== null
-      ? (options as { relationType?: unknown }).relationType
-      : undefined;
-  return relationType === "manyToMany";
 }
 
 /**
@@ -380,8 +358,7 @@ export function componentRelationshipHoldsReferenceList(field: {
   hasMany?: unknown;
   options?: unknown;
 }): boolean {
-  const isRelation = field.type === "relationship" || field.type === "upload";
-  return (isRelation && Boolean(field.hasMany)) || usesJunctionTable(field);
+  return relationHoldsReferenceList(field);
 }
 
 /**

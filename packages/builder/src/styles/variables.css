@@ -81,13 +81,9 @@
   color: var(--nx-foreground);
 }
 
-.nx-vars__add {
-  width: 24px;
-  height: 24px;
-}
-
 .nx-vars__seg > button:focus-visible,
 .nx-vars__icon-button:focus-visible,
+.nx-vars__add-row:focus-visible,
 .nx-vars__row:focus-visible,
 .nx-vars__link:focus-visible,
 .nx-vars-editor__swatch:focus-visible {
@@ -469,10 +465,108 @@
 
 .nx-vars-editor__code {
   margin: 0;
-  font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 11px;
   color: var(--nx-muted-foreground);
   overflow-wrap: anywhere;
+}
+
+.nx-vars-editor__code code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--nx-foreground);
+}
+
+/* ☀ or ☾ before "Light" or "Dark", muted beside the words. */
+.nx-vars-editor__mode-icon {
+  margin-inline-end: 0.25rem;
+  vertical-align: -1px;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-vars-editor__contrast-line .nx-vars-editor__mode-icon {
+  margin-inline-end: 0;
+}
+
+/* "Code name: --site-…", Copy at its end, the rename note under it. */
+.nx-vars-editor__code-name {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 0.5rem;
+}
+
+.nx-vars-editor__copy {
+  font-size: 11px;
+}
+
+.nx-vars-editor__copied {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-vars-editor__copied:empty {
+  display: none;
+}
+
+.nx-vars-editor__hint {
+  grid-column: 1 / -1;
+  margin: 0.125rem 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--nx-muted-foreground);
+}
+
+/* How widely it is used, and where on request. */
+.nx-vars-editor__usage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.5rem;
+  font-size: var(--text-xs);
+}
+
+.nx-vars-editor__usage > .nx-vars-editor__status {
+  margin-inline-end: 0;
+}
+
+/* Contrast with Background and Text: each a name over its light and dark
+   lines, the ratio in figures of one width so the two lines read down. */
+.nx-vars-editor__contrast {
+  display: grid;
+  gap: 0.375rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--nx-border);
+}
+
+.nx-vars-editor__contrast-pair {
+  display: grid;
+  gap: 0.125rem;
+  font-size: 11px;
+}
+
+.nx-vars-editor__contrast-name {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-vars-editor__contrast-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 0.25rem;
+}
+
+.nx-vars-editor__ratio {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.nx-vars-editor__contrast-line[data-band="Low contrast"]
+  .nx-vars-editor__ratio {
+  color: var(--nx-destructive);
+}
+
+.nx-vars-editor__same-dark {
+  color: var(--nx-muted-foreground);
 }
 
 .nx-vars-editor__mono {
@@ -858,14 +952,47 @@
 /* The adds of groups hidden while they hold nothing, worded, at the end of
    a tab, so the first such variable can still be made. */
 .nx-vars__hidden-adds {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
+  display: grid;
   margin: 0;
-  padding: 0.5rem 0;
+  padding: 0.25rem 0;
 }
-.nx-vars__worded-add {
-  display: inline-flex;
+/* The add rows a list ends with: "+ Add colour", quieter than a variable,
+   full width so the whole line is the target. */
+.nx-vars__add-rows {
+  display: grid;
+}
+
+.nx-vars__add-row {
+  display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 0.375rem;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 2px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--nx-muted-foreground);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.nx-vars__add-row:hover,
+.nx-vars__add-row[data-state="open"] {
+  background: var(--nx-muted);
+  color: var(--nx-foreground);
+}
+
+/* A new row a search does not match, held in view while it is edited. */
+.nx-vars__new {
+  padding: 0 5px;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  color: var(--nx-foreground);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+  vertical-align: 1px;
 }

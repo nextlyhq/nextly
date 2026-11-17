@@ -26,7 +26,14 @@ import { resolvePageStyles } from "../styles";
 import { coreBlocks } from "./index";
 
 import { BUTTON_BASE_STYLES } from "./button";
-import { form, renderForm, FORM_FIELD_TYPES, type FormProps } from "./form";
+import {
+  form,
+  formFields,
+  renderForm,
+  FORM_FIELD_TYPES,
+  FORM_HONEYPOT_FIELD,
+  type FormProps,
+} from "./form";
 
 function context(): PageContext {
   return {
@@ -56,6 +63,14 @@ function args(props: FormProps, nodeId = "n1"): BlockRenderArgs<FormProps> {
 }
 
 const html = (element: ReactElement): string => renderToStaticMarkup(element);
+
+/**
+ * The form's markup without its spam trap, for assertions about the fields an
+ * author added: the trap is a text input in every form, so a check for
+ * `type="text"` or a count of inputs would otherwise pass on it alone.
+ */
+const fieldsHtml = (element: ReactElement): string =>
+  html(element).replace(/<div[^>]*aria-hidden="true"[^>]*>.*?<\/div>/, "");
 
 describe("core/form", () => {
   describe("the value that reaches the action attribute", () => {
@@ -141,7 +156,7 @@ describe("core/form", () => {
 
   describe("what a stored document can actually hold", () => {
     it("renders a textarea only for the type that asks for one", () => {
-      const out = html(
+      const out = fieldsHtml(
         renderForm(
           args({
             fields: [{ name: "a", type: "textarea" }, { name: "b" }],
@@ -157,7 +172,7 @@ describe("core/form", () => {
       // A stored type can be anything: a migration, a hand edit, or a version
       // of this block that offered a control this one does not.
       const stored = { fields: [{ name: "a", type: "color" }] };
-      const out = html(renderForm(args(stored as unknown as FormProps)));
+      const out = fieldsHtml(renderForm(args(stored as unknown as FormProps)));
 
       expect(out).toContain('type="text"');
       expect(out).not.toContain('type="color"');
@@ -175,7 +190,7 @@ describe("core/form", () => {
 
     it("renders nothing but the button when fields is not an array", () => {
       const stored = { fields: 42 };
-      const out = html(renderForm(args(stored as unknown as FormProps)));
+      const out = fieldsHtml(renderForm(args(stored as unknown as FormProps)));
 
       // Matched on the attribute rather than on the opening tag's exact text:
       // the submit carries a part class now, and asserting attribute ORDER
@@ -193,7 +208,7 @@ describe("core/form", () => {
       const fields = Array.from({ length: 500 }, (_, index) => ({
         name: `f${index}`,
       }));
-      const out = html(renderForm(args({ fields })));
+      const out = fieldsHtml(renderForm(args({ fields })));
 
       const inputs = out.match(/<input/g) ?? [];
       expect(inputs.length).toBe(100);
@@ -487,5 +502,102 @@ describe("a control an author can SEE", () => {
     // Must-be-found control: the envelope really carries declarations, so the
     // equality above is not two empty shapes agreeing.
     expect(Object.keys(BUTTON_BASE_STYLES.base.base).length).toBeGreaterThan(3);
+  });
+});
+
+describe("the hidden spam trap", () => {
+  /** The trap's input element, as it reaches the page. */
+  function trapInput(out: string): string | undefined {
+    return out.match(
+      new RegExp(`<input[^>]*name="${FORM_HONEYPOT_FIELD}"[^>]*>`)
+    )?.[0];
+  }
+
+  it("is in every form, under the name the receiver reads", () => {
+    // `_hp` is the name the forms plugin also treats as a trap, so a form
+    // received there reads the same field.
+    expect(FORM_HONEYPOT_FIELD).toBe("_hp");
+    expect(trapInput(html(renderForm(args({}))))).toBeDefined();
+    expect(
+      trapInput(
+        html(renderForm(args({ fields: [{ name: "email", type: "email" }] })))
+      )
+    ).toBeDefined();
+  });
+
+  it("is out of the tab order, closed to autofill and hidden from screen readers", () => {
+    const input = trapInput(html(renderForm(args({})))) ?? "";
+
+    expect(input).toContain('tabindex="-1"');
+    // Matched without case: HTML attribute names are case-insensitive, and
+    // React writes this one as `autoComplete`.
+    expect(input).toMatch(/autocomplete="off"/i);
+    expect(input).toContain('aria-hidden="true"');
+    // A field a bot would skip is no trap: not `type="hidden"`, and empty.
+    expect(input).toContain('type="text"');
+    expect(input).not.toMatch(/value="[^"]+"/);
+  });
+
+  it("hides its label from screen readers with it", () => {
+    const out = html(renderForm(args({}, "n7")));
+    // The wrapper carries `aria-hidden`, so the label inside is not read out
+    // either; the label still names the input for whoever reads the markup.
+    expect(out).toMatch(
+      /<div[^>]*aria-hidden="true"[^>]*><label for="n7-trap">[^<]+<\/label><input[^>]*id="n7-trap"/
+    );
+  });
+
+  it("is drawn off screen by its part, not by an inline style", () => {
+    const out = html(renderForm(args({})));
+    expect(out).not.toContain("style=");
+
+    const trap = form.parts?.trap?.baseStyles?.base?.base as
+      | Record<string, unknown>
+      | undefined;
+    expect(trap?.position).toEqual({ type: "absolute" });
+    expect(trap?.margin).toEqual({ inlineStart: "-10000px" });
+    expect(trap?.overflow).toBe("hidden");
+  });
+});
+
+describe("the fields a form describes", () => {
+  it("applies every default the form draws with", () => {
+    expect(
+      formFields({
+        fields: [
+          { label: "Email", name: "email", type: "email", required: true },
+          { name: "phone" },
+          { label: "Odd", type: "colour" as never },
+          "not a field" as never,
+        ],
+      })
+    ).toEqual([
+      { name: "email", label: "Email", type: "email", required: true },
+      { name: "phone", label: "phone", type: "text", required: false },
+      { name: "field-2", label: "Odd", type: "text", required: false },
+      { name: "field-3", label: "field-3", type: "text", required: false },
+    ]);
+  });
+
+  it("is what the form draws, so the receiver checks the fields people see", () => {
+    const props: FormProps = {
+      fields: [
+        { label: "Your email", name: "your-email", type: "email" },
+        { label: "Note", type: "textarea", required: true },
+      ],
+    };
+    const out = html(renderForm(args(props)));
+
+    for (const field of formFields(props)) {
+      expect(out).toContain(`name="${field.name}"`);
+      expect(out).toContain(`>${field.label}`);
+    }
+  });
+
+  it("reads at most a hundred stored fields", () => {
+    const fields = Array.from({ length: 150 }, (_, index) => ({
+      name: `f${index}`,
+    }));
+    expect(formFields({ fields })).toHaveLength(100);
   });
 });
