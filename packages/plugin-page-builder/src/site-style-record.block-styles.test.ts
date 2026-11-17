@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { withCoreLooks } from "./core-looks";
 import { checkStoredClasses } from "./site-style-record";
-import { classOverrideOf } from "./site-style";
+import { classOverrideOf, resolveSiteStyle } from "./site-style";
 
 /*
  * The block style marks a site stores: ★ (`starred`, the style a block of its
@@ -123,6 +123,18 @@ describe("a built-in block style's name", () => {
         },
       ])
     ).toEqual([]);
+    // And it stays the image's own style, named as the code names it, once
+    // merged: the fields it leaves out are the code's.
+    const merged = resolveSiteStyle(policy.defaults, {
+      classes: [{ id: square.id, slug: square.slug, orderIndex: 2, styles }],
+    }).classes?.find(entry => entry.id === square.id);
+    expect(merged).toMatchObject({
+      label: square.label,
+      slug: square.slug,
+      blockType: square.blockType,
+      isDefault: true,
+      styles,
+    });
     // Stated and different, it is still a rename, and refused.
     expect(
       issuesOf([

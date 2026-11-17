@@ -54,6 +54,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import {
+  BUILT_IN_NAME_FIELDS,
   resolveSiteStyle,
   siteStyleOf,
   type SiteStyleData,
@@ -930,7 +931,7 @@ function builtInRenameIssues(
 ): string[] {
   const code = policy.defaults?.classes?.find(each => each.id === entry.id);
   if (code === undefined || !isLook(code)) return [];
-  const same = (["label", "slug", "blockType", "isDefault"] as const).every(
+  const same = BUILT_IN_NAME_FIELDS.every(
     field => entry[field] === undefined || entry[field] === code[field]
   );
   return same
