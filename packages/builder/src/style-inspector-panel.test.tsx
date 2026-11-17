@@ -44,6 +44,7 @@ import {
   describeProvenance,
   StyleInspectorPanel,
 } from "./style-inspector-panel";
+import { SettingsFilterProvider, StyleReportContext } from "./settings-filter";
 import { keywordLabel } from "./style-keyword-labels";
 import type { SharedStylesHost } from "./style-target";
 import type { StylePolicy } from "./style-values";
@@ -782,7 +783,18 @@ describe("the shared style target", () => {
 
     it("leaves a hidden look out of the tiles", () => {
       const hidden = { ...outline, hidden: true as const };
-      mountTarget({ library: [card, hidden, { ...outline, id: "look:acme/box:soft", slug: "box-soft", label: "Soft" }] });
+      mountTarget({
+        library: [
+          card,
+          hidden,
+          {
+            ...outline,
+            id: "look:acme/box:soft",
+            slug: "box-soft",
+            label: "Soft",
+          },
+        ],
+      });
       expect(
         within(looks())
           .getAllByRole("radio")
@@ -6311,5 +6323,48 @@ describe("the Font control", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Manage fonts…" }));
     expect(onManageFonts).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("what the Style tab tells the panel's filter", () => {
+  it("reports the shared style's own values while one is the target", () => {
+    // The block holds a background; Card, the target, holds a colour. The
+    // filter keeps what these controls show: Card's.
+    register({ color: true, background: true });
+    const editor = editorFor(
+      documentOf({
+        base: { [BASE_BREAKPOINT]: { backgroundColor: "#123456" } },
+      } as NodeStyles)
+    );
+    const target = {
+      kind: "shared" as const,
+      worn: [],
+      style: {
+        id: "cls-1",
+        name: "Card",
+        styles: { base: { [BASE_BREAKPOINT]: { color: "#ff0000" } } },
+      } as never,
+      readOnly: undefined,
+      write: async () => undefined,
+    };
+    const report = vi.fn();
+    render(
+      <SettingsFilterProvider initial={{ onlyChanged: true }}>
+        <StyleReportContext.Provider value={report}>
+          <StyleInspectorPanel editor={editor} target={target} />
+        </StyleReportContext.Provider>
+      </SettingsFilterProvider>
+    );
+    const sections = report.mock.lastCall?.[0]?.sections as
+      | readonly { properties: readonly { property: string; set: boolean }[] }[]
+      | undefined;
+    const set = (sections ?? [])
+      .flatMap(section => section.properties)
+      .filter(property => property.set)
+      .map(property => property.property);
+    expect(set).toContain("color");
+    expect(set).not.toContain("backgroundColor");
+    // And says a shared style is the target, which draws no block shortcuts.
+    expect(report.mock.lastCall?.[0]?.shared).toBe(true);
   });
 });
