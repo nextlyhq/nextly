@@ -46,6 +46,9 @@ async function createPage(
     data: {
       title: `Shortcuts ${stamp}`,
       slug,
+      // Without the site's header and footer, whose regions on the canvas
+      // would take the clicks meant for the page's blocks.
+      noHeaderFooter: true,
       status,
       content: { formatVersion: 1, kind: "page", nodes },
     },

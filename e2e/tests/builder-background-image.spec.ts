@@ -24,6 +24,9 @@ async function createPage(
       title: `Picker page ${stamp}`,
       slug: `background-image-${stamp}`,
       status: "draft",
+      // Without the site's header and footer, whose regions on the canvas
+      // would take the clicks meant for the Section.
+      noHeaderFooter: true,
       content: {
         formatVersion: 1,
         kind: "page",
