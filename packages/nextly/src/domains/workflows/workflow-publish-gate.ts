@@ -39,7 +39,7 @@ import type {
 } from "../collections/services/publish-gate";
 import { recordWriteEvent } from "../content-events/write-event";
 
-import { stillApproved } from "./approval-digest";
+import { partExemptFields, stillApproved } from "./approval-digest";
 import { partStage, pendingPartsOn } from "./implicit-stage";
 import { documentTableOn, shownContentOn } from "./part-versions";
 import { workflowAttachedTo, type RegisteredWorkflow } from "./registry";
@@ -364,7 +364,11 @@ async function stillApprovedOn(
     state.approval.digest,
     shown.snapshot,
     document.scopeKind,
-    registered.workflow.onEdit.exemptFields
+    partExemptFields(
+      registered.workflow.onEdit.exemptFields,
+      part,
+      table.translated
+    )
   );
 }
 

@@ -84,7 +84,7 @@ import {
   type VersionRow,
 } from "../versions/versions-repository";
 
-import { approvalDigest } from "./approval-digest";
+import { approvalDigest, partExemptFields } from "./approval-digest";
 import {
   allowsSelfApproval,
   entersReview,
@@ -1060,6 +1060,7 @@ async function readRecorded(
 /** Entering a stage that allows publishing approves the version shown, by a person. */
 function approvalChange(
   c: StepContext,
+  part: string | null,
   shown: VersionRow | undefined,
   now: Date
 ): ReviewStateChange {
@@ -1068,12 +1069,17 @@ function approvalChange(
   return {
     approval: {
       versionNo: shown.versionNo,
-      // Without the fields an edit may change while an approval stands, so a save compared with
-      // it leaves out the same ones.
+      // Without the fields an edit may change while an approval stands, and for the shared part
+      // of a translated document without its translations, so a save compared with it leaves out
+      // the same ones.
       digest: approvalDigest(
         shown.snapshot,
         "collection",
-        c.workflow.onEdit.exemptFields
+        partExemptFields(
+          c.workflow.onEdit.exemptFields,
+          part,
+          c.table.translated
+        )
       ),
       by,
       at: now,
@@ -1098,7 +1104,7 @@ function stepChange(
       : {}),
     // Leaving a stage that allows publishing withdraws the approval it held.
     ...(allowsPublish(c.workflow, entry.stage) ? { approval: null } : {}),
-    ...approvalChange(c, shown, now),
+    ...approvalChange(c, entry.part, shown, now),
     ...(c.reviewer.reviewer ? { assignee: c.reviewer.reviewer } : {}),
   };
 }
