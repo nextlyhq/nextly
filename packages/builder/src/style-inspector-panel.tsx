@@ -77,6 +77,7 @@ import { FocalFrame } from "./focal-frame";
 import { FontChoicesContext, type FontChoices } from "./font-family-field";
 import { PanelFoldsProvider } from "./panel-folds-context";
 import { layerLabel } from "./panels/layers/layers";
+import { ParentArrangementContext } from "./plain-parent-controls";
 import type { SideOrientation } from "./side-orientation";
 import {
   BLOCK_TARGET,
@@ -96,7 +97,6 @@ import {
   targetCascade,
   targetStyles,
 } from "./style-field-target";
-import { useReportStyle } from "./settings-filter";
 import { inspectStyle, type StyleInspection } from "./style-inspector";
 import {
   appliedAtReader,
@@ -487,14 +487,6 @@ function StyleInspectorBody({
     styles: targetStyles(target),
   });
 
-  // What the panel's filter keeps in Style: what these controls draw.
-  useReportStyle(
-    inspection?.nodeId,
-    inspection?.sections,
-    target.kind === "shared",
-    editedStyles(target, editor)
-  );
-
   const chooseForm = (property: string, path: readonly string[], arm: number) =>
     setChosenForms(current => ({ ...current, [formKey(property, path)]: arm }));
 
@@ -588,17 +580,9 @@ function StyleInspectorBody({
   return (
     <StyleTargetContext.Provider value={target}>
       <TokenPrefixContext.Provider value={tokenPrefixOf(cascade)}>
-        <AppliedAtTier.Provider
-          value={appliedAtReader({
-            cascade,
-            subject,
-            state: inspected.state,
-            breakpoints,
-            nodeId: inspected.nodeId,
-          })}
-        >
-          <BeneathAtTier.Provider
-            value={beneathAtReader({
+        <ParentArrangementContext.Provider value={inspection?.parentLayout}>
+          <AppliedAtTier.Provider
+            value={appliedAtReader({
               cascade,
               subject,
               state: inspected.state,
@@ -606,34 +590,49 @@ function StyleInspectorBody({
               nodeId: inspected.nodeId,
             })}
           >
-            <CanvasTokenModeProvider value={tokenMode}>
-              {/*
-               * Spell-check off for the tab's fields: they hold numbers,
-               * lengths, colours and keywords, which a spell-checker marks as
-               * misspelt with the same red line an error would show. Set once
-               * here because the attribute is inherited by every field inside,
-               * including the ones other components draw and any added later.
-               * The Content tab is a different element and keeps its own.
-               */}
-              <div
-                className="nx-style-inspector"
-                data-style-target={target.kind}
-                spellCheck={false}
-              >
-                {showReadOnlyReason ? (
-                  <ReadOnlyNote target={target} reason={readOnlyReason} />
-                ) : null}
-                <NoStyleProperties count={inspected.sections.length} />
-                <StyleSections
-                  sections={inspected.sections}
-                  readOnlyReason={readOnlyReason}
-                  surroundings={surroundings}
-                  fit={inspected.objectFit}
-                />
-              </div>
-            </CanvasTokenModeProvider>
-          </BeneathAtTier.Provider>
-        </AppliedAtTier.Provider>
+            <BeneathAtTier.Provider
+              value={beneathAtReader({
+                cascade,
+                subject,
+                state: inspected.state,
+                breakpoints,
+                nodeId: inspected.nodeId,
+              })}
+            >
+              <CanvasTokenModeProvider value={tokenMode}>
+                {/*
+                 * Spell-check off for the tab's fields: they hold numbers,
+                 * lengths, colours and keywords, which a spell-checker marks as
+                 * misspelt with the same red line an error would show. Set once
+                 * here because the attribute is inherited by every field inside,
+                 * including the ones other components draw and any added later.
+                 * The Content tab is a different element and keeps its own.
+                 */}
+                <div
+                  className="nx-style-inspector"
+                  data-style-target={target.kind}
+                  spellCheck={false}
+                >
+                  {showReadOnlyReason ? (
+                    <ReadOnlyNote target={target} reason={readOnlyReason} />
+                  ) : null}
+                  <NoStyleProperties count={inspected.sections.length} />
+                  <StyleSections
+                    sections={inspected.sections}
+                    readOnlyReason={readOnlyReason}
+                    surroundings={surroundings}
+                    fit={inspected.objectFit}
+                    report={{
+                      shared: target.kind === "shared",
+                      styles: editedStyles(target, editor),
+                      parent: inspected.parent,
+                    }}
+                  />
+                </div>
+              </CanvasTokenModeProvider>
+            </BeneathAtTier.Provider>
+          </AppliedAtTier.Provider>
+        </ParentArrangementContext.Provider>
       </TokenPrefixContext.Provider>
     </StyleTargetContext.Provider>
   );

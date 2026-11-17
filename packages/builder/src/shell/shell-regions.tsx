@@ -61,6 +61,7 @@ export function ShellRegions({
   checklist,
   canvasStrip,
   onExit,
+  exitLabel,
   preferences,
   update,
   className,
@@ -163,6 +164,7 @@ export function ShellRegions({
           regionRefs.current.header = element;
         }}
         onExit={onExit}
+        exitLabel={exitLabel}
         title={title}
         topBar={topBar}
         topBarCenter={topBarCenter}

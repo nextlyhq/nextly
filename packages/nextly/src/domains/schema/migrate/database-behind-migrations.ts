@@ -51,6 +51,13 @@ export interface AppliedSnapshot {
    * whole, since such a table is its owner's to report.
    */
   foreign?: ReadonlySet<string>;
+  /**
+   * Those of `foreign` that Nextly makes again when they are missing, without
+   * the app's columns (its own tables, by the core reconcile). Missing whole,
+   * such a table is still not named, but each column the app added to it is:
+   * nothing else would bring those back.
+   */
+  remade?: ReadonlySet<string>;
 }
 
 /**
@@ -121,7 +128,8 @@ function createdByOf(applied: readonly AppliedSnapshot[]): Map<string, string> {
 /**
  * What the newest of `applied` records and `live` lacks, each with the
  * applied migration that last created it. A table missing whole is named
- * once, not again for each of its columns. Pure.
+ * once, not again for each of its columns; a table Nextly makes again
+ * (`AppliedSnapshot.remade`) is named by the app's columns on it. Pure.
  */
 export function missingFromDatabase(
   applied: readonly AppliedSnapshot[],
@@ -134,12 +142,15 @@ export function missingFromDatabase(
   return newest.snapshot.tables.flatMap(table => {
     const liveColumns = live.get(keyOf(table.name));
     if (liveColumns === undefined) {
-      return newest.foreign?.has(table.name) === true
-        ? []
-        : [{ table: table.name, createdBy: by(keyOf(table.name)) }];
+      if (newest.foreign?.has(table.name) !== true) {
+        return [{ table: table.name, createdBy: by(keyOf(table.name)) }];
+      }
+      // Another owner's table: its owner's to report, unless that owner makes
+      // it again bare, which leaves the app's columns for this check to name.
+      if (newest.remade?.has(table.name) !== true) return [];
     }
     return table.columns
-      .filter(column => !liveColumns.has(column.name.toLowerCase()))
+      .filter(column => liveColumns?.has(column.name.toLowerCase()) !== true)
       .map(column => ({
         table: table.name,
         column: column.name,

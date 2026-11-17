@@ -34,6 +34,8 @@
  * @module @nextlyhq/plugin-page-builder/site-style
  */
 import {
+  DEFAULT_FLUID_RANGE,
+  isLook,
   sameJsonValue,
   sameSiteToken,
   tokenIdentity,
@@ -120,10 +122,54 @@ export function resolveSiteStyle(
   return siteStyleOf({
     tokens: mergeTokens(defaults?.tokens, stored?.tokens),
     fonts: mergeByKey(defaults?.fonts, stored?.fonts, faceIdentity),
-    classes: mergeByKey(defaults?.classes, stored?.classes, c => c.id),
+    classes: mergeByKey(
+      defaults?.classes,
+      withBuiltInNames(defaults?.classes, stored?.classes),
+      c => c.id
+    ),
     breakpoints: hasBreakpoints(stored?.breakpoints)
       ? stored?.breakpoints
       : defaults?.breakpoints,
+  });
+}
+
+/**
+ * What names a built-in block style, which the code states and a site may
+ * not change: its name, slug, block type and whether it is the block's own
+ * style. A stored override keeps only what the site changed, so it may
+ * leave any of these out.
+ */
+export const BUILT_IN_NAME_FIELDS = [
+  "label",
+  "slug",
+  "blockType",
+  "isDefault",
+] as const;
+
+/**
+ * The stored classes with each override of a built-in block style given
+ * the code's name fields where it leaves them out, so it merges as the
+ * built-in it overrides (the image's own style stays its own, named as the
+ * code names it) rather than replacing it with a nameless shared class.
+ */
+export function withBuiltInNames(
+  defaults: readonly NamedClass[] | undefined,
+  stored: readonly NamedClass[] | undefined
+): readonly NamedClass[] | undefined {
+  if (stored === undefined || defaults === undefined) return stored;
+  const code = new Map(
+    defaults.filter(isLook).map(entry => [entry.id, entry] as const)
+  );
+  return stored.map(entry => {
+    const base = code.get(entry.id);
+    if (base === undefined) return entry;
+    const filled: Record<string, unknown> = { ...entry };
+    for (const field of BUILT_IN_NAME_FIELDS) {
+      if (filled[field] === undefined && base[field] !== undefined) {
+        filled[field] = base[field];
+      }
+    }
+    return filled as unknown as NamedClass;
   });
 }
 
@@ -216,7 +262,29 @@ export function tokenOverrideOf(
     ...(edited.darkMode === undefined || edited.darkMode === defaults?.darkMode
       ? {}
       : { darkMode: edited.darkMode }),
+    ...storedFluidRange(defaults, edited, tokens),
   };
+}
+
+/**
+ * The fluid range the stored tier holds: where it differs from the code's,
+ * and wherever the tier holds a size made with Fluid…, so the stored sizes
+ * say what they were made across. A merge of two authors' saves writes
+ * those sizes again from the stored tier alone.
+ */
+function storedFluidRange(
+  defaults: SiteTokenSet | undefined,
+  edited: SiteTokenSet,
+  stored: readonly SiteToken[]
+): Pick<SiteTokenSet, "fluidRange"> {
+  const range =
+    edited.fluidRange ?? defaults?.fluidRange ?? DEFAULT_FLUID_RANGE;
+  if (stored.some(token => token.fluid !== undefined))
+    return { fluidRange: range };
+  return edited.fluidRange === undefined ||
+    sameJsonValue(edited.fluidRange, defaults?.fluidRange)
+    ? {}
+    : { fluidRange: edited.fluidRange };
 }
 
 /**
@@ -370,10 +438,12 @@ function mergeTokens(
   );
   const prefix = stored?.prefix ?? defaults?.prefix;
   const darkMode = stored?.darkMode ?? defaults?.darkMode;
+  const fluidRange = stored?.fluidRange ?? defaults?.fluidRange;
   return {
     tokens: tokens === undefined ? [] : [...tokens],
     ...(prefix === undefined ? {} : { prefix }),
     ...(darkMode === undefined ? {} : { darkMode }),
+    ...(fluidRange === undefined ? {} : { fluidRange }),
   };
 }
 

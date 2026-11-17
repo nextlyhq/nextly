@@ -12,6 +12,7 @@ import { withCurrentPrincipal } from "../auth/principal-scope";
 import { NextlyError } from "../errors/nextly-error";
 import { consoleLogger } from "../shared/types";
 
+import { withHookLanguage } from "./hook-language";
 import { normalizeHookError } from "./normalize-hook-error";
 import { recordSideEffectWarning } from "./side-effect-warnings";
 import { HOOK_TYPES } from "./types";
@@ -1002,7 +1003,9 @@ export class HookRegistry {
       try {
         // Pass current data to hook
         const result = await handler(
-          withCurrentPrincipal({ ...contextForPhase(hookType, context), data })
+          withCurrentPrincipal(
+            withHookLanguage({ ...contextForPhase(hookType, context), data })
+          )
         );
 
         // If hook returns data (including null), use it for next hook
@@ -1145,7 +1148,7 @@ export class HookRegistry {
       try {
         // Pass current args to hook
         const result = await handler(
-          withCurrentPrincipal({ ...context, args })
+          withCurrentPrincipal(withHookLanguage({ ...context, args }))
         );
 
         // If hook returns args, use it for next hook

@@ -25,26 +25,41 @@ import {
   SIZE_LABELS,
 } from "./block-shortcuts-field";
 import { BUILT_IN_WRITES } from "./code-hints";
-import { CONTENT_WIDTH_CHOICES } from "./content-width-control";
-import { keywordLabel } from "./style-keyword-labels";
 import {
   COLUMNS_LAYOUTS,
   COLUMNS_ROW,
   stackOf,
   stackTiers,
 } from "./columns-layout";
+import { CONTENT_WIDTH_CHOICES } from "./content-width-control";
 import {
-  advancedRowsBySection,
-  HTML_SECTION,
-  VISIBILITY_SECTION,
-} from "./inspector-advanced-tab";
+  addableRows,
+  arrangeCssProperties,
+  CSS_PROPERTIES_SECTION,
+  writtenCss,
+  type CssPropertyRow,
+} from "./css-properties";
 import {
   builderContentSectionOf,
   contentRowsOf,
   type BlockInspection,
   type EditableProp,
 } from "./inspector";
+import {
+  advancedRowsBySection,
+  HTML_SECTION,
+  VISIBILITY_SECTION,
+} from "./inspector-advanced-tab";
 import { offersNeverQuote } from "./never-quote";
+import {
+  childAxisRows,
+  LAYOUT_CSS_NAMES,
+  offersChildAxis,
+  type ChildAxis,
+  type ParentArrangement,
+  type PlainFlow,
+} from "./plain-layout";
+import { CHILD_SIZE_IDS } from "./plain-parent-controls";
 import { propLabel } from "./prop-label";
 import {
   sectionEntries,
@@ -52,6 +67,7 @@ import {
   type SettingEntry,
 } from "./settings-index";
 import type { StyleSection } from "./style-inspector";
+import { keywordLabel } from "./style-keyword-labels";
 import { readStyleValue } from "./style-values";
 
 /** What a prop writes into the page, every spelling its schema gives. */
@@ -314,13 +330,58 @@ function shortcutRows(
   ];
 }
 
-/** The CSS properties a Style property's controls write. */
-function cssOf(property: StyleSection["properties"][number]): string[] {
-  const names = new Set<string>();
-  for (const control of property.controls) {
-    if ("cssProperty" in control.leaf) names.add(control.leaf.cssProperty);
+/**
+ * "Inside its parent"'s Width, and its Height under a Row or a Grid, by the
+ * words they're drawn with, set where the block holds a share of its own.
+ * None where the parent isn't known: nothing draws them.
+ */
+function childSizeRows(
+  parent: ParentArrangement | undefined,
+  sections: readonly StyleSection[],
+  flow: PlainFlow | undefined
+): IndexedRow[] {
+  if (parent === undefined) return [];
+  const choices = ["Fill", "Fit", "Fixed"];
+  // Each axis is set by what it writes, wherever its rows are (a width is
+  // Size's): a share's or an order's value says nothing of the other axis.
+  const stored = new Set(
+    sections
+      .flatMap(section => section.properties)
+      .filter(property => property.set)
+      .map(property => property.property)
+  );
+  const holds = (properties: readonly string[]) =>
+    properties.some(property => stored.has(property));
+  return [
+    {
+      id: CHILD_SIZE_IDS.width,
+      label: "Width",
+      options: choices,
+      css: cssNamesOf(written("width")),
+      set: holds(written("width")),
+    },
+    ...(offersChildAxis(parent, "height", flow)
+      ? [
+          {
+            id: CHILD_SIZE_IDS.height,
+            label: "Height",
+            options: choices,
+            css: cssNamesOf(written("height")),
+            set: holds(written("height")),
+          },
+        ]
+      : []),
+  ];
+
+  /** What a size's choices write, its own size included. */
+  function written(axis: ChildAxis): string[] {
+    return [axis, ...childAxisRows(parent as ParentArrangement, axis, flow)];
   }
-  return [...names];
+}
+
+/** Layout properties by their CSS names, as a search spells them. */
+function cssNamesOf(properties: readonly string[]): string[] {
+  return properties.map(property => LAYOUT_CSS_NAMES[property] ?? property);
 }
 
 /**
@@ -344,30 +405,71 @@ function optionsOf(property: StyleSection["properties"][number]): string[] {
 }
 
 /**
- * The Style tab's settings: each section's properties, and the block's own
- * settings it draws there (Content width, a Section's Height), under the
- * section that draws them.
+ * "CSS properties"' settings: those holding a value, drawn as its rows, and
+ * those the block can use but doesn't show, which a search offers to add. By
+ * their plain names, found by their CSS names too.
+ */
+function cssPropertyEntries(extras: readonly CssPropertyRow[]): SettingEntry[] {
+  const addable = new Set(addableRows(extras, new Set()));
+  return sectionEntries(
+    "style",
+    CSS_PROPERTIES_SECTION,
+    extras
+      .filter(each => each.row.set || addable.has(each))
+      .map(each => ({
+        id: each.id,
+        label: each.plainName,
+        options: optionsOf(each.row),
+        css: [each.cssName, ...writtenCss(each.row)],
+        set: each.row.set,
+        addable: !each.row.set,
+      }))
+  );
+}
+
+/**
+ * The Style tab's settings: each section's properties it draws, and the
+ * block's own settings it draws there (Content width, a Section's Height),
+ * under the section that draws them; then "CSS properties".
  */
 export function styleEntries(
   sections: readonly StyleSection[],
   inspection: BlockInspection | null,
-  shortcuts?: { node: BlockNode | undefined; at: ShortcutAt }
+  shortcuts?: { node: BlockNode | undefined; at: ShortcutAt },
+  parent?: ParentArrangement,
+  flow?: PlainFlow,
+  arranges?: boolean
 ): SettingEntry[] {
   const props = inspection?.sections.styleProps ?? [];
-  return sections.flatMap(section => {
-    const own = props.find(each => each.key === section.key)?.rows ?? [];
-    return sectionEntries("style", section, [
-      ...(section.key === "size" && shortcuts !== undefined
-        ? shortcutRows(shortcuts.node, shortcuts.at)
-        : []),
-      ...drawnRows(own, new Set()).map(withDrawnChoices),
-      ...section.properties.map(property => ({
-        id: property.property,
-        label: property.label,
-        options: optionsOf(property),
-        css: cssOf(property),
-        set: property.set,
-      })),
-    ]);
+  // Arranged as the tab draws them, so a search finds a row where it is
+  // drawn, and nothing it doesn't draw.
+  // The block's own shortcuts are drawn only where it is edited itself.
+  const arranged = arrangeCssProperties(sections, {
+    blockType: shortcuts?.node?.type,
+    arranges,
   });
+  return [
+    ...arranged.sections.flatMap(section => {
+      const own = props.find(each => each.key === section.key)?.rows ?? [];
+      return sectionEntries("style", section, [
+        ...(section.key === "inside-parent"
+          ? childSizeRows(parent, sections, flow)
+          : []),
+        ...(section.key === "size" && shortcuts !== undefined
+          ? shortcutRows(shortcuts.node, shortcuts.at)
+          : []),
+        ...drawnRows(own, new Set()).map(withDrawnChoices),
+        ...section.properties
+          .filter(property => property.common)
+          .map(property => ({
+            id: property.property,
+            label: property.label,
+            options: optionsOf(property),
+            css: writtenCss(property),
+            set: property.set,
+          })),
+      ]);
+    }),
+    ...cssPropertyEntries(arranged.extras),
+  ];
 }

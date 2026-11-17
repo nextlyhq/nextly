@@ -108,7 +108,9 @@ describe("a page saved before its block type's ★ moved", () => {
     const html = renderPublished(saved(stampFor("outline")), "ghost");
     expect(html).not.toContain("rebeccapurple");
     // Ghost's rule on the button that picked no style, by its own class.
-    expect(html).toContain(`:is(.${nodeClassName("plain")}) { color: #444444 }`);
+    expect(html).toContain(
+      `:is(.${nodeClassName("plain")}) { color: #444444 }`
+    );
   });
 
   it("is drawn with the new ★ when one is first chosen", () => {

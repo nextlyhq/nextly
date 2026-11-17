@@ -472,6 +472,16 @@ export type {
 export { EmptyContainerAppenders } from "./canvas/empty-container-appender";
 export type { EmptyContainerAppendersProps } from "./canvas/empty-container-appender";
 /**
+ * An Image's empty state over each Image with no picture: "Add an image"
+ * with Upload, Media library and Link, a file dropped on it, and a missing
+ * library file's Replace. A canvas overlay composed like the one above, given
+ * the host's media library upload and picker.
+ *
+ * @experimental
+ */
+export { ImageStates } from "./canvas/image-states";
+export type { ImageStatesProps } from "./canvas/image-states";
+/**
  * The badge on a block whose bound value a visitor will not see, drawn in the
  * canvas's overlay from the host's `visitorUnreadableBindings` answer.
  */
@@ -801,6 +811,9 @@ export { sharedStyleNameTaken } from "./shared-style-target";
 export { useNoticeQueue } from "./shell/builder-notices";
 export type { NoticeQueue, RaiseNotice } from "./shell/builder-notices";
 export { SharedStylesPanel } from "./shared-styles-panel";
+// The whole-list class write the Styles tab's Block styles make, copy,
+// rename and hide block styles and move ★ through.
+export type { ClassListEdit, EditClasses } from "./block-style-actions";
 export type {
   ClassRenameOutcome,
   PageClassBlocks,

@@ -14,12 +14,14 @@ import type {
 } from "@nextlyhq/blocks-engine";
 
 import type { LookKey } from "./block-look-rows";
+import type { EditClasses } from "./block-style-actions";
 import type {
   SharedStyleRefusal,
   SharedStylesCount,
   SharedStylesUsage,
   SharedStyleUsesPage,
 } from "./shared-style-library";
+import type { GroupFolds } from "./tokens-panel";
 
 /** What the host answers a rename with. */
 export type ClassRenameOutcome =
@@ -110,6 +112,22 @@ export interface SharedStylesPanelProps {
    * @experimental
    */
   looks?: PanelLookEditing;
+  /**
+   * The host's whole-list class write, through which the Block styles
+   * section makes, copies, renames and hides block styles and moves ★; a
+   * removal goes through `access`. Absent, or read-only: the section offers
+   * none of them.
+   *
+   * @experimental Settles with the Styles tab's Block styles.
+   */
+  onEditClasses?: EditClasses;
+  /**
+   * Which block types' styles the author folded, kept by the host as the
+   * other Design groups' are. Absent: every type is open.
+   *
+   * @experimental Settles with the Styles tab's Block styles.
+   */
+  folds?: GroupFolds;
   /**
    * The style whose details are open as the tab mounts, as when the Variables
    * tab sends the author to a style that uses a variable. Read once.

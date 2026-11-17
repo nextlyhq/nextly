@@ -47,6 +47,7 @@ import {
   ruleCouldNotRun,
   waitedOutPoolBound,
 } from "../../errors/rule-could-not-run";
+import { withHookLanguage } from "../../hooks/hook-language";
 import { normalizeHookError } from "../../hooks/normalize-hook-error";
 import { singleHookNamespace } from "../../hooks/register-single-hooks";
 import { recordSideEffectWarning } from "../../hooks/side-effect-warnings";
@@ -1271,14 +1272,16 @@ async function runFieldHooksRec(
       if (phase === "afterChange") {
         try {
           const result = await handler(
-            withCurrentPrincipal({
-              collection: ctx.slug,
-              operation: ctx.operation,
-              fieldName: name,
-              value,
-              data,
-              user: ctx.user,
-            })
+            withCurrentPrincipal(
+              withHookLanguage({
+                collection: ctx.slug,
+                operation: ctx.operation,
+                fieldName: name,
+                value,
+                data,
+                user: ctx.user,
+              })
+            )
           );
           if (result !== undefined) value = result;
         } catch (error) {
@@ -1317,14 +1320,16 @@ async function runFieldHooksRec(
         continue;
       }
       const result = await handler(
-        withCurrentPrincipal({
-          collection: ctx.slug,
-          operation: ctx.operation,
-          fieldName: name,
-          value,
-          data,
-          user: ctx.user,
-        })
+        withCurrentPrincipal(
+          withHookLanguage({
+            collection: ctx.slug,
+            operation: ctx.operation,
+            fieldName: name,
+            value,
+            data,
+            user: ctx.user,
+          })
+        )
       );
       if (result !== undefined) value = result;
     }

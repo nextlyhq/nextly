@@ -25,8 +25,10 @@ import type { ClassSurface } from "./site-style-class-surface";
 import { useStyleToOpen } from "./site-style-tokens-studio";
 
 /**
- * The Shared styles tab, with the class surface's rename and the shared-style
- * routes' reads, lock and removal.
+ * The Styles tab, with the class surface's rename and whole-list edits (the
+ * Block styles section's new, copied, renamed and hidden styles and its ★)
+ * and the shared-style routes' reads, lock and removal, which a block style's
+ * removal goes through too.
  *
  * Shown read-only to a role without `update-site-style`, which the server
  * would refuse anyway; locking is its own permission, which the usage read
@@ -52,7 +54,7 @@ export function SharedStylesStudio({
   const mayChange = useCan("update-site-style");
   const access = useSharedStylesClient();
   const initialOpenId = useStyleToOpen();
-  const { search, setSearch, searchRef } = useDesignBrowse();
+  const { search, setSearch, searchRef, folds } = useDesignBrowse();
   // The Design panel's one search, across its tabs, and its box, where focus
   // goes once a style is removed.
   const hostSearch = useMemo(
@@ -73,6 +75,8 @@ export function SharedStylesStudio({
         onRename={classes.rename}
         currentRenameAttempt={classes.currentRenameAttempt}
         pendingNames={classes.pendingNames}
+        onEditClasses={classes.edit}
+        {...(folds === undefined ? {} : { folds })}
         {...(looks === undefined ? {} : { looks })}
         {...(initialOpenId === undefined ? {} : { initialOpenId })}
       />

@@ -130,6 +130,14 @@ export interface SiteToken {
    */
   extensions?: Readonly<Record<string, unknown>>;
   /**
+   * The two sizes a fluid size was made from, in px: on the smallest screen
+   * of the site's fluid range and on its largest. Kept beside the value it
+   * gave, so the size can be made again when the range changes; a value
+   * typed by hand has none, and a range change leaves it as it is. Never
+   * read by the emitter: the value is what reaches the page.
+   */
+  fluid?: { readonly small: number; readonly large: number };
+  /**
    * Fields found under THIS system's own extension key that this build does not
    * read, kept so it can write them back out.
    *
@@ -166,6 +174,13 @@ export interface SiteTokenSet {
    * {@link DarkModeStrategy}.
    */
   darkMode?: DarkModeStrategy;
+  /**
+   * The page widths a size made with "Fluid…" grows across, in px: the
+   * smallest screen and the largest. 360 to 1280 where unset. Never
+   * emitted: each fluid size's value already holds it, and a change of it
+   * remakes those values.
+   */
+  fluidRange?: { readonly min: number; readonly max: number };
 }
 
 /**
@@ -282,9 +297,14 @@ const GROUP_WORDS: ReadonlySet<string> = new Set([
 export function tokenDisplayLabel(token: {
   name: string;
   label?: string;
+  id?: string;
 }): string {
   const own = token.label?.trim();
   if (own !== undefined && own !== "") return own;
+  // A built-in's plain name, by the identity a rename leaves alone: a site
+  // overriding its value keeps the name, since the override stores no label.
+  const builtIn = BUILT_IN_LABELS.get(token.id ?? token.name);
+  if (builtIn !== undefined) return builtIn;
   const parts = token.name.split(".");
   const rest = parts.slice(1);
   const dropGroup =
@@ -670,7 +690,7 @@ function typeInstead(kind: TokenKind): string {
  * that agree today drift, and the drift is invisible because a missing token
  * looks exactly like a token whose value did not apply.
  *
- * `prefix` and `darkMode` come from the override when it states them, because
+ * `prefix`, `darkMode` and `fluidRange` come from the override when it states them, because
  * they are site-wide decisions rather than per-token values. A site that sets a
  * prefix must set it in ONE place: `compileSiteSheet` derives the prefix used
  * for declaring and for referencing from a single value for exactly this
@@ -702,6 +722,10 @@ export function resolveSiteTokens(override?: SiteTokenSet): SiteTokenSet {
     ...(override?.darkMode === undefined
       ? {}
       : { darkMode: override.darkMode }),
+    // Site-wide too: the widths the sizes made with Fluid… grow between.
+    ...(override?.fluidRange === undefined
+      ? {}
+      : { fluidRange: override.fluidRange }),
   };
 }
 
@@ -837,6 +861,8 @@ type SpacingValue =
 /** One row of {@link SPACING_DEFAULTS}. */
 interface SpacingDefault {
   readonly name: string;
+  /** What it is called where an author meets it, in plain words. */
+  readonly label: string;
   readonly value: SpacingValue;
   readonly description: string;
 }
@@ -858,45 +884,64 @@ interface SpacingDefault {
 const SPACING_DEFAULTS: readonly SpacingDefault[] = [
   {
     name: "space.stack",
+    label: "Space between blocks",
     value: { min: "1rem", preferred: "0.875rem + 0.5vw", max: "1.25rem" },
     description: "The space a container puts between the blocks it holds.",
   },
   {
     name: "space.section-y",
+    label: "Section padding (top and bottom)",
     value: { min: "3rem", preferred: "2rem + 4vw", max: "5rem" },
     description: "A section's padding above and below its content.",
   },
   {
     name: "space.gutter",
+    label: "Section padding (sides)",
     value: { min: "1rem", preferred: "4vw", max: "2rem" },
     description: "A section's padding beside its content.",
   },
   {
     name: "space.columns",
+    label: "Space between columns",
     value: { min: "1rem", preferred: "0.5rem + 2vw", max: "2rem" },
     description: "The space between columns, and between gallery images.",
   },
   {
     name: "space.card",
+    label: "Card padding",
     value: { min: "1rem", preferred: "0.75rem + 1vw", max: "1.5rem" },
     description: "A card's padding around its content.",
   },
   {
     name: "space.paragraph",
+    label: "Space between paragraphs",
     value: "1em",
     description: "The space between the paragraphs of rich text.",
   },
   {
     name: "button.padding-y",
+    label: "Button padding (top and bottom)",
     value: "0.75rem",
     description: "A button's padding above and below its label.",
   },
   {
     name: "button.padding-x",
+    label: "Button padding (sides)",
     value: "1.25rem",
     description: "A button's padding beside its label.",
   },
 ];
+
+/**
+ * The plain names of the built-in variables that have one, by identity:
+ * the spacing table's, and the content width. Read by
+ * {@link tokenDisplayLabel}, so every surface that names a variable says
+ * the same words, and a stored override, which carries no label, keeps them.
+ */
+const BUILT_IN_LABELS: ReadonlyMap<string, string> = new Map([
+  ["content.width", "Content width"],
+  ...SPACING_DEFAULTS.map(row => [row.name, row.label] as const),
+]);
 
 /** A spacing default as the CSS a token stores. */
 function spacingValue(value: SpacingValue): string {
