@@ -17,13 +17,16 @@ import type { BlockRenderArgs, PageContext } from "../context";
 
 import { CONTENT } from "./categories";
 import {
+  addressLinkFor,
   boundText,
   canLink,
   LINK_PROPS,
   linkFor,
+  linksToEntry,
   oneOf,
   readClaimOf,
   text,
+  type LinkAttributes,
   type LinkProps,
 } from "./props";
 
@@ -44,23 +47,33 @@ export interface HeadingProps extends LinkProps {
   level?: HeadingLevel;
 }
 
-export async function renderHeading({
-  props,
-  className,
-  markProp,
-  bound,
-  ctx,
-  node,
-}: BlockRenderArgs<HeadingProps>): Promise<ReactElement> {
+/**
+ * Render a heading, linked where its props say. Only a link to an entry
+ * waits, for the entry's path; a heading linking by address, or not at all,
+ * renders at once, as it always did.
+ */
+export function renderHeading(
+  args: BlockRenderArgs<HeadingProps>
+): ReactElement | Promise<ReactElement> {
+  const { props, ctx, node } = args;
+  if (linksToEntry(props)) {
+    // Claimed as this block's, as every linking block's entry read is.
+    return linkFor(props, (collection, id) =>
+      ctx.resolveEntryPath(collection, id, readClaimOf(node))
+    ).then(link => drawHeading(args, link));
+  }
+  return drawHeading(args, addressLinkFor(props));
+}
+
+/** The heading element, with its words inside the link where it has one. */
+function drawHeading(
+  { props, className, markProp, bound }: BlockRenderArgs<HeadingProps>,
+  link: LinkAttributes | undefined
+): ReactElement {
   const level = oneOf(props.level, HEADING_LEVELS, "h2");
   // A bound date keeps its machine-readable value, inside the anchor or the
   // heading itself.
   const label = boundText(text(props.text), bound?.text);
-  // Where it goes, read as every linking block reads it: an entry's path
-  // where one is linked, else the address. Claimed as this block's.
-  const link = await linkFor(props, (collection, id) =>
-    ctx.resolveEntryPath(collection, id, readClaimOf(node))
-  );
 
   // The text moves between two elements, which is why the block marks it rather
   // than an editor inferring it: linked, the words live inside the anchor;
