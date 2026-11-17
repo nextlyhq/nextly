@@ -39,15 +39,21 @@ class Block {
     this.own.base = { ...base } as Record<string, string>;
   }
 
-  /** Values cascading widest first, a layer's own over those beneath it. */
+  /**
+   * Values as the page compiles them: each layer whole, its devices widest
+   * first, the block's own after the shared style's, so a block value at any
+   * wider device beats a shared value at this one.
+   */
   private merged(
     device: string,
     layers: readonly Record<Device, Record<string, string>>[]
   ): LayoutValues {
     const merged: Record<string, string> = {};
-    for (const each of ORDER) {
-      for (const layer of layers) Object.assign(merged, layer[each]);
-      if (each === device) break;
+    for (const layer of layers) {
+      for (const each of ORDER) {
+        Object.assign(merged, layer[each]);
+        if (each === device) break;
+      }
     }
     return merged as LayoutValues;
   }
@@ -522,5 +528,47 @@ describe("flex-relative and physical alignment keywords", () => {
   it("reads a physical left as Custom", () => {
     const block = new Block({ display: "flex", justifyContent: "left" });
     expect(block.read()).toEqual({ mode: "custom" });
+  });
+});
+
+describe("the block's own values over a shared style's, as compiled", () => {
+  it("keeps a block's Desktop row over a shared style's Mobile column", () => {
+    const block = new Block({ display: "flex", flexDirection: "row" });
+    block.shared.sm = { flexDirection: "column" };
+    expect(block.read("sm")).toMatchObject({ mode: "row", stacked: false });
+  });
+});
+
+describe("clearing at an interaction state, by what survives at the device", () => {
+  it("writes nowrap where a Normal wrap at this device would stay", () => {
+    const at = (values: Record<string, LayoutValues>) => (device: string) =>
+      values[device] ?? {};
+    const normal = at({
+      base: { display: "flex", flexWrap: "nowrap" },
+      sm: { flexWrap: "wrap" },
+    });
+    const hover = at({});
+    const tiers: LayoutTiers = {
+      order: ORDER,
+      own: hover,
+      inForce: ownCascade(ORDER, hover, normal),
+      beneath: normalBeneath(ORDER, normal),
+    };
+    expect(planWrap(tiers, "sm", false)).toEqual([
+      { device: "sm", property: "flexWrap", value: "nowrap" },
+    ]);
+  });
+});
+
+describe("plain controls for a Stack spreading its blocks", () => {
+  it("takes the distribution away, leaving a plain Stack", () => {
+    const block = new Block({
+      display: "flex",
+      flexDirection: "column",
+      justifyContent: "space-between",
+    });
+    block.apply(planPlain(block.tiers(), "base"));
+    expect(block.own.base.justifyContent).toBeUndefined();
+    expect(block.read()).toMatchObject({ mode: "stack", flex: true });
   });
 });

@@ -404,6 +404,15 @@ function stackDevice(tiers: LayoutTiers): string | undefined {
   return undefined;
 }
 
+/** Whether a column at a device is a Row stacked there, not a Stack. */
+function stackedRowAt(tiers: LayoutTiers, device: string): boolean {
+  const stackOn = stackDevice(tiers);
+  return (
+    stackOn !== undefined &&
+    tiers.order.indexOf(device) >= tiers.order.indexOf(stackOn)
+  );
+}
+
 /** What a container's Arrange reads as at the edited device. */
 export function readArrange(tiers: LayoutTiers, editing: string): PlainArrange {
   const values = tiers.inForce(editing);
@@ -489,13 +498,7 @@ function settled(
   value: string | null
 ): LayoutWrite {
   if (value !== null) return { device, property, value };
-  const index = tiers.order.indexOf(device);
-  const wider = index > 0 ? tiers.order[index - 1] : undefined;
-  // What would stay in force with the target's own value gone: a wider
-  // device's, or what lies beneath it here (a shared style it wears).
-  const reaching =
-    (wider === undefined ? undefined : tiers.inForce(wider)[property]) ??
-    tiers.beneath?.(device)[property];
+  const reaching = surviving(tiers, device)[property];
   return {
     device,
     property,
@@ -505,6 +508,23 @@ function settled(
         ? null
         : RESET[property],
   };
+}
+
+/**
+ * What stays in force at a device once the target's own value there is gone:
+ * what lies beneath the target (a shared style it wears, its Normal values at
+ * an interaction state), with the target's own values at wider devices, at
+ * the edited state, over it, as the page applies them.
+ */
+function surviving(tiers: LayoutTiers, device: string): LayoutValues {
+  const merged: Partial<Record<LayoutProperty, string>> = {
+    ...(tiers.beneath?.(device) ?? {}),
+  };
+  for (const each of tiers.order) {
+    if (each === device) break;
+    Object.assign(merged, tiers.own(each));
+  }
+  return merged;
 }
 
 /** The value that undoes a property reaching from a wider device. */
@@ -776,13 +796,15 @@ const PLAIN_DISPLAY: Readonly<Record<string, "flex" | "grid">> = {
 /** The alignment values a plain rewrite clears: those with no 3×3 point. */
 function unplainAlign(
   values: LayoutValues,
-  kind: "row" | "column" | "grid"
+  kind: "row" | "column" | "grid",
+  spreads: boolean
 ): LayoutProperty[] {
   const axes = alignAxes(kind);
   const forward =
     kind !== "grid" && !(values.flexDirection ?? "").endsWith("-reverse");
   return [axes.inline, axes.block].filter(property => {
-    const spreadHere = property === "justifyContent" && kind !== "grid";
+    const spreadHere =
+      spreads && property === "justifyContent" && kind !== "grid";
     return axisRead(values[property], spreadHere, forward) === "custom";
   });
 }
@@ -821,9 +843,12 @@ export function planPlain(tiers: LayoutTiers, editing: string): LayoutWrite[] {
   if (readArrange(tiers, editing).mode !== "custom") return [];
   const values = tiers.inForce(editing);
   const display = PLAIN_DISPLAY[values.display ?? ""];
+  const kind = plainKind(display, values);
+  // Only a Row stacked here offers Spread; a Stack's distribution goes.
+  const spreads = kind !== "column" || stackedRowAt(tiers, editing);
   const cleared: LayoutProperty[] = [
     ...(display === undefined ? (["flexDirection"] as const) : []),
-    ...unplainAlign(values, plainKind(display, values)),
+    ...unplainAlign(values, kind, spreads),
     ...(display === "grid" ? unplainTemplates(values) : []),
     ...(PLAIN_WRAPS.has(values.flexWrap ?? "nowrap")
       ? []
