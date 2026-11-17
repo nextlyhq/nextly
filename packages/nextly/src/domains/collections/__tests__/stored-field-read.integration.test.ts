@@ -701,6 +701,58 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
       expect(many.get(id)).toEqual({ kind: "value", value: { v: 1 } });
     });
 
+    it("reads a working draft saved through another spelling of the id, as the database matched it", async () => {
+      const t = await boot(dialect);
+      const id = await created(t, "drafted", {
+        title: "a",
+        body: { v: "live" },
+        status: "published",
+      });
+      const other = await created(t, "drafted", {
+        title: "b",
+        body: { v: "other" },
+        status: "published",
+      });
+      // MySQL finds the entry by another spelling of its id, and the draft is
+      // kept under the spelling the save named; the others find no entry.
+      const saved = await t.nextly
+        .update({
+          collection: "drafted",
+          id: id.toUpperCase(),
+          data: { body: { v: "pending" }, _overwrite: true },
+          overrideAccess: true,
+        })
+        .then(
+          () => true,
+          () => false
+        );
+      expect(saved).toBe(dialect === "mysql");
+      const shown = { kind: "value", value: { v: saved ? "pending" : "live" } };
+
+      expect(
+        await poolReader(
+          t,
+          "probe"
+        )({
+          collection: "drafted",
+          id,
+          field: "body",
+          form: "draft",
+        })
+      ).toEqual(shown);
+      const many = await poolReaderOf(
+        t,
+        "probe"
+      )({
+        collection: "drafted",
+        ids: [id, other],
+        field: "body",
+        form: "draft",
+      });
+      expect(many.get(id)).toEqual(shown);
+      expect(many.get(other)).toEqual({ kind: "value", value: { v: "other" } });
+    });
+
     it("reads the pending working drafts as `draft`, in one query for the rows and one for the drafts", async () => {
       const t = await boot(dialect);
       const pending = await created(t, "drafted", {

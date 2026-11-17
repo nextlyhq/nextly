@@ -1325,8 +1325,14 @@ async function workingDraftsOf(
     const drafts = new Map<string, VersionRow>();
     for (let at = 0; at < ids.length; at += STORED_ROWS_AT_ONCE) {
       const batch = ids.slice(at, at + STORED_ROWS_AT_ONCE);
-      const read = await repo.findWorkingDraftsOf(scope, batch, slot);
-      for (const [id, draft] of read) drafts.set(id, draft);
+      for (const [id, draft] of await draftsMatching(
+        repo,
+        scope,
+        batch,
+        slot
+      )) {
+        drafts.set(id, draft);
+      }
     }
     return drafts;
   };
@@ -1347,6 +1353,47 @@ async function workingDraftsOf(
     if (holdsPendingChange(parts)) {
       found.set(id, { snapshot: combinedDraft({}, parts) });
     }
+  }
+  return found;
+}
+
+/**
+ * The working draft in `slot` of each entry of `ids`, by the entry's id as
+ * the rows hold it.
+ *
+ * A draft is kept under the spelling of the id its save named, which the
+ * database may have matched to the entry's row by its own comparison
+ * (ignoring case or trailing spaces, as MySQL's does), so a draft is matched
+ * to its entry by the database too: one entry is read alone by its key, as
+ * its own read is, and of several, an entry whose draft came back under a
+ * spelling of its own is asked alone where any did.
+ */
+async function draftsMatching(
+  repo: VersionsRepository,
+  scope: Pick<VersionRef, "scopeKind" | "scopeSlug">,
+  ids: readonly string[],
+  slot: string | null
+): Promise<Map<string, VersionRow>> {
+  const alone = async (id: string) =>
+    repo.findWorkingDraft({ ...scope, entryId: id }, slot);
+  const found = new Map<string, VersionRow>();
+  const [only] = ids;
+  if (ids.length === 1 && only !== undefined) {
+    const draft = await alone(only);
+    if (draft !== undefined) found.set(only, draft);
+    return found;
+  }
+  const asked = new Set(ids);
+  let spelledOtherwise = false;
+  for (const [id, draft] of await repo.findWorkingDraftsOf(scope, ids, slot)) {
+    if (asked.has(id)) found.set(id, draft);
+    else spelledOtherwise = true;
+  }
+  if (!spelledOtherwise) return found;
+  for (const id of ids) {
+    if (found.has(id)) continue;
+    const draft = await alone(id);
+    if (draft !== undefined) found.set(id, draft);
   }
   return found;
 }
