@@ -40,7 +40,13 @@ import {
   type CssPropertyRow,
 } from "./css-properties";
 import {
-  builderContentSectionOf,
+  galleryColumnsHoldValue,
+  GALLERY_COLUMNS,
+  GALLERY_MOBILE,
+} from "./gallery-columns";
+import { GALLERY_BLOCK } from "./gallery-pictures";
+import {
+  builderContentSectionsOf,
   contentRowsOf,
   type BlockInspection,
   type EditableProp,
@@ -112,13 +118,53 @@ function drawnRows(
 }
 
 /**
+ * The controls a Gallery's builder-drawn sections hold: Add images in
+ * Pictures, and Columns and On mobile in Layout, the latter only where the
+ * site has a mobile tier, as the section draws it.
+ */
+function galleryRows(
+  node: BlockNode,
+  section: string,
+  breakpoints: BreakpointSet | undefined
+): IndexedRow[] {
+  if (section === "Pictures") {
+    return [{ id: "galleryAddImages", label: "Add images", set: false }];
+  }
+  const tiers = stackTiers(breakpoints);
+  const set = galleryColumnsHoldValue(node, tiers);
+  const columns: IndexedRow = {
+    id: "galleryColumns",
+    label: "Columns",
+    options: GALLERY_COLUMNS.map(String),
+    css: ["grid-template-columns"],
+    set,
+  };
+  if (tiers.mobile === undefined) return [columns];
+  return [
+    columns,
+    {
+      id: "galleryMobile",
+      label: "On mobile",
+      options: GALLERY_MOBILE.map(String),
+      css: ["grid-template-columns"],
+      set,
+    },
+  ];
+}
+
+/**
  * The controls a builder-drawn Content section holds: Columns' Layout tiles,
- * Stack on and its Reverse, set as the section's own dot says.
+ * Stack on and its Reverse, set as the section's own dot says; a Gallery's,
+ * by section.
  */
 function builderRows(
   node: BlockNode | undefined,
-  breakpoints: BreakpointSet | undefined
+  breakpoints: BreakpointSet | undefined,
+  section: string
 ): IndexedRow[] {
+  if (node?.type === GALLERY_BLOCK) {
+    return galleryRows(node, section, breakpoints);
+  }
   if (node === undefined || node.type !== COLUMNS_ROW) return [];
   const tiers = stackTiers(breakpoints);
   const template = readStyleValue(node.styles, {
@@ -157,16 +203,14 @@ export function contentEntries(
   breakpoints?: BreakpointSet
 ): SettingEntry[] {
   const bound = boundProps(node);
-  const own = builderContentSectionOf(inspection.blockName);
-  // The builder's own section comes first, drawn whatever else the tab holds.
-  const builder =
-    own === undefined
-      ? []
-      : sectionEntries(
-          "content",
-          { key: own, label: own },
-          builderRows(node, breakpoints)
-        );
+  // The builder's own sections come first, drawn whatever else the tab holds.
+  const builder = builderContentSectionsOf(inspection.blockName).flatMap(own =>
+    sectionEntries(
+      "content",
+      { key: own, label: own },
+      builderRows(node, breakpoints, own)
+    )
+  );
   const sections = inspection.sections.content;
   if (sections.length === 0 && builder.length === 0) {
     // A block with no sections draws its Content rows bare.
