@@ -284,8 +284,15 @@ export function PageLayoutPicker<T extends FieldValues>({
 /** Above this many sets the menu is searched rather than scrolled. */
 const SEARCH_ABOVE = 10;
 
-/** How many sets the menu lists by name, without the default and none. */
-function setCount(view: LayoutPickerView): number {
+/**
+ * How many sets the site has, as the answer lists them. Counted from the
+ * answer rather than the menu's rows: the menu draws the default set as
+ * "Site default" and drops its named row, so its rows run one short of the
+ * sets whenever the page follows the default. Before an answer, the rows
+ * named are all there is to count.
+ */
+function setCount(state: LayoutChoicesState, view: LayoutPickerView): number {
+  if (state.kind === "ready") return state.choices.items.length;
   return view.options.filter(
     option =>
       option.value !== SITE_DEFAULT_VALUE &&
@@ -379,7 +386,7 @@ function Picker<T extends FieldValues>({
   // More sets than ten, or than one answer lists: the menu searches titles on
   // the server, so every set the author may read can be found and chosen.
   const capped = state.kind === "ready" && state.choices.meta.more;
-  const searchable = capped || setCount(view) > SEARCH_ABOVE;
+  const searchable = capped || setCount(state, view) > SEARCH_ABOVE;
   const { definitions: foundDefinitions, ...search } = useLayoutSearch(
     open && searchable,
     stored,

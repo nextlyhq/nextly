@@ -693,6 +693,28 @@ describe("the page's Layout picker", () => {
     expect(screen.queryAllByRole("option")).toEqual([]);
   });
 
+  it("searches eleven sets when the page follows the default among them", async () => {
+    const set = (i: number) => ({
+      id: `s${i}`,
+      title: `Set ${i}`,
+      published: true,
+      draftChangesNotLive: false,
+      areasFilled: ["header" as const],
+      regions: [{ area: "header" as const, componentId: `h${i}` }],
+    });
+    // Eleven sets in all, the first the site default: the menu draws that one
+    // as "Site default" rather than by name, and it is still one of eleven.
+    answering({
+      items: Array.from({ length: 11 }, (_, i) => set(i)),
+      meta: { ...choices.meta, defaultLayout: "s0" },
+    });
+    renderPicker();
+    await openMenu();
+    expect(
+      screen.getByRole("combobox", { name: "Search headers & footers" })
+    ).toBeTruthy();
+  });
+
   it("is not searched with ten sets or fewer", async () => {
     renderPicker();
     expect(

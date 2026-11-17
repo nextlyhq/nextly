@@ -649,6 +649,32 @@ describe("readLayoutChoices", () => {
     expect(logoReads.length).toBeLessThanOrEqual(2);
   });
 
+  it("reads the pictures' distinct components in one batch, not one read per set", async () => {
+    // Eleven header-only sets, each with a header of its own: every picture
+    // asks for a different component, and all are asked for together.
+    const layouts = Array.from({ length: 11 }, (_, i) =>
+      layoutRow(`l${i}`, `Layout ${i}`, `h${i}`)
+    );
+    const components: Record<string, unknown> = {};
+    for (let i = 0; i < 11; i += 1) components[`h${i}`] = component([]);
+    const { nextly, calls } = fake({
+      ...store,
+      layouts,
+      components,
+      defaultLayout: "l0",
+    });
+    const { meta } = await readLayoutChoices(
+      context(),
+      nextly,
+      asked(null, DEFAULT_COMPONENT_STORE, { pictures: true })
+    );
+    expect(Object.keys(meta.regionDefinitions)).toHaveLength(11);
+    const publishedReads = calls.filter(
+      call => call.collection === "components" && call.status === "published"
+    );
+    expect(publishedReads).toHaveLength(1);
+  });
+
   it("sends every listed published set's definitions when asked for pictures", async () => {
     const layouts = [
       ...Array.from({ length: 3 }, (_, i) =>

@@ -501,6 +501,45 @@ async function publishedDefinitions(
     ...store,
     reading: read.reading,
   });
+  // The ids every drawing asks for in the same turn, read together: the
+  // drawings start at once, so their reads coalesce into one batched read
+  // rather than one store query per set.
+  let gathering: {
+    ids: string[];
+    read: Promise<ReadonlyMap<string, BlockDocument>>;
+  } | null = null;
+  const gather = (
+    ids: readonly string[]
+  ): Promise<ReadonlyMap<string, BlockDocument>> => {
+    let current = gathering;
+    if (current === null) {
+      const batch: string[] = [];
+      const read = new Promise<void>(resolve => {
+        setTimeout(resolve, 0);
+      }).then(() => {
+        gathering = null;
+        return source(batch).catch(
+          (error: unknown): ReadonlyMap<string, BlockDocument> => {
+            // Refused: the caller may not read these, and the regions draw as
+            // missing, which is what they are to this caller. Anything else is
+            // a failure, not an answer, and fails the request, so the picker
+            // says it could not load rather than calling the components missing.
+            if (
+              NextlyError.isForbidden(error) ||
+              NextlyError.isNotFound(error)
+            ) {
+              return new Map<string, BlockDocument>();
+            }
+            throw error;
+          }
+        );
+      });
+      current = { ids: batch, read };
+      gathering = current;
+    }
+    current.ids.push(...ids);
+    return current.read;
+  };
   // One answer per id across every drawing, kept as it is asked for, so a
   // component that many sets place (a shared logo) is read once, and two
   // drawings asking for it at the same moment share that read.
@@ -508,23 +547,15 @@ async function publishedDefinitions(
   const readOnce = async (
     ids: readonly string[]
   ): Promise<Map<string, BlockDocument>> => {
-    const fresh = ids.filter(id => !asked.has(id));
+    const fresh = [...new Set(ids.filter(id => !asked.has(id)))];
     if (fresh.length > 0) {
-      const batch = source(fresh).catch((error: unknown) => {
-        // Refused: the caller may not read these, and the regions draw as
-        // missing, which is what they are to this caller. Anything else is a
-        // failure, not an answer, and fails the request, so the picker says
-        // it could not load rather than calling the components missing.
-        if (NextlyError.isForbidden(error) || NextlyError.isNotFound(error)) {
-          return new Map<string, BlockDocument>();
-        }
-        throw error;
-      });
-      for (const id of fresh)
+      const batch = gather(fresh);
+      for (const id of fresh) {
         asked.set(
           id,
           batch.then(found => found.get(id))
         );
+      }
     }
     const answers = await Promise.all(
       ids.map(async id => [id, await asked.get(id)] as const)
