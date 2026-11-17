@@ -72,7 +72,6 @@ import {
   UNDO_KEYS_SPOKEN,
 } from "./keyboard-announcements";
 import { keyboardMovePosition, type MoveDirection } from "./keyboard-move";
-import { pathTo } from "./layers";
 import { lockedBlockWording, lockRefusalWording } from "./lock-refusal";
 import { lockBlockingMove } from "./locking";
 import {
@@ -80,6 +79,7 @@ import {
   refusalAnnouncement,
   unmovedAnnouncement,
 } from "./move-refusal";
+import { pathTo } from "./panels/layers/layers";
 import { offerSignal, useSelectionOffer } from "./selection-offer";
 import {
   isRefusal,

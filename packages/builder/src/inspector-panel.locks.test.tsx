@@ -177,7 +177,7 @@ describe("a block inside a contentOnly area", () => {
     expect(disabled("Tone")).toBe(true);
     // Advanced: read-only with the reason.
     openAdvanced();
-    expect(disabled("CSS id")).toBe(true);
+    expect(disabled("Anchor (ID)")).toBe(true);
     expect(screen.getAllByText(/locked to its content/).length).toBeGreaterThan(
       0
     );
@@ -218,7 +218,7 @@ describe("a block in a slot locked all", () => {
     expect(disabled("Body")).toBe(false);
     expect(disabled("Tone")).toBe(false);
     openAdvanced();
-    expect(disabled("CSS id")).toBe(false);
+    expect(disabled("Anchor (ID)")).toBe(false);
     openMenu();
     // The arrangement lock leaves the block's own lock its own.
     expect(screen.queryByRole("menuitem", { name: /^Unlock/ })).toBeNull();
@@ -446,7 +446,7 @@ describe("Advanced's own write path", () => {
     const editor = editorFor(free);
     render(<InspectorPanel editor={editor} />);
     openAdvanced();
-    const field = screen.getByLabelText("CSS id");
+    const field = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(field, { target: { value: "hero" } });
 
     const holder = free.nodes[0] as BlockNode;

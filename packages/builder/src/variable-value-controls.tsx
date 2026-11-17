@@ -384,7 +384,10 @@ export function LineHeightInput({
         {...(placeholder === undefined ? {} : { placeholder })}
       />
       {times ? (
-        <span className="nx-vars-editor__times-mark" title="Times the text size">
+        <span
+          className="nx-vars-editor__times-mark"
+          title="Times the text size"
+        >
           ×
         </span>
       ) : null}

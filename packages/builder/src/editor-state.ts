@@ -56,7 +56,6 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { useCallback, useMemo, useRef, useState } from "react";
 
-import { compositionRefusal, type CompositionRefusal } from "./inserter";
 import { keptLockAnswers } from "./kept-lock-answers";
 import {
   layersLockRefusalFor,
@@ -68,6 +67,10 @@ import {
 import { hostLocksOf, lockSourcesOf, useLockDefinitions } from "./lock-sources";
 import { refusalAnnouncement } from "./move-refusal";
 import { applyOps, type BuilderOp } from "./op-vocabulary";
+import {
+  compositionRefusal,
+  type CompositionRefusal,
+} from "./panels/add/inserter";
 import {
   EMPTY_SELECTION,
   applySelection,

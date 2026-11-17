@@ -26,6 +26,7 @@ import {
   useConditionsUnchecked,
   CanvasFrameProvider,
   OnboardingChecklist,
+  RecentColoursStore,
   SelectionBreadcrumb,
   VisitorUnreadableProvider,
 } from "@nextlyhq/builder/shell";
@@ -73,6 +74,7 @@ import {
   useMediaSearchReader,
   useMediaSummaryReader,
 } from "./media-summary-reader";
+import { recentColoursStore } from "./recent-colours-store";
 import { useReveal } from "./reveal-hidden";
 import { useSettingsPlace } from "./settings-place";
 import {
@@ -613,7 +615,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     // Fills the view's area, under the admin's lock and recovery notices for
     // this document, rather than covering the window over them. A component's
     // own view carries its banner above the editor.
-    <EditorFrame banner={componentView.banner}>
+    <EditorFrame banner={componentView.banner} userId={mount.userId}>
       {/* The bound props a visitor will not see, for the inspector's note
           under each; the canvas's badges are handed the same answer. */}
       <VisitorUnreadableProvider value={view.visitorUnreadable}>
@@ -802,21 +804,32 @@ function shellExit(
 /**
  * The editor's area: the whole of it for a page, and under the banner for a
  * component's own view, so the banner takes its height and the shell the rest.
+ * The author's Recent colours are provided here, around the whole editor, so
+ * the Design panel's colour pickers and the inspector's read one list.
  */
 function EditorFrame({
   banner,
+  userId,
   children,
 }: {
   banner: React.ReactNode;
+  /** The signed-in author, whose Recent colours these are. */
+  userId: string | null;
   children: React.ReactNode;
 }): React.JSX.Element {
+  const recentColours = useMemo(() => recentColoursStore(userId), [userId]);
+  const body = (
+    <RecentColoursStore.Provider value={recentColours}>
+      {children}
+    </RecentColoursStore.Provider>
+  );
   if (banner === null) {
-    return <div className="h-full bg-background">{children}</div>;
+    return <div className="h-full bg-background">{body}</div>;
   }
   return (
     <div className="flex h-full flex-col bg-background">
       {banner}
-      <div className="min-h-0 flex-1">{children}</div>
+      <div className="min-h-0 flex-1">{body}</div>
     </div>
   );
 }

@@ -267,6 +267,12 @@
   --nx-builder-title-size: 0.75rem;
   --nx-builder-title-weight: 600;
   --nx-builder-row-gap: 0.5rem;
+  /*
+   * The frame around each section of the block panel: none, so sections sit
+   * flat and are divided by a line. One value to try cards on the real panel
+   * (`0 0 0 1px var(--nx-builder-border)`, say).
+   */
+  --nx-builder-section-frame: none;
 }
 
 /*

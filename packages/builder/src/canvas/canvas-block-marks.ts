@@ -24,12 +24,12 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
-import type { AppliedConditions } from "../applied-conditions";
+import type { AppliedConditions } from "../conditions/applied-conditions";
 import {
   asStoredDefinitions,
   gatedAsDrawn,
   gatedAsStored,
-} from "../condition-gate";
+} from "../conditions/condition-gate";
 import { isLocked } from "../locking";
 import {
   entryContentLabel,

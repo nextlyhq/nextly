@@ -88,6 +88,8 @@ import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
 import { LookInspector } from "./look-inspector";
 import { ManyBlocksPanel } from "./many-blocks-panel";
+import { PanelFoldsProvider } from "./panel-folds-context";
+import { PanelOptions } from "./panel-options";
 import { placedDefinition } from "./variant-picker";
 
 // What the panel takes, the style state it edits, the Content and Style tabs,
@@ -298,7 +300,9 @@ export function InspectorPanel({
     <ComponentFieldsScope editor={panel.editor} host={componentFields}>
       <ComponentVariantsContext.Provider value={componentVariants}>
         <CanvasPassageContext.Provider value={canvasPassage}>
-          <SelectionInspector {...panel} />
+          <PanelFoldsProvider>
+            <SelectionInspector {...panel} />
+          </PanelFoldsProvider>
         </CanvasPassageContext.Provider>
       </ComponentVariantsContext.Provider>
     </ComponentFieldsScope>
@@ -383,11 +387,29 @@ function useInspectorTab(
 /** The tab list: one Tab stop, with arrows, Home and End between the tabs. */
 function InspectorTabList({
   tabs,
+  shown,
+}: {
+  tabs: readonly InspectorTab[];
+  /** The tab showing, whose sections the options menu folds. */
+  shown: string;
+}): React.JSX.Element {
+  // Compact underlined tabs at the start of the panel; the classes carry the
+  // inspector's own tab rules over the shared tabs'. The options menu sits at
+  // the row's end, outside the tab list, so arrows still move between tabs.
+  return (
+    <div className="nx-inspector__tabrow">
+      <InspectorTabs tabs={tabs} />
+      <PanelOptions tab={shown} />
+    </div>
+  );
+}
+
+/** The tabs themselves: one Tab stop, with arrows, Home and End. */
+function InspectorTabs({
+  tabs,
 }: {
   tabs: readonly InspectorTab[];
 }): React.JSX.Element {
-  // Compact underlined tabs at the start of the panel; the classes carry the
-  // inspector's own tab rules over the shared tabs'.
   return (
     <TabsList className="nx-inspector__tablist">
       {INSPECTOR_TABS.filter(tab => tabs.includes(tab.value)).map(tab => (
@@ -572,7 +594,7 @@ function SelectionInspector({
         chosen one shows it again.
       */}
       <Tabs value={shown} onValueChange={choose} className="nx-inspector__tabs">
-        <InspectorTabList tabs={tabs} />
+        <InspectorTabList tabs={tabs} shown={shown} />
 
         {/*
           FORCE-MOUNTED, Content and Advanced both: a field commits on blur

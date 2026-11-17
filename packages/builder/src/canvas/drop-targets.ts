@@ -81,8 +81,8 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import type { Point, Rect } from "../geometry";
-import type { PlacementTarget, SlotSource } from "../inserter";
 import type { OpPosition } from "../op-vocabulary";
+import type { PlacementTarget, SlotSource } from "../panels/add/inserter";
 
 /**
  * The direction a region lays its children out.

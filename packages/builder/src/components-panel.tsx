@@ -49,13 +49,13 @@ import {
   type EntryOffer,
   type InsertPanelProps,
   type LibraryTierState,
-} from "./insert-panel";
+} from "./panels/add/insert-panel";
 import {
   filterEntries,
   unplaceableComponentEntries,
   type ComponentInsertEntry,
   type SavedComponent,
-} from "./inserter";
+} from "./panels/add/inserter";
 
 export interface ComponentsPanelProps {
   /** The editor whose document this places into, as Add is given it. */
