@@ -208,23 +208,26 @@ describe("an Image set to Enlarge, on a published page", () => {
   });
 });
 
+/** One enlarged Image drawn on its own, with these context fields. */
+async function drawnWith(ctx: Record<string, unknown>): Promise<HTMLElement> {
+  const { container } = render(
+    await renderImage({
+      props: { src: "https://example.test/team.png", whenClicked: "enlarge" },
+      className: "nx-pb-node1",
+      partClass: (part: string) => `part-${part}`,
+      node: { id: "pic", type: "core/image", version: 1, props: {} },
+      ctx: {
+        resolveMedia: async () => null,
+        resolveEntryPath: async () => undefined,
+        ...ctx,
+      },
+    } as never)
+  );
+  return container;
+}
+
 describe("an enlarged Image a list draws once per entry", () => {
-  async function drawnAt(itemPosition: string): Promise<HTMLElement> {
-    const { container } = render(
-      await renderImage({
-        props: { src: "https://example.test/team.png", whenClicked: "enlarge" },
-        className: "nx-pb-node1",
-        partClass: (part: string) => `part-${part}`,
-        node: { id: "pic", type: "core/image", version: 1, props: {} },
-        ctx: {
-          resolveMedia: async () => null,
-          resolveEntryPath: async () => undefined,
-          itemPosition,
-        },
-      } as never)
-    );
-    return container;
-  }
+  const drawnAt = (itemPosition: string) => drawnWith({ itemPosition });
 
   it("gives each entry's copy its own popover id", async () => {
     const first = (await drawnAt("0")).querySelector("[popover]")?.id;
@@ -232,5 +235,24 @@ describe("an enlarged Image a list draws once per entry", () => {
     expect(first).toBeTruthy();
     expect(second).toBeTruthy();
     expect(first).not.toBe(second);
+  });
+});
+
+describe("an enlarged Image where an author is looking", () => {
+  it("opens nothing on a click, so the click only selects the block", async () => {
+    // The canvas draws the page as published, and a click on a picture is
+    // how an author selects it: a button naming the popover would open it
+    // over the editor instead.
+    const canvas = await drawnWith({ diagnostics: true });
+    const opener = canvas.querySelector("button[data-nx-enlarge]");
+    expect(opener?.getAttribute("aria-label")).toBe("Enlarge picture");
+    expect(opener?.hasAttribute("popovertarget")).toBe(false);
+    // The control: on a visitor's page the same button opens it.
+    const live = await drawnWith({});
+    expect(
+      live
+        .querySelector("button[data-nx-enlarge]")
+        ?.getAttribute("popovertarget")
+    ).toBe("nx-lightbox-pic");
   });
 });

@@ -238,6 +238,8 @@ export async function renderImage({
   if (enlarge !== undefined) {
     return enlargedPicture(image, {
       id: enlarge,
+      // Where an author is looking, a click on the picture selects the block.
+      opens: ctx?.diagnostics !== true,
       className,
       caption,
       alt,
@@ -631,11 +633,17 @@ function wrapPicture(
  *
  * The button only opens (`show`): a click on the picture while its lightbox
  * is open lands on the backdrop, which closes it, and never reopens it.
+ *
+ * Where an author is looking (the editor's canvas, a draft's preview) the
+ * button names no popover (`opens` false): the canvas draws the page as it
+ * is published, and a click on a picture there is how the block is
+ * selected, which would otherwise open the lightbox over the editor.
  */
 function enlargedPicture(
   image: ReactElement,
   {
     id,
+    opens,
     className,
     caption,
     alt,
@@ -643,6 +651,7 @@ function enlargedPicture(
     full,
   }: {
     id: string;
+    opens: boolean;
     className: string;
     caption: string;
     alt: string;
@@ -657,8 +666,7 @@ function enlargedPicture(
       <button
         type="button"
         className={partClass("enlarge")}
-        popoverTarget={id}
-        popoverTargetAction="show"
+        {...(opens ? { popoverTarget: id, popoverTargetAction: "show" } : {})}
         aria-label={enlargeName(alt)}
         {...{ [ENLARGE_ATTRIBUTE]: "" }}
       >
