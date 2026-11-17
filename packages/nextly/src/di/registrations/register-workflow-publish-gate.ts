@@ -13,7 +13,10 @@ import { container } from "../container";
 import type { RegistrationContext } from "./types";
 
 export function registerWorkflowPublishGate(ctx: RegistrationContext): void {
-  container.registerSingleton<PublishGate>("publishGate", () =>
+  // Built on each ask rather than kept as a singleton: it holds nothing but the adapter, and a
+  // singleton's instance, once asked for, stays cached under the name, so a gate registered
+  // later under `publishGate` would be shadowed by this one instead of replacing it.
+  container.register<PublishGate>("publishGate", () =>
     workflowPublishGate(ctx.adapter)
   );
 }
