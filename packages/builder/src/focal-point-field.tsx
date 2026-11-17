@@ -18,7 +18,7 @@ import { MoreHorizontal } from "lucide-react";
 import * as React from "react";
 
 import { commitOnEnter } from "./commit-on-enter";
-import { useFieldDescription } from "./css-hint";
+import { CssHint, OptionWrites, useFieldDescription } from "./css-hint";
 import { FocalFrame } from "./focal-frame";
 import { InheritedValue } from "./inherited-value";
 import { commitRawCss } from "./raw-css";
@@ -129,6 +129,8 @@ export function FocalPointField({
 }): React.JSX.Element {
   // The refusal, and the CSS names while they are shown.
   const described = useFieldDescription(describedBy);
+  // What each point writes, from the field it is drawn in: its tooltip.
+  const optionWrites = React.useContext(OptionWrites);
   const { picture, fit, position } = React.useContext(FocalFrame);
   const inherited = React.useContext(InheritedValue);
   const text = typeof stored === "string" ? stored : undefined;
@@ -201,22 +203,27 @@ export function FocalPointField({
             const isChosen = point === chosen;
             const isInherited = point === inheritedPoint;
             return (
-              <button
-                key={point.value}
-                type="button"
-                role="radio"
-                data-point={point.value}
-                aria-checked={isChosen}
-                aria-label={
-                  isInherited ? `${point.label}, inherited` : point.label
-                }
-                aria-invalid={invalid}
-                {...(isInherited ? { "data-inherited": "" } : {})}
-                tabIndex={point === focusable ? 0 : -1}
-                className="nx-focal__point"
-                onClick={() => choose(point)}
-                onKeyDown={event => move(event, point)}
-              />
+              <CssHint key={point.value} writes={optionWrites?.(point.value)}>
+                <button
+                  type="button"
+                  role="radio"
+                  data-point={point.value}
+                  aria-checked={isChosen}
+                  aria-label={
+                    isInherited ? `${point.label}, inherited` : point.label
+                  }
+                  aria-invalid={invalid}
+                  {...(isInherited ? { "data-inherited": "" } : {})}
+                  tabIndex={point === focusable ? 0 : -1}
+                  className="nx-focal__point"
+                  onClick={() => choose(point)}
+                  onKeyDown={event => move(event, point)}
+                  // The point's own tooltip says what it writes; kept from
+                  // the field's, which would open over it with the stored
+                  // value.
+                  onPointerMove={event => event.stopPropagation()}
+                />
+              </CssHint>
             );
           })}
         </div>
