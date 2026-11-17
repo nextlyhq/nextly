@@ -31,7 +31,9 @@ import { asDocument } from "../component-store-source";
  * the check of every document once on every site, which fills the index
  * again; and the value the index's "filled" mark holds.
  */
-export const BINDING_USES_FORMAT = 1;
+// 2: a value that may be shared by every language keeps each language's
+// uses, so an index written before it is written again.
+export const BINDING_USES_FORMAT = 2;
 
 /** One binding to a Single's field, and where it is. */
 export interface BindingUse {

@@ -109,7 +109,12 @@ function overAt(
 ): string[] {
   const ids = Object.keys(places);
   const containers = ids.map(
-    id => ({ id, key: id, data: { current: undefined } }) as unknown as DroppableContainer
+    id =>
+      ({
+        id,
+        key: id,
+        data: { current: undefined },
+      }) as unknown as DroppableContainer
   );
   return crumbsByPointer({
     active: { id: "f-label" } as never,
@@ -148,8 +153,6 @@ describe("crumbsByPointer", () => {
     // The pointer in the gap between the two crumbs: overlap alone would pick the focused one.
     expect(overAt(places, dragged, 152, 10)).toEqual([]);
     // The pointer on the row below, the dragged row over it: the row, as by overlap.
-    expect(overAt(places, rect(110, 30, 700, 40), 500, 50)).toEqual([
-      "f-kind",
-    ]);
+    expect(overAt(places, rect(110, 30, 700, 40), 500, 50)).toEqual(["f-kind"]);
   });
 });

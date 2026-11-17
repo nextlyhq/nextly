@@ -1,7 +1,9 @@
 /**
  * `/api/dashboard/pins` — the signed-in person's pinned entries and Singles.
  *
- *   GET    /api/dashboard/pins   their pins they may read, newest first, titled
+ *   GET    /api/dashboard/pins   their pins they may read, newest first, titled,
+ *                                 and `unreadable`: their pins of documents
+ *                                 they may no longer read, by target alone
  *   POST   /api/dashboard/pins   pin `{ targetType, targetSlug, entryId? }`
  *   DELETE /api/dashboard/pins   unpin the same body
  *
@@ -9,7 +11,6 @@
  * refused: pins are a person's own dashboard, and a key has none.
  *
  * @module api/dashboard-pins
- * @experimental Until the dashboard draws its pins.
  */
 import { z } from "zod";
 
@@ -22,7 +23,7 @@ import { dashboardPinsService as service } from "../services/dashboard/dashboard
 
 import { PRIVATE_NO_STORE_HEADERS, readCaller } from "./authenticated-read";
 import { readBoundedJsonBody } from "./read-json-body";
-import { respondAction, respondList } from "./response-shapes";
+import { respondAction, respondData } from "./response-shapes";
 import { signedInPerson } from "./signed-in-person";
 import { withErrorHandler } from "./with-error-handler";
 
@@ -66,17 +67,21 @@ export const getDashboardPins = withErrorHandler(async (req: Request) => {
   const caller = await readCaller(
     await signedInPerson(req, "have dashboard pins")
   );
-  const pins = await service().list(caller);
-  return respondList(
-    pins,
+  const { shown, unreadable } = await service().read(caller);
+  return respondData(
     {
-      total: pins.length,
-      page: 1,
-      // One page holds every pin a reader can keep.
-      limit: MAX_PINS_PER_READER,
-      totalPages: 1,
-      hasNext: false,
-      hasPrev: false,
+      items: shown,
+      meta: {
+        total: shown.length,
+        page: 1,
+        // One page holds every pin a reader can keep.
+        limit: MAX_PINS_PER_READER,
+        totalPages: 1,
+        hasNext: false,
+        hasPrev: false,
+      },
+      // Still counted toward the limit, so the reader may remove them.
+      unreadable,
     },
     { headers: PRIVATE_NO_STORE_HEADERS }
   );

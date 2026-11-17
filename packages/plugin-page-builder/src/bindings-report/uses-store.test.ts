@@ -93,5 +93,8 @@ describe("bindingUsesReader", () => {
     expect(await at(undefined)).toBe(false);
     expect(await at(String(BINDING_USES_FORMAT))).toBe(true);
     expect(await at(String(BINDING_USES_FORMAT + 1))).toBe(false);
+    // A mark from the first format, written before possibly shared values
+    // kept each language's uses: the index is filled again.
+    expect(await at("1")).toBe(false);
   });
 });
