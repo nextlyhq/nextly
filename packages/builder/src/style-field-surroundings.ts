@@ -20,7 +20,6 @@ import {
 import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
-import type { AppliedAt } from "./columns-layout";
 import type { EditorState } from "./editor-state";
 import type { SideOrientation } from "./side-orientation";
 import type { BreakpointBadge, StyleProvenance } from "./style-provenance";
@@ -126,8 +125,18 @@ export interface StyleFieldSurroundings {
  * control that writes at tiers other than the one being edited (where a row
  * stacks). Absent where the host compiles no cascade.
  */
-export const AppliedAtTier: React.Context<AppliedAt | undefined> =
-  React.createContext<AppliedAt | undefined>(undefined);
+export const AppliedAtTier: React.Context<CascadeAt | undefined> =
+  React.createContext<CascadeAt | undefined>(undefined);
+
+/**
+ * What the cascade applies to the edited block at a tier, for any CSS
+ * property: the value, the tier that sets it, and whether the block itself
+ * stores it. `undefined` where nothing sets it.
+ */
+export type CascadeAt = (
+  tier: string,
+  cssProperty: string
+) => { value: string; breakpoint: string; own: boolean } | undefined;
 
 /**
  * Whether this field's form toggle is drawn just above it. A single control

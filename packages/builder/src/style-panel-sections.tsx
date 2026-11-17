@@ -43,6 +43,13 @@ import {
 } from "./style-field-surroundings";
 import { fieldStyles } from "./style-field-target";
 import type { InspectedStyleProperty, StyleSection } from "./style-inspector";
+import {
+  ARRANGED_PROPERTIES,
+  ArrangeFields,
+  SPACE_PROPERTIES,
+  useArrangeReading,
+  type ArrangeReading,
+} from "./plain-layout-controls";
 import { StylePropertyFields } from "./style-property-fields";
 import type { StyleProvenance } from "./style-provenance";
 import type { StyleTarget } from "./style-target";
@@ -223,12 +230,6 @@ function SectionBody({
     () => new Set()
   );
   const isRevealed = (property: string) => revealed.has(property);
-  const shown = section.properties.filter(
-    property => property.common || isRevealed(property.property)
-  );
-  const more = section.properties.filter(
-    property => !property.common && !isRevealed(property.property)
-  );
   const surroundings: StyleFieldSurroundings = {
     orientation,
     nodeId,
@@ -243,6 +244,28 @@ function SectionBody({
     onChooseForm,
     breakpoints,
   };
+  /*
+   * A container's Layout says its arrangement in plain words. Its rows hold
+   * the properties Arrange draws, so they leave the raw rows and More, except
+   * while it reads Custom, when the raw rows are what hold it.
+   */
+  const reading = useArrangeReading(
+    surroundings,
+    section.key === "layout" &&
+      section.properties.some(property => property.property === "display")
+  );
+  const plain = reading !== undefined && reading.arrange.mode !== "custom";
+  const listed = plain
+    ? section.properties.filter(
+        property => !ARRANGED_PROPERTIES.has(property.property)
+      )
+    : section.properties;
+  const shown = listed.filter(
+    property => property.common || isRevealed(property.property)
+  );
+  const more = listed.filter(
+    property => !property.common && !isRevealed(property.property)
+  );
   return (
     <>
       <SectionFields
@@ -250,6 +273,18 @@ function SectionBody({
         shown={shown}
         readOnly={readOnly}
         surroundings={surroundings}
+        arrange={
+          reading === undefined
+            ? undefined
+            : {
+                reading,
+                spacing: plain
+                  ? section.properties.filter(property =>
+                      SPACE_PROPERTIES.has(property.property)
+                    )
+                  : [],
+              }
+        }
       />
       {readOnly || more.length === 0 ? null : (
         <MoreProperties
@@ -273,11 +308,19 @@ function SectionFields({
   shown,
   readOnly,
   surroundings,
+  arrange,
 }: {
   sectionKey: InspectorSectionKey;
   shown: readonly InspectedStyleProperty[];
   readOnly: boolean;
   surroundings: StyleFieldSurroundings;
+  /** A container's Arrange, with the space fields it draws. */
+  arrange?:
+    | {
+        reading: ArrangeReading;
+        spacing: readonly InspectedStyleProperty[];
+      }
+    | undefined;
 }): React.JSX.Element {
   const target = React.useContext(StyleTargetContext);
   const rings =
@@ -291,6 +334,13 @@ function SectionFields({
           <>
             <ContentWidthFields surroundings={surroundings} />
             <ColumnsLayoutFields surroundings={surroundings} />
+            {arrange === undefined ? null : (
+              <ArrangeFields
+                surroundings={surroundings}
+                reading={arrange.reading}
+                spacing={arrange.spacing}
+              />
+            )}
           </>
         ) : null}
         {sectionKey === "size" ? (
@@ -320,7 +370,7 @@ function SectionFields({
             />
           </React.Fragment>
         ))}
-        {shown.length === 0 ? (
+        {shown.length === 0 && arrange === undefined ? (
           <p className="nx-inspector__note">
             Nothing set here yet. Add a property from More.
           </p>

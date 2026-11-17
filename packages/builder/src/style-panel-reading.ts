@@ -16,9 +16,8 @@ import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 
 import { editedTierLive } from "./breakpoints";
 import { breakpointsAtWidth } from "./canvas/canvas-width";
-import type { AppliedAt } from "./columns-layout";
 import type { EditorState } from "./editor-state";
-import type { ProvenanceOf } from "./style-field-surroundings";
+import type { CascadeAt, ProvenanceOf } from "./style-field-surroundings";
 import type { StyleInspectionOptions } from "./style-inspector";
 import {
   breakpointBadge,
@@ -43,7 +42,7 @@ export function appliedAtReader({
   state: StyleState;
   breakpoints: BreakpointSet | undefined;
   nodeId: string;
-}): AppliedAt | undefined {
+}): CascadeAt | undefined {
   if (cascade === undefined || subject === undefined) return undefined;
   return (tier, cssProperty) => {
     const width = breakpoints?.viewport.find(

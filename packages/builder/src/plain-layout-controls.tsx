@@ -16,28 +16,34 @@ import {
   type BreakpointSet,
   type NodeStyles,
   type StyleState,
+  type StyleValue,
 } from "@nextlyhq/blocks-engine";
 import { Input, Switch } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { offeredTiers } from "./canvas/canvas-width";
-import { chainedStyleOp, COLUMNS_ROW, type AppliedAt } from "./columns-layout";
+import { chainedStyleOp, COLUMNS_ROW } from "./columns-layout";
 import { CssHint } from "./css-hint";
+import type { EditorState } from "./editor-state";
 import {
   ARRANGE_WRITES,
   LAYOUT_PROPERTIES,
   planAlign,
   planArrange,
   planColumns,
+  planPlain,
   planReverse,
   planRows,
   planSpread,
   planStackOn,
   planWrap,
   readArrange,
+  readSpace,
   SPREAD_KEYWORDS,
   unusedSettings,
   type AlignPoint,
+  type AlignX,
+  type AlignY,
   type LayoutProperty,
   type LayoutTiers,
   type LayoutValues,
@@ -53,10 +59,13 @@ import {
 import {
   AppliedAtTier,
   StyleTargetContext,
+  type CascadeAt,
   type StyleFieldSurroundings,
 } from "./style-field-surroundings";
 import type { StyleTarget } from "./style-target";
-import { readStyleValue } from "./style-values";
+import type { InspectedStyleProperty } from "./style-inspector";
+import { StylePropertyFields } from "./style-property-fields";
+import { readStyleValue, type StyleAddress } from "./style-values";
 
 /**
  * The devices the switcher offers, widest (the base) first: of two at one
@@ -111,7 +120,7 @@ function ownInForce(
 }
 
 /** What the cascade applies to the block at a device, property by property. */
-function appliedInForce(applied: AppliedAt): (device: string) => LayoutValues {
+function appliedInForce(applied: CascadeAt): (device: string) => LayoutValues {
   return device => {
     const values: Partial<Record<LayoutProperty, string>> = {};
     for (const property of LAYOUT_PROPERTIES) {
@@ -131,7 +140,7 @@ function appliedInForce(applied: AppliedAt): (device: string) => LayoutValues {
 export function layoutTiers(
   surroundings: StyleFieldSurroundings,
   target: StyleTarget,
-  applied: AppliedAt | undefined
+  applied: CascadeAt | undefined
 ): LayoutTiers {
   const order = deviceOrder(surroundings.breakpoints);
   const styles = stylesOf(target, surroundings);
@@ -166,6 +175,9 @@ export const ARRANGED_PROPERTIES: ReadonlySet<string> = new Set([
   "justifyContent",
   "alignItems",
   "justifyItems",
+  "gap",
+  "rowGap",
+  "columnGap",
   "gridTemplateColumns",
   "gridTemplateRows",
 ]);
@@ -268,24 +280,59 @@ function modeLine(arrange: PlainArrange): string {
   }
 }
 
+/** What Arrange reads at the edited device, shared by its rows and the section. */
+export interface ArrangeReading {
+  readonly tiers: LayoutTiers;
+  readonly editing: string;
+  readonly arrange: PlainArrange;
+}
+
 /**
- * Arrange and its rows, at the top of a container's Layout section. Drawn for
- * any container but Columns, whose tiles are its own.
+ * Arrange's reading for a Layout section, or `undefined` where Arrange isn't
+ * drawn: a block with no layout (its section offers no Display) and Columns,
+ * whose tiles are its own.
+ */
+export function useArrangeReading(
+  surroundings: StyleFieldSurroundings,
+  offersDisplay: boolean
+): ArrangeReading | undefined {
+  const target = React.useContext(StyleTargetContext);
+  const applied = React.useContext(AppliedAtTier);
+  if (!offersDisplay || !arrangesLayout(surroundings.editing.blockType)) {
+    return undefined;
+  }
+  const tiers = layoutTiers(surroundings, target, applied);
+  const editing = surroundings.breakpoint;
+  return { tiers, editing, arrange: readArrange(tiers, editing) };
+}
+
+/**
+ * Arrange and its rows, at the top of a container's Layout section, from the
+ * section's reading. `spacing` is the section's own Space between fields,
+ * drawn in the mode's order.
  */
 export function ArrangeFields({
   surroundings,
+  reading,
+  spacing,
 }: {
   surroundings: StyleFieldSurroundings;
-}): React.JSX.Element | null {
+  reading: ArrangeReading;
+  spacing: readonly InspectedStyleProperty[];
+}): React.JSX.Element {
   const target = React.useContext(StyleTargetContext);
-  const applied = React.useContext(AppliedAtTier);
   const labelId = React.useId();
   const apply = useApply(surroundings, target);
-  if (!arrangesLayout(surroundings.editing.blockType)) return null;
-  const tiers = layoutTiers(surroundings, target, applied);
-  const editing = surroundings.breakpoint;
-  const arrange = readArrange(tiers, editing);
+  const { tiers, editing, arrange } = reading;
   const unused = unusedSettings(tiers, editing);
+  const space = (
+    <SpaceBetween
+      surroundings={surroundings}
+      reading={reading}
+      properties={spacing}
+      apartOffered={arrange.mode === "grid"}
+    />
+  );
   return (
     <div className="nx-arrange" data-control="arrange">
       <div className="nx-inspector__field">
@@ -303,7 +350,16 @@ export function ArrangeFields({
       </div>
       <p className="nx-arrange__css">{modeLine(arrange)}</p>
       {arrange.mode === "custom" ? (
-        <p className="nx-inspector__note">Arrange: Custom</p>
+        <p className="nx-arrange__custom">
+          Arrange: Custom{" · "}
+          <button
+            type="button"
+            className="nx-arrange__link"
+            onClick={() => apply(planPlain(tiers, editing))}
+          >
+            Use plain controls
+          </button>
+        </p>
       ) : null}
       <ModeRows
         arrange={arrange}
@@ -311,6 +367,7 @@ export function ArrangeFields({
         editing={editing}
         breakpoints={surroundings.breakpoints}
         apply={apply}
+        space={space}
       />
       {unused.length === 0 ? null : (
         <UnusedLine
@@ -337,12 +394,15 @@ function ModeRows({
   editing,
   breakpoints,
   apply,
+  space,
 }: {
   arrange: PlainArrange;
   tiers: LayoutTiers;
   editing: string;
   breakpoints: BreakpointSet | undefined;
   apply: (writes: readonly LayoutWrite[]) => void;
+  /** Space between, drawn in the mode's order. */
+  space: React.JSX.Element;
 }): React.JSX.Element | null {
   if (arrange.mode === "custom") return null;
   const align = (
@@ -362,6 +422,7 @@ function ModeRows({
     return (
       <>
         {align}
+        {space}
         <SwitchRow
           label="Reverse order"
           on={arrange.reverse}
@@ -378,6 +439,7 @@ function ModeRows({
         editing={editing}
         apply={apply}
         align={align}
+        space={space}
       />
     );
   }
@@ -394,6 +456,7 @@ function ModeRows({
         spread={arrange.spread}
         onChoose={spread => apply(planSpread(tiers, editing, spread))}
       />
+      {space}
       {arrange.stacked ? null : (
         <SwitchRow
           label="Wrap onto new lines"
@@ -413,18 +476,20 @@ function ModeRows({
 
 const X_POINTS = ["left", "center", "right"] as const;
 const Y_POINTS = ["top", "middle", "bottom"] as const;
-const POINT_WORDS = {
-  top: "Top",
-  middle: "Middle",
-  bottom: "Bottom",
-  left: "left",
-  center: "centre",
-  right: "right",
-} as const;
+const POINT_NAMES: Readonly<Record<AlignY, Readonly<Record<AlignX, string>>>> =
+  {
+    top: { left: "Top left", center: "Top centre", right: "Top right" },
+    middle: { left: "Middle left", center: "Centre", right: "Middle right" },
+    bottom: {
+      left: "Bottom left",
+      center: "Bottom centre",
+      right: "Bottom right",
+    },
+  };
 
-/** A point's name: "Top left", "Middle centre". */
+/** A point's name: "Top left", "Centre", "Bottom right". */
 function pointName(point: AlignPoint): string {
-  return `${POINT_WORDS[point.y]} ${POINT_WORDS[point.x]}`;
+  return POINT_NAMES[point.y][point.x];
 }
 
 /**
@@ -629,12 +694,14 @@ function GridRows({
   editing,
   apply,
   align,
+  space,
 }: {
   arrange: Extract<PlainArrange, { mode: "grid" }>;
   tiers: LayoutTiers;
   editing: string;
   apply: (writes: readonly LayoutWrite[]) => void;
   align: React.JSX.Element;
+  space: React.JSX.Element;
 }): React.JSX.Element {
   const columnsId = React.useId();
   const fit = arrange.columns?.kind === "fit";
@@ -698,6 +765,7 @@ function GridRows({
         onCommit={rows => apply(planRows(tiers, editing, rows))}
       />
       {align}
+      {space}
     </>
   );
 }
@@ -766,11 +834,14 @@ function DraftInput({
 
 /** Which choice a set of unused values came from, for the line. */
 function unusedFrom(unused: readonly LayoutProperty[]): string {
-  const grid = unused.some(property => property.startsWith("grid"));
+  const grid = unused.some(
+    property => property.startsWith("grid") || property === "justifyItems"
+  );
   const flex = unused.some(property => property.startsWith("flex"));
-  if (grid && !flex) return "Grid";
-  if (flex && !grid) return "Row";
-  return "another arrangement";
+  if (grid && flex) return "Row and Grid";
+  // What's left without a grid property (alignment, space) is a Row's or a
+  // flex Stack's, and only a Row writes it outside a flex column.
+  return grid ? "Grid" : "Row";
 }
 
 /** "2 settings from Row aren't used · Clear". */
@@ -792,5 +863,174 @@ function UnusedLine({
         Clear
       </button>
     </p>
+  );
+}
+
+/** The space properties, in the order the rows draw them. */
+const SPACE_ORDER = ["gap", "rowGap", "columnGap"] as const;
+
+/** The properties Space between draws, out of the section's own fields. */
+export const SPACE_PROPERTIES: ReadonlySet<string> = new Set(SPACE_ORDER);
+
+/** Whether styles set any space at the edited address. */
+function setsSpace(
+  styles: NodeStyles | undefined,
+  state: StyleState,
+  breakpoint: string
+): boolean {
+  return SPACE_ORDER.some(
+    property =>
+      readStyleValue(styles, { state, breakpoint, property, path: [] }) !==
+      undefined
+  );
+}
+
+/** The flex column a Stack in block flow becomes to space its blocks. */
+function columnSteps(
+  state: StyleState,
+  breakpoint: string
+): { address: StyleAddress; value: StyleValue }[] {
+  return [
+    {
+      address: { state, breakpoint, property: "display", path: [] },
+      value: "flex",
+    },
+    {
+      address: { state, breakpoint, property: "flexDirection", path: [] },
+      value: "column",
+    },
+  ];
+}
+
+/**
+ * The editor a Stack in block flow writes its space through: a space set
+ * there also writes the flex column, in the same op, so it applies and one
+ * undo takes both back. A style op holds the node's whole styles, so the
+ * last one for the node is extended.
+ */
+function columnOnSpace(
+  editor: EditorState,
+  nodeId: string,
+  state: StyleState,
+  breakpoint: string
+): EditorState {
+  return {
+    ...editor,
+    applyAll: ops => {
+      const node = findNode(editor.document.nodes, nodeId);
+      const at = ops.findLastIndex(
+        op =>
+          op.kind === "update" &&
+          op.id === nodeId &&
+          op.patch?.styles !== undefined
+      );
+      const last = at === -1 ? undefined : ops[at];
+      const styles =
+        last?.kind === "update"
+          ? (last.patch?.styles as NodeStyles)
+          : undefined;
+      if (
+        node === undefined ||
+        last === undefined ||
+        !setsSpace(styles, state, breakpoint)
+      ) {
+        return editor.applyAll(ops);
+      }
+      const flexed = chainedStyleOp(
+        { ...node, styles },
+        columnSteps(state, breakpoint)
+      );
+      return editor.applyAll(
+        ops.map((op, index) => (index === at ? (flexed ?? op) : op))
+      );
+    },
+  };
+}
+
+/** The shared style a Stack in block flow writes its space through, likewise. */
+function sharedColumnOnSpace(
+  target: Extract<StyleTarget, { kind: "shared" }>,
+  state: StyleState,
+  breakpoint: string,
+  policy: StyleFieldSurroundings["policy"]
+): StyleTarget {
+  return {
+    ...target,
+    write: change => {
+      const write = change(target.style.styles as NodeStyles);
+      if (
+        write.kind !== "write" ||
+        !setsSpace(write.styles, state, breakpoint)
+      ) {
+        return target.write(change);
+      }
+      return target.write(
+        combined([
+          change,
+          ...columnSteps(state, breakpoint).map(step =>
+            sharedStyleChange(step.address, step.value, policy)
+          ),
+        ])
+      );
+    },
+  };
+}
+
+/**
+ * Space between: the section's own gap field, so a variable or a token works
+ * as on any spacing field, named in plain words. A Grid can set rows and
+ * columns apart, which writes `row-gap` and `column-gap`.
+ */
+function SpaceBetween({
+  surroundings,
+  reading,
+  properties,
+  apartOffered,
+}: {
+  surroundings: StyleFieldSurroundings;
+  reading: ArrangeReading;
+  properties: readonly InspectedStyleProperty[];
+  apartOffered: boolean;
+}): React.JSX.Element | null {
+  const target = React.useContext(StyleTargetContext);
+  const space = readSpace(reading.tiers, reading.editing);
+  const setApart = space.rowGap !== undefined || space.columnGap !== undefined;
+  const [apartAsked, setApartAsked] = React.useState(false);
+  const apart = apartOffered && (setApart || apartAsked);
+  const { arrange } = reading;
+  const flow = arrange.mode === "stack" && !arrange.flex;
+  const { state, breakpoint, nodeId, policy } = surroundings;
+  const editor = flow
+    ? columnOnSpace(surroundings.editor, nodeId, state, breakpoint)
+    : surroundings.editor;
+  const written =
+    flow && target.kind === "shared"
+      ? sharedColumnOnSpace(target, state, breakpoint, policy)
+      : target;
+  const drawn = properties.filter(property =>
+    apart ? property.property !== "gap" : property.property === "gap"
+  );
+  if (drawn.length === 0) return null;
+  return (
+    <StyleTargetContext.Provider value={written}>
+      {drawn.map(property => (
+        <StylePropertyFields
+          key={property.property}
+          property={property}
+          namesSection={false}
+          {...surroundings}
+          editor={editor}
+        />
+      ))}
+      {apartOffered && !apart ? (
+        <button
+          type="button"
+          className="nx-arrange__link"
+          onClick={() => setApartAsked(true)}
+        >
+          Set rows and columns apart
+        </button>
+      ) : null}
+    </StyleTargetContext.Provider>
   );
 }

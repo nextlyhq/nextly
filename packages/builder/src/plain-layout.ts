@@ -15,6 +15,8 @@
  * @module plain-layout
  */
 
+import { applies } from "@nextlyhq/blocks-engine";
+
 /** The catalog properties the layer reads and writes. */
 export const LAYOUT_PROPERTIES = [
   "display",
@@ -536,57 +538,123 @@ export function planRows(
   return [settled(tiers, editing, "gridTemplateRows", rowsTemplate(rows))];
 }
 
-/** The properties each mode uses; the others it stores stop applying. */
-const USED_BY: Readonly<
-  Record<PlainArrange["mode"], ReadonlySet<LayoutProperty>>
-> = {
-  stack: new Set([
-    "display",
-    "flexDirection",
-    "justifyContent",
-    "alignItems",
-    "gap",
-  ]),
-  row: new Set([
-    "display",
-    "flexDirection",
-    "flexWrap",
-    "justifyContent",
-    "alignItems",
-    "gap",
-    "rowGap",
-    "columnGap",
-  ]),
-  grid: new Set([
-    "display",
-    "gridTemplateColumns",
-    "gridTemplateRows",
-    "justifyItems",
-    "alignItems",
-    "gap",
-    "rowGap",
-    "columnGap",
-  ]),
-  custom: new Set(LAYOUT_PROPERTIES),
-};
-
 /**
- * The values stored at the edited device that the arrangement in force does
- * not use: kept, but not to be listed as if they applied. A Row stacked here
- * does not use its wrap, which a column never does.
+ * The values stored at the edited device that do nothing there: kept, but not
+ * to be listed as if they applied. Judged by the engine's `applies`, against
+ * the display and wrap in force, so this line and every other reader agree.
+ * A wrap on a Row stacked here still applies to a flex container, so it is
+ * not listed; the Row's own controls just don't show it there.
  */
 export function unusedSettings(
   tiers: LayoutTiers,
   editing: string
 ): LayoutProperty[] {
-  const current = readArrange(tiers, editing);
-  const used = USED_BY[current.mode];
+  const values = tiers.inForce(editing);
+  const context = {
+    display: values.display ?? "block",
+    flexWrap: values.flexWrap ?? "nowrap",
+  };
   const own = tiers.own(editing);
-  return LAYOUT_PROPERTIES.filter(property => {
-    if (own[property] === undefined) return false;
-    if (current.mode === "row" && current.stacked && property === "flexWrap") {
-      return false;
+  return LAYOUT_PROPERTIES.filter(
+    property => own[property] !== undefined && !applies(property, context)
+  );
+}
+
+/** A container's Space between: one gap, or rows and columns set apart. */
+export interface PlainSpace {
+  readonly gap?: string;
+  readonly rowGap?: string;
+  readonly columnGap?: string;
+}
+
+/** The Space between in force at the edited device. */
+export function readSpace(tiers: LayoutTiers, editing: string): PlainSpace {
+  const values = tiers.inForce(editing);
+  return {
+    ...(values.gap === undefined ? {} : { gap: values.gap }),
+    ...(values.rowGap === undefined ? {} : { rowGap: values.rowGap }),
+    ...(values.columnGap === undefined ? {} : { columnGap: values.columnGap }),
+  };
+}
+
+/**
+ * The writes Space between makes: `gap`, or `row-gap` and `column-gap` once
+ * set apart, each cleared where it is not given. A Stack in block flow becomes
+ * a flex column to space its blocks, as its Align does.
+ */
+export function planSpace(
+  tiers: LayoutTiers,
+  editing: string,
+  space: PlainSpace
+): LayoutWrite[] {
+  const current = readArrange(tiers, editing);
+  const writes: LayoutWrite[] = [];
+  const anything =
+    space.gap !== undefined ||
+    space.rowGap !== undefined ||
+    space.columnGap !== undefined;
+  if (current.mode === "stack" && !current.flex && anything) {
+    writes.push(
+      { device: editing, property: "display", value: "flex" },
+      { device: editing, property: "flexDirection", value: "column" }
+    );
+  }
+  writes.push(
+    settled(tiers, editing, "gap", space.gap ?? null),
+    settled(tiers, editing, "rowGap", space.rowGap ?? null),
+    settled(tiers, editing, "columnGap", space.columnGap ?? null)
+  );
+  return writes;
+}
+
+/** The display a Custom arrangement's plain rewrite keeps. */
+const PLAIN_DISPLAY: Readonly<Record<string, "flex" | "grid">> = {
+  flex: "flex",
+  "inline-flex": "flex",
+  grid: "grid",
+  "inline-grid": "grid",
+};
+
+/**
+ * "Use plain controls": the writes that turn a Custom arrangement into the
+ * nearest plain one at the edited device, as one step. An inline flex or grid
+ * becomes its block form; any other display becomes a Stack; each value the
+ * plain controls can't say (an alignment keyword with no 3×3 point, a
+ * template with no plain form) is cleared, and every other value is kept.
+ */
+export function planPlain(tiers: LayoutTiers, editing: string): LayoutWrite[] {
+  if (readArrange(tiers, editing).mode !== "custom") return [];
+  const values = tiers.inForce(editing);
+  const display = PLAIN_DISPLAY[values.display ?? ""];
+  const writes: LayoutWrite[] = [
+    settled(tiers, editing, "display", display ?? null),
+  ];
+  if (display === undefined) {
+    writes.push(settled(tiers, editing, "flexDirection", null));
+  }
+  const kind =
+    display === "grid"
+      ? "grid"
+      : display === "flex" && isColumn({ ...values, display: "flex" })
+        ? "column"
+        : "row";
+  const axes = alignAxes(kind);
+  for (const property of [axes.x, axes.y]) {
+    const value = values[property];
+    if (value === undefined) continue;
+    const spread =
+      SPREADS.has(value) && property === "justifyContent" && kind !== "grid";
+    if (axisPlace(value) === undefined && !spread) {
+      writes.push(settled(tiers, editing, property, null));
     }
-    return !used.has(property);
-  });
+  }
+  if (display === "grid") {
+    if (readColumns(values.gridTemplateColumns) === "custom") {
+      writes.push(settled(tiers, editing, "gridTemplateColumns", null));
+    }
+    if (readRows(values.gridTemplateRows) === "custom") {
+      writes.push(settled(tiers, editing, "gridTemplateRows", null));
+    }
+  }
+  return writes;
 }
