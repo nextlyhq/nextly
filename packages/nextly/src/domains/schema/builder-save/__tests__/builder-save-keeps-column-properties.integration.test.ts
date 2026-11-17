@@ -342,56 +342,55 @@ for (const dialect of getConfiguredTestDialects()) {
        * has each, or, with `columnDefault`, gives `views` a default instead.
        */
       async function decorate(columnDefault?: string): Promise<void> {
-        const table = road.table;
         if (columnDefault !== undefined) {
           await defaultViews();
           return;
         }
-        if (dialect === "postgresql") {
-          await exec(
-            `ALTER TABLE ${q(table)} ALTER COLUMN "heading" TYPE text COLLATE "C"`
-          );
-          await exec(
-            `COMMENT ON COLUMN ${q(table)}."heading" IS 'it''s kept by the change'`
-          );
-          await exec(
-            `ALTER TABLE ${q(table)} ADD CONSTRAINT ${q(`${table}_short`)} CHECK (char_length("heading") <= 60)`
-          );
-          return;
-        }
-        if (dialect === "mysql") {
-          const [current] = await exec<{ type: string; nullable: string }>(
-            `SELECT COLUMN_TYPE AS \`type\`, IS_NULLABLE AS \`nullable\` FROM information_schema.COLUMNS ` +
-              `WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}' AND COLUMN_NAME = 'heading'`
-          );
-          const nullability =
-            current.nullable === "YES" ? " NULL" : " NOT NULL";
-          if (columnDefault !== undefined) {
-            await exec(
-              `ALTER TABLE ${q(table)} MODIFY COLUMN \`heading\` ${current.type}${nullability} DEFAULT '${columnDefault}'`
-            );
-            return;
-          }
-          await exec(
-            `ALTER TABLE ${q(table)} MODIFY COLUMN \`heading\` ${current.type} CHARACTER SET utf8mb4 COLLATE utf8mb4_bin${nullability} COMMENT 'it''s kept by the change'`
-          );
-          await exec(
-            `ALTER TABLE ${q(table)} ADD CONSTRAINT ${q(`${table}_short`)} CHECK (char_length(\`heading\`) <= 60)`
-          );
-          return;
-        }
-        // SQLite keeps a collation, a check and a default only in the CREATE statement, so the column
-        // is made again with them, its indexes dropped and put back around it. The table is empty.
+        if (dialect === "postgresql") await decoratePostgres(road.table);
+        else if (dialect === "mysql") await decorateMysql(road.table);
+        else await decorateSqlite(road.table);
+      }
+
+      /** On PostgreSQL: `heading` collated "C", with a comment and a check. */
+      async function decoratePostgres(table: string): Promise<void> {
+        await exec(
+          `ALTER TABLE ${q(table)} ALTER COLUMN "heading" TYPE text COLLATE "C"`
+        );
+        await exec(
+          `COMMENT ON COLUMN ${q(table)}."heading" IS 'it''s kept by the change'`
+        );
+        await exec(
+          `ALTER TABLE ${q(table)} ADD CONSTRAINT ${q(`${table}_short`)} CHECK (char_length("heading") <= 60)`
+        );
+      }
+
+      /** On MySQL: `heading` in a binary collation, with a comment and a check. */
+      async function decorateMysql(table: string): Promise<void> {
+        const [current] = await exec<{ type: string; nullable: string }>(
+          `SELECT COLUMN_TYPE AS \`type\`, IS_NULLABLE AS \`nullable\` FROM information_schema.COLUMNS ` +
+            `WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}' AND COLUMN_NAME = 'heading'`
+        );
+        const nullability = current.nullable === "YES" ? " NULL" : " NOT NULL";
+        await exec(
+          `ALTER TABLE ${q(table)} MODIFY COLUMN \`heading\` ${current.type} CHARACTER SET utf8mb4 COLLATE utf8mb4_bin${nullability} COMMENT 'it''s kept by the change'`
+        );
+        await exec(
+          `ALTER TABLE ${q(table)} ADD CONSTRAINT ${q(`${table}_short`)} CHECK (char_length(\`heading\`) <= 60)`
+        );
+      }
+
+      /**
+       * On SQLite, which keeps a collation and a check only in the CREATE statement: the column made
+       * again with them, its indexes dropped and put back around it. The table is empty.
+       */
+      async function decorateSqlite(table: string): Promise<void> {
         const indexes = await exec<{ name: string; sql: string | null }>(
           `SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = '${table}' AND sql LIKE '%"heading"%'`
         );
         for (const index of indexes) await exec(`DROP INDEX ${q(index.name)}`);
         await exec(`ALTER TABLE ${q(table)} DROP COLUMN "heading"`);
         await exec(
-          `ALTER TABLE ${q(table)} ADD COLUMN "heading" text` +
-            (columnDefault !== undefined
-              ? ` DEFAULT '${columnDefault}'`
-              : ` COLLATE NOCASE CHECK (length("heading") <= 60)`)
+          `ALTER TABLE ${q(table)} ADD COLUMN "heading" text COLLATE NOCASE CHECK (length("heading") <= 60)`
         );
         for (const index of indexes) {
           if (index.sql !== null) await exec(index.sql);
