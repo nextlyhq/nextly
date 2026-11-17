@@ -504,7 +504,7 @@ describe("a link placed across tabs, as a card's", () => {
     ).toBeDefined();
     // Not inside Content's link control: its own field in Advanced › HTML.
     expect(screen.queryByRole("button", { name: /Link options/ })).toBeNull();
-    const html = document.querySelector('[data-advanced-section="html"]');
+    const html = document.querySelector('[data-section="html"]');
     expect(html?.textContent).toContain("Link relationship");
   });
 });

@@ -1,5 +1,6 @@
 /**
- * A Columns row's layout tiles and stacking, in the real editor.
+ * A Columns row's layout tiles and stacking, in its Content tab, in the real
+ * editor.
  *
  * - A tile writes the row's columns: Wide right lays two columns at one to
  *   two.
@@ -101,7 +102,7 @@ async function createPage(
   return id;
 }
 
-/** Open the row's Style tab, selected by clicking its padding. */
+/** Open the row's Content tab, selected by clicking its padding. */
 async function openRow(page: Page, id: string): Promise<void> {
   await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
   await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
@@ -112,7 +113,7 @@ async function openRow(page: Page, id: string): Promise<void> {
     .first()
     .click({ position: { x: 6, y: 6 } });
   await expect(page.locator("[data-block-card]")).toBeVisible();
-  await page.getByRole("tab", { name: "Style" }).click();
+  await page.getByRole("tab", { name: "Content" }).click();
   await expect(page.getByRole("radiogroup", { name: "Layout" })).toBeVisible();
 }
 

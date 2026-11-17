@@ -16,12 +16,15 @@ import {
   findNode,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
+import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import { Switch } from "@nextlyhq/ui";
 import * as React from "react";
 
 import {
   COLUMNS_LAYOUTS,
+  COLUMNS_ROW,
   defaultTemplate,
+  layoutHoldsValue,
   layoutOf,
   planLayout,
   planStack,
@@ -33,7 +36,9 @@ import {
   type StackOn,
 } from "./columns-layout";
 import type { EditorState } from "./editor-state";
+import type { PanelSection } from "./panel-section";
 import { arrowTo, SegmentChoices } from "./segment-choices";
+import { appliedAtReader, selectedSubject } from "./style-panel-reading";
 import { readStyleValue } from "./style-values";
 
 /** Where a row stacks, each choice saying every device it applies on. */
@@ -247,4 +252,54 @@ export function ColumnsLayoutControl({
       ) : null}
     </div>
   );
+}
+
+/** What the Content tab knows of the page around a Columns row. */
+export interface ColumnsSectionContext {
+  readonly editor: EditorState;
+  readonly nodeId: string;
+  /** The block's type, which decides whether it has the section at all. */
+  readonly blockName: string;
+  /** The section's name, as the inspection names it. */
+  readonly label: string;
+  readonly breakpoints: BreakpointSet | undefined;
+  /** The canvas's cascade, for a stack reaching the row from a shared style. */
+  readonly cascade: PageStyleCascade | undefined;
+  /** The tag the canvas draws the row as, which the cascade's subject names. */
+  readonly renderedTag: string | undefined;
+}
+
+/**
+ * A Columns row's Content section, Layout and Stack on, or `undefined` for
+ * any other block. Its dot shows while the row stores a template or a stack.
+ * A stack reaching the row is read from the cascade's base state, the state
+ * every choice here writes.
+ */
+export function columnsContentSection(
+  context: ColumnsSectionContext
+): PanelSection | undefined {
+  const { editor, nodeId, blockName, breakpoints } = context;
+  if (blockName !== COLUMNS_ROW) return undefined;
+  const row = findNode(editor.document.nodes, nodeId);
+  if (row === undefined) return undefined;
+  const applied = appliedAtReader({
+    cascade: context.cascade,
+    subject: selectedSubject(editor, context.cascade, context.renderedTag),
+    state: ROW_OWN.state,
+    breakpoints,
+    nodeId,
+  });
+  return {
+    key: context.label,
+    label: context.label,
+    holdsValue: layoutHoldsValue(row, stackTiers(breakpoints)),
+    body: (
+      <ColumnsLayoutControl
+        editor={editor}
+        nodeId={nodeId}
+        breakpoints={breakpoints}
+        applied={applied}
+      />
+    ),
+  };
 }

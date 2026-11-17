@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * The fields a block adds to its own Style sections: the columns layout over
- * its template, its shortcuts, and the presets drawn over a section.
+ * The fields a block adds to its own Style sections: its shortcuts, and the
+ * presets drawn over a section.
  *
  * @module style-block-shortcuts
  */
@@ -13,42 +13,11 @@ import {
   BlockShortcutsControl,
   MinHeightPresets,
 } from "./block-shortcuts-field";
-import { COLUMNS_ROW } from "./columns-layout";
-import { ColumnsLayoutControl } from "./columns-layout-field";
 import {
   StyleTargetContext,
   TokenPrefixContext,
   type StyleFieldSurroundings,
-  AppliedAtTier,
 } from "./style-field-surroundings";
-
-/**
- * A Columns row's layout tiles and stacking, at the top of its Layout
- * section. Only for the row itself: a shared style's values reach many rows,
- * and its tiles would add or remove columns in none of them.
- */
-export function ColumnsLayoutFields({
-  surroundings,
-}: {
-  surroundings: StyleFieldSurroundings;
-}): React.JSX.Element | null {
-  const target = React.useContext(StyleTargetContext);
-  const applied = React.useContext(AppliedAtTier);
-  if (
-    target.kind !== "block" ||
-    surroundings.editing.blockType !== COLUMNS_ROW
-  ) {
-    return null;
-  }
-  return (
-    <ColumnsLayoutControl
-      editor={surroundings.editor}
-      nodeId={surroundings.nodeId}
-      breakpoints={surroundings.breakpoints}
-      applied={applied}
-    />
-  );
-}
 
 /**
  * A Section's Height and a Button's Size and Full width, at the top of its

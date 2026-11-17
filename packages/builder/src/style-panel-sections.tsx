@@ -33,7 +33,6 @@ import { SectionHeld } from "./section-held";
 import { spacingRings } from "./spacing-box";
 import { SpacingBox } from "./spacing-box-fields";
 import {
-  ColumnsLayoutFields,
   BlockShortcutsFields,
   BlockPresetsOver,
 } from "./style-block-shortcuts";
@@ -288,10 +287,7 @@ function SectionFields({
     <fieldset className="nx-inspector__fields" disabled={readOnly}>
       <SectionHeld.Provider value={readOnly}>
         {sectionKey === "layout" ? (
-          <>
-            <ContentWidthFields surroundings={surroundings} />
-            <ColumnsLayoutFields surroundings={surroundings} />
-          </>
+          <ContentWidthFields surroundings={surroundings} />
         ) : null}
         {sectionKey === "size" ? (
           <BlockShortcutsFields

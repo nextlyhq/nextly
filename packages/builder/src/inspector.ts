@@ -554,7 +554,7 @@ const BUILDER_CONTENT_SECTIONS: Readonly<Record<string, string>> = {
 };
 
 /** The Content section the builder draws for a block, if it draws one. */
-function builderContentSectionOf(blockName: string): string | undefined {
+export function builderContentSectionOf(blockName: string): string | undefined {
   return Object.hasOwn(BUILDER_CONTENT_SECTIONS, blockName)
     ? BUILDER_CONTENT_SECTIONS[blockName]
     : undefined;
