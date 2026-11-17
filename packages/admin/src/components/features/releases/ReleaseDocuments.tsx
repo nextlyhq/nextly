@@ -45,6 +45,10 @@ import {
   useChangeReleaseMemberAction,
   type ReleaseDocumentNames,
 } from "@admin/hooks/queries/useReleases";
+import {
+  useDocumentAddress,
+  type DocumentAddressOf,
+} from "@admin/lib/navigation/useDocumentAddress";
 import { cn } from "@admin/lib/utils";
 import type {
   HiddenReleaseMembers,
@@ -90,11 +94,18 @@ export interface ReadinessState {
 /** The id the first document needing a fix is reached by, from the panel. */
 const FIRST_PROBLEM_ID = "release-first-problem";
 
-/** Where a document is edited, so a row is a way back to it. */
-function documentHref(member: ReleaseMember): string {
+/**
+ * Where a document opens, so a row is a way back to it: where the admin's one
+ * rule for opening a document opens it, as from any other link.
+ */
+export function documentHref(
+  member: ReleaseMember,
+  addressOf: DocumentAddressOf
+): string {
   return member.scopeKind === "single"
-    ? buildRoute(ROUTES.SINGLE_EDIT, { slug: member.scopeSlug })
-    : buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
+    ? addressOf({ kind: "single", slug: member.scopeSlug })
+    : addressOf({
+        kind: "collection",
         slug: member.scopeSlug,
         id: member.entryId,
       });
@@ -473,11 +484,12 @@ function DocumentTitle({
   openable: boolean;
   statusLine: string;
 }) {
+  const addressOf = useDocumentAddress();
   return (
     <>
       {openable && !label.muted ? (
         <Link
-          href={documentHref(member)}
+          href={documentHref(member, addressOf)}
           className="group inline-flex max-w-full items-center gap-1 font-medium text-foreground hover:underline"
         >
           <span className="truncate">{label.text}</span>
@@ -602,6 +614,7 @@ function ProblemList({
   /** Takes the document out, where the reader may. */
   onRemove?: () => void;
 }) {
+  const addressOf = useDocumentAddress();
   if (problems.length === 0) return null;
   const Icon = tone === "hard" ? AlertCircle : Info;
   return (
@@ -632,7 +645,7 @@ function ProblemList({
               <>
                 {" · "}
                 <Link
-                  href={documentHref(member)}
+                  href={documentHref(member, addressOf)}
                   className="font-medium underline underline-offset-2"
                 >
                   Fix
@@ -790,6 +803,7 @@ function RowMenu({
   onRemove: () => void;
 }) {
   const { remove } = controls;
+  const addressOf = useDocumentAddress();
   if (!openable && !remove.offered) return null;
   return (
     <DropdownMenu>
@@ -806,7 +820,7 @@ function RowMenu({
       <DropdownMenuContent align="end" className="max-w-[18rem]">
         {openable ? (
           <DropdownMenuItem asChild>
-            <Link href={documentHref(member)}>Open document</Link>
+            <Link href={documentHref(member, addressOf)}>Open document</Link>
           </DropdownMenuItem>
         ) : null}
         {remove.offered ? (

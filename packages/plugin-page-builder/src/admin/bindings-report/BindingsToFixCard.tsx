@@ -35,8 +35,8 @@ export interface BindingsToFixCardData {
 const PLACE_LABEL: Readonly<Record<string, string>> = {
   pages: "Page",
   components: "Component",
-  patterns: "Pattern",
-  layouts: "Layout",
+  patterns: "Saved section",
+  layouts: "Header & footer set",
   entries: "Entry",
   singles: "Single",
 };

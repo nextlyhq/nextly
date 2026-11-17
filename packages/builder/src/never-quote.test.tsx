@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 
 /**
- * "Never quote this" in the Content tab: offered on Section and Box only, a
- * switch that marks the block so its root carries `data-nosnippet`, stored
- * only while on, and a note where the block's tag is one Google does not
- * read the mark on.
+ * "Keep out of search previews" in the Advanced tab: offered on every
+ * container, a switch that marks the block so its root carries
+ * `data-nosnippet`, stored only while on, and a note where the block's tag is
+ * one Google does not read the mark on.
  *
  * @module never-quote.test
  */
@@ -46,27 +46,32 @@ function pageWith(
 
 const stored = () => findNode(editorRef!.document.nodes, "a");
 
+/** Every container, as the tag it renders by default. */
+const CONTAINERS: ReadonlyArray<readonly [string, string]> = [
+  ["core/section", "section"],
+  ["core/box", "div"],
+  ["core/card", "div"],
+  ["core/columns", "div"],
+  ["core/column", "div"],
+  ["core/accordion", "div"],
+  ["core/gallery", "div"],
+];
+
 describe("NeverQuote", () => {
-  it.each(["core/section", "core/box"])("is offered on %s", type => {
-    render(
-      <Host
-        document={pageWith(type, {
-          as: type === "core/box" ? "div" : "section",
-        })}
-      />
-    );
+  it.each(CONTAINERS)("is offered on %s", (type, as) => {
+    render(<Host document={pageWith(type, { as })} />);
     expect(
-      screen.getByRole("switch", { name: "Never quote this" })
+      screen.getByRole("switch", { name: "Keep out of search previews" })
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "Google won't show this section's text under the page's link, or use it as a direct source in AI Overviews and AI Mode. Visitors still see it."
+        "Google won't show this block's text under the page's link, or use it as a direct source in AI Overviews and AI Mode. Visitors still see it."
       )
     ).toBeTruthy();
   });
 
-  it.each(["core/heading", "core/columns", "core/card"])(
-    "is not offered on %s",
+  it.each(["core/heading", "core/text", "core/button"])(
+    "is not offered on %s, which is no container",
     type => {
       const { container } = render(<Host document={pageWith(type)} />);
       expect(container.innerHTML).toBe("");
@@ -75,14 +80,20 @@ describe("NeverQuote", () => {
 
   it("marks the block when turned on, and stores nothing once turned off", () => {
     render(<Host document={pageWith("core/section", { as: "section" })} />);
-    const toggle = screen.getByRole("switch", { name: "Never quote this" });
+    const toggle = screen.getByRole("switch", {
+      name: "Keep out of search previews",
+    });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
 
     act(() => toggle.click());
     expect(stored()?.nosnippet).toBe(true);
     expect(screen.getByText("data-nosnippet")).toBeTruthy();
 
-    act(() => screen.getByRole("switch", { name: "Never quote this" }).click());
+    act(() =>
+      screen
+        .getByRole("switch", { name: "Keep out of search previews" })
+        .click()
+    );
     expect(stored()).not.toHaveProperty("nosnippet");
   });
 
@@ -91,6 +102,11 @@ describe("NeverQuote", () => {
     ["core/section", { as: "main" }],
     ["core/box", { as: "article" }],
     ["core/box", { as: "div", link: "https://example.com" }],
+    ["core/card", { as: "aside" }],
+    ["core/card", { as: "div", link: "https://example.com" }],
+    ["core/columns", { as: "article" }],
+    ["core/accordion", { as: "article" }],
+    ["core/gallery", { as: "article" }],
   ])("says Google won't read the mark on %s with %j", (type, props) => {
     render(<Host document={pageWith(type, props, { nosnippet: true })} />);
     expect(
@@ -100,17 +116,28 @@ describe("NeverQuote", () => {
     ).toBeTruthy();
   });
 
-  it("says nothing more on a section or div tag", () => {
-    render(
-      <Host
-        document={pageWith("core/box", { as: "div" }, { nosnippet: true })}
-      />
-    );
+  it.each([
+    ["core/box", { as: "div" }],
+    ["core/card", { as: "section" }],
+    ["core/columns", { as: "div" }],
+    ["core/gallery", { as: "section" }],
+  ])("says nothing more on %s with %j", (type, props) => {
+    render(<Host document={pageWith(type, props, { nosnippet: true })} />);
     expect(
       screen.queryByText(
         "Google reads this only when the HTML tag is section or div."
       )
     ).toBeNull();
+  });
+
+  it("marks a card, a container that newly offers it", () => {
+    render(<Host document={pageWith("core/card", { as: "div" })} />);
+    act(() =>
+      screen
+        .getByRole("switch", { name: "Keep out of search previews" })
+        .click()
+    );
+    expect(stored()?.nosnippet).toBe(true);
   });
 
   it("is held while a lock holds the block's design", () => {
@@ -122,7 +149,7 @@ describe("NeverQuote", () => {
     );
     expect(
       screen
-        .getByRole("switch", { name: "Never quote this" })
+        .getByRole("switch", { name: "Keep out of search previews" })
         .hasAttribute("disabled")
     ).toBe(true);
   });

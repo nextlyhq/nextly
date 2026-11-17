@@ -176,6 +176,28 @@ function outranks(
 }
 
 /**
+ * Whether a class's rule lands on the node: a class it applies, a look only on
+ * its own block type, and a type's ★ look on a block of the type that applies
+ * none of the type's looks, as the compiler's ★ rule selects it.
+ */
+function classReaches(
+  origin: Extract<StyleTraceEntry["origin"], { kind: "class" }>,
+  subject: Pick<StyleSubject, "blockType" | "classIds">
+): boolean {
+  const applied = subject.classIds ?? [];
+  if (origin.unlessWearing !== undefined) {
+    return (
+      origin.blockType === subject.blockType &&
+      !origin.unlessWearing.some(id => applied.includes(id))
+    );
+  }
+  return (
+    applied.includes(origin.id) &&
+    (origin.blockType === undefined || origin.blockType === subject.blockType)
+  );
+}
+
+/**
  * Whether an entry's origin reaches this node directly.
  *
  * Directly means the selector lands on the node's own element: its own rules, a class it applies,
@@ -198,12 +220,7 @@ function reachesNode(entry: StyleTraceEntry, subject: StyleSubject): boolean {
     case "blockType":
       return origin.part === undefined && origin.type === subject.blockType;
     case "class":
-      return (
-        (subject.classIds ?? []).includes(origin.id) &&
-        // A look only on its own block type, as the compiler applies it.
-        (origin.blockType === undefined ||
-          origin.blockType === subject.blockType)
-      );
+      return classReaches(origin, subject);
     // The baseline lands on the ELEMENT, so only a node rendering that element
     // is wearing it. A subject that does not state its tag gets `false`: the
     // tag lives in a block's render, and a caller that cannot say is answered

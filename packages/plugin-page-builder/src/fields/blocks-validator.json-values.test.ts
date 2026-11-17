@@ -6,12 +6,16 @@
  * accepted rather than after it reaches the serializer.
  */
 import {
+  createBlockRegistry,
   DEFAULT_MAX_DOCUMENT_BYTES,
   DOCUMENT_FORMAT_VERSION,
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it, vi } from "vitest";
 
 import { validateBlocksValue } from "./blocks-validator";
+
+/** The site's block registry these tests judge against: it holds none. */
+const blocks = createBlockRegistry();
 
 function withProps(props: Record<string, unknown>) {
   return {
@@ -29,7 +33,7 @@ function withProps(props: Record<string, unknown>) {
 }
 
 const codes = (value: unknown) =>
-  validateBlocksValue(value, "content", "content", {}).map(i => i.code);
+  validateBlocksValue(value, "content", "content", {}, blocks).map(i => i.code);
 
 describe("unserializable values in a document", () => {
   it("accepts ordinary JSON values", () => {
@@ -70,7 +74,8 @@ describe("unserializable values in a document", () => {
       withProps({ a: 1n, b: 2n }),
       "content",
       "content",
-      {}
+      {},
+      blocks
     );
     expect(issues[0].message).toContain("a");
     expect(issues[0].message).toContain("b");
@@ -111,7 +116,7 @@ describe("unserializable values in a document", () => {
     const doc = withProps({}) as Record<string, unknown>;
     doc.self = doc;
     expect(() =>
-      validateBlocksValue(doc, "content", "content", {})
+      validateBlocksValue(doc, "content", "content", {}, blocks)
     ).not.toThrow();
     expect(codes(doc).length).toBeGreaterThan(0);
   });

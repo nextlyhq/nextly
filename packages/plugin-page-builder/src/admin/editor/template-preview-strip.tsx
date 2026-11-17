@@ -96,10 +96,6 @@ import { listPreviewEntries } from "../template-preview-client";
 import { entryCreatePath, entryEditPath } from "./builder-address";
 import { CanvasEntryProvider, type CanvasEntryRead } from "./canvas-entry";
 import {
-  TemplateConditionsPart,
-  type TemplateConditions,
-} from "./conditions-strip";
-import {
   followingCanvas,
   useRefreshOnFocus,
   useTemplatePreview,
@@ -376,22 +372,22 @@ function useSwitchKeys(preview: TemplatePreview): void {
         run: () => switchBy(-1),
       },
     ],
-    { name: "Template preview" }
+    { name: "Collection template preview" }
   );
 }
 
 /** The strip, as the editor hands it to the shell's canvas strip slot. */
 export function TemplatePreviewStrip({
   preview,
-  conditions,
+  visitor,
 }: {
   readonly preview: TemplatePreview;
   /**
-   * The switch that applies the template's visibility conditions for the
-   * entry, after it; absent while the template holds no block whose
-   * conditions read the entry.
+   * The row saying the canvas shows the page as a visitor reading the entry
+   * gets it, under the Previewing row; absent while "Preview as visitor" is
+   * off.
    */
-  readonly conditions?: TemplateConditions;
+  readonly visitor?: ReactNode;
 }): JSX.Element {
   return (
     <div data-template-preview="">
@@ -405,10 +401,8 @@ export function TemplatePreviewStrip({
         ) : (
           <EntryPicker preview={preview} />
         )}
-        {conditions === undefined ? null : (
-          <TemplateConditionsPart conditions={conditions} />
-        )}
       </div>
+      {visitor}
       <PreviewNotice preview={preview} />
     </div>
   );

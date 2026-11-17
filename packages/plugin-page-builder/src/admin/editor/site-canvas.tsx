@@ -18,6 +18,7 @@ import {
   CANVAS_ROUTE_DOCS_HREF,
   type CanvasFrameFallback,
   type CanvasFrameSource,
+  type SiteChromeDrawn,
 } from "@nextlyhq/builder/shell";
 import { useDocumentLocale } from "@nextlyhq/plugin-sdk/admin";
 import { useMemo, useState, type JSX } from "react";
@@ -26,6 +27,9 @@ import {
   CANVAS_MOUNT_ATTRIBUTE,
   CANVAS_READY_ATTRIBUTE,
 } from "../../canvas/attributes";
+import type { SiteHeaderFooter } from "../../site-header-footer";
+
+import { readSiteHeaderFooter } from "./double-header-notice";
 
 /** The mount point, once the site's page has hydrated it. */
 const READY_MOUNT = `[${CANVAS_MOUNT_ATTRIBUTE}][${CANVAS_READY_ATTRIBUTE}]`;
@@ -81,7 +85,16 @@ export interface SiteCanvas {
   readonly onCanvasFallback: (reason: CanvasFrameFallback | null) => void;
   /** The direction of the language being edited, for the frame's root. */
   readonly canvasDir: "ltr" | "rtl" | undefined;
+  /** Where the site's own layout draws around the page, as the frame says. */
+  readonly siteChrome: SiteChromeDrawn;
+  /** What the frame calls when that changes. */
+  readonly onSiteChrome: (drawn: SiteChromeDrawn) => void;
+  /** Who the site says draws its header and footer. */
+  readonly siteHeaderFooter: SiteHeaderFooter;
 }
+
+/** Nothing drawn around the page, until the frame says otherwise. */
+const NO_SITE_CHROME: SiteChromeDrawn = { before: false, after: false };
 
 /** Where a canvas path names the language being edited. */
 const LOCALE_PLACEHOLDER = "{locale}";
@@ -118,11 +131,17 @@ export function useSiteCanvas(
     [path]
   );
   const [refused, setRefused] = useState<CanvasFrameFallback | null>(null);
+  const [siteChrome, setSiteChrome] = useState<SiteChromeDrawn>(NO_SITE_CHROME);
   return {
     canvasSource,
     canvasFallback: canvasSource === undefined ? null : refused,
     onCanvasFallback: setRefused,
     canvasDir: locale === null ? undefined : locale.rtl ? "rtl" : "ltr",
+    // Only the site's own canvas route has a layout around the page; the
+    // editor's blank page never does.
+    siteChrome: canvasSource === undefined ? NO_SITE_CHROME : siteChrome,
+    onSiteChrome: setSiteChrome,
+    siteHeaderFooter: readSiteHeaderFooter(clientConfig),
   };
 }
 

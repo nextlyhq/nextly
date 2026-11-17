@@ -9,6 +9,8 @@ interface Template {
   name: string;
   /** When the email is sent, in a sentence the admin shows beside it. */
   description: string;
+  /** What causes this email to be sent, in user-facing statements. */
+  sentBy?: string[];
   subject: string;
   /** The body, with `{{variable}}` for each of the email's fields. */
   html: string;
@@ -28,6 +30,7 @@ const TEMPLATES: Record<Kind, Template> = {
     name: "Verify an address",
     description:
       "Sent when someone signs up, with the link and code that verify their address and a link to remove the account.",
+    sentBy: ["Someone signs up", "Someone asks for a new verification link"],
     carriesSecret: true,
     subject: "Confirm your email address",
     html: `<p>Confirm your email address: <a href="{{link}}">confirm</a>, or type the code <strong>{{code}}</strong>.</p><p>Didn't sign up? <a href="{{notMeLink}}">Remove this account</a>.</p>`,
@@ -36,6 +39,7 @@ const TEMPLATES: Record<Kind, Template> = {
     name: "Sign-up with an address that has an account",
     description:
       "Sent when someone tries to sign up with an address that already has an account.",
+    sentBy: ["Someone signs up with an address that already has an account"],
     subject: "Someone tried to sign up with your address",
     html: `<p>Someone tried to make an account with this address, which already has one.</p><p>If it was you, <a href="{{signInLink}}">sign in</a> or <a href="{{resetLink}}">reset your password</a>. If your account was closed, contact us.</p>`,
   },
@@ -43,6 +47,7 @@ const TEMPLATES: Record<Kind, Template> = {
     name: "Reset a password",
     description:
       "Sent when someone asks to reset the password of an account, with the link that sets a new one.",
+    sentBy: ["Someone asks to reset their password"],
     carriesSecret: true,
     subject: "Reset your password",
     html: `<p>Someone asked to reset the password for this address. <a href="{{link}}">Choose a new password</a>.</p><p>If it wasn't you, you can ignore this email.</p>`,
@@ -51,6 +56,9 @@ const TEMPLATES: Record<Kind, Template> = {
     name: "A reset is needed",
     description:
       "Sent when too many wrong passwords mean the account needs a reset, with the link that sets a new one.",
+    sentBy: [
+      "An account needs a password reset after too many wrong passwords",
+    ],
     carriesSecret: true,
     subject: "Reset your password to sign in again",
     html: `<p>There have been too many wrong passwords for your account, so it now needs a reset to sign in from a new browser. <a href="{{link}}">Choose a new password</a>.</p>`,
@@ -59,6 +67,7 @@ const TEMPLATES: Record<Kind, Template> = {
     name: "An address change was asked for",
     description:
       "Sent to an account's address when a change to another address is asked for, with the link that cancels it.",
+    sentBy: ["Someone asks to change their account's email address"],
     carriesSecret: true,
     subject: "A change of your email address was asked for",
     html: `<p>Someone signed in to your account asked to change its address to {{newAddress}}.</p><p>If it wasn't you, <a href="{{cancelLink}}">cancel the change</a>.</p>`,
@@ -67,6 +76,7 @@ const TEMPLATES: Record<Kind, Template> = {
     name: "Confirm a new address",
     description:
       "Sent to a new address an account asked to move to, with the link and code that confirm it.",
+    sentBy: ["Someone asks to change their account's email address"],
     carriesSecret: true,
     subject: "Confirm your new email address",
     html: `<p>Confirm this as your account's new address: <a href="{{link}}">confirm</a>, or type the code <strong>{{code}}</strong> while signed in.</p>`,
@@ -75,6 +85,9 @@ const TEMPLATES: Record<Kind, Template> = {
     name: "An address change named an address in use",
     description:
       "Sent to an address that has an account when another account tries to move to it.",
+    sentBy: [
+      "Someone asks to change an account's email address to one already in use",
+    ],
     subject: "Someone tried to use your email address",
     html: `<p>Someone tried to move another account to this address, which already has an account. Nothing has changed.</p>`,
   },
@@ -82,18 +95,21 @@ const TEMPLATES: Record<Kind, Template> = {
     name: "An address changed",
     description:
       "Sent to an account's old address once the change to a new one is made.",
+    sentBy: ["An account's email address is changed"],
     subject: "Your account's email address changed",
     html: `<p>Your account's address is now {{newAddress}}. If you didn't do this, contact us.</p>`,
   },
   "account-deleted": {
     name: "An account was deleted",
     description: "Sent when the holder deletes their account.",
+    sentBy: ["Someone deletes their account"],
     subject: "Your account was deleted",
     html: `<p>Your account has been deleted.</p>`,
   },
   "password-changed": {
     name: "A password changed",
     description: "Sent when an account's password changes.",
+    sentBy: ["An account's password is changed"],
     subject: "Your password changed",
     html: `<p>Your account's password changed. If you didn't do this, reset it now.</p>`,
   },
@@ -152,6 +168,7 @@ export function accountsEmailTemplates(): PluginEmailTemplate[] {
       slug: templateSlug(kind),
       name: template.name,
       description: template.description,
+      ...(template.sentBy ? { sentBy: template.sentBy } : {}),
       ...(template.carriesSecret ? { carriesSecret: true } : {}),
       subject: template.subject,
       htmlContent: template.html,

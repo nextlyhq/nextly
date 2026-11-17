@@ -25,11 +25,11 @@ export class RowCommitRefused extends Error {
 
 /** Said when the row the editor was open on is no longer in the entry. */
 const ROW_GONE =
-  "The row this layout belongs to isn't in the entry any more, so it wasn't saved into another row. Go back to the entry to check its rows.";
+  "The row this design belongs to isn't in the entry any more, so it wasn't saved into another row. Go back to the entry to check its rows.";
 
 /** Said when the row moved and the editor has not caught up with it yet. */
 const ROW_MOVED =
-  "The row this layout belongs to moved while it was being saved, so nothing was written. Try again.";
+  "The row this design belongs to moved while it was being saved, so nothing was written. Try again.";
 
 /**
  * Why a write bound at `bound` may not go ahead, given where the row's field

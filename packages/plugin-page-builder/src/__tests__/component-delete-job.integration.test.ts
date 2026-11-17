@@ -127,6 +127,25 @@ interface Switches {
   /** Run once, on the next read of a component that a read hook sees. */
   onComponentRead?: () => Promise<void>;
   /**
+   * Hold the next Layout write with this title after the page builder's own
+   * checks before the write: a Layout save that has passed them.
+   */
+  holdLayoutBeforeWrite?: {
+    title: string;
+    reached: () => void;
+    release: Promise<void>;
+  };
+  /**
+   * Hold the next Layout write with this title inside its transaction, after
+   * the page builder's own handlers there: a Layout save that has judged its
+   * components and not committed yet.
+   */
+  holdLayoutInTransaction?: {
+    title: string;
+    reached: () => void;
+    release: Promise<void>;
+  };
+  /**
    * What each localized brief save's `beforeChange` hook was told it moves
    * from: the main row's status and core's `storedStatus`.
    */
@@ -169,6 +188,23 @@ function harness(switches: Switches): PluginDefinition {
         if (run === undefined) return;
         switches.onComponentRead = undefined;
         await run();
+      });
+      // Registered after the page builder's, so each runs after its checks.
+      ctx.hooks.on("beforeChange", LAYOUTS_SLUG, async context => {
+        const hold = switches.holdLayoutBeforeWrite;
+        const title = (context as { data?: { title?: unknown } }).data?.title;
+        if (hold === undefined || title !== hold.title) return;
+        switches.holdLayoutBeforeWrite = undefined;
+        hold.reached();
+        await hold.release;
+      });
+      ctx.hooks.onInTransaction(LAYOUTS_SLUG, async write => {
+        const hold = switches.holdLayoutInTransaction;
+        const title = (write.data as { title?: unknown } | undefined)?.title;
+        if (hold === undefined || title !== hold.title) return;
+        switches.holdLayoutInTransaction = undefined;
+        hold.reached();
+        await hold.release;
       });
       ctx.hooks.on("afterRead", LAYOUTS_SLUG, async () => {
         const run = switches.onLayoutRead;
@@ -1339,6 +1375,184 @@ describe.each(getConfiguredTestDialects())(
         plan: { complete: true, next: null },
       });
     });
+    /** A Layout naming the component in its header, as the system saves it. */
+    const headerLayout = (t: TestNextly, title: string, componentId: string) =>
+      t.nextly.create({
+        collection: LAYOUTS_SLUG,
+        data: {
+          title,
+          slug: title.toLowerCase().replace(/[^a-z]+/g, "-"),
+          areas: [{ area: "header", component: componentId }],
+          status: "published",
+        },
+        overrideAccess: true,
+      });
+
+    /** The Layouts whose stored areas name the component. */
+    async function layoutsNaming(t: TestNextly, componentId: string) {
+      const found = await t.nextly.find({
+        collection: LAYOUTS_SLUG,
+        status: "all",
+        depth: 0,
+        overrideAccess: true,
+      });
+      return (found.items as { title?: unknown; areas?: unknown }[])
+        .filter(
+          row =>
+            Array.isArray(row.areas) &&
+            row.areas.some(
+              (area: { component?: unknown }) => area.component === componentId
+            )
+        )
+        .map(row => row.title);
+    }
+
+    /** The phase of the component's delete run, or null when none is open. */
+    async function runPhase(t: TestNextly, componentId: string) {
+      const rows = await t.adapter.select<{ phase: string }>(RUNS, {
+        where: {
+          and: [{ column: "componentId", op: "=", value: componentId }],
+        },
+      });
+      return rows[0]?.phase ?? null;
+    }
+
+    it("refuses a Layout save adding the component while its delete runs, and the delete still finishes", async () => {
+      const { t, cookie } = await boot();
+      const cardId = await card(t);
+      await note(t, "Holding", [copyOf("i1", cardId)]);
+      expect((await call(cookie, cardId, "POST", {})).item.status).toBe(
+        "running"
+      );
+
+      const refused = await headerLayout(t, "Late", cardId).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      const done = await deleteToTheEnd(cookie, cardId);
+
+      expect(refused).toMatchObject({ code: "VALIDATION_ERROR" });
+      expect(String((refused as Error).message)).not.toBe("");
+      expect(done.item.status, JSON.stringify(done.body)).toBe("done");
+      expect(await exists(t, cardId)).toBe(false);
+      expect(await layoutsNaming(t, cardId)).toEqual([]);
+    });
+
+    it("refuses a Layout save held past its checks that lands after the delete", async () => {
+      const switches: Switches = {};
+      const { t, cookie } = await boot(switches);
+      const cardId = await card(t);
+      let reached!: () => void;
+      const atHold = new Promise<void>(resolve => {
+        reached = resolve;
+      });
+      let release!: () => void;
+      switches.holdLayoutBeforeWrite = {
+        title: "Held",
+        reached,
+        release: new Promise<void>(resolve => {
+          release = resolve;
+        }),
+      };
+      // Checked before the delete starts, against a component that exists.
+      const save = headerLayout(t, "Held", cardId).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      await atHold;
+
+      const done = await deleteToTheEnd(cookie, cardId);
+      release();
+      const refused = await save;
+
+      expect(done.item.status, JSON.stringify(done.body)).toBe("done");
+      expect(refused).toMatchObject({ code: "VALIDATION_ERROR" });
+      expect(await exists(t, cardId)).toBe(false);
+      expect(await layoutsNaming(t, cardId)).toEqual([]);
+    });
+
+    // SQLite admits one writer at a time, so a Layout write open in its
+    // transaction holds every other write back and this order cannot arise.
+    it.skipIf(dialect === "sqlite")(
+      "waits for a Layout save open in its transaction before its last check, then keeps the component that Layout names",
+      async () => {
+        const switches: Switches = {};
+        const { t, cookie } = await boot(switches);
+        const cardId = await card(t);
+        // A Layout not using the card, so every scan of the Layouts reads a
+        // row and the read hook runs.
+        await t.nextly.create({
+          collection: LAYOUTS_SLUG,
+          data: {
+            title: "Plain",
+            slug: "plain",
+            areas: [],
+            status: "published",
+          },
+          overrideAccess: true,
+        });
+        let reached!: () => void;
+        const atHold = new Promise<void>(resolve => {
+          reached = resolve;
+        });
+        let release!: () => void;
+        switches.holdLayoutInTransaction = {
+          title: "Racing",
+          reached,
+          release: new Promise<void>(resolve => {
+            release = resolve;
+          }),
+        };
+        // The Layout save judges the card inside its transaction before the
+        // delete opens its run, and stays open.
+        const save = headerLayout(t, "Racing", cardId);
+        await atHold;
+        // Released at the delete's last check of the Layouts, once its run is
+        // at `deleting`: a delete not ordered after the save would have read
+        // the Layouts already and go on to delete the card. Released after a
+        // while otherwise, which is where a delete that waits for the save
+        // stands.
+        const atLastCheck = async (): Promise<void> => {
+          if ((await runPhase(t, cardId)) !== "deleting") {
+            switches.onLayoutRead = atLastCheck;
+            return;
+          }
+          release();
+          await save;
+        };
+        switches.onLayoutRead = atLastCheck;
+        const timer = setTimeout(() => release(), 2000);
+
+        // Stepped by hand: the step that reaches the component's own delete
+        // answers that delete's refusal.
+        let answered: Answer | undefined;
+        try {
+          for (let step = 0; step < 8; step += 1) {
+            answered = await call(cookie, cardId, "POST", {});
+            if (
+              answered.status !== 200 ||
+              !["preflight", "running"].includes(answered.item.status)
+            ) {
+              break;
+            }
+          }
+        } finally {
+          clearTimeout(timer);
+        }
+        await save;
+
+        expect(answered?.status, JSON.stringify(answered?.body)).toBe(409);
+        const refusal = answered?.body as
+          | { error?: { message?: string } }
+          | undefined;
+        expect(refusal?.error?.message).toContain(
+          'the header & footer set "Racing" uses it'
+        );
+        expect(await exists(t, cardId)).toBe(true);
+        expect(await layoutsNaming(t, cardId)).toEqual(["Racing"]);
+      }
+    );
+
     it("keeps the tombstone when a stale step of the same person is refused after the delete", async () => {
       const switches: Switches = {};
       const { t, cookie } = await boot(switches);

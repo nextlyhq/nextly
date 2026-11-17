@@ -248,11 +248,11 @@ test.describe("detach, duplicate and update a pattern", () => {
     await openBuilder(page, pageId);
 
     await clickBlock(page, "lead");
-    await more(page, /^Update a pattern/);
-    const dialog = page.getByRole("dialog", { name: "Update a pattern" });
-    await dialog.getByRole("combobox", { name: "Pattern" }).click();
+    await more(page, /^Update a saved section/);
+    const dialog = page.getByRole("dialog", { name: "Update a saved section" });
+    await dialog.getByRole("combobox", { name: "Saved section" }).click();
     await page.getByRole("option", { name: `Hero ${tag}` }).click();
-    await dialog.getByRole("button", { name: "Update pattern" }).click();
+    await dialog.getByRole("button", { name: "Update saved section" }).click();
     await expect(dialog).toBeHidden({ timeout: 30_000 });
 
     const pattern = await page.request.get(

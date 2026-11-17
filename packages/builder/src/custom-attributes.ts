@@ -87,7 +87,8 @@ export type RowProblem =
   | { readonly kind: "not-allowed" }
   | { readonly kind: "reserved" }
   | { readonly kind: "duplicate" }
-  | { readonly kind: "use-css-id-field" };
+  | { readonly kind: "use-css-id-field" }
+  | { readonly kind: "use-css-classes-field" };
 
 /**
  * HTML attribute names are ASCII case-insensitive; React props are not.
@@ -236,6 +237,9 @@ function keepersOf(rows: readonly AttributeRow[]): Map<string, number> {
  */
 function soloProblem(row: AttributeRow): RowProblem | undefined {
   const key = attributeKey(row.name);
+  // A class has its own field above, which the block's generated classes
+  // are kept apart from; the bag never carries one.
+  if (key === "class") return { kind: "use-css-classes-field" };
   if (!isAllowedAttribute(key)) return { kind: "not-allowed" };
   /*
    * The editor's own NAMESPACE, asked as a prefix rather than as a list of
@@ -301,7 +305,9 @@ export function problemMessage(problem: RowProblem): string {
     case "duplicate":
       return "Another row already sets this attribute, and only the first is used. Attribute names ignore capitals, so “Data-X” and “data-x” are one name.";
     case "use-css-id-field":
-      return "Set this block’s id in the CSS id field above. An id written here is not used while that field has a value, and it is the field the rest of the editor reads.";
+      return "Set this block’s id in the Anchor (ID) field above. An id written here is not used while that field has a value, and it is the field the rest of the editor reads.";
+    case "use-css-classes-field":
+      return "Use CSS classes above.";
   }
 }
 

@@ -995,6 +995,9 @@
         "cssId": {
           "type": "string"
         },
+        "cssClasses": {
+          "type": "string"
+        },
         "nosnippet": {
           "type": "boolean"
         },
