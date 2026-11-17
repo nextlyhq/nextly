@@ -32,8 +32,10 @@ const NUMBER_AND_UNIT = /^(.*?)(%|[a-z]*)$/i;
 /** One component as written: its number, and the unit after it, if any. */
 function numberAndUnit(text: string): { value: number; unit: string } | null {
   const [, digits = "", unit = ""] = NUMBER_AND_UNIT.exec(text) ?? [];
-  if (!NUMBER.test(digits)) return null;
-  return { value: Number(digits), unit: unit.toLowerCase() };
+  const value = Number(digits);
+  // `1e400` reads as Infinity, which no channel or hue can hold.
+  if (!NUMBER.test(digits) || !Number.isFinite(value)) return null;
+  return { value, unit: unit.toLowerCase() };
 }
 
 /** A percentage as [0, 1], or a bare number divided by `whole`. */

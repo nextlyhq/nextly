@@ -72,6 +72,7 @@ describe("refusing what is no colour yet", () => {
     "hsl(120 100% 25%",
     "hsl(120foo 100% 25%)",
     "oklch(0.7 0.1 200)",
+    "hsl(1e400 100% 50%)",
     "red",
   ])("answers null for %j", text => {
     expect(parseColour(text)).toBeNull();

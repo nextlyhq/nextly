@@ -658,26 +658,25 @@ function ColourValue({
   React.useEffect(() => flush, [flush]);
   // The value it holds commits too while a refusal is shown: putting it
   // back is how a refused value is corrected, and clears the refusal.
-  const commit = (typed: string): void => {
+  const commit = (typed: string): boolean => {
     const next = typed.trim();
-    if (
-      !readOnly &&
-      next !== "" &&
-      (next !== value || refusedBy !== undefined)
-    ) {
-      onCommit(next);
-      // Only a colour joins Recent colours; text that is none is refused.
-      if (isColour(next)) remember(next);
-    }
+    const writes =
+      !readOnly && next !== "" && (next !== value || refusedBy !== undefined);
+    if (writes) onCommit(next);
+    return writes;
   };
-  // A recent colour is one choice, written as it is listed, as on a block.
+  // A typed colour joins Recent colours; text that is none is refused.
+  const commitTyped = (typed: string): void => {
+    if (commit(typed) && isColour(typed.trim())) remember(typed.trim());
+  };
+  // A recent colour is one choice, written as it is listed, as on a block,
+  // and moves to the front even where it is already the value.
   const pickRecent = (colour: string): void => {
     draft.current = null;
     setShown(null);
     setText(colour);
     setPicking(false);
     commit(colour);
-    // Chosen again, it moves to the front even where it is already the value.
     remember(colour);
   };
   const { hex, paint, invalid, said } = colourFieldState(
@@ -732,9 +731,9 @@ function ColourValue({
             setShown(null);
           }}
           readOnly={readOnly}
-          onBlur={event => commit(event.currentTarget.value)}
+          onBlur={event => commitTyped(event.currentTarget.value)}
           onKeyDown={event => {
-            if (event.key === "Enter") commit(event.currentTarget.value);
+            if (event.key === "Enter") commitTyped(event.currentTarget.value);
           }}
         />
       </div>

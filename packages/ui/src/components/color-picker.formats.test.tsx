@@ -5,7 +5,13 @@
  * screen's eyedropper only where the browser has one, and lists the host's
  * recent colours under their own heading.
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -107,6 +113,21 @@ describe("switching the field between Hex, RGB and HSL", () => {
     expect(field("RGB").value).toBe("rgb(0 0 255)");
   });
 
+  it("reports nothing when the text shown is finished again unchanged", () => {
+    // HSL shows whole numbers, so reading its own text back would move the
+    // colour by a rounding: an edit nobody made.
+    const onColorChange = vi.fn();
+    render(<Held initial="#3b82f6" onColorChange={onColorChange} />);
+    fireEvent.click(format("HSL"));
+    const shown = field("HSL").value;
+
+    fireEvent.change(field("HSL"), { target: { value: `${shown} ` } });
+    fireEvent.keyDown(field("HSL"), { key: "Enter" });
+
+    expect(onColorChange).not.toHaveBeenCalled();
+    expect(screen.getByTestId("stored").textContent).toBe("#3b82f6");
+  });
+
   it("drops an unfinished colour rather than reporting it", () => {
     const onColorChange = vi.fn();
     render(<Held initial="#112233" onColorChange={onColorChange} />);
@@ -153,6 +174,19 @@ describe("Pick from screen", () => {
 });
 
 describe("Recent colours", () => {
+  it("shows the row while the host's list is empty, saying what will appear", () => {
+    render(
+      <ColorPicker color="#000000" onColorChange={vi.fn()} recentColors={[]} />
+    );
+    const row = screen.getByRole("group", { name: "Recent colours" });
+    expect(row.textContent).toContain("Colours you type or pick show here.");
+  });
+
+  it("shows no row where the host keeps no recent colours", () => {
+    render(<ColorPicker color="#000000" onColorChange={vi.fn()} />);
+    expect(screen.queryByRole("group", { name: "Recent colours" })).toBeNull();
+  });
+
   it("lists the host's colours under their own heading", () => {
     render(
       <ColorPicker
@@ -162,8 +196,8 @@ describe("Recent colours", () => {
       />
     );
 
-    expect(screen.getByText("Recent colours")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "#ff0000" })).toBeTruthy();
+    const row = screen.getByRole("group", { name: "Recent colours" });
+    expect(within(row).getByRole("button", { name: "#ff0000" })).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "hsl(120 100% 25%)" })
     ).toBeTruthy();

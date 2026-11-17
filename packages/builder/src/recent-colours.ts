@@ -5,8 +5,9 @@
  * host keeps it in its store for that author, provided here once, so a block's
  * picker and a variable's picker read the one list.
  *
- * Kept by the rules the Icon control keeps its recent icons by, eight, each
- * once, newest first: only what is remembered differs.
+ * Eight, each once, newest first, written as the Icon control writes its
+ * recent icons. Unlike that list there is no copy held for the session: the
+ * host's store holds the list for the page itself where storage refuses.
  *
  * @module recent-colours
  */
@@ -102,7 +103,15 @@ export function useRecentColours(): readonly [
     () => storedText(store),
     () => null
   );
-  const colours = React.useMemo(() => readRecentIcons(textStore(raw)), [raw]);
+  // Read by the rule it was written by, so nothing else under the key is
+  // offered as a colour.
+  const colours = React.useMemo(
+    () =>
+      readRecentIcons(textStore(raw)).filter(
+        colour => rememberable(colour) !== undefined
+      ),
+    [raw]
+  );
   const remember = React.useCallback(
     (value: unknown) => rememberColour(store, value),
     [store]

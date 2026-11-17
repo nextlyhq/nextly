@@ -207,7 +207,27 @@ describe("a block's colour picker", () => {
     expect(store.value).toBeNull();
   });
 
-  it("marks a recent colour on a block as not adapted to dark mode, as any raw colour", () => {
+  it("puts the field back when a recent colour ends a gesture where it began", () => {
+    // Dragged away, then back to the colour already stored: the document
+    // needs nothing, and the field must not keep the dragged colour for a
+    // later blur to write.
+    const editor = mount(memory('["#00aaff"]'), "#00aaff");
+    openPicker();
+    const surface = screen.getByRole("application", {
+      name: /Saturation and brightness/,
+    });
+    fireEvent.keyDown(surface, { key: "ArrowLeft", shiftKey: true });
+    const field = screen.getByRole("textbox", { name: "Colour" });
+    expect((field as HTMLInputElement).value).not.toBe("#00aaff");
+
+    fireEvent.click(within(recent()).getByRole("button", { name: "#00aaff" }));
+
+    expect((field as HTMLInputElement).value).toBe("#00aaff");
+    fireEvent.blur(field);
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("marks a raw colour stored on a block as not adapted to dark mode, as a recent one is", () => {
     mount(memory('["#ff0000"]'), "#ff0000");
     expect(
       screen.getByText(

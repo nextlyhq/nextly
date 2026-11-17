@@ -105,14 +105,16 @@ describe("a colour variable's picker", () => {
     );
 
     expect(within(editor).getByText("Recent colours")).toBeTruthy();
-    fireEvent.click(
-      within(editor).getByRole("button", { name: "hsl(120 100% 25%)" })
-    );
+    // The second, so moving it to the front is seen.
+    fireEvent.click(within(editor).getByRole("button", { name: "#ff0000" }));
 
     await waitFor(() =>
-      expect(lightOf(onChange.mock.lastCall?.[0])).toBe("hsl(120 100% 25%)")
+      expect(lightOf(onChange.mock.lastCall?.[0])).toBe("#ff0000")
     );
-    expect(JSON.parse(store.value ?? "[]")[0]).toBe("hsl(120 100% 25%)");
+    expect(JSON.parse(store.value ?? "[]")).toEqual([
+      "#ff0000",
+      "hsl(120 100% 25%)",
+    ]);
   });
 
   it("remembers a colour typed into the value", async () => {

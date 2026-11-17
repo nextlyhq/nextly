@@ -329,7 +329,7 @@ export function ColourField({
    */
   const commitInstead = (value: StyleValue | null): void => {
     pending.current = null;
-    commitColour(value);
+    settle(commitColour(value), reset);
   };
   /*
    * The picker closed, whichever outcome that close had.
@@ -355,7 +355,7 @@ export function ColourField({
     const unwritten = pending.current;
     pending.current = null;
     if (outcome === "superseded" || unwritten === null) return;
-    if (commitColour(unwritten) === "unchanged") reset();
+    settle(commitColour(unwritten), reset);
   };
   // The current writer, held so the teardown below depends on nothing. A
   // teardown listing `onCommit` would re-run its cleanup on every render that
@@ -689,6 +689,15 @@ function ColourPicker({
       </PopoverContent>
     </Popover>
   );
+}
+
+/**
+ * After a commit the document did not need, the field goes back to what it
+ * holds: a picker gesture or a choice that ends where it began leaves no
+ * draft behind for a later blur to write.
+ */
+function settle(outcome: CommitOutcome, reset: () => void): void {
+  if (outcome === "unchanged") reset();
 }
 
 /**

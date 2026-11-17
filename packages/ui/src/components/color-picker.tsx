@@ -67,7 +67,9 @@ export interface ColorPickerProps<TValue = string> {
   /**
    * Recently used colours. Owned by the host, never by this component — the
    * admin scopes them per user, and a component writing `localStorage` at
-   * render is unusable on a server and untestable without a DOM.
+   * render is unusable on a server and untestable without a DOM. Given, the
+   * "Recent colours" row shows, saying what will appear while it is empty;
+   * absent, there is no row.
    */
   recentColors?: string[];
   /**
@@ -201,7 +203,7 @@ export function ColorPicker<TValue = string>({
   onColorChange,
   swatches = [],
   onSwatchSelect,
-  recentColors = [],
+  recentColors,
   onRecentSelect,
   showAlpha = false,
   className,
@@ -260,6 +262,12 @@ export function ColorPicker<TValue = string>({
   // colour has several spellings, and `#FFF` arriving back as `#ffffff` would
   // otherwise reset the surface on every change.
   const rendered = toHexString(hsva, showAlpha);
+  // The colour as the field shows it, in the chosen notation.
+  const shownText = formatColour(
+    hsvToRgb(hsva),
+    showAlpha ? hsva.a : 1,
+    format
+  );
   /*
    * At LAYOUT timing, matching the listener below. A passive effect leaves the
    * stale draft readable for a moment the native capture listener is already
@@ -333,6 +341,9 @@ export function ColorPicker<TValue = string>({
     // already reported by Enter.
     if (text === null) return;
     setDraftHex(null);
+    // The text already shown, typed again, is no edit. RGB and HSL show whole
+    // numbers, so reading it back would move the colour by a rounding.
+    if (text.trim() === shownText) return;
     const parsed = parseColour(text);
     // An unfinishable draft is DISCARDED rather than reported. The field
     // returns to the colour that is actually stored, so what is shown and what
@@ -587,12 +598,6 @@ export function ColorPicker<TValue = string>({
 
   const handle = surfacePointFor(hsva.s, hsva.v);
   const hueOnly = toHex(hsvToRgb({ h: hsva.h, s: 1, v: 1 }));
-  // The colour as the field shows it, in the chosen notation.
-  const shownText = formatColour(
-    hsvToRgb(hsva),
-    showAlpha ? hsva.a : 1,
-    format
-  );
   const formatLabel =
     FORMATS.find(entry => entry.format === format)?.label ?? "Hex";
 
@@ -892,22 +897,48 @@ export function ColorPicker<TValue = string>({
         </div>
       )}
 
-      {recentColors.length > 0 && (
-        <div>
-          <p className="text-muted-foreground mb-1 text-xs">Recent colours</p>
-          <div className="flex flex-wrap gap-1">
-            {recentColors.map(recent => (
-              <button
-                key={recent}
-                type="button"
-                title={recent}
-                aria-label={recent}
-                className="size-6 rounded border shadow-sm"
-                style={{ backgroundColor: recent }}
-                onClick={() => chooseRecent(recent)}
-              />
-            ))}
-          </div>
+      {recentColors === undefined ? null : (
+        <RecentColors colors={recentColors} onChoose={chooseRecent} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The host's recent colours, under their heading, each a swatch named by its
+ * value. Shown while there are none too, saying what will appear there, so
+ * the place is known before it is filled.
+ */
+function RecentColors({
+  colors,
+  onChoose,
+}: {
+  colors: readonly string[];
+  onChoose: (color: string) => void;
+}): React.JSX.Element {
+  const headingId = React.useId();
+  return (
+    <div role="group" aria-labelledby={headingId}>
+      <p id={headingId} className="text-muted-foreground mb-1 text-xs">
+        Recent colours
+      </p>
+      {colors.length === 0 ? (
+        <p className="text-muted-foreground text-xs">
+          Colours you type or pick show here.
+        </p>
+      ) : (
+        <div className="flex flex-wrap gap-1">
+          {colors.map(recent => (
+            <button
+              key={recent}
+              type="button"
+              title={recent}
+              aria-label={recent}
+              className="size-6 rounded border shadow-sm"
+              style={{ backgroundColor: recent }}
+              onClick={() => onChoose(recent)}
+            />
+          ))}
         </div>
       )}
     </div>
