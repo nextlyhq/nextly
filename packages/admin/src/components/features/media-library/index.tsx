@@ -1179,6 +1179,8 @@ export function MediaLibrary({
         queue={uploadQueue}
         placement="floating"
         returnFocusRef={headingRef}
+        // An uploaded image's row offers its alt text to whoever may edit it.
+        onSaveMedia={canEdit ? handleSaveMedia : undefined}
       />
 
       {/* Deletes, their Undo and replaced files, said once each. After the
