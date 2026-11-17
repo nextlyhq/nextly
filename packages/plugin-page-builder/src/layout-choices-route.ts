@@ -29,6 +29,7 @@ import {
   type PluginRouteContext,
   type PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
+import { PENDING_CHANGE_KEY } from "nextly/reserved-filter-keys";
 import { z } from "nextly/zod";
 
 import { COMPONENTS_SLUG } from "./collections/components";
@@ -46,7 +47,9 @@ import {
   readLayoutSettings,
   type DefaultLayoutDirectApi,
 } from "./default-layout/store";
+import { idsKeptByWorkflowKey } from "./entry-reads";
 import {
+  LAYOUT_CHOICES_DRAFTS_PARAM,
   LAYOUT_CHOICES_LOCALE_PARAM,
   LAYOUT_CHOICES_PICTURES_PARAM,
   LAYOUT_CHOICES_ROUTE_PATH,
@@ -119,6 +122,11 @@ export interface LayoutChoicesRequest {
    * listed published set's regions, not only the two a page is drawn inside.
    */
   readonly pictures?: boolean;
+  /**
+   * Whether every listed published set's "changes not published" is asked
+   * for, not only the two a page is drawn inside.
+   */
+  readonly drafts?: boolean;
   /**
    * The starter header and footer the site was seeded with, as recorded.
    * Absent, no region is told it shows the starter.
@@ -283,6 +291,29 @@ export async function readLayoutChoices(
     { ...asUser, ...inLocale }
   );
 
+  // Asked for every listed set: one read of core's workflow filter, the
+  // versions domain's one statement of a working draft with changes not yet
+  // published, read as the caller, rather than a read by id per set.
+  const listedDrafts =
+    request.drafts === true
+      ? await idsKeptByWorkflowKey(
+          async args => {
+            const found = await nextly.find({
+              collection: args.collection,
+              ...(args.where === undefined ? {} : { where: args.where }),
+              select: args.select,
+              limit: args.limit,
+              ...asUser,
+              ...inLocale,
+            });
+            return { items: rowsOf(found), meta: found.meta };
+          },
+          layouts,
+          items.filter(item => item.published).map(item => item.id),
+          PENDING_CHANGE_KEY
+        )
+      : new Set<string>();
+
   const fenced =
     (await request.fence?.removalStates(items.map(item => item.id))) ??
     new Map<string, FencedLayoutState>();
@@ -296,7 +327,7 @@ export async function readLayoutChoices(
       const removal = fenced.get(item.id);
       return {
         ...item,
-        draftChangesNotLive: drafts.has(item.id),
+        draftChangesNotLive: drafts.has(item.id) || listedDrafts.has(item.id),
         ...(removal === undefined ? {} : { removal }),
       };
     }),
@@ -602,6 +633,7 @@ const choicesQuery = z.object({
   // "1" or nothing: the one value the admin sends, so a typo is refused
   // rather than read as "no pictures".
   [LAYOUT_CHOICES_PICTURES_PARAM]: z.literal("1").optional(),
+  [LAYOUT_CHOICES_DRAFTS_PARAM]: z.literal("1").optional(),
 });
 
 /** What the request asks, as the route reads it. */
@@ -610,6 +642,7 @@ export interface LayoutChoicesQuery {
   readonly locale: string | undefined;
   readonly search: string | undefined;
   readonly pictures: boolean;
+  readonly drafts: boolean;
 }
 
 /**
@@ -624,6 +657,7 @@ export function parseChoicesQuery(url: string | URL): LayoutChoicesQuery {
       LAYOUT_CHOICES_LOCALE_PARAM,
       LAYOUT_CHOICES_SEARCH_PARAM,
       LAYOUT_CHOICES_PICTURES_PARAM,
+      LAYOUT_CHOICES_DRAFTS_PARAM,
     ],
     choicesQuery,
     "header & footer choices route"
@@ -633,6 +667,7 @@ export function parseChoicesQuery(url: string | URL): LayoutChoicesQuery {
     locale: query[LAYOUT_CHOICES_LOCALE_PARAM],
     search: query[LAYOUT_CHOICES_SEARCH_PARAM],
     pictures: query[LAYOUT_CHOICES_PICTURES_PARAM] === "1",
+    drafts: query[LAYOUT_CHOICES_DRAFTS_PARAM] === "1",
   };
 }
 

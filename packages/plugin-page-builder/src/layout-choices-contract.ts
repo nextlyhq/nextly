@@ -44,6 +44,14 @@ export const LAYOUT_CHOICES_SEARCH_PARAM = "q";
  */
 export const LAYOUT_CHOICES_PICTURES_PARAM = "pictures";
 
+/**
+ * The query parameter asking whether each listed PUBLISHED set has changes
+ * not yet published, not only the two a page can be drawn inside. Asked by
+ * the builder's Pages panel, which marks every set's row; the page's menu
+ * does not ask, so its read stays as small as it was.
+ */
+export const LAYOUT_CHOICES_DRAFTS_PARAM = "drafts";
+
 /** The longest Layout id the route accepts, as an entry id is bounded. */
 export const LAYOUT_ID_MAX = 200;
 
@@ -61,7 +69,12 @@ export const LAYOUT_SEARCH_MAX = 200;
  */
 export function layoutChoicesPath(
   selected: string | null,
-  options: { locale?: string | null; search?: string; pictures?: boolean } = {}
+  options: {
+    locale?: string | null;
+    search?: string;
+    pictures?: boolean;
+    drafts?: boolean;
+  } = {}
 ): string {
   const query = new URLSearchParams();
   if (selected !== null && selected !== "") {
@@ -72,6 +85,7 @@ export function layoutChoicesPath(
   const search = options.search?.trim() ?? "";
   if (search !== "") query.set(LAYOUT_CHOICES_SEARCH_PARAM, search);
   if (options.pictures === true) query.set(LAYOUT_CHOICES_PICTURES_PARAM, "1");
+  if (options.drafts === true) query.set(LAYOUT_CHOICES_DRAFTS_PARAM, "1");
   const text = query.toString();
   return text === ""
     ? LAYOUT_CHOICES_ROUTE_PATH

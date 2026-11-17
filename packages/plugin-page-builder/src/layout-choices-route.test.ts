@@ -78,11 +78,22 @@ function fake(store: Store) {
         const search = (
           args.where as { title?: { contains?: string } } | undefined
         )?.title?.contains;
+        // Core's workflow filter, as the batched draft read asks it: the
+        // rows with a working draft the caller may see.
+        const pendingOnly =
+          (args.where as { _pendingChange?: unknown } | undefined)
+            ?._pendingChange === true;
         const rows = store.layouts
           .filter(
             row =>
               args.overrideAccess === true ||
               !(store.filtered ?? []).includes(String(row.id))
+          )
+          .filter(
+            row =>
+              !pendingOnly ||
+              (store.drafts.includes(String(row.id)) &&
+                (store.updatable?.includes(String(row.id)) ?? true))
           )
           .filter(row => asked === undefined || asked.includes(String(row.id)))
           .filter(
@@ -675,6 +686,56 @@ describe("readLayoutChoices", () => {
     expect(publishedReads).toHaveLength(1);
   });
 
+  it("says which listed published sets have changes not published, in one read, when asked", async () => {
+    const layouts = [
+      layoutRow("l0", "Main"),
+      layoutRow("l1", "Landing"),
+      layoutRow("l2", "Campaign"),
+    ];
+    const { nextly, calls } = fake({
+      ...store,
+      layouts,
+      drafts: ["l2"],
+      defaultLayout: "l0",
+    });
+    const { items } = await readLayoutChoices(
+      context(),
+      nextly,
+      asked(null, DEFAULT_COMPONENT_STORE, { drafts: true })
+    );
+    expect(
+      Object.fromEntries(items.map(item => [item.id, item.draftChangesNotLive]))
+    ).toEqual({ l0: false, l1: false, l2: true });
+    // One batched read for the listed sets, not a read by id per set.
+    const pendingReads = calls.filter(
+      call =>
+        (call.where as { _pendingChange?: unknown } | undefined)
+          ?._pendingChange === true
+    );
+    expect(pendingReads).toHaveLength(1);
+    const byIdLayoutReads = calls.filter(
+      call => call.collection === "layouts" && "draft" in call
+    );
+    expect(byIdLayoutReads.map(call => call.id)).toEqual(["l0"]);
+  });
+
+  it("says nothing of unfocused sets' changes when not asked", async () => {
+    const { nextly } = fake({
+      ...store,
+      layouts: [layoutRow("l0", "Main"), layoutRow("l2", "Campaign")],
+      drafts: ["l2"],
+      defaultLayout: "l0",
+    });
+    const { items } = await readLayoutChoices(
+      context(),
+      nextly,
+      asked(null, DEFAULT_COMPONENT_STORE)
+    );
+    expect(items.find(item => item.id === "l2")?.draftChangesNotLive).toBe(
+      false
+    );
+  });
+
   it("sends every listed published set's definitions when asked for pictures", async () => {
     const layouts = [
       ...Array.from({ length: 3 }, (_, i) =>
@@ -831,16 +892,21 @@ describe("parseChoicesQuery", () => {
       locale: "de",
       search: "Land",
       pictures: false,
+      drafts: false,
     });
     expect(parseChoicesQuery("http://x/layouts/choices")).toEqual({
       selected: null,
       locale: undefined,
       search: undefined,
       pictures: false,
+      drafts: false,
     });
     expect(
       parseChoicesQuery("http://x/layouts/choices?pictures=1").pictures
     ).toBe(true);
+    expect(parseChoicesQuery("http://x/layouts/choices?drafts=1").drafts).toBe(
+      true
+    );
   });
 
   it("refuses a value it cannot take", () => {
