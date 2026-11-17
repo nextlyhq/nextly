@@ -65,7 +65,7 @@ const TOKENS: SiteTokenSet = {
 
 type Editor = EditorState & { applyAll: ReturnType<typeof vi.fn> };
 
-function mount(styles?: NodeStyles): Editor {
+function mount(styles?: NodeStyles, tokens: SiteTokenSet = TOKENS): Editor {
   registerBlocks(
     [
       {
@@ -110,7 +110,7 @@ function mount(styles?: NodeStyles): Editor {
     composed: () => undefined,
   } as unknown as Editor;
   render(
-    <StyleInspectorPanel editor={editor} tokens={TOKENS} sideOrientation={LTR} />
+    <StyleInspectorPanel editor={editor} tokens={tokens} sideOrientation={LTR} />
   );
   return editor;
 }
@@ -252,6 +252,38 @@ describe("a spacing-box side", () => {
     const dialog = screen.getByRole("dialog", { name: "Margin top" });
     expect(dialog.contains(document.activeElement)).toBe(true);
     expect(document.activeElement?.textContent).toBe("None 0");
+  });
+
+  it("keeps None apart from a spacing variable whose id is \"none\"", () => {
+    const editor = mount(undefined, {
+      tokens: [
+        {
+          id: "none",
+          name: "space.small",
+          kind: "dimension",
+          values: { light: "8px" },
+        },
+      ],
+    } as SiteTokenSet);
+    fireEvent.click(side("Padding top"));
+    const presets = radios("Presets");
+    expect(presets[0]).toBe("None 0");
+    expect(presets).toContain("Small 8px");
+    fireEvent.click(screen.getByRole("radio", { name: "Small 8px" }));
+    expect(written(editor)).toContain('"blockStart":{"$token":"none"}');
+  });
+
+  it("tells apart two spacing presets that share a name", () => {
+    mount(undefined, {
+      tokens: [
+        { name: "space.card", kind: "dimension", values: { light: "8px" } },
+        { name: "spacing.card", kind: "dimension", values: { light: "8px" } },
+      ],
+    } as SiteTokenSet);
+    fireEvent.click(side("Padding top"));
+    const cards = radios("Presets").filter(preset => preset.includes("Card"));
+    expect(cards).toHaveLength(2);
+    expect(new Set(cards).size).toBe(2);
   });
 
   it("offers Left & right for a left side", () => {

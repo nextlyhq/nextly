@@ -29,8 +29,8 @@ import {
 import {
   moveToSharedStyleClear,
   planMoveToSharedStyle,
-  sharedStyleChange,
-  sharedStyleWrite,
+  sharedStyleChanges,
+  type SharedStyleSet,
 } from "./shared-style-target";
 import { useSurvivingReport } from "./shell/builder-notices";
 import {
@@ -412,21 +412,15 @@ export function useFieldTarget({
     at: StyleAddress = address
   ): CommitOutcome {
     if (target.kind !== "shared") return writeBlock(value, also, at);
-    // A shared style is written by the host, one change at a time.
-    let outcome: CommitOutcome = "unchanged";
-    for (const write of [{ address: at, value }, ...also]) {
-      const one = writeSharedStyleValue({
-        target,
-        address: write.address,
-        policy,
-        value: write.value,
-        setIssue,
-        report: reportFor(target),
-      });
-      if (one === "refused") return one;
-      if (one === "applied") outcome = one;
-    }
-    return outcome;
+    // A shared style's writes go to the host as ONE change, so one undo
+    // takes the whole gesture back, as it does on the block.
+    return writeSharedStyleValue({
+      target,
+      sets: [{ address: at, value }, ...also],
+      policy,
+      setIssue,
+      report: reportFor(target),
+    });
   }
 }
 
@@ -440,16 +434,15 @@ export function useFieldTarget({
  */
 function writeSharedStyleValue({
   target,
-  address,
+  sets,
   policy,
-  value,
   setIssue,
   report,
 }: {
   target: Extract<StyleTarget, { kind: "shared" }>;
-  address: StyleAddress;
+  /** The addresses written, as one change the host stores and undoes once. */
+  sets: readonly SharedStyleSet[];
   policy: StylePolicy | undefined;
-  value: StyleValue | null;
   setIssue: (message: string | null) => void;
   report: (reason: string) => void;
 }): CommitOutcome {
@@ -459,7 +452,8 @@ function writeSharedStyleValue({
     setIssue(target.readOnly);
     return "refused";
   }
-  const write = sharedStyleWrite(target.style.styles, address, value, policy);
+  const change = sharedStyleChanges(sets, policy);
+  const write = change(target.style.styles);
   if (write.kind === "refused") {
     setIssue(write.reason);
     return "refused";
@@ -471,7 +465,7 @@ function writeSharedStyleValue({
    * anything is the host's to decide against what it has queued. The change,
    * not the styles just computed, so none is lost.
    */
-  void target.write(sharedStyleChange(address, value, policy)).then(refused => {
+  void target.write(change).then(refused => {
     if (refused !== undefined) report(refused);
   });
   return "applied";

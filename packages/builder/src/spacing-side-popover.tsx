@@ -32,7 +32,11 @@ import { isElement, isInput } from "./dom-kind";
 import { SegmentChoices } from "./segment-choices";
 import { CompactSides } from "./spacing-box";
 import type { ApplyTo } from "./spacing-side";
-import { variablesFor, type SiteVariable } from "./style-colour";
+import {
+  variableLabel,
+  variablesFor,
+  type SiteVariable,
+} from "./style-colour";
 import type { StyleControl } from "./style-controls";
 import type { CommitOutcome } from "./style-field-surroundings";
 import { NumericField } from "./style-numeric-field";
@@ -44,7 +48,20 @@ import { variableGroupOf } from "./tokens-studio";
 export type SideClose = "side" | "next" | "previous";
 
 /** "None", the preset that writes nothing between the edges. */
-const NONE = "none";
+const NONE = "zero";
+
+/**
+ * A preset's key in the radio group: a variable's under a prefix, so no
+ * variable's identity ("none", "zero") can be taken for the zero preset.
+ */
+function presetKey(identity: string): string {
+  return `token:${identity}`;
+}
+
+/** The variable a preset's key stands for, or none for the zero preset. */
+function identityOfKey(key: string): string | undefined {
+  return key.startsWith("token:") ? key.slice("token:".length) : undefined;
+}
 
 /** A zero length as it may be stored: "0", "0px", "0rem". */
 const ZERO = /^[+-]?0*(?:\.0*)?(?:[a-z%]+)?$/i;
@@ -78,7 +95,7 @@ function offeredPreset(
   presets: readonly SiteVariable[]
 ): string | undefined {
   const held = heldPreset(stored);
-  return held === NONE || presets.some(preset => preset.identity === held)
+  return held === NONE || presets.some(preset => presetKey(preset.identity) === held)
     ? held
     : undefined;
 }
@@ -106,7 +123,7 @@ function commitTyped(
 
 /** The preset a side holds: its variable, "None" for a zero, else none. */
 function heldPreset(stored: StyleValue | undefined): string | undefined {
-  if (isTokenRef(stored)) return stored.$token;
+  if (isTokenRef(stored)) return presetKey(stored.$token);
   if (stored === undefined) return undefined;
   return ZERO.test(storedText(stored)) && /\d/.test(storedText(stored))
     ? NONE
@@ -241,12 +258,13 @@ export function SpacingSidePopover(
           Presets
         </span>
         <SegmentChoices
-          options={[NONE, ...presets.map(preset => preset.identity)]}
+          options={[NONE, ...presets.map(preset => presetKey(preset.identity))]}
           on={offeredPreset(stored, presets)}
           labels={presetLabels(presets)}
           labelId={`${id}-presets`}
           onChoose={choice => {
-            write(choice === NONE ? "0" : { $token: choice });
+            const identity = identityOfKey(choice);
+            write(identity === undefined ? "0" : { $token: identity });
           }}
         />
       </div>
@@ -316,9 +334,11 @@ function presetLabels(
     ),
   };
   for (const preset of presets) {
-    labels[preset.identity] = (
+    labels[presetKey(preset.identity)] = (
       <>
-        {preset.label}{" "}
+        {/* Qualified where two presets share a name, as every variable
+            list here qualifies it. */}
+        {variableLabel(preset, presets)}{" "}
         <span className="nx-spacing-popover__preset-value">
           {variableValueText(preset)}
         </span>
