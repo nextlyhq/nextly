@@ -15,7 +15,7 @@ import { isFieldLocalized, type FieldConfig } from "nextly/config";
 import { useEffect, useMemo, useRef } from "react";
 import type { FieldValues, Path, UseFormReturn } from "react-hook-form";
 
-import { viewFieldRefusal } from "../entries/EntryForm/document-view-field-gate";
+import { viewFieldRefusal } from "../entries/EntryForm/document-view-field-refusal";
 
 import type { EditorRestoreSurface } from "./document-history-context";
 import { createEditorRestore, type EditorRestore } from "./editor-restore";
