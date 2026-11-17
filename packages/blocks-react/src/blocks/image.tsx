@@ -771,7 +771,9 @@ const IMAGE_PARTS = {
         "objectFit",
         "objectPosition",
       ],
-      whenRootIs: ["frame", "link"],
+      // The enlarge button sits between the figure and the picture, as a
+      // link does inside a captioned picture's figure.
+      whenRootIs: ["frame", "link", "enlarge"],
     },
     baseStyles: {
       base: {

@@ -6,8 +6,11 @@
  * Close button that hides it (`popovertargetaction="hide"`), the full-size
  * file and the caption. An `auto` popover closes on Escape and on a click
  * outside it, and gives focus back to the button that opened it; it adds no
- * history entry, as a `:target` fragment would. A closed popover is not
- * drawn, so its `loading="lazy"` file is fetched only when it opens.
+ * history entry, as a `:target` fragment would. The full-size file is the
+ * background of an element inside the popover rather than an `img`: with
+ * script turned off a browser ignores `loading="lazy"` and fetches every
+ * `img` with the page, while a background inside a closed popover, which
+ * is not drawn, is fetched only when it opens.
  *
  * Close is the only control: nothing here steps to another picture. With no
  * script, a Next inside one popover opens the next one nested over it rather
@@ -21,7 +24,7 @@
  *
  * @module blocks/lightbox
  */
-import type { ReactElement } from "react";
+import type { CSSProperties, ReactElement } from "react";
 
 /**
  * The marker on every lightbox, which the rules below select by: a popover
@@ -29,6 +32,9 @@ import type { ReactElement } from "react";
  * a part's styles can say.
  */
 const LIGHTBOX_ATTRIBUTE = "data-nx-lightbox";
+
+/** The marker on the full-size picture, for its background's fit. */
+const PICTURE_ATTRIBUTE = "data-nx-lightbox-picture";
 
 /** The marker on the button that opens one, for its pointer (see below). */
 export const ENLARGE_ATTRIBUTE = "data-nx-enlarge";
@@ -45,12 +51,13 @@ export const ENLARGE_ATTRIBUTE = "data-nx-enlarge";
  * outweighs it too, and pinned the panel to the window's corner. The
  * backdrop dims the page the same in light and dark: it is a shade over
  * whatever is there, and the panel on it takes the site's colours. The
- * pointers too, which are no style a part can declare: a picture that
- * enlarges, and a Close button.
+ * pointers too, and how the full-size picture fills its box, which are no
+ * style a part can declare: a picture that enlarges, and a Close button.
  */
 const LIGHTBOX_CSS: string = [
   `[${LIGHTBOX_ATTRIBUTE}]:popover-open{display:flex}`,
   `[${LIGHTBOX_ATTRIBUTE}]{margin:auto}`,
+  `[${PICTURE_ATTRIBUTE}]{background-size:contain;background-repeat:no-repeat;background-position:center}`,
   `[${LIGHTBOX_ATTRIBUTE}]::backdrop{background:rgb(0 0 0 / 0.8)}`,
   `[${ENLARGE_ATTRIBUTE}]{cursor:zoom-in}`,
   `[${LIGHTBOX_ATTRIBUTE}]>button{cursor:pointer}`,
@@ -166,18 +173,16 @@ export const LIGHTBOX_PARTS = {
       },
     },
   },
-  // The full-size file: never past the window, its proportion kept, with
-  // room left in the panel for Close and the caption.
+  // The full-size file: never past the window, with room left in the panel
+  // for Close and the caption. Its size for its proportion is the picture's
+  // own (see `fullSize`).
   full: {
     baseStyles: {
       base: {
         base: {
           display: "block",
-          width: "auto",
-          height: "auto",
           maxWidth: "calc(90vw - 1.5rem)",
           maxHeight: "70vh",
-          minHeight: "0",
         },
       },
     },
@@ -200,6 +205,44 @@ export const LIGHTBOX_PARTS = {
     },
   },
 } as const;
+
+/**
+ * An address as a CSS `url()` string. The address is content, so a quote or
+ * a backslash in it is escaped, and a line break written as its code, rather
+ * than ending the string and letting the rest read as more CSS.
+ */
+function cssUrl(address: string): string {
+  const escaped = address
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"')
+    .replaceAll("\n", "\\a ")
+    .replaceAll("\r", "\\d ");
+  return `url("${escaped}")`;
+}
+
+/**
+ * The full-size picture's box: its proportion, and as wide as it can be
+ * while it fits the room the part's styles give it and stays no wider than
+ * the file. A picture whose size isn't known takes the room as it is, and
+ * its background is fitted inside.
+ */
+function fullSize(
+  width: number | undefined,
+  height: number | undefined
+): CSSProperties {
+  if (
+    width === undefined ||
+    height === undefined ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    return { width: "calc(90vw - 1.5rem)", height: "70vh" };
+  }
+  return {
+    aspectRatio: `${width} / ${height}`,
+    width: `min(calc(90vw - 1.5rem), calc(70vh * ${width} / ${height}), ${width}px)`,
+  };
+}
 
 /** What the picture's button is called: its alt text, or that it enlarges. */
 export function enlargeName(alt: string): string {
@@ -260,13 +303,15 @@ export function Lightbox({
       >
         Close
       </button>
-      <img
+      <div
         className={partClass("full")}
-        src={src}
-        alt={alt}
-        loading="lazy"
-        {...(width === undefined ? {} : { width })}
-        {...(height === undefined ? {} : { height })}
+        // Named as the page's picture is; a decorative one is hidden, as
+        // its `alt=""` is.
+        {...(alt === ""
+          ? { "aria-hidden": "true" }
+          : { role: "img", "aria-label": alt })}
+        style={{ backgroundImage: cssUrl(src), ...fullSize(width, height) }}
+        {...{ [PICTURE_ATTRIBUTE]: "" }}
       />
       {caption === "" ? null : (
         <p className={partClass("lightbox-caption")}>{caption}</p>

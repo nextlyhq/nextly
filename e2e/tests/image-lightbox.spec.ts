@@ -117,7 +117,8 @@ function lightboxOn(page: Page) {
     panel,
     open: page.locator("[data-nx-lightbox]:popover-open"),
     close: panel.getByRole("button", { name: "Close" }),
-    full: panel.locator("img"),
+    // The full-size file, drawn as this element's background.
+    full: panel.locator("[data-nx-lightbox-picture]"),
   };
 }
 
@@ -222,10 +223,11 @@ for (const script of [false, true]) {
           )
         )
         .toBe(true);
-      const full = new URL(
-        (await box.full.getAttribute("src")) ?? "",
-        live.url()
-      ).href;
+      const background = /url\("([^"]+)"\)/.exec(
+        (await box.full.getAttribute("style")) ?? ""
+      )?.[1];
+      expect(background, "the full-size file's address").toBeTruthy();
+      const full = new URL(background ?? "", live.url()).href;
       const shown = await pagePicture.evaluate(
         element => (element as HTMLImageElement).currentSrc
       );
@@ -239,11 +241,6 @@ for (const script of [false, true]) {
       await expect
         .poll(() => asked.filter(each => each === full).length)
         .toBe(1);
-      await expect
-        .poll(() =>
-          box.full.evaluate(element => (element as HTMLImageElement).complete)
-        )
-        .toBe(true);
       await live.context().close();
     });
 
@@ -258,11 +255,7 @@ for (const script of [false, true]) {
         await live.goto(`/${slug}`);
         const box = lightboxOn(live);
         await box.opener.click();
-        await expect
-          .poll(() =>
-            box.full.evaluate(element => (element as HTMLImageElement).complete)
-          )
-          .toBe(true);
+        await expect(box.open).toHaveCount(1);
         const size = live.viewportSize() ?? { width, height: 900 };
         const picture = await box.full.boundingBox();
         expect(picture, "the full-size picture has a box").not.toBeNull();

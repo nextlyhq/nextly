@@ -51,7 +51,9 @@ async function page(nodes: BlockNode[]): Promise<Document> {
       resolveMedia: async (id: string) =>
         id === "photo"
           ? { url: "/media/photo.jpg", width: 3000, height: 2000, alt: "" }
-          : null,
+          : id === "quoted"
+            ? { url: '/media/a"b\\c.jpg', width: 300, height: 200, alt: "" }
+            : null,
     }),
     ...imageSizingFor(
       async (source): Promise<readonly ImageCopy[]> =>
@@ -136,8 +138,8 @@ describe("an Image set to Enlarge, on a published page", () => {
     expect(close?.getAttribute("type")).toBe("button");
     expect(close?.getAttribute("popovertarget")).toBe(popover.id);
     expect(close?.getAttribute("popovertargetaction")).toBe("hide");
-    const full = popover.querySelector("img");
-    expect(full?.getAttribute("alt")).toBe("The team on the hill");
+    const full = popover.querySelector('[role="img"]');
+    expect(full?.getAttribute("aria-label")).toBe("The team on the hill");
     expect(popover.textContent).toContain("Our team");
     // The caption stays under the page's picture too.
     expect(doc.querySelector("figure > figcaption")?.textContent).toBe(
@@ -145,32 +147,50 @@ describe("an Image set to Enlarge, on a published page", () => {
     );
   });
 
-  it("shows the full-size file in the popover, loaded only when it opens, and sized copies on the page", async () => {
+  it("shows the full-size file in the popover as a background, fetched only when it opens", async () => {
     const doc = await page([image("pic", { whenClicked: "enlarge" })]);
     const { opener, popover } = lightboxOf(doc);
-    const full = popover.querySelector("img");
-    expect(full?.getAttribute("src")).toBe("/media/photo.jpg");
-    // A copy would be chosen by the browser from a srcset: the original is
-    // the one file the popover shows.
-    expect(full?.hasAttribute("srcset")).toBe(false);
-    // Lazy inside a closed popover, which is not drawn: not fetched with
-    // the page.
-    expect(full?.getAttribute("loading")).toBe("lazy");
-    // The control: the page's own picture offers the sized copies.
-    expect(opener.querySelector("img")?.getAttribute("srcset")).toContain(
+    // No `img` in the popover: with script turned off a browser ignores
+    // `loading="lazy"` and fetches every one with the page. A background
+    // inside a closed popover, which is not drawn, is fetched on opening.
+    expect(popover.querySelector("img")).toBeNull();
+    const full = popover.querySelector<HTMLElement>('[role="img"]');
+    // The original, never a copy sized to the page.
+    expect(full?.style.backgroundImage).toBe('url("/media/photo.jpg")');
+    // Its proportion, so the box is the picture's shape before it arrives.
+    expect(full?.style.aspectRatio).toBe("3000 / 2000");
+    // The control: the page's own picture is an `img` offering the copies,
+    // loaded first as the page's first block.
+    const shown = opener.querySelector("img");
+    expect(shown?.getAttribute("srcset")).toContain(
       "/media/photo-640.webp 640w"
     );
+    expect(shown?.getAttribute("loading")).toBe("eager");
   });
 
-  it("keeps the picture in the page's first block lazy in the popover", async () => {
-    // The first block's picture loads at once and first; its full-size
-    // copy must not ride that along.
-    const doc = await page([image("pic", { whenClicked: "enlarge" })]);
-    const { opener, popover } = lightboxOf(doc);
-    expect(opener.querySelector("img")?.getAttribute("loading")).toBe("eager");
-    expect(popover.querySelector("img")?.getAttribute("loading")).toBe("lazy");
-    expect(popover.querySelector("img")?.hasAttribute("fetchpriority")).toBe(
-      false
+  it("hides a decorative picture's full-size view from screen readers", async () => {
+    const doc = await page([
+      image("pic", { whenClicked: "enlarge", decorative: true }),
+    ]);
+    const { popover } = lightboxOf(doc);
+    expect(popover.querySelector('[role="img"]')).toBeNull();
+    expect(
+      popover
+        .querySelector("[data-nx-lightbox-picture]")
+        ?.getAttribute("aria-hidden")
+    ).toBe("true");
+  });
+
+  it("writes an address with quotes into the background as one CSS string", async () => {
+    // The address is content: a quote in it must not end the string and
+    // let the rest be read as more CSS. Read from the page's markup as
+    // sent, not as a style object re-serializes it.
+    const doc = await page([
+      image("pic", { mediaId: "quoted", whenClicked: "enlarge" }),
+    ]);
+    const full = doc.querySelector("[data-nx-lightbox-picture]");
+    expect(full?.getAttribute("style")).toContain(
+      String.raw`url("/media/a\"b\\c.jpg")`
     );
   });
 
