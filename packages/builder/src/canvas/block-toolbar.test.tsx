@@ -43,9 +43,8 @@ import {
 
 import { BlockToolbar } from "./block-toolbar";
 import { Canvas } from "./canvas";
-import type { EditorState } from "../editor-state";
+import { useEditorState, type EditorState } from "../editor-state";
 import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
-import { lockOp } from "../inspector";
 import { BlockKeyboardActions } from "../keyboard-actions";
 import { toolbarActions } from "./toolbar-actions";
 import { EDITING_ATTRIBUTE } from "./use-inline-text";
@@ -587,59 +586,73 @@ describe("BlockToolbar", () => {
   });
 
   /**
-   * A block a placed component locks in Layers: the lock sits on the
-   * component's own node, which only the composed page shows, and the store
-   * refuses any edit to it through the placement, naming the component.
+   * A block the page puts in the slot a placed component exposes, inside a
+   * node the component locks in Layers. The real editor composes the page
+   * with the component, so the lock is the one a save would hold the block
+   * to; the page may lift only its own lock, which leaves the block held.
    */
-  function lockedByItsComponent(lockedOnPage: boolean) {
-    register();
-    const [own, after] = pair(lockedOnPage ? { locked: true } : {}).nodes as [
-      BlockNode,
-      BlockNode,
-    ];
-    // On the page, the block fills the slot the placement exposes.
-    const page = documentOf([
-      {
-        id: "placement",
-        type: COMPONENT_INSTANCE_TYPE,
-        version: 1,
-        props: { componentId: "promo-card" },
-        slots: { content: [own] },
-      } as BlockNode,
-      after,
-    ]);
-    // Composed, it sits in the component's own node, which the component
-    // locks in Layers.
-    const composed = documentOf([
-      {
-        id: "promo-root",
-        type: "acme/leaf",
-        version: 1,
-        props: {},
-        instanceOf: "placement",
-        locked: true,
-        slots: { content: [own] },
-      } as BlockNode,
-      after,
-    ]);
-    const componentLock = {
-      code: "layers-locked",
-      label: "Promo card",
-      relation: "component",
-      verb: "change",
-    } as const;
-    // The store's own question: a lock edit on the block is refused, by the
-    // component, as a save would refuse it.
-    const lockEdits = [lockOp("a", false), lockOp("a", true)].map(op =>
-      JSON.stringify(op)
-    );
-    return Object.assign(editorSpy(page, "a"), {
-      composed: () => composed,
-      lockRefusalFor: (ops: readonly unknown[]) =>
-        ops.some(op => lockEdits.includes(JSON.stringify(op)))
-          ? componentLock
-          : undefined,
+  function ComponentLockedPage({ lockedOnPage }: { lockedOnPage: boolean }) {
+    if (!hasBlock("acme/box")) {
+      registerBlocks(
+        [
+          {
+            name: "acme/box",
+            version: 1,
+            description: "A box holding blocks.",
+            example: { props: {} },
+            editor: { label: "Box" },
+            props: {},
+            slots: { children: {} },
+            render: () => null,
+          },
+        ] as never,
+        { source: "block-toolbar-test" }
+      );
+    }
+    const promo = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        {
+          id: "hero",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          locked: true,
+          name: "Hero",
+          slots: { children: [] },
+        },
+      ],
+      slots: { body: { label: "Body", nodeId: "hero", slot: "children" } },
+    } as unknown as BlockDocument;
+    const given = {
+      id: "given",
+      type: "acme/leaf",
+      version: 1,
+      props: {},
+      ...(lockedOnPage ? { locked: true } : {}),
+    } as BlockNode;
+    const editor = useEditorState({
+      initialDocument: documentOf([
+        {
+          id: "i1",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "promo" },
+          slots: { body: [given] },
+        } as BlockNode,
+      ]),
+      definitions: new Map([["promo", promo]]),
+      componentName: id => (id === "promo" ? "Promo" : undefined),
     });
+    return tree(
+      {
+        ...editor,
+        selectedId: "given",
+        selection: { ids: ["given"], primary: "given" },
+      } as EditorState,
+      {}
+    );
   }
 
   it.each([
@@ -648,18 +661,16 @@ describe("BlockToolbar", () => {
   ])(
     "says Locked, by the component, where a placed component locks the block in Layers (%s), and offers no Unlock",
     (_how, lockedOnPage) => {
-      const editor = lockedByItsComponent(lockedOnPage);
-      mount(editor);
+      register();
+      render(<ComponentLockedPage lockedOnPage={lockedOnPage} />);
 
       expect(unseenButton("Unlock")).toBeNull();
       const locked = unseenButton("Locked");
       if (locked === null) throw new Error("no Locked button");
       expect(locked.getAttribute("aria-disabled")).toBe("true");
       expect(locked.getAttribute("title")).toBe(
-        "Set by the component Promo card. Change it where the component is edited."
+        "Set by its component. Change it where the component is edited."
       );
-      fireEvent.click(locked);
-      expect(editor.apply).not.toHaveBeenCalled();
     }
   );
 

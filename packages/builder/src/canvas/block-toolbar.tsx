@@ -87,8 +87,9 @@ import {
   useBlockActionsContext,
   useToolbarFocusSlot,
 } from "../keyboard-actions";
-import { lockSentence } from "../keyboard-announcements";
+import { lockRefusalWording } from "../lock-refusal";
 import { lockBlockingEdit } from "../locking";
+import { refusalAnnouncement } from "../move-refusal";
 import { layerLabel, pathTo } from "../panels/layers/layers";
 import { useSelectionActions } from "../selection-actions";
 import { blockActionRunners } from "../shell/builder-commands";
@@ -257,8 +258,18 @@ type BarLock =
 /** What a pinned lock says where the area it sits in gives no reason. */
 const HELD_REASON = "The area it sits in fixes this.";
 
-/** What a component's Layers lock says where the store gives no sentence. */
-const COMPONENT_HELD_REASON = "Set by its component.";
+/**
+ * What a placed component's Layers lock says: the lock refusal's own words
+ * for it, as an edit the component holds is refused.
+ */
+const COMPONENT_HELD_REASON = refusalAnnouncement(
+  lockRefusalWording({
+    code: "layers-locked",
+    label: "",
+    relation: "component",
+    verb: "change",
+  })
+);
 
 /**
  * Whether the block sits inside a component the page places: in the slot the
@@ -297,33 +308,22 @@ function barLockOf(
   selectedIds: readonly string[]
 ): BarLock | undefined {
   if (selectedId === null || selectedIds.length > 1) return undefined;
-  const holder = lockBlockingEdit(editor.document, selectedId);
-  if (holder === undefined) {
-    // Not locked on the page, but a placed component may lock it: the bar
-    // says so, since no edit to it here would be kept.
-    if (!lockedByComponent(editor, selectedId)) return undefined;
-    return {
-      kind: "held",
-      reason:
-        lockSentence(editor, [lockOp(selectedId, true)]) ??
-        COMPONENT_HELD_REASON,
-    };
+  // A placed component's own lock holds first: the page may lift only its
+  // own, which would leave the block held all the same.
+  if (lockedByComponent(editor, selectedId)) {
+    return { kind: "held", reason: COMPONENT_HELD_REASON };
   }
+  const holder = lockBlockingEdit(editor.document, selectedId);
+  if (holder === undefined) return undefined;
   if (holder.id !== selectedId) {
     return { kind: "around", id: holder.id, name: layerLabel(holder) };
   }
   // Asked only of a block locked itself, so a click on any other block reads
   // no slot locks.
   const status = lockStatusOf(editor.document, selectedId, lockViewOf(editor));
-  if (!layersLockChangeable(status)) {
-    return { kind: "held", reason: status.slot?.reason ?? HELD_REASON };
-  }
-  // Unlock is offered only where the store keeps it: the store judges the
-  // same op the button applies, a placed component's own lock included.
-  const refused = lockSentence(editor, [lockOp(selectedId, false)]);
-  return refused === null
+  return layersLockChangeable(status)
     ? { kind: "unlock", id: selectedId }
-    : { kind: "held", reason: refused };
+    : { kind: "held", reason: status.slot?.reason ?? HELD_REASON };
 }
 
 /**
