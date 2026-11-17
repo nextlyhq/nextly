@@ -17,7 +17,8 @@
  *   starts twice with migrations at start off and twice with them on, each
  *   pair begun once by the Direct API and once by a request. After each, the
  *   database is compared with a copy taken before the first: every table's
- *   columns and indexes, and every row of every table.
+ *   columns and indexes, every row of every table, and where each
+ *   generated key stands.
  * - The older build runs `nextly migrate`: it stops with exit code 3 naming
  *   the migration its folder lacks, and the database, the ledger included,
  *   still matches the copy.
@@ -27,7 +28,9 @@
  * timestamp repair) was written by the starts before the copy, and a later
  * start has none of it left to write.
  *
- * Two controls show the comparison sees a write. A development start of the
+ * Three controls show the comparison sees a write. A row inserted into a
+ * table with a generated key and deleted again leaves every row as it was
+ * and the next key moved on, which the copy shows. A development start of the
  * older build, which still syncs the registry from its configuration, leaves
  * the collection's registry row different from the copy. And with the newer
  * build's files back in its folder and a migration of its own written, the
@@ -141,6 +144,9 @@ const PLUGIN = definePlugin({
     permissions: [{ action: "export", resource: "obl-submissions" }],
   },
 });
+
+/** The copy's entry for where the generated keys stand, beside the tables. */
+const GENERATED_KEYS = "(generated keys)";
 
 /** How a start is begun. */
 type Entry = "the Direct API" | "a request";
@@ -393,7 +399,7 @@ describe.each(getConfiguredTestDialects())(
     /**
      * Everything the database holds: each table's columns, indexes and
      * constraints as the dialect describes them, and every row of every
-     * table, whole. Nothing is left out: the setup token included, which the
+     * table, whole, and where each generated key stands. Nothing is left out: the setup token included, which the
      * older build's first start issued and no later start replaces.
      */
     async function copy(): Promise<Copy> {
@@ -419,10 +425,58 @@ describe.each(getConfiguredTestDialects())(
           held.columns.sort();
           held.indexes.sort();
         }
+        out[GENERATED_KEYS] = {
+          columns: [],
+          indexes: [],
+          rows: await generatedKeys(adapter, Object.keys(out)),
+        };
         return out;
       } finally {
         await adapter.disconnect().catch(() => undefined);
       }
+    }
+
+    /**
+     * Where each generated key stands: the next id a table hands out, which
+     * a row inserted and then deleted moves on though no row shows it.
+     * PostgreSQL keeps it in sequences, SQLite in `sqlite_sequence`, and
+     * MySQL in each table's own statement.
+     */
+    async function generatedKeys(
+      adapter: DrizzleAdapter,
+      tables: string[]
+    ): Promise<string[]> {
+      if (dialect === "postgresql") {
+        return (
+          await rowsOf(
+            adapter,
+            "SELECT sequencename::text AS name, last_value::text AS at FROM pg_sequences WHERE schemaname = current_schema()"
+          )
+        )
+          .map(line)
+          .sort();
+      }
+      if (dialect === "sqlite") {
+        // The table is there only once a table with such a key is.
+        const [there] = await rowsOf(
+          adapter,
+          "SELECT name FROM sqlite_master WHERE name = 'sqlite_sequence'"
+        );
+        if (there === undefined) return [];
+        return (
+          await rowsOf(adapter, "SELECT name, seq AS at FROM sqlite_sequence")
+        )
+          .map(line)
+          .sort();
+      }
+      const out: string[] = [];
+      for (const table of tables) {
+        const [row] = await rowsOf(adapter, `SHOW CREATE TABLE \`${table}\``);
+        const statement = String(Object.values(row ?? {})[1] ?? "");
+        const at = /AUTO_INCREMENT=(\d+)/.exec(statement)?.[1];
+        if (at !== undefined) out.push(line({ name: table, at }));
+      }
+      return out.sort();
     }
 
     /**
@@ -614,6 +668,33 @@ describe.each(getConfiguredTestDialects())(
       expect(after["nextly_schema_events"]).not.toEqual(
         before["nextly_schema_events"]
       );
+    }, 900_000);
+
+    it("the control: a row inserted and deleted again moves a generated key on", async () => {
+      await newerBuildDeployed();
+      const before = await copy();
+
+      const adapter = await open();
+      try {
+        const moment =
+          dialect === "sqlite" ? "1900000000" : "'2030-01-01 00:00:00'";
+        await adapter.executeQuery(
+          `INSERT INTO ${q}password_reset_tokens${q} (${q}identifier${q}, ${q}token_hash${q}, ${q}expires${q}, ${q}created_at${q}) VALUES ('obl', 'obl', ${moment}, ${moment})`
+        );
+        await adapter.executeQuery(
+          `DELETE FROM ${q}password_reset_tokens${q} WHERE ${q}identifier${q} = 'obl'`
+        );
+      } finally {
+        await adapter.disconnect().catch(() => undefined);
+      }
+
+      const after = await copy();
+      // Every table as it was, and only the key's standing different.
+      expect(after[GENERATED_KEYS]).not.toEqual(before[GENERATED_KEYS]);
+      expect({ ...after, [GENERATED_KEYS]: undefined }).toEqual({
+        ...before,
+        [GENERATED_KEYS]: undefined,
+      });
     }, 900_000);
 
     it("the control: a development start of the older build rewrites the registry row", async () => {
