@@ -459,6 +459,15 @@ describe("how many blocks on how many places use a style", () => {
     ).toBe("Used on 3 blocks on 2 pages");
   });
 
+  it("keeps the saved counts where the caller has no live page", () => {
+    expect(
+      sharedStyleReachSentence(
+        undefined,
+        counted({ pages: 2 }, 3, { here: { blocks: 1, kind: "pages" } })
+      )
+    ).toBe("Used on 3 blocks on 2 pages");
+  });
+
   it("says at least while any count is a floor", () => {
     expect(
       sharedStyleReachSentence(

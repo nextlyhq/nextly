@@ -702,7 +702,9 @@ function siteWideSentence(
   live: BlocksOnThisPage | undefined,
   reach: SharedStyleReach & { readonly blocks: number }
 ): string {
-  const here = reach.here;
+  // Without the open page's live count (a caller that has none), the saved
+  // counts stand as they are.
+  const here = live === undefined ? undefined : reach.here;
   // The open page counted live where the host could name its saved copy, and
   // where it is saved nowhere yet (no `here`), live as well: either way it is
   // counted once.
