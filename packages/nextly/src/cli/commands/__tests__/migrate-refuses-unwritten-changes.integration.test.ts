@@ -30,6 +30,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { defineCollection, defineConfig, number, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { loadedDialect } from "../../../database/dialect-tables";
+import { col } from "../../../domains/schema/extension/dsl";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { liveColumnNames } from "../../../domains/schema/pipeline/diff/introspect-live";
 import { definePlugin } from "../../../plugins/plugin-context";
@@ -455,6 +456,57 @@ describe.each(getConfiguredTestDialects())(
       expect(run.said).not.toContain(UP_TO_DATE);
       // Nothing was changed: the column stays dropped, nothing re-created it.
       expect((await columns(instance!, dialect))?.has("body")).toBe(false);
+    });
+
+    it("a column the app's migration added to a core table, dropped by hand: named with the migration that made it", async () => {
+      // A schema hook's column on `users` travels in the app's migrations, and
+      // the core reconcile sets it aside rather than making it again.
+      const hinted = defineConfig({
+        collections: [defineCollection({ slug: SLUG, fields: [TITLE] })],
+        plugins: [
+          definePlugin({
+            name: PLUGIN,
+            version: "1.0.0",
+            nextly: ">=0.0.1",
+            contributes: {
+              schema: {
+                extend: [
+                  ({ schema }) => {
+                    schema.extendTable("users", {
+                      columns: { uwHint: col.text({ nullable: true }) },
+                    });
+                  },
+                ],
+              },
+            },
+          }),
+        ],
+        db: { migrationsDir: "./migrations" },
+      });
+      await migrateCreate(hinted, "create_posts_and_hint");
+      const applied = await migrate(hinted);
+      expect(applied.code, applied.said).toBeUndefined();
+      const db = (instance!.adapter as unknown as DrizzleAdapter).getDrizzle();
+      const usersColumns = async () =>
+        (await liveColumnNames(db, dialect, ["users"])).get("users");
+      expect((await usersColumns())?.has("uw_hint")).toBe(true);
+      const q = dialect === "mysql" ? "`" : '"';
+      await (
+        instance!.adapter as unknown as {
+          executeQuery(sql: string): Promise<unknown>;
+        }
+      ).executeQuery(`ALTER TABLE ${q}users${q} DROP COLUMN ${q}uw_hint${q}`);
+
+      const run = await migrate(hinted);
+
+      expect(run.code, run.said).toBe(1);
+      expect(run.said).toMatch(
+        /- column users\.uw_hint \(created by \d+_\d+_\d+_create_posts_and_hint\)/
+      );
+      // Only the app's column: none of Nextly's own columns on the table is named.
+      expect(run.said.match(/- column users\./g)).toHaveLength(1);
+      expect(run.said).not.toContain(UP_TO_DATE);
+      expect((await usersColumns())?.has("uw_hint")).toBe(false);
     });
 
     it("a table and a column a later migration dropped, with consent, are not missing", async () => {

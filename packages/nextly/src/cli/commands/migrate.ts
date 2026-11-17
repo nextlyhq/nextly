@@ -3181,7 +3181,8 @@ function firstRunSteps(
  * Refuses, reading only, where the database lacks a table or column the newest
  * applied app snapshot records (`MigrateCoreDeps.refuseDatabaseBehind`).
  * Nextly's own tables are left to the core reconcile, which brings them to
- * this release whatever a snapshot froze of them.
+ * this release whatever a snapshot froze of them; the columns the app's
+ * migrations added to one are the app's, and are checked.
  */
 async function refuseDatabaseBehindLedger(
   deps: MigrateCoreDeps
@@ -3211,7 +3212,13 @@ async function refuseDatabaseBehindLedger(
     ...entry,
     snapshot: {
       ...entry.snapshot,
-      tables: entry.snapshot.tables.filter(table => !core.has(table.name)),
+      // A core table the app contributed to stays: `appOwnedTables` has
+      // narrowed it to the app's own columns, which the core reconcile sets
+      // aside and never makes again. Nextly's own columns are not in it.
+      tables: entry.snapshot.tables.filter(
+        table =>
+          !core.has(table.name) || entry.foreign?.has(table.name) === true
+      ),
     },
   }));
   const newest = snapshots.at(-1);
