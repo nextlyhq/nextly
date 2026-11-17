@@ -197,6 +197,8 @@ export const CONTAINER_SUPPORTS = {
   dimensions: true,
   background: true,
   border: true,
+  // A card or a panel often casts one: Style › Effects › Shadow.
+  shadow: true,
   effects: true,
   position: true,
   container: true,

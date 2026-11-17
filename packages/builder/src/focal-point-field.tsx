@@ -284,17 +284,23 @@ export function FocalPointField({
   );
 }
 
-/** A point written as CSS, such as `30% 70%`, once the field is left. */
-function FocalCss({
+/**
+ * A value written as CSS, such as `30% 70%`, once the field is left: the way
+ * past a picker's choices, for a point here and a background's size.
+ */
+export function FocalCss({
   stored,
   actionName,
   describedBy,
   onCommit,
+  placeholder = "30% 70%",
 }: {
   stored: string | undefined;
   actionName: string;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
+  /** An example of what may be written; a point unless said. */
+  placeholder?: string;
 }): React.JSX.Element {
   // The refusal, and the CSS names while they are shown.
   const described = useFieldDescription(describedBy);
@@ -313,7 +319,7 @@ function FocalCss({
       aria-label={`${actionName} as CSS`}
       aria-describedby={described}
       aria-invalid={refusedBy(describedBy)}
-      placeholder="30% 70%"
+      placeholder={placeholder}
       value={text}
       onChange={event => setText(event.target.value)}
       onBlur={commit}

@@ -179,7 +179,9 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
       ["lineHeight", "common"],
       ["color", "common"],
       ["textAlign", "common"],
-      ["listStyleType", "common"],
+      // A list's own marker is chosen with "List as"; a custom one is a CSS
+      // detail, added from "Add CSS property" and drawn there once set.
+      ["listStyleType", "more"],
       ["letterSpacing", "more"],
       ["textTransform", "more"],
       ["fontStyle", "more"],

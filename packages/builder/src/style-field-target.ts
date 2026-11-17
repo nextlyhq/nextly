@@ -66,6 +66,7 @@ function writeStyleValue({
   value,
   setIssue,
   also = [],
+  pairFor,
 }: {
   editor: EditorState;
   nodeId: string;
@@ -79,6 +80,8 @@ function writeStyleValue({
    * a margin set together. A clear is of `address` alone.
    */
   also?: readonly StyleWriteRequest[];
+  /** A second value the same edit writes with this one, read from the block. */
+  pairFor?: PairFor | undefined;
 }): CommitOutcome {
   const current = findNode(editor.document.nodes, nodeId);
   if (current === undefined) return "refused";
@@ -110,7 +113,10 @@ function writeStyleValue({
    * therefore not a detour around the simple case — it IS the simple case,
    * with the count left open.
    */
-  const write = styleWrite(current, address, also, value, policy);
+  // A type size picked where the block has no line height of its own
+  // writes the line height with it, in the same op, so one undo takes both.
+  const extra = [...also, ...pairedWrite(value, current.styles, pairFor)];
+  const write = styleWrite(current, address, extra, value, policy);
   if (write.refused !== undefined) {
     setIssue(write.refused);
     return "refused";
@@ -131,6 +137,26 @@ function writeStyleValue({
     return "refused";
   }
   return "applied";
+}
+
+/**
+ * A second value an edit writes with its own, given the value and the
+ * block's styles before the edit, or `undefined` for none.
+ */
+export type PairFor = (
+  value: StyleValue,
+  styles: NodeStyles | undefined
+) => { address: StyleAddress; value: StyleValue } | undefined;
+
+/** The second write an edit brings with its value, where it brings one. */
+function pairedWrite(
+  value: StyleValue | null,
+  styles: NodeStyles | undefined,
+  pairFor: PairFor | undefined
+): StyleWriteRequest[] {
+  if (value === null || pairFor === undefined) return [];
+  const paired = pairFor(value, styles);
+  return paired === undefined ? [] : [paired];
 }
 
 /** The ops that write one address, or several in one op, or clear one. */
@@ -230,11 +256,14 @@ export function useFieldTarget({
   nodeId,
   address,
   policy,
+  pairFor,
 }: {
   editor: EditorState;
   nodeId: string;
   address: StyleAddress;
   policy: StylePolicy | undefined;
+  /** A second value a write to the block makes with this field's. */
+  pairFor?: PairFor | undefined;
 }): {
   target: StyleTarget;
   nodeStyles: NodeStyles | undefined;
@@ -346,6 +375,7 @@ export function useFieldTarget({
       value,
       setIssue,
       ...(also === undefined ? {} : { also }),
+      pairFor,
     });
   const commitPaths = (writes: readonly PathWrite[]): CommitOutcome => {
     quieten();

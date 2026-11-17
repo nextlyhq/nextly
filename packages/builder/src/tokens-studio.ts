@@ -50,13 +50,19 @@ import {
   tokenCustomProperty,
   tokenIdentity,
   type SiteToken,
+  type SiteTextMap,
   type SiteTokenSet,
   type TokenKind,
   type TokenMode,
   validateStyleValues,
 } from "@nextlyhq/blocks-engine";
 
-import { colourOrder } from "./colour-groups";
+import {
+  colourOrder,
+  orderWithCopy,
+  renamedInOrder,
+  withoutIdentity,
+} from "./colour-groups";
 import {
   DEFAULT_FLUID_RANGE,
   fluidValue,
@@ -500,7 +506,27 @@ export function setFluidRange(
             values: { ...token.values, light: fluidValue(token.fluid, range) },
           }
     ),
+    // A Site text row's own size made with Fluid… is remade across the
+    // range too, in the same edit.
+    ...(tokens.siteText === undefined
+      ? {}
+      : { siteText: siteTextAcross(tokens.siteText, range) }),
   };
+}
+
+/** Site text with each row's own fluid size remade across a range. */
+function siteTextAcross(
+  siteText: SiteTextMap,
+  range: FluidRangeWidths
+): SiteTextMap {
+  return Object.fromEntries(
+    Object.entries(siteText).map(([role, row]) => [
+      role,
+      row?.fluid === undefined
+        ? row
+        : { ...row, fontSize: fluidValue(row.fluid, range) },
+    ])
+  );
 }
 
 /**
@@ -1382,54 +1408,6 @@ export function duplicateVariable(
     },
     at: at + 1,
   };
-}
-
-/**
- * The site's colour order with a copy listed right after the colour it
- * copies, where the order names that colour; otherwise nothing, and the copy
- * is listed where its group puts it.
- */
-function orderWithCopy(
-  tokens: SiteTokenSet,
-  token: SiteToken,
-  copies: readonly SiteToken[]
-): { order?: readonly string[] } {
-  const copy = copies[0];
-  // A colour removed before may have left the copy's free name in the order:
-  // it is listed once, here.
-  const order =
-    copy === undefined ? tokens.order : withoutIdentity(tokens.order, copy);
-  const at = order?.indexOf(tokenIdentity(token)) ?? -1;
-  if (order === undefined || at === -1 || copy === undefined) return {};
-  return {
-    order: [
-      ...order.slice(0, at + 1),
-      tokenIdentity(copy),
-      ...order.slice(at + 1),
-    ],
-  };
-}
-
-/** The colour order without a variable's identity, where it has one. */
-function withoutIdentity(
-  order: readonly string[] | undefined,
-  token: SiteToken
-): readonly string[] | undefined {
-  return order?.filter(identity => identity !== tokenIdentity(token));
-}
-
-/**
- * The colour order with one identity renamed in its place, listed there
- * once: a colour removed before may have left the new name in the order.
- */
-function renamedInOrder(
-  order: readonly string[] | undefined,
-  from: string,
-  to: string
-): readonly string[] | undefined {
-  return order
-    ?.filter(identity => identity !== to)
-    .map(identity => (identity === from ? to : identity));
 }
 
 /**

@@ -87,16 +87,27 @@ function sectionOnCanvas(page: Page) {
 }
 
 /** The Section's computed background, as the canvas draws it. */
-async function drawnBackground(
-  page: Page
-): Promise<{ image: string; position: string }> {
+async function drawnBackground(page: Page): Promise<{
+  image: string;
+  position: string;
+  size: string;
+  repeat: string;
+}> {
   return sectionOnCanvas(page).evaluate(element => {
     const style = getComputedStyle(element);
     return {
       image: style.backgroundImage,
       position: style.backgroundPosition,
+      size: style.backgroundSize,
+      repeat: style.backgroundRepeat,
     };
   });
+}
+
+/** The Section's drawn size and repeat, as one string to poll. */
+async function drawnSizing(page: Page): Promise<string> {
+  const { size, repeat } = await drawnBackground(page);
+  return `${size} ${repeat}`;
 }
 
 /** Pick the uploaded file named for `run` from the library dialog. */
@@ -166,6 +177,37 @@ test.describe("a Section's background image", () => {
     await expect(
       page.getByRole("textbox", { name: "Image link" })
     ).toBeVisible();
+  });
+
+  test("is sized with Cover, Fit and Tile, each with its repeat, and one undo takes both back", async ({
+    page,
+  }) => {
+    const id = await createPage(page.request, { url: "/hills.jpg" });
+    await openBackground(page, id);
+    const size = page.getByRole("radiogroup", { name: "Size" });
+    await expect(size).toBeVisible();
+    await expect.poll(() => drawnSizing(page)).toBe("auto repeat");
+
+    // Fit shows the whole image once: contain, and no tiling.
+    await size.getByRole("radio", { name: "Fit" }).click();
+    await expect.poll(() => drawnSizing(page)).toBe("contain no-repeat");
+
+    // One undo takes the size and the repeat back together.
+    await page.getByRole("button", { name: "Undo", exact: true }).click();
+    await expect.poll(() => drawnSizing(page)).toBe("auto repeat");
+    await expect(size.getByRole("radio", { name: "Fit" })).toHaveAttribute(
+      "aria-checked",
+      "false"
+    );
+
+    await size.getByRole("radio", { name: "Cover" }).click();
+    await expect.poll(() => drawnSizing(page)).toBe("cover no-repeat");
+    await size.getByRole("radio", { name: "Tile" }).click();
+    await expect.poll(() => drawnSizing(page)).toBe("auto repeat");
+    await expect(size.getByRole("radio", { name: "Tile" })).toHaveAttribute(
+      "aria-checked",
+      "true"
+    );
   });
 
   test("reads a position the nine points can't make as Custom", async ({

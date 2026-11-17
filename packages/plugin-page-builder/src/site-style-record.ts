@@ -38,6 +38,8 @@ import {
   newStyleIssueBudget,
   resolveSiteTokens,
   sameSiteToken,
+  SITE_TEXT_ROLES,
+  siteTextIssues,
   tokenIdentity,
   tokenLabelIssue,
   usableNamedClasses,
@@ -48,6 +50,9 @@ import {
   type FontFaceDef,
   type MayFetchUrl,
   type NamedClass,
+  type SiteTextEntry,
+  type SiteTextMap,
+  type SiteTextRole,
   type SiteToken,
   type SiteTokenSet,
   type StyleIssueBudget,
@@ -314,6 +319,8 @@ function storedTokenOf(entry: StoredTokenShape): SiteToken {
 interface SettingRead {
   readonly kept: Partial<SiteTokenSet>;
   readonly issue?: string;
+  /** Several, for a setting with parts of its own, such as the site text. */
+  readonly issues?: readonly string[];
 }
 
 /** A setting that is absent keeps nothing and is not refused. */
@@ -358,6 +365,14 @@ const SETTING_READERS: readonly ((
             "The colour order must be a list of different code names, each used once.",
         };
   },
+  // Row by row: a refused row is left out and the others are kept.
+  ({ siteText }) => {
+    const read = storedSiteText(siteText);
+    return {
+      kept: read.value === undefined ? {} : { siteText: read.value },
+      issues: read.issues,
+    };
+  },
 ];
 
 /** The token set's site-wide settings, as stored, and why any is refused. */
@@ -370,6 +385,7 @@ function storedSettingsOf(raw: Record<string, unknown>): {
   for (const read of SETTING_READERS.map(reader => reader(raw))) {
     Object.assign(value, read.kept);
     if (read.issue !== undefined) issues.push(read.issue);
+    issues.push(...(read.issues ?? []));
   }
   return { value, issues };
 }
@@ -409,6 +425,29 @@ export function checkStoredTokens(
   const set: SiteTokenSet = { tokens, ...settings.value };
   issues.push(...tokenEmissionIssues(set, policy));
   return { value: set, issues };
+}
+
+/**
+ * The site's text a stored token set holds: each row the engine's own check
+ * (`siteTextIssues`) finds usable, kept as written, and a sentence for each
+ * refusal, naming the row. A save is refused on any refusal; a read keeps
+ * the usable rows, so one bad row never takes the others off every page.
+ */
+function storedSiteText(raw: unknown): {
+  value: SiteTextMap | undefined;
+  issues: string[];
+} {
+  if (raw === undefined) return { value: undefined, issues: [] };
+  const found = siteTextIssues(raw);
+  const issues = found.map(issue => `Site text: ${issue.message}`);
+  if (!isPlainRecord(raw)) return { value: undefined, issues };
+  const refused = new Set(found.map(issue => issue.path.split("/")[1]));
+  const kept: Partial<Record<SiteTextRole, SiteTextEntry>> = {};
+  for (const role of SITE_TEXT_ROLES) {
+    if (!Object.hasOwn(raw, role) || refused.has(role)) continue;
+    kept[role] = raw[role] as SiteTextEntry;
+  }
+  return { value: kept, issues };
 }
 
 /**

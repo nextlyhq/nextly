@@ -46,6 +46,8 @@ import type {
   FontFaceDef,
   NamedClass,
   SiteSheetInput,
+  SiteTextMap,
+  SiteTextRole,
   SiteToken,
   SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
@@ -257,6 +259,7 @@ export function tokenOverrideOf(
     const base = supplied.get(tokenIdentity(token));
     return base === undefined || !sameSiteToken(base, token);
   });
+  const rows = storedSiteText(defaults?.siteText, edited.siteText);
   return {
     tokens,
     ...(edited.prefix === undefined || edited.prefix === defaults?.prefix
@@ -265,13 +268,36 @@ export function tokenOverrideOf(
     ...(edited.darkMode === undefined || edited.darkMode === defaults?.darkMode
       ? {}
       : { darkMode: edited.darkMode }),
-    ...storedFluidRange(defaults, edited, tokens),
+    ...storedFluidRange(defaults, edited, tokens, rows.siteText),
     // The colour order, once the site has one of its own.
     ...(edited.order === undefined ||
     sameJsonValue(edited.order, defaults?.order)
       ? {}
       : { order: edited.order }),
+    ...rows,
   };
+}
+
+/**
+ * The rows of the site's text the stored tier holds: each row that differs
+ * from the code's, an empty row included (it leaves that text to the site's
+ * own CSS). A row the edit holds as the code states it is left to the code,
+ * so the code can still change it.
+ */
+function storedSiteText(
+  defaults: SiteTextMap | undefined,
+  edited: SiteTextMap | undefined
+): Pick<SiteTokenSet, "siteText"> {
+  if (edited === undefined) return {};
+  const rows = Object.fromEntries(
+    Object.entries(edited).filter(
+      ([role, row]) =>
+        defaults === undefined ||
+        !Object.hasOwn(defaults, role) ||
+        !sameJsonValue(row, defaults[role as SiteTextRole])
+    )
+  );
+  return Object.keys(rows).length === 0 ? {} : { siteText: rows };
 }
 
 /**
@@ -283,11 +309,16 @@ export function tokenOverrideOf(
 function storedFluidRange(
   defaults: SiteTokenSet | undefined,
   edited: SiteTokenSet,
-  stored: readonly SiteToken[]
+  stored: readonly SiteToken[],
+  /** The Site text rows the tier stores, whose fluid sizes need it too. */
+  rows: SiteTextMap | undefined
 ): Pick<SiteTokenSet, "fluidRange"> {
   const range =
     edited.fluidRange ?? defaults?.fluidRange ?? DEFAULT_FLUID_RANGE;
-  if (stored.some(token => token.fluid !== undefined))
+  const fluidRow = Object.values(rows ?? {}).some(
+    row => row?.fluid !== undefined
+  );
+  if (fluidRow || stored.some(token => token.fluid !== undefined))
     return { fluidRange: range };
   return edited.fluidRange === undefined ||
     sameJsonValue(edited.fluidRange, defaults?.fluidRange)
@@ -468,7 +499,22 @@ function mergeTokens(
   return {
     tokens: tokens === undefined ? [] : [...tokens],
     ...siteWideSettings(defaults, stored),
+    ...mergedSiteText(defaults?.siteText, stored?.siteText),
   };
+}
+
+/**
+ * The site's text across the two tiers: row by row, a stored row in place of
+ * the code's. Per row rather than whole, so a site setting its Body keeps the
+ * headings its code states; per row rather than per value, so a heading
+ * pointed at another type size never keeps the code's line height beside it.
+ */
+function mergedSiteText(
+  defaults: SiteTextMap | undefined,
+  stored: SiteTextMap | undefined
+): Pick<SiteTokenSet, "siteText"> {
+  if (defaults === undefined && stored === undefined) return {};
+  return { siteText: { ...defaults, ...stored } };
 }
 
 /**

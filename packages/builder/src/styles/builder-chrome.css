@@ -25,6 +25,8 @@
  * - block-toolbar: the bottom bar, the breadcrumb, the block toolbar and the
  *   spacing overlay.
  * - variables: the Variables panel, its editor and import.
+ * - site-text: the Type tab's Site text rows and their popups, and a type
+ *   size's line height under a block's field.
  * - field-rows: attribute rows, where a value came from, a style field's row.
  * - inserters: the "+" on an empty container and between blocks.
  * - shared-styles: class chips, the Layers key hint, the zoom control, shared
@@ -80,6 +82,8 @@
 @import "./colour-groups.css";
 
 @import "./shadow.css";
+
+@import "./site-text.css";
 
 @import "./field-rows.css";
 
