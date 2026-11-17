@@ -247,6 +247,7 @@ describe("a contentOnly slot", () => {
     ["customCss", (n: BlockNode) => (n.customCss = "color: red;")],
     ["locked", (n: BlockNode) => (n.locked = true)],
     ["cssId", (n: BlockNode) => (n.cssId = "sale")],
+    ["cssClasses", (n: BlockNode) => (n.cssClasses = "promo")],
     ["attributes", (n: BlockNode) => (n.attributes = { title: "Sale" })],
     ["nosnippet", (n: BlockNode) => (n.nosnippet = true)],
   ])("refuses a change to its %s", (what, change) => {
