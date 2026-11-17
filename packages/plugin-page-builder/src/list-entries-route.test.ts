@@ -149,6 +149,10 @@ describe("a canvas list's read", () => {
     expect(NextlyError.isCode(await outcome(1500), "VALIDATION_ERROR")).toBe(
       false
     );
+    // A site with no limit: the count sends `null`, which JSON carries.
+    expect(
+      NextlyError.isCode(await outcome(null as never), "VALIDATION_ERROR")
+    ).toBe(false);
     // CONTROL: an allowance no page has is still refused at the boundary.
     expect(
       NextlyError.isCode(await outcome(10_000_000), "VALIDATION_ERROR")

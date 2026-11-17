@@ -44,6 +44,7 @@ import {
 } from "./canvas-bindings-contract";
 import { readBodyWith } from "./composition-route-kit";
 import { editorReaderAsCaller, mediaReaderAsCaller } from "./entry-reads";
+import { allowanceFromWire } from "./page-allowance";
 
 /** A field name a binding may read: no paths, operators or quoting. */
 const NAME = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
@@ -140,7 +141,8 @@ const CanvasBindingsBody = z
       .strict()
       .optional(),
     // At most a published page's allowance: an ask is one page's reads.
-    allowance: z.number().int().min(0).max(MOST_READS).optional(),
+    // `null` is no limit, for a site that sets none (`page-allowance`).
+    allowance: z.number().int().min(0).max(MOST_READS).nullable().optional(),
   })
   .strict()
   .refine(body => shapeLookupsOf(body) <= MOST, {
@@ -198,7 +200,9 @@ function directCanvasBindingsReads(
       // they were made, as a named query's run reports its reads.
       // Under the reads the page has left at that point, when the meter
       // says, so a read past them is refused here as it is there.
-      const budget = blocks.createQueryBudget(request.allowance);
+      const budget = blocks.createQueryBudget(
+        allowanceFromWire(request.allowance)
+      );
       const bindings = await next.readBindingSources({
         documents: [],
         demand: demandFromWire(request.demand),

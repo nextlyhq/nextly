@@ -72,6 +72,7 @@ import { readBodyWith } from "./composition-route-kit";
 import { assertMayOpen, directOpenReads } from "./conditions-preview-route";
 import { editorReaderAsCaller, publicSourceReader } from "./entry-reads";
 import { readingAsUser } from "./library-route";
+import { allowanceFromWire } from "./page-allowance";
 import {
   LIST_ENTRIES_NAMED_MAX_PARAMS,
   LIST_ENTRIES_ROUTE_PATH,
@@ -225,7 +226,14 @@ const ListEntriesNamedBody = z
           .optional(),
         // What the canvas's draw has left of the page's limit, which a
         // site may raise past the default (`pageBuilder({ maxQueries })`).
-        allowance: z.number().int().min(0).max(MOST_READS).optional(),
+        // `null` is no limit, for a site that sets none (`page-allowance`).
+        allowance: z
+          .number()
+          .int()
+          .min(0)
+          .max(MOST_READS)
+          .nullable()
+          .optional(),
       })
       .strict(),
   })
@@ -311,7 +319,7 @@ export async function readNamedListEntries(
   const definition = reads.definitionOf(name);
   // No more than the canvas's draw has left, so the page's lists share one
   // allowance whichever of them runs where.
-  const budget = countingBudget(allowance);
+  const budget = countingBudget(allowanceFromWire(allowance));
   const host: NamedQueryHost = {
     definitionOf: asked => (asked === name ? definition : undefined),
     reader: await reads.baseReader(locale),
