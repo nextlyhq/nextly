@@ -109,6 +109,34 @@ describe("a gallery's Columns and On mobile", () => {
     expect(galleryColumnsOf(node, tiers).mobile).toBeUndefined();
   });
 
+  it("reads On mobile from a wider tier that reaches a phone, before the default", () => {
+    // A tablet's count also applies under a phone's width while the phone's
+    // tier says nothing, so the tile shows that count, not the default's one.
+    const node = gallery({
+      base: { md: { gridTemplateColumns: "repeat(2, minmax(0, 1fr))" } },
+    });
+    expect(galleryColumnsOf(node, stackTiers(SITE))).toEqual({
+      columns: 3,
+      mobile: 2,
+    });
+    // One no tile writes reaches it as no tile.
+    const odd = gallery({ base: { md: { gridTemplateColumns: "1fr 2fr" } } });
+    expect(galleryColumnsOf(odd, stackTiers(SITE)).mobile).toBeUndefined();
+    // Columns then writes no default for the phone: the tablet's count
+    // already reaches it, and the base value no longer does.
+    const tiers = stackTiers(SITE);
+    const four = after(node, planGalleryColumns(node, 4, tiers));
+    expect(galleryColumnsOf(four, tiers)).toEqual({ columns: 4, mobile: 2 });
+    // The phone's own value still wins over the tablet's.
+    const both = gallery({
+      base: {
+        md: { gridTemplateColumns: "repeat(2, minmax(0, 1fr))" },
+        sm: { gridTemplateColumns: "repeat(1, minmax(0, 1fr))" },
+      },
+    });
+    expect(galleryColumnsOf(both, stackTiers(SITE)).mobile).toBe(1);
+  });
+
   it("reads a template no tile writes as no tile", () => {
     const node = gallery({
       base: { [BASE_BREAKPOINT]: { gridTemplateColumns: "1fr 2fr" } },

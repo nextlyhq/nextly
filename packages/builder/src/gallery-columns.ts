@@ -75,9 +75,31 @@ export interface GalleryColumns {
 }
 
 /**
+ * The template a wider tier hands down to a phone while the phone's own tier
+ * says nothing: the nearest of the tiers between the base values and the
+ * phone's that stores one, since a narrower tier's rule comes later in the
+ * page's styles and wins where both apply.
+ */
+function reachingPhone(
+  gallery: BlockNode,
+  tiers: StackTiers
+): StyleValue | undefined {
+  const managed = tiers.managed ?? [];
+  const at = managed.findIndex(tier => tier.id === tiers.mobile);
+  // Widest first, so the ones before the phone's are wider; nearest first.
+  const wider = at === -1 ? [] : managed.slice(0, at).reverse();
+  for (const tier of wider) {
+    const stored = storedAt(gallery, tier.id);
+    if (stored !== undefined) return stored;
+  }
+  return undefined;
+}
+
+/**
  * The counts the gallery lays its pictures out in: its own, else the
- * default grid's. On a phone, the mobile tier's own, else the count the base
- * value reaches it with, else the default's one.
+ * default grid's. On a phone, the mobile tier's own, else the count a wider
+ * tier reaches it with (a tablet's, then the base values), else the
+ * default's one.
  */
 export function galleryColumnsOf(
   gallery: BlockNode,
@@ -86,20 +108,16 @@ export function galleryColumnsOf(
   const base = storedAt(gallery, BASE_BREAKPOINT);
   const columns = base === undefined ? DEFAULT_COLUMNS : countOf(base);
   if (tiers.mobile === undefined) return { columns, mobile: undefined };
-  const phone = storedAt(gallery, tiers.mobile);
-  const mobile =
-    phone !== undefined
-      ? countOf(phone)
-      : base === undefined
-        ? DEFAULT_MOBILE
-        : countOf(base);
+  const phone =
+    storedAt(gallery, tiers.mobile) ?? reachingPhone(gallery, tiers) ?? base;
+  const mobile = phone === undefined ? DEFAULT_MOBILE : countOf(phone);
   return { columns, mobile };
 }
 
 /**
  * Choosing Columns, as ONE op: the count at the base values, and On mobile's
- * default at the mobile tier while that tier holds nothing. `null` where it
- * changes nothing.
+ * default at the mobile tier while nothing narrower than the base values
+ * reaches a phone. `null` where it changes nothing.
  */
 export function planGalleryColumns(
   gallery: BlockNode,
@@ -109,9 +127,12 @@ export function planGalleryColumns(
   const steps: { address: StyleAddress; value: StyleValue }[] = [
     { address: addressAt(BASE_BREAKPOINT), value: templateOf(count) },
   ];
+  // Only where the base value is what reaches a phone: a tablet's count, or
+  // the phone's own, already decides it there.
   if (
     tiers.mobile !== undefined &&
-    storedAt(gallery, tiers.mobile) === undefined
+    storedAt(gallery, tiers.mobile) === undefined &&
+    reachingPhone(gallery, tiers) === undefined
   ) {
     steps.push({
       address: addressAt(tiers.mobile),
