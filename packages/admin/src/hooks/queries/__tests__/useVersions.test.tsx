@@ -418,6 +418,48 @@ describe("useBaselineDiff", () => {
     client.clear();
   });
 
+  it("never answers a language named like the absent one with the absent one's answer", async () => {
+    // A language code is whatever the app configures, so no word can stand
+    // for "no language" in the key without some code meaning the same.
+    baselineDiffSpy.mockResolvedValue({
+      from: 3,
+      to: 5,
+      locale: null,
+      hasChanges: true,
+      fields: [],
+      baseline: { name: "published", versionNo: 3 },
+    });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const ownWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+
+    // One mounted comparison moving between parts, as the page does when its
+    // address changes: a key shared by two parts would ask nothing new.
+    const { result, rerender } = renderHook(
+      ({ locale }: { locale?: string }) =>
+        useBaselineDiff({
+          scope,
+          baseline: "last-viewed",
+          ...(locale !== undefined ? { locale } : {}),
+        }),
+      { wrapper: ownWrapper, initialProps: {} }
+    );
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    for (const code of ["any", "auto", "null"]) {
+      rerender({ locale: code });
+      await waitFor(() =>
+        expect(baselineDiffSpy).toHaveBeenCalledWith(scope, "last-viewed", {
+          locale: code,
+        })
+      );
+    }
+    expect(baselineDiffSpy).toHaveBeenCalledTimes(4);
+    client.clear();
+  });
+
   it("keeps the version last looked at for the visit, and resolves it again on the next", async () => {
     // The app's own cache time, so the first visit's answer is still held
     // when the reader comes back.

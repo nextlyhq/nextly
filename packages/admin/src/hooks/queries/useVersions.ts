@@ -113,6 +113,9 @@ export const versionKeys = {
   // the version compared (or none, for the server's own choice), and the
   // language the server pairs in when no version is named. A baseline resolved
   // once per visit also carries that visit, so the next visit asks again.
+  // No language is `null` in the key, not a word: a language code is whatever
+  // the app configures, so any word could also be a code, and that language
+  // would be answered with the default part's comparison.
   baselineDiff: (
     scope: VersionScope,
     baseline: string,
@@ -124,7 +127,7 @@ export const versionKeys = {
       ...versionKeys.documentDiffs(scope),
       baseline,
       to ?? "auto",
-      locale ?? "any",
+      locale ?? null,
       ...(visit !== undefined ? [`visit-${visit}`] : []),
     ] as const,
   // A diff is identified by the document (scope), the ordered version pair
