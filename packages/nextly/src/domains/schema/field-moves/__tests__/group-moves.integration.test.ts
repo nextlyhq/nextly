@@ -480,15 +480,26 @@ describe.each(getConfiguredTestDialects())(
           `UPDATE ${q(TABLE)} SET ${q("meta")} = '{}' WHERE ${q("slug")} = 'two'`
         );
         const stated = await definition();
+        const files = await filesWritten();
 
+        // Counted before anything is written, on every dialect: on MySQL a refusal at the
+        // statement making the column required would leave the added column behind.
         await expect(save(t, onRow, out)).rejects.toThrow(
           expect.objectContaining({
-            message: expect.stringMatching(
-              /1 row|holds no value|hold no value/
-            ),
+            publicData: {
+              errors: [
+                expect.objectContaining({
+                  code: "FIELD_MOVE_REFUSED",
+                  message: expect.stringMatching(
+                    /^1 entry holds no value for summary in the group it moves out of, and it is required\./
+                  ),
+                }),
+              ],
+            },
           })
         );
 
+        expect(await filesWritten()).toBe(files);
         expect(await summaryColumn(t)).toBeUndefined();
         expect(await definition()).toBe(stated);
         const one = (await readAll(t)).get("one");
