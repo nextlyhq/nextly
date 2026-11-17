@@ -275,6 +275,7 @@ export function SpacingSide(props: SpacingSideProps): React.JSX.Element {
           onCommitSides={props.onCommitSides}
           onReset={reset}
           onClose={close}
+          side={button}
         />
       )}
     </Popover>

@@ -191,6 +191,16 @@ describe("a spacing-box side", () => {
     expect(document.activeElement?.getAttribute("role")).toBe("radio");
   });
 
+  it("closes when its side is pressed again", () => {
+    mount();
+    const top = side("Padding top");
+    fireEvent.click(top);
+    screen.getByRole("dialog", { name: "Padding top" });
+    fireEvent.pointerDown(top);
+    fireEvent.click(top);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("offers Left & right for a left side", () => {
     mount();
     fireEvent.click(side("Margin left"));

@@ -28,6 +28,7 @@ import { MoreHorizontal, X } from "lucide-react";
 import * as React from "react";
 
 import { useCanvasTokenMode } from "./canvas/prefers-dark";
+import { isElement, isInput } from "./dom-kind";
 import { SegmentChoices } from "./segment-choices";
 import { CompactSides } from "./spacing-box";
 import type { ApplyTo } from "./spacing-side";
@@ -96,6 +97,8 @@ export interface SpacingSidePopoverProps {
   ) => CommitOutcome;
   readonly onReset: () => void;
   readonly onClose: (to: SideClose) => void;
+  /** The side it opened from, whose own click closes it. */
+  readonly side: React.RefObject<HTMLButtonElement | null>;
 }
 
 export function SpacingSidePopover(
@@ -129,6 +132,13 @@ export function SpacingSidePopover(
       }}
       // A click elsewhere leaves focus where it went.
       onCloseAutoFocus={event => event.preventDefault()}
+      // A press on the side is the side's own toggle, which closes it.
+      onInteractOutside={event => {
+        const at = event.target;
+        if (isElement(at) && props.side.current?.contains(at) === true) {
+          event.preventDefault();
+        }
+      }}
       onKeyDown={event =>
         popoverKeys(event, seed !== undefined, to => {
           event.preventDefault();
@@ -280,7 +290,7 @@ function popoverKeys(
   close: (to: SideClose) => void
 ): void {
   const target = event.target as HTMLElement;
-  const inNumber = target.tagName === "INPUT";
+  const inNumber = isInput(target);
   // After the number's own Enter has committed it.
   if (event.key === "Enter" && inNumber) return close("side");
   if (event.key !== "Tab") return;
