@@ -36,7 +36,7 @@ import {
 
 import { canvasRoot, structure } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 
 const API = "/admin/api";
 const PAGES = `${API}/collections/pages/entries`;
@@ -415,7 +415,10 @@ test("the published empty page draws no start area", async ({ page }) => {
   });
   const response = await page.goto(`/blocks/${slug}`);
   expect(response?.status()).toBe(200);
-  await expect(page.getByText(/^Start building/)).toHaveCount(0);
+  // Absent anywhere, a hidden copy included, not only from what is shown.
+  await expect(includingHidden(page).getByText(/^Start building/)).toHaveCount(
+    0
+  );
   await expect(page.locator(".nx-page-start")).toHaveCount(0);
   // Nothing holds an empty body open for visitors.
   expect(
