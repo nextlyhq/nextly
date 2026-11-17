@@ -28,6 +28,7 @@
 import type { FirstFillDeps, PublishedAs } from "./first-fill";
 import { fillDefaultOnFirstPublish } from "./first-fill";
 import type { StarterArea } from "./seed-names";
+import type { DefaultLayoutDirectApi } from "./store";
 
 /** The plugin context this needs, named structurally. */
 interface HookRegistry {

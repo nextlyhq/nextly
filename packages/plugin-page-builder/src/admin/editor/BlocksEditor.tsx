@@ -43,6 +43,7 @@ import {
 
 import { ComponentActionPrompt } from "../ComponentActionPrompt";
 import { ComponentFromSelectionPrompt } from "../ComponentFromSelectionPrompt";
+import { useFilledDefaultNotice } from "../filled-default-notice";
 import { SavePatternPrompt } from "../SavePatternPrompt";
 import {
   SiteStyleHistoryContext,
@@ -453,6 +454,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     mount.initialDocument.kind === "component",
     canvas.pageDataLimit
   );
+  // A component published as the first header or footer: said once.
+  useFilledDefaultNotice(mount.initialDocument.kind === "component");
   // The "Part of" toast offers the same Edit component the panel does.
   useOfferedEditComponent(
     mount.offerEditComponent,
