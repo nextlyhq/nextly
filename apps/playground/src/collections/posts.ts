@@ -111,9 +111,11 @@ export const Posts = defineCollection({
   admin: {
     useAsTitle: "title",
     // Where a post previews: the address its `(frontend)/[...slug]` route
-    // serves it at. The editor's Preview, beside the form or in a tab, goes
-    // through the preview route, which turns draft mode on, so that route
-    // draws the post's saved draft rather than its published page.
+    // serves it at, so the editor's Preview, beside the form or in a tab,
+    // shows the post as its template draws it. That route draws published
+    // posts only: its draft gate speaks for pages, so a post never published
+    // previews as not found, and a published post's unpublished edits are
+    // not in its preview.
     preview: { url: previewUrlFromTemplate("/blog/{slug}") },
   },
 });
