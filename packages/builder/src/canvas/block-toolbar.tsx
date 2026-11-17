@@ -42,6 +42,11 @@
  * @module block-toolbar
  */
 
+import {
+  COMPONENT_INSTANCE_TYPE,
+  componentLayersLocks,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import {
   DropdownMenu,
@@ -82,7 +87,9 @@ import {
   useBlockActionsContext,
   useToolbarFocusSlot,
 } from "../keyboard-actions";
+import { lockRefusalWording } from "../lock-refusal";
 import { lockBlockingEdit } from "../locking";
+import { refusalAnnouncement } from "../move-refusal";
 import { layerLabel, pathTo } from "../panels/layers/layers";
 import { useSelectionActions } from "../selection-actions";
 import { blockActionRunners } from "../shell/builder-commands";
@@ -251,12 +258,61 @@ type BarLock =
 /** What a pinned lock says where the area it sits in gives no reason. */
 const HELD_REASON = "The area it sits in fixes this.";
 
+/**
+ * What a placed component's Layers lock says: the lock refusal's own words
+ * for it, as an edit the component holds is refused.
+ */
+const COMPONENT_HELD_REASON = refusalAnnouncement(
+  lockRefusalWording({
+    code: "layers-locked",
+    label: "",
+    relation: "component",
+    verb: "change",
+  })
+);
+
+/**
+ * Whether the block sits inside a component the page places: in the slot the
+ * placement exposes, which the page fills. Only there can a component's own
+ * lock hold one of the page's blocks.
+ */
+function insidePlacement(nodes: readonly BlockNode[], id: string): boolean {
+  const search = (list: readonly BlockNode[], placed: boolean): boolean => {
+    for (const node of list) {
+      const within = placed || node.type === COMPONENT_INSTANCE_TYPE;
+      if (node.id === id) return placed;
+      for (const children of Object.values(node.slots ?? {})) {
+        if (search(children, within)) return true;
+      }
+    }
+    return false;
+  };
+  return search(nodes, false);
+}
+
+/**
+ * Whether a component the page places locks the block in Layers. Only the
+ * composed page shows it: the lock is in the component's own nodes, which a
+ * page reaches through its placement. Composed only for a block inside a
+ * placement, so selecting any other block composes nothing.
+ */
+function lockedByComponent(editor: EditorState, id: string): boolean {
+  if (!insidePlacement(editor.document.nodes, id)) return false;
+  const composed = editor.composed();
+  return composed !== undefined && componentLayersLocks(composed.nodes).has(id);
+}
+
 function barLockOf(
   editor: EditorState,
   selectedId: string | null,
   selectedIds: readonly string[]
 ): BarLock | undefined {
   if (selectedId === null || selectedIds.length > 1) return undefined;
+  // A placed component's own lock holds first: the page may lift only its
+  // own, which would leave the block held all the same.
+  if (lockedByComponent(editor, selectedId)) {
+    return { kind: "held", reason: COMPONENT_HELD_REASON };
+  }
   const holder = lockBlockingEdit(editor.document, selectedId);
   if (holder === undefined) return undefined;
   if (holder.id !== selectedId) {

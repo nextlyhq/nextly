@@ -18,7 +18,10 @@
  *
  * @module block-toolbar.test
  */
-import type { NestingSource } from "@nextlyhq/blocks-engine";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  type NestingSource,
+} from "@nextlyhq/blocks-engine";
 import {
   cleanup,
   fireEvent,
@@ -40,7 +43,7 @@ import {
 
 import { BlockToolbar } from "./block-toolbar";
 import { Canvas } from "./canvas";
-import type { EditorState } from "../editor-state";
+import { useEditorState, type EditorState } from "../editor-state";
 import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
 import { BlockKeyboardActions } from "../keyboard-actions";
 import { toolbarActions } from "./toolbar-actions";
@@ -530,6 +533,155 @@ describe("BlockToolbar", () => {
     ).toHaveProperty("textContent", HELD);
     fireEvent.click(locked);
     expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A block in the slot a placed component exposes, which the component's
+   * definition locks to its content. The page alone doesn't show the lock;
+   * the page composed with its placement does, so the bar reads the editor's
+   * composed view.
+   */
+  it("says Locked, with the reason, where a placed component's locked slot holds the block, and offers no Unlock", () => {
+    register();
+    if (!hasBlock("acme/promo")) {
+      registerBlocks(
+        [
+          {
+            name: "acme/promo",
+            version: 1,
+            description: "A promo, its exposed slot locked to its content.",
+            example: { props: {} },
+            editor: { label: "Promo" },
+            props: {},
+            slots: { content: { lock: "contentOnly" } },
+            render: () => null,
+          },
+        ] as never,
+        { source: "block-toolbar-test" }
+      );
+    }
+    const page = pair({ locked: true });
+    const composed = documentOf([
+      {
+        id: "promo",
+        type: "acme/promo",
+        version: 1,
+        props: {},
+        slots: { content: page.nodes },
+      } as BlockNode,
+    ]);
+    const editor = Object.assign(editorSpy(page, "a"), {
+      composed: () => composed,
+    });
+    mount(editor);
+
+    expect(unseenButton("Unlock")).toBeNull();
+    const locked = unseenButton("Locked");
+    if (locked === null) throw new Error("no Locked button");
+    expect(locked.getAttribute("aria-disabled")).toBe("true");
+    // The reason names the block that holds the area.
+    expect(locked.getAttribute("title")).toContain("Promo");
+    fireEvent.click(locked);
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A block the page puts in the slot a placed component exposes, inside a
+   * node the component locks in Layers. The real editor composes the page
+   * with the component, so the lock is the one a save would hold the block
+   * to; the page may lift only its own lock, which leaves the block held.
+   */
+  function ComponentLockedPage({ lockedOnPage }: { lockedOnPage: boolean }) {
+    if (!hasBlock("acme/box")) {
+      registerBlocks(
+        [
+          {
+            name: "acme/box",
+            version: 1,
+            description: "A box holding blocks.",
+            example: { props: {} },
+            editor: { label: "Box" },
+            props: {},
+            slots: { children: {} },
+            render: () => null,
+          },
+        ] as never,
+        { source: "block-toolbar-test" }
+      );
+    }
+    const promo = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        {
+          id: "hero",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          locked: true,
+          name: "Hero",
+          slots: { children: [] },
+        },
+      ],
+      slots: { body: { label: "Body", nodeId: "hero", slot: "children" } },
+    } as unknown as BlockDocument;
+    const given = {
+      id: "given",
+      type: "acme/leaf",
+      version: 1,
+      props: {},
+      ...(lockedOnPage ? { locked: true } : {}),
+    } as BlockNode;
+    const editor = useEditorState({
+      initialDocument: documentOf([
+        {
+          id: "i1",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "promo" },
+          slots: { body: [given] },
+        } as BlockNode,
+      ]),
+      definitions: new Map([["promo", promo]]),
+      componentName: id => (id === "promo" ? "Promo" : undefined),
+    });
+    return tree(
+      {
+        ...editor,
+        selectedId: "given",
+        selection: { ids: ["given"], primary: "given" },
+      } as EditorState,
+      {}
+    );
+  }
+
+  it.each([
+    ["locked on the page too", true],
+    ["not locked on the page", false],
+  ])(
+    "says Locked, by the component, where a placed component locks the block in Layers (%s), and offers no Unlock",
+    (_how, lockedOnPage) => {
+      register();
+      render(<ComponentLockedPage lockedOnPage={lockedOnPage} />);
+
+      expect(unseenButton("Unlock")).toBeNull();
+      const locked = unseenButton("Locked");
+      if (locked === null) throw new Error("no Locked button");
+      expect(locked.getAttribute("aria-disabled")).toBe("true");
+      expect(locked.getAttribute("title")).toBe(
+        "Set by its component. Change it where the component is edited."
+      );
+    }
+  );
+
+  it("composes nothing to select a block outside any placed component", () => {
+    // Selection stays free of the composition: only a block inside a
+    // placement can be held by its component's lock.
+    register();
+    const composed = vi.fn(() => undefined);
+    mount(Object.assign(editorSpy(pair(), "a"), { composed }));
+
+    expect(composed).not.toHaveBeenCalled();
   });
 
   it("says Locked by the block around it, with Select it and no Unlock", () => {
