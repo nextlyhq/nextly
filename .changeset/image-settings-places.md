@@ -30,5 +30,6 @@
 ---
 An Image's "Load right away" is in Advanced › HTML, beside its link relationship, with
 the hint "For images near the top of the page". An Image gains Style › Text and
-colour, which style its caption, and a shadow under Effects. The stored `loading`
+colour, which style its caption; a size set there is the caption's own, not scaled by
+its smaller default. The stored `loading`
 values are unchanged.

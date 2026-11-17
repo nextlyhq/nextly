@@ -822,7 +822,11 @@ const IMAGE_PARTS = {
       },
     },
   },
+  // The caption takes the block's text size itself, inside its figure: set
+  // on the figure, a size would reach the caption scaled by its own smaller
+  // default, so 20px would read 17.5px. The default stays its own.
   caption: {
+    takesFromRoot: { properties: ["fontSize"], whenRootIs: ["frame"] },
     baseStyles: {
       base: {
         base: {
@@ -984,14 +988,14 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
   // its choices: upload, the media library, or a link.
   example: { props: {} },
   supports: {
-    // Text and its colour style the caption, which inherits them.
+    // Text and its colour style the caption: it inherits them, and takes
+    // the text size itself (see its part).
     typography: true,
     color: true,
     spacing: true,
     dimensions: true,
     border: true,
     effects: true,
-    shadow: true,
     position: true,
   },
   // Interactive content while it links or enlarges, so a link (a linked box

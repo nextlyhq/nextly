@@ -192,7 +192,6 @@ describe("the settings added beside them", () => {
     "core/column",
     "core/card",
     "core/button",
-    "core/image",
   ])("offer %s a shadow", name => {
     expect(offered(name)).toContain("boxShadow");
   });
