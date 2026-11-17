@@ -74,7 +74,7 @@ import {
   useMediaSearchReader,
   useMediaSummaryReader,
 } from "./media-summary-reader";
-import { readPageDataLimit, usePageDataCount } from "./page-read-meter";
+import { usePageDataCount } from "./page-read-meter";
 import { recentColoursStore } from "./recent-colours-store";
 import { useReveal } from "./reveal-hidden";
 import { useSettingsPlace } from "./settings-place";
@@ -232,7 +232,9 @@ function useDrawnCanvasRender(
   document: BlockDocument,
   regions: Parameters<typeof useBoundCanvasRender>[1]["regions"],
   locale: string | undefined,
-  component: boolean
+  component: boolean,
+  /** The site's page data limit, which the bindings are read under. */
+  pageDataLimit: number | undefined
 ): ReturnType<typeof useBoundCanvasRender> {
   // Under the canvas's limits, the entry left the room its components need.
   const drawn = useDrawnTemplate(document, {
@@ -243,7 +245,8 @@ function useDrawnCanvasRender(
     render,
     { document: drawn, stored: document, regions },
     locale,
-    component
+    component,
+    pageDataLimit
   );
 }
 
@@ -427,7 +430,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     componentView.preview.document,
     panels.canvasRegions,
     mount.locale,
-    mount.initialDocument.kind === "component"
+    mount.initialDocument.kind === "component",
+    canvas.pageDataLimit
   );
   // The "Part of" toast offers the same Edit component the panel does.
   useOfferedEditComponent(
@@ -598,7 +602,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     drawnWith: view.canvasRender,
     regions: view.canvasRegions,
     componentTitle: view.componentLibrary.titleOf,
-    cap: readPageDataLimit(mount.clientConfig),
+    // The limit the canvas draws under, read once for both.
+    cap: view.pageDataLimit,
   });
   useOpenAtSection({
     sectionId: openAt?.sectionId,
