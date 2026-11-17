@@ -14,6 +14,7 @@ import {
   continueEmpty,
   continueRowFrom,
   continueRows,
+  continueSections,
   continueTab,
 } from "./continue-model";
 
@@ -185,5 +186,78 @@ describe("where a Continue row opens", () => {
       continueRowFrom(row({ collection: "pages", locale: "fr" }), pageAddress)
         ?.href
     ).toBe("/admin/collections/pages/doc-1?locale=fr");
+  });
+});
+
+describe("Mine's groups", () => {
+  /** `count` pinned rows, newest first, of `total` pins in all, as the source sends them. */
+  const pinned = (count: number, total = count): Row[] =>
+    Array.from({ length: count }, (_, i) =>
+      row({
+        id: `pin-${i + 1}`,
+        entryId: `pin-${i + 1}`,
+        entryTitle: `Pin ${i + 1}`,
+        userId: null,
+        pinned: true,
+        group: "pinned",
+        pinCount: total,
+      })
+    );
+  /** `count` recent saves, newest first. */
+  const recent = (count: number): Row[] =>
+    Array.from({ length: count }, (_, i) =>
+      row({
+        id: `save-${i + 1}`,
+        entryId: `save-${i + 1}`,
+        entryTitle: `Save ${i + 1}`,
+        group: "recent",
+      })
+    );
+  const sectionsOf = (items: Row[], drawn = 5) =>
+    continueSections(continueRows({ items }, formAddress), drawn);
+  const titles = (rows: readonly { title: string }[]) =>
+    rows.map(each => each.title);
+
+  it("has none while there are no pins, so Mine is one plain list", () => {
+    expect(sectionsOf(recent(6))).toBeUndefined();
+    // A server before the groups sends none: one plain list too.
+    expect(sectionsOf([row(), row({ id: "save-2" })])).toBeUndefined();
+  });
+
+  it.each([
+    // pins sent, of how many in all, saves sent: what the card's five rows draw.
+    [1, 1, 5, ["Pin 1"], ["Save 1", "Save 2", "Save 3", "Save 4"]],
+    [3, 3, 3, ["Pin 1", "Pin 2", "Pin 3"], ["Save 1", "Save 2"]],
+    [3, 4, 3, ["Pin 1", "Pin 2", "Pin 3"], ["Save 1", "Save 2"]],
+    [3, 7, 3, ["Pin 1", "Pin 2", "Pin 3"], ["Save 1", "Save 2"]],
+    [6, 7, 0, ["Pin 1", "Pin 2", "Pin 3", "Pin 4", "Pin 5"], []],
+  ] as const)(
+    "draws %i pins of %i, newest first, then the recent saves, in the card's rows",
+    (sent, total, saves, pins, saved) => {
+      const sections = sectionsOf([...pinned(sent, total), ...recent(saves)]);
+      expect(titles(sections!.pinned)).toEqual(pins);
+      expect(titles(sections!.recent)).toEqual(saved);
+      expect(sections!.pinTotal).toBe(total);
+    }
+  );
+
+  it("counts the pins it draws when the answer says no total", () => {
+    const items = pinned(2).map(({ pinCount: _count, ...rest }) => rest);
+    expect(sectionsOf(items)!.pinTotal).toBe(2);
+  });
+
+  it("reads each row's group and count, and leaves out a group it does not know", () => {
+    const [pin, odd] = continueRows(
+      {
+        items: [
+          ...pinned(1, 7),
+          row({ id: "odd", group: "starred", pinCount: "7" }),
+        ],
+      },
+      formAddress
+    );
+    expect(pin).toMatchObject({ group: "pinned", pinCount: 7 });
+    expect(odd).not.toHaveProperty("group");
+    expect(odd).not.toHaveProperty("pinCount");
   });
 });

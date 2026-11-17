@@ -12,6 +12,7 @@
  */
 import {
   BASE_BREAKPOINT,
+  breakpointContexts,
   findNode,
   type BreakpointSet,
   type NodeStyles,
@@ -82,6 +83,17 @@ function deviceOrder(breakpoints: BreakpointSet | undefined): string[] {
   return [BASE_BREAKPOINT, ...offeredTiers(breakpoints).map(tier => tier.id)];
 }
 
+/**
+ * Every viewport tier the page's styles are written for, in their order, as
+ * the engine answers it: a target's own values are read through all of them,
+ * though the switcher offers one tier of each width.
+ */
+function compiledOrder(breakpoints: BreakpointSet | undefined): string[] {
+  return breakpointContexts(breakpoints)
+    .filter(context => context.axis === "viewport")
+    .map(context => context.id);
+}
+
 /** The edited target's styles: the block's, or the shared style's. */
 function stylesOf(
   target: StyleTarget,
@@ -145,15 +157,16 @@ function layoutTiers(
   const inForce =
     block && cascade.applied !== undefined
       ? appliedInForce(cascade.applied)
-      : ownCascade(order, own, normal);
+      : ownCascade(compiledOrder(surroundings.breakpoints), own, normal);
   const beneath = beneathOf({
-    order,
+    order: compiledOrder(surroundings.breakpoints),
     normal,
     atState: surroundings.state !== "base",
     cascade: block ? cascade.beneath : undefined,
   });
   return {
     order,
+    cascadeOrder: compiledOrder(surroundings.breakpoints),
     own,
     inForce,
     ...(beneath === undefined ? {} : { beneath }),

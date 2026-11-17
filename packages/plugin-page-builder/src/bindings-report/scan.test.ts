@@ -614,4 +614,59 @@ describe("the check of every document", () => {
     expect(await runFullCheck(pages.walk, using, LATER())).toBe("complete");
     expect(memory.filled()).toBe(1);
   });
+
+  it("keeps each language's uses of a value that may be shared, by the language it was read in", async () => {
+    const memory = memoryStore();
+    // A grouped blocks field whose languages store their own values, or not:
+    // which, the walk can't tell, so each language's host may be shared.
+    const values: Record<string, Record<string, unknown>> = {
+      a: { en: pageBinding("title"), fr: pageShowing("homepage", "headline") },
+      b: {
+        en: pageShowing("homepage", "headline"),
+        fr: pageShowing("homepage", "headline"),
+      },
+    };
+    const host = (id: string, locale: string): HostAddress => ({
+      kind: "collection",
+      slug: "pages",
+      id,
+      path: ["hero", "body"],
+      locale,
+    });
+    const hostsOf = (id: string) =>
+      ["en", "fr"].map(locale => ({
+        host: host(id, locale),
+        access: "write" as const,
+        maybeShared: true,
+      }));
+    const documents = Object.keys(values).map(
+      (id): HostDocument => ({ key: keyOf(id), hosts: hostsOf(id) })
+    );
+    const walk = {
+      documents: async function* () {
+        for (const document of documents) yield document;
+      },
+      cursorOf: (document: HostDocument) => document.key,
+      fingerprint: async () => "v1",
+    };
+    const reading = {
+      hostsOf: async (at: { id?: string }) => hostsOf(at.id ?? ""),
+      read: async (address: HostAddress) => ({
+        published: {
+          kind: "value" as const,
+          value: values[address.id ?? ""]?.[address.locale ?? ""],
+        },
+        draft: null,
+        liveState: null,
+      }),
+    };
+    await runFullCheck(walk, deps(memory.store, reading as never), LATER());
+    // Only the French value binds it: its use is French, not the default's.
+    expect(memory.uses.get(keyOf("a"))?.map(use => use.locale)).toEqual(["fr"]);
+    // The same value in both: a use in each, the default's among them.
+    expect(memory.uses.get(keyOf("b"))?.map(use => use.locale)).toEqual([
+      "en",
+      "fr",
+    ]);
+  });
 });

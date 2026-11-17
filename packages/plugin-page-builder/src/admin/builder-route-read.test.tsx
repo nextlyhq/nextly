@@ -66,7 +66,10 @@ function deferredStartup() {
     new Promise<never>(resolve => {
       answer = resolve as never;
     });
-  return { ask, answer: (reads: Record<string, unknown>) => answer(reads) };
+  return {
+    ask,
+    answer: (reads: Record<string, unknown>) => answer({ reads } as never),
+  };
 }
 
 describe("a read the builder opens on", () => {
@@ -107,7 +110,9 @@ describe("a read the builder opens on", () => {
 
   it("reads its route once it asks again", async () => {
     startBuilderReads("ada", ["/site/style"], async () => ({
-      "/site/style": { status: 200, body: { from: "start-up" } },
+      reads: {
+        "/site/style": { status: 200, body: { from: "start-up" } },
+      },
     }));
     const { result } = renderHook(() =>
       useBuilderRoute({ plugin: PLUGIN, path: "/site/style" })
@@ -121,7 +126,9 @@ describe("a read the builder opens on", () => {
 
   it("reads its route when the start-up request could not answer it", async () => {
     startBuilderReads("ada", ["/layouts/choices"], async () => ({
-      "/layouts/choices": { status: 403 },
+      reads: {
+        "/layouts/choices": { status: 403 },
+      },
     }));
     const { result } = renderHook(() =>
       useBuilderRoute({ plugin: PLUGIN, path: "/layouts/choices" })
@@ -134,7 +141,9 @@ describe("a read the builder opens on", () => {
   it("reads its route on a mount made long after the builder opened", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     startBuilderReads("ada", ["/capability"], async () => ({
-      "/capability": { status: 200, body: { from: "start-up" } },
+      reads: {
+        "/capability": { status: 200, body: { from: "start-up" } },
+      },
     }));
     await act(async () => {});
     vi.setSystemTime(Date.now() + STARTED_READ_HANDOFF_MS + 1);
@@ -146,10 +155,12 @@ describe("a read the builder opens on", () => {
 
   it("shows nothing read for a person once another signs in", async () => {
     startBuilderReads("ada", ["/capability"], async () => ({
-      "/capability": { status: 200, body: { from: "ada's start-up" } },
+      reads: {
+        "/capability": { status: 200, body: { from: "ada's start-up" } },
+      },
     }));
     await act(async () => {});
-    startBuilderReads("grace", ["/other"], async () => ({}));
+    startBuilderReads("grace", ["/other"], async () => ({ reads: {} }));
     const { result } = renderHook(() =>
       useBuilderRoute({ plugin: PLUGIN, path: "/capability" })
     );
@@ -157,7 +168,7 @@ describe("a read the builder opens on", () => {
   });
 
   it("reads nothing while the caller holds the read", () => {
-    startBuilderReads("ada", ["/capability"], async () => ({}));
+    startBuilderReads("ada", ["/capability"], async () => ({ reads: {} }));
     const request = { plugin: PLUGIN, path: "/capability", enabled: false };
     renderHook(() => useBuilderRoute(request));
     expect(lastAsked()).toBe(request);
@@ -165,7 +176,9 @@ describe("a read the builder opens on", () => {
 
   it("never shows an answer read for one person to the next, even on the same mount", async () => {
     startBuilderReads("ada", ["/capability"], async () => ({
-      "/capability": { status: 200, body: { from: "ada's start-up" } },
+      reads: {
+        "/capability": { status: 200, body: { from: "ada's start-up" } },
+      },
     }));
     const { result, rerender } = renderHook(() =>
       useBuilderRoute({ plugin: PLUGIN, path: "/capability" })

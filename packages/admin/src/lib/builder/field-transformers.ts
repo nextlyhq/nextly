@@ -534,6 +534,20 @@ export function applyCarriedOptions(
 }
 
 /**
+ * The collection a relationship stored the earlier way names in `options.target`, when it has no
+ * `relationTo` (the server leaves a many-to-many so), or undefined. Read only, so the Builder does
+ * not judge the field to link nowhere; a save does not write it.
+ */
+function storedRelationTargetOf(field: FieldDefinition): string | undefined {
+  if (field.type !== "relationship" || field.relationTo) return undefined;
+  const stored: unknown = field.options;
+  if (!isPlainRecord(stored) || typeof stored.target !== "string") {
+    return undefined;
+  }
+  return stored.target === "" ? undefined : stored.target;
+}
+
+/**
  * Convert FieldDefinition (API) to BuilderField (UI).
  * Handles nested fields, blocks, and all field-type-specific properties.
  *
@@ -641,6 +655,8 @@ export function convertToBuilderField(
       value: opt.value,
     }));
   }
+
+  builderField.storedRelationTarget = storedRelationTargetOf(field);
 
   return builderField;
 }

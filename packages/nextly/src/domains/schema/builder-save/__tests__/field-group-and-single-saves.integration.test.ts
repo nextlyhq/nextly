@@ -29,6 +29,7 @@ import { superAdminSession } from "../../../collections/__tests__/helpers/collec
 import type { CollectionService } from "../../../collections/services/collection-service";
 import { FieldGroupMetadataService } from "../../../field-groups/services/field-group-metadata-service";
 import { SingleMetadataService } from "../../../singles/services/single-metadata-service";
+import { SingleRegistryService } from "../../../singles/services/single-registry-service";
 import { resolveBuilderVersions } from "../../../versions/builder-versions";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 
@@ -546,7 +547,9 @@ describe.each(getConfiguredTestDialects())(
       expect(rows.length).toBeGreaterThan(0);
     });
 
-    it("keeps a Single update's files, recorded nowhere, when its companion fails to follow", async () => {
+    // A Single's settings save that carries no values runs its own file, so the table changes as
+    // the file says and the file is recorded applied before the companion follows.
+    it("keeps a Single update's file recorded applied, its status failed, when its companion fails to follow", async () => {
       const t = await boot();
       await dispatchSingles(
         "createSingle",
@@ -576,6 +579,65 @@ describe.each(getConfiguredTestDialects())(
       const update = migrationFiles(t).find(f =>
         /_notice_update\.sql$/.test(f)
       );
+      expect(update).toBeDefined();
+      expect(await appliedFiles(t)).toContain(update);
+    });
+
+    /**
+     * A Single's settings save that carries values (here, translation turned on) keeps the service's
+     * own statements, which the writer runs inside its step: a failure after the table changed
+     * keeps the files, recorded applied nowhere.
+     */
+    async function turnTranslationOn(t: TestNextly) {
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          fields: [{ name: "heading", type: "text" }],
+        }
+      );
+      return () =>
+        dispatchSingles(
+          "updateSingleSchema",
+          { slug: "notice" },
+          {
+            localized: true,
+            fields: [
+              { name: "heading", type: "text" },
+              { name: "body", type: "text" },
+            ],
+          }
+        );
+    }
+    const updateFile = (t: TestNextly) =>
+      migrationFiles(t).find(f => /_notice_update\.sql$/.test(f));
+
+    it("keeps a value-carrying Single update's files, recorded nowhere, when its companion fails to follow", async () => {
+      const t = await boot({ translated: true });
+      const save = await turnTranslationOn(t);
+
+      companionFails.single = true;
+      const result = await bodyOf(await save());
+
+      expect(JSON.stringify(result)).toContain("failed");
+      const update = updateFile(t);
+      expect(update).toBeDefined();
+      expect(await appliedFiles(t)).not.toContain(update);
+    });
+
+    it("records a value-carrying Single update's files applied only once its row is written", async () => {
+      const t = await boot({ translated: true });
+      const save = await turnTranslationOn(t);
+      const rowWrite = vi
+        .spyOn(SingleRegistryService.prototype, "updateSingle")
+        .mockRejectedValueOnce(new Error("the row could not be written"));
+
+      await expect(save()).rejects.toBeDefined();
+      rowWrite.mockRestore();
+
+      const update = updateFile(t);
       expect(update).toBeDefined();
       expect(await appliedFiles(t)).not.toContain(update);
     });
@@ -882,7 +944,9 @@ describe.each(getConfiguredTestDialects())(
       expect(await appliedFiles(t)).toContain(deleted);
     });
 
-    it("records a Single update's files applied only once its row is written", async () => {
+    // The file runs, and is recorded applied, before the row is written: a row that then fails is
+    // an internal error, and the file stays applied, the database standing as it says.
+    it("keeps a Single update's file recorded applied when its row cannot be written after it", async () => {
       const t = await boot();
       await dispatchSingles(
         "createSingle",
@@ -893,9 +957,9 @@ describe.each(getConfiguredTestDialects())(
           fields: [{ name: "heading", type: "text" }],
         }
       );
-      const registry = t.getService("singleRegistryService");
+      // The first registry write after the file is the settings save's own row.
       const rowWrite = vi
-        .spyOn(registry, "updateSingle")
+        .spyOn(SingleRegistryService.prototype, "updateSingle")
         .mockRejectedValueOnce(new Error("the row could not be written"));
 
       await expect(
@@ -909,16 +973,14 @@ describe.each(getConfiguredTestDialects())(
             ],
           }
         )
-      ).rejects.toBeDefined();
+      ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
       rowWrite.mockRestore();
 
-      // The table changed and the row did not: the file stays, recorded
-      // applied nowhere.
       const update = migrationFiles(t).find(f =>
         /_notice_update\.sql$/.test(f)
       );
       expect(update).toBeDefined();
-      expect(await appliedFiles(t)).not.toContain(update);
+      expect(await appliedFiles(t)).toContain(update);
     });
 
     it("keeps a field group delete's files, recorded nowhere, when it stops after its first teardown", async () => {
