@@ -914,6 +914,7 @@ function openFold(folds: GroupFolds | undefined, group: VariableGroup): void {
 /** The groups that list only what they hold, hidden while they hold none. */
 const SHOWN_WHEN_FILLED: ReadonlySet<VariableGroup> = new Set<VariableGroup>([
   "fonts",
+  "content",
   "other",
 ]);
 
