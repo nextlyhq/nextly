@@ -1209,17 +1209,6 @@ describe("declared empty output", () => {
   // without being rendered, and these pin the answers against the SAME props
   // the render path treats as empty — the two must not drift.
   it.each([
-    ["core/image", image, {}, true],
-    ["core/image with a direct url", image, { src: "/a.jpg" }, false],
-    ["core/image with a media id", image, { mediaId: "m1" }, false],
-    // A refused scheme leaves nothing usable, so it is empty for this purpose
-    // exactly as `renderImage` treats it.
-    [
-      "core/image with a refused url",
-      image,
-      { src: "javascript:alert(1)" },
-      true,
-    ],
     ["core/embed", embed, {}, true],
     ["core/embed with a url", embed, { src: "https://e.com/v" }, false],
     [
@@ -1243,12 +1232,6 @@ describe("declared empty output", () => {
     // case is checked in BOTH directions, and through the real render rather
     // than through one of the two blocks.
     const declaredEmpty = [
-      { label: "image with nothing", definition: image, props: {} },
-      {
-        label: "image with a refused scheme",
-        definition: image,
-        props: { src: "javascript:alert(1)" },
-      },
       { label: "embed with nothing", definition: embed, props: {} },
       {
         label: "embed with a refused scheme",
@@ -1261,12 +1244,7 @@ describe("declared empty output", () => {
       expect(definition.rendersNothing?.(props as never), label).toBe(true);
     }
 
-    // Every one of them, rendered. `core/image` is asynchronous, which is why it
-    // was the one this assertion previously skipped.
-    expect(html(await renderImage(args({})))).toBe("");
-    expect(html(await renderImage(args({ src: "javascript:alert(1)" })))).toBe(
-      ""
-    );
+    // Every one of them, rendered.
     expect(html(renderEmbed(args({})))).toBe("");
     expect(
       html(renderEmbed(args({ src: "javascript:alert(1)", title: "t" })))
@@ -1274,10 +1252,21 @@ describe("declared empty output", () => {
 
     // And the other direction: a block with usable input must NOT declare empty,
     // or a drawing block would be exempted from the diagnostic it needs.
-    expect(image.rendersNothing?.({ src: "/a.png" } as never)).toBe(false);
-    expect(image.rendersNothing?.({ mediaId: "m1" } as never)).toBe(false);
     expect(embed.rendersNothing?.({ src: "https://e.com/v" } as never)).toBe(
       false
+    );
+  });
+
+  it("is not declared by core/image, whose empty box the canvas draws", async () => {
+    // An Image with no picture draws its empty box where an author is looking,
+    // in the block's own classes, and the stylesheet holds back the rules of a
+    // block declaring it draws nothing: declared, the box would lose them.
+    // So it declares nothing, and draws nothing at render time on a page a
+    // visitor is served, with no source or with a refused one.
+    expect(image.rendersNothing).toBeUndefined();
+    expect(html(await renderImage(args({})))).toBe("");
+    expect(html(await renderImage(args({ src: "javascript:alert(1)" })))).toBe(
+      ""
     );
   });
 });

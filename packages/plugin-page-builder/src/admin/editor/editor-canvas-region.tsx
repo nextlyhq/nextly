@@ -27,6 +27,7 @@ import { Button } from "@nextlyhq/ui";
 import { siteSheet } from "../../site-style";
 import type { LibraryReadState } from "../pattern-library-client";
 
+import { CanvasImageStates } from "./canvas-image-states";
 import { previewedCanvas } from "./canvas-preview-mode";
 import { DoubleHeaderNotice } from "./double-header-notice";
 import type { EditorView } from "./editor-view";
@@ -254,6 +255,19 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
             pinned={previewed.tags}
             overlay={
               <>
+                {/* An Image with no picture: "Add an image" with Upload,
+                    Media library and Link, and a file dropped on it, through
+                    the admin's media library. First, so the marks, the drop
+                    line and the toolbar are drawn over it. */}
+                <CanvasImageStates
+                  editor={editor}
+                  {...(canvasRender.hostPolicy?.remotePatterns === undefined
+                    ? {}
+                    : {
+                        remotePatterns: canvasRender.hostPolicy.remotePatterns,
+                      })}
+                  dragging={dragging}
+                />
                 {/* A selected block the page hides on this device is drawn
                     anyway, and its ring says so. */}
                 <CanvasMarks
