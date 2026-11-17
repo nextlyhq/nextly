@@ -49,8 +49,8 @@ import { PanelSections, rowsHoldValue } from "./panel-section";
 import { VisibleOn, type BreakpointsStatus } from "./visible-on";
 
 /** The Advanced section the builder's own HTML settings join. */
-const VISIBILITY_SECTION = "Visibility";
-const HTML_SECTION = "HTML";
+export const VISIBILITY_SECTION = "Visibility";
+export const HTML_SECTION = "HTML";
 
 /**
  * The Advanced tab. Kept mounted while hidden, so a half-typed attribute
@@ -225,7 +225,7 @@ function DrawnAdvancedTab({
  * HTML settings join the builder's sections of those names, so each is one
  * section, folded as one; any other section it declares is its own.
  */
-function advancedRowsBySection(own: BlockInspection["sections"]["advanced"]): {
+export function advancedRowsBySection(own: BlockInspection["sections"]["advanced"]): {
   htmlRows: readonly EditableProp[];
   visibilityRows: readonly EditableProp[];
   others: BlockInspection["sections"]["advanced"];
@@ -258,7 +258,7 @@ function htmlHoldsValue(
  * Whether the block's Visibility holds a value: a device it is hidden on, a
  * condition it shows by, or the mark that keeps it out of search previews.
  */
-function visibilityHoldsValue(node: BlockNode | undefined): boolean {
+export function visibilityHoldsValue(node: BlockNode | undefined): boolean {
   if (node === undefined) return false;
   const { visibility } = node;
   const devices = visibility?.devices;
