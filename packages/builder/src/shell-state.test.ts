@@ -189,6 +189,8 @@ describe("preferences round-trip", () => {
     // A section closed and a tab expanded, which a read that dropped them
     // would answer as none remembered.
     sectionFolds: { "style:Spacing": false, "advanced:*": true },
+    // On, the non-default: a read that dropped it would answer off.
+    showCssNames: true,
   };
 
   it("restores what was written", () => {
@@ -298,6 +300,7 @@ describe("preferences round-trip", () => {
       // turned off: on.
       panelKeys: true,
       sectionFolds: {},
+      showCssNames: false,
     });
   });
 
@@ -367,6 +370,7 @@ describe("preferences saved before panels had parts", () => {
       },
       panelKeys: true,
       sectionFolds: {},
+      showCssNames: false,
     });
   });
 });

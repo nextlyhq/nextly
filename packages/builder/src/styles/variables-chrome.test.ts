@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
+import { chromeStylesheetSource } from "./chrome-stylesheet";
 
 const CHROME = chromeStylesheetSource(url =>
   readFileSync(fileURLToPath(url), "utf8")
