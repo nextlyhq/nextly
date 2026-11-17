@@ -501,6 +501,7 @@ function FontValue({
 }: ValueFieldProps): React.JSX.Element {
   const fonts = React.useContext(FontChoicesContext);
   const id = React.useId();
+  const manage = useManageFonts(fonts?.onManageFonts);
   if (readOnly) {
     return (
       <TextValue
@@ -512,7 +513,6 @@ function FontValue({
       />
     );
   }
-  const manage = useManageFonts(fonts?.onManageFonts);
   return (
     <div className="nx-vars-editor__field">
       <span className="nx-vars-editor__label" id={`${id}-label`}>

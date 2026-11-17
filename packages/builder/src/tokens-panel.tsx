@@ -74,7 +74,6 @@ import {
 } from "./tokens-studio";
 import { ADDS, AddButton, EmptyGroup } from "./variable-adds";
 import { VariableEditor } from "./variable-editor";
-import { CloseVariableEditor } from "./variable-value-controls";
 import { ColourPair, swatchStyle } from "./variable-swatch";
 import {
   combinedReach,
@@ -88,6 +87,7 @@ import {
   VariableRowCount,
   type VariableUsageHere,
 } from "./variable-usage-view";
+import { CloseVariableEditor } from "./variable-value-controls";
 import { useVariablesTransfer } from "./variables-transfer";
 
 /** A save's note to the author, and the way to read the variables again. */
