@@ -404,6 +404,20 @@ describe("what a screen reader is given for an image", () => {
     expect(written(editor)).toEqual({ mediaId: "m-1", alt: "Still typing" });
   });
 
+  it("shows the library's words again when the field is emptied with none of the page's own", async () => {
+    // Nothing to remove, so nothing is written, and the library's words are
+    // still the ones in use: the field says so rather than staying blank.
+    const editor = mount({ mediaId: "m-1" });
+    await waitFor(() => expect(field().value).toBe("The team at launch"));
+    fireEvent.change(field(), { target: { value: "" } });
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(field().value).toBe("The team at launch");
+    fireEvent.change(field(), { target: { value: "  " } });
+    fireEvent.blur(field());
+    expect(field().value).toBe("The team at launch");
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
   it("gives way to the document while words are being typed, as an undo", () => {
     const editor = mount({ mediaId: "m-1", alt: "Before" });
     fireEvent.change(field(), { target: { value: "Half typed" } });

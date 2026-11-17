@@ -440,7 +440,8 @@ function GrowingText({
   placeholder: string;
   disabled: boolean;
   describedBy: string | undefined;
-  onCommit: (text: string) => void;
+  /** Write the words; answers whether anything was written. */
+  onCommit: (text: string) => boolean;
 }): React.JSX.Element {
   const [draft, setDraft] = React.useState(value);
   // Whether the author has typed since the words last followed `value`.
@@ -453,9 +454,13 @@ function GrowingText({
     typing.current = false;
     setDraft(value);
   }, [value, stored]);
+  // A commit that writes nothing (the words already in use, an emptied field
+  // with no words of the page's own to remove, or one a lock refuses) leaves
+  // the document where it was, so nothing else brings the shown words back:
+  // the field shows them again itself.
   const commit = (): void => {
     typing.current = false;
-    if (draft !== value) onCommit(draft);
+    if (draft !== value && !onCommit(draft)) setDraft(value);
   };
   const field = React.useRef<HTMLTextAreaElement>(null);
   // Fitted to its words after each change, up to the six lines the style
@@ -720,9 +725,13 @@ export function ImageAltField({
   const mode = altModeOf(group, values);
   const own = storedAlt(group, values);
   const ownStored = isAuthoredText(values[group.alt]);
-  const write = (changes: ImageChanges) => {
-    if (Object.keys(changes).length === 0) return;
-    if (allWritable(changes, writable)) onCommitMany(changes);
+  // Whether anything was written: no change, or one a lock refuses, writes
+  // nothing.
+  const write = (changes: ImageChanges): boolean => {
+    if (Object.keys(changes).length === 0) return false;
+    if (!allWritable(changes, writable)) return false;
+    onCommitMany(changes);
+    return true;
   };
   const altHeld = !writable(group.alt);
   const wrap = bindable ?? unwrapped;
