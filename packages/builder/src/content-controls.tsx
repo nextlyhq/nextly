@@ -584,7 +584,9 @@ function ArrayItems({
     // arrived) changed nothing, and the next action must not start from it.
     if (onCommit(prop.name, next) !== null) latest.current = next;
   };
-  const position = (index: number) => `${label}, item ${index + 1}`;
+  // "Item 1", "Item 2": each item sits in the group the setting's own name
+  // labels, so repeating that name ("Items, item 1") says it twice.
+  const position = (index: number) => `Item ${index + 1}`;
   const move = (index: number, by: -1 | 1) => {
     const next = [...latest.current];
     const [taken] = next.splice(index, 1);
