@@ -41,6 +41,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { sql } from "drizzle-orm";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { serializeUiSchema } from "../../../cli/utils/ui-schema-writer";
@@ -63,6 +64,7 @@ import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import type { FieldMoveRequest } from "../field-moves/check-move";
 import { movedColumnSentences } from "../field-moves/moved-column-facts";
+import { holdsValueAt } from "../field-moves/move-statements";
 import { planEntityMoves, type EntityMoves } from "../field-moves/plan-moves";
 import { checksumOf } from "../migrate/applied-checksums";
 import {
@@ -88,7 +90,10 @@ import {
   type GenerateArgs,
 } from "../migrate-create/generate";
 import { loadLatestSnapshot } from "../migrate-create/snapshot-io";
-import { countRowsBreakingNotNull } from "../pipeline/classifier/count-helpers";
+import {
+  countRowsBreakingNotNull,
+  querySqlRows,
+} from "../pipeline/classifier/count-helpers";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import type {
@@ -429,7 +434,11 @@ async function writeSave(
   refuseUnconfirmedConversions(plan, save);
   refuseUnenforceableUniques(deps, save, plan.table);
   // A move that cannot keep its values is refused here, before the definition is written.
-  plannedMovesOf(deps, save, plan.table);
+  await refuseEmptyRequiredRefills(
+    deps,
+    plannedMovesOf(deps, save, plan.table),
+    plan.table
+  );
   await settledRows(deps, save, plan.table);
 
   const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
@@ -477,11 +486,9 @@ export async function previewCollectionSave(
       ...files.change,
     ];
     const conversions = plan.adoption?.conversions ?? [];
-    const moved = await moveSentencesOf(
-      deps,
-      plan.table,
-      plannedMovesOf(deps, save, plan.table)
-    );
+    const planned = plannedMovesOf(deps, save, plan.table);
+    await refuseEmptyRequiredRefills(deps, planned, plan.table);
+    const moved = await moveSentencesOf(deps, plan.table, planned);
     return {
       adopts: plan.adoption !== null,
       conversions,
@@ -1414,6 +1421,45 @@ function plannedMovesOf(
   });
   refuseDeletesBeforeRefill(save, planned);
   return planned;
+}
+
+/**
+ * Refuses a required field moved out of a group while some entry's group holds no value for it,
+ * counted before anything is written: the file would add its column, fill it and make it
+ * required, and on MySQL, which keeps the statements a refusal stops after, the column would
+ * stay behind.
+ */
+async function refuseEmptyRequiredRefills(
+  deps: CollectionSaveDeps,
+  planned: EntityMoves,
+  table: string
+): Promise<void> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  for (const refill of planned.refilledColumns) {
+    if (!refill.required) continue;
+    const held = holdsValueAt(
+      refill.source.column,
+      refill.source.keys,
+      dialect
+    );
+    const [row] = await querySqlRows<{ count: string | number }>(
+      deps.adapter.getDrizzle(),
+      dialect,
+      sql`SELECT COUNT(*) AS count FROM ${sql.identifier(table)} WHERE NOT (${sql.raw(held)})`
+    );
+    const empty = Number(row?.count ?? 0);
+    if (empty === 0) continue;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: refill.field,
+          code: "FIELD_MOVE_REFUSED",
+          message: `${empty} ${empty === 1 ? "entry holds" : "entries hold"} no value for ${refill.field} in the group it moves out of, and it is required. Give ${empty === 1 ? "that entry" : "those entries"} a value first, or move it as optional.`,
+        },
+      ],
+      logContext: { table, column: refill.column, empty },
+    });
+  }
 }
 
 /**

@@ -50,7 +50,16 @@ export interface EntityMoves {
    * Each column the save adds because its field moved out of a group, which the file's last
    * statements fill from the group: added without NOT NULL, and made required once they have.
    */
-  refilledColumns: { table: string; column: string }[];
+  refilledColumns: {
+    table: string;
+    column: string;
+    /** The field's name, for a refusal to name it. */
+    field: string;
+    /** Whether the field is required, so every entry needs a value to move. */
+    required: boolean;
+    /** Where the values come from: the group's column and the keys inside it. */
+    source: { column: string; keys: readonly string[] };
+  }[];
 }
 
 /** The refusal of a move, as the save reports it. */
@@ -253,6 +262,9 @@ export function planEntityMoves(args: {
       result.refilledColumns.push({
         table: args.table,
         column: move.to.column,
+        field: request.to.join("."),
+        required: (move.field as { required?: unknown }).required === true,
+        source: { column: move.from.column, keys: move.from.keys },
       });
     }
     if (move.from.kind === "column" && move.to.kind === "json") {

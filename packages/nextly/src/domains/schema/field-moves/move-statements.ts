@@ -234,6 +234,18 @@ const DIALECTS: Record<SupportedDialect, JsonDialect> = {
 };
 
 /**
+ * The condition true for each entry whose group holds a value at `keys` of `column`, JSON null
+ * not counted: the one the copy out of a group carries values on.
+ */
+export function holdsValueAt(
+  column: string,
+  keys: readonly string[],
+  dialect: SupportedDialect
+): string {
+  return DIALECTS[dialect].holds(quoteIdent(column, dialect), keys);
+}
+
+/**
  * Statements making each container above `keys` an object where an entry is about to get a value
  * there, keeping what one already holds: a key two levels down needs the group between.
  */
