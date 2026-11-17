@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
 import {
   planAlign,
   planArrange,
+  planChildHeight,
+  planChildWidth,
   planColumns,
   planReverse,
   planRows,
@@ -17,6 +19,10 @@ import {
   ownCascade,
   planPlain,
   readArrange,
+  readChildHeight,
+  readChildWidth,
+  type ChildFit,
+  type ParentArrangement,
   unusedSettings,
   type AlignPoint,
   type LayoutTiers,
@@ -648,5 +654,132 @@ describe("a clear at a device beside a hidden tier of the same width", () => {
       property: "flexDirection",
       value: "row",
     });
+  });
+});
+
+describe("Inside its parent: Width", () => {
+  const writesOf = (
+    parent: ParentArrangement,
+    choice: ChildFit,
+    size?: string
+  ) => {
+    const block = new Block();
+    block.apply(planChildWidth(block.tiers(), "base", parent, choice, size));
+    return block;
+  };
+
+  it("in a Stack's flow: auto, fit-content, or the width set", () => {
+    expect(writesOf("flow", "fill").own.base).toEqual({});
+    expect(writesOf("flow", "fit").own.base).toEqual({ width: "fit-content" });
+    expect(writesOf("flow", "fixed", "320px").own.base).toEqual({
+      width: "320px",
+    });
+  });
+
+  it("in a flex column: stretched, at the start, or set at the start", () => {
+    expect(writesOf("column", "fill").own.base).toEqual({
+      alignSelf: "stretch",
+    });
+    expect(writesOf("column", "fit").own.base).toEqual({
+      alignSelf: "flex-start",
+    });
+    expect(writesOf("column", "fixed", "50%").own.base).toEqual({
+      width: "50%",
+      alignSelf: "flex-start",
+    });
+  });
+
+  it("in a Row: grown from nothing, its content's, or set and kept", () => {
+    expect(writesOf("row", "fill").own.base).toEqual({
+      flexGrow: "1",
+      flexShrink: "1",
+      flexBasis: "0",
+      minWidth: "0",
+    });
+    expect(writesOf("row", "fit").own.base).toEqual({});
+    expect(writesOf("row", "fixed", "12rem").own.base).toEqual({
+      width: "12rem",
+      flexShrink: "0",
+    });
+  });
+
+  it("in a Grid: stretched, at the start, or set", () => {
+    expect(writesOf("grid", "fill").own.base).toEqual({});
+    expect(writesOf("grid", "fit").own.base).toEqual({ justifySelf: "start" });
+    expect(writesOf("grid", "fixed", "200px").own.base).toEqual({
+      width: "200px",
+    });
+  });
+
+  it("reads every choice back as itself under each parent", () => {
+    for (const parent of ["flow", "column", "row", "grid"] as const) {
+      for (const choice of ["fill", "fit", "fixed"] as const) {
+        const block = writesOf(parent, choice, "240px");
+        expect(readChildWidth(block.tiers(), "base", parent)).toEqual(
+          choice === "fixed" ? { choice, size: "240px" } : { choice }
+        );
+      }
+    }
+  });
+
+  it("reads anything else as Custom", () => {
+    const centred = new Block({ alignSelf: "center" });
+    expect(readChildWidth(centred.tiers(), "base", "column")).toEqual({
+      choice: "custom",
+    });
+    const grown = new Block({ flexGrow: "2" });
+    expect(readChildWidth(grown.tiers(), "base", "row")).toEqual({
+      choice: "custom",
+    });
+  });
+
+  it("switches from one choice to another without leaving the last behind", () => {
+    const block = writesOf("row", "fixed", "12rem");
+    block.apply(planChildWidth(block.tiers(), "base", "row", "fill"));
+    expect(block.own.base).toEqual({
+      flexGrow: "1",
+      flexShrink: "1",
+      flexBasis: "0",
+      minWidth: "0",
+    });
+  });
+});
+
+describe("Inside its parent under a Row stacked at the edited device", () => {
+  it("sizes and reads the child as in a column there", () => {
+    const block = new Block({ flexGrow: "1", flexShrink: "1", flexBasis: "0" });
+    // The Row's main-axis Fill from the desktop doesn't change what shows.
+    expect(readChildWidth(block.tiers(), "sm", "column")).toEqual({
+      choice: "fill",
+    });
+    block.apply(planChildWidth(block.tiers(), "sm", "column", "fit"));
+    expect(block.own.sm).toEqual({ alignSelf: "flex-start" });
+    expect(readChildWidth(block.tiers(), "sm", "column")).toEqual({
+      choice: "fit",
+    });
+  });
+
+  it("lets Fill there replace a width fixed at a wider device", () => {
+    const block = new Block({ width: "300px", flexShrink: "0" });
+    block.apply(planChildWidth(block.tiers(), "sm", "column", "fill"));
+    expect(block.own.sm).toEqual({ width: "auto", alignSelf: "stretch" });
+    expect(readChildWidth(block.tiers(), "sm", "column")).toEqual({
+      choice: "fill",
+    });
+  });
+});
+
+describe("Inside its parent: Height, under a Row or a Grid", () => {
+  it("writes and reads each choice on the cross axis", () => {
+    for (const choice of ["fill", "fit", "fixed"] as const) {
+      const block = new Block();
+      block.apply(planChildHeight(block.tiers(), "base", choice, "80px"));
+      expect(readChildHeight(block.tiers(), "base")).toEqual(
+        choice === "fixed" ? { choice, size: "80px" } : { choice }
+      );
+    }
+    const fit = new Block();
+    fit.apply(planChildHeight(fit.tiers(), "base", "fit"));
+    expect(fit.own.base).toEqual({ alignSelf: "start" });
   });
 });
