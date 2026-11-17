@@ -100,6 +100,22 @@ describe("the Body and Headings fonts", () => {
     expect(cleared.siteText?.body).toEqual({});
   });
 
+  it("reads headings as set when every row draws one font, however each holds it", () => {
+    const set = withFontRole(SITE, "heading", '"Lora", serif');
+    const literal = {
+      ...set,
+      siteText: { ...set.siteText, h3: { ...set.siteText?.h3, fontFamily: '"Lora", serif' } },
+    };
+    expect(fontRoleSetting(literal, "heading")).toEqual({
+      kind: "set",
+      stack: '"Lora", serif',
+    });
+    // Said row by row: the rows hold the font two ways.
+    expect(fontRoleWrites(literal, "heading")).toContain(
+      'h3 { font-family: "Lora", serif }'
+    );
+  });
+
   it("says a heading row holding a font of its own makes Headings mixed", () => {
     const set = withFontRole(SITE, "heading", '"Lora", serif');
     const one = withSiteTextRow(
@@ -202,6 +218,12 @@ describe("a Headings font with no bold", () => {
     expect(
       missingBold(withFontRole(SITE, "heading", '"Lora", serif'), italic)?.family
     ).toBe("Lora");
+    // A variable face reaching 600 or heavier between two named weights
+    // draws a bold too.
+    const between = roleFamilies([face("Lora", "625 675", LORA)], []);
+    expect(
+      missingBold(withFontRole(SITE, "heading", '"Lora", serif'), between)
+    ).toBeUndefined();
     // A variable face covering 700 draws a bold.
     const variable = roleFamilies([face("Lora", "400 700", LORA)], []);
     expect(

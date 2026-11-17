@@ -98,15 +98,16 @@ export function fontRoleSetting(
 ): FontRoleSetting {
   const rows = resolveSiteText(tokens.siteText);
   const fonts = rowsOf(role).map(row => rows[row]?.fontFamily);
-  const [first] = fonts;
-  if (first === undefined && fonts.every(font => font === undefined)) {
+  if (fonts.every(font => font === undefined)) {
     return { kind: "unset" };
   }
-  const same = fonts.every(
-    font => JSON.stringify(font) === JSON.stringify(first)
+  // Compared by the font each row draws, so a row holding the font as written
+  // and one pointing at a variable of that font read as one setting.
+  const stacks = fonts.map(font =>
+    font === undefined ? undefined : drawnStack(tokens, font)
   );
-  const stack = first === undefined ? undefined : drawnStack(tokens, first);
-  return same && stack !== undefined
+  const [stack] = stacks;
+  return stack !== undefined && stacks.every(each => each === stack)
     ? { kind: "set", stack }
     : { kind: "mixed" };
 }
@@ -231,7 +232,11 @@ export function fontRoleWrites(tokens: SiteTokenSet, role: FontRole): string {
   });
   const [first] = held;
   if (first === undefined) return "Nothing";
-  if (fontRoleSetting(tokens, role).kind === "set") {
+  // One rule for every row only where each row holds the font the same way.
+  const uniform =
+    held.length === rowsOf(role).length &&
+    held.every(([, font]) => JSON.stringify(font) === JSON.stringify(first[1]));
+  if (uniform) {
     return `${variableDeclared(tokens, first[1], prefix)}${ROLE_SELECTOR[role]} { ${writtenFont(first[1], prefix)} }`;
   }
   return held

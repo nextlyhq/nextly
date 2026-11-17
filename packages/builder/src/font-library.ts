@@ -560,8 +560,12 @@ export function roleStack(family: string, category?: string): string {
  * lighter one. An italic bold leaves upright headings thickened.
  */
 export function drawsBold(faces: readonly FontFaceDef[]): boolean {
-  const upright = faces.filter(face => !slanted(face.style));
-  return [...weightsDrawn(upright)].some(weight => weight >= 600);
+  return emittableFaces(faces).some(face => {
+    if (slanted(face.style)) return false;
+    // A variable face's heavier end, which may fall between named weights.
+    const [low, high = low] = weightNumbers(face.weight);
+    return high !== undefined && high >= 600;
+  });
 }
 
 /** The specimen, one sentence with ascenders, descenders and round forms. */
