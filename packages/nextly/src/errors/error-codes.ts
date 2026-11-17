@@ -304,6 +304,10 @@ export const NEXTLY_ERROR_STATUS = {
   // standard form (`pt_BR` beside `pt-BR`): it changes nothing until the developer keeps one. 500
   // for the same reason: the remedy is the site's configuration.
   NEXTLY_LANGUAGE_CODES_COLLIDE: 500,
+  // The configuration writes a language code the earlier way (`pt_BR`) and the database still
+  // stores rows under it: the start refuses until `nextly upgrade` has moved them to the standard
+  // code they are read as. 500: the remedy is a command the developer runs.
+  NEXTLY_LANGUAGE_CODES_NOT_UPGRADED: 500,
   // `db.postgres.schema` names a schema holding no installation while another
   // schema of the database holds one: the setting moved on an existing site.
   // 500 for the same reason as the mismatch above: a boot-time refusal of the

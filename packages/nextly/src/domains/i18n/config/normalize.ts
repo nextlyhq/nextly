@@ -45,9 +45,18 @@ function normalizeLocale(input: LocaleInput): ResolvedLocale {
 export function normalizeLocalization(
   input: LocalizationConfig
 ): SanitizedLocalizationConfig {
+  const written = input.locales.map(locale =>
+    typeof locale === "string" ? locale : locale.code
+  );
+  const olderCodes = [...new Set(written)].flatMap(from => {
+    const to = standardOf(from);
+    return to === from ? [] : [{ from, to }];
+  });
   return {
     locales: input.locales.map(normalizeLocale),
     defaultLocale: standardOf(input.defaultLocale),
     fallback: input.fallback ?? true,
+    // Named only where there is one, so a configuration in standard form reads as it always has.
+    ...(olderCodes.length > 0 ? { olderCodes } : {}),
   };
 }
