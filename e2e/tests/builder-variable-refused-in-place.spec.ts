@@ -105,6 +105,10 @@ test("a value the save would refuse is refused in its field, and the page still 
     await light.press("Enter");
     await expect(light).toHaveValue("20");
     await expect(editor.getByLabel("Unit for Light")).toContainText("px");
+    // The menu shows px by default, so what was written is what proves it.
+    await expect
+      .poll(() => sent.some(body => body.includes('"20px"')))
+      .toBe(true);
     await expect(light).not.toHaveAttribute("aria-invalid", "true");
     await page.keyboard.press("Escape");
     await expect(editor).toBeHidden();

@@ -30,5 +30,6 @@
 ---
 
 The form builder reads the forms that reference an email template in a stable
-order again, page by page, so none is skipped or counted twice when deciding
-whether the template can be deleted.
+order again (by id, page by page), when deciding whether the template can be
+deleted. Before, no order reached the query, so the database could return the
+pages in any order and skip or repeat a form between them.
