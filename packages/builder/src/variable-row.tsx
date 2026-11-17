@@ -396,7 +396,7 @@ function ColourSwatch({
  * editor closes without handing focus back to the row, which would take it
  * from the place the author was sent to.
  */
-export function useHandOff(onOpenChange: (open: boolean) => void): {
+function useHandOff(onOpenChange: (open: boolean) => void): {
   close: () => void;
   onCloseAutoFocus: (event: Event) => void;
 } {
