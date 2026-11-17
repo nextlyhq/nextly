@@ -20,13 +20,11 @@ import * as React from "react";
 import type { ContentServices } from "./content-services";
 import { AfterSendingControl } from "./form-after-sending";
 import { FormFieldsControl } from "./form-fields-control";
-import { pickedFormOf } from "./form-picked";
+import { FORM_BLOCK, pickedFormOf } from "./form-picked";
 import { FormSourceControl, type FormSources } from "./form-source-control";
 import type { BlockInspection, EditableProp } from "./inspector";
 import type { PanelSection } from "./panel-section";
 
-/** The block these sections are drawn for. */
-export const FORM_BLOCK = "core/form";
 
 /** The sections the block places these props in, by their names. */
 const FIELDS_SECTION = "Fields";

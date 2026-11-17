@@ -116,6 +116,8 @@
 
 @import "./image-states.css";
 
+@import "./form-states.css";
+
 @import "./form-fields.css";
 
 @import "./first-add.css";

@@ -29,6 +29,7 @@ import { siteSheet } from "../../site-style";
 import type { LibraryReadState } from "../pattern-library-client";
 
 import { CanvasFirstAddChoosers } from "./canvas-first-add-choosers";
+import { CanvasFormStates } from "./canvas-form-states";
 import { CanvasImageStates } from "./canvas-image-states";
 import { previewedCanvas } from "./canvas-preview-mode";
 import { DoubleHeaderNotice } from "./double-header-notice";
@@ -268,6 +269,13 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                         remotePatterns: canvasRender.hostPolicy.remotePatterns,
                       })}
                   dragging={dragging}
+                />
+                {/* A picked form that is a draft, closed or deleted, and a
+                    simple form with nowhere to send answers. */}
+                <CanvasFormStates
+                  editor={editor}
+                  locale={locale}
+                  hidden={dragging}
                 />
                 {/* A selected block the page hides on this device is drawn
                     anyway, and its ring says so. */}

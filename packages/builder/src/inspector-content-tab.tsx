@@ -25,11 +25,8 @@ import {
 } from "./component-fields-panel";
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
-import {
-  FORM_BLOCK,
-  formSectionBodies,
-  formSourceSections,
-} from "./form-sections";
+import { FORM_BLOCK } from "./form-picked";
+import { formSectionBodies, formSourceSections } from "./form-sections";
 import { useFormSources } from "./form-source-control";
 import { galleryContentSections } from "./gallery-fields";
 import {

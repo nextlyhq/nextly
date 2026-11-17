@@ -51,6 +51,7 @@ import { canvasListReadsIn } from "../list-entries-client";
 import { canvasNamedQueriesIn } from "../named-queries-client";
 
 import { useCanvasEntryIdentity } from "./canvas-entry";
+import { canvasForms } from "./canvas-forms";
 
 /**
  * An icon as the canvas draws it, from the set a published page draws with.
@@ -240,8 +241,12 @@ export function useCanvasPageContext(
           : { entry: { id: entryId }, entryCollection }),
         ...(namedQueries === undefined ? {} : { namedQueries }),
         ...(drawn.report === undefined ? {} : { listShown: drawn.report }),
+        // A picked form, as the person editing reads it.
+        forms: canvasForms(locale, userId),
       }),
     [
+      locale,
+      userId,
       readMedia,
       entryCollection,
       entryId,

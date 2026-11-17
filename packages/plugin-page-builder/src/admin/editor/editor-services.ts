@@ -13,6 +13,7 @@ import {
 import type { ComponentProps } from "react";
 
 import { bindingFieldsReader, unbindPlanner } from "../binding-fields-client";
+import { readEditorForm, readEditorForms } from "../editor-forms-client";
 import { findEntries } from "../entries-client";
 import { findLinkTargets, findLinkTargetsIn } from "../link-targets-client";
 import { canvasListReadsIn } from "../list-entries-client";
@@ -132,6 +133,17 @@ export function servicesFor(
           ? canvasListReadsIn(locale, userId).count(props)
           : canvasNamedQueriesIn(locale, userId).count(props),
       ...(entryCollection === undefined ? {} : { entryCollection }),
+      // A Form's "Form: <pick a form>", the canvas's word on a picked one,
+      // and a picked form's own "After sending", each read as the author.
+      listForms: () => readEditorForms(userId),
+      pickedFormState: async form =>
+        (await readEditorForm(form, locale, userId)).state,
+      describeForm: async form => {
+        const answer = await readEditorForm(form, locale, userId);
+        return "drawing" in answer
+          ? { afterSending: answer.drawing.afterSending }
+          : undefined;
+      },
       // The fields a binding can read, as this author reads them, kept a
       // short while: the picker opens on every bindable prop.
       listBindingFields: bindingFieldsReader(binding.entry, locale, userId),

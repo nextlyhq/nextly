@@ -6,6 +6,9 @@
  * @module form-picked
  */
 
+/** The Form block, whose `form` this is. */
+export const FORM_BLOCK = "core/form";
+
 /** The page builder's own provider, which a block with no picked form uses. */
 const SIMPLE_PROVIDER = "simple";
 
