@@ -17,6 +17,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import { useCanvasTokenModeAt } from "./canvas/prefers-dark";
 import { FocalFrame } from "./focal-frame";
 import type { selectedNode } from "./inspector";
 import type {
@@ -24,7 +25,6 @@ import type {
   StyleStateBinding,
 } from "./inspector-panel-types";
 import { editedStyleState } from "./inspector-style-state";
-import { useCanvasTokenModeAt } from "./prefers-dark";
 import { StyleStateField } from "./state-switcher";
 import {
   breakpointLabel,

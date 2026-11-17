@@ -25,8 +25,8 @@
  * @module builder-commands
  */
 
+import type { ToolbarAction, ToolbarActionId } from "../canvas/toolbar-actions";
 import { CONVERSION_WORDS } from "../editor-words";
-import type { ToolbarAction, ToolbarActionId } from "../toolbar-actions";
 
 import type { BuilderCommand } from "./command-palette";
 

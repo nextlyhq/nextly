@@ -9,7 +9,7 @@ import {
 import { TooltipProvider } from "@nextlyhq/ui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { FIT_ZOOM } from "../canvas-zoom";
+import { FIT_ZOOM } from "../canvas/canvas-zoom";
 import { ShellTopBar } from "./shell-top-bar";
 
 /**

@@ -17,7 +17,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { SECTION_BLOCK } from "./block-shortcuts";
-import { emptySlotOf } from "./empty-slot";
+import { emptySlotOf } from "./canvas/empty-slot";
 import type { InsertEntry, SlotSource } from "./inserter-types";
 import { positionOf, type OpPosition } from "./op-vocabulary";
 

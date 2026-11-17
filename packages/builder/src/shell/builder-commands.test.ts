@@ -18,7 +18,7 @@ import {
   builderCommands,
   type CommandVerbs,
 } from "./builder-commands";
-import { toolbarActions } from "../toolbar-actions";
+import { toolbarActions } from "../canvas/toolbar-actions";
 
 function node(id: string, extra: Partial<BlockNode> = {}): BlockNode {
   return {

@@ -42,7 +42,8 @@ import {
   sameLook,
   type BlockLookRow,
 } from "./block-look-rows";
-import { CanvasPassageContext } from "./canvas-passage";
+import { CanvasPassageContext } from "./canvas/canvas-passage";
+import { useCanvasReading } from "./canvas/use-canvas-reading";
 import {
   ComponentFieldsContext,
   ComponentFieldsScope,
@@ -87,7 +88,6 @@ import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
 import { LookInspector } from "./look-inspector";
 import { ManyBlocksPanel } from "./many-blocks-panel";
-import { useCanvasReading } from "./use-canvas-reading";
 import { placedDefinition } from "./variant-picker";
 
 // What the panel takes, the style state it edits, the Content and Style tabs,
