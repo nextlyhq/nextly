@@ -24,8 +24,6 @@
 import type { BlockDocument, NestingSource } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import type { EditorState } from "./editor-state";
-import type { SharedStyleOffer } from "./shared-style-target";
 import {
   depthMoveActions,
   toolbarActions,
@@ -34,7 +32,9 @@ import {
   type MoveJudge,
   type MovePosition,
   type ToolbarAction,
-} from "./toolbar-actions";
+} from "./canvas/toolbar-actions";
+import type { EditorState } from "./editor-state";
+import type { SharedStyleOffer } from "./shared-style-target";
 
 /** The selection's verbs, and the depth moves the block menu adds. */
 export interface SelectionVerbs {

@@ -45,7 +45,7 @@ import { ChevronDown, Laptop, Monitor, Smartphone, Tablet } from "lucide-react";
 import * as React from "react";
 
 import { authoredBreakpoints, BASE_DEVICE_LABEL } from "../breakpoints";
-import { baseWidth, offeredTiers, previewWidth } from "../canvas-width";
+import { baseWidth, offeredTiers, previewWidth } from "../canvas/canvas-width";
 import { radioGroupStep } from "../roving-radios";
 
 /**

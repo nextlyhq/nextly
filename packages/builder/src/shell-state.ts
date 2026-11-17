@@ -14,7 +14,12 @@
  * @module shell-state
  */
 
-import { FIT_ZOOM, readZoom, writeZoom, type CanvasZoom } from "./canvas-zoom";
+import {
+  FIT_ZOOM,
+  readZoom,
+  writeZoom,
+  type CanvasZoom,
+} from "./canvas/canvas-zoom";
 import { readSectionFolds, type SectionFolds } from "./panel-folds";
 
 /**

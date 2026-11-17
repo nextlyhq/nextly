@@ -27,13 +27,13 @@ import {
 import * as React from "react";
 
 import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
+import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { commitOnEnter } from "./commit-on-enter";
 import { DecorationField, drawsDecoration } from "./decoration-field";
 import { FocalPointField } from "./focal-point-field";
 import { IconChoiceField } from "./icon-choice-field";
 import { InheritedValue, useUnsetHint } from "./inherited-value";
 import { useLabelScrub } from "./label-scrub";
-import { useCanvasTokenMode } from "./prefers-dark";
 import { SectionHeld } from "./section-held";
 import {
   alignmentGroupFor,

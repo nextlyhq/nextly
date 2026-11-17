@@ -9,6 +9,7 @@
 import { findNode, type BlockNode } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import {
   CONTENT_WIDTH_HELD,
   ContentWidthControl,
@@ -24,7 +25,6 @@ import {
   propPatch,
   type EditableProp,
 } from "./inspector";
-import { useCanvasTokenMode } from "./prefers-dark";
 import {
   StyleTargetContext,
   type StyleFieldSurroundings,

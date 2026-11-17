@@ -8,9 +8,9 @@ import {
 import { cn } from "@nextlyhq/ui/utils";
 import * as React from "react";
 
-import { CanvasFrameShortcuts } from "../canvas-frame-context";
-import { FIT_ZOOM, type CanvasZoom } from "../canvas-zoom";
-import { HoveredBlockProvider } from "../hovered-block";
+import { CanvasFrameShortcuts } from "../canvas/canvas-frame-context";
+import { FIT_ZOOM, type CanvasZoom } from "../canvas/canvas-zoom";
+import { HoveredBlockProvider } from "../canvas/hovered-block";
 import type { SectionFolds } from "../panel-folds";
 import { PanelFoldsContext, type PanelFolds } from "../panel-folds-context";
 import {

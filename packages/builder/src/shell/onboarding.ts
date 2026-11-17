@@ -30,9 +30,9 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
-import { inlineTargets } from "../inline-text";
+import { inlineTargets } from "../canvas/inline-text";
+import { startWords } from "../canvas/page-start-words";
 import { insertionPropSets } from "../inserter";
-import { startWords } from "../page-start-words";
 
 /** One thing to do, and whether the page shows it has been done. */
 export interface ChecklistStep {
