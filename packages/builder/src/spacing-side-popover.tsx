@@ -12,11 +12,7 @@
  *
  * @module spacing-side-popover
  */
-import {
-  isTokenRef,
-  type SiteTokenSet,
-  type StyleValue,
-} from "@nextlyhq/blocks-engine";
+import type { SiteTokenSet, StyleValue } from "@nextlyhq/blocks-engine";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,75 +26,22 @@ import * as React from "react";
 import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { isElement, isInput } from "./dom-kind";
 import { SegmentChoices } from "./segment-choices";
+import {
+  identityOfKey,
+  NONE,
+  offeredPreset,
+  presetKey,
+  presetLabels,
+  spacingPresets,
+} from "./spacing-presets";
 import { CompactSides } from "./spacing-box";
 import type { ApplyTo } from "./spacing-side";
-import {
-  variableLabel,
-  variablesFor,
-  type SiteVariable,
-} from "./style-colour";
 import type { StyleControl } from "./style-controls";
 import type { CommitOutcome } from "./style-field-surroundings";
 import { NumericField } from "./style-numeric-field";
-import { storedText } from "./style-text-field";
-import { lengthInPx, variableValueText } from "./style-variables";
-import { variableGroupOf } from "./tokens-studio";
 
 /** Where focus goes as the popover closes. */
 export type SideClose = "side" | "next" | "previous";
-
-/** "None", the preset that writes nothing between the edges. */
-const NONE = "zero";
-
-/**
- * A preset's key in the radio group: a variable's under a prefix, so no
- * variable's identity ("none", "zero") can be taken for the zero preset.
- */
-function presetKey(identity: string): string {
-  return `token:${identity}`;
-}
-
-/** The variable a preset's key stands for, or none for the zero preset. */
-function identityOfKey(key: string): string | undefined {
-  return key.startsWith("token:") ? key.slice("token:".length) : undefined;
-}
-
-/** A zero length as it may be stored: "0", "0px", "0rem". */
-const ZERO = /^[+-]?0*(?:\.0*)?(?:[a-z%]+)?$/i;
-
-/**
- * The site's spacing variables, smallest first, the order a scale is read
- * in. One with no single size (fluid, or through a function) goes last.
- */
-function spacingPresets(
-  control: StyleControl,
-  tokens: SiteTokenSet | undefined,
-  mode: ReturnType<typeof useCanvasTokenMode>
-): readonly SiteVariable[] {
-  const size = (variable: SiteVariable): number =>
-    lengthInPx(variable.value) ?? Number.POSITIVE_INFINITY;
-  return variablesFor(control.leaf, tokens, mode)
-    .filter(
-      variable =>
-        variable.kind === "dimension" && variableGroupOf(variable) === "spacing"
-    )
-    .sort((a, b) => size(a) - size(b));
-}
-
-/**
- * The preset to mark: the one the side holds, where the popover offers it. A
- * variable that is not a spacing preset (a radius) marks none, so the first
- * preset keeps the group's Tab stop.
- */
-function offeredPreset(
-  stored: StyleValue | undefined,
-  presets: readonly SiteVariable[]
-): string | undefined {
-  const held = heldPreset(stored);
-  return held === NONE || presets.some(preset => presetKey(preset.identity) === held)
-    ? held
-    : undefined;
-}
 
 /**
  * What the number's commit comes to as the popover closes.
@@ -126,15 +69,6 @@ function commitTyped(
   const result = outcome.current;
   if (result === "refused") active.focus();
   return result;
-}
-
-/** The preset a side holds: its variable, "None" for a zero, else none. */
-function heldPreset(stored: StyleValue | undefined): string | undefined {
-  if (isTokenRef(stored)) return presetKey(stored.$token);
-  if (stored === undefined) return undefined;
-  return ZERO.test(storedText(stored)) && /\d/.test(storedText(stored))
-    ? NONE
-    : undefined;
 }
 
 /** What the popover is given. */
@@ -318,9 +252,7 @@ export function SpacingSidePopover(
           stored={stored}
           tokens={props.tokens}
           actionName={name}
-          describedBy={
-            props.refusal === null ? undefined : `${id}-refusal`
-          }
+          describedBy={props.refusal === null ? undefined : `${id}-refusal`}
           seed={seed}
           offerVariables={false}
           onCommit={value =>
@@ -359,32 +291,6 @@ export function SpacingSidePopover(
       />
     </PopoverContent>
   );
-}
-
-/** Each preset's name, then its value in a quieter tone; "None" first. */
-function presetLabels(
-  presets: readonly SiteVariable[]
-): Readonly<Record<string, React.ReactNode>> {
-  const labels: Record<string, React.ReactNode> = {
-    [NONE]: (
-      <>
-        None <span className="nx-spacing-popover__preset-value">0</span>
-      </>
-    ),
-  };
-  for (const preset of presets) {
-    labels[presetKey(preset.identity)] = (
-      <>
-        {/* Qualified where two presets share a name, as every variable
-            list here qualifies it. */}
-        {variableLabel(preset, presets)}{" "}
-        <span className="nx-spacing-popover__preset-value">
-          {variableValueText(preset)}
-        </span>
-      </>
-    );
-  }
-  return labels;
 }
 
 /**

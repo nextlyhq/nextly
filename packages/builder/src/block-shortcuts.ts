@@ -28,6 +28,7 @@ import { readStyleValue } from "./style-values";
 /** The core blocks these shortcuts belong to. */
 export const SECTION_BLOCK = "core/section";
 export const BUTTON_BLOCK = "core/button";
+export const SPACER_BLOCK = "core/spacer";
 export const ICON_BLOCK = "core/icon";
 
 /** Where a shortcut writes: the state and the device being edited. */
@@ -143,6 +144,20 @@ export function planHeight(
     return written(node, at, [["minHeight", FULL_SCREEN]]);
   const over = reaching("min-height") === undefined ? null : "auto";
   return written(node, at, [["minHeight", over]]);
+}
+
+// --- a Spacer's height
+
+/**
+ * A Spacer's height set to one of the site's spacing variables, at the edited
+ * state and device, so the space follows the site's scale as it changes.
+ */
+export function planSpacerHeight(
+  node: BlockNode,
+  identity: string,
+  at: ShortcutAt
+): BuilderOp | null {
+  return written(node, at, [["height", { $token: identity }]]);
 }
 
 // --- a Button's size
