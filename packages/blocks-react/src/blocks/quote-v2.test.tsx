@@ -94,6 +94,16 @@ describe("a Quote saved before its source was the shared link", () => {
     });
   });
 
+  it("keeps a source address bound to a field, as the link's binding", () => {
+    const binding = { source: "entry", field: "website" };
+    const { doc } = migrateDocument(
+      page([{ ...v1, bindings: { citeUrl: binding } }]),
+      migrationSourceFor(resolver)
+    );
+    expect(doc.nodes[0]?.bindings).toEqual({ href: binding });
+    expect(doc.nodes[0]?.props.href).toBe("https://example.com/osiris");
+  });
+
   it("keeps what it stored when it had no source address", () => {
     const { citeUrl: _none, ...bare } = v1.props;
     const { doc } = migrateDocument(

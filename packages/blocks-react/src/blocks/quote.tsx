@@ -141,15 +141,18 @@ function drawQuote(
 
 /**
  * Version 1 to 2: the source's loose address becomes the shared link's
- * address. A new tab and a relationship are left unset, as version 1 had
- * neither; every other value is kept as it is.
+ * address. The move is the step's rename (`QUOTE_RENAMES`), which carries a
+ * value bound to it too; a new tab and a relationship are left unset, as
+ * version 1 had neither. A blank address moved is no link, so it is dropped.
  */
 function fromVersion1(props: Record<string, unknown>): Record<string, unknown> {
-  const { citeUrl, ...rest } = props;
-  return typeof citeUrl === "string" && citeUrl.trim() !== ""
-    ? { ...rest, href: citeUrl }
-    : rest;
+  if (typeof props.href !== "string" || props.href.trim() !== "") return props;
+  const { href: _blank, ...rest } = props;
+  return rest;
 }
+
+/** The props version 1 to 2 renames, with any value bound to them. */
+const QUOTE_RENAMES = { 1: { citeUrl: "href" } } as const;
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The
@@ -267,6 +270,7 @@ export const quote: BlockDefinition<QuoteProps, PageContext> = defineBlock({
   name: QUOTE_BLOCK,
   version: 2,
   migrate: { 1: fromVersion1 },
+  renames: QUOTE_RENAMES,
   // What an author reads, in the Add panel and the block card: one plain line.
   // What the block does, for whoever maintains it: Quoted text with an optional
   // attribution, kept outside the quotation so the speaker is not quoted saying
