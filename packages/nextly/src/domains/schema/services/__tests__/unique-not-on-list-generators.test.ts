@@ -96,6 +96,39 @@ for (const dialect of DIALECTS) {
     });
   });
 
+  // An earlier release made a list marked unique unique, with `uq_<table>_<column>` on
+  // PostgreSQL and SQLite (MySQL refused the create). Turning the mark off must still drop that
+  // index: no list is unique now, but the one the earlier release made is still there.
+  describe(`turning Unique off on a list an earlier release made unique — ${dialect}`, () => {
+    const { unique: _marked, ...TAGS_UNMARKED } = TAGS;
+    const change = (options?: { indexNames?: ReadonlySet<string> }) =>
+      new DynamicCollectionSchemaService(
+        undefined,
+        dialect
+      ).generateAlterTableMigration(
+        "dc_posts",
+        [TAGS] as unknown as Fields,
+        [TAGS_UNMARKED] as unknown as Fields,
+        options as never
+      );
+
+    if (dialect === "mysql") {
+      it("drops nothing where none was made", () => {
+        expect(change()).not.toContain("uq_dc_posts_tags");
+      });
+
+      it("drops one the live table holds", () => {
+        expect(change({ indexNames: new Set(["uq_dc_posts_tags"]) })).toMatch(
+          /DROP INDEX `uq_dc_posts_tags` ON `dc_posts`/
+        );
+      });
+    } else {
+      it("drops its index", () => {
+        expect(change()).toMatch(/DROP INDEX IF EXISTS "uq_dc_posts_tags"/);
+      });
+    }
+  });
+
   describe(`a field group's create refuses a list marked unique — ${dialect}`, () => {
     const create = (
       fields: Record<string, unknown>[],
