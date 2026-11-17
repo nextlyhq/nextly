@@ -121,6 +121,9 @@ interface Plate {
   readonly rect: Rect;
 }
 
+/** What on a plate does something of its own when pressed. */
+const CONTROLS = "button, input, label, select, textarea, a";
+
 /** How long a note stays before the Image's choices come back. */
 const NOTE_MS = 6000;
 
@@ -577,9 +580,11 @@ function ImagePlate(props: ImagePlateProps): React.JSX.Element {
       aria-label={plate.reason === "missing" ? WORDS.missing : "Image"}
       style={{ left: x, top: y, width, height }}
       onClick={event => {
-        if (event.target === event.currentTarget) {
-          onSelect(selectionModeFor(event));
-        }
+        // Anywhere on the box selects the Image, its words and its icon
+        // included; its controls do their own thing.
+        if (isElement(event.target) && event.target.closest(CONTROLS) !== null)
+          return;
+        onSelect(selectionModeFor(event));
       }}
       onContextMenu={event => event.stopPropagation()}
       onDragOver={event => {

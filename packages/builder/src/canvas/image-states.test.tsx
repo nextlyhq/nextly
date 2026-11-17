@@ -549,6 +549,20 @@ describe("where a plate is drawn", () => {
 });
 
 describe("selecting an empty Image from its box", () => {
+  it("selects it from its words and icon too, and not from its buttons", () => {
+    const { select } = mount(page(imageNode("img")), EMPTY_BOX);
+    fireEvent.click(screen.getByText("Add an image"));
+    fireEvent.click(screen.getByText("or drop a file here"));
+    expect(select.mock.calls).toEqual([
+      ["img", "replace"],
+      ["img", "replace"],
+    ]);
+    select.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Link" }));
+    // The Link choice selects the Image itself, once, as its choice.
+    expect(select.mock.calls).toEqual([["img"]]);
+  });
+
   it("keeps the canvas's modifiers: Shift extends, Ctrl or Cmd toggles", () => {
     const { select } = mount(page(imageNode("img")), EMPTY_BOX);
     const plate = screen.getByRole("group", { name: "Image" });
