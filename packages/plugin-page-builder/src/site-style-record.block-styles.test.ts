@@ -82,23 +82,29 @@ describe("the stored ★ and hidden marks", () => {
   });
 });
 
-describe("marks on an override that leaves the built-in's name fields out", () => {
-  it("are judged as it merges: a ★ on the block's own style is refused", () => {
-    // The button's own style, its own-style mark left out: the code's comes
-    // back at the merge, so a ★ here would star the block's own style.
+describe("a ★ on an override of a built-in", () => {
+  const STAR_REFUSED =
+    "classes[0] has a default ★ mark that cannot be used: it is true on a block style a block can pick, and absent otherwise.";
+
+  it("is refused, by its mark, on the block's own style, its name left to the code", () => {
+    // Everything that says what it is stated as the code states it, its name
+    // left out: the rename check passes, and only the ★ is wrong.
     expect(
       issuesOf([
         {
           id: primary.id,
           slug: primary.slug,
           blockType: primary.blockType,
+          isDefault: true,
           orderIndex: 0,
           styles: primary.styles,
           starred: true,
         },
       ])
-    ).not.toEqual([]);
-    // The control: the same ★ on a style a block can pick is accepted.
+    ).toEqual([STAR_REFUSED]);
+  });
+
+  it("is accepted on a style a block can pick, its name left to the code", () => {
     expect(
       issuesOf([
         {
@@ -164,9 +170,9 @@ describe("a built-in block style's name", () => {
     const styles = { base: { base: { color: "#123456" } } };
     const base = { id: square.id, slug: square.slug, orderIndex: 2, styles };
     expect(issuesOf([base])).not.toEqual([]);
-    expect(
-      issuesOf([{ ...base, blockType: square.blockType }])
-    ).not.toEqual([]);
+    expect(issuesOf([{ ...base, blockType: square.blockType }])).not.toEqual(
+      []
+    );
     expect(
       issuesOf([{ ...base, blockType: square.blockType, isDefault: false }])
     ).not.toEqual([]);
