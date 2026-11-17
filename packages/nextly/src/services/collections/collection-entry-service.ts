@@ -809,13 +809,11 @@ export class CollectionEntryService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ) {
-    // A create writes the shared part as well as its language's.
+    // Its hooks are told it moves the shared part by the mutation service,
+    // which every create reaches.
     const result = await withRuleLanguage(
       writeLanguagesFor(this.localization, params.locale),
-      () =>
-        withWriteParts({ shared: true }, () =>
-          this.mutationService.createEntry(params, body, depth)
-        )
+      () => this.mutationService.createEntry(params, body, depth)
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
@@ -1274,13 +1272,11 @@ export class CollectionEntryService extends BaseService {
     /** API-key scope; judges the delete gate on the key's own grant. */
     authenticatedScope?: AuthenticatedScope;
   }) {
-    // A delete removes the shared part with every language's.
+    // Its hooks are told it moves the shared part by the mutation service,
+    // which every delete reaches.
     const result = await withRuleLanguage(
       everyLanguageOf(this.localization),
-      () =>
-        withWriteParts({ shared: true }, () =>
-          this.mutationService.deleteEntry(params)
-        )
+      () => this.mutationService.deleteEntry(params)
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;

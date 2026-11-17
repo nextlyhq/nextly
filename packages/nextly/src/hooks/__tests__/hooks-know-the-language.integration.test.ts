@@ -208,6 +208,35 @@ const WRITE_HOOKS = [
   "posts:afterChange",
 ];
 
+/** The collection entry service's writes in a caller's transaction, and its batch update. */
+interface EntryWrites {
+  createEntryInTransaction(
+    tx: unknown,
+    params: Record<string, unknown>,
+    body: Record<string, unknown>
+  ): Promise<{ success: boolean; data?: unknown }>;
+  updateEntryInTransaction(
+    tx: unknown,
+    params: Record<string, unknown>,
+    body: Record<string, unknown>
+  ): Promise<{ success: boolean }>;
+  deleteEntryInTransaction(
+    tx: unknown,
+    params: Record<string, unknown>
+  ): Promise<{ success: boolean }>;
+  updateEntries(
+    params: Record<string, unknown>,
+    entries: { id: string; data: Record<string, unknown> }[]
+  ): Promise<{ successful: number }>;
+}
+
+const entryService = (t: TestNextly): EntryWrites =>
+  (
+    t.getService("collectionsHandler") as unknown as {
+      getEntryService(): EntryWrites;
+    }
+  ).getEntryService();
+
 describe.each(getConfiguredTestDialects())(
   "hooks know the language (integration, %s)",
   dialect => {
@@ -611,6 +640,136 @@ describe.each(getConfiguredTestDialects())(
           locales: ["es"],
           shared: false,
         });
+      }
+    }, 90_000);
+
+    // An update inside an enclosing transaction holds its after-hooks until
+    // that transaction commits, after the update has returned; they are told
+    // what the same update outside one tells them, since the adapter runs a
+    // held effect in the context that registered it. SQLite only: on
+    // PostgreSQL and MySQL the Direct API's update reads the entry and its
+    // translations on the pool inside a caller's transaction, which the
+    // suites' escape guard refuses whatever a hook is told.
+    it.skipIf(dialect !== "sqlite")(
+      "tells an update's after-hooks its language when they wait for an enclosing transaction",
+      async () => {
+        const t = await boot(dialect);
+        const id = await publishedInBoth(t);
+        await t.adapter.transaction(async () => {
+          await t.nextly.update({
+            collection: POSTS,
+            id,
+            locale: "es",
+            data: { title: "Puerto 2", _overwrite: true },
+          });
+          // Held: the update has returned and its after-hooks have not run.
+          expect(toldBy("posts:afterChange")).toHaveLength(0);
+        });
+        const after = toldBy("posts:afterChange");
+        expect(after).toHaveLength(1);
+        expect(after[0]).toMatchObject({
+          locale: "es",
+          locales: ["es"],
+          shared: false,
+        });
+      },
+      90_000
+    );
+
+    it("tells an update's hooks in a caller's transaction whether it moves the shared part", async () => {
+      const t = await boot(dialect);
+      const id = await publishedInBoth(t);
+      const entries = entryService(t);
+      for (const [data, shared] of [
+        [{ title: "Harbour 2" }, false],
+        [{ code: "b" }, true],
+      ] as const) {
+        told.length = 0;
+        const updated = await t.adapter.transaction(tx =>
+          entries.updateEntryInTransaction(
+            tx,
+            { collectionName: POSTS, entryId: id, overrideAccess: true },
+            { ...data, _overwrite: true }
+          )
+        );
+        expect(updated.success, JSON.stringify(updated)).toBe(true);
+        const writes = toldBy("posts:").filter(e =>
+          WRITE_HOOKS.includes(e.hook)
+        );
+        expect(writes.map(e => e.hook)).toEqual(WRITE_HOOKS);
+        for (const entry of writes) {
+          expect(entry, `${entry.hook} ${JSON.stringify(data)}`).toMatchObject({
+            locale: "en",
+            locales: ["en"],
+            shared,
+          });
+        }
+      }
+    }, 90_000);
+
+    it("tells a create's and a delete's hooks in a caller's transaction they move the shared part", async () => {
+      const t = await boot(dialect);
+      const entries = entryService(t);
+      const created = await t.adapter.transaction(tx =>
+        entries.createEntryInTransaction(
+          tx,
+          { collectionName: POSTS, overrideAccess: true },
+          { title: "Harbour", code: "a" }
+        )
+      );
+      expect(created.success, JSON.stringify(created)).toBe(true);
+      const id = String((created.data as { id: unknown }).id);
+      const deleted = await t.adapter.transaction(tx =>
+        entries.deleteEntryInTransaction(tx, {
+          collectionName: POSTS,
+          entryId: id,
+          overrideAccess: true,
+        })
+      );
+      expect(deleted.success, JSON.stringify(deleted)).toBe(true);
+      const writes = toldBy("posts:").filter(
+        e => WRITE_HOOKS.includes(e.hook) || e.hook.includes("Delete")
+      );
+      expect(writes.map(e => e.hook)).toEqual(
+        expect.arrayContaining([
+          ...WRITE_HOOKS,
+          "posts:beforeDelete",
+          "posts:afterDelete",
+        ])
+      );
+      for (const entry of writes) {
+        expect(entry, entry.hook).toMatchObject({ shared: true });
+      }
+    }, 90_000);
+
+    // A batch update tells each entry's hooks what that entry's own update
+    // moves: the first sets a translated field, the second a shared one.
+    it("tells a batch update's hooks, entry by entry, whether it moves the shared part", async () => {
+      const t = await boot(dialect);
+      const first = await publishedInBoth(t);
+      const second = String(
+        (
+          await t.nextly.create({
+            collection: POSTS,
+            locale: "en",
+            data: { title: "Lighthouse", code: "l" },
+          })
+        ).item.id
+      );
+      told.length = 0;
+      const result = await entryService(t).updateEntries(
+        { collectionName: POSTS, overrideAccess: true },
+        [
+          { id: first, data: { title: "Harbour 2", _overwrite: true } },
+          { id: second, data: { code: "m", _overwrite: true } },
+        ]
+      );
+      expect(result.successful, JSON.stringify(result)).toBe(2);
+      for (const hook of WRITE_HOOKS) {
+        expect(
+          toldBy(hook).map(e => e.shared),
+          hook
+        ).toEqual([false, true]);
       }
     }, 90_000);
   }

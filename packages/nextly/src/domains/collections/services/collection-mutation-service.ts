@@ -88,6 +88,7 @@ import { getEventBus } from "../../../events/event-bus";
 // same way.
 import {
   eventLanguage,
+  WHOLE_DOCUMENT,
   withWriteParts,
   writeMovesSharedPart,
   type HookLanguage,
@@ -4935,11 +4936,15 @@ export class CollectionMutationService extends BaseService {
    * check reports, so the readiness answer must not fail over it.
    */
   private async releaseCollection(
-    collectionName: string
+    collectionName: string,
+    // A caller's transaction to read on, so a write inside one does not wait
+    // for a pooled connection that transaction holds.
+    executor?: Parameters<DynamicCollectionService["getCollection"]>[1]
   ): Promise<object | null> {
     try {
       return (await this.collectionService.getCollection(
-        collectionName
+        collectionName,
+        executor
       )) as object;
     } catch (error) {
       if (NextlyError.isCode(error, "NOT_FOUND")) return null;
@@ -8710,6 +8715,19 @@ export class CollectionMutationService extends BaseService {
    * @returns Created entry or error
    */
   async createEntry(
+    params: Parameters<CollectionMutationService["createEntryInParts"]>[0],
+    body: Record<string, unknown>,
+    depth?: number
+  ): Promise<CollectionServiceResult> {
+    // A create moves the shared part (`WHOLE_DOCUMENT`), as its hooks are
+    // told, whether the entry service or a batch sent it.
+    return withWriteParts(WHOLE_DOCUMENT, () =>
+      this.createEntryInParts(params, body, depth)
+    );
+  }
+
+  /** {@link createEntry}, inside the scope that says what it moves. */
+  private async createEntryInParts(
     params: {
       collectionName: string;
       user?: UserContext;
@@ -15940,14 +15958,39 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ): Promise<CollectionServiceResult> {
+    return this.inUpdateParts(
+      {
+        collectionName: rawParams.collectionName,
+        body,
+        locale: rawParams.locale,
+      },
+      () => this.updateEntryInParts(rawParams, body, depth)
+    );
+  }
+
+  /**
+   * Runs an update of `body` in `locale` with its hooks told whether it moves
+   * the collection's shared part (`writePartsOf`). Every update entry point
+   * goes through it, its own transaction's, a caller's and a batch's, so a
+   * hook is told the same of one update whichever way it was sent. `executor`
+   * is the caller's transaction, where the update runs in one.
+   */
+  private async inUpdateParts<T>(
+    write: {
+      collectionName: string;
+      body: Record<string, unknown>;
+      locale: string | undefined;
+      executor?: Parameters<DynamicCollectionService["getCollection"]>[1];
+    },
+    update: () => Promise<T>
+  ): Promise<T> {
     const parts = await this.writePartsOf(
-      rawParams.collectionName,
-      body,
-      rawParams.locale
+      write.collectionName,
+      write.body,
+      write.locale,
+      write.executor
     );
-    return withWriteParts(parts, () =>
-      this.updateEntryInParts(rawParams, body, depth)
-    );
+    return withWriteParts(parts, update);
   }
 
   /**
@@ -15983,9 +16026,10 @@ export class CollectionMutationService extends BaseService {
   private async writePartsOf(
     collectionName: string,
     body: Record<string, unknown>,
-    locale: string | undefined
+    locale: string | undefined,
+    executor?: Parameters<DynamicCollectionService["getCollection"]>[1]
   ): Promise<WriteParts> {
-    const collection = await this.releaseCollection(collectionName);
+    const collection = await this.releaseCollection(collectionName, executor);
     if (collection === null) return { shared: true };
     return {
       shared: writeMovesSharedPart(
@@ -20586,7 +20630,18 @@ export class CollectionMutationService extends BaseService {
     return gate.refusal === undefined;
   }
 
-  async deleteEntry(params: {
+  async deleteEntry(
+    params: Parameters<CollectionMutationService["deleteEntryInParts"]>[0]
+  ): Promise<CollectionServiceResult> {
+    // A delete moves the shared part (`WHOLE_DOCUMENT`), as its hooks are
+    // told, whether the entry service or a batch sent it.
+    return withWriteParts(WHOLE_DOCUMENT, () =>
+      this.deleteEntryInParts(params)
+    );
+  }
+
+  /** {@link deleteEntry}, inside the scope that says what it moves. */
+  private async deleteEntryInParts(params: {
     collectionName: string;
     entryId: string;
     user?: UserContext;
@@ -21149,13 +21204,16 @@ export class CollectionMutationService extends BaseService {
     // after — a key that kept its write grant but surrendered a field grant
     // still wrote that field. Pinning covers every gate below, including the
     // ones added next.
+    // A create moves the shared part (`WHOLE_DOCUMENT`), as its hooks are told.
     return runWithCallerScope(params.authenticatedScope, () =>
-      this.createEntryWrite(tx, params, body, {
-        enforceCollectionAccess: true,
-        runHooks: true,
-        shapeCallerObject: true,
-        failureMessage: "Failed to create entry in transaction",
-      })
+      withWriteParts(WHOLE_DOCUMENT, () =>
+        this.createEntryWrite(tx, params, body, {
+          enforceCollectionAccess: true,
+          runHooks: true,
+          shapeCallerObject: true,
+          failureMessage: "Failed to create entry in transaction",
+        })
+      )
     );
   }
 
@@ -21949,13 +22007,24 @@ export class CollectionMutationService extends BaseService {
     // after — a key that kept its write grant but surrendered a field grant
     // still wrote that field. Pinning covers every gate below, including the
     // ones added next.
+    // Its hooks are told whether it moves the shared part, read on the
+    // caller's transaction; it writes the default language.
     return runWithCallerScope(params.authenticatedScope, () =>
-      this.updateEntryWrite(tx, params, params.entryId, body, {
-        rowGate: "access-service",
-        runHooks: true,
-        identifyMissingEntry: false,
-        failureMessage: "Failed to update entry in transaction",
-      })
+      this.inUpdateParts(
+        {
+          collectionName: params.collectionName,
+          body,
+          locale: undefined,
+          executor: tx.getDrizzle(),
+        },
+        () =>
+          this.updateEntryWrite(tx, params, params.entryId, body, {
+            rowGate: "access-service",
+            runHooks: true,
+            identifyMissingEntry: false,
+            failureMessage: "Failed to update entry in transaction",
+          })
+      )
     );
   }
 
@@ -23656,13 +23725,16 @@ export class CollectionMutationService extends BaseService {
     // after — a key that kept its write grant but surrendered a field grant
     // still wrote that field. Pinning covers every gate below, including the
     // ones added next.
+    // A delete moves the shared part (`WHOLE_DOCUMENT`), as its hooks are told.
     return runWithCallerScope(params.authenticatedScope, () =>
-      this.deleteEntryWrite(tx, params, params.entryId, {
-        rowGate: "access-service",
-        runHooks: true,
-        identifyMissingEntry: false,
-        failureMessage: "Failed to delete entry in transaction",
-      })
+      withWriteParts(WHOLE_DOCUMENT, () =>
+        this.deleteEntryWrite(tx, params, params.entryId, {
+          rowGate: "access-service",
+          runHooks: true,
+          identifyMissingEntry: false,
+          failureMessage: "Failed to delete entry in transaction",
+        })
+      )
     );
   }
 
@@ -24145,13 +24217,16 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     skipHooks: boolean
   ): Promise<CollectionServiceResult<unknown>> {
+    // A create moves the shared part (`WHOLE_DOCUMENT`), as its hooks are told.
     return runWithCallerScope(params.authenticatedScope, () =>
-      this.createEntryWrite(tx, params, body, {
-        enforceCollectionAccess: false,
-        runHooks: !skipHooks,
-        shapeCallerObject: false,
-        failureMessage: "Failed to create entry",
-      })
+      withWriteParts(WHOLE_DOCUMENT, () =>
+        this.createEntryWrite(tx, params, body, {
+          enforceCollectionAccess: false,
+          runHooks: !skipHooks,
+          shapeCallerObject: false,
+          failureMessage: "Failed to create entry",
+        })
+      )
     );
   }
 
@@ -24179,13 +24254,24 @@ export class CollectionMutationService extends BaseService {
      */
     rowGate: UpdateEntryWriteOptions["rowGate"] = "batch-hoisted"
   ): Promise<CollectionServiceResult<unknown>> {
+    // Each entry's hooks are told what its own body moves, as a single
+    // update's are; a batch writes the default language.
     return runWithCallerScope(params.authenticatedScope, () =>
-      this.updateEntryWrite(tx, params, entryId, body, {
-        rowGate,
-        runHooks: !skipHooks,
-        identifyMissingEntry: true,
-        failureMessage: "Failed to update entry",
-      })
+      this.inUpdateParts(
+        {
+          collectionName: params.collectionName,
+          body,
+          locale: undefined,
+          executor: tx.getDrizzle(),
+        },
+        () =>
+          this.updateEntryWrite(tx, params, entryId, body, {
+            rowGate,
+            runHooks: !skipHooks,
+            identifyMissingEntry: true,
+            failureMessage: "Failed to update entry",
+          })
+      )
     );
   }
 
@@ -24281,13 +24367,16 @@ export class CollectionMutationService extends BaseService {
       | DeleteRowFilter
       | DeleteRowLanguages = "batch-hoisted"
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
+    // A delete moves the shared part (`WHOLE_DOCUMENT`), as its hooks are told.
     return runWithCallerScope(params.authenticatedScope, () =>
-      this.deleteEntryWrite(tx, params, entryId, {
-        rowGate,
-        runHooks: !skipHooks,
-        identifyMissingEntry: true,
-        failureMessage: "Failed to delete entry",
-      })
+      withWriteParts(WHOLE_DOCUMENT, () =>
+        this.deleteEntryWrite(tx, params, entryId, {
+          rowGate,
+          runHooks: !skipHooks,
+          identifyMissingEntry: true,
+          failureMessage: "Failed to delete entry",
+        })
+      )
     );
   }
 }

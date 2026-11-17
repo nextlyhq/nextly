@@ -34,6 +34,12 @@ export function withWriteParts<T>(parts: WriteParts, operation: () => T): T {
   return writeParts.run(parts, operation);
 }
 
+/**
+ * What a create or a delete moves: the shared part, which a create writes
+ * with its language's and a delete removes with every language's.
+ */
+export const WHOLE_DOCUMENT: WriteParts = Object.freeze({ shared: true });
+
 /** What a write's entity says about which of its fields are shared. */
 export interface SharedPartOf {
   /** The entity's fields, classified as the write classifies them. */
