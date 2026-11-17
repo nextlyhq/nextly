@@ -418,3 +418,30 @@ export function rowWaysIn(
     ...others,
   ];
 }
+
+/**
+ * The create dialog (`createDialog`) "+ New" opens on `document`'s collection:
+ * the one the view its entries open in declares, by the rule above, so the
+ * dialog belongs to the view where its new entry will open. None where the
+ * entries open as the form, for a reader who may not update them (a view
+ * edits them) or on a Single.
+ */
+export function createDialogOf(
+  document: OpenedDocument,
+  collection: OpenableCollection | undefined,
+  request: OpenRequest,
+  views: readonly RegisteredDocumentView[]
+): string | undefined {
+  if (
+    document.kind !== "collection" ||
+    collection === undefined ||
+    !request.canUpdate ||
+    otherLanguage(request)
+  ) {
+    return undefined;
+  }
+  const opened = ruleDestination(document.slug, collection, views).view;
+  return opened === undefined
+    ? undefined
+    : viewAt(views, document.slug, opened)?.createDialog;
+}
