@@ -447,6 +447,30 @@ describe("the keys on a block style's row", () => {
     );
   });
 
+  it("puts a rename down, sending nothing, once the section may no longer write", async () => {
+    const actions = actionsOf();
+    const props = {
+      groups: blockLookGroups(LIBRARY, BUILT_IN),
+      library: LIBRARY,
+      tokens: undefined,
+      mode: "light" as const,
+      editing: null,
+      actions,
+      reachOf: () => undefined,
+      blocksOf: () => undefined,
+      chip: () => null,
+    };
+    const view = render(<BlockLooksGroup {...props} />);
+    const section = screen.getByRole("region", { name: "Block styles" });
+    fireEvent.keyDown(rowOf(section, "Ghost"), { key: "F2" });
+    expect(
+      within(section).getByRole("textbox", { name: "Rename Ghost" })
+    ).toBeTruthy();
+    view.rerender(<BlockLooksGroup {...props} readOnly />);
+    expect(within(section).queryByRole("textbox")).toBeNull();
+    expect(actions.rename).not.toHaveBeenCalled();
+  });
+
   it("never renames a built-in style with F2", () => {
     const { section } = draw(LIBRARY, { actions: actionsOf() });
     fireEvent.keyDown(rowOf(section, "Text"), { key: "F2" });

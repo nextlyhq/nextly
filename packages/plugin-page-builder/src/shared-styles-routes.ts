@@ -805,39 +805,69 @@ function whereUsedWords(titles: readonly string[], documents: number): string {
   return `${shown.slice(0, -1).join(", ")} and ${shown.at(-1) as string}`;
 }
 
-/** One in-use reason with the documents it counts named, where any can be. */
+/**
+ * One in-use reason said again from one listing of where the style is used,
+ * so its count and its names describe the same read: the documents counted,
+ * then the first the caller may open by title. Counted only where it may
+ * open none, and kept as it was where the listing now finds no use.
+ */
 async function namedUseReason(
   reason: UsageReason,
+  names: ReadonlyMap<string, string>,
   usage: SharedStyleUsageSource,
   health: UsageIndexHealth,
   titles: NonNullable<StillUsedCheck["titles"]>
 ): Promise<UsageReason> {
-  if (!reason.used || reason.id === undefined) return reason;
+  const name = reason.id === undefined ? undefined : names.get(reason.id);
+  if (!reason.used || reason.id === undefined || name === undefined) {
+    return reason;
+  }
   const found = await listingOf(usage, reason.id, health);
+  const documents = documentCountOf(found);
+  if (documents === 0) return reason;
+  const counted = `${name} is used on ${documents} ${documents === 1 ? "document" : "documents"}`;
   const named = await titles(found);
-  // The reason's words end on its count's full stop; the names follow it.
-  if (named.length === 0 || !reason.message.endsWith(".")) return reason;
-  const where = whereUsedWords(named, documentCountOf(found));
-  return { ...reason, message: `${reason.message.slice(0, -1)}: ${where}.` };
+  return {
+    ...reason,
+    message:
+      named.length === 0
+        ? `${counted}.`
+        : `${counted}: ${whereUsedWords(named, documents)}.`,
+  };
+}
+
+/** The index's reasons, each use said again with where it is. */
+async function namedReasons(
+  reasons: readonly UsageReason[],
+  names: ReadonlyMap<string, string>,
+  usage: SharedStyleUsageSource,
+  titles: NonNullable<StillUsedCheck["titles"]>
+): Promise<UsageReason[]> {
+  const health = await usage.health();
+  return Promise.all(
+    reasons.map(reason => namedUseReason(reason, names, usage, health, titles))
+  );
 }
 
 /**
  * The index's reasons against a removal, each use naming where it is, within
- * {@link REMOVAL_COUNT_MS}: past it they are counted only, so the refusal
- * never waits on its own wording.
+ * {@link REMOVAL_COUNT_MS}, the index's health read included: past it, or
+ * where a read fails, they are counted only, as the index first said, so the
+ * refusal never waits on its own wording or is lost to it.
  */
 async function withWhereUsed(
   reasons: readonly UsageReason[],
+  removable: readonly { id: string; name: string }[],
   usage: SharedStyleUsageSource,
   titles: StillUsedCheck["titles"]
 ): Promise<UsageReason[]> {
   if (titles === undefined || !reasons.some(reason => reason.used)) {
     return [...reasons];
   }
-  const health = await usage.health();
+  const names = new Map(removable.map(entry => [entry.id, entry.name]));
   const named = await within(
-    Promise.all(
-      reasons.map(reason => namedUseReason(reason, usage, health, titles))
+    namedReasons(reasons, names, usage, titles).catch(
+      (): typeof TIMED_OUT => TIMED_OUT
     ),
     REMOVAL_COUNT_MS
   );
@@ -889,6 +919,7 @@ export async function removeSharedStyles(
       reasons.push(
         ...(await withWhereUsed(
           await usageRefusals(removable, usage, "shared style"),
+          removable,
           usage,
           stillUsed.titles
         ))

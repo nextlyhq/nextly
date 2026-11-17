@@ -116,7 +116,12 @@ export function blockLookGroups(
       }),
     ])
   );
-  const entryOf = new Map(library.map(entry => [entry?.id, entry]));
+  // The entries the rows are read from, as the compiler keeps them: the
+  // first usable one of an id, so a row's type and marks are its own.
+  const entryOf = new Map<string, NamedClass>();
+  for (const entry of usableSiteClasses(library)) {
+    if (!entryOf.has(entry.id)) entryOf.set(entry.id, entry);
+  }
   const worn = new Map<string, BlockLookRow[]>();
   for (const row of sharedStyleRows(library, suppliedIds)) {
     const entry = entryOf.get(row.id);

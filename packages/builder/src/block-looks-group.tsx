@@ -402,12 +402,15 @@ function StyleRow({
     setRefusal(null);
     setRenaming(true);
   };
-  if (renaming) {
+  // Drawn only while the section may still write: a role that loses the
+  // right with the field open is shown the row again.
+  if (renaming && writableOf(panel)) {
     return (
       <BlockStyleNameField
         label={`Rename ${row.name}`}
         initial={row.name}
         onCommit={async name => {
+          if (!writableOf(panel)) return undefined;
           const refused = await panel.actions?.rename(row.id, name);
           if (refused === undefined) {
             setRenaming(false);

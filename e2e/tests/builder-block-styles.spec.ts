@@ -688,18 +688,26 @@ test("a role that may read Design but not change it sees block styles with no ac
     await view.keyboard.press("F2");
     await expect(blockStyles(view).getByRole("textbox")).toHaveCount(0);
 
-    // The writes themselves are refused: a rename, ★ and a removal.
+    // The writes themselves are refused for want of the right alone: each is
+    // a whole write the site style takes from a Design manager (the control,
+    // put back after), and the reader's same write is refused as forbidden.
+    const writes = [
+      { classes: [{ ...ghost, label: "Mine" }], _overwrite: true },
+      { classes: [{ ...ghost, starred: true }], _overwrite: true },
+    ];
+    for (const data of writes) {
+      const allowed = await page.request.patch(SITE_STYLE, { data });
+      expect(allowed.ok(), await allowed.text()).toBe(true);
+      await storeClasses(page.request, [ghost]);
+    }
     const headers = await writeHeaders(reader.context.request);
-    const renamed = await reader.context.request.patch(SITE_STYLE, {
-      headers,
-      data: { classes: [{ ...ghost, label: "Mine" }] },
-    });
-    expect(renamed.ok()).toBe(false);
-    const starred = await reader.context.request.patch(SITE_STYLE, {
-      headers,
-      data: { classes: [{ ...ghost, starred: true }] },
-    });
-    expect(starred.ok()).toBe(false);
+    for (const data of writes) {
+      const refused = await reader.context.request.patch(SITE_STYLE, {
+        headers,
+        data,
+      });
+      expect(refused.status(), await refused.text()).toBe(403);
+    }
     const removed = await reader.context.request.post(
       `${PLUGIN}/shared-styles/remove`,
       { headers, data: { ids: [ghost.id] } }

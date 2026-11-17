@@ -73,6 +73,27 @@ describe("a new block style", () => {
     });
   });
 
+  it("is made from the own style the compiler reads, where a library holds two", () => {
+    // Later in the array, first in the library's order: the one the page uses.
+    const red: NamedClass = {
+      ...primary,
+      id: "own-red",
+      slug: "button-red",
+      orderIndex: 9,
+      styles: values({ color: "red" }),
+    };
+    const purple: NamedClass = { ...primary, orderIndex: 0 };
+    const plan = newBlockStylePlan(
+      [red, purple, outline],
+      "core/button",
+      "Ghost",
+      "Button",
+      mint
+    );
+    if (!plan.ok) throw new Error(plan.reason);
+    expect(plan.classes.at(-1)?.styles).toEqual(values({ color: "purple" }));
+  });
+
   it("is made from the ★ style's values once one carries it", () => {
     const starred = withDefaultBlockStyle(library, "core/button", outline.id);
     const plan = newBlockStylePlan(
@@ -247,6 +268,19 @@ describe("a renamed block style", () => {
     expect(
       renameBlockStylePlan([outline, ghost], ghost.id, "", "Button")
     ).toEqual({ ok: false, reason: "A block style needs a name." });
+  });
+
+  it("is refused for a locked style, which may still be duplicated", () => {
+    const locked: NamedClass = { ...ghost, locked: true };
+    expect(
+      renameBlockStylePlan([outline, locked], ghost.id, "Soft", "Button")
+    ).toEqual({
+      ok: false,
+      reason: "Ghost is locked, so it can't be renamed.",
+    });
+    expect(
+      duplicateBlockStylePlan([outline, locked], ghost.id, "Button", mint).ok
+    ).toBe(true);
   });
 
   it("is refused for a style no longer on the site", () => {

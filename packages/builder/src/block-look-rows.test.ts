@@ -189,6 +189,29 @@ describe("the Design panel's block looks", () => {
     ]);
   });
 
+  it("reads a row's type and marks from the entry the compiler keeps for its id", () => {
+    // The first usable entry of the id is kept; a later one sharing it,
+    // another type's and hidden, says nothing of the row.
+    const twin: NamedClass = {
+      ...square,
+      id: outline.id,
+      slug: "image-twin",
+      isDefault: undefined,
+      orderIndex: 5,
+      hidden: true,
+    };
+    const rows = blockLookGroups(
+      [primary, { ...outline, starred: true }, twin],
+      new Set()
+    ).flatMap(group =>
+      group.rows.map(row => [row.blockType, row.id, row.starred, row.hidden])
+    );
+    expect(rows).toEqual([
+      ["core/button", primary.id, false, false],
+      ["core/button", outline.id, true, false],
+    ]);
+  });
+
   it("reads a library with no looks as no groups", () => {
     expect(blockLookGroups([card], new Set())).toEqual([]);
   });

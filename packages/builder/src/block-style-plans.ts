@@ -15,6 +15,7 @@
 import {
   isDefaultLook,
   isLook,
+  ownLooksRead,
   MAX_NAMED_CLASS_NAME_LENGTH,
   MAX_TOKEN_LABEL_LENGTH,
   newId,
@@ -146,14 +147,15 @@ function wornStyleOf(
   return source === undefined || isDefaultLook(source) ? undefined : source;
 }
 
-/** A block's own style, which stores the site's edits to its base. */
+/**
+ * A block's own style, which stores the site's edits to its base: the one
+ * the compiler reads for the type, where a library holds more than one.
+ */
 function ownStyleOf(
   library: readonly NamedClass[],
   blockType: string
 ): NamedClass | undefined {
-  return library.find(
-    entry => isDefaultLook(entry) && entry.blockType === blockType
-  );
+  return ownLooksRead(library).find(entry => entry.blockType === blockType);
 }
 
 /**
@@ -282,6 +284,13 @@ export function renameBlockStylePlan(
 ): BlockStylePlan {
   const source = wornStyleOf(library, id);
   if (source === undefined) return { ok: false, reason: BLOCK_STYLE_GONE };
+  // A lock holds a style's name as well as its values.
+  if (source.locked === true) {
+    return {
+      ok: false,
+      reason: `${sharedStyleName(source)} is locked, so it can't be renamed.`,
+    };
+  }
   const blockType = source.blockType as string;
   const label = name.trim();
   const refused =
