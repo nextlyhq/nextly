@@ -110,9 +110,9 @@ function StyleFieldLabel({
       {...(focusOnly && !readOnly
         ? {
             onClick: (event: React.MouseEvent<HTMLLabelElement>) =>
-              event.currentTarget.ownerDocument
-                .getElementById(htmlFor)
-                ?.focus(),
+              tabStopOf(
+                event.currentTarget.ownerDocument.getElementById(htmlFor)
+              )?.focus(),
           }
         : {})}
     >
@@ -125,6 +125,23 @@ function StyleFieldLabel({
     </Label>
   );
 }
+
+/**
+ * Where a label that only moves focus sends it: the control itself when it
+ * takes focus, else the tab stop inside it. A group of buttons is named by
+ * its container, which takes no focus, so focusing the container would do
+ * nothing; its tab stop is the button in force, or the first.
+ */
+function tabStopOf(control: HTMLElement | null): HTMLElement | null {
+  if (control === null) return null;
+  if (control.tabIndex >= 0 && control.matches(FOCUSABLE)) return control;
+  return control.querySelector<HTMLElement>(
+    '[tabindex="0"], button:not([tabindex="-1"]), input, select, textarea'
+  );
+}
+
+/** What takes focus by itself, as a label's target. */
+const FOCUSABLE = "button, input, select, textarea, [tabindex]";
 
 /**
  * What reaches a control from another tier, shown in it while nothing is set

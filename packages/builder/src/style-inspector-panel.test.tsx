@@ -2202,6 +2202,25 @@ describe("the background size choices", () => {
     });
   });
 
+  it("moves focus into a group of buttons from its label", () => {
+    // The group is named by a container that takes no focus, so the label
+    // hands focus to the group's tab stop: the choice in force, or the first.
+    mount({ background: { image: true } }, withImage);
+    const row = fieldsOf("background");
+    const labelOf = (words: string) =>
+      row
+        .getByText(words, { selector: ".nx-style-inspector__field-label-text" })
+        .closest("label") as HTMLElement;
+    fireEvent.click(labelOf("Size"));
+    expect(document.activeElement).toBe(
+      row.getByRole("radio", { name: "Cover" })
+    );
+    fireEvent.click(labelOf("Position"));
+    expect(document.activeElement).toBe(
+      row.getByRole("radio", { name: "Top left" })
+    );
+  });
+
   it("sends Cover's size and repeat to a shared style as ONE change", () => {
     register({ background: { image: true } });
     const editor = editorFor(documentOf());
