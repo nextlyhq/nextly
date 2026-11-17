@@ -49,6 +49,7 @@ import type {
   SanitizedApiKeysConfig,
   SecurityConfig,
 } from "../collections/config/define-config";
+import { assertCollectionOpensIn } from "../collections/config/opens-in";
 import type { FieldConfig } from "../collections/fields/types";
 import { loadDialectTables } from "../database/dialect-tables";
 import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
@@ -1764,6 +1765,11 @@ function validateBootContributions(
   // plugin's types reach it without passing through `defineCollection` or
   // `defineSingle`, and a plugin must not take a page the site declares.
   assertConfiguredPublicAddresses(transformedConfig);
+
+  // Fail fast on a collection that opens its entries in a view it does not
+  // have: every link to them would lead nowhere. Asked of the merged
+  // configuration against every plugin's views, disabled ones included.
+  assertCollectionOpensIn(transformedConfig.collections, transformedPlugins);
 
   // Fail fast on role-bundle collisions. Validation only here; roles are
   // re-derived + seeded (resolving permission slugs→ids) in runPostInitTasks.

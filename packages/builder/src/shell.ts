@@ -141,6 +141,7 @@ export type {
   CanvasFrameFallback,
   CanvasFrameProps,
   CanvasFrameSource,
+  SiteChromeDrawn,
   SiteFrameSource,
 } from "./canvas/canvas-frame";
 export {

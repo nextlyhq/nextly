@@ -331,16 +331,6 @@
   background: var(--nx-foreground);
 }
 
-/* Auto's track that wraps: dashed, where the next column would go. */
-.nx-columns-layout__glyph i.nx-columns-layout__wraps,
-.nx-columns-layout__tile[aria-checked="true"]
-  .nx-columns-layout__glyph
-  i.nx-columns-layout__wraps {
-  flex-grow: 1;
-  border-style: dashed;
-  background: transparent;
-}
-
 .nx-segment {
   display: inline-flex;
   border: 1px solid var(--nx-builder-border);

@@ -128,6 +128,39 @@ function register(): void {
         props: { link: { label: "Link", role: "content", type: "url" } },
         render: () => null,
       },
+      {
+        // As the core Card declares its link: a hint, the entry, the new tab
+        // in Content, and the link relationship in Advanced.
+        name: "acme/card",
+        version: 1,
+        description: "A card.",
+        example: { props: {} },
+        editor: { label: "Card" },
+        props: {
+          link: {
+            label: "Link",
+            role: "content",
+            type: "url",
+            section: "Link",
+            hint: "The whole card becomes the link",
+          },
+          entryCollection: {
+            label: "Linked collection",
+            role: "content",
+            type: "text",
+            section: "Link",
+          },
+          entryId: {
+            label: "Linked entry",
+            role: "content",
+            type: "text",
+            section: "Link",
+          },
+          target: { ...TARGET, section: "Link" },
+          rel: { label: "Link relationship", type: "text", group: "advanced" },
+        },
+        render: () => null,
+      },
     ] as never,
     { source: "link-control-test" }
   );
@@ -450,6 +483,29 @@ describe("the link group", () => {
     fireEvent.change(search(), { target: { value: "example.com" } });
     fireEvent.keyDown(search(), { key: "Enter" });
     expect(written(editor)).toEqual({ link: "https://example.com" });
+  });
+});
+
+describe("a link placed across tabs, as a card's", () => {
+  it("says the link's hint under it, as the link's description", () => {
+    mount("acme/card", {}, { findLinkTargets: targetsService() });
+    const hint = screen.getByText("The whole card becomes the link");
+    expect(trigger().getAttribute("aria-describedby")).toBe(hint.id);
+  });
+
+  it("draws the new tab in Content and the link relationship in Advanced", () => {
+    mount(
+      "acme/card",
+      { link: "https://example.com" },
+      { findLinkTargets: targetsService() }
+    );
+    expect(
+      screen.getByRole("switch", { name: "Open in new tab" })
+    ).toBeDefined();
+    // Not inside Content's link control: its own field in Advanced › HTML.
+    expect(screen.queryByRole("button", { name: /Link options/ })).toBeNull();
+    const html = document.querySelector('[data-section="html"]');
+    expect(html?.textContent).toContain("Link relationship");
   });
 });
 
