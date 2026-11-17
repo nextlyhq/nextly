@@ -37,6 +37,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
+import type { PluginDefinition } from "../../../../plugins/plugin-context";
 import { _resetEnvCache } from "../../../../shared/lib/env";
 import { MetaService } from "../../../meta/services/meta-service";
 import { runFieldGroupMigration } from "../../migration/run";
@@ -69,6 +70,8 @@ export interface SiteOptions {
    * empty and the first start sets up a new site.
    */
   legacy?: boolean;
+  /** Plugins every start boots, as the app config lists them. */
+  plugins?: PluginDefinition[];
 }
 
 /**
@@ -129,7 +132,9 @@ export interface StorageGenerationSite {
   /** A development start: the boot, then its schema apply, as `next dev` runs them. */
   developmentStart(
     declared: Declared,
-    logger?: typeof SILENT
+    logger?: typeof SILENT,
+    /** Plugins this start boots, in place of the site's own. */
+    plugins?: PluginDefinition[]
   ): Promise<TestNextly>;
   /** A configuration reload of `declared`, as a saved edit triggers it. */
   configurationReload(declared: Declared): Promise<void>;
@@ -184,7 +189,7 @@ async function openDatabase(
 export async function openStorageGenerationSite(
   options: SiteOptions
 ): Promise<StorageGenerationSite> {
-  const { dialect, loaded, localization } = options;
+  const { dialect, loaded, localization, plugins } = options;
   const database = await openDatabase(dialect);
   if (options.legacy === true) {
     await seedLegacyCoreTables(database.adapter, dialect);
@@ -199,6 +204,7 @@ export async function openStorageGenerationSite(
       collections: declared.collections,
       fieldGroups: declared.fieldGroups,
       ...(localization ? { localization } : {}),
+      ...(plugins ? { plugins } : {}),
     });
 
   return {
@@ -206,7 +212,8 @@ export async function openStorageGenerationSite(
     get current() {
       return current;
     },
-    async developmentStart(declared, logger) {
+    async developmentStart(declared, logger, startPlugins) {
+      const bootPlugins = startPlugins ?? plugins;
       vi.stubEnv("NODE_ENV", "development");
       vi.stubEnv("NEXT_PHASE", "");
       clearServices();
@@ -219,6 +226,7 @@ export async function openStorageGenerationSite(
         collections: declared.collections,
         fieldGroups: declared.fieldGroups,
         ...(localization ? { localization } : {}),
+        ...(bootPlugins ? { plugins: bootPlugins } : {}),
         ...(logger ? { logger: logger as never } : {}),
         basePath,
       });

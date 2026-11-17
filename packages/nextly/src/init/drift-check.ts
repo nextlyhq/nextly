@@ -45,6 +45,9 @@ import { resolveSingleTableName } from "../domains/singles/services/resolve-sing
 interface AdapterLike {
   dialect: "postgresql" | "mysql" | "sqlite";
   getDrizzle: () => unknown;
+  /** Present on a database adapter: with `queryStatement`, how a field group's stored table is read. */
+  listTables?: () => Promise<string[]>;
+  queryStatement?: (statement: never) => Promise<unknown[]>;
 }
 
 interface LoggerLike {
@@ -171,31 +174,36 @@ export type RunDriftCheckResult =
   | { kind: "clean" };
 
 /**
- * The field groups to ask about, each under the name it is stored by on this site: its derived
- * name moved to the naming the site's registry is on (`field-group-storage-names`). On a site whose
- * storage moved to the current names, the derived legacy name addresses no table, and the preview
- * would describe a group that does not exist. A catalog that cannot answer leaves the names as
- * derived, as before.
+ * The field groups to ask about, each under the table it is stored in on this site: the one its
+ * registry row names, or, for a group the registry does not hold yet, its derived name under the
+ * naming the site's storage is on (`field-group-stored-tables`). Deriving the name instead
+ * addresses no table on a site whose storage moved to the current names, or one whose row an
+ * earlier release created under the other naming, and the preview would describe a group that does
+ * not exist. A registry that cannot be read leaves the names as derived, as before.
  */
 async function onSiteNaming(
   adapter: AdapterLike,
   groups: readonly DriftCheckEntity[]
 ): Promise<DriftCheckEntity[]> {
   if (groups.length === 0) return [];
-  const [
-    { resolveRegistryNameFromCatalog },
-    { namingOfRegistry, underNaming },
-  ] = await Promise.all([
-    import("../domains/field-groups/storage/resolve-storage-names"),
-    import("../domains/field-groups/services/field-group-storage-names"),
-  ]);
-  const naming = await resolveRegistryNameFromCatalog({
-    dialect: adapter.dialect,
-    getDrizzle: <T>() => adapter.getDrizzle() as T,
-  }).then(namingOfRegistry, () => "legacy" as const);
+  // The start hands over its database adapter, which reads the registry. A narrower adapter, as a
+  // test's, is asked as before.
+  if (
+    typeof adapter.listTables !== "function" ||
+    typeof adapter.queryStatement !== "function"
+  ) {
+    return [...groups];
+  }
+  const { readStoredFieldGroupTables, storedOrNewTableName } = await import(
+    "../domains/field-groups/services/field-group-stored-tables"
+  );
+  const stored = await readStoredFieldGroupTables(
+    adapter as unknown as Parameters<typeof readStoredFieldGroupTables>[0]
+  );
+  if (!stored.usable) return [...groups];
   return groups.map(group => ({
     ...group,
-    tableName: underNaming(naming, group.tableName),
+    tableName: storedOrNewTableName(stored, group.slug),
   }));
 }
 

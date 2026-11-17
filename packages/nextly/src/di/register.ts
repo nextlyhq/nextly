@@ -1922,7 +1922,17 @@ async function prepareBootSchema(
   // holding the active-schema map — so it read an empty map while this call
   // had just filled one. Passing the value makes the boot path independent of
   // how the two modules happen to be resolved.
+  // Each field group's stored table, so a contribution to a group attaches to the table the group
+  // is in: `fg_<slug>` on a site whose field-group storage was migrated.
+  const { declaredFieldGroupTables } = await import(
+    "../domains/field-groups/services/field-group-stored-tables"
+  );
+  const fieldGroupTables = await declaredFieldGroupTables(
+    adapter,
+    transformedConfig.fieldGroups
+  ).catch(() => undefined);
   return compileAndPublishExtensionSchema({
+    ...(fieldGroupTables === undefined ? {} : { fieldGroupTables }),
     dialect: bootDialect,
     // The transformed list, like everything else from Layer 0b down: a
     // plugin a `setup` transformer added declares tables too, and the
@@ -6305,24 +6315,30 @@ async function refuseMixedStorageInConfig(
     { refuseMixedStorage },
     { resolveSingleTableName },
     { resolveCollectionTableName },
-    { fieldGroupTableNameFor, resolveFieldGroupStorageNames },
+    { readStoredFieldGroupTables, storedOrNewTableName },
   ] = await Promise.all([
     import("../domains/i18n/per-language-storage-layout"),
     import("../domains/singles/services/resolve-single-table-name"),
     import("../domains/schema/utils/resolve-table-name"),
-    import("../domains/field-groups/services/field-group-storage-names"),
+    import("../domains/field-groups/services/field-group-stored-tables"),
   ]);
-  // A declared field group's table under the naming this site's storage is on, so it is matched
-  // with its own registry row below rather than judged a second time as a Builder entity. Only
-  // asked when the configuration declares one. A catalog that cannot answer is left to the
-  // registry scan below, which refuses naming the registry it could not read.
-  const fieldGroupNaming =
+  // A declared field group's table as its registry row names it, or, for one the registry does
+  // not hold yet, its name under the naming this site's storage is on. So it is matched with its
+  // own registry row below rather than judged a second time as a Builder entity, and the
+  // undeclared-languages check reads its real translation table. Only read when the configuration
+  // declares a group. A registry that cannot be read is left to the registry scan below, which
+  // refuses naming the registry it could not read.
+  const storedFieldGroups =
     (config.fieldGroups ?? []).length === 0
-      ? "legacy"
-      : await resolveFieldGroupStorageNames(adapter).then(
-          names => names.naming,
-          () => "legacy" as const
-        );
+      ? undefined
+      : await readStoredFieldGroupTables(adapter);
+  const fieldGroupTableOf = (slug: string): string =>
+    storedOrNewTableName(
+      storedFieldGroups?.usable === true
+        ? storedFieldGroups
+        : { tables: new Map(), naming: "legacy" },
+      slug
+    );
   type Entity = Parameters<typeof refuseMixedStorage>[1][number];
   const fieldsOf = (entity: { fields?: unknown }) =>
     (entity.fields ?? []) as Entity["fields"];
@@ -6355,7 +6371,7 @@ async function refuseMixedStorageInConfig(
       (g): Entity => ({
         kind: "component",
         slug: g.slug,
-        tableName: fieldGroupTableNameFor(fieldGroupNaming, g.slug),
+        tableName: fieldGroupTableOf(g.slug),
         fields: fieldsOf(g),
         localized: (g as { localized?: unknown }).localized,
       })

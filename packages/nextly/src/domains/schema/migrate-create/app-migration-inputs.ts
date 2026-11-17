@@ -114,6 +114,13 @@ export interface AppMigrationInputsArgs {
    * history this release writes is on.
    */
   fieldGroupNaming?: FieldGroupNaming;
+  /**
+   * The table each field group's registry row names, by slug, where the caller read the registry
+   * (`field-group-stored-tables`): a group the registry holds is generated under the table it is
+   * stored in, whatever naming it was created under, and only a group it does not hold takes its
+   * name from `fieldGroupNaming`.
+   */
+  fieldGroupTables?: ReadonlyMap<string, string>;
 }
 
 /** The inputs `generateMigration` takes, as `appMigrationInputs` prepares them. */
@@ -177,7 +184,8 @@ export async function appMigrationInputs(
       codeComponents,
       manifest,
     }),
-    fieldGroupNames
+    fieldGroupNames,
+    input.fieldGroupTables
   );
   for (const slug of merged.droppedUiSlugs) {
     logger.warn(
@@ -236,7 +244,8 @@ export async function appMigrationInputs(
       components: survivingOf(manifest.components, config.fieldGroups ?? []),
     },
     dialect,
-    fieldGroupNames
+    fieldGroupNames,
+    input.fieldGroupTables
   );
 
   // The APP stream's extension schema, compiled the way boot compiles it:
@@ -293,6 +302,17 @@ export async function appMigrationInputs(
     config: config,
     dialect,
     logger: { warn: m => logger.warn(m) },
+    // Each field group under the table the entities above name, so a contribution to it attaches
+    // to the same physical table in both streams. Only where the caller said where groups are
+    // stored; otherwise both streams derive the same names, as before.
+    ...(input.fieldGroupNaming === undefined &&
+    input.fieldGroupTables === undefined
+      ? {}
+      : {
+          fieldGroupTables: new Map(
+            components.map(component => [component.slug, component.tableName])
+          ),
+        }),
   });
 
   // A new address is judged by the one address rule before anything is written.
@@ -311,7 +331,8 @@ export async function appMigrationInputs(
   const previousMetadataUpserts = builderMetadataUpserts(
     builderEntriesOf(latest?.data.entities),
     dialect,
-    fieldGroupNames
+    fieldGroupNames,
+    input.fieldGroupTables
   );
   const nothing = nothingToGenerate({
     entityCount: collections.length + singles.length + components.length,
@@ -421,24 +442,34 @@ export function nothingToGenerate(input: {
 }
 
 /**
- * The merged entities with each field group's table under `names`' prefix.
+ * The merged entities with each field group's table as it is stored: the table its registry row
+ * names where `stored` holds one, otherwise its derived name under `names`' prefix.
  *
  * Every field group's name is derived as the legacy prefix and the slug's table form, by its own
  * kind's rule (`resolveComponentTableName` for code-first, `uiToMinimal` for Builder groups), so
  * moving it to the current names swaps the prefix and keeps that form. The storage migration moves
  * a derived name the same way (`fg_` + the slug's form), so a site that migrated holds exactly
- * these names.
+ * these names, except for a row an earlier release created under the other naming, which `stored`
+ * names.
  */
 function withFieldGroupTables<T extends { components: MinimalConfigEntity[] }>(
   merged: T,
-  names: FieldGroupStorageNames
+  names: FieldGroupStorageNames,
+  stored: ReadonlyMap<string, string> | undefined
 ): T {
-  if (names.naming === "legacy") return merged;
+  if (
+    names.naming === "legacy" &&
+    (stored === undefined || stored.size === 0)
+  ) {
+    return merged;
+  }
   return {
     ...merged,
     components: merged.components.map(component => ({
       ...component,
-      tableName: underNaming(names.naming, component.tableName),
+      tableName:
+        stored?.get(component.slug) ??
+        underNaming(names.naming, component.tableName),
     })),
   };
 }
@@ -456,7 +487,9 @@ function builderMetadataUpserts(
   },
   dialect: SupportedDialect,
   /** The field-group registry each Builder group's row goes to, and the prefix its table carries. */
-  fieldGroupNames: FieldGroupStorageNames
+  fieldGroupNames: FieldGroupStorageNames,
+  /** The table each group's registry row already names, by slug (`withFieldGroupTables`). */
+  storedTables: ReadonlyMap<string, string> | undefined
 ): { tableName: string; sql: string }[] {
   const tn = (slug: string, prefix: string) =>
     `${prefix}${slug.replace(/-/g, "_")}`;
@@ -475,11 +508,13 @@ function builderMetadataUpserts(
   }
   for (const cp of entries.components) {
     upserts.push({
-      tableName: tn(cp.slug, fieldGroupNames.tablePrefix),
+      tableName:
+        storedTables?.get(cp.slug) ?? tn(cp.slug, fieldGroupNames.tablePrefix),
       sql: buildComponentMetadataUpsert(
         cp,
         dialect,
-        fieldGroupNames.registryTable
+        fieldGroupNames.registryTable,
+        storedTables?.get(cp.slug)
       ),
     });
   }

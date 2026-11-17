@@ -69,6 +69,13 @@ interface PublishInput {
    * before anything applies it. Absent when there is no server to ask.
    */
   server?: ServerConstructCapabilities;
+  /**
+   * The table each configured field group is stored in, by slug, where the caller read the
+   * registry (`field-group-stored-tables`). On a site whose field-group storage was migrated that
+   * is `fg_<slug>`, which no slug rule derives, and a contribution seeded on the derived name would
+   * attach to no table. Absent, or for a group it does not name, the table is derived as before.
+   */
+  fieldGroupTables?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -344,7 +351,12 @@ export async function compileExtensionSchema(
       seed("single", resolveSingleTableName(single), single)
     ),
     ...fieldGroups.map(group =>
-      seed("component", resolveComponentTableName(group.slug), group)
+      seed(
+        "component",
+        input.fieldGroupTables?.get(group.slug) ??
+          resolveComponentTableName(group.slug),
+        group
+      )
     ),
   ];
 

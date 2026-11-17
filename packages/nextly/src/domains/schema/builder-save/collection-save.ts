@@ -58,6 +58,7 @@ import {
   underNaming,
   type FieldGroupNaming,
 } from "../../field-groups/services/field-group-storage-names";
+import { readStoredFieldGroupTables } from "../../field-groups/services/field-group-stored-tables";
 import { appLanguageOrder } from "../../i18n/configured-locales";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
 import { mainTableFields } from "../../i18n/per-language-storage";
@@ -536,13 +537,16 @@ async function planSave(
     save
   );
   // Named as the generator names it (`uiToMinimal`, and for a field group the
-  // naming the site's storage is on), so the scope is the table the migration
-  // writes.
+  // table its registry row names, or for a new one the naming the site's
+  // storage is on), so the scope is the table the migration writes.
   const derived = uiToMinimal(collectionOf(save), kind.prefix).tableName;
+  const fieldGroups =
+    kind.kind === "fieldGroup" ? await fieldGroupStorageOf(deps) : undefined;
   const table =
-    kind.kind === "fieldGroup"
-      ? underNaming(await fieldGroupNamingOf(deps), derived)
-      : derived;
+    fieldGroups === undefined
+      ? derived
+      : (fieldGroups.tables?.get(save.slug) ??
+        underNaming(fieldGroups.naming, derived));
   return {
     current,
     next: (save.removedTogether ?? []).reduce(
@@ -1387,13 +1391,18 @@ function placedJunctions(
 }
 
 /**
- * The naming the site's field-group storage is on, read from the database the save writes to, so
- * the migration it writes names each field group's table and registry as the database holds them.
+ * Where the site's field groups are stored, read from the database the save writes to, so the
+ * migration it writes names each group's table and registry as the database holds them: the table
+ * each registry row names, and the naming a group the registry does not hold yet is created under.
+ * A registry that cannot be read leaves only the naming, as before.
  */
-async function fieldGroupNamingOf(
-  deps: CollectionSaveDeps
-): Promise<FieldGroupNaming> {
-  return (await resolveFieldGroupStorageNames(deps.adapter)).naming;
+async function fieldGroupStorageOf(deps: CollectionSaveDeps): Promise<{
+  naming: FieldGroupNaming;
+  tables: ReadonlyMap<string, string> | undefined;
+}> {
+  const naming = (await resolveFieldGroupStorageNames(deps.adapter)).naming;
+  const stored = await readStoredFieldGroupTables(deps.adapter);
+  return { naming, tables: stored.usable ? stored.tables : undefined };
 }
 
 /** What `appMigrationInputs` is asked with for this app, its definition aside. */
@@ -1403,8 +1412,12 @@ async function inputsArgs(
   held: readonly UiSchemaEntity[] = []
 ): Promise<AppMigrationInputsArgs> {
   const { kind } = kindOf(save);
+  const fieldGroups = await fieldGroupStorageOf(deps);
   return {
-    fieldGroupNaming: await fieldGroupNamingOf(deps),
+    fieldGroupNaming: fieldGroups.naming,
+    ...(fieldGroups.tables === undefined
+      ? {}
+      : { fieldGroupTables: fieldGroups.tables }),
     ...(held.length === 0
       ? {}
       : { held: held.map((entity): HeldEntity => ({ kind, entity })) }),

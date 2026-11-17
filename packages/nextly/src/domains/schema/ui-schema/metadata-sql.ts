@@ -403,14 +403,19 @@ export function singleRowValues(entity: UiSchemaEntity): SingleRowValues {
  */
 export function componentRowValues(
   entity: UiSchemaEntity,
-  registryTable: FieldGroupRegistryName = STORAGE_FORMAT.registryTable
+  registryTable: FieldGroupRegistryName = STORAGE_FORMAT.registryTable,
+  /**
+   * The table the group's registry row already names, where it has one: a row is never repointed
+   * at a derived name, which would address storage the group does not have.
+   */
+  storedTableName?: string
 ): ComponentRowValues {
   const keys = keysOf(registryTable, entity.slug);
   return {
     id: keys.id,
     slug: entity.slug,
     label: singular(entity),
-    tableName: keys.table_name,
+    tableName: storedTableName ?? keys.table_name,
     fields: storedFields(entity),
     source: "ui",
     localized: entity.localized === true,
@@ -574,9 +579,11 @@ export function buildComponentMetadataUpsert(
   entity: UiSchemaEntity,
   dialect: Dialect,
   /** The field-group registry the row is upserted into (`componentRowValues`). */
-  registryTable: FieldGroupRegistryName = STORAGE_FORMAT.registryTable
+  registryTable: FieldGroupRegistryName = STORAGE_FORMAT.registryTable,
+  /** The table the row already names, where it has one (`componentRowValues`). */
+  storedTableName?: string
 ): string {
-  const row = componentRowValues(entity, registryTable);
+  const row = componentRowValues(entity, registryTable, storedTableName);
   const columns: Column[] = [
     { name: "id", value: sqlStr(row.id, dialect) },
     { name: "slug", value: sqlStr(row.slug, dialect) },
