@@ -32,7 +32,9 @@ const live: {
   savedPath: string | null;
   /** Each write through the SDK's field, which marks the document changed. */
   sets: [string, unknown][];
-} = { writable: true, savedPath: "/pricing", sets: [] };
+  /** Which kind of document the editor has open. */
+  identity: "collection" | "single";
+} = { writable: true, savedPath: "/pricing", sets: [], identity: "collection" };
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useDocumentField: (path: string) => {
@@ -48,6 +50,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
       },
     };
   },
+  useDocumentIdentity: () => ({ kind: live.identity, slug: "pages" }),
   usePluginRoute: (args: { enabled?: boolean }) => ({
     data: args.enabled === false ? undefined : { path: live.savedPath },
     error: null,
@@ -78,19 +81,19 @@ beforeEach(() => {
   live.writable = true;
   live.savedPath = "/pricing";
   live.sets = [];
+  live.identity = "collection";
 });
 
 afterEach(cleanup);
 
 function mount(
   kind: DocumentKind,
-  props: Partial<DocumentSettingsPanelProps> = {}
+  props: Partial<DocumentSettingsPanelProps> = {},
+  values: FieldValues = { title: "Pricing", slug: "pricing" }
 ): { form: () => UseFormReturn<FieldValues>; open: () => number } {
   let opened = 0;
   function Host() {
-    const form = useForm<FieldValues>({
-      defaultValues: { title: "Pricing", slug: "pricing" },
-    });
+    const form = useForm<FieldValues>({ defaultValues: values });
     live.form = form;
     return (
       <DocumentSettingsPanel
@@ -220,6 +223,33 @@ describe("a page's settings in the right panel", () => {
     ).toBeTruthy();
     expect(
       line.compareDocumentPosition(all) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+});
+
+describe("a title or address the panel must not change", () => {
+  it("shows a Single's fixed title without editing it, and no address", () => {
+    live.identity = "single";
+    mount("page", { address: null }, { title: "Homepage", slug: "homepage" });
+    const title = screen.getByRole("textbox", {
+      name: "Title",
+    }) as HTMLInputElement;
+    expect(title.value).toBe("Homepage");
+    expect(title.readOnly).toBe(true);
+    expect(screen.queryByRole("textbox", { name: "Address" })).toBeNull();
+  });
+
+  it("shows a number title as the entry does, without typing text into it", () => {
+    mount("page", {}, { title: 42, slug: "pricing" });
+    const title = screen.getByRole("textbox", {
+      name: "Title",
+    }) as HTMLInputElement;
+    expect(title.value).toBe("42");
+    expect(title.readOnly).toBe(true);
+    expect(
+      within(
+        screen.getByRole("region", { name: "Search result" })
+      ).getByText("42")
     ).toBeTruthy();
   });
 });

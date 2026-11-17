@@ -16,7 +16,7 @@
 import type { DocumentKind } from "@nextlyhq/blocks-engine";
 import {
   useDocumentField,
-  usePluginRoute,
+  useDocumentIdentity,
   type DocumentField,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Button, Input, Label } from "@nextlyhq/ui";
@@ -32,14 +32,9 @@ import {
 } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
-import { PAGE_BUILDER_PLUGIN_NAME } from "../../library-contract";
-import {
-  pageAddressPath,
-  type PageAddressResponse,
-} from "../../pages-search-contract";
 import { PageLayoutPicker } from "../page-layout";
 
-import type { SettingsAddress } from "./settings-address";
+import { useSavedAddress, type SettingsAddress } from "./settings-address";
 
 /** Each document's panel heading, and the way to the rest of its settings. */
 export const DOCUMENT_SETTINGS_WORDS: Record<
@@ -101,6 +96,9 @@ export function DocumentSettingsPanel({
   const title = useDocumentField(TITLE_FIELD);
   const slug = useDocumentField(SLUG_FIELD);
   const page = kind === "page";
+  // A Single's title and slug are fixed by its configuration, and its slug
+  // is not its address: only an entry of a collection edits them here.
+  const fixed = useDocumentIdentity()?.kind !== "collection";
   // Held as the title is: a past version on screen, someone else's claim, a
   // reader who may not edit. The picker writes the form directly, so it is
   // told, rather than trusted to ask.
@@ -117,16 +115,13 @@ export function DocumentSettingsPanel({
       >
         {words.heading}
       </h2>
-      {title === null ? null : <TitleRow field={title} />}
-      {page && slug !== null && typeof slug.value === "string" ? (
+      {title === null ? null : <TitleRow field={title} fixed={fixed} />}
+      {page && !fixed && slug !== null && typeof slug.value === "string" ? (
         <AddressRow field={slug} address={address} />
       ) : null}
       {page ? <PageLayoutPicker control={control} disabled={held} /> : null}
       {page && !seoEditsPage ? (
-        <SearchSummary
-          title={typeof title?.value === "string" ? title.value : ""}
-          address={address}
-        />
+        <SearchSummary title={titleText(title?.value)} address={address} />
       ) : null}
       {page ? pageData : null}
       {own}
@@ -143,16 +138,43 @@ export function DocumentSettingsPanel({
   );
 }
 
-/** The document's title: typed straight into the entry's own field. */
-function TitleRow({ field }: { field: DocumentField }): JSX.Element {
+/**
+ * A title as the entry shows it: text, or a number or a yes/no where a
+ * collection redefines its title field so; nothing for no value.
+ */
+function titleText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return "";
+}
+
+/**
+ * The document's title: typed straight into the entry's own field. Shown,
+ * not edited, where it is fixed (a Single's) or is not text, whose own
+ * control is in Settings.
+ */
+function TitleRow({
+  field,
+  fixed,
+}: {
+  field: DocumentField;
+  fixed: boolean;
+}): JSX.Element {
   const id = useId();
+  const typed =
+    field.value === undefined ||
+    field.value === null ||
+    typeof field.value === "string";
   return (
     <div className="nx-inspector__field">
       <Label htmlFor={id}>Title</Label>
       <Input
         id={id}
-        value={typeof field.value === "string" ? field.value : ""}
+        value={titleText(field.value)}
         disabled={!field.writable}
+        readOnly={fixed || !typed}
         onChange={event => field.set(event.target.value)}
         onKeyDown={keepEnterFromThePage}
       />
@@ -174,7 +196,7 @@ function AddressRow({
 }): JSX.Element {
   const id = useId();
   const noteId = `${id}-note`;
-  const saved = useSavedAddress(address);
+  const saved = useSavedAddress(address, true).data?.path ?? null;
   return (
     <div className="nx-inspector__field">
       <Label htmlFor={id}>Address</Label>
@@ -236,30 +258,6 @@ function CopyAddress({ path }: { path: string }): JSX.Element {
 }
 
 /**
- * The address the page is saved at, read as Settings reads it, or null while
- * it is read, for a page never saved, and where the site gives it none.
- */
-function useSavedAddress(address: SettingsAddress | null): string | null {
-  const read = usePluginRoute<PageAddressResponse>({
-    plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path:
-      address === null ? "" : pageAddressPath(address.page, address.locale),
-    staleTime: 0,
-    enabled: address !== null,
-  });
-  // Read again after each save: the saved address may have moved.
-  const { refetch } = read;
-  const revision = address?.savedRevision;
-  const seen = useRef(revision);
-  useEffect(() => {
-    if (seen.current === revision) return;
-    seen.current = revision;
-    if (address !== null) void refetch();
-  }, [revision, address, refetch]);
-  return address === null ? null : (read.data?.path ?? null);
-}
-
-/**
  * What a search result would show where nothing sets it: the page's title
  * over its address. Only where the SEO plugin does not edit the page's type,
  * so no two summaries of one page can disagree.
@@ -271,7 +269,7 @@ function SearchSummary({
   title: string;
   address: SettingsAddress | null;
 }): JSX.Element {
-  const saved = useSavedAddress(address);
+  const saved = useSavedAddress(address, true).data?.path ?? null;
   return (
     <section aria-label="Search result" className="nx-inspector__field">
       <p className="nx-inspector__field-name" aria-hidden="true">
