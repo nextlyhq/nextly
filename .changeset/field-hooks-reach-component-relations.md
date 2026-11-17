@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Field `afterRead` hooks now run on related documents inside components and component zones, as they already did for a relationship on the document itself or in a group or repeater, including the related documents in every language's values beside a read of every language (`_allLocales`). A Single's read now runs a related document's field hooks too, the same way an entry's read does.
+Field `afterRead` hooks now run on related documents inside components and component zones, as they already did for a relationship on the document itself or in a group or repeater, including the related documents in every language's values beside a read of every language (`_allLocales`). A Single's read now runs a related document's field hooks too, the same way an entry's read does. A related document inside a component or zone, or held by a Single, that the reading document's own `afterRead` hook (collection-level or field-level) changes is answered as its own collection's hooks returned it, as one held directly on an entry already was.

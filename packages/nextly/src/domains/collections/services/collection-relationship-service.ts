@@ -678,6 +678,27 @@ function holdsOwnRows(field: FieldDefinition): boolean {
 }
 
 /**
+ * Each language's value of each of `fields` beside `entry` (`_allLocales`,
+ * `{ field: { code: value } }`), with the map that holds it, so the walk reads
+ * it and the reprojection replaces it in the same places.
+ */
+function eachLanguageValue(
+  entry: Record<string, unknown>,
+  fields: readonly FieldDefinition[]
+): { field: FieldDefinition; values: Record<string, unknown>; code: string }[] {
+  const every = valuesBesideRow(entry);
+  if (!every) return [];
+  return fields.flatMap(field => {
+    const keyed = every[field.name];
+    if (keyed === null || typeof keyed !== "object" || Array.isArray(keyed)) {
+      return [];
+    }
+    const values = keyed as Record<string, unknown>;
+    return Object.keys(values).map(code => ({ field, values, code }));
+  });
+}
+
+/**
  * Safely parses JSON data if it's a string, otherwise returns as-is.
  * Handles cases where repeater/group field data hasn't been deserialized yet.
  */
@@ -3885,15 +3906,16 @@ export class CollectionRelationshipService extends BaseService {
    * rather than by a collection: a Single, whose fields the collection registry
    * does not hold. The same walk and the same finish, so a related row is
    * answered alike from an entry and from a Single. One document, so its walk
-   * is finished here.
+   * is finished here; the caller keeps `state` to reproject the document after
+   * each of its own hook phases ({@link reprojectDocumentRelatedRows}).
    */
   async applyNestedFieldHooksToDocument(
     doc: Record<string, unknown>,
     fields: FieldDefinition[],
-    access: RelatedRowAccess
+    access: RelatedRowAccess,
+    state: NestedHookState
   ): Promise<void> {
     if (!access.enforceFieldAccess) return;
-    const state = createNestedHookState();
     await this.walkDocument(doc, fields, access, state);
     await this.finalizeRelatedRows(state, access);
   }
@@ -3914,16 +3936,8 @@ export class CollectionRelationshipService extends BaseService {
     state: NestedHookState
   ): Promise<void> {
     await this.walkFields(entry, fields, access, state, 0);
-    const every = valuesBesideRow(entry);
-    if (!every) return;
-    for (const field of fields) {
-      const keyed = every[field.name];
-      if (keyed === null || typeof keyed !== "object" || Array.isArray(keyed)) {
-        continue;
-      }
-      for (const inLanguage of Object.values(keyed)) {
-        await this.walkFieldValue(inLanguage, field, access, state, 0);
-      }
+    for (const { field, values, code } of eachLanguageValue(entry, fields)) {
+      await this.walkFieldValue(values[code], field, access, state, 0);
     }
   }
 
@@ -4034,58 +4048,106 @@ export class CollectionRelationshipService extends BaseService {
     // reads, so the recorded versions are stripped either way and restoring them
     // is what removes a secret a source hook wrote back.
     if (!access.enforceFieldAccess) return;
-    const fields = await this.fieldsForNestedWalk(collectionName, state);
+    await this.reprojectDocuments(
+      entries,
+      await this.fieldsForNestedWalk(collectionName, state),
+      state
+    );
+  }
+
+  /**
+   * {@link reprojectRelatedRows} for a document described by its own fields: a
+   * Single, reprojected after each of its own hook phases with the state its
+   * walk ({@link applyNestedFieldHooksToDocument}) kept, as an entry is after
+   * its collection's.
+   */
+  async reprojectDocumentRelatedRows(
+    doc: Record<string, unknown>,
+    fields: FieldDefinition[],
+    access: RelatedRowAccess,
+    state: NestedHookState
+  ): Promise<void> {
+    if (!access.enforceFieldAccess) return;
+    await this.reprojectDocuments([doc], fields, state);
+  }
+
+  /**
+   * Rebuild the related rows of `entries` by `fields`: each document's own
+   * values and every language's values beside it (`_allLocales`), the places
+   * the walk reached them ({@link walkDocument}).
+   */
+  private async reprojectDocuments(
+    entries: Record<string, unknown>[],
+    fields: FieldDefinition[],
+    state: NestedHookState
+  ): Promise<void> {
     // Rows rebuilt during THIS pass, so a row several parents reference stays ONE
     // object across the response — the sharing batch expansion produced — instead
     // of becoming a separate copy per reference.
     const rebuilt = new Map<string, Record<string, unknown>>();
     for (const entry of entries) {
-      this.reprojectFields(entry, fields, state, rebuilt);
+      await this.reprojectFields(entry, fields, state, rebuilt);
+      for (const { field, values, code } of eachLanguageValue(entry, fields)) {
+        await this.reprojectValueAt(values, code, field, state, rebuilt);
+      }
     }
   }
 
   /**
    * Rebuild every relationship value held at one level of the response, and
-   * descend through `group`/`repeater` containers to reach the ones nested inside
-   * them.
-   *
-   * Container rows belong to the SOURCE collection, so they carry no authoritative
-   * version of their own and are descended into rather than replaced. Only a
-   * relationship value names another collection's row.
+   * descend through containers to reach the ones nested inside them.
    */
-  private reprojectFields(
+  private async reprojectFields(
     holder: Record<string, unknown>,
-    fields: FieldDefinition[],
+    fields: readonly FieldDefinition[],
     state: NestedHookState,
     rebuilt: Map<string, Record<string, unknown>>
-  ): void {
+  ): Promise<void> {
     for (const field of fields) {
       if (!field.name) continue;
       // A hook can hand a container or a populated hasMany back as the JSON string
       // storage keeps it as; left a string there is no value here to rebuild.
       this.decodeJsonBackedFieldInPlace(holder, field);
-      const value = holder[field.name];
-      if (value === null || value === undefined) continue;
-
-      if (isRepeaterOrGroupField(field)) {
-        const nested = getNestedFields(field);
-        if (nested.length === 0) continue;
-        for (const row of containerRowsOf(value)) {
-          this.reprojectFields(row, nested, state, rebuilt);
-        }
-        continue;
-      }
-      // An upload points at the built-in media entity, which registers no field
-      // rules and is never sanitized as a related row.
-      if (!isRelationshipField(field) || isUploadField(field)) continue;
-
-      holder[field.name] = this.reprojectRelationshipValue(
-        value,
-        field,
-        state,
-        rebuilt
-      );
+      await this.reprojectValueAt(holder, field.name, field, state, rebuilt);
     }
+  }
+
+  /**
+   * Rebuild the related rows in `holder[key]`, one value of `field`.
+   *
+   * Container rows (a group's, a repeater's or a component's, a zone's
+   * included) belong to the SOURCE document, so they carry no authoritative
+   * version of their own and are descended into rather than replaced, by the
+   * fields the walk read them with (`holdsOwnRows`, `containedFields`): a
+   * container the walk reached is one this pass reaches. Only a relationship
+   * value names another collection's row.
+   */
+  private async reprojectValueAt(
+    holder: Record<string, unknown>,
+    key: string,
+    field: FieldDefinition,
+    state: NestedHookState,
+    rebuilt: Map<string, Record<string, unknown>>
+  ): Promise<void> {
+    const value = holder[key];
+    if (value === null || value === undefined) return;
+
+    if (holdsOwnRows(field)) {
+      for (const row of containerRowsOf(value)) {
+        await this.reprojectFields(
+          row,
+          await this.containedFields(field, row, state),
+          state,
+          rebuilt
+        );
+      }
+      return;
+    }
+    // An upload points at the built-in media entity, which registers no field
+    // rules and is never sanitized as a related row.
+    if (!isRelationshipField(field) || isUploadField(field)) return;
+
+    holder[key] = this.reprojectRelationshipValue(value, field, state, rebuilt);
   }
 
   /** Rebuild one relationship field's value, mapping a list one entry at a time so

@@ -7,6 +7,8 @@
  *
  * The person collection's `secret` field is masked by its field hook, so a
  * read answering the stored value instead has skipped the hook for that row.
+ * A document whose own read hook (collection-level or field-level) rewrites a
+ * related row still answers it as the related collection's hooks return it.
  *
  * @module domains/collections/services/__tests__/field-hooks-reach-component-relations.integration.test
  */
@@ -29,6 +31,10 @@ import {
 const PEOPLE = "fhc_people";
 const PAGES = "fhc_pages";
 const HOME = "fhc_home";
+const HOOKED_PAGES = "fhc_hooked_pages";
+const HOOKED_HOME = "fhc_hooked_home";
+const FIELD_HOOKED_PAGES = "fhc_field_hooked_pages";
+const FIELD_HOOKED_HOME = "fhc_field_hooked_home";
 const BYLINE = "fhc_byline";
 const QUOTE = "fhc_quote";
 const NOTE = "fhc_note";
@@ -72,6 +78,35 @@ const besidePeople: Record<string, string[]> = {
   blocks: [],
 };
 
+/**
+ * Write a value over the secret of every person row a read hook is handed,
+ * in place, wherever it sits: a source hook rewriting a related row.
+ */
+function rewritePeople(value: unknown): void {
+  if (value === null || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    for (const item of value) rewritePeople(item);
+    return;
+  }
+  const row = value as Record<string, unknown>;
+  if (row.name === "Ann" || row.name === "Bea") row.secret = "rewritten";
+  for (const inner of Object.values(row)) rewritePeople(inner);
+}
+
+/** A title whose field-level read hook rewrites the document's related rows. */
+const rewritingTitle = () =>
+  text({
+    name: "title",
+    hooks: {
+      afterRead: [
+        ({ value, data }) => {
+          rewritePeople(data);
+          return value;
+        },
+      ],
+    },
+  });
+
 /** A person row found in an answer, and where. */
 interface FoundPerson {
   path: string;
@@ -103,7 +138,7 @@ let t: TestNextly;
 describe.each(getConfiguredTestDialects())(
   "a related row's field hooks wherever the relationship sits (integration, %s)",
   dialect => {
-    let pageId = "";
+    const pageIds = new Map<string, string>();
 
     beforeAll(async () => {
       t = await createTestNextly({
@@ -149,6 +184,21 @@ describe.each(getConfiguredTestDialects())(
             access: { read: () => true },
             fields: [text({ name: "title" }), ...holders()],
           }),
+          // Its own read hook rewrites the related rows it is handed.
+          defineCollection({
+            slug: HOOKED_PAGES,
+            localized: true,
+            access: { read: () => true },
+            hooks: { afterRead: [({ data }) => rewritePeople(data)] },
+            fields: [text({ name: "title" }), ...holders()],
+          }),
+          // A field's read hook rewrites the related rows of its document.
+          defineCollection({
+            slug: FIELD_HOOKED_PAGES,
+            localized: true,
+            access: { read: () => true },
+            fields: [rewritingTitle(), ...holders()],
+          }),
         ],
         singles: [
           defineSingle({
@@ -156,6 +206,19 @@ describe.each(getConfiguredTestDialects())(
             localized: true,
             access: { read: () => true },
             fields: [text({ name: "title" }), ...holders()],
+          }),
+          defineSingle({
+            slug: HOOKED_HOME,
+            localized: true,
+            access: { read: () => true },
+            hooks: { afterRead: [({ data }) => rewritePeople(data)] },
+            fields: [text({ name: "title" }), ...holders()],
+          }),
+          defineSingle({
+            slug: FIELD_HOOKED_HOME,
+            localized: true,
+            access: { read: () => true },
+            fields: [rewritingTitle(), ...holders()],
           }),
         ],
         localization: { locales: ["en", "fr"], defaultLocale: "en" },
@@ -175,36 +238,41 @@ describe.each(getConfiguredTestDialects())(
 
       // Ann in English and Bea in French, in each translated place a person is
       // held; Ann in the zone every language shares.
-      pageId = String(
-        (
-          await t.nextly.create({
-            collection: PAGES,
-            locale: "en",
-            data: { title: "Page", ...heldBy(ann), ...zoneOf(ann) },
-          })
-        ).item.id
-      );
-      await t.nextly.update({
-        collection: PAGES,
-        id: pageId,
-        locale: "fr",
-        data: { title: "Page en français", ...heldBy(bea), _overwrite: true },
-      });
-      await t.nextly.updateSingle({
-        slug: HOME,
-        locale: "en",
-        data: {
-          title: "Home",
-          ...heldBy(ann),
-          ...zoneOf(ann),
-          _overwrite: true,
-        },
-      } as never);
-      await t.nextly.updateSingle({
-        slug: HOME,
-        locale: "fr",
-        data: { title: "Accueil", ...heldBy(bea), _overwrite: true },
-      } as never);
+      for (const collection of [PAGES, HOOKED_PAGES, FIELD_HOOKED_PAGES]) {
+        const id = String(
+          (
+            await t.nextly.create({
+              collection,
+              locale: "en",
+              data: { title: "Page", ...heldBy(ann), ...zoneOf(ann) },
+            })
+          ).item.id
+        );
+        await t.nextly.update({
+          collection,
+          id,
+          locale: "fr",
+          data: { title: "Page en français", ...heldBy(bea), _overwrite: true },
+        });
+        pageIds.set(collection, id);
+      }
+      for (const slug of [HOME, HOOKED_HOME, FIELD_HOOKED_HOME]) {
+        await t.nextly.updateSingle({
+          slug,
+          locale: "en",
+          data: {
+            title: "Home",
+            ...heldBy(ann),
+            ...zoneOf(ann),
+            _overwrite: true,
+          },
+        } as never);
+        await t.nextly.updateSingle({
+          slug,
+          locale: "fr",
+          data: { title: "Accueil", ...heldBy(bea), _overwrite: true },
+        } as never);
+      }
     }, 120_000);
 
     afterAll(async () => {
@@ -218,24 +286,38 @@ describe.each(getConfiguredTestDialects())(
       overrideAccess: false,
     });
 
-    const reads: Record<
-      string,
-      (locale: "en" | "all") => Promise<Record<string, unknown>>
-    > = {
-      "an entry read by id": async locale =>
+    type Locale = "en" | "all";
+    type Read = (locale: Locale) => Promise<Record<string, unknown>>;
+    const entryReads = (
+      label: string,
+      collection: string
+    ): Record<string, Read> => ({
+      [`${label} read by id`]: async (locale: Locale) =>
         (await t.nextly.findByID({
-          collection: PAGES,
-          id: pageId,
+          collection,
+          id: pageIds.get(collection) ?? "",
           ...visitor(locale),
         })) as Record<string, unknown>,
-      "an entry listed": async locale =>
-        (await t.nextly.find({ collection: PAGES, ...visitor(locale) }))
+      [`${label} listed`]: async (locale: Locale) =>
+        (await t.nextly.find({ collection, ...visitor(locale) }))
           .items[0] as Record<string, unknown>,
-      "a Single read": async locale =>
+    });
+    const singleRead = (label: string, slug: string): Record<string, Read> => ({
+      [label]: async (locale: Locale) =>
         (await t.nextly.findSingle({
-          slug: HOME,
+          slug,
           ...visitor(locale),
         } as never)) as unknown as Record<string, unknown>,
+    });
+    const reads: Record<string, Read> = {
+      ...entryReads("an entry", PAGES),
+      ...singleRead("a Single read", HOME),
+      // The document's own read hooks hand back related rows they rewrote;
+      // the answer still carries what the related collection's hooks return.
+      ...entryReads("an entry its read hook rewrites", HOOKED_PAGES),
+      ...singleRead("a Single its read hook rewrites", HOOKED_HOME),
+      ...entryReads("an entry a field hook rewrites", FIELD_HOOKED_PAGES),
+      ...singleRead("a Single a field hook rewrites", FIELD_HOOKED_HOME),
     };
 
     const cases = Object.keys(reads).flatMap(read =>
@@ -278,8 +360,9 @@ describe.each(getConfiguredTestDialects())(
           );
         }
 
-        // Under no key of the field, in any language, is a stored secret.
-        expect(JSON.stringify(held)).not.toMatch(/stored (Ann|Bea)/);
+        // Under no key of the field, in any language, is a stored or
+        // rewritten secret.
+        expect(JSON.stringify(held)).not.toMatch(/stored (Ann|Bea)|rewritten/);
       },
       60_000
     );

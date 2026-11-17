@@ -1722,21 +1722,42 @@ export class SingleQueryService extends BaseService {
       // the read does not return; before the Single's own hooks, which are
       // handed the related rows as the walk leaves them. Not waived with the
       // Single's hooks: they belong to the related collection.
-      await this.resolveRelationshipService()?.applyNestedFieldHooksToDocument(
-        doc,
-        // FieldConfig and FieldDefinition are structurally compatible for the
-        // properties the walk reads, as for the expansion above.
-        singleMeta.fields as unknown as FieldDefinition[],
-        this.relatedRowAccess(
-          options,
-          true,
-          resolveLocaleChain(
-            this.localization,
-            options.locale,
-            options.fallbackLocale
-          )
+      const relationships = this.resolveRelationshipService();
+      // FieldConfig and FieldDefinition are structurally compatible for the
+      // properties the walk reads, as for the expansion above.
+      const nestedFields = singleMeta.fields as unknown as FieldDefinition[];
+      const nestedAccess = this.relatedRowAccess(
+        options,
+        true,
+        resolveLocaleChain(
+          this.localization,
+          options.locale,
+          options.fallbackLocale
         )
       );
+      // Kept for the whole read: it holds each related row as the walk
+      // finished it, which the document is rebuilt from after each of the
+      // Single's own hook phases below, as an entry is after its collection's.
+      const nestedState = relationships?.createNestedHookState();
+      // Rebuild the document's related rows from that state: whatever a hook
+      // of the Single's did to one, it reads as its own collection answered it.
+      const reprojectRelatedRows = async (current: SingleDocument) => {
+        if (!relationships || !nestedState) return;
+        await relationships.reprojectDocumentRelatedRows(
+          current,
+          nestedFields,
+          nestedAccess,
+          nestedState
+        );
+      };
+      if (relationships && nestedState) {
+        await relationships.applyNestedFieldHooksToDocument(
+          doc,
+          nestedFields,
+          nestedAccess,
+          nestedState
+        );
+      }
       // Every language's values beside the Single are kept off it while its
       // hooks and its own field rules run, and put back only to be judged
       // language by language: no hook is handed a value before it is judged,
@@ -1765,6 +1786,9 @@ export class SingleQueryService extends BaseService {
           doc = transformedData;
         }
       }
+      // After the Single's own read hooks, before its field rules and field
+      // hooks are handed the document.
+      await reprojectRelatedRows(doc);
 
       this.logger.debug("Single document retrieved", { slug, id: doc.id });
 
@@ -1775,6 +1799,9 @@ export class SingleQueryService extends BaseService {
         options,
         besideDoc
       );
+      // After its field hooks, which are handed the document and every
+      // language's values beside it.
+      await reprojectRelatedRows(doc);
 
       // Defense in depth, after every user callback on this document: hooks,
       // access rules and field rules are all app code, and this is the last
