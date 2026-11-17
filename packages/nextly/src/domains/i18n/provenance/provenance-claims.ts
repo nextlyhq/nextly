@@ -14,6 +14,7 @@ import { nextlyValidationFromZod } from "../../../api/zod-to-nextly-error";
 import type { RequestActor } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors/nextly-error";
 import { DOCUMENT_PROVENANCE_KEY } from "../../../lib/system-columns";
+import { languageCounterInVersion } from "../../versions/stale-version";
 
 /**
  * For a field with a structure per language (a translated repeater or blocks field): which row of
@@ -39,6 +40,9 @@ const ProvenanceClaimSchema = z.discriminatedUnion("origin", [
     .object({
       origin: z.literal("copy"),
       sourceLocale: z.string().min(1).max(35),
+      // The document's `_rev` as the copy read its source: which version of the source language
+      // the value was copied from. Checked as a version below.
+      sourceRevision: z.string().min(1).max(4096).optional(),
       rows: RowOriginsSchema.optional(),
     })
     .strict(),
@@ -67,6 +71,25 @@ export function provenanceClaimsOf(
   if (!Object.hasOwn(body, DOCUMENT_PROVENANCE_KEY)) return undefined;
   const parsed = ProvenanceInput.safeParse(body[DOCUMENT_PROVENANCE_KEY]);
   if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+  // A copy's version is read as every version is (`languageCounterInVersion`); one that is not a
+  // version is the writer's mistake, refused here, before anything is written.
+  for (const [field, claim] of Object.entries(parsed.data)) {
+    if (claim.origin !== "copy" || claim.sourceRevision === undefined) continue;
+    try {
+      languageCounterInVersion(claim.sourceRevision, claim.sourceLocale);
+    } catch {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `${DOCUMENT_PROVENANCE_KEY}.${field}.sourceRevision`,
+            code: "INVALID_VALUE",
+            message:
+              "A copy's sourceRevision must be a document version (`_rev`) as read.",
+          },
+        ],
+      });
+    }
+  }
   return parsed.data;
 }
 

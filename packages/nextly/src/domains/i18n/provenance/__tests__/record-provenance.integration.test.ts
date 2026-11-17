@@ -24,6 +24,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { CollectionService } from "../../../collections/services/collection-service";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
+import { SOURCE_FINGERPRINT_MOVED } from "../../../../schemas/translation-provenance";
 import { valueFingerprint } from "../record-provenance";
 
 let t: TestNextly | undefined;
@@ -254,6 +255,36 @@ describe.each(getConfiguredTestDialects())(
         }),
       ]);
 
+      // A copy names the version of its source it read: made from Spanish as it stands, it keeps
+      // that value's fingerprint.
+      const spanish = await container
+        .get<CollectionsHandler>("collectionsHandler")
+        .getEntry({
+          collectionName: "posts",
+          entryId: id,
+          locale: "es",
+          overrideAccess: true,
+        });
+      await save(id, "fr", {
+        title: "Hola",
+        _provenance: {
+          title: {
+            origin: "copy",
+            sourceLocale: "es",
+            sourceRevision: (spanish.data as Record<string, unknown>)._rev,
+          },
+        },
+      });
+      expect((await rowsOf(id)).fr).toEqual([
+        expect.objectContaining({
+          origin: "copy",
+          sourceLocale: "es",
+          sourceFingerprint: valueFingerprint("Hola"),
+        }),
+      ]);
+
+      // A copy that doesn't say which version it read can't be shown to be of the source as it
+      // is: it keeps the marker that reads as out of date, never a fingerprint of a value.
       await save(id, "fr", {
         title: "Hola",
         _provenance: { title: { origin: "copy", sourceLocale: "es" } },
@@ -262,7 +293,7 @@ describe.each(getConfiguredTestDialects())(
         expect.objectContaining({
           origin: "copy",
           sourceLocale: "es",
-          sourceFingerprint: valueFingerprint("Hola"),
+          sourceFingerprint: SOURCE_FINGERPRINT_MOVED,
         }),
       ]);
 

@@ -272,6 +272,7 @@ import {
   type ProvenanceClaims,
 } from "../../i18n/provenance/provenance-claims";
 import {
+  copySourceRevisions,
   discardDraftProvenance,
   forgetDocumentProvenance,
   recordWrittenValues,
@@ -322,6 +323,7 @@ import {
   documentVersionOn,
   mainRowBump,
   revisionBumpColumns,
+  type SelectsRows,
   setDocumentVersion,
   translationChangeColumns,
   translationRevisionBumpColumns,
@@ -14059,6 +14061,8 @@ export class CollectionMutationService extends BaseService {
         localizedFieldValues?: Record<string, unknown>;
         /** The fields among the values whose storage is JSON. */
         jsonFields?: readonly string[];
+        /** The translation table the values are written to. */
+        companionTableName?: string;
       } | null;
       savedBy: RequestActor;
       provenance?: {
@@ -14084,6 +14088,17 @@ export class CollectionMutationService extends BaseService {
       partState: provenance.partState ?? "live",
       values: translation.localizedFieldValues ?? {},
       jsonFields: new Set(translation.jsonFields ?? []),
+      // Each language's counter as it stands, for a copy to be judged against the version of its
+      // source it says it read.
+      languageRevisions: await copySourceRevisions(
+        tx.getDrizzle<SelectsRows>(),
+        {
+          dialect: this.dialect,
+          languagesTable: translation.companionTableName ?? null,
+          entryId: args.entryId,
+          claims: provenance.claims,
+        }
+      ),
       promotesDraft: provenance.promotesDraft,
       defaultLocale: this.localization.defaultLocale,
       savedBy: args.savedBy,

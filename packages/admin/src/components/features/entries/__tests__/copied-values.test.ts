@@ -29,6 +29,20 @@ describe("copiedValuesFor", () => {
     expect(copies.provenanceForSave({ title: "Bonjour" })).toBeUndefined();
   });
 
+  it("says which version of its source each copy was read at", () => {
+    // The server judges a copy against the source language as it now stands: a copy read at an
+    // older version of English reads as out of date, so the claim carries the version it read.
+    const copies = copiedValuesFor({});
+    copies.record({ title: "Hello" }, "en", "3.en:2");
+    copies.record({ body: "Bonjour" }, "fr");
+    expect(
+      copies.provenanceForSave({ title: "Hello", body: "Bonjour" })
+    ).toEqual({
+      title: { origin: "copy", sourceLocale: "en", sourceRevision: "3.en:2" },
+      body: { origin: "copy", sourceLocale: "fr" },
+    });
+  });
+
   it("is one tracker per form", () => {
     const control = {};
     copiedValuesFor(control).record({ title: "Hello" }, "en");

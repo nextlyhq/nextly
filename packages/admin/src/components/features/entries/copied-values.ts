@@ -15,16 +15,29 @@
 
 import { sameFormValue } from "../versions/same-form-value";
 
-/** One field's claim: copied from that language. */
+/** One field's claim: copied from that language, at the version of it the copy read. */
 export interface CopyClaim {
   origin: "copy";
   sourceLocale: string;
+  /**
+   * The document's `_rev` as the copy read the source language. The server compares it with the
+   * source as it stands when the copy is saved: a source that moved in between, or a copy that
+   * names no version, reads as out of date until it is copied again.
+   */
+  sourceRevision?: string;
 }
 
 /** The copies one form holds. */
 export interface CopiedValues {
-  /** Note the values a copy from `sourceLocale` just put into the form. */
-  record: (values: Record<string, unknown>, sourceLocale: string) => void;
+  /**
+   * Note the values a copy from `sourceLocale` just put into the form, and the version of the
+   * source it read (`sourceRevision`, the source's `_rev`), when the read gave one.
+   */
+  record: (
+    values: Record<string, unknown>,
+    sourceLocale: string,
+    sourceRevision?: string
+  ) => void;
   /** Each field still holding its copied value, and the language it came from. */
   provenanceForSave: (
     current: Record<string, unknown>
@@ -46,12 +59,16 @@ export function copiedValuesFor(control: object): CopiedValues {
 }
 
 function createCopiedValues(): CopiedValues {
-  // Each field's latest copy: the value put in, and the language it came from.
-  const copied = new Map<string, { value: unknown; sourceLocale: string }>();
+  // Each field's latest copy: the value put in, the language it came from, and the version of
+  // that language it was read at.
+  const copied = new Map<
+    string,
+    { value: unknown; sourceLocale: string; sourceRevision?: string }
+  >();
   return {
-    record(values, sourceLocale) {
+    record(values, sourceLocale, sourceRevision) {
       for (const [name, value] of Object.entries(values)) {
-        copied.set(name, { value, sourceLocale });
+        copied.set(name, { value, sourceLocale, sourceRevision });
       }
     },
     provenanceForSave(current) {
@@ -59,7 +76,13 @@ function createCopiedValues(): CopiedValues {
       for (const [name, entry] of copied) {
         // A value edited again since its copy is the person's own.
         if (sameFormValue(current[name], entry.value)) {
-          claims[name] = { origin: "copy", sourceLocale: entry.sourceLocale };
+          claims[name] = {
+            origin: "copy",
+            sourceLocale: entry.sourceLocale,
+            ...(entry.sourceRevision !== undefined
+              ? { sourceRevision: entry.sourceRevision }
+              : {}),
+          };
         }
       }
       return Object.keys(claims).length > 0 ? claims : undefined;

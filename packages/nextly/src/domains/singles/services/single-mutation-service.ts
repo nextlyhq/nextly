@@ -4611,6 +4611,7 @@ export class SingleMutationService extends BaseService {
               locale: writeLocale,
               values: companionData,
               localizedFields: companion.localizedFields,
+              languagesTable: companion.companionTableName,
               savedBy,
               claims: provenanceClaims,
               promotesDraft: promotedDraft,
@@ -4729,6 +4730,7 @@ export class SingleMutationService extends BaseService {
                 locale: singleDraftLocale,
                 values: companionData,
                 localizedFields: companion.localizedFields,
+                languagesTable: companion.companionTableName,
                 savedBy,
                 claims: provenanceClaims,
                 partState: "draft",
@@ -6781,6 +6783,7 @@ export class SingleMutationService extends BaseService {
       locale: translatedIn,
       values: translation,
       localizedFields: companion.localizedFields,
+      languagesTable: companion.companionTableName,
       savedBy: args.actor,
     });
   }

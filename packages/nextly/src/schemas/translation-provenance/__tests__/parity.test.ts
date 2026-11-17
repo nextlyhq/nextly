@@ -17,6 +17,10 @@ import { CORE_TABLE_NAMES, getCoreSchema } from "../../index";
 import * as my from "../mysql";
 import * as pg from "../postgres";
 import * as sl from "../sqlite";
+import {
+  SOURCE_FINGERPRINT_MOVED,
+  TRANSLATION_PROVENANCE_FINGERPRINT_LENGTH,
+} from "../table-name";
 
 const TABLE = "nextly_translation_provenance";
 
@@ -138,5 +142,22 @@ describe("the provenance table keeps who wrote a value", () => {
       | { length?: number }
       | undefined;
     expect(column?.length).toBeGreaterThanOrEqual(PRINCIPAL_KIND_MAX_LENGTH);
+  });
+});
+
+describe("the marker kept for a copy of a source that moved", () => {
+  it("fits the fingerprint column and can never be a fingerprint", () => {
+    // Stored where a sha256 goes, it must fit the MySQL varchar, and never equal one: the one
+    // comparison then always finds it different, so the copy reads as out of date.
+    const column = mysqlTableConfig(
+      my.nextlyTranslationProvenanceMysql
+    ).columns.find(col => col.name === "source_fingerprint") as
+      | { length?: number }
+      | undefined;
+    expect(column?.length).toBe(TRANSLATION_PROVENANCE_FINGERPRINT_LENGTH);
+    expect(SOURCE_FINGERPRINT_MOVED.length).toBeLessThanOrEqual(
+      TRANSLATION_PROVENANCE_FINGERPRINT_LENGTH
+    );
+    expect(SOURCE_FINGERPRINT_MOVED).not.toMatch(/^[0-9a-f]{64}$/);
   });
 });

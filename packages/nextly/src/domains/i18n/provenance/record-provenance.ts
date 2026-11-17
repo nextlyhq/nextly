@@ -15,12 +15,14 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type {
+  SupportedDialect,
   WhereClause,
   WhereCondition,
 } from "@nextlyhq/adapter-drizzle/types";
 
 import type { RequestActor } from "../../../auth/request-actor";
 import {
+  SOURCE_FINGERPRINT_MOVED,
   TRANSLATION_PROVENANCE_FIELD_PATH_LENGTH,
   TRANSLATION_PROVENANCE_ROW_SEPARATOR as ROW_PATH_SEPARATOR,
   TRANSLATION_PROVENANCE_TABLE,
@@ -34,6 +36,11 @@ import {
   type DashboardLogger,
   type TableProbe,
 } from "../../dashboard/table-presence";
+import {
+  readLanguageRevisions,
+  type SelectsRows,
+} from "../../versions/document-revision";
+import { languageCounterInVersion } from "../../versions/stale-version";
 
 import {
   ownEntry,
@@ -71,6 +78,12 @@ export interface ProvenanceWrite {
    * their text is read back to the value it encodes. Any other field's text is the value.
    */
   jsonFields?: ReadonlySet<string>;
+  /**
+   * Each of the document's languages' counters as they stand, read on the write's transaction:
+   * what a copy's `sourceRevision` is compared with. Absent, no copy can be shown to come from
+   * the source as it is.
+   */
+  languageRevisions?: ReadonlyMap<string, number>;
   /** The site's default language: the source every other language is made from. */
   defaultLocale: string;
   savedBy?: RequestActor;
@@ -143,6 +156,23 @@ function writtenValueOf(value: unknown, storedAsJson: boolean): unknown {
   return value;
 }
 
+/**
+ * Whether a copy was made from its source language as that language now stands: it says which
+ * version of the source it read (`sourceRevision`), and the source's counter has not moved since.
+ * A copy that does not say cannot be shown to, so it is not.
+ */
+function copiedFromCurrentSource(
+  claim: Extract<ProvenanceClaim, { origin: "copy" }>,
+  write: ProvenanceWrite
+): boolean {
+  if (claim.sourceRevision === undefined) return false;
+  const now = write.languageRevisions?.get(claim.sourceLocale);
+  return (
+    now !== undefined &&
+    languageCounterInVersion(claim.sourceRevision, claim.sourceLocale) === now
+  );
+}
+
 /** The origin a write without a claim gives a value, from who wrote it. */
 function originOfActor(savedBy: RequestActor | undefined): ProvenanceOrigin {
   if (savedBy?.type === "user" || savedBy?.type === "principal") {
@@ -207,6 +237,25 @@ function fieldOrigin(
     sourceLocale:
       claim.origin === "copy" ? claim.sourceLocale : write.defaultLocale,
   };
+}
+
+/**
+ * The fingerprint `field`'s value was made from: its source language's live one, or, for a copy
+ * not made from the source as it now stands, {@link SOURCE_FINGERPRINT_MOVED}, which reads as out
+ * of date until the value is made again from the source as it is.
+ */
+function sourceFingerprintOf(
+  write: ProvenanceWrite,
+  field: string,
+  origin: FieldOrigin,
+  sources: ReadonlyMap<string, ReadonlyMap<string, string>>
+): string | null {
+  if (origin.sourceLocale === null) return null;
+  const claim = ownEntry(write.claims, field);
+  if (claim?.origin === "copy" && !copiedFromCurrentSource(claim, write)) {
+    return SOURCE_FINGERPRINT_MOVED;
+  }
+  return sources.get(origin.sourceLocale)?.get(field) ?? null;
 }
 
 /** The rows of one document's language and part, matched by these columns. */
@@ -332,10 +381,7 @@ async function recordTranslationProvenance(
       engine: origin.engine,
       ...actorColumns(write.savedBy),
       sourceLocale: origin.sourceLocale,
-      sourceFingerprint:
-        origin.sourceLocale === null
-          ? null
-          : (sources.get(origin.sourceLocale)?.get(field) ?? null),
+      sourceFingerprint: sourceFingerprintOf(write, field, origin, sources),
       originRowId: null,
       writtenAt,
     };
@@ -463,6 +509,33 @@ async function promoteDraftProvenance(
 }
 
 /** A write's values and, where it puts a held draft live, that it does. */
+/**
+ * The document's languages' counters as they stand, read on `db` (the write's transaction) when a
+ * write claims a copy, for {@link ProvenanceWrite.languageRevisions}; undefined when none does, or
+ * when the document keeps no translations to count.
+ */
+export async function copySourceRevisions(
+  db: SelectsRows,
+  args: {
+    dialect: SupportedDialect;
+    languagesTable: string | null;
+    entryId: string;
+    claims: ProvenanceClaims | undefined;
+  }
+): Promise<ReadonlyMap<string, number> | undefined> {
+  const copies = Object.values(args.claims ?? {}).some(
+    claim => claim.origin === "copy"
+  );
+  if (!copies || args.languagesTable === null) return undefined;
+  const counters = await readLanguageRevisions(db, {
+    dialect: args.dialect,
+    table: args.languagesTable,
+    ids: [args.entryId],
+  });
+  // A language with no translation row yet holds no counter: it reads as 0, as a version does.
+  return counters.get(args.entryId) ?? new Map<string, number>();
+}
+
 export interface WrittenValues extends ProvenanceWrite {
   /** The write puts the language's held draft live: the draft's record moves with it. */
   promotesDraft?: boolean;
