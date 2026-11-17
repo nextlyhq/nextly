@@ -27,6 +27,7 @@ import { ChevronDown } from "lucide-react";
 import * as React from "react";
 
 import { ChoiceList } from "./choice-list";
+import { useFieldDescription } from "./css-hint";
 import { isElement } from "./dom-kind";
 import { InheritedValue } from "./inherited-value";
 import {
@@ -587,6 +588,8 @@ function ColourPicker({
    */
   onChoose: (value: StyleValue) => void;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   // Whether the dismissal in progress belongs to a control that writes for
   // itself. Read once by the close below and reset there, so it cannot leak
   // into the next open.
@@ -623,7 +626,7 @@ function ColourPicker({
           reference={reference}
           referenceLabel={referenceLabel}
           actionName={actionName}
-          aria-describedby={describedBy}
+          aria-describedby={described}
           aria-invalid={invalid ? true : undefined}
         />
       </PopoverTrigger>

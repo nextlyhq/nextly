@@ -6,6 +6,10 @@
  * Esc puts it back. Held read-only, there is no edit button. Without the
  * site's address the chip shows the path alone; for a type with no public
  * address, the slug alone; with neither, no chip, as for a Single.
+ *
+ * The address is the entry's details read, which the block asks for itself
+ * (so a view covering it asks for nothing); here that read answers what each
+ * case hands it.
  */
 import userEvent from "@testing-library/user-event";
 import type { FieldConfig } from "nextly/config";
@@ -16,10 +20,26 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 import { render, screen, within } from "@admin/__tests__/utils";
 
 import { DocumentTitleBlock } from "../DocumentTitleBlock";
-import type { EntryAddress } from "../entry-details-read";
+import type {
+  EntryAddress,
+  EntryDetails,
+  EntryDetailsTarget,
+} from "../entry-details-read";
 
-const { toast } = vi.hoisted(() => ({
+const { toast, details } = vi.hoisted(() => ({
   toast: { success: vi.fn(), error: vi.fn() },
+  // What the details read answers, and what it was asked.
+  details: {
+    answer: undefined as EntryDetails | undefined,
+    asked: vi.fn(),
+  },
+}));
+vi.mock("../entry-details-read", async importOriginal => ({
+  ...(await importOriginal<typeof import("../entry-details-read")>()),
+  useEntryDetails: (target: EntryDetailsTarget | undefined) => {
+    details.asked(target);
+    return details.answer;
+  },
 }));
 vi.mock("@admin/components/ui", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/components/ui")>()),
@@ -37,6 +57,13 @@ const PAGE: EntryAddress = {
   site: "https://ridgeline.com/",
   path: "/homepage",
   aroundSlug: { before: "/", after: "" },
+};
+
+/** The entry the block is drawn for. */
+const ENTRY: EntryDetailsTarget = {
+  collectionSlug: "pages",
+  entryId: "e1",
+  locale: undefined,
 };
 
 let stored: unknown;
@@ -61,6 +88,10 @@ function Harness({
   const methods = useForm({
     defaultValues: { title: "Home", slug: initialSlug },
   });
+  details.answer =
+    address === undefined
+      ? undefined
+      : { createdBy: null, updatedBy: null, updatedAt: null, address };
   stored = methods.watch("slug");
   const { setError } = methods;
   useEffect(() => {
@@ -75,7 +106,7 @@ function Harness({
             ? { field: slugField, locked, hasPublicAddress: live === true }
             : undefined
         }
-        address={address}
+        detailsOf={ENTRY}
         status={{ status, hasWorkingDraft: false }}
       />
     </FormProvider>
@@ -99,6 +130,11 @@ afterEach(() => {
 });
 
 describe("DocumentTitleBlock — the address chip", () => {
+  it("asks for the address of the entry it is drawn for", () => {
+    render(<Harness address={PAGE} />);
+    expect(details.asked).toHaveBeenCalledWith(ENTRY);
+  });
+
   it("shows a page's full address and its three buttons", () => {
     render(<Harness address={PAGE} />);
     expect(chip()).toHaveTextContent("ridgeline.com/homepage");

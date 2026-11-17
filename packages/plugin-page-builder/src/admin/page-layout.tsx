@@ -60,6 +60,7 @@ import {
 } from "../layout-choices-contract";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
+import { useBuilderRoute } from "./builder-route-read";
 import {
   layoutPickerView,
   layoutValue,
@@ -173,7 +174,7 @@ function useRefreshOnReturn(enabled: boolean, refetch: () => void): void {
 function useIsPageForm(): boolean {
   const identity = useDocumentIdentity();
   const candidate = identity?.kind === "collection";
-  const read = usePluginRoute<PageCollectionResponse>({
+  const read = useBuilderRoute<PageCollectionResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: PAGE_COLLECTION_ROUTE_PATH,
     enabled: candidate,

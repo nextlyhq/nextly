@@ -28,6 +28,7 @@ import * as React from "react";
 
 // Enter commits without submitting the entry form the builder sits in.
 import { commitOnEnter } from "./commit-on-enter";
+import { useFieldDescription } from "./css-hint";
 import { InheritedValue } from "./inherited-value";
 import { CSS_NUMBER } from "./style-numeric";
 
@@ -166,6 +167,8 @@ export function AspectRatioField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   const inherited = inheritedLabel(stored, React.useContext(InheritedValue));
   // Custom and CSS are chosen before anything is typed, so each is the
   // field's own state until a ratio is stored; a stored change (one written
@@ -193,7 +196,7 @@ export function AspectRatioField({
         <SelectTrigger
           id={id}
           aria-labelledby={labelledBy}
-          aria-describedby={describedBy}
+          aria-describedby={described}
           aria-invalid={invalid}
           {...(value === "" && inherited !== undefined
             ? { "data-inherited": "" }
@@ -243,6 +246,8 @@ function CssRatio({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   const [text, setText] = React.useState("");
   const commit = () => {
     if (trimCssWhitespace(text) !== "") onCommit(text);
@@ -250,7 +255,7 @@ function CssRatio({
   return (
     <Input
       aria-label={`${actionName} as CSS`}
-      aria-describedby={describedBy}
+      aria-describedby={described}
       aria-invalid={describedBy === undefined ? undefined : true}
       value={text}
       onChange={event => setText(event.target.value)}
@@ -275,6 +280,8 @@ function CustomRatio({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   const [width, setWidth] = React.useState(
     stored === undefined ? "" : String(stored.width)
   );
@@ -302,7 +309,7 @@ function CustomRatio({
   // A refusal said for the field is said for both numbers, either of which
   // may hold the focus when it arrives.
   const refusal = {
-    "aria-describedby": describedBy,
+    "aria-describedby": described,
     "aria-invalid": describedBy === undefined ? undefined : true,
   } as const;
   return (

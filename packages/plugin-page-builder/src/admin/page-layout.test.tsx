@@ -24,6 +24,8 @@ import {
 } from "vitest";
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  // The person signed in, whom the builder's start-up answers are for.
+  useCurrentUserId: () => "ada",
   usePluginRoute: vi.fn(),
   useDocumentIdentity: vi.fn(),
   useDocumentLocale: vi.fn(() => null),
