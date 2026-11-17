@@ -5,9 +5,6 @@
  * @module domains/schema/builder-save/push-carries-values
  */
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import { isFieldLocalized } from "../../i18n/classify-fields";
-import { fieldsLeavingTranslationUnder } from "../../i18n/migration/archive-preflight";
-import { fieldsJoiningTranslation } from "../../i18n/migration/field-joins-translation";
 import type { FieldRename } from "../../i18n/migration/reconcile-companion";
 import type { TableSpec } from "../pipeline/diff/types";
 import { reachesRelationStorage } from "../pipeline/recorded-shapes";
@@ -62,25 +59,6 @@ export async function pushCarriesValues(args: {
     holdsRow: () => Promise<boolean>;
   };
 }): Promise<boolean> {
-  if (args.wasStored !== args.isStored) return true;
-  if (args.isStored && args.wasStatus !== args.status) return true;
-  if (
-    args.isStored &&
-    fieldsJoiningTranslation(args.oldFields, args.newFields).length > 0
-  ) {
-    return true;
-  }
-  if (
-    args.wasStored &&
-    fieldsLeavingTranslationUnder(args.oldFields, args.newFields, args.renamed)
-      .length > 0
-  ) {
-    return true;
-  }
-  // A translated field renamed or removed: its companion column is renamed or dropped, judged by
-  // the push against the companion as it stands, so a save made again after one that stopped part
-  // way finishes it. The file, planned from the companion's history, would rename or drop it again.
-  if (args.wasStored && translatedFieldRenamedOrRemoved(args)) return true;
   // A field whose column changes type or size: the push judges every stored value against the new
   // column before it alters it, refusing one it would cut short; the file's statements have no
   // such judgement yet, and a server refuses them with its own error, or cuts the value.
@@ -154,17 +132,4 @@ async function fillsSingleRow(
     field => !kept.has(toSnakeCase(field.name)) && row.fills(field)
   );
   return filled && (await row.holdsRow());
-}
-
-/** Whether a field translated before the save is renamed, or is gone from the fields after it. */
-function translatedFieldRenamedOrRemoved(args: {
-  oldFields: readonly FieldDefinition[];
-  newFields: readonly FieldDefinition[];
-  renamed: FieldRename | null | undefined;
-}): boolean {
-  if (args.renamed) return true;
-  const kept = new Set(namedOnRow(args.newFields).map(field => field.name));
-  return namedOnRow(args.oldFields).some(
-    field => isFieldLocalized(field, true) && !kept.has(field.name)
-  );
 }
