@@ -54,6 +54,7 @@ import {
 import { declaresOwnId } from "nextly/field-catalog";
 import { z } from "zod";
 
+import { fieldLabel } from "./field-label";
 import { RESTRICTED_REFERENCE } from "./form/stored-references";
 
 // ============================================================
@@ -386,25 +387,60 @@ function fieldToZodSchema(
     const optionalBase =
       schema instanceof z.ZodArray ? schema : z.union([z.literal(""), schema]);
     schema = optionalBase.optional().nullable();
-  } else if (schema instanceof z.ZodString) {
-    // For required string fields, ensure they are not empty
-    // unless a specific minLength is already set
-    const minLength = getValidation(field, "minLength") as number | undefined;
-    if (!minLength) {
-      schema = schema.min(1, "This field is required");
+  } else {
+    const message = requiredMessage(field);
+    if (isRichTextField(field)) {
+      // Why: richText's schema is `z.unknown()` (Lexical handles its own
+      // structural validation), so an empty editor is not a missing value
+      // to the check below. Refine with `isRichTextEmpty` so the user gets a
+      // real required error when the editor is empty.
+      schema = schema.refine(value => !isRichTextEmpty(value), { message });
     }
-  } else if (isRichTextField(field)) {
-    // Why: richText's schema is `z.unknown()` (Lexical handles its own
-    // structural validation), so the ZodString branch above doesn't
-    // apply and the required gate was a silent no-op. Wrap with a
-    // `refine` that calls `isRichTextEmpty` so the user gets a real
-    // "This field is required" error when the editor is empty.
-    schema = schema.refine(value => !isRichTextEmpty(value), {
-      message: "This field is required",
-    });
+    schema = requiredFirst(schema, message);
   }
 
   return schema;
+}
+
+/**
+ * What a required field with no value says: the field's name, as the server
+ * says it (`entry-validation`'s `REQUIRED` issue), so the form and the save
+ * word one mistake one way.
+ */
+function requiredMessage(field: DataFieldConfig | ExtractedField): string {
+  const label = fieldLabel(field);
+  return `${label || "This field"} is required.`;
+}
+
+/**
+ * Whether a value counts as not given, by the server's own rule (`isEmpty` in
+ * `entry-validation`): absent, null, or text of nothing but spaces. A list is
+ * left to its own schema, whose row bounds already judge an empty one.
+ */
+function isMissingValue(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    (typeof value === "string" && value.trim() === "")
+  );
+}
+
+/**
+ * A required field's schema, asked first whether the value was given at all.
+ *
+ * Without this, a required field the form seeds empty as `null` — a select, a
+ * number, a date, a relationship, an upload — met its TYPE check first and
+ * showed zod's own words, `Invalid option: expected one of "draft"|"published"`
+ * or `Invalid input: expected number, received null`: a developer's message
+ * that names raw option values and says nothing about what to do. A missing
+ * value now says only that it is required, and the type's own rules are asked
+ * only of a value that was given.
+ */
+function requiredFirst(schema: z.ZodTypeAny, message: string): z.ZodTypeAny {
+  return z
+    .unknown()
+    .refine(value => !isMissingValue(value), { message, abort: true })
+    .pipe(schema);
 }
 
 // ============================================================
@@ -448,11 +484,15 @@ function applyPattern(
   schema: z.ZodString,
   pattern: string,
   message: string | undefined,
-  required: boolean
+  required: boolean,
+  named: string
 ): z.ZodTypeAny {
   const re = compileRegexOrUndefined(pattern);
   if (!re) return schema;
-  const msg = message ?? "Invalid format";
+  // With no message of the author's, the field is named as the server names
+  // it on the same failure, rather than a bare "Invalid format" that said
+  // neither which field nor that a message could be written for it.
+  const msg = message ?? `${named} does not match the required format.`;
   if (required) {
     return schema.regex(re, msg);
   }
@@ -591,7 +631,10 @@ function constrainedStringSchema(
       schema,
       pattern,
       getPatternMessage(field),
-      isFieldRequired(field)
+      isFieldRequired(field),
+      // Each item of a list is named as the bounds name it; a single value
+      // by the field's own name.
+      subject === "Each item" ? subject : fieldLabel(field) || "This value"
     );
   }
   return schema;

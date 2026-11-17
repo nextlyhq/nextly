@@ -41,7 +41,9 @@ describe("generateClientSchema — validation.pattern enforcement (Task 3 PR 8)"
     const bad = schema.safeParse({ code: "abc" });
     expect(bad.success).toBe(false);
     if (!bad.success) {
-      expect(bad.error.issues[0]?.message).toBe("Invalid format");
+      expect(bad.error.issues[0]?.message).toBe(
+        "Code does not match the required format."
+      );
     }
   });
 
@@ -736,6 +738,118 @@ describe("generateClientSchema — a relationship naming several collections", (
     expect(parsed.success).toBe(true);
     if (parsed.success) {
       expect((parsed.data as { related: unknown[] }).related).toEqual([pair]);
+    }
+  });
+});
+
+// A required field with no value says it is required, by name, as the server
+// says it — and before the type's own check, which for a field the form seeds
+// as null (select, number, date) used to show zod's own words instead, such as
+// `Invalid option: expected one of "draft"|"published"`.
+describe("generateClientSchema — a required field left empty", () => {
+  const firstMessage = (field: Record<string, unknown>, value: unknown) => {
+    const result = generateClientSchema([
+      field as unknown as FieldConfig,
+    ]).safeParse({ [field.name as string]: value });
+    return result.success ? null : result.error.issues[0]?.message;
+  };
+
+  it("names a required select left unchosen, rather than its options", () => {
+    const status = {
+      type: "select",
+      name: "status",
+      label: "Status",
+      required: true,
+      options: [
+        { label: "Draft", value: "draft" },
+        { label: "Published", value: "published" },
+      ],
+    };
+    expect(firstMessage(status, null)).toBe("Status is required.");
+    expect(firstMessage(status, "")).toBe("Status is required.");
+    expect(firstMessage(status, undefined)).toBe("Status is required.");
+    // A value given is still judged by the type's own rule.
+    expect(firstMessage(status, "archived")).not.toBe("Status is required.");
+    expect(firstMessage(status, "draft")).toBeNull();
+  });
+
+  it("names a required number or date left empty", () => {
+    expect(
+      firstMessage({ type: "number", name: "rank", required: true }, null)
+    ).toBe("Rank is required.");
+    expect(
+      firstMessage(
+        {
+          type: "date",
+          name: "publishedAt",
+          label: "Publish date",
+          required: true,
+        },
+        null
+      )
+    ).toBe("Publish date is required.");
+  });
+
+  it("names a required text field left blank, spaces included", () => {
+    const name = { type: "text", name: "fullName", required: true };
+    expect(firstMessage(name, "")).toBe("Full Name is required.");
+    expect(firstMessage(name, "   ")).toBe("Full Name is required.");
+    expect(firstMessage(name, "Ada")).toBeNull();
+  });
+
+  it("says required, not a length bound, for a blank field with a minimum length", () => {
+    const code = {
+      type: "text",
+      name: "code",
+      required: true,
+      validation: { minLength: 3 },
+    };
+    expect(firstMessage(code, "")).toBe("Code is required.");
+    expect(firstMessage(code, "ab")).toBe("Must be at least 3 characters");
+  });
+
+  it("leaves an optional field free to stay empty", () => {
+    expect(
+      firstMessage(
+        { type: "select", name: "tone", options: [{ label: "A", value: "a" }] },
+        null
+      )
+    ).toBeNull();
+  });
+});
+
+describe("generateClientSchema — a password's pattern", () => {
+  const password = (validation: Record<string, unknown>) => ({
+    type: "password",
+    name: "password",
+    label: "Password",
+    required: true,
+    validation: { pattern: "@123", ...validation },
+  });
+
+  it("says the author's message when the password does not match", () => {
+    const result = generateClientSchema([
+      password({
+        message: "Password must contain @123",
+      }) as unknown as FieldConfig,
+    ]).safeParse({ password: "secret" });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toBe(
+        "Password must contain @123"
+      );
+    }
+  });
+
+  it("names the field when the author wrote no message", () => {
+    const result = generateClientSchema([
+      password({}) as unknown as FieldConfig,
+    ]).safeParse({ password: "secret" });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toBe(
+        "Password does not match the required format."
+      );
     }
   });
 });
