@@ -300,6 +300,36 @@ describe("tables dropped", () => {
     }
   );
 
+  it("keeps a name a view takes after the run dropped its own table of it live", () => {
+    expect(
+      read(
+        "postgresql",
+        [
+          "CREATE TABLE IF NOT EXISTS recent (id integer)",
+          "DROP TABLE recent",
+          "CREATE VIEW recent AS SELECT id FROM posts",
+          "CREATE TABLE IF NOT EXISTS recent (id integer)",
+          "DELETE FROM recent",
+        ],
+        { live: ["posts"] }
+      )
+    ).toEqual([rows("recent")]);
+  });
+
+  it("keeps every later conditional create live once the run imports a foreign schema", () => {
+    expect(
+      read(
+        "postgresql",
+        [
+          "IMPORT FOREIGN SCHEMA remote LIMIT TO (recent) FROM SERVER elsewhere INTO public",
+          "CREATE TABLE IF NOT EXISTS recent (id integer)",
+          "DELETE FROM recent WHERE id = 1",
+        ],
+        { live: [] }
+      )
+    ).toEqual([rows("recent")]);
+  });
+
   it("counts a table whose own definition names an index the run's own, as its name is free", () => {
     expect(
       read(

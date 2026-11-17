@@ -201,6 +201,8 @@ type Step =
     }
   /** A relation other than a table (a view, a sequence, an index) the list makes or renames onto `table`. */
   | { kind: "hold"; table: string }
+  /** Relations made under names the statement does not state (an imported foreign schema). */
+  | { kind: "hold-every" }
   /** A table dropped; `temporary` when only a temporary table of the name can be (MySQL's DROP TEMPORARY). */
   | { kind: "drop"; table: string; temporary?: boolean }
   | { kind: "add-column"; table: string; column: string }
@@ -425,7 +427,11 @@ function readStatement(statement: string, dialect: SupportedDialect): Step[] {
   const first = cursor.peek();
   if (typeof first !== "string") return unreadIfDeleting(tokens);
   if (CODE_WORDS.has(first)) return [unread(tokens)];
-  const held = nameHeldBy(tokens);
+  // PostgreSQL's foreign-schema import makes foreign tables under names it need not state.
+  if (first === "IMPORT" && cursor.isWord("FOREIGN", 1)) {
+    return [{ kind: "hold-every" }];
+  }
+  const held = nameHeldByCreate(tokens) ?? nameHeldByAlter(tokens);
   if (held !== undefined) return [{ kind: "hold", table: held }];
   const read =
     readDefinition(cursor, tokens, dialect) ??
@@ -459,45 +465,55 @@ const NOT_HOLDING = new Set([
  * name holds its unqualified part, which a later unqualified create may mean. Undefined for any
  * other statement, a table's own definition (an index it names inline) included.
  */
-function nameHeldBy(tokens: readonly Token[]): string | undefined {
-  const nameAt = (from: number): string | undefined => {
-    const cursor = new StatementCursor(tokens.slice(from));
-    cursor.accept("CONCURRENTLY");
-    cursor.acceptCondition();
-    if (cursor.isWord("ON")) return undefined;
-    const start = cursor.at;
-    const plain = cursor.name();
-    if (plain !== undefined) return plain;
-    cursor.at = start;
-    return cursor.qualifiedName()?.name;
-  };
-  if (tokens[0] === "CREATE") {
-    // PostgreSQL's foreign table is a relation of its own kind under a table's name.
-    if (tokens[1] === "FOREIGN" && tokens[2] === "TABLE") return nameAt(3);
-    const at = tokens.findIndex(
-      (token, i) =>
-        i > 0 &&
-        typeof token === "string" &&
-        (HOLDING_KINDS.has(token) || NOT_HOLDING.has(token))
-    );
-    const kind = tokens[at];
-    if (at === -1 || typeof kind !== "string" || !HOLDING_KINDS.has(kind)) {
-      return undefined;
-    }
-    return nameAt(at + 1);
+function heldNameAt(
+  tokens: readonly Token[],
+  from: number
+): string | undefined {
+  const cursor = new StatementCursor(tokens.slice(from));
+  cursor.accept("CONCURRENTLY");
+  cursor.acceptCondition();
+  if (cursor.isWord("ON")) return undefined;
+  const start = cursor.at;
+  const plain = cursor.name();
+  if (plain !== undefined) return plain;
+  cursor.at = start;
+  return cursor.qualifiedName()?.name;
+}
+
+/** The name a `CREATE` of a view, a sequence, an index or a foreign table takes (`HOLDING_KINDS`). */
+function nameHeldByCreate(tokens: readonly Token[]): string | undefined {
+  if (tokens[0] !== "CREATE") return undefined;
+  // PostgreSQL's foreign table is a relation of its own kind under a table's name.
+  if (tokens[1] === "FOREIGN" && tokens[2] === "TABLE") {
+    return heldNameAt(tokens, 3);
   }
+  const at = tokens.findIndex(
+    (token, i) =>
+      i > 0 &&
+      typeof token === "string" &&
+      (HOLDING_KINDS.has(token) || NOT_HOLDING.has(token))
+  );
+  const kind = tokens[at];
+  if (at === -1 || typeof kind !== "string" || !HOLDING_KINDS.has(kind)) {
+    return undefined;
+  }
+  return heldNameAt(tokens, at + 1);
+}
+
+/** The name an `ALTER [MATERIALIZED] VIEW | SEQUENCE | INDEX … RENAME TO` gives one. */
+function nameHeldByAlter(tokens: readonly Token[]): string | undefined {
   const altered = tokens[1];
   if (
-    tokens[0] === "ALTER" &&
-    typeof altered === "string" &&
-    (HOLDING_KINDS.has(altered) || altered === "MATERIALIZED")
+    tokens[0] !== "ALTER" ||
+    typeof altered !== "string" ||
+    !(HOLDING_KINDS.has(altered) || altered === "MATERIALIZED")
   ) {
-    const to = tokens.findIndex(
-      (token, i) => token === "RENAME" && tokens[i + 1] === "TO"
-    );
-    return to === -1 ? undefined : nameAt(to + 2);
+    return undefined;
   }
-  return undefined;
+  const to = tokens.findIndex(
+    (token, i) => token === "RENAME" && tokens[i + 1] === "TO"
+  );
+  return to === -1 ? undefined : heldNameAt(tokens, to + 2);
 }
 
 /** A statement on a table's or a type's definition: CREATE, DROP, ALTER; null for any other. */
@@ -1687,6 +1703,8 @@ class FileWalk {
   private readonly shadowed = new Map<string, string | null | undefined>();
   /** Names a view, a sequence or an index the list made or renamed onto holds from then on. */
   private readonly held = new Set<string>();
+  /** Set once the list makes relations under names it does not state: any name may be held. */
+  private holdsEvery = false;
   /** Per table, the tables the list made its descendants. */
   private readonly attached = new Map<string, Set<string>>();
   /** The functions the list defines, by the last part of their names; `*` for one it cannot name. */
@@ -1798,6 +1816,12 @@ class FileWalk {
         return true;
       case "hold":
         this.held.add(step.table);
+        // What holds the name now is that relation, never a table the run made earlier and
+        // dropped: a removal through it is the relation's, judged as live.
+        this.origins.delete(step.table);
+        return true;
+      case "hold-every":
+        this.holdsEvery = true;
         return true;
       default:
         return false;
@@ -1852,21 +1876,8 @@ class FileWalk {
   }
 
   private create(table: string, temporary: boolean, ifNotExists = false): void {
-    // Made only where the name is free at this point of the run: a view, sequence or index the
-    // run made or renamed onto it, a live table the run renamed onto it, a relation of any kind
-    // holding it before the run, or one not known to be absent
-    // leaves the statement a no-op, and what holds the name stays what it was.
     if (ifNotExists) {
-      if (this.held.has(table)) return;
-      const now = this.origins.get(table);
-      if (typeof now === "string") return;
-      if (
-        now === undefined &&
-        (this.facts.liveTable(table) !== false ||
-          this.facts.nameTaken(table) !== false)
-      )
-        return;
-      this.origins.set(table, null);
+      this.createIfAbsent(table);
       return;
     }
     // A temporary table shadows the name until it is dropped again.
@@ -1876,6 +1887,26 @@ class FileWalk {
     else if (
       this.origin(table) !== null &&
       this.facts.liveTable(table) !== false
+    )
+      return;
+    this.origins.set(table, null);
+  }
+
+  /**
+   * `CREATE TABLE IF NOT EXISTS`: made only where the name is free at this point of the run. A
+   * view, sequence, index or foreign table the run made or renamed onto it (or relations it made
+   * under names not stated), a live table the run renamed onto it, a relation of any kind holding
+   * it before the run, or one not known to be absent leaves the statement a no-op, and what holds
+   * the name stays what it was.
+   */
+  private createIfAbsent(table: string): void {
+    if (this.holdsEvery || this.held.has(table)) return;
+    const now = this.origins.get(table);
+    if (typeof now === "string") return;
+    if (
+      now === undefined &&
+      (this.facts.liveTable(table) !== false ||
+        this.facts.nameTaken(table) !== false)
     )
       return;
     this.origins.set(table, null);
