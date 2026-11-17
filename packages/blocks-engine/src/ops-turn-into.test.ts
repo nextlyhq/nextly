@@ -136,12 +136,17 @@ describe("the turnInto op", () => {
       type: "core/box",
       slots: { children: [text("c")] },
     };
-    expect(() => applyOp(sectionPage(), { ...TURN, node })).toThrow(OpError);
+    expect(() => applyOp(sectionPage(), { ...TURN, node })).toThrow(
+      /^turnInto: .*already uses/
+    );
   });
 
   it("refuses a malformed new block", () => {
     const node = { ...HEADING, version: 0 };
     expect(() => applyOp(sectionPage(), { ...TURN, node })).toThrow(OpError);
+    expect(() => applyOp(sectionPage(), { ...TURN, node })).toThrow(
+      /^turnInto: /
+    );
   });
 
   describe("the Layers lock", () => {
