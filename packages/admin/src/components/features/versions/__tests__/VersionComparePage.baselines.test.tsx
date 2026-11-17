@@ -17,6 +17,7 @@ const {
   seenMock,
   diffMountMock,
   drawn,
+  versionMock,
 } = vi.hoisted(() => ({
   useVersionsMock: vi.fn(),
   baselineMock: vi.fn(),
@@ -26,6 +27,7 @@ const {
   diffMountMock: vi.fn(),
   // The language of the comparison the stand-in view draws.
   drawn: { locale: null as string | null },
+  versionMock: vi.fn(),
 }));
 
 // A stand-in for a comparison that has arrived and is drawn: it reports its
@@ -56,6 +58,9 @@ vi.mock("../diff/VersionDiffView", async () => {
 vi.mock("@admin/hooks/queries/useVersions", () => ({
   useVersions: (...a: unknown[]) => useVersionsMock(...a),
   useBaselineDiff: (...a: unknown[]) => baselineMock(...a),
+  // One stored version, read for the language of a version the page names
+  // but has no comparison of.
+  useVersion: (...a: unknown[]) => versionMock(...a),
   // Each comparison has arrived and is drawn, with no field an editor wrote,
   // so the page may mark what it shows and the rail draws no summary line.
   useVersionDiff: () => ({
@@ -118,6 +123,7 @@ describe("VersionComparePage, its choices", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     drawn.locale = null;
+    versionMock.mockReturnValue({ data: undefined });
     canMock.mockReturnValue(true);
     useVersionsMock.mockReturnValue({
       data: { pages: [{ items: [row(5), row(4), row(3)] }] },
@@ -512,6 +518,8 @@ describe("VersionComparePage, its choices", () => {
       isError: true,
     });
 
+    versionMock.mockReturnValue({ data: { versionNo: 5, locale: "de" } });
+
     renderPage({ from: "draft", to: 5 });
     await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
 
@@ -525,5 +533,53 @@ describe("VersionComparePage, its choices", () => {
       restore: "1",
       locale: "de",
     });
+  });
+
+  it("offers to restore the version named beyond the loaded history, in its own language", async () => {
+    // The history is paged: the version a refused baseline names can sit
+    // behind many newer ones, and its own record still says its language.
+    useVersionsMock.mockReturnValue({
+      data: { pages: [{ items: [row(9), row(8), row(7)] }] },
+      isLoading: false,
+      isError: false,
+      hasNextPage: true,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    });
+    versionMock.mockImplementation(
+      ({ versionNo }: { versionNo: number | null }) =>
+        versionNo === 5
+          ? { data: { versionNo: 5, locale: "fr" } }
+          : { data: undefined }
+    );
+    baselineMock.mockReturnValue({
+      data: undefined,
+      error: Object.assign(new Error("Validation failed."), {
+        status: 400,
+        code: "VALIDATION_ERROR",
+        data: {
+          errors: [
+            {
+              path: "baseline",
+              code: "NO_BASELINE",
+              message: "This is the version that is published.",
+            },
+          ],
+        },
+      }),
+      isLoading: false,
+      isError: true,
+    });
+
+    renderPage({ from: "published", to: 5 });
+    await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
+
+    const target = new URL(
+      String(navigateMock.mock.calls.at(-1)?.[0]),
+      "http://admin.test"
+    );
+    expect(target.searchParams.get("version")).toBe("5");
+    expect(target.searchParams.get("locale")).toBe("fr");
   });
 });

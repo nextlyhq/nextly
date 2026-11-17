@@ -31,6 +31,8 @@ vi.mock("@admin/hooks/queries/useVersions", async importOriginal => {
     useVersions: (...a: unknown[]) => useVersionsMock(...a),
     useBaselineDiff: actual.useBaselineDiff,
     useVersionDiff: (...a: unknown[]) => versionDiffMock(...a),
+    // Read only for a version a refused baseline names; none is refused here.
+    useVersion: () => ({ data: undefined }),
     scopeKey: actual.scopeKey,
   };
 });

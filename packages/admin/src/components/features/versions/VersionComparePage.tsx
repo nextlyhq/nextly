@@ -23,6 +23,7 @@ import { LOCALE_PARAM } from "@admin/constants/search-params";
 import {
   scopeKey,
   useBaselineDiff,
+  useVersion,
   useVersions,
 } from "@admin/hooks/queries/useVersions";
 import { useCan } from "@admin/hooks/useCan";
@@ -408,19 +409,26 @@ export function VersionComparePage({
   // What "Restore…" hands the editor: the version on screen, in the language
   // its loaded comparison names, which is the comparison's own and holds
   // where the address names none; or, while the server says there is nothing
-  // to compare with, the version the address named, in its row's language.
-  // A version's restore list compares it with the editor, not with a
-  // baseline, so having nothing to compare it with is no reason to withhold
-  // it. Nothing while the version's language is not known: the editor offers
-  // a restore only while open in that language.
-  const refusedRow =
+  // to compare with, the version the address named. A version's restore list
+  // compares it with the editor, not with a baseline, so having nothing to
+  // compare it with is no reason to withhold it.
+  //
+  // That version's language comes from its own record. The refusal names
+  // none, the address's `locale` is not that version's (the server takes a
+  // named version's part from the version), and the list is paged, so the
+  // version may sit beyond what is loaded. The record is the one the editor
+  // reads for the hand-off anyway, so reading it here asks nothing twice.
+  // Nothing is offered until it arrives: the editor offers a restore only
+  // while open in the version's language.
+  const refusedTo =
     refusal !== undefined && pair.kind === "baseline" && pair.to !== undefined
-      ? versions.find(v => v.versionNo === pair.to)
-      : undefined;
+      ? pair.to
+      : null;
+  const refusedVersion = useVersion({ scope, versionNo: refusedTo });
   const restoreTarget = seen
     ? { versionNo: seen.to, locale: seen.locale }
-    : refusedRow?.versionNo != null
-      ? { versionNo: refusedRow.versionNo, locale: refusedRow.locale ?? null }
+    : refusedTo !== null && refusedVersion.data?.versionNo === refusedTo
+      ? { versionNo: refusedTo, locale: refusedVersion.data.locale }
       : null;
 
   /** The same comparison, at another baseline or in another view. */
