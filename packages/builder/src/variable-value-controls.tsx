@@ -400,6 +400,25 @@ function durationInUnit(draft: string, unit: string): string {
 }
 
 /**
+ * A duration field's draft: the author's typing, until the stored value
+ * changes, number or unit, which replaces it with the stored number. Keyed on
+ * the whole value, so `200s` stored over `200ms` resets a draft that still
+ * reads `200s`; a refused draft is never stored, so it stays as typed.
+ */
+function useDurationDraft(
+  value: string,
+  number: string
+): [string, (next: string) => void] {
+  const [draft, setDraft] = React.useState(number);
+  const [shown, setShown] = React.useState(value);
+  if (shown !== value) {
+    setShown(value);
+    setDraft(number);
+  }
+  return [draft, setDraft];
+}
+
+/**
  * A duration: a number with a menu of ms and s. The number box and the menu
  * share one draft, so the menu changes the unit of the number on screen,
  * typed or refused, never of the value stored before it; a refused draft
@@ -412,7 +431,7 @@ function DurationValue(props: ValueFieldProps): React.JSX.Element {
   const parts = DURATION.exec(value);
   const number = parts?.[1] ?? "";
   const unit = (parts?.[2] ?? "ms").toLowerCase();
-  const [draft, setDraft] = useDraft(number);
+  const [draft, setDraft] = useDurationDraft(value, number);
   if (readOnly || parts === null) return <TextValue {...props} />;
   const commit = (text: string): void => {
     const typed = text.trim();

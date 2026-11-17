@@ -165,6 +165,14 @@ describe("a duration", () => {
     fireEvent.click(within(editor).getByLabelText("Unit for Light"));
     fireEvent.click(screen.getByRole("option", { name: "ms", hidden: true }));
     expect(savedValue(onChange, "duration.fast")).toBe("200ms");
+    // The field follows what was stored, so leaving it writes nothing back.
+    const light = within(editor).getByLabelText("Light");
+    expect(light).toHaveProperty("value", "200");
+    const saves = onChange.mock.calls.length;
+    fireEvent.focus(light);
+    fireEvent.blur(light);
+    expect(onChange.mock.calls.length).toBe(saves);
+    expect(savedValue(onChange, "duration.fast")).toBe("200ms");
   });
 
   it("keeps a refused duration refused when only its unit is changed", async () => {
