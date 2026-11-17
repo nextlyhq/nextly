@@ -46,6 +46,8 @@
  * - bindings: data bindings, the image fallback and the media library picker.
  * - image-states: an Image's empty state on the canvas, its upload, link and
  *   missing file.
+ * - first-add: the chooser a block just added asks for on the canvas, such
+ *   as the Columns layouts.
  *
  * Tests that read the stylesheet's rules read it through
  * `chrome-stylesheet.ts` beside this file, which follows these imports in
@@ -99,3 +101,5 @@
 @import "./bindings.css";
 
 @import "./image-states.css";
+
+@import "./first-add.css";

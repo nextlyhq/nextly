@@ -17,6 +17,7 @@ import {
   DropIndicator,
   DropRefusal,
   EmptyContainerAppenders,
+  FirstAddChoosers,
   PageInserters,
   RepairNotice,
   SpacingOverlay,
@@ -360,6 +361,11 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                     openInsertPanel({ after: nodeId });
                   }}
                 />
+                {/* A block just added that asks for a choice (Columns: its
+                    layout) draws its chooser in place of its body until the
+                    author picks or skips. Last, so it covers the "+" of the
+                    block's own empty columns; hidden mid-drag. */}
+                <FirstAddChoosers editor={editor} hidden={dragging} />
               </>
             }
           >
