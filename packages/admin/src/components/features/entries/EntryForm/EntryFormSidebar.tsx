@@ -19,8 +19,8 @@ export type EntryFormSidebarProps = Omit<
 > & {
   /**
    * The document whose details (who made and changed it) the panel shows.
-   * Read only while the panel is drawn, so a folded panel, a closed sheet or
-   * a document view covering the form costs no request.
+   * Read only while the panel is drawn, so a panel its author folded, or a
+   * document view covering the form, costs no request.
    */
   detailsOf?: EntryDetailsTarget;
   /** Whether sidebar should be hidden (embedded mode or rail collapsed). */

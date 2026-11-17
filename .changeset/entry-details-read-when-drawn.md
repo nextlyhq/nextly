@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Opening an entry straight into a document view, such as the page builder, no longer reads the entry's details (its address, and who made and changed it). The address chip under the title and the side panel now ask for them as they are drawn, so a view that covers both costs one request fewer before it shows, and a folded panel or a closed sheet on a Single waits until it opens. The entry page still reads them once and shows them as before.
+Opening an entry straight into a document view, such as the page builder, no longer reads the entry's details (its address, and who made and changed it). The address chip under the title and the side panel now ask for them as they are drawn, so a view that covers both costs one request fewer before it shows, and a Single's panel that its author folded reads them once it opens. The entry page still reads them once and shows them as before.

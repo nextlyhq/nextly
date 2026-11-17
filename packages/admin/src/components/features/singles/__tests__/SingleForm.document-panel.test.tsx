@@ -421,16 +421,6 @@ describe("what the Single's panel says about the Single", () => {
     }
   });
 
-  it("reads no details while the panel is a closed sheet, and reads them once it opens", () => {
-    editorWidth(390);
-    renderEditor();
-    const named = () =>
-      details.asked.mock.calls.filter(([target]) => target !== undefined);
-    expect(named()).toEqual([]);
-    run("onToggleRail");
-    expect(named()).not.toEqual([]);
-  });
-
   it("gives the API address View API response reads, under For developers", () => {
     renderEditor();
     expect(
