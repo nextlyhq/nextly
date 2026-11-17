@@ -6,8 +6,9 @@
  * point before any app migration (`null`). Where that point has no registry
  * metadata (its snapshot predates recorded declarations, or there is no app
  * migration at all), the record keeps the **registry baseline** there: every
- * collection, Single and field group registry row, and the slugs of the
- * permissions not orphaned, as they stood when the record was written. That
+ * collection, Single and field group registry row, the slugs of the
+ * permissions not orphaned, and each owned permission with its owner, as they
+ * stood when the record was written. That
  * baseline is what the registry is at the record's point, since no snapshot
  * says so. Where the point's snapshot carries the metadata, the record keeps
  * no baseline.
@@ -37,6 +38,21 @@ const REGISTRY_RECORD_KEY = "registry_record";
 /** A registry row as stored, its dates as ISO text. */
 export type BaselineRow = Record<string, unknown>;
 
+/**
+ * One permission an owner declared (the app or a plugin), as it stood when
+ * the record was written. Nextly's own and an entity's built-in permissions
+ * have no owner and are kept as slugs alone.
+ */
+export interface BaselinePermission {
+  slug: string;
+  action: string;
+  resource: string;
+  name: string;
+  description: string | null;
+  permissionGroup: string | null;
+  owner: string;
+}
+
 /** The registry and the live permissions at the record's point. */
 export interface RegistryBaseline {
   /** Every registry row, by kind and then by slug. */
@@ -45,6 +61,14 @@ export interface RegistryBaseline {
   fieldGroups: Record<string, BaselineRow>;
   /** The slugs of the permissions not orphaned, sorted. */
   permissions: string[];
+  /**
+   * Those of `permissions` an owner declared, each with its owner, sorted by
+   * slug: what a later comparison reads an owner's permissions from, since
+   * the live rows change with every development start and plugin install.
+   * Absent from a record written before owners were kept, which cannot say
+   * whose a slug was.
+   */
+  ownedPermissions?: BaselinePermission[];
 }
 
 /** The record as stored. */
@@ -87,6 +111,20 @@ function isRowsBySlug(value: unknown): value is Record<string, BaselineRow> {
   );
 }
 
+/** Whether `value` is a list of owned permissions as the baseline keeps them. */
+function isOwnedPermissions(value: unknown): value is BaselinePermission[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (row: unknown) =>
+        typeof row === "object" &&
+        row !== null &&
+        typeof (row as { slug?: unknown }).slug === "string" &&
+        typeof (row as { owner?: unknown }).owner === "string"
+    )
+  );
+}
+
 /** The record a stored value holds, or undefined for anything else. */
 function decodeRecord(raw: unknown): RegistryRecord | undefined {
   let value: unknown = raw;
@@ -108,7 +146,9 @@ function decodeRecord(raw: unknown): RegistryRecord | undefined {
     !isRowsBySlug(b.singles) ||
     !isRowsBySlug(b.fieldGroups) ||
     !Array.isArray(b.permissions) ||
-    !b.permissions.every(slug => typeof slug === "string")
+    !b.permissions.every(slug => typeof slug === "string") ||
+    (b.ownedPermissions !== undefined &&
+      !isOwnedPermissions(b.ownedPermissions))
   ) {
     return undefined;
   }
@@ -119,6 +159,9 @@ function decodeRecord(raw: unknown): RegistryRecord | undefined {
       singles: b.singles,
       fieldGroups: b.fieldGroups,
       permissions: b.permissions,
+      ...(b.ownedPermissions === undefined
+        ? {}
+        : { ownedPermissions: b.ownedPermissions }),
     },
   };
 }
@@ -211,13 +254,29 @@ export async function takeRegistryBaseline(args: {
   ).getAllComponents();
   const { permissions } = loadedDialect(args.dialect).tables;
   const live = (await (args.db as MetaDatabase)
-    .select({ slug: permissions.slug })
+    .select({
+      slug: permissions.slug,
+      action: permissions.action,
+      resource: permissions.resource,
+      name: permissions.name,
+      description: permissions.description,
+      permissionGroup: permissions.permissionGroup,
+      owner: permissions.owner,
+    })
     .from(permissions)
-    .where(isNull(permissions.orphanedAt))) as { slug: string }[];
+    .where(isNull(permissions.orphanedAt))) as (Omit<
+    BaselinePermission,
+    "owner"
+  > & { owner: string | null })[];
+  const bySlug = (a: { slug: string }, b: { slug: string }) =>
+    a.slug.localeCompare(b.slug);
   return {
     collections: rowsBySlug(collections),
     singles: rowsBySlug(singles),
     fieldGroups: rowsBySlug(fieldGroups),
     permissions: live.map(row => row.slug).sort(),
+    ownedPermissions: live
+      .filter((row): row is BaselinePermission => row.owner !== null)
+      .sort(bySlug),
   };
 }

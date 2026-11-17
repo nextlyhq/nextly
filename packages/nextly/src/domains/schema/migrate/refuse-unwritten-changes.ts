@@ -26,7 +26,7 @@ import type { Operation } from "../pipeline/diff/types";
 
 import { configurationRegistryRows } from "./first-run";
 import { readRegistryRecord } from "./registry-record";
-import { rowsBehindSource } from "./registry-writer";
+import { rowsBehindSource, type RowsBySlug } from "./registry-writer";
 import {
   livePermissionsByOwner,
   unwrittenChangesError,
@@ -103,9 +103,14 @@ async function holdsAnyAddedTable(
  * this release has recorded them (the registry record exists); undefined
  * before that run, whose silence names nothing.
  *
- * - Settings: each code-first entity whose registry row the writer would
- *   rewrite from the configuration, as that first run wrote the rows from it.
- * - Permissions: the live ones not orphaned, the app's and each plugin's.
+ * Read from the record's baseline, which is written once and never changes:
+ * the live rows are rewritten by every development start and plugin install,
+ * and compared with those a change already made in development names nothing.
+ *
+ * - Settings: each code-first entity the writer would rewrite from the
+ *   configuration, judged against the row the record kept.
+ * - Permissions: the app's and each plugin's as the record kept them. A
+ *   record written before owners were kept gives its slugs alone.
  */
 async function recordedInDatabase(
   args: RefuseUnwrittenChangesArgs
@@ -113,21 +118,41 @@ async function recordedInDatabase(
   const exists = tableExistsOf(args.adapter);
   if (exists === undefined || !(await exists("nextly_meta"))) return undefined;
   const db = args.adapter.getDrizzle();
-  if ((await readRegistryRecord(db, args.dialect)) === undefined) {
-    return undefined;
+  const record = await readRegistryRecord(db, args.dialect);
+  if (record === undefined) return undefined;
+  const { baseline } = record;
+  // A record with no baseline was written at a point whose snapshot carries
+  // the settings, so only permissions can be asked here: the live ones.
+  if (baseline === undefined) {
+    return {
+      settingsDiffer: await settingsBehindConfiguration(args),
+      permissions: livePermissionsByOwner(
+        await livePermissionRows(db, args.dialect),
+        APP_OWNER
+      ),
+    };
   }
   return {
-    settingsDiffer: await settingsBehindConfiguration(args),
-    permissions: livePermissionsByOwner(
-      await livePermissionRows(db, args.dialect),
-      APP_OWNER
-    ),
+    settingsDiffer: await settingsBehindConfiguration(args, baseline),
+    ...(baseline.ownedPermissions === undefined
+      ? { permissionSlugs: baseline.permissions }
+      : {
+          permissions: livePermissionsByOwner(
+            baseline.ownedPermissions,
+            APP_OWNER
+          ),
+        }),
   };
 }
 
-/** Each code-first entity whose registry row differs from what the configuration declares. */
+/**
+ * Each code-first entity whose registry row differs from what the
+ * configuration declares: the row the record kept (`kept`), or the live one
+ * where the record kept none.
+ */
 async function settingsBehindConfiguration(
-  args: RefuseUnwrittenChangesArgs
+  args: RefuseUnwrittenChangesArgs,
+  kept?: RowsBySlug
 ): Promise<EntitySettingsChange[]> {
   const { behind } = await rowsBehindSource(
     {
@@ -143,7 +168,8 @@ async function settingsBehindConfiguration(
         warn: m => args.logger.warn(m),
         error: m => args.logger.error(m),
       },
-    }
+    },
+    kept
   );
   return behind
     .filter(row => row.row === "differs")

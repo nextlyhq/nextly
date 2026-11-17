@@ -41,6 +41,7 @@ import { createAdapter } from "../../../database/factory";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import {
   readRegistryRecord,
+  storeRegistryRecord,
   type RegistryRecord,
 } from "../../../domains/schema/migrate/registry-record";
 import {
@@ -723,6 +724,105 @@ describe.each(getConfiguredTestDialects())(
           // The record is written once.
           expect((await recordOf(adapter))?.point).toBe(earlier);
         });
+      }, 240_000);
+    });
+
+    describe("a change no migration records, on a site whose newest snapshot predates settings and permissions", () => {
+      /** The app's config with the collection described, a settings-only change. */
+      const described = defineConfig({
+        collections: [
+          defineCollection({
+            slug: SLUG,
+            description: "Articles",
+            fields: [text({ name: "title" }), text({ name: "summary" })],
+          }),
+        ],
+        db: { migrationsDir: "./migrations" },
+      });
+
+      it("is named after a development start has rewritten the registry row from the changed configuration", async () => {
+        const url = await scratch();
+        use(url);
+        asEarlierRelease(await migrateCreate("one", config()));
+        // The first run: the record, with the rows as the configuration then declared them.
+        await migrate(config());
+        // What a development start over the edited configuration leaves: the
+        // live row already says what the configuration now declares.
+        await on(url, adapter =>
+          adapter.executeQuery(
+            `UPDATE ${q}dynamic_collections${q} SET ${q}description${q} = 'Articles' WHERE ${q}slug${q} = '${SLUG}'`
+          )
+        );
+
+        const run = await migrateRun(described);
+
+        expect(run.failure, run.said.join("\n")).toBeDefined();
+        expect(run.why).toMatch(new RegExp(`^~ settings .*${SLUG}`, "m"));
+        // The unchanged configuration is still up to date against the record.
+        await on(url, adapter =>
+          adapter.executeQuery(
+            `UPDATE ${q}dynamic_collections${q} SET ${q}description${q} = NULL WHERE ${q}slug${q} = '${SLUG}'`
+          )
+        );
+        await migrate(config());
+      }, 240_000);
+
+      it("names an app permission removed after a development start has orphaned its row", async () => {
+        const url = await scratch();
+        use(url);
+        // The first run: the record keeps each owned permission with its owner.
+        await migrate(permissionsOnly(["export"]));
+        await on(url, async adapter => {
+          expect(await live(adapter, "export-fr-reports")).toBe(true);
+          // What a development start without the permission leaves.
+          await adapter.executeQuery(
+            `UPDATE ${q}permissions${q} SET ${q}orphaned_at${q} = ${q}created_at${q} WHERE ${q}slug${q} = 'export-fr-reports'`
+          );
+        });
+
+        const run = await migrateRun(permissionsOnly([]));
+
+        expect(run.failure, run.said.join("\n")).toBeDefined();
+        expect(run.why).toMatch(/^~ permissions .*export-fr-reports/m);
+      }, 240_000);
+
+      it("over a record written before owners were kept: names a permission added, and not one removed", async () => {
+        const url = await scratch();
+        use(url);
+        await migrate(permissionsOnly(["export"]));
+        /** Stores the record as an earlier build wrote it: slugs alone, `without` left out. */
+        const asEarlierRecord = (without: string | undefined) =>
+          on(url, async adapter => {
+            const record = await recordOf(adapter);
+            const { ownedPermissions: _owners, ...baseline } =
+              record!.baseline!;
+            await deleteRecord(adapter);
+            await storeRegistryRecord(adapter.getDrizzle(), dialect, {
+              point: record!.point,
+              baseline: {
+                ...baseline,
+                permissions: baseline.permissions.filter(
+                  slug => slug !== without
+                ),
+              },
+            });
+          });
+
+        // Added: live already, as a development start left it, and in no record.
+        await asEarlierRecord("export-fr-reports");
+        const added = await migrateRun(permissionsOnly(["export"]));
+        expect(added.failure, added.said.join("\n")).toBeDefined();
+        expect(added.why).toMatch(/^~ permissions .*export-fr-reports/m);
+
+        // Removed: the record holds the slug with no owner, so it cannot be
+        // told from one of Nextly's own, and nothing is named.
+        await asEarlierRecord(undefined);
+        await on(url, adapter =>
+          adapter.executeQuery(
+            `UPDATE ${q}permissions${q} SET ${q}orphaned_at${q} = ${q}created_at${q} WHERE ${q}slug${q} = 'export-fr-reports'`
+          )
+        );
+        await migrate(permissionsOnly([]));
       }, 240_000);
     });
 
