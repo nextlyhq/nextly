@@ -156,6 +156,25 @@ function cachedDescribe(
 }
 
 /**
+ * The plugins of the instance a route was given, where it is one rather than
+ * a reader of one: its page builder is the one whose receiver the site's
+ * forms post to, and the process's instance may be another site's, or none.
+ * Empty where the route was given no instance carrying plugins.
+ */
+export function ownPlugins(
+  nextly: object | undefined
+): Pick<PageFormsInput, "plugins"> {
+  const plugins: unknown =
+    nextly !== undefined && "plugins" in nextly ? nextly.plugins : undefined;
+  return typeof plugins === "object" && plugins !== null
+    ? {
+        plugins: () =>
+          plugins as ReturnType<NonNullable<PageFormsInput["plugins"]>>,
+      }
+    : {};
+}
+
+/**
  * The forms of the page a route draws, or `undefined` where the instance
  * offers no `site-forms` service, or none that can be read.
  */

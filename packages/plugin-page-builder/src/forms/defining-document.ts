@@ -144,7 +144,7 @@ export async function publishedNode(
   /** The site's document limits, which its pages are drawn under. */
   limits: DocumentLimits = DEFAULT_LIMITS
 ): Promise<BlockNode | null> {
-  const nodes = await publishedNodes(api, stores, document, locale);
+  const nodes = await publishedNodes(api, stores, document, locale, limits);
   if (nodes === null) return null;
   const found =
     findNode(nodes, nodeId) ??
@@ -220,7 +220,8 @@ async function publishedNodes(
   api: PublishedReadApi,
   stores: DefiningStores,
   document: DefiningDocument,
-  locale: string | undefined
+  locale: string | undefined,
+  limits: DocumentLimits
 ): Promise<BlockNode[] | null> {
   const language = locale === undefined ? {} : { locale };
   switch (document.kind) {
@@ -239,7 +240,7 @@ async function publishedNodes(
     case "component":
       return componentNodes(api, stores, document.id, locale);
     case "entry":
-      return entryDrawnNodes(api, stores, document, locale);
+      return entryDrawnNodes(api, stores, document, locale, limits);
     case "layout": {
       const row = await onePublished(api, stores.layouts, document.id, {
         ...AS_THE_SYSTEM,
@@ -288,7 +289,8 @@ async function entryDrawnNodes(
   api: PublishedReadApi,
   stores: DefiningStores,
   document: { readonly collection: string; readonly id: string },
-  locale: string | undefined
+  locale: string | undefined,
+  limits: DocumentLimits
 ): Promise<BlockNode[] | null> {
   const language = locale === undefined ? {} : { locale };
   const entry = await onePublished(api, document.collection, document.id, {
@@ -318,7 +320,13 @@ async function entryDrawnNodes(
     rows.find(row => row[TEMPLATE_COLLECTION_FIELD] === document.collection);
   const drawn = asDocument(design?.[TEMPLATE_CONTENT_FIELD]);
   if (drawn === null) return null;
-  return composeEntryContent(drawn, { valueOf: field => entry[field] }).nodes;
+  // Cut under the site's limits, where the entry's page cuts it: under the
+  // defaults, a form past them would be drawn and then never found here.
+  return composeEntryContent(drawn, {
+    valueOf: field => entry[field],
+    maxNodes: limits.maxNodes,
+    maxDepth: limits.maxDepth,
+  }).nodes;
 }
 
 /** A published component's node list, read as the renderer reads it. */

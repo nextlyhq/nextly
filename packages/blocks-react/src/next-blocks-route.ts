@@ -52,7 +52,7 @@ import {
   linkLanguageOf,
   entryPathResolver,
 } from "./next-entry-paths";
-import { routedFormsFor } from "./next-forms";
+import { ownPlugins, routedFormsFor } from "./next-forms";
 import { checkedLayoutsProvider } from "./next-layouts";
 import {
   MEDIA_TAG_COLLECTION,
@@ -666,6 +666,7 @@ export function blocksRouteConfig(
       // Where the page's forms post, and the forms a provider describes,
       // from the page builder: with none, the page's forms are left unsent.
       const forms = await routedFormsFor({
+        ...ownPlugins(config.nextly),
         entry,
         field,
         route: context,

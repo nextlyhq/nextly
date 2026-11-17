@@ -52,14 +52,15 @@ const reader = {
 
 /** The forms the route handed the page it drew. */
 async function formsOfPage(
-  config: { cacheScope?: string } = {}
+  config: { cacheScope?: string; nextly?: object } = {}
 ): Promise<PageForms | undefined> {
+  const { nextly = reader, ...rest } = config;
   const route = createBlocksPage({
     collections: ["pages"],
     field: "content",
-    nextly: reader as never,
+    nextly: nextly as never,
     blocks: createBlockResolver(coreBlocks as never),
-    ...config,
+    ...rest,
   });
   const element = (await throughBoundary(
     route.ContentPage({ params: { slug: ["contact"] } })
@@ -119,6 +120,26 @@ describe("a routed page's forms", () => {
       "contact",
       "",
     ]);
+  });
+
+  it("come from the route's own instance where it is given one, never the process's", async () => {
+    // The process's instance offers forms; the route's own offers others.
+    offerForms();
+    const own = {
+      ...reader,
+      plugins: {
+        [SITE_FORMS_SERVICE.plugin]: {
+          [SITE_FORMS_SERVICE.service]: {
+            ...(offered[SITE_FORMS_SERVICE.plugin]?.[
+              SITE_FORMS_SERVICE.service
+            ] as object),
+            action: "/site-b/send",
+          },
+        },
+      },
+    };
+    const forms = await formsOfPage({ nextly: own });
+    expect(forms?.action).toBe("/site-b/send");
   });
 
   it("are left out where the instance has no page builder to post to", async () => {

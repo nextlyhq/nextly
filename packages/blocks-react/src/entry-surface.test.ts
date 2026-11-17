@@ -110,6 +110,7 @@ const SOURCE_MODULES: ReadonlyArray<{
       "MAX_FIELDS",
       "FORM_FIELD_TYPES",
       "formFieldDrawings",
+      "receiverKeepsName",
       "sentNameOf",
     ],
   },

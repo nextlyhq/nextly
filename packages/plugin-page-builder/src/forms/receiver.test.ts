@@ -397,6 +397,22 @@ describe("where the visitor is sent back to", () => {
     );
     expect(location(response)).toBe("/contact#form-f1-3-sent");
   });
+
+  it("names the item of a form in a list inside a list, as the block draws it", async () => {
+    const response = await receiveFormPost(
+      post({ ...ANSWERS, _item: "0-3" }),
+      parts().deps
+    );
+    expect(location(response)).toBe("/contact#form-f1-0-3-sent");
+    // Anything else is not a position, and names no item.
+    for (const item of ["0-", "-3", "a-1", "0--3"]) {
+      const refused = await receiveFormPost(
+        post({ ...ANSWERS, _item: item }),
+        parts().deps
+      );
+      expect(location(refused), item).toBe("/contact#form-f1-sent");
+    }
+  });
 });
 
 describe("what is refused before anything is read", () => {
@@ -801,6 +817,37 @@ describe("the block's own fields, as it draws them", () => {
     expect(delivered[0]?.answers).toEqual([
       { name: "your-email", values: ["ada@example.com"] },
     ]);
+  });
+});
+
+describe("an app served under a base path", () => {
+  it("sends the visitor back under it, and to another site as written", async () => {
+    vi.stubEnv("__NEXT_ROUTER_BASEPATH", "/site");
+    try {
+      // The paths a post names are the app's own, as its routes see them; a
+      // browser only reaches them under the base path.
+      expect(location(await receiveFormPost(post(ANSWERS), parts().deps))).toBe(
+        "/site/contact#form-f1-sent"
+      );
+      const page = simpleForm({
+        props: { ...simpleForm().props, afterSending: "page", href: "/thanks" },
+      });
+      expect(
+        location(await receiveFormPost(post(ANSWERS), parts(page).deps))
+      ).toBe("/site/thanks");
+      const away = simpleForm({
+        props: {
+          ...simpleForm().props,
+          afterSending: "page",
+          href: "https://example.org/thanks",
+        },
+      });
+      expect(
+        location(await receiveFormPost(post(ANSWERS), parts(away).deps))
+      ).toBe("https://example.org/thanks");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

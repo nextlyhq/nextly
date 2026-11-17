@@ -36,6 +36,15 @@ describe("the site's forms service", () => {
     expect(service().action).toBe(FORM_ACTION);
   });
 
+  it("posts under the app's base path, where it is served under one", () => {
+    vi.stubEnv("__NEXT_ROUTER_BASEPATH", "/site");
+    try {
+      expect(service().action).toBe(`/site${FORM_ACTION}`);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("names the documents the receiver reads, under the host's names", () => {
     const forms = service();
     const named = forms.documentOf({

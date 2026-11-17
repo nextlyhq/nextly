@@ -47,10 +47,8 @@ their place.
 
 ### Known limits
 
-- A form repeated in each item of a collection list shares one message: sending one item's
-  form shows the message in every item's.
 - The receiver's address assumes Nextly's handler is mounted at `/admin/api`, as a
-  scaffolded project mounts it.
+  scaffolded project mounts it, under the app's `basePath` where it has one.
 - A plain form post through the page builder carries no file. A provider's form with a file
   field says "This form needs JavaScript to send a file." beside the field, and the route
   refuses a post to it with that sentence rather than sending it on without the file.
@@ -70,12 +68,15 @@ Beside the visitor's answers, a post carries these hidden fields:
 | `_form`   | The document that defines the form: `page:<id>`, `template:<id>`, `component:<id>`, `layout:<id>:<area>` for the component a header & footer set places in an area, or `entry:<collection>:<id>` for a collection's entry drawn by its design, its own blocks included |
 | `_node`   | The form block's id in that document                                                                                                                                                                                                                                   |
 | `_return` | The path to come back to, such as `/contact`                                                                                                                                                                                                                           |
-| `_item`   | For a form repeated in a collection list, the item's position                                                                                                                                                                                                          |
+| `_item`   | For a form repeated in a collection list, the item's position from 0, after those of the lists around it (`0-3`)                                                                                                                                                       |
 | `_locale` | The page's language, when the site has several                                                                                                                                                                                                                         |
 | `_hp`     | The spam trap. The Form block draws it hidden; a person leaves it empty                                                                                                                                                                                                |
 
 The route answers with a `303` back to `_return`, with the outcome in the fragment:
-`#form-<id>-sent`, `#form-<id>-invalid`, `#form-<id>-closed` or `#form-<id>-error`.
+`#form-<id>-sent`, `#form-<id>-invalid`, `#form-<id>-closed` or `#form-<id>-error`. A form
+repeated in a list adds its `_item` to the id (`#form-<id>-<item>-sent`), so the message
+shows in the copy that was sent. A field name starting with `_` is the route's own: a
+provider's form naming a field with one is not drawn.
 
 ## What the route checks
 

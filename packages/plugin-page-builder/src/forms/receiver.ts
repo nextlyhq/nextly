@@ -48,6 +48,7 @@ import type {
 } from "@nextlyhq/plugin-sdk/blocks";
 
 import { checkAnswers, describedAnswers, type CheckedAnswer } from "./answers";
+import { servedUnderBase } from "./base-path";
 import {
   parseDefiningDocument,
   type DefiningDocument,
@@ -61,12 +62,9 @@ import { SIMPLE_FORM_PROVIDER } from "./providers";
  * to come back to, the page's language) are named once, by the block.
  */
 const FORM_POST_FIELDS: typeof BLOCK_POST_FIELDS & {
-  readonly item: "_item";
   readonly honeypot: typeof FORM_HONEYPOT_FIELD;
 } = {
   ...BLOCK_POST_FIELDS,
-  /** The item's position, for a form repeated in a collection list. */
-  item: "_item",
   /** The spam trap the Form block draws. */
   honeypot: FORM_HONEYPOT_FIELD,
 };
@@ -461,12 +459,17 @@ function hasUnsafeCharacter(raw: string): boolean {
   return false;
 }
 
-/** The fragment's stem, `form-<node>` or `form-<node>-<item>`; `null` without a usable node id. */
+/**
+ * The fragment's stem, `form-<node>` or `form-<node>-<item>`, as the block
+ * names the copy it drew; `null` without a usable node id. An item is the
+ * copy's position among its list's entries, after those of the lists around
+ * it (`3`, `0-3`).
+ */
 function anchorOf(post: Map<string, string[]>): string | null {
   const node = post.get(FORM_POST_FIELDS.node)?.[0];
   if (node === undefined || !/^[A-Za-z0-9_-]{1,128}$/.test(node)) return null;
   const item = post.get(FORM_POST_FIELDS.item)?.[0];
-  return item !== undefined && /^\d{1,4}$/.test(item)
+  return item !== undefined && /^\d{1,4}(?:-\d{1,4}){0,7}$/.test(item)
     ? `form-${node}-${item}`
     : `form-${node}`;
 }
@@ -667,15 +670,20 @@ function hostOf(address: string): string | null {
   }
 }
 
-/** A `303` to `path`, with the outcome in its fragment. */
+/**
+ * A `303` to `path`, with the outcome in its fragment. A path of the app's
+ * own is one its routes name, so it is sent under the app's base path,
+ * where the browser reaches it.
+ */
 function redirect(
   path: string,
   anchor: string | null,
   outcome: FormOutcome,
   retryAfter?: number
 ): Response {
+  const served = servedUnderBase(path);
   const headers = new Headers({
-    location: anchor === null ? path : `${path}#${anchor}-${outcome}`,
+    location: anchor === null ? served : `${served}#${anchor}-${outcome}`,
     "cache-control": "no-store",
   });
   if (retryAfter !== undefined) headers.set("retry-after", String(retryAfter));

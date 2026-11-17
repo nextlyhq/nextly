@@ -75,7 +75,11 @@ export type FormFieldKind =
  * @experimental Settles with the form provider contract.
  */
 export interface FormFieldDrawing {
-  /** The name its answer is sent under; unique within the form. */
+  /**
+   * The name its answer is sent under; unique within the form. A name
+   * starting with `_` is the form receiver's own, and a form naming a field
+   * with one is not drawn.
+   */
   readonly name: string;
   readonly label: string;
   readonly kind: FormFieldKind;

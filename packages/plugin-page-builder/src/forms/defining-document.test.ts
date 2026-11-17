@@ -475,3 +475,73 @@ describe("a form on a page the site lets grow past the default size", () => {
     ).toBe("core/form");
   });
 });
+
+describe("a form in an entry's own blocks the site lets grow past the default size", () => {
+  it("is found under the site's own limits, as the entry's page is drawn", async () => {
+    const { composeEntryContent, DEFAULT_LIMITS, ENTRY_CONTENT_TYPE } =
+      await import("@nextlyhq/blocks-engine");
+    const design = {
+      formatVersion: 1,
+      kind: "template",
+      nodes: [
+        {
+          id: "body",
+          type: ENTRY_CONTENT_TYPE,
+          version: 1,
+          props: { field: "body" },
+        },
+      ],
+    };
+    const filler = Array.from(
+      { length: DEFAULT_LIMITS.maxNodes },
+      (_, index): BlockNode => ({
+        id: `p${index}`,
+        type: "core/paragraph",
+        version: 1,
+        props: {},
+      })
+    );
+    const own = page([...filler, form("late-form")]);
+    const limits = {
+      ...DEFAULT_LIMITS,
+      maxNodes: DEFAULT_LIMITS.maxNodes + 100,
+    };
+    const drawn = composeEntryContent(design as never, {
+      valueOf: field => (field === "body" ? own : undefined),
+      maxNodes: limits.maxNodes,
+      maxDepth: limits.maxDepth,
+    });
+    const drawnId = drawn.nodes
+      .flatMap(function forms(node): string[] {
+        return [
+          ...(node.type === "core/form" ? [node.id] : []),
+          ...Object.values(node.slots ?? {}).flatMap(list =>
+            list.flatMap(forms)
+          ),
+        ];
+      })
+      .at(0);
+    // Must-be-found: the site's entry page does draw the form, past the
+    // default size, so a cut at the default would lose it.
+    expect(drawnId).toBeDefined();
+
+    const { api } = directApi({
+      posts: [{ id: "e1", body: own }],
+      templates: [
+        { id: "t1", collection: "posts", entry: null, content: design },
+      ],
+    });
+    expect(
+      (
+        await publishedNode(
+          api,
+          STORES,
+          { kind: "entry", collection: "posts", id: "e1" },
+          drawnId ?? "",
+          undefined,
+          limits
+        )
+      )?.type
+    ).toBe("core/form");
+  });
+});

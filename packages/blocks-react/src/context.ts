@@ -825,6 +825,18 @@ export interface PageContext {
    */
   item?: Record<string, unknown>;
   /**
+   * Where {@link item} is drawn among its list's entries, from 0, after the
+   * positions of the entries around it in lists that hold this one: `2`, or
+   * `0-3` for the fourth entry of a list inside the first entry of another.
+   * What tells apart the copies of a block a list draws once per entry, as
+   * the node id alone cannot.
+   *
+   * Absent outside a repeater.
+   *
+   * @experimental
+   */
+  itemPosition?: string;
+  /**
    * The collection {@link item} comes from, set by the repeater beside it, so
    * a binding to the item is checked against that collection's fields.
    *

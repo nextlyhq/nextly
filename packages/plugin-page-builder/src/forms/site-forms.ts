@@ -20,6 +20,7 @@ import { PAGES_CONTENT_FIELD } from "../collections/pages";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import type { ComponentStore } from "../library-route";
 
+import { servedUnderBase } from "./base-path";
 import { definingDocumentValue } from "./defining-document";
 import type { FormProviders } from "./providers";
 import { definingStores, FORM_RECEIVER_PATH } from "./route";
@@ -61,7 +62,8 @@ export function siteForms(parts: {
       self = started;
     },
     service: () => ({
-      action: FORM_ACTION,
+      // Under the app's base path, which a form's native post must carry.
+      action: servedUnderBase(FORM_ACTION),
       documentOf({ collection, id, field, design }) {
         // An entry drawn by its design: the receiver draws it as its page
         // does, its own blocks composed into the design.

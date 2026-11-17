@@ -306,6 +306,23 @@ describe("a provider's form on a published page", () => {
     expect(out).not.toContain("down");
   });
 
+  it("draws nothing where a field would be sent under a name the receiver keeps", async () => {
+    const withField = (name: string) =>
+      formsAnswering(() =>
+        Promise.resolve({
+          ...CONTACT,
+          fields: [...CONTACT.fields, { name, label: "Extra", kind: "text" }],
+        })
+      );
+    // Must-be-found: the same field under a name of its own is drawn.
+    expect(await page(withField("form"), PICKED)).toContain('name="form"');
+    for (const name of ["_form", "_hp", "_later"]) {
+      // Drawn, its answer would be read as the receiver's own (the document
+      // it was sent from, or the spam trap) and every send refused or lost.
+      expect(await page(withField(name), PICKED), name).not.toContain("<form");
+    }
+  });
+
   it("draws nothing where the page has no receiver to describe it", async () => {
     expect(await page(undefined, PICKED)).not.toContain("<form");
   });

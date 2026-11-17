@@ -106,14 +106,21 @@ export function sentNameOf(label: string): string {
 }
 
 /**
- * A stored name as it may be sent, or `""` where it cannot be. A name the
- * receiver keeps for itself starts with `_` (`_form`, `_hp`), so a field
- * stored under one would be read as the receiver's own and its answer lost,
- * or read as the spam trap; such a name is made from the label instead.
+ * Whether the receiver keeps `name` for itself: every name starting with `_`
+ * (`_form`, `_hp`), so a field sent under one would be read as the
+ * receiver's own and its answer lost, or read as the spam trap.
+ */
+export function receiverKeepsName(name: string): boolean {
+  return name.startsWith("_");
+}
+
+/**
+ * A stored name as it may be sent, or `""` where it cannot be: a name the
+ * receiver keeps is made from the label instead.
  */
 function storedName(value: unknown): string {
   const name = text(value).trim().slice(0, MAX_NAME_LENGTH);
-  return name.startsWith("_") ? "" : name;
+  return receiverKeepsName(name) ? "" : name;
 }
 
 /** `name`, or the first of `name-2`, `name-3`… that `taken` does not hold. */

@@ -48,6 +48,7 @@ import {
 import {
   FORM_FIELD_TYPES,
   formFieldDrawings,
+  receiverKeepsName,
   type FormFieldSpec,
 } from "./form-fields";
 import { FORM_BASE_STYLES, FORM_PARTS } from "./form-parts";
@@ -120,18 +121,21 @@ export const FORM_HONEYPOT_FIELD = "_hp";
 /**
  * The hidden fields a form posts beside its answers, as the receiver reads
  * them: the document defining the form, the form's node, the path to come
- * back to and the page's language.
+ * back to, the page's language, and, for a form a list draws once per entry,
+ * which entry's copy was sent.
  */
 export const FORM_POST_FIELDS: {
   readonly document: "_form";
   readonly node: "_node";
   readonly returnTo: "_return";
   readonly locale: "_locale";
+  readonly item: "_item";
 } = {
   document: "_form",
   node: "_node",
   returnTo: "_return",
   locale: "_locale",
+  item: "_item",
 };
 
 /** The provider form `value` names, or `undefined` for the block's own fields. */
@@ -210,6 +214,7 @@ function sending(
     [FORM_POST_FIELDS.node, nodeId],
     [FORM_POST_FIELDS.returnTo, forms.returnTo],
     [FORM_POST_FIELDS.locale, ctx.locale],
+    [FORM_POST_FIELDS.item, ctx.itemPosition],
   ];
   return {
     attributes: {
@@ -240,6 +245,10 @@ function drawForm(
   { node, ctx, className, partClass }: BlockRenderArgs<FormProps>
 ): ReactElement {
   const { attributes, hidden } = sending(ctx, node.id, spec.multipart);
+  // A list draws one copy per entry, all one node: the entry's position keeps
+  // each copy's ids its own, and is the fragment a send comes back to.
+  const stem =
+    ctx.itemPosition === undefined ? node.id : `${node.id}-${ctx.itemPosition}`;
   return (
     <form className={className} {...attributes}>
       {/* Hoisted and deduped by React: one copy per page. */}
@@ -247,7 +256,7 @@ function drawForm(
         {FORM_RESULT_CSS}
       </style>
       {drawResults({
-        anchor: node.id,
+        anchor: stem,
         sentMessage: spec.sentMessage,
         partClass,
       })}
@@ -259,9 +268,9 @@ function drawForm(
         </p>
       ) : null}
       {spec.fields.map((field, index) =>
-        drawField(field, { id: `${node.id}-field-${index}`, partClass })
+        drawField(field, { id: `${stem}-field-${index}`, partClass })
       )}
-      {honeypot(node.id, partClass("trap"))}
+      {honeypot(stem, partClass("trap"))}
       {hidden}
       <button className={partClass("submit")} type="submit">
         {spec.submitText}
@@ -307,6 +316,14 @@ async function renderPicked(
     // A provider that fails draws nothing, never an error on the page.
     return null;
   }
+  // A field under a name the receiver keeps would turn its answer into the
+  // receiver's own (the document it came from, the spam trap), refusing or
+  // losing every send: such a description is drawn as a failing one is.
+  if (
+    "fields" in drawing &&
+    drawing.fields.some(field => receiverKeepsName(field.name))
+  )
+    return null;
   if ("unavailable" in drawing) {
     if (drawing.unavailable !== "closed") return null;
     return (
