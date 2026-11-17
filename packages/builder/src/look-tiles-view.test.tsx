@@ -76,7 +76,11 @@ function lookId(type: string, name: string): string {
 }
 
 /** A block as a page holds it, at the version its definition is at. */
-function nodeOf(type: string, classes?: string[]): BlockNode {
+function nodeOf(
+  type: string,
+  classes?: string[],
+  styles?: Record<string, unknown>
+): BlockNode {
   const block = coreBlocks.find(each => each.name === type);
   if (block === undefined) throw new Error(`${type} is not a core block`);
   return {
@@ -85,6 +89,7 @@ function nodeOf(type: string, classes?: string[]): BlockNode {
     version: block.version,
     props: type === "core/button" ? { label: "Get a quote" } : {},
     ...(classes === undefined ? {} : { classes }),
+    ...(styles === undefined ? {} : { styles }),
   } as BlockNode;
 }
 
@@ -305,6 +310,43 @@ describe("the Block style section while the panel is filtered", () => {
     expect(
       within(tiles()).getByRole("radio", { checked: true }).textContent
     ).toContain("Hero");
+  });
+
+  it("folds apart from the sections under the bar, after Collapse all", () => {
+    // Hero worn and an opacity of the block's own: Only changed keeps Block
+    // style and Effects, the two lists the tab draws.
+    const tab = mountStyle(
+      nodeOf("core/section", [lookId("core/section", "hero")], {
+        base: { base: { opacity: 0.5 } },
+      })
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Only changed" }));
+    const state = (key: string) =>
+      tab.querySelector(`[data-section="${key}"]`)?.getAttribute("data-state");
+    expect(state("block-style")).toBe("open");
+    expect(state("effects")).toBe("open");
+    fireEvent.keyDown(screen.getByRole("button", { name: "Panel options" }), {
+      key: "Enter",
+    });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Collapse all" }));
+    expect(state("block-style")).toBe("closed");
+    expect(state("effects")).toBe("closed");
+    // Opening Block style opens it alone; Effects stays as the menu left it.
+    const trigger = tab.querySelector<HTMLElement>(
+      '[data-section="block-style"] [data-slot="accordion-trigger"]'
+    );
+    if (trigger === null) throw new Error("no Block style heading");
+    fireEvent.click(trigger);
+    expect(state("block-style")).toBe("open");
+    expect(state("effects")).toBe("closed");
+    // And back: closing Effects' neighbour list leaves Block style open.
+    const effects = tab.querySelector<HTMLElement>(
+      '[data-section="effects"] [data-slot="accordion-trigger"]'
+    );
+    if (effects === null) throw new Error("no Effects heading");
+    fireEvent.click(effects);
+    expect(state("effects")).toBe("open");
+    expect(state("block-style")).toBe("open");
   });
 
   it("goes under Only changed while the block wears its own style", () => {
