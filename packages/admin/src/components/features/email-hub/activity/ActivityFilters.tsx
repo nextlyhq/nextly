@@ -73,13 +73,13 @@ export function ActivityFilters({
   const set = (next: Partial<ActivityFilter>) =>
     onChange({ ...filter, ...next });
   return (
-    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:flex lg:flex-wrap">
+    <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 xl:flex xl:flex-wrap">
         <Select
           value={filter.outcome}
           onValueChange={value => set({ outcome: value as OutcomeFilter })}
         >
-          <SelectTrigger aria-label="Outcome" className="lg:w-44">
+          <SelectTrigger aria-label="Outcome" className="xl:w-44">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -101,7 +101,7 @@ export function ActivityFilters({
               })
             }
           >
-            <SelectTrigger aria-label="Template" className="lg:w-56">
+            <SelectTrigger aria-label="Template" className="xl:w-56">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -131,7 +131,7 @@ export function ActivityFilters({
               })
             }
           >
-            <SelectTrigger aria-label="Provider" className="lg:w-48">
+            <SelectTrigger aria-label="Provider" className="xl:w-48">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

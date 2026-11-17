@@ -13,10 +13,13 @@ import {
 import {
   useEmailActivity,
   useQueuedEmailOverdue,
+  type EmailActivityResult,
 } from "@admin/hooks/queries/useEmailActivity";
 import { useEmailProviders } from "@admin/hooks/queries/useEmailProviders";
 import { useEmailTemplates } from "@admin/hooks/queries/useEmailTemplates";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import type { EmailProviderRecord } from "@admin/services/emailProviderApi";
+import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
 import { providerChoices, templateChoices } from "./activity-choices";
 import type { ActivityFilter } from "./activity-model";
@@ -58,36 +61,9 @@ export function useTickingNow(intervalMs = CLOCK_TICK_MS): Date {
  */
 export function ActivityScreen(): JSX.Element {
   const [filter, setFilter] = useState<ActivityFilter>(DEFAULT_ACTIVITY_FILTER);
-  const { hasPermission } = useCurrentUserPermissions();
-  const readsTemplates = holdsAny(
-    hasPermission,
-    EMAIL_TEMPLATE_READ_PERMISSIONS
-  );
-  const readsProviders = holdsAny(
-    hasPermission,
-    EMAIL_PROVIDER_READ_PERMISSIONS
-  );
-
   const activity = useEmailActivity(filter);
   const overdue = useQueuedEmailOverdue();
-  const templates = useEmailTemplates({ enabled: readsTemplates });
-  const providers = useEmailProviders(
-    { page: 0, pageSize: PROVIDERS_READ, search: "" },
-    { enabled: readsProviders }
-  );
-
-  const templateNames = useMemo(
-    () => new Map((templates.data ?? []).map(t => [t.slug, t.name])),
-    [templates.data]
-  );
-  const providerNames = useMemo(
-    () => new Map((providers.data?.data ?? []).map(p => [p.id, p.name])),
-    [providers.data]
-  );
-  const names: ActivityNames = {
-    template: slug => templateNames.get(slug),
-    provider: id => providerNames.get(id),
-  };
+  const lists = useActivityLists();
   const now = useTickingNow();
   const filtered = isFiltered(filter);
 
@@ -98,12 +74,12 @@ export function ActivityScreen(): JSX.Element {
         filter={filter}
         onChange={setFilter}
         templates={templateChoices(
-          templates.data,
+          lists.templates,
           activity.rows,
           filter.template
         )}
         providers={providerChoices(
-          providers.data?.data,
+          lists.providers,
           activity.rows,
           filter.provider
         )}
@@ -114,74 +90,156 @@ export function ActivityScreen(): JSX.Element {
           isn’t listed while a provider is chosen.
         </p>
       )}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-        <span>
-          {activity.rows.length}
-          {activity.hasMore ? "+" : ""} shown, newest first
-          {filtered ? " · filtered" : ""}
-        </span>
-        {filtered && (
+      <ActivityCount
+        shown={activity.rows.length}
+        more={activity.hasMore}
+        filtered={filtered}
+        onClear={() =>
+          setFilter({ ...DEFAULT_ACTIVITY_FILTER, window: filter.window })
+        }
+      />
+      <ActivityBody
+        activity={activity}
+        names={lists.names}
+        now={now}
+        filtered={filtered}
+      />
+    </div>
+  );
+}
+
+/**
+ * The hub's own lists of templates and providers, read only where the reader
+ * may read them, and the names the list shows from them.
+ */
+function useActivityLists(): {
+  templates: EmailTemplateRecord[] | undefined;
+  providers: EmailProviderRecord[] | undefined;
+  names: ActivityNames;
+} {
+  const { hasPermission } = useCurrentUserPermissions();
+  const templates = useEmailTemplates({
+    enabled: holdsAny(hasPermission, EMAIL_TEMPLATE_READ_PERMISSIONS),
+  });
+  const providers = useEmailProviders(
+    { page: 0, pageSize: PROVIDERS_READ, search: "" },
+    { enabled: holdsAny(hasPermission, EMAIL_PROVIDER_READ_PERMISSIONS) }
+  );
+  const templateNames = useMemo(
+    () => new Map((templates.data ?? []).map(t => [t.slug, t.name])),
+    [templates.data]
+  );
+  const providerNames = useMemo(
+    () => new Map((providers.data?.data ?? []).map(p => [p.id, p.name])),
+    [providers.data]
+  );
+  return {
+    templates: templates.data,
+    providers: providers.data?.data,
+    names: {
+      template: slug => templateNames.get(slug),
+      provider: id => providerNames.get(id),
+    },
+  };
+}
+
+/** How many rows are shown, whether filtered, and the way to clear the filters. */
+function ActivityCount({
+  shown,
+  more,
+  filtered,
+  onClear,
+}: {
+  shown: number;
+  more: boolean;
+  filtered: boolean;
+  onClear: () => void;
+}): JSX.Element {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+      <span>
+        {shown}
+        {more ? "+" : ""} shown, newest first
+        {filtered ? " · filtered" : ""}
+      </span>
+      {filtered && (
+        <Button
+          variant="link"
+          size="sm"
+          className="h-auto p-0"
+          onClick={onClear}
+        >
+          Clear filters
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The list, or the error in its place. A read that fails with nothing loaded
+ * leaves nothing to show; one that fails later (a refresh, Load more) keeps
+ * what has loaded, with a short note.
+ */
+function ActivityBody({
+  activity,
+  names,
+  now,
+  filtered,
+}: {
+  activity: EmailActivityResult;
+  names: ActivityNames;
+  now: Date;
+  filtered: boolean;
+}): JSX.Element {
+  if (activity.isError && activity.rows.length === 0) {
+    return (
+      <Alert variant="destructive">
+        <AlertCircle className="h-4 w-4" aria-hidden />
+        <AlertTitle>Activity couldn’t be loaded</AlertTitle>
+        <AlertDescription>
+          <p>{activity.error?.message ?? "Try again in a moment."}</p>
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-2"
+            onClick={activity.refetch}
+          >
+            Try again
+          </Button>
+        </AlertDescription>
+      </Alert>
+    );
+  }
+  return (
+    <>
+      {activity.isError && (
+        <div
+          role="status"
+          className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground"
+        >
+          <AlertCircle className="h-4 w-4 shrink-0" aria-hidden />
+          <span>Couldn’t refresh, so this shows what loaded before.</span>
           <Button
             variant="link"
             size="sm"
             className="h-auto p-0"
-            onClick={() =>
-              setFilter({ ...DEFAULT_ACTIVITY_FILTER, window: filter.window })
-            }
+            onClick={activity.refetch}
           >
-            Clear filters
+            Try again
           </Button>
-        )}
-      </div>
-      {/* A read that fails with nothing loaded leaves nothing to show; one
-          that fails later (a refresh, Load more) keeps what has loaded. */}
-      {activity.isError && activity.rows.length === 0 ? (
-        <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" aria-hidden />
-          <AlertTitle>Activity couldn’t be loaded</AlertTitle>
-          <AlertDescription>
-            <p>{activity.error?.message ?? "Try again in a moment."}</p>
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-2"
-              onClick={activity.refetch}
-            >
-              Try again
-            </Button>
-          </AlertDescription>
-        </Alert>
-      ) : (
-        <>
-          {activity.isError && (
-            <div
-              role="status"
-              className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground"
-            >
-              <AlertCircle className="h-4 w-4 shrink-0" aria-hidden />
-              <span>Couldn’t refresh, so this shows what loaded before.</span>
-              <Button
-                variant="link"
-                size="sm"
-                className="h-auto p-0"
-                onClick={activity.refetch}
-              >
-                Try again
-              </Button>
-            </div>
-          )}
-          <ActivityList
-            rows={activity.rows}
-            names={names}
-            now={now}
-            isLoading={activity.isLoading}
-            filtered={filtered}
-            hasMore={activity.hasMore}
-            isLoadingMore={activity.isLoadingMore}
-            onLoadMore={activity.loadMore}
-          />
-        </>
+        </div>
       )}
-    </div>
+      <ActivityList
+        rows={activity.rows}
+        names={names}
+        now={now}
+        isLoading={activity.isLoading}
+        filtered={filtered}
+        hasMore={activity.hasMore}
+        isLoadingMore={activity.isLoadingMore}
+        onLoadMore={activity.loadMore}
+      />
+    </>
   );
 }

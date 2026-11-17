@@ -66,3 +66,6 @@ ui-schema.json
 # match, which these generated ones do not, so they stay out of history.
 /AGENTS.md
 /CLAUDE.md
+
+# Nextly local uploads (auto-added)
+public\uploads/

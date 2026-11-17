@@ -186,7 +186,7 @@ function ActivityTable({ views }: { views: RowView[] }) {
       <table className="w-full table-fixed text-sm">
         <thead className="border-b border-border bg-muted/40 text-left text-xs uppercase tracking-wider text-muted-foreground">
           <tr>
-            <th scope="col" className="w-32 px-4 py-3 font-medium">
+            <th scope="col" className="w-40 px-4 py-3 font-medium">
               Time
             </th>
             <th scope="col" className="w-28 px-4 py-3 font-medium">
@@ -197,13 +197,13 @@ function ActivityTable({ views }: { views: RowView[] }) {
             </th>
             <th
               scope="col"
-              className="hidden w-32 px-4 py-3 font-medium lg:table-cell"
+              className="hidden w-32 px-4 py-3 font-medium xl:table-cell"
             >
               Provider
             </th>
             <th
               scope="col"
-              className="hidden w-24 px-4 py-3 font-medium lg:table-cell"
+              className="hidden w-24 px-4 py-3 font-medium xl:table-cell"
             >
               Recipient
             </th>
@@ -219,7 +219,7 @@ function ActivityTable({ views }: { views: RowView[] }) {
               className="border-b border-border align-top last:border-b-0"
             >
               <td className="px-4 py-3">
-                <div>{view.when}</div>
+                <div className="whitespace-nowrap">{view.when}</div>
                 <div className="text-xs text-muted-foreground">{view.ago}</div>
               </td>
               <td className="px-4 py-3">
@@ -232,16 +232,16 @@ function ActivityTable({ views }: { views: RowView[] }) {
                   // columns, carried under the email instead.
                   <div
                     data-compact-details
-                    className="mt-1 break-words text-xs text-muted-foreground lg:hidden"
+                    className="mt-1 break-words text-xs text-muted-foreground xl:hidden"
                   >
                     {view.provider} · {view.recipient}
                   </div>
                 )}
               </td>
-              <td className="hidden break-words px-4 py-3 lg:table-cell">
+              <td className="hidden break-words px-4 py-3 xl:table-cell">
                 {view.provider}
               </td>
-              <td className="hidden px-4 py-3 lg:table-cell">
+              <td className="hidden px-4 py-3 xl:table-cell">
                 {view.recipient}
               </td>
               <td className="px-4 py-3">
