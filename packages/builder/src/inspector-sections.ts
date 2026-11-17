@@ -204,6 +204,7 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
     properties: [
       ["boxShadow", "common"],
       ["opacity", "common"],
+      ["appear", "common"],
       ["transition", "state"],
       ["transform", "more"],
       ["filter", "more"],

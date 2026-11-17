@@ -397,6 +397,24 @@
   color: var(--nx-builder-text-muted);
 }
 
+/* A time in milliseconds: the number, holding five digits, and its unit. */
+.nx-style-inspector__unit-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nx-style-inspector__unit-field > .nx-style-inspector__numeric {
+  flex: 0 0 4.5rem;
+}
+
+.nx-style-inspector__unit {
+  margin-inline-start: -0.25rem;
+  font-size: var(--nx-builder-font-size);
+  color: var(--nx-builder-text-muted);
+}
+
 /*
  * A switch in the inspector is a 24px target on its own. The shared switch is
  * 18px tall, which passes only while no other target sits within 12px of its

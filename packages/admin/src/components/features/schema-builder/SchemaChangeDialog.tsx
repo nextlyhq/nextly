@@ -40,6 +40,10 @@ import type {
 
 import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
 import {
+  FieldGroupCreatesList,
+  type FieldGroupCreate,
+} from "./FieldGroupCreatesList";
+import {
   JoiningTranslationNotice,
   LeavingTranslationNotice,
 } from "./LeavingTranslationNotice";
@@ -66,6 +70,8 @@ interface SchemaChangeDialogProps {
   joiningTranslation?: SchemaPreviewJoiningTranslation[];
   /** The entity's settings saved with the fields, each listed. */
   settingChanges?: readonly SettingChange[];
+  /** The field groups not saved yet that this save creates first, listed before all else. */
+  fieldGroupCreates?: readonly FieldGroupCreate[];
   onConfirm: (
     resolutions: Record<string, FieldResolution>,
     renameResolutions: SchemaRenameResolution[]
@@ -87,6 +93,7 @@ export function SchemaChangeDialog({
   leavingTranslation = [],
   joiningTranslation = [],
   settingChanges = [],
+  fieldGroupCreates = [],
   onConfirm,
   isApplying,
 }: SchemaChangeDialogProps): JSX.Element {
@@ -224,6 +231,8 @@ export function SchemaChangeDialog({
           )}
           refused={refused}
         />
+
+        <FieldGroupCreatesList groups={fieldGroupCreates} />
 
         {/* Changes list */}
         {hasChanges && (

@@ -133,6 +133,10 @@ export async function pushAndReconcileCompanion(
 ): Promise<PipelineResult> {
   const result = await push(desired);
   if (!result.success) {
+    // A busy-table stop as it is, its code, status and report: the API answers it with 409, as
+    // every other bounded schema path does, and the stop carries the table and its tries.
+    const stopped = result.error?.details;
+    if (NextlyError.isCode(stopped, "NEXTLY_TABLE_BUSY")) throw stopped;
     // The push's own words, under the code its status already was: what the dialog tells the
     // admin about a refused apply is the only account of it they get.
     throw new NextlyError({
@@ -142,7 +146,27 @@ export async function pushAndReconcileCompanion(
   }
   // Columns this apply already moved onto the companion, with their values, before its drop, so
   // the reconcile takes them as done rather than adding them again.
-  const joinedBefore = movedOnto(result, companion.tableName);
+  await reconcileBuilderCompanion(
+    kind,
+    companion,
+    movedOnto(result, companion.tableName)
+  );
+  return result;
+}
+
+/**
+ * Brings a Single's or field group's companion in step with its main table, once the main table's
+ * change has run: after the dialog's push, or after the writer ran the save's migration file. It
+ * plans from the companion as it stands, so a change the file already made there is taken as done.
+ *
+ * @param joinedBefore - Columns the push already moved onto the companion, with their values.
+ * @throws as `pushAndReconcileCompanion` does once the push has landed (`companionReconcileFailure`).
+ */
+export async function reconcileBuilderCompanion(
+  kind: "single" | "component",
+  companion: BuilderCompanionReconcile,
+  joinedBefore: string[] = []
+): Promise<void> {
   try {
     if (kind === "single") {
       const { reconcileSingleCompanion } = await import(
@@ -169,7 +193,6 @@ export async function pushAndReconcileCompanion(
       slug: companion.slug,
     });
   }
-  return result;
 }
 
 /** What a companion reconcile stopped after its entity's push landed leaves, for the admin. */

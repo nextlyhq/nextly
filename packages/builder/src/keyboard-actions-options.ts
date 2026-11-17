@@ -135,6 +135,15 @@ export interface BlockKeyboardActionsOptions {
    * @experimental Settles with the Design panel's Block looks group.
    */
   onEscapeWithoutSelection?: () => void;
+  /**
+   * "/" pressed with a block selected, or with nothing selected, while no
+   * text is being typed: the host opens its in-place picker there, adding
+   * by the placement rule. Absent, "/" is left to the browser and Help does
+   * not list it.
+   *
+   * @experimental Settles with the in-place picker.
+   */
+  onAddBlockHere?: () => void;
 }
 
 /**
