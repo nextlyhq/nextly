@@ -754,20 +754,24 @@ function SelectionInspector({
                 breakpoints={styleOnly.breakpoints}
                 onJumpToBreakpoint={styleOnly.onJumpToBreakpoint}
               />
-              <StyleTab
-                {...styleOnly}
-                editor={editor}
-                styleNode={styleNode}
-                renderedTag={canvas.tag}
-                renderedPicture={canvas.picture}
-                renderedPicturePosition={canvas.picturePosition}
-                sideOrientation={canvas.orientation}
-                styleState={styleState}
-                breakpoint={breakpoint}
-                cascade={cascade}
-                previewContainer={previewContainer}
-                verbs={verbs}
-              />
+              {/* The Style tab reaches the host's media library too: the
+                  background image picks and uploads as the Content tab does. */}
+              <ContentServicesContext.Provider value={contentServices}>
+                <StyleTab
+                  {...styleOnly}
+                  editor={editor}
+                  styleNode={styleNode}
+                  renderedTag={canvas.tag}
+                  renderedPicture={canvas.picture}
+                  renderedPicturePosition={canvas.picturePosition}
+                  sideOrientation={canvas.orientation}
+                  styleState={styleState}
+                  breakpoint={breakpoint}
+                  cascade={cascade}
+                  previewContainer={previewContainer}
+                  verbs={verbs}
+                />
+              </ContentServicesContext.Provider>
             </TabsContent>
 
             <TabsContent

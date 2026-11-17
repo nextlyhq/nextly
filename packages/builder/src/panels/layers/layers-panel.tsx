@@ -86,7 +86,6 @@ import {
   Input,
   TreeView,
   detectApplePlatform,
-  useShortcuts,
   type TreeNode,
 } from "@nextlyhq/ui";
 import {
@@ -103,7 +102,6 @@ import { BlockIconMark } from "../../block-icon";
 import { DRAG_SOURCE_ATTRIBUTE } from "../../canvas/canvas";
 import { useHoveredBlockSetter } from "../../canvas/hovered-block";
 import { revealNode } from "../../canvas/reveal-node";
-import { isElement } from "../../dom-kind";
 import type { EditorState } from "../../editor-state";
 import { EDITOR_WORDS } from "../../editor-words";
 import {
@@ -135,6 +133,7 @@ import {
   type RowKeyAction,
 } from "./layer-row-actions";
 import { LayerRowMenu, type RowMenuItem } from "./layer-row-menu";
+import { rowIdOf, RowShortcuts } from "./layer-row-shortcuts";
 import {
   ancestorIds,
   filterLayers,
@@ -781,16 +780,6 @@ function draggingState(drag: LayersDrag): string | undefined {
   return drag.drawn?.result.kind === "refused" ? "refused" : "";
 }
 
-/** The block of the row an event happened in, or `null` off the rows. */
-function rowIdOf(target: EventTarget | null): string | null {
-  // Asked by node kind, so a row in another document still answers.
-  if (!isElement(target)) return null;
-  const row = target.closest('[role="treeitem"]');
-  return (
-    row?.querySelector("[data-nx-layer]")?.getAttribute("data-nx-layer") ?? null
-  );
-}
-
 /**
  * The handlers the element around the tree carries for the rows: the row
  * under the pointer outlines its block on the canvas, the row's verbs by
@@ -828,63 +817,6 @@ function rowBodyHandlers({
       if (id !== null) act(id, "rename");
     },
   };
-}
-
-/** What each row keystroke does, as Help lists it. */
-const ROW_KEY_DESCRIPTIONS: Readonly<Record<RowKeyAction, string>> = {
-  rename: "Rename the block of the focused Layers row",
-  "toggle-hidden":
-    "Hide or show the block of the focused Layers row on the device being edited",
-  "toggle-lock": "Lock or unlock the block of the focused Layers row",
-};
-
-const ROW_KEY_ACTIONS: readonly RowKeyAction[] = [
-  "rename",
-  "toggle-hidden",
-  "toggle-lock",
-];
-
-/**
- * The row keystrokes, registered with the editor's shortcut manager so Help
- * lists them with every other binding. Each acts on the row that has focus,
- * and only while one of this panel's rows has it: the same keys elsewhere,
- * or in a rename's field, are left alone.
- */
-function RowShortcuts({
-  scope,
-  act,
-}: {
-  scope: React.RefObject<HTMLElement | null>;
-  act: (id: string, action: RowKeyAction) => void;
-}): null {
-  const focusedRow = (): string | null => {
-    const root = scope.current;
-    const active = root?.ownerDocument.activeElement;
-    if (
-      root === null ||
-      root === undefined ||
-      active === null ||
-      active === undefined ||
-      !root.contains(active) ||
-      active.getAttribute("role") !== "treeitem"
-    ) {
-      return null;
-    }
-    return rowIdOf(active);
-  };
-  useShortcuts(
-    ROW_KEY_ACTIONS.map(action => ({
-      keys: ROW_KEYS[action],
-      description: ROW_KEY_DESCRIPTIONS[action],
-      when: () => focusedRow() !== null,
-      run: () => {
-        const id = focusedRow();
-        if (id !== null) act(id, action);
-      },
-    })),
-    { name: "builder-layers-rows" }
-  );
-  return null;
 }
 
 /**

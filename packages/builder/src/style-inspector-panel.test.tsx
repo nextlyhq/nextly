@@ -1918,9 +1918,11 @@ describe("controls", () => {
     ).toBeDefined();
   });
 
-  it("names a token's clear action for its property, not just 'Clear'", () => {
+  it("names a held token's Reset for its property, not just the side", () => {
     // Several token-valued properties on one panel would otherwise be a column
     // of identical buttons, and the label pointed at an id nothing carried.
+    // A token the site lacks has no value to unlink to, so Reset is the way
+    // to remove it.
     const styles = {
       base: {
         [BASE_BREAKPOINT]: {
@@ -1931,19 +1933,16 @@ describe("controls", () => {
     } as NodeStyles;
     mount({ spacing: true }, styles);
 
-    // Each names the PROPERTY it clears, not just the side: `padding` and
+    // Each names the PROPERTY it resets, not just the side: `padding` and
     // `margin` both have a block start, so a name built from the side alone
     // says the same thing twice.
     expect(
-      screen.getByRole("button", {
-        name: "Clear Padding block start",
-      })
+      screen.getByRole("button", { name: /^Reset Padding block start at / })
     ).toBeDefined();
     expect(
-      screen.getByRole("button", {
-        name: "Clear Margin block start",
-      })
+      screen.getByRole("button", { name: /^Reset Margin block start at / })
     ).toBeDefined();
+    expect(screen.queryByRole("button", { name: /^Clear / })).toBeNull();
   });
 
   it("names every reset for its own property", () => {
@@ -2050,10 +2049,9 @@ describe("controls", () => {
     expect(padding.getByText("space.4")).toBeDefined();
     expect(padding.queryByDisplayValue("space.4")).toBeNull();
 
+    // The row's Reset removes it.
     fireEvent.click(
-      padding.getByRole("button", {
-        name: "Clear Padding block start",
-      })
+      padding.getByRole("button", { name: /^Reset Padding block start at / })
     );
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
@@ -2073,7 +2071,7 @@ describe("the site's host-fetch policy", () => {
 
   it("refuses a URL naming a host the site does not load from", () => {
     const editor = mount({ background: { image: true } }, undefined, REFUSE);
-    const field = fieldsOf("background").getByLabelText("Url");
+    const field = fieldsOf("background").getByLabelText("Image link");
 
     fireEvent.change(field, { target: { value: REMOTE } });
     fireEvent.blur(field);
@@ -2094,7 +2092,7 @@ describe("the site's host-fetch policy", () => {
     // from "the panel refuses every URL". Both halves produce a refused write
     // in the test above; only this one distinguishes them.
     const editor = mount({ background: { image: true } }, undefined, ALLOW);
-    const field = fieldsOf("background").getByLabelText("Url");
+    const field = fieldsOf("background").getByLabelText("Image link");
 
     fireEvent.change(field, { target: { value: REMOTE } });
     fireEvent.blur(field);
@@ -2108,7 +2106,7 @@ describe("the site's host-fetch policy", () => {
     // scheme allowlist is the only limit. Passing an empty policy here rather
     // than a refusing one is what makes that distinct from a lockdown.
     const editor = mount({ background: { image: true } });
-    const field = fieldsOf("background").getByLabelText("Url");
+    const field = fieldsOf("background").getByLabelText("Image link");
 
     fireEvent.change(field, { target: { value: REMOTE } });
     fireEvent.blur(field);
@@ -2125,13 +2123,50 @@ describe("the site's host-fetch policy", () => {
     render(<InspectorPanel editor={editor} policy={REFUSE} />);
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
-    const field = fieldsOf("background").getByLabelText("Url");
+    const field = fieldsOf("background").getByLabelText("Image link");
 
     fireEvent.change(field, { target: { value: REMOTE } });
     fireEvent.blur(field);
 
     expect(editor.applyAll).not.toHaveBeenCalled();
     expect(field.getAttribute("aria-invalid")).toBe("true");
+  });
+});
+
+describe("the background image and gradient, which both write background-image", () => {
+  it("draws the image picker for the image only, and the gradient as its own field", () => {
+    // Both rows set `background-image`; only the image is a file to choose.
+    mount({ background: { image: true, gradient: true } });
+    expect(
+      fieldsOf("background").getByRole("group", { name: "Image" })
+    ).toBeTruthy();
+    const gradient = fieldsOf("backgroundGradient");
+    expect(gradient.queryByRole("textbox", { name: "Image link" })).toBeNull();
+    expect(gradient.queryByRole("button", { name: /Choose/ })).toBeNull();
+    // The gradient keeps the CSS value field it had.
+    expect(gradient.getAllByRole("textbox")).toHaveLength(1);
+  });
+});
+
+describe("the background image in the Inspector's Style tab", () => {
+  it("reaches the host's media library, as the Content tab's controls do", () => {
+    // Without the host's services the Style tab offers only a link, so a
+    // Choose button here is the services reaching the tab.
+    register({ background: { image: true } });
+    const editor = editorFor(documentOf());
+    const MediaPicker = () => null;
+    render(
+      <InspectorPanel
+        editor={editor}
+        contentServices={{ MediaPicker } as never}
+      />
+    );
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+    expect(
+      fieldsOf("background").getByRole("button", {
+        name: "Choose Background image",
+      })
+    ).toBeTruthy();
   });
 });
 
@@ -4244,7 +4279,9 @@ describe("where a control's value came from", () => {
      * value, so the absent dot is the ambiguity being respected rather than the
      * panel having failed to render the field at all.
      */
-    expect(fieldsOf("background").getByLabelText("Url")).toBeTruthy();
+    expect(
+      fieldsOf("background").getByRole("group", { name: "Image" })
+    ).toBeTruthy();
     expect(dotIn("background")).toBeNull();
   });
 
@@ -5402,7 +5439,6 @@ describe("a per-side property is drawn as a box", () => {
     );
   });
 
-
   it("marks each side with WHICH side it is, not with its position", () => {
     /*
      * The property the stylesheet places on. The heading, a form selector and
@@ -5527,7 +5563,6 @@ describe("a per-side property is drawn as a box", () => {
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
-
   it("goes round the box mirrored on a right-to-left element", () => {
     // The order is the sides' logical one: top, inline end, bottom, inline
     // start, which on a right-to-left element is top, left, bottom, right.
@@ -5640,7 +5675,6 @@ describe("a per-side property is drawn as a box", () => {
       within(box as HTMLElement).getByLabelText("Inline start")
     ).toBeDefined();
   });
-
 
   it("resolves the axes from the CANVAS, through the panel that owns it", () => {
     /*

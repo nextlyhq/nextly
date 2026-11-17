@@ -148,6 +148,20 @@ export function chosenFile(
 }
 
 /**
+ * Why an upload did not finish, in the library's own words when it gave any.
+ * Shared by every place an author uploads an image, so each says it alike.
+ */
+export function failureWords(error: unknown): string {
+  const reason =
+    error instanceof Error && error.message.trim() !== ""
+      ? error.message.trim()
+      : undefined;
+  return reason === undefined
+    ? `${IMAGE_STATE_WORDS.uploadFailed}.`
+    : `${IMAGE_STATE_WORDS.uploadFailed}: ${reason}`;
+}
+
+/**
  * The address a typed link is drawn from, or `undefined` when the page
  * would refuse it: through the same rule the Image block draws by, so a
  * link the canvas accepts is one the page draws.
