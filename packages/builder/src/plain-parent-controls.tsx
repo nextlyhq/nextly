@@ -185,3 +185,51 @@ function AxisRow({
     </div>
   );
 }
+
+/**
+ * The CSS rows each axis draws in plain words, by the parent's arrangement:
+ * in a column the width is its self-alignment, in a Row its share, in a Grid
+ * its justification; the height, under a Row or a Grid, its self-alignment.
+ */
+const DRAWN_ROWS: Readonly<
+  Record<
+    ParentArrangement,
+    { readonly width: readonly string[]; readonly height: readonly string[] }
+  >
+> = {
+  flow: { width: [], height: [] },
+  column: { width: ["alignSelf"], height: [] },
+  row: {
+    width: ["flexGrow", "flexShrink", "flexBasis"],
+    height: ["alignSelf"],
+  },
+  grid: { width: ["justifySelf"], height: ["alignSelf"] },
+};
+
+/**
+ * The rows of "Inside its parent" that Width and Height draw in plain words
+ * while each reads as a choice: they leave the raw rows, as Arrange's do,
+ * and come back while that axis reads Custom. None where neither is drawn.
+ */
+export function useDrawnChildRows(
+  surroundings: StyleFieldSurroundings
+): ReadonlySet<string> {
+  const parent = React.useContext(ParentArrangementContext);
+  const target = React.useContext(StyleTargetContext);
+  const tiers = useLayoutTiers(surroundings);
+  if (parent === undefined || target.kind === "shared") return NONE;
+  const editing = surroundings.breakpoint;
+  const drawn = new Set<string>();
+  if (readChildWidth(tiers, editing, parent).choice !== "custom") {
+    for (const row of DRAWN_ROWS[parent].width) drawn.add(row);
+  }
+  if (
+    DRAWN_ROWS[parent].height.length > 0 &&
+    readChildHeight(tiers, editing).choice !== "custom"
+  ) {
+    for (const row of DRAWN_ROWS[parent].height) drawn.add(row);
+  }
+  return drawn;
+}
+
+const NONE: ReadonlySet<string> = new Set();

@@ -117,17 +117,18 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
     ],
   },
   // How a block takes its place in its parent: Fill, Fit or Fixed drawn on
-  // top, and the CSS each choice writes behind "+ More".
+  // top, and below it the CSS rows that apply in this parent. Those the
+  // choices draw leave while a choice reads them (plain-parent-controls).
   {
     key: "inside-parent",
     label: "Inside its parent",
     properties: [
-      ["flexGrow", "more"],
-      ["flexShrink", "more"],
-      ["flexBasis", "more"],
-      ["alignSelf", "more"],
-      ["justifySelf", "more"],
-      ["order", "more"],
+      ["flexGrow", "common"],
+      ["flexShrink", "common"],
+      ["flexBasis", "common"],
+      ["alignSelf", "common"],
+      ["justifySelf", "common"],
+      ["order", "common"],
     ],
   },
   {

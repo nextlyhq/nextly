@@ -144,7 +144,7 @@ describe("which tier shows without being asked", () => {
     expect(placementOf("justifyItems", "layout").tier).toBe("more");
   });
 
-  it("puts an image's fit and focal point first in Size, a child's share after its size", () => {
+  it("puts an image's fit and focal point first in Size, a child's share inside its parent", () => {
     // What an author changes first on an image is how it fills its box.
     const order = (property: string) =>
       placementOf(property, "dimensions").order;
@@ -152,8 +152,8 @@ describe("which tier shows without being asked", () => {
     expect(order("objectFit")).toBeLessThan(order("objectPosition"));
     expect(order("objectPosition")).toBeLessThan(order("width"));
     expect(order("maxWidth")).toBeLessThan(order("aspectRatio"));
-    expect(order("aspectRatio")).toBeLessThan(order("flexGrow"));
-    expect(placementOf("flexGrow", "dimensions").section).toBe("size");
+    // A child's share of a Row or a Grid is in "Inside its parent".
+    expect(placementOf("flexGrow", "dimensions").section).toBe("inside-parent");
   });
 
   it("shows an aspect ratio at once on an image, behind More on a box", () => {

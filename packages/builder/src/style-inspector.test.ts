@@ -384,6 +384,7 @@ describe("the builder's sections, over the engine's groups", () => {
     const inspection = inspectStyle(documentOf(), "a");
     expect(inspection?.sections.map(section => section.label)).toEqual([
       "Layout",
+      "Inside its parent",
       "Spacing",
       "Size",
       "Position",
@@ -462,7 +463,9 @@ describe("the builder's sections, over the engine's groups", () => {
       inspectStyle(documentOf(), "a", {
         media,
         cascade: { trace: [], subject: { nodeId: "a", tag } },
-      })?.sections[0]?.properties.find(p => p.property === "objectFit")?.common;
+      })
+        ?.sections.find(section => section.key === "size")
+        ?.properties.find(p => p.property === "objectFit")?.common;
     expect(fitIsCommon(false, "div")).toBe(false);
     expect(fitIsCommon(true, "img")).toBe(true);
   });

@@ -49,7 +49,7 @@ import {
   useArrangeReading,
   type ArrangeReading,
 } from "./plain-layout-controls";
-import { InsideParentFields } from "./plain-parent-controls";
+import { InsideParentFields, useDrawnChildRows } from "./plain-parent-controls";
 import { StylePropertyFields } from "./style-property-fields";
 import type { StyleProvenance } from "./style-provenance";
 import type { StyleTarget } from "./style-target";
@@ -253,7 +253,14 @@ function SectionBody({
         property => property.property === "display" && property.offered
       )
   );
-  const { listed, arrange } = arrangedSection(section.properties, reading);
+  const arranged = arrangedSection(section.properties, reading);
+  const arrange = arranged.arrange;
+  // "Inside its parent" leaves out the rows its Fill / Fit / Fixed draw.
+  const childDrawn = useDrawnChildRows(surroundings);
+  const listed =
+    section.key === "inside-parent"
+      ? arranged.listed.filter(property => !childDrawn.has(property.property))
+      : arranged.listed;
   const shown = listed.filter(
     property => property.common || isRevealed(property.property)
   );

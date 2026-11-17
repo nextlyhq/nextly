@@ -119,6 +119,30 @@ function shown(
   );
 }
 
+/**
+ * A block's Size rows shown, then the rows of "Inside its parent" that apply:
+ * a child's share of a Row or a Grid is drawn there as Fill / Fit / Fixed,
+ * its CSS rows behind More, so what decides them is whether they apply.
+ */
+function sizeAndChild(
+  document: BlockDocument,
+  id: string,
+  options?: StyleInspectionOptions
+): string[] {
+  const inspected = inspectStyle(document, id, options)?.sections;
+  const size =
+    inspected
+      ?.find(entry => entry.key === "size")
+      ?.properties.filter(row => row.common)
+      .map(row => row.property) ?? [];
+  const child =
+    inspected
+      ?.find(entry => entry.key === "inside-parent")
+      ?.properties.filter(row => row.applies)
+      .map(row => row.property) ?? [];
+  return [...size, ...child];
+}
+
 // A box's Size rows: its aspect ratio waits behind More, as on any block that
 // draws no replaced element.
 const SIZE = ["width", "height", "minWidth", "maxWidth"];
@@ -183,14 +207,14 @@ describe("a child's rows, by its parent's arrangement", () => {
   it("gives a Stack's child no Row or Grid sizing", () => {
     register();
     expect(
-      shown(nested(), "inner", "size", { cascade: read("inner", []) })
+      sizeAndChild(nested(), "inner", { cascade: read("inner", []) })
     ).toEqual(SIZE);
   });
 
   it("gives a Row's child grow, shrink, basis, align self and order", () => {
     register();
     const cascade = read("inner", [own("outer", "display", "flex")]);
-    expect(shown(nested(), "inner", "size", { cascade })).toEqual([
+    expect(sizeAndChild(nested(), "inner", { cascade })).toEqual([
       ...SIZE,
       "flexGrow",
       "flexShrink",
@@ -203,7 +227,7 @@ describe("a child's rows, by its parent's arrangement", () => {
   it("gives a Grid's child align self, justify self and order", () => {
     register();
     const cascade = read("inner", [own("outer", "display", "inline-grid")]);
-    expect(shown(nested(), "inner", "size", { cascade })).toEqual([
+    expect(sizeAndChild(nested(), "inner", { cascade })).toEqual([
       ...SIZE,
       "alignSelf",
       "justifySelf",
@@ -251,7 +275,7 @@ describe("a child's rows, by its parent's arrangement", () => {
       ],
     };
     const through = (wrapper: string) =>
-      shown(document, "leaf", "size", {
+      sizeAndChild(document, "leaf", {
         cascade: {
           trace: [
             own("row", "display", "flex"),
@@ -275,20 +299,20 @@ describe("a child's rows, by its parent's arrangement", () => {
       outer: { base: { [BASE_BREAKPOINT]: { display: "flex" } } } as NodeStyles,
       inner,
     });
-    expect(shown(flexParent, "inner", "size")).toContain("flexGrow");
+    expect(sizeAndChild(flexParent, "inner")).toContain("flexGrow");
     const blockParent = nested("page", {
       outer: {
         base: { [BASE_BREAKPOINT]: { display: "block" } },
       } as NodeStyles,
       inner,
     });
-    expect(shown(blockParent, "inner", "size")).not.toContain("flexGrow");
+    expect(sizeAndChild(blockParent, "inner")).not.toContain("flexGrow");
   });
 
   it("knows a page's top-level block sits in the page's flow", () => {
     register();
     expect(
-      shown(nested(), "outer", "size", { cascade: read("outer", []) })
+      sizeAndChild(nested(), "outer", { cascade: read("outer", []) })
     ).toEqual(SIZE);
   });
 
@@ -298,14 +322,14 @@ describe("a child's rows, by its parent's arrangement", () => {
       trace: [],
       subject: { nodeId: "inner", blockType: "acme/box", tag: "div" },
     };
-    expect(shown(nested(), "inner", "size", { cascade })).toContain("flexGrow");
+    expect(sizeAndChild(nested(), "inner", { cascade })).toContain("flexGrow");
   });
 
   it("does not know where a component's top-level block is placed", () => {
     // A component goes wherever an author puts it, a Row included.
     register();
     expect(
-      shown(nested("component"), "outer", "size", {
+      sizeAndChild(nested("component"), "outer", {
         cascade: read("outer", []),
       })
     ).toContain("flexGrow");
@@ -315,7 +339,7 @@ describe("a child's rows, by its parent's arrangement", () => {
 describe("what the block renders", () => {
   it("shows an image its fit and focal point, and a box neither", () => {
     register();
-    const image = shown(nested(), "outer", "size", {
+    const image = sizeAndChild(nested(), "outer", {
       cascade: read("outer", [], "img"),
       media: true,
     });
@@ -328,7 +352,7 @@ describe("what the block renders", () => {
       "maxWidth",
       "aspectRatio",
     ]);
-    const box = shown(nested(), "outer", "size", {
+    const box = sizeAndChild(nested(), "outer", {
       cascade: read("outer", []),
       media: false,
     });
@@ -378,8 +402,8 @@ describe("where the parent is read from", () => {
     const document = nested("page", {
       outer: stored({ display: "block" }),
     });
-    expect(shown(document, "inner", "size")).not.toContain("flexGrow");
-    expect(shown(document, "inner", "size", { styles: stored({}) })).toContain(
+    expect(sizeAndChild(document, "inner")).not.toContain("flexGrow");
+    expect(sizeAndChild(document, "inner", { styles: stored({}) })).toContain(
       "flexGrow"
     );
   });
@@ -391,18 +415,18 @@ describe("where the parent is read from", () => {
       settings: { styles: stored({ display: "grid" }) },
     } as BlockDocument;
     expect(
-      shown(document, "outer", "size", { cascade: read("outer", []) })
+      sizeAndChild(document, "outer", { cascade: read("outer", []) })
     ).toContain("justifySelf");
-    expect(shown(document, "outer", "size")).toContain("justifySelf");
+    expect(sizeAndChild(document, "outer")).toContain("justifySelf");
   });
 
   it("puts a template's top-level block in the page's flow, and a pattern's nowhere known", () => {
     register();
     const cascade = read("outer", []);
-    expect(shown(nested("template"), "outer", "size", { cascade })).toEqual(
+    expect(sizeAndChild(nested("template"), "outer", { cascade })).toEqual(
       SIZE
     );
-    expect(shown(nested("pattern"), "outer", "size", { cascade })).toContain(
+    expect(sizeAndChild(nested("pattern"), "outer", { cascade })).toContain(
       "flexGrow"
     );
   });
@@ -422,7 +446,7 @@ describe("where the parent is read from", () => {
       inner: stored({ display: "block", flexWrap: "nowrap" }),
     });
     const at = (state: "base" | "hover" | "active" | "focus") =>
-      shown(document, "inner", "size", { state });
+      sizeAndChild(document, "inner", { state });
     expect(at("hover")).toContain("flexGrow");
     expect(at("active")).toContain("flexGrow");
     expect(at("focus")).not.toContain("flexGrow");
@@ -460,7 +484,7 @@ describe("where the parent is read from", () => {
         },
       ],
     } as unknown as BlockDocument;
-    expect(shown(document, "leaf", "size")).toContain("flexGrow");
+    expect(sizeAndChild(document, "leaf")).toContain("flexGrow");
   });
 
   it("reads the parent at the edited breakpoint", () => {
@@ -481,7 +505,7 @@ describe("where the parent is read from", () => {
       } as unknown as NodeStyles,
     });
     const at = (breakpoint: string) =>
-      shown(document, "inner", "size", {
+      sizeAndChild(document, "inner", {
         breakpoint: breakpoint as never,
         breakpoints,
       });
