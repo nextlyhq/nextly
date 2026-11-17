@@ -36,7 +36,7 @@ import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { Canvas, CANVAS_ROOT_CLASS } from "./canvas";
 import { DropIndicator, useCanvasDrag } from "./canvas-drag";
 import { useEditorState, type EditorState } from "../editor-state";
-import { registrySlotSource, type SlotSource } from "../inserter";
+import { registrySlotSource, type SlotSource } from "../panels/add/inserter";
 
 afterEach(() => {
   cleanup();

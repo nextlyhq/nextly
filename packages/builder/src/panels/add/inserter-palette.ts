@@ -6,7 +6,8 @@
  * @module inserter-palette
  */
 
-import { EDITOR_WORDS } from "./editor-words";
+import { EDITOR_WORDS } from "../../editor-words";
+
 import {
   COMPONENT_CATEGORY,
   type InsertEntry,

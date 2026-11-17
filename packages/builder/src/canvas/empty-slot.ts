@@ -19,7 +19,7 @@
 import type { BlockNode } from "@nextlyhq/blocks-engine";
 import { SLOTS_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
-import type { SlotSource } from "../inserter";
+import type { SlotSource } from "../panels/add/inserter";
 import { BUILDER_CHROME_CLASS, CANVAS_ROOT_CLASS } from "../shell-state";
 
 /**

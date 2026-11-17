@@ -59,7 +59,7 @@ import {
   centeredControlRect,
   EmptyContainerAppenders,
 } from "./empty-container-appender";
-import { registrySlotSource } from "../inserter";
+import { registrySlotSource } from "../panels/add/inserter";
 
 /**
  * The `checkVisibility` the RUNTIME brought, read before any case can replace

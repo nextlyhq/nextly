@@ -44,19 +44,22 @@ import type {
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { autoscrollStep } from "./canvas/autoscroll";
-import { DEFAULT_ACTIVATION_PX } from "./canvas/canvas-drag";
-import { placementSources } from "./canvas/drop-targets";
+import { autoscrollStep } from "../../canvas/autoscroll";
+import { DEFAULT_ACTIVATION_PX } from "../../canvas/canvas-drag";
+import { placementSources } from "../../canvas/drop-targets";
 import {
   canvasContentPoint,
   canvasContentRect,
   containerEdges,
-} from "./canvas/geometry-dom";
-import { RefusalNotice } from "./canvas/refusal-notice";
-import { isElement } from "./dom-kind";
-import type { EditorState } from "./editor-state";
-import type { Point, Rect } from "./geometry";
-import { holdsBlocks } from "./keyboard-move";
+} from "../../canvas/geometry-dom";
+import { RefusalNotice } from "../../canvas/refusal-notice";
+import { isElement } from "../../dom-kind";
+import type { EditorState } from "../../editor-state";
+import type { Point, Rect } from "../../geometry";
+import { holdsBlocks } from "../../keyboard-move";
+import { isLayersLockFacts } from "../../lock-refusal";
+import { refusalAnnouncement, unmovedAnnouncement } from "../../move-refusal";
+
 import {
   LAYERS_DEPTH_PX,
   layersDrop,
@@ -67,8 +70,6 @@ import {
   type LayersRow,
   type LayersVerdictCache,
 } from "./layers-drop";
-import { isLayersLockFacts } from "./lock-refusal";
-import { refusalAnnouncement, unmovedAnnouncement } from "./move-refusal";
 
 /** How long the pointer rests on a collapsed row before it opens. */
 export const LAYERS_OPEN_DELAY_MS = 500;

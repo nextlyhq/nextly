@@ -28,7 +28,7 @@ import {
   offeredIn,
   withEntryContentField,
 } from "./entry-content-rules";
-import { InsertPanel } from "./insert-panel";
+import { InsertPanel } from "./panels/add/insert-panel";
 import {
   PreviewedEntryProvider,
   type PreviewedCollection,

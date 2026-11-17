@@ -33,7 +33,7 @@ import { firstInlineProp } from "../canvas/inline-target";
 import type { EditorState } from "../editor-state";
 import { EDITOR_WORDS } from "../editor-words";
 import { keyHint } from "../key-hint";
-import { pathTo, type ComponentTitleOf } from "../layers";
+import { pathTo, type ComponentTitleOf } from "../panels/layers/layers";
 
 export interface SelectionBreadcrumbProps {
   /** The editor whose selection this describes and changes. */

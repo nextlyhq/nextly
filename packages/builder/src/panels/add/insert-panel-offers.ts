@@ -27,13 +27,19 @@ import {
   placementWording,
   refusalWording,
   type RefusalWording,
-} from "./canvas/drag-refusal";
-import type { EditorState } from "./editor-state";
+} from "../../canvas/drag-refusal";
+import type { EditorState } from "../../editor-state";
 import {
   entryContentRefusal,
   offeredIn,
   withEntryContentField,
-} from "./entry-content-rules";
+} from "../../entry-content-rules";
+import { lockRefusalWording, type LockRefusalFacts } from "../../lock-refusal";
+import { refusalAnnouncement } from "../../move-refusal";
+import type { BuilderOp } from "../../op-vocabulary";
+import { usePreviewedCollection } from "../../previewed-entry";
+import { withArticle } from "../../with-article";
+
 import { insertLockAt, type InsertLock } from "./insert-lock";
 import type { InsertPanelProps } from "./insert-panel-types";
 import { insertedAnnouncement } from "./insert-placement-words";
@@ -62,11 +68,6 @@ import {
   type EntryRole,
   type InsertionOptions,
 } from "./insertion-candidates";
-import { lockRefusalWording, type LockRefusalFacts } from "./lock-refusal";
-import { refusalAnnouncement } from "./move-refusal";
-import type { BuilderOp } from "./op-vocabulary";
-import { usePreviewedCollection } from "./previewed-entry";
-import { withArticle } from "./with-article";
 
 /**
  * One entry as the panel offers it at the current place: where a click puts

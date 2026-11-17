@@ -23,8 +23,8 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import type { RefusalWording } from "./canvas/drag-refusal";
-import { blockLabel } from "./inserter";
-import { layerLabel } from "./layers";
+import { blockLabel } from "./panels/add/inserter";
+import { layerLabel } from "./panels/layers/layers";
 
 /**
  * The facts a slot-lock refusal is worded from: the rule, and the block whose

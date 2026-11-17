@@ -39,10 +39,10 @@ import {
 
 import type { RefusalWording } from "./canvas/drag-refusal";
 import { composedHolds, composedHoldWording } from "./component-holds";
-import type { SavedComponent } from "./inserter";
 import { lockSourceOf, type BlockIdentity, type LockView } from "./inspector";
 import { refusalAnnouncement } from "./move-refusal";
 import type { BuilderOp, NodePatch } from "./op-vocabulary";
+import type { SavedComponent } from "./panels/add/inserter";
 import { instanceProps, storedComponentId } from "./placement-props";
 
 /**

@@ -29,10 +29,10 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { isElement } from "./dom-kind";
-import { keyHint } from "./key-hint";
-import type { SharedBlockVerbs } from "./keyboard-actions";
-import { useAskedSharedVerbs } from "./selection-offer";
+import { isElement } from "../../dom-kind";
+import { keyHint } from "../../key-hint";
+import type { SharedBlockVerbs } from "../../keyboard-actions";
+import { useAskedSharedVerbs } from "../../selection-offer";
 
 /** One of the row's own verbs, as the menu offers it. */
 export interface RowMenuItem {

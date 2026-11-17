@@ -16,10 +16,11 @@ import {
   type PlacementTarget,
 } from "@nextlyhq/blocks-engine";
 
-import { SECTION_BLOCK } from "./block-shortcuts";
-import { emptySlotOf } from "./canvas/empty-slot";
+import { SECTION_BLOCK } from "../../block-shortcuts";
+import { emptySlotOf } from "../../canvas/empty-slot";
+import { positionOf, type OpPosition } from "../../op-vocabulary";
+
 import type { InsertEntry, SlotSource } from "./inserter-types";
-import { positionOf, type OpPosition } from "./op-vocabulary";
 
 /**
  * What kind of block an entry adds, which decides the order its places are

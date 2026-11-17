@@ -80,10 +80,12 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { BlockIconMark } from "./block-icon";
-import { isElement } from "./dom-kind";
-import { EDITOR_WORDS } from "./editor-words";
-import { entryContentRefusal } from "./entry-content-rules";
+import { BlockIconMark } from "../../block-icon";
+import { isElement } from "../../dom-kind";
+import { EDITOR_WORDS } from "../../editor-words";
+import { entryContentRefusal } from "../../entry-content-rules";
+import { usePreviewedCollection } from "../../previewed-entry";
+
 import { LibraryNotices, type LibraryTier } from "./insert-panel-notices";
 import { useInsertOffers } from "./insert-panel-offers";
 import { SummonAnswerOnly } from "./insert-panel-summon";
@@ -104,7 +106,6 @@ import {
   UNCATEGORISED,
   type InsertEntry,
 } from "./inserter";
-import { usePreviewedCollection } from "./previewed-entry";
 
 // The panel's props, its library notices, its tiles and what it offers where
 // live in modules of their own beside it; every name this module exported

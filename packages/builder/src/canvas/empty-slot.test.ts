@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
 
 import { emptySlotOf } from "./empty-slot";
-import { insertionCandidates, slotsShowingEmpty } from "../inserter";
+import { insertionCandidates, slotsShowingEmpty } from "../panels/add/inserter";
 
 const slots = {
   slotsOf: (type: string) =>

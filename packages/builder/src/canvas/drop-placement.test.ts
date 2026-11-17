@@ -31,7 +31,7 @@ import {
   type DropRegion,
 } from "./drop-targets";
 import type { Rect } from "../geometry";
-import { registrySlotSource } from "../inserter";
+import { registrySlotSource } from "../panels/add/inserter";
 
 const base = {
   version: 1,

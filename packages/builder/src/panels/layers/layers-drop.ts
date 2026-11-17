@@ -47,18 +47,22 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { TREE_INDENT_PX } from "@nextlyhq/ui";
 
-import { placementWording, type RefusalWording } from "./canvas/drag-refusal";
-import { movingSubtree } from "./canvas/drop-targets";
-import type { Point } from "./geometry";
-import { indentSlot } from "./keyboard-move";
-import { pathTo } from "./layers";
+import {
+  placementWording,
+  type RefusalWording,
+} from "../../canvas/drag-refusal";
+import { movingSubtree } from "../../canvas/drop-targets";
+import type { Point } from "../../geometry";
+import { indentSlot } from "../../keyboard-move";
 import {
   lockedBlockWording,
   lockRefusalWording,
   type LockRefusalFacts,
-} from "./lock-refusal";
-import { lockBlockingMove } from "./locking";
-import type { BuilderOp, OpPosition, SlotAddress } from "./op-vocabulary";
+} from "../../lock-refusal";
+import { lockBlockingMove } from "../../locking";
+import type { BuilderOp, OpPosition, SlotAddress } from "../../op-vocabulary";
+
+import { pathTo } from "./layers";
 
 /**
  * How far right the pointer travels to nest a block one level deeper: the
