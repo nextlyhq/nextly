@@ -60,6 +60,77 @@ describe("a sheet that is not modal", () => {
     fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(button("Further down the page"));
   });
+
+  it("sends Tab from the sheet itself to its first control, not out of it", () => {
+    // The sheet holds focus as it opens. With controls inside, it is no edge: Tab goes in.
+    renderBesidePage(false);
+    const sheet = screen.getByRole("dialog");
+    sheet.focus();
+    fireEvent.keyDown(sheet, { key: "Tab" });
+    expect(document.activeElement).toBe(button("First in the sheet"));
+  });
+
+  it("sends Shift+Tab from the sheet itself to its last control, not out of it", () => {
+    renderBesidePage(false);
+    const sheet = screen.getByRole("dialog");
+    sheet.focus();
+    fireEvent.keyDown(sheet, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(button("Last in the sheet"));
+  });
+});
+
+describe("a sheet that is not modal and holds nothing to focus", () => {
+  it("lets Tab leave from the sheet itself", () => {
+    render(
+      <>
+        <button type="button">In the page</button>
+        <Sheet open modal={false}>
+          <SheetContent side="right">
+            <SheetTitle>History</SheetTitle>
+            <SheetDescription>Loading…</SheetDescription>
+          </SheetContent>
+        </Sheet>
+      </>
+    );
+    const after = document.createElement("button");
+    after.id = "after-the-sheet";
+    after.type = "button";
+    after.textContent = "After the sheet";
+    document.body.appendChild(after);
+    // With nothing inside to focus, the sheet itself holds focus.
+    const sheet = screen.getByRole("dialog");
+    sheet.focus();
+    fireEvent.keyDown(sheet, { key: "Tab" });
+    expect(document.activeElement).toBe(after);
+  });
+
+  it("counts controls disabled by their fieldset as nothing to focus", () => {
+    // A control inside `<fieldset disabled>` takes no focus though it carries no `disabled` of its
+    // own: counted as a stop, Tab would be sent to it and stay on the sheet.
+    render(
+      <>
+        <button type="button">In the page</button>
+        <Sheet open modal={false}>
+          <SheetContent side="right">
+            <SheetTitle>History</SheetTitle>
+            <SheetDescription>Read only</SheetDescription>
+            <fieldset disabled>
+              <button type="button">Restore</button>
+            </fieldset>
+          </SheetContent>
+        </Sheet>
+      </>
+    );
+    const after = document.createElement("button");
+    after.id = "after-the-sheet";
+    after.type = "button";
+    after.textContent = "After the sheet";
+    document.body.appendChild(after);
+    const sheet = screen.getByRole("dialog");
+    sheet.focus();
+    fireEvent.keyDown(sheet, { key: "Tab" });
+    expect(document.activeElement).toBe(after);
+  });
 });
 
 describe("a modal sheet", () => {
