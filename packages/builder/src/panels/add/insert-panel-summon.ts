@@ -57,6 +57,55 @@ export function cardAnchor(
   };
 }
 
+/**
+ * How many frames the search is held focused after a press, while the tab
+ * the press opened draws: a Saved sections tab reads the site's sections
+ * first, and draws its search again once they arrive.
+ */
+const FOCUS_FRAMES = 90;
+
+/** The open tab's search, or the panel's only one. */
+function searchOf(panel: HTMLElement): HTMLInputElement | null {
+  return (
+    panel.querySelector<HTMLInputElement>(
+      '[role="tabpanel"][data-state="active"] [cmdk-input]'
+    ) ?? panel.querySelector<HTMLInputElement>("[cmdk-input]")
+  );
+}
+
+/**
+ * Focus the panel's search, without scrolling the panel's region (the list
+ * going to the top is the one movement the author should see), and keep it
+ * there while the tab draws: a search drawn again takes the focus its last
+ * drawing held. Lets go the moment focus is somewhere else on purpose, or
+ * after a moment and a half. Answers the way to stop early.
+ */
+function keepSearchFocused(panel: HTMLElement | null): () => void {
+  if (panel === null) return () => undefined;
+  const doc = panel.ownerDocument;
+  const view = doc.defaultView;
+  let frames = 0;
+  let handle = 0;
+  const hold = (): void => {
+    if (!panel.isConnected) return;
+    const search = searchOf(panel);
+    const active = doc.activeElement;
+    // Somewhere else on purpose: an author moved on.
+    const lost = active === null || active === doc.body;
+    if (search !== null && active !== search && (frames === 0 || lost)) {
+      search.focus({ preventScroll: true });
+    } else if (!lost && active !== search) {
+      return;
+    }
+    frames += 1;
+    if (frames < FOCUS_FRAMES && view !== null) {
+      handle = view.requestAnimationFrame(hold);
+    }
+  };
+  hold();
+  return () => view?.cancelAnimationFrame(handle);
+}
+
 /** How long the line naming the place stays highlighted after a press. */
 const FLASH_MS = 1200;
 
@@ -73,15 +122,16 @@ export function useSummonAnswer(
 ): number | undefined {
   const [flash, setFlash] = React.useState<number | undefined>(undefined);
   const answered = React.useRef<number | undefined>(undefined);
+  // The hold on the search outlives the press's own render, which the host
+  // answers at once by taking the press back, and this line itself, which a
+  // tab drawn again replaces; it ends by itself, or when the panel goes.
+  const stopHolding = React.useRef<() => void>(() => undefined);
   React.useEffect(() => {
     if (summoned === undefined || answered.current === summoned) return;
     answered.current = summoned;
     const panel = root.current;
-    // Without scrolling the panel's region: the list going to the top is the
-    // one movement the author should see.
-    panel
-      ?.querySelector<HTMLInputElement>("[cmdk-input]")
-      ?.focus({ preventScroll: true });
+    stopHolding.current();
+    stopHolding.current = keepSearchFocused(panel);
     const list = panel?.querySelector<HTMLElement>(".nx-insert-panel__list");
     if (list !== null && list !== undefined) list.scrollTop = 0;
     setFlash(summoned);
@@ -93,21 +143,4 @@ export function useSummonAnswer(
     return () => clearTimeout(done);
   }, [flash]);
   return flash;
-}
-
-/**
- * The answer to a press where the panel has nowhere to add: nothing to focus
- * or scroll, but the press is still said back as answered, so it does not
- * wait and steal focus when the panel can next draw its palette.
- */
-export function SummonAnswerOnly({
-  summoned,
-  onSummoned,
-}: {
-  readonly summoned?: number | undefined;
-  readonly onSummoned?: ((count: number) => void) | undefined;
-}): null {
-  const nowhere = React.useRef<HTMLDivElement | null>(null);
-  useSummonAnswer(nowhere, summoned, onSummoned);
-  return null;
 }
