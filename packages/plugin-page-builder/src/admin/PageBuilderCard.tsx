@@ -412,7 +412,7 @@ function SectionsToggle({
       aria-expanded={open}
       aria-controls={controls}
       onClick={onToggle}
-      className="-mx-1 flex items-center gap-1.5 rounded-md px-1 py-1 text-sm font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+      className="-mx-1 flex items-center gap-1.5 rounded-md px-1 py-1 text-sm font-medium text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
     >
       <ChevronDown
         aria-hidden="true"
