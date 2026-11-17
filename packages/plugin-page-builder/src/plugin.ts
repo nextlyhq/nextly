@@ -495,6 +495,7 @@ export const pageBuilder = (
         ...components.componentDelete,
         layouts.layoutChoices,
         layouts.layoutCounts,
+        layouts.fillNotices,
         ...layouts.layoutWrites,
         ...layouts.layoutArea,
         pages.pageCollection,

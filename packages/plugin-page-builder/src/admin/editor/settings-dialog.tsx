@@ -51,6 +51,7 @@ import {
 } from "@nextlyhq/ui";
 import { AlertCircle, TriangleAlert } from "lucide-react";
 import {
+  useContext,
   useEffect,
   useState,
   type ComponentProps,
@@ -74,6 +75,7 @@ import { lazyPart } from "../lazy-part";
 import { RemovalStatusRow, RemovalStepPanel } from "./breakpoint-removal-step";
 import { undoableHint } from "./breakpoint-undo-flow";
 import { UndoStatusRow, UndoStepPanel } from "./breakpoint-undo-step";
+import { ManageSetsContext } from "./manage-sets";
 import { useSavedAddress, type SettingsAddress } from "./settings-address";
 import type { SettingsPlace } from "./settings-place";
 import type { SharePreview } from "./share-preview";
@@ -173,6 +175,7 @@ export function SettingsDialog({
     enabled: open,
   });
   const leave = useLeaveGuard(onOpenChange, open);
+  const leaveToSets = useLeaveToSets(leave.request);
   // The Site tab is offered to a manager, and also when the read failed: a
   // failure must not look like a missing permission.
   const siteTab = site.data?.mayManageSite === true || site.error !== null;
@@ -183,7 +186,7 @@ export function SettingsDialog({
   }, [siteTab, leave]);
 
   return (
-    <>
+    <ManageSetsContext.Provider value={leaveToSets}>
       <Dialog
         open={open}
         onOpenChange={next =>
@@ -286,7 +289,7 @@ export function SettingsDialog({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </>
+    </ManageSetsContext.Provider>
   );
 }
 
@@ -339,7 +342,23 @@ const DISCARD_WORDS = {
 } as const;
 
 /** A way out of the breakpoint editor: closing Settings, or another tab. */
-type Leave = { kind: "close" } | { kind: "tab"; to: string };
+/**
+ * Where leaving goes: closing (and then, where asked, somewhere else in the
+ * editor, such as the Pages panel's sets), or another tab.
+ */
+type Leave = { kind: "close"; then?: () => void } | { kind: "tab"; to: string };
+
+/**
+ * The editor's way to its list of sets, taken only as the dialog may be
+ * left: a breakpoint or code draft asks first, and a save running keeps it.
+ * Null where the editor offers none.
+ */
+function useLeaveToSets(request: (leave: Leave) => void): (() => void) | null {
+  const openSets = useContext(ManageSetsContext);
+  return openSets === null
+    ? null
+    : () => request({ kind: "close", then: openSets });
+}
 
 /** Which drafts leaving would discard. */
 function discardingOf(
@@ -375,8 +394,12 @@ function useLeaveGuard(onOpenChange: (open: boolean) => void, open: boolean) {
     setPending(null);
   }, [open]);
   const go = (leave: Leave): void => {
-    if (leave.kind === "close") onOpenChange(false);
-    else setTab(leave.to);
+    if (leave.kind === "tab") {
+      setTab(leave.to);
+      return;
+    }
+    onOpenChange(false);
+    leave.then?.();
   };
   return {
     tab,
@@ -858,6 +881,9 @@ function useSetListHref(): string | undefined {
  */
 function SiteDefaultLine({ read }: { read: SiteSettingsRead }): JSX.Element {
   const href = useSetListHref();
+  // Inside the builder, the list of sets is the Pages panel, in this window:
+  // Settings closes and the panel opens on its Header & footer sets.
+  const openSets = useContext(ManageSetsContext);
   const name =
     read.layouts.find(layout => layout.id === read.defaultLayout)?.title ??
     "none set";
@@ -872,7 +898,15 @@ function SiteDefaultLine({ read }: { read: SiteSettingsRead }): JSX.Element {
         </span>{" "}
         <span className="font-medium">{name}</span>
       </p>
-      {href === undefined ? null : (
+      {openSets !== null ? (
+        <button
+          type="button"
+          onClick={openSets}
+          className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+        >
+          Change in Pages ▸ Header & footer
+        </button>
+      ) : href === undefined ? null : (
         <a
           href={href}
           target="_blank"

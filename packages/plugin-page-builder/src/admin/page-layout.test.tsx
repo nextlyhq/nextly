@@ -68,6 +68,7 @@ import {
   usePageLayoutRegions,
   usePageLayoutSettings,
 } from "./page-layout";
+import { ManageSetsContext } from "./editor/manage-sets";
 
 const read = vi.mocked(usePluginRoute);
 const identity = vi.mocked(useDocumentIdentity);
@@ -305,6 +306,30 @@ describe("the page's Layout picker", () => {
       "_blank",
       "noopener"
     );
+    opened.mockRestore();
+  });
+
+  it("opens the builder's own list of sets, inside the builder, from Manage headers & footers", async () => {
+    const opened = vi.spyOn(window, "open").mockReturnValue(null);
+    const openSets = vi.fn();
+    render(
+      <ManageSetsContext.Provider value={openSets}>
+        <Form defaults={{ layout: null, noHeaderFooter: false }}>
+          {control => <PageLayoutPicker control={control} />}
+        </Form>
+      </ManageSetsContext.Provider>
+    );
+    await openMenu();
+    const manage = screen.getByRole("option", {
+      name: /Manage headers & footers/,
+    });
+    // Not a new tab here: the Pages panel is in this window.
+    expect(manage.textContent).toBe("Manage headers & footers");
+    await act(async () => {
+      fireEvent.click(manage);
+    });
+    expect(openSets).toHaveBeenCalledTimes(1);
+    expect(opened).not.toHaveBeenCalled();
     opened.mockRestore();
   });
 

@@ -108,6 +108,10 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   "columns-layout-picker.tsx": ["Choose a layout"],
   // The Style tab's Layout section, where a container's Content width is.
   "core-block-placement.fixture.ts": ["Layout"],
+  // A Gallery's Layout section, the one its block places "When clicked" in,
+  // holding how its pictures sit: Columns and On mobile.
+  "gallery-fields.tsx": ["Layout"],
+  "inspector.ts": ["Layout"],
   // The Add panel's group of layout blocks (Section, Columns, Grid).
   "panels/add/inserter-palette.ts": ["Layout"],
   // The Style tab's Layout section.

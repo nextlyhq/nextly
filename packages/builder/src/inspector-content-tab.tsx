@@ -26,9 +26,10 @@ import {
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
 import { formSectionBodies } from "./form-sections";
+import { galleryContentSections } from "./gallery-fields";
 import {
   blockIsReadOnly,
-  builderContentSectionOf,
+  builderContentSectionsOf,
   contentRowsOf,
   designReadOnlyReason,
   fieldLabel,
@@ -149,9 +150,34 @@ function builderSectionsOf(
   inspection: BlockInspection,
   editor: EditorState,
   around: ContentAround | undefined,
-  reasonId: string
+  reasonId: string,
+  services: ContentServices | undefined
 ): PanelSection[] {
-  const label = builderContentSectionOf(inspection.blockName);
+  const labels = builderContentSectionsOf(inspection.blockName);
+  if (labels.length === 0) return [];
+  // Layout, Stack on, Columns and On mobile write the block's design, so a
+  // design lock holds them.
+  const designHeldBy =
+    designReadOnlyReason(
+      editor.document,
+      inspection.nodeId,
+      lockViewOf(editor)
+    ) === undefined
+      ? undefined
+      : reasonId;
+  const gallery = galleryContentSections(
+    {
+      editor,
+      nodeId: inspection.nodeId,
+      breakpoints: around?.breakpoints,
+      services,
+      reasonId,
+      designHeldBy,
+    },
+    labels
+  );
+  if (gallery.length > 0) return gallery;
+  const [label] = labels;
   if (label === undefined) return [];
   const section = columnsContentSection({
     editor,
@@ -161,17 +187,38 @@ function builderSectionsOf(
     breakpoints: around?.breakpoints,
     cascade: around?.cascade,
     renderedTag: around?.renderedTag,
-    // Layout and Stack on write the row's design, so a design lock holds them.
-    heldBy:
-      designReadOnlyReason(
-        editor.document,
-        inspection.nodeId,
-        lockViewOf(editor)
-      ) === undefined
-        ? undefined
-        : reasonId,
+    heldBy: designHeldBy,
   });
   return section === undefined ? [] : [section];
+}
+
+/**
+ * The builder's sections and the block's own, as one list: a block's
+ * section named as one the builder draws is drawn inside it, after the
+ * builder's controls, so the two never share a name in one tab.
+ */
+function joinedSections(
+  builder: readonly PanelSection[],
+  own: readonly PanelSection[]
+): PanelSection[] {
+  const named = new Set(builder.map(section => section.key));
+  return [
+    ...builder.map(section => {
+      const same = own.find(each => each.key === section.key);
+      if (same === undefined) return section;
+      return {
+        ...section,
+        holdsValue: section.holdsValue || same.holdsValue,
+        body: (
+          <>
+            {section.body}
+            {same.body}
+          </>
+        ),
+      };
+    }),
+    ...own.filter(section => !named.has(section.key)),
+  ];
 }
 
 /**
@@ -261,17 +308,18 @@ function ContentSurface({
           ),
   });
   // Each section the block places in Content, folding on its own, after
-  // the one the builder draws for a core block (Columns' layout); a block
+  // the ones the builder draws for a core block (Columns' layout, a
+  // Gallery's Pictures and Layout); a block
   // with none draws the fields' own note that there is nothing to set.
-  const sections = [
-    ...builderSectionsOf(inspection, editor, around, reasonId),
-    ...inspection.sections.content.map(section => ({
+  const sections = joinedSections(
+    builderSectionsOf(inspection, editor, around, reasonId, services),
+    inspection.sections.content.map(section => ({
       key: section.label,
       label: section.label,
       holdsValue: rowsHoldValue(section.rows),
       body: formBodies?.get(section.label) ?? fieldsFor(section.rows),
-    })),
-  ];
+    }))
+  );
   const generated =
     sections.length === 0 ? (
       fieldsFor(contentRowsOf(inspection))
