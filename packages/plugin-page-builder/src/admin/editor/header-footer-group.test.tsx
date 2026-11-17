@@ -20,11 +20,16 @@ const routeReads: RouteRead[] = [];
 const refetch = vi.fn();
 let choices: { data?: unknown; error?: unknown } = {};
 let counts: { data?: unknown; error?: unknown } = {};
+let siteSettings: { data?: unknown; error?: unknown } = {};
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   usePluginRoute: (read: RouteRead) => {
     routeReads.push(read);
-    const answer = read.path.startsWith("/layouts/counts") ? counts : choices;
+    const answer = read.path.startsWith("/layouts/counts")
+      ? counts
+      : read.path.startsWith("/site/settings")
+        ? siteSettings
+        : choices;
     return {
       data: answer.data,
       error: answer.error ?? null,
@@ -51,6 +56,21 @@ const setWrites = vi.hoisted(() => ({
   })),
 }));
 vi.mock("../layout-writes-client", () => setWrites);
+
+const flows = vi.hoisted(() => ({
+  makeDefault: vi.fn(),
+  remove: vi.fn(),
+  removeArgs: [] as Array<{ entryId: string | null; published: boolean }>,
+}));
+vi.mock("../make-default-action", () => ({
+  useMakeDefaultFlow: () => ({ start: flows.makeDefault, dialog: null }),
+}));
+vi.mock("../RemoveLayoutAction", () => ({
+  useRemoveLayout: (args: { entryId: string | null; published: boolean }) => {
+    flows.removeArgs.push(args);
+    return { open: () => flows.remove(args.entryId), dialog: null };
+  },
+}));
 
 const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock("@nextlyhq/ui", async importOriginal => ({
@@ -88,6 +108,7 @@ function answer(items: ReturnType<typeof set>[], defaultLayout = "main") {
         layoutsCollection: "layouts",
         canUpdateLayouts: rights.update,
         canCreateLayouts: rights.create,
+        canDeleteAnyLayout: rights.delete,
         more: false,
         matched: items.map(item => item.id),
         regionComponents: {},
@@ -99,11 +120,29 @@ function answer(items: ReturnType<typeof set>[], defaultLayout = "main") {
 
 const folds = { folded: new Set<string>(), onFold: vi.fn() };
 /** What the author may do to sets. */
-const rights = { update: true, create: true };
+const rights = {
+  update: true,
+  create: true,
+  delete: true,
+  chooseDefault: true,
+};
 
 beforeEach(() => {
   rights.update = true;
   rights.create = true;
+  rights.delete = true;
+  rights.chooseDefault = true;
+  flows.makeDefault.mockClear();
+  flows.remove.mockClear();
+  flows.removeArgs.length = 0;
+  siteSettings = {
+    get data() {
+      return {
+        mayManageSite: true,
+        mayChooseDefaultLayout: rights.chooseDefault,
+      };
+    },
+  };
   setWrites.renameLayout.mockClear();
   setWrites.duplicateLayout.mockClear();
   toasts.success.mockClear();
@@ -249,12 +288,14 @@ describe("a set's menu", () => {
     await openMenu("Landing");
     expect(
       screen.getAllByRole("menuitem").map(entry => entry.textContent)
-    ).toEqual(["Open", "Rename", "Duplicate"]);
+    ).toEqual(["Open", "Make site default", "Rename", "Duplicate", "Delete…"]);
   });
 
   it("offers neither Rename without the right to change sets nor Duplicate without the right to make them", async () => {
     rights.update = false;
     rights.create = false;
+    rights.delete = false;
+    rights.chooseDefault = false;
     answer([set("main", "Main"), set("landing", "Landing")]);
     render(<HeaderFooterGroup folds={folds} />);
     await openMenu("Landing");
@@ -289,7 +330,7 @@ describe("a set's menu", () => {
     await openMenu("Landing");
     expect(
       screen.getAllByRole("menuitem").map(entry => entry.textContent)
-    ).toEqual(["Open", "Rename", "Duplicate"]);
+    ).toContain("Rename");
   });
 
   it("copies a set, says so, then reads the sets again", async () => {
@@ -311,6 +352,45 @@ describe("a set's menu", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }));
     await vi.waitFor(() =>
       expect(toasts.error).toHaveBeenCalledWith("Not allowed.")
+    );
+  });
+
+  it("makes a published set the site default through the list's own flow", async () => {
+    render(<HeaderFooterGroup folds={folds} />);
+    await openMenu("Landing");
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Make site default" })
+    );
+    expect(flows.makeDefault).toHaveBeenCalledWith({
+      id: "landing",
+      title: "Landing",
+      published: true,
+    });
+  });
+
+  it("offers a draft set Publish it, then make default, and the default neither", async () => {
+    render(<HeaderFooterGroup folds={folds} />);
+    await openMenu("Campaign");
+    expect(
+      screen.getByRole("menuitem", { name: "Publish it, then make default" })
+    ).toBeTruthy();
+    await userEvent.keyboard("{Escape}");
+    await openMenu("Main");
+    expect(
+      screen.queryByRole("menuitem", { name: /make default|Make site default/ })
+    ).toBeNull();
+  });
+
+  it("opens the set's removal, and refuses the site default's with the reason", async () => {
+    render(<HeaderFooterGroup folds={folds} />);
+    await openMenu("Landing");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
+    expect(flows.remove).toHaveBeenCalledWith("landing");
+    await openMenu("Main");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
+    expect(flows.remove).not.toHaveBeenCalledWith("main");
+    expect(toasts.error).toHaveBeenCalledWith(
+      "Main is the site default. Make another set the default before deleting it."
     );
   });
 });

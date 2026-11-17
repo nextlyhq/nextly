@@ -22,6 +22,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
   toast,
 } from "@nextlyhq/ui";
@@ -38,10 +39,19 @@ import {
   type LayoutPageCount,
   type LayoutPageCountsResponse,
 } from "../../layout-counts-contract";
-import { PAGE_BUILDER_PLUGIN_NAME } from "../../library-contract";
+import {
+  PAGE_BUILDER_PLUGIN_NAME,
+  SITE_SETTINGS_ROUTE_PATH,
+  type SiteSettingsRead,
+} from "../../library-contract";
 import { useSetPictures } from "../header-footer-pictures";
 import { duplicateLayout, renameLayout } from "../layout-writes-client";
+import {
+  useMakeDefaultFlow,
+  type MakeDefaultAsked,
+} from "../make-default-action";
 import { useRefreshOnReturn } from "../refresh-on-return";
+import { useRemoveLayout } from "../RemoveLayoutAction";
 
 import { RenameField } from "./rename-field";
 
@@ -171,6 +181,15 @@ function GroupBody({
   const [renamed, setRenamed] = React.useState<ReadonlyMap<string, string>>(
     () => new Map()
   );
+  // Who may choose the site default, as the Header & footer list asks it.
+  const settings = usePluginRoute<SiteSettingsRead>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: SITE_SETTINGS_ROUTE_PATH,
+    staleTime: 0,
+  });
+  // The list's own Make site default flow, its question included, so both
+  // places ask the same and write the same; the panel reads its sets again.
+  const makeDefault = useMakeDefaultFlow({ published: reread, made: reread });
   if (read.error !== null) {
     return (
       <div className="grid justify-items-start gap-2 text-sm text-muted-foreground">
@@ -189,51 +208,58 @@ function GroupBody({
   if (read.data === undefined) return null;
   const { items, meta } = read.data;
   return (
-    <ul aria-label="Header & footer sets" className="grid gap-0.5">
-      {items.map(set => (
-        <SetRow
-          key={set.id}
-          set={set}
-          href={formHref(meta.layoutsCollection, set.id)}
-          note={setNote(set, meta.defaultLayout, counts?.[set.id])}
-          picture={picture(set.regions)}
-          may={{
-            rename: meta.canUpdateAnyLayout ?? meta.canUpdateLayouts,
-            duplicate: meta.canCreateLayouts === true,
-          }}
-          shownTitle={renamed.get(set.id) ?? set.title}
-          onRenamed={title => {
-            setRenamed(current => new Map(current).set(set.id, title));
-          }}
-          onWritten={reread}
-        />
-      ))}
-      {meta.more ? (
+    <>
+      {makeDefault.dialog}
+      <ul aria-label="Header & footer sets" className="grid gap-0.5">
+        {items.map(set => (
+          <SetRow
+            key={set.id}
+            set={set}
+            href={formHref(meta.layoutsCollection, set.id)}
+            note={setNote(set, meta.defaultLayout, counts?.[set.id])}
+            picture={picture(set.regions)}
+            isDefault={set.id === meta.defaultLayout}
+            may={{
+              rename: meta.canUpdateAnyLayout ?? meta.canUpdateLayouts,
+              duplicate: meta.canCreateLayouts === true,
+              makeDefault: settings.data?.mayChooseDefaultLayout === true,
+              remove: meta.canDeleteAnyLayout === true,
+            }}
+            onMakeDefault={makeDefault.start}
+            shownTitle={renamed.get(set.id) ?? set.title}
+            onRenamed={title => {
+              setRenamed(current => new Map(current).set(set.id, title));
+            }}
+            onWritten={reread}
+          />
+        ))}
+        {meta.more ? (
+          <li>
+            <a
+              href={`/admin/collections/${encodeURIComponent(meta.layoutsCollection)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block rounded-md px-1.5 py-1 text-xs text-muted-foreground underline-offset-4 hover:underline"
+            >
+              Showing the first {items.length}. See every header & footer set
+              <span className="sr-only"> (opens in a new tab)</span>
+            </a>
+          </li>
+        ) : null}
         <li>
           <a
-            href={`/admin/collections/${encodeURIComponent(meta.layoutsCollection)}`}
+            href={formHref(meta.layoutsCollection)}
             target="_blank"
             rel="noopener noreferrer"
-            className="block rounded-md px-1.5 py-1 text-xs text-muted-foreground underline-offset-4 hover:underline"
+            className="flex items-center gap-2 rounded-md px-1.5 py-1 text-sm text-muted-foreground hover:bg-[color:var(--nx-builder-hover)] hover:text-[color:var(--nx-builder-text)]"
           >
-            Showing the first {items.length}. See every header & footer set
+            <Plus aria-hidden="true" className="size-3.5" />
+            New header & footer
             <span className="sr-only"> (opens in a new tab)</span>
           </a>
         </li>
-      ) : null}
-      <li>
-        <a
-          href={formHref(meta.layoutsCollection)}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-2 rounded-md px-1.5 py-1 text-sm text-muted-foreground hover:bg-[color:var(--nx-builder-hover)] hover:text-[color:var(--nx-builder-text)]"
-        >
-          <Plus aria-hidden="true" className="size-3.5" />
-          New header & footer
-          <span className="sr-only"> (opens in a new tab)</span>
-        </a>
-      </li>
-    </ul>
+      </ul>
+    </>
   );
 }
 
@@ -251,6 +277,8 @@ function refusalOf(error: unknown): string {
  */
 function SetRow({
   set,
+  isDefault,
+  onMakeDefault,
   shownTitle,
   href,
   note,
@@ -260,12 +288,20 @@ function SetRow({
   onWritten,
 }: {
   set: LayoutChoice;
+  /** Whether this set is the site default. */
+  isDefault: boolean;
+  onMakeDefault: (asked: MakeDefaultAsked) => void;
   /** The name the row shows: the saved one after a rename here. */
   shownTitle: string;
   href: string;
   note: string;
   picture: React.ReactNode;
-  may: { readonly rename: boolean; readonly duplicate: boolean };
+  may: {
+    readonly rename: boolean;
+    readonly duplicate: boolean;
+    readonly makeDefault: boolean;
+    readonly remove: boolean;
+  };
   onRenamed: (title: string) => void;
   onWritten: () => void;
 }): React.JSX.Element {
@@ -273,6 +309,13 @@ function SetRow({
   // Rename starts once the menu has CLOSED, as a page's does: started while
   // it closes, the menu's focus return would end the rename at once.
   const renameAfterClose = React.useRef(false);
+  // The set's own Remove dialog, as its form opens it; the panel stays.
+  const removal = useRemoveLayout({
+    entryId: set.id,
+    published: set.published,
+    leave: onWritten,
+    closeOnLeave: true,
+  });
   const write = (run: () => Promise<unknown>) => {
     void run().then(onWritten, (error: unknown) =>
       toast.error(refusalOf(error))
@@ -340,6 +383,21 @@ function SetRow({
           >
             Open
           </DropdownMenuItem>
+          {may.makeDefault && !isDefault ? (
+            <DropdownMenuItem
+              onSelect={() =>
+                onMakeDefault({
+                  id: set.id,
+                  title: shownTitle,
+                  published: set.published,
+                })
+              }
+            >
+              {set.published
+                ? "Make site default"
+                : "Publish it, then make default"}
+            </DropdownMenuItem>
+          ) : null}
           {may.rename ? (
             <DropdownMenuItem
               onSelect={() => {
@@ -361,8 +419,30 @@ function SetRow({
               Duplicate
             </DropdownMenuItem>
           ) : null}
+          {may.remove ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-destructive focus:text-destructive"
+                onSelect={() => {
+                  // The default is taken down only once another set is the
+                  // default: said here, before any check is asked.
+                  if (isDefault) {
+                    toast.error(
+                      `${shownTitle} is the site default. Make another set the default before deleting it.`
+                    );
+                    return;
+                  }
+                  removal.open();
+                }}
+              >
+                Delete…
+              </DropdownMenuItem>
+            </>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
+      {removal.dialog}
     </li>
   );
 }
