@@ -40,14 +40,17 @@ export const ENLARGE_ATTRIBUTE = "data-nx-enlarge";
  *
  * `display` only while open: a page's rule outweighs the browser's own
  * `[popover]:not(:popover-open) { display: none }`, so a lightbox given its
- * layout unconditionally would show on every page load. The backdrop dims
- * the page the same in light and dark: it is a shade over whatever is
- * there, and the panel on it takes the site's colours. The pointers too,
- * which are no style a part can declare: a picture that enlarges, and a
- * Close button.
+ * layout unconditionally would show on every page load. `margin: auto` is
+ * the browser's own centring, restated: a site's reset (`* { margin: 0 }`)
+ * outweighs it too, and pinned the panel to the window's corner. The
+ * backdrop dims the page the same in light and dark: it is a shade over
+ * whatever is there, and the panel on it takes the site's colours. The
+ * pointers too, which are no style a part can declare: a picture that
+ * enlarges, and a Close button.
  */
 const LIGHTBOX_CSS: string = [
   `[${LIGHTBOX_ATTRIBUTE}]:popover-open{display:flex}`,
+  `[${LIGHTBOX_ATTRIBUTE}]{margin:auto}`,
   `[${LIGHTBOX_ATTRIBUTE}]::backdrop{background:rgb(0 0 0 / 0.8)}`,
   `[${ENLARGE_ATTRIBUTE}]{cursor:zoom-in}`,
   `[${LIGHTBOX_ATTRIBUTE}]>button{cursor:pointer}`,

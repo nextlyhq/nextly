@@ -631,8 +631,10 @@ function wrapPicture(
  * lightbox, in a figure that holds the caption and the lightbox beside it,
  * so the block keeps one root whether or not it has a caption.
  *
- * The button only opens (`show`): a click on the picture while its lightbox
- * is open lands on the backdrop, which closes it, and never reopens it.
+ * The button toggles, the browser's default: the backdrop lets clicks through
+ * to the page, so a click outside the panel but over the page's picture
+ * lands on this button, and closes the lightbox as a click anywhere else
+ * outside it does.
  *
  * Where an author is looking (the editor's canvas, a draft's preview) the
  * button names no popover (`opens` false): the canvas draws the page as it
@@ -666,7 +668,7 @@ function enlargedPicture(
       <button
         type="button"
         className={partClass("enlarge")}
-        {...(opens ? { popoverTarget: id, popoverTargetAction: "show" } : {})}
+        {...(opens ? { popoverTarget: id } : {})}
         aria-label={enlargeName(alt)}
         {...{ [ENLARGE_ATTRIBUTE]: "" }}
       >

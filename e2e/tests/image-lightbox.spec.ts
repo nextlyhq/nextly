@@ -1,10 +1,11 @@
 /**
  * An Image set to Enlarge, on the live page and on the canvas.
  *
- * - With JavaScript turned off, a click on the picture opens its full-size
+ * - With JavaScript off (and on), a click on the picture opens its full-size
  *   file over the page with its caption, in the browser's own popover; Close,
- *   Escape and a click outside each close it, and focus is back on the
- *   picture each time.
+ *   Escape and a click outside each close it. Focus is back on the picture
+ *   after Close, Escape and a click over the picture behind the backdrop; a
+ *   click elsewhere leaves it where it went.
  * - The full-size file is fetched only when the lightbox opens.
  * - At 320px and 1440px the opened picture fits 90% of the window, Close is
  *   a 44px target, and the page never scrolls sideways.
@@ -29,7 +30,6 @@ import { pngBuffer } from "./support/media-files";
 import { test } from "./support/test";
 
 const PAGES = "/admin/api/collections/pages/entries";
-const BLOCK_PAGES = "/admin/api/collections/block-pages/entries";
 const IMAGE = "00000000-0000-4000-8000-00000000c401";
 const ALT = "Surveyors on a ridge at dawn";
 const CAPTION = "The survey team, first light";
@@ -90,16 +90,18 @@ async function enlargedPage(
   return { id, slug };
 }
 
-/** A visitor's page with JavaScript turned off, at `width`. */
+/** A visitor's page, signed in to nothing, at `width`. */
 async function visitor(
   browser: Browser,
   baseURL: string | undefined,
   width: number,
+  script: boolean,
   colorScheme: "light" | "dark" = "light"
 ): Promise<Page> {
   const context = await browser.newContext({
     baseURL,
-    javaScriptEnabled: false,
+    javaScriptEnabled: script,
+    storageState: { cookies: [], origins: [] },
     viewport: { width, height: 900 },
     colorScheme,
   });
@@ -119,182 +121,227 @@ function lightboxOn(page: Page) {
   };
 }
 
-test.describe("an enlarged Image on the live page, with no JavaScript", () => {
-  test.describe.configure({ timeout: 180_000 });
-
-  test("opens full size with its caption, and Close, Escape and a click outside close it, each giving focus back", async ({
-    page,
-    browser,
-    baseURL,
-  }) => {
-    const { slug } = await enlargedPage(page.request, BLOCK_PAGES, "published");
-    const live = await visitor(browser, baseURL, 1440);
-    await live.goto(`/blocks/${slug}`);
-    const box = lightboxOn(live);
-    // Scripts are off, so the browser's popover is all that can open it.
-    await expect(box.panel).toHaveCount(1);
-    await expect(box.open).toHaveCount(0);
-    await expect(box.full).toBeHidden();
-
-    // Close.
-    await box.opener.click();
-    await expect(box.open).toHaveCount(1);
-    await expect(box.full).toBeVisible();
-    await expect(box.panel.getByText(CAPTION)).toBeVisible();
-    await box.close.click();
-    await expect(box.open).toHaveCount(0);
-    await expect(box.opener).toBeFocused();
-
-    // Escape, from the keyboard: Enter opens, Tab reaches Close.
-    await box.opener.focus();
-    await live.keyboard.press("Enter");
-    await expect(box.open).toHaveCount(1);
-    await live.keyboard.press("Tab");
-    await expect(box.close).toBeFocused();
-    await live.keyboard.press("Escape");
-    await expect(box.open).toHaveCount(0);
-    await expect(box.opener).toBeFocused();
-
-    // Close from the keyboard.
-    await live.keyboard.press("Enter");
-    await live.keyboard.press("Tab");
-    await live.keyboard.press("Enter");
-    await expect(box.open).toHaveCount(0);
-    await expect(box.opener).toBeFocused();
-
-    // A click outside the picture: the window's corner, on the backdrop.
-    await box.opener.click();
-    await expect(box.open).toHaveCount(1);
-    await box.close.focus();
-    await live.mouse.click(5, 5);
-    await expect(box.open).toHaveCount(0);
-    await expect(box.opener).toBeFocused();
-    await live.context().close();
-  });
-
-  test("fetches the full-size file only when the lightbox opens", async ({
-    page,
-    browser,
-    baseURL,
-  }) => {
-    const { slug } = await enlargedPage(page.request, BLOCK_PAGES, "published");
-    const live = await visitor(browser, baseURL, 1440);
-    const asked: string[] = [];
-    live.on("request", request => {
-      if (request.resourceType() === "image") asked.push(request.url());
-    });
-    await live.goto(`/blocks/${slug}`);
-    const box = lightboxOn(live);
-    const pagePicture = box.opener.locator("img");
-    await expect
-      .poll(() =>
-        pagePicture.evaluate(element => (element as HTMLImageElement).complete)
-      )
-      .toBe(true);
-    const full = new URL((await box.full.getAttribute("src")) ?? "", live.url())
-      .href;
-    const shown = await pagePicture.evaluate(
-      element => (element as HTMLImageElement).currentSrc
+/*
+ * Every case runs twice: with JavaScript off, which is what the lightbox
+ * promises, and on, where nothing a script does may change it. With it off,
+ * the page must be readable from its HTML alone, and the published route
+ * still streams the page's body in a part only script reveals; that run is
+ * enabled once the body renders in the first HTML.
+ */
+for (const script of [false, true]) {
+  test.describe(`an enlarged Image on the live page, JavaScript ${script ? "on" : "off"}`, () => {
+    test.describe.configure({ timeout: 180_000 });
+    test.skip(
+      !script,
+      "The published route sends the page body hidden until JavaScript runs; " +
+        "enabled once it renders in the first HTML."
     );
-    // The control: the page draws a sized copy, so the full-size file is a
-    // request of its own.
-    expect(shown, "the page's picture is a sized copy").not.toBe(full);
-    await live.waitForLoadState("networkidle");
-    expect(asked.filter(each => each === full)).toHaveLength(0);
 
-    await box.opener.click();
-    await expect.poll(() => asked.filter(each => each === full).length).toBe(1);
-    await expect
-      .poll(() =>
-        box.full.evaluate(element => (element as HTMLImageElement).complete)
-      )
-      .toBe(true);
-    await live.context().close();
-  });
-
-  for (const width of [320, 1440]) {
-    test(`fits the window at ${width}px, with a 44px Close and no sideways scroll`, async ({
+    test("opens full size with its caption, and Close, Escape and a click outside close it, each giving focus back", async ({
       page,
       browser,
       baseURL,
     }) => {
-      const { slug } = await enlargedPage(
-        page.request,
-        BLOCK_PAGES,
-        "published"
-      );
-      const live = await visitor(browser, baseURL, width);
-      await live.goto(`/blocks/${slug}`);
+      const { slug } = await enlargedPage(page.request, PAGES, "published");
+      const live = await visitor(browser, baseURL, 1440, script);
+      await live.goto(`/${slug}`);
       const box = lightboxOn(live);
+      // The browser's own popover opens it, with or without a script.
+      await expect(box.panel).toHaveCount(1);
+      await expect(box.open).toHaveCount(0);
+      await expect(box.full).toBeHidden();
+
+      // Close.
       await box.opener.click();
+      await expect(box.open).toHaveCount(1);
+      await expect(box.full).toBeVisible();
+      await expect(box.panel.getByText(CAPTION)).toBeVisible();
+      await box.close.click();
+      await expect(box.open).toHaveCount(0);
+      await expect(box.opener).toBeFocused();
+
+      // Escape, from the keyboard: Enter opens, Tab reaches Close.
+      await box.opener.focus();
+      await live.keyboard.press("Enter");
+      await expect(box.open).toHaveCount(1);
+      await live.keyboard.press("Tab");
+      await expect(box.close).toBeFocused();
+      await live.keyboard.press("Escape");
+      await expect(box.open).toHaveCount(0);
+      await expect(box.opener).toBeFocused();
+
+      // Close from the keyboard.
+      await live.keyboard.press("Enter");
+      await live.keyboard.press("Tab");
+      await live.keyboard.press("Enter");
+      await expect(box.open).toHaveCount(0);
+      await expect(box.opener).toBeFocused();
+
+      // A click outside the picture, on the backdrop, closes it. Beside the
+      // panel the page's own picture lies beneath, so the click lands on its
+      // button, which closes the lightbox and holds the focus.
+      await box.opener.click();
+      await expect(box.open).toHaveCount(1);
+      await box.close.focus();
+      const panel = await box.panel.boundingBox();
+      expect(panel?.x ?? 0, "room beside the panel").toBeGreaterThan(10);
+      await live.mouse.click(
+        (panel?.x ?? 0) / 2,
+        (panel?.y ?? 0) + (panel?.height ?? 0) / 2
+      );
+      await expect(box.open).toHaveCount(0);
+      await expect(box.opener).toBeFocused();
+      // In the window's corner, over the page's header, it closes too; the
+      // focus goes where the click went, as the browser's own light dismiss
+      // leaves it, rather than back to the picture.
+      await box.opener.click();
+      await expect(box.open).toHaveCount(1);
+      await live.mouse.click(5, 5);
+      await expect(box.open).toHaveCount(0);
+      await live.context().close();
+    });
+
+    test("fetches the full-size file only when the lightbox opens", async ({
+      page,
+      browser,
+      baseURL,
+    }) => {
+      const { slug } = await enlargedPage(page.request, PAGES, "published");
+      const live = await visitor(browser, baseURL, 1440, script);
+      const asked: string[] = [];
+      live.on("request", request => {
+        if (request.resourceType() === "image") asked.push(request.url());
+      });
+      await live.goto(`/${slug}`);
+      const box = lightboxOn(live);
+      const pagePicture = box.opener.locator("img");
+      await expect
+        .poll(() =>
+          pagePicture.evaluate(
+            element => (element as HTMLImageElement).complete
+          )
+        )
+        .toBe(true);
+      const full = new URL(
+        (await box.full.getAttribute("src")) ?? "",
+        live.url()
+      ).href;
+      const shown = await pagePicture.evaluate(
+        element => (element as HTMLImageElement).currentSrc
+      );
+      // The control: the page draws a sized copy, so the full-size file is a
+      // request of its own.
+      expect(shown, "the page's picture is a sized copy").not.toBe(full);
+      await live.waitForLoadState("networkidle");
+      expect(asked.filter(each => each === full)).toHaveLength(0);
+
+      await box.opener.click();
+      await expect
+        .poll(() => asked.filter(each => each === full).length)
+        .toBe(1);
       await expect
         .poll(() =>
           box.full.evaluate(element => (element as HTMLImageElement).complete)
         )
         .toBe(true);
-      const size = live.viewportSize() ?? { width, height: 900 };
-      const picture = await box.full.boundingBox();
-      expect(picture, "the full-size picture has a box").not.toBeNull();
-      expect(picture?.width ?? 0).toBeGreaterThan(width * 0.5);
-      expect(picture?.width ?? Infinity).toBeLessThanOrEqual(size.width * 0.9);
-      expect(picture?.height ?? Infinity).toBeLessThanOrEqual(
-        size.height * 0.9
-      );
-      // Its proportion kept: 16:9, as the file is.
-      expect(
-        Math.abs((picture?.width ?? 0) / (picture?.height ?? 1) - 16 / 9)
-      ).toBeLessThan(0.02);
-      const panel = await box.panel.boundingBox();
-      expect(panel?.width ?? Infinity).toBeLessThanOrEqual(
-        size.width * 0.9 + 1
-      );
-      expect(panel?.height ?? Infinity).toBeLessThanOrEqual(
-        size.height * 0.9 + 1
-      );
-      // The panel hugs the picture rather than leaving a band beside it.
-      expect((panel?.width ?? 0) - (picture?.width ?? 0)).toBeLessThan(40);
-      const close = await box.close.boundingBox();
-      expect(close?.width ?? 0).toBeGreaterThanOrEqual(44);
-      expect(close?.height ?? 0).toBeGreaterThanOrEqual(44);
-      expect(
-        await live.evaluate(
-          () => document.documentElement.scrollWidth <= window.innerWidth
-        )
-      ).toBe(true);
       await live.context().close();
     });
-  }
 
-  test("takes the site's dark values in a dark window", async ({
-    page,
-    browser,
-    baseURL,
-  }) => {
-    const { slug } = await enlargedPage(page.request, BLOCK_PAGES, "published");
-    const colours: Record<string, { background: string; text: string }> = {};
-    for (const scheme of ["light", "dark"] as const) {
-      const live = await visitor(browser, baseURL, 1440, scheme);
-      await live.goto(`/blocks/${slug}`);
-      const box = lightboxOn(live);
-      await box.opener.click();
-      await expect(box.open).toHaveCount(1);
-      colours[scheme] = await box.panel.evaluate(element => {
-        const style = getComputedStyle(element);
-        return { background: style.backgroundColor, text: style.color };
+    for (const width of [320, 1440]) {
+      test(`fits the window at ${width}px, with a 44px Close and no sideways scroll`, async ({
+        page,
+        browser,
+        baseURL,
+      }) => {
+        const { slug } = await enlargedPage(page.request, PAGES, "published");
+        const live = await visitor(browser, baseURL, width, script);
+        await live.goto(`/${slug}`);
+        const box = lightboxOn(live);
+        await box.opener.click();
+        await expect
+          .poll(() =>
+            box.full.evaluate(element => (element as HTMLImageElement).complete)
+          )
+          .toBe(true);
+        const size = live.viewportSize() ?? { width, height: 900 };
+        const picture = await box.full.boundingBox();
+        expect(picture, "the full-size picture has a box").not.toBeNull();
+        expect(picture?.width ?? 0).toBeGreaterThan(width * 0.5);
+        expect(picture?.width ?? Infinity).toBeLessThanOrEqual(
+          size.width * 0.9
+        );
+        expect(picture?.height ?? Infinity).toBeLessThanOrEqual(
+          size.height * 0.9
+        );
+        // Its proportion kept: 16:9, as the file is.
+        expect(
+          Math.abs((picture?.width ?? 0) / (picture?.height ?? 1) - 16 / 9)
+        ).toBeLessThan(0.02);
+        const panel = await box.panel.boundingBox();
+        expect(panel?.width ?? Infinity).toBeLessThanOrEqual(
+          size.width * 0.9 + 1
+        );
+        expect(panel?.height ?? Infinity).toBeLessThanOrEqual(
+          size.height * 0.9 + 1
+        );
+        // Centred: as much room on either side, and above as below.
+        expect(
+          Math.abs(
+            (panel?.x ?? 0) -
+              (size.width - (panel?.x ?? 0) - (panel?.width ?? 0))
+          )
+        ).toBeLessThanOrEqual(2);
+        expect(
+          Math.abs(
+            (panel?.y ?? 0) -
+              (size.height - (panel?.y ?? 0) - (panel?.height ?? 0))
+          )
+        ).toBeLessThanOrEqual(2);
+        // The panel hugs the picture rather than leaving a band beside it.
+        expect((panel?.width ?? 0) - (picture?.width ?? 0)).toBeLessThan(40);
+        const close = await box.close.boundingBox();
+        expect(close?.width ?? 0).toBeGreaterThanOrEqual(44);
+        expect(close?.height ?? 0).toBeGreaterThanOrEqual(44);
+        expect(
+          await live.evaluate(
+            () => document.documentElement.scrollWidth <= window.innerWidth
+          )
+        ).toBe(true);
+        await live.context().close();
       });
-      await live.context().close();
     }
-    // The site's page colours, as its default tokens hold them.
-    expect(colours.light).toEqual({
-      background: "rgb(255, 255, 255)",
-      text: "rgb(17, 24, 39)",
-    });
-    expect(colours.dark).toEqual({
-      background: "rgb(11, 15, 25)",
-      text: "rgb(249, 250, 251)",
+
+    test("takes the site's dark values in a dark window", async ({
+      page,
+      browser,
+      baseURL,
+    }) => {
+      const { slug } = await enlargedPage(page.request, PAGES, "published");
+      const colours: Record<string, { background: string; text: string }> = {};
+      for (const scheme of ["light", "dark"] as const) {
+        const live = await visitor(browser, baseURL, 1440, script, scheme);
+        await live.goto(`/${slug}`);
+        const box = lightboxOn(live);
+        await box.opener.click();
+        await expect(box.open).toHaveCount(1);
+        colours[scheme] = await box.panel.evaluate(element => {
+          const style = getComputedStyle(element);
+          return { background: style.backgroundColor, text: style.color };
+        });
+        await live.context().close();
+      }
+      // The site's page colours, as its default tokens hold them.
+      expect(colours.light).toEqual({
+        background: "rgb(255, 255, 255)",
+        text: "rgb(17, 24, 39)",
+      });
+      expect(colours.dark).toEqual({
+        background: "rgb(11, 15, 25)",
+        text: "rgb(249, 250, 251)",
+      });
     });
   });
-});
+}
 
 test.describe("an enlarged Image on the canvas", () => {
   test.describe.configure({ timeout: 180_000 });

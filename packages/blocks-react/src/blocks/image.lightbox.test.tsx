@@ -109,9 +109,10 @@ describe("an Image set to Enlarge, on a published page", () => {
     expect(opener.querySelector("img")).not.toBeNull();
     // The browser's own popover, closed by a click outside and Escape.
     expect(popover.getAttribute("popover")).toBe("auto");
-    // Opened, not toggled: a second click on the picture never closes it
-    // from under a pointer that missed the Close button.
-    expect(opener.getAttribute("popovertargetaction")).toBe("show");
+    // Toggled, the browser's default: the page's picture sits under the
+    // backdrop, and a click there lands on this button, so it must close
+    // the lightbox as a click anywhere else outside it does.
+    expect(opener.hasAttribute("popovertargetaction")).toBe(false);
   });
 
   it("names a decorative picture's button without alt text", async () => {
