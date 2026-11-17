@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-The page builder opens with fewer requests. Its own reads as the builder opens (the collections a list may show, the custom sources, the component library, what the author may do, the site style, the pages collection and the header & footer choices) now arrive in one request, each answered and checked as its own route would. The "bindings to fix" chip reads the whole report only when its list is opened, and the release banner under an entry no longer redraws the screen every minute when the entry is in no release.
+The page builder opens with fewer requests. Five of its own reads as the builder opens (the collections a list may show, the custom sources, what the author may do, the site style and the pages collection) now arrive in one request, each answered and checked by its own route. The "bindings to fix" chip reads the whole report only when its list is opened, and the release banner under an entry no longer redraws the screen every minute when the entry is in no release.
