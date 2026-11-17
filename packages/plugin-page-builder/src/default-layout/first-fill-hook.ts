@@ -3,6 +3,14 @@
  * as a header or footer for the first time, from any screen: the builder, the
  * admin's form, the API or an import.
  *
+ * ## Whose publish
+ *
+ * Someone's: a signed-in person's or an API key's, from the builder, the
+ * admin's form or the API. A write made with no user is the system's own (a
+ * seed, a script, an internal write) and fills nothing: the fill is the first
+ * header an author publishes, and the author is the one told. Code that wants
+ * a default of its own writes the set's areas itself.
+ *
  * ## What counts as the first time
  *
  * A committed create or update that leaves the component published (its live
@@ -88,8 +96,11 @@ export function firstPublishedAs(
   if (publishedAreaOf(context.originalData) === area) return null;
   const id = (context.data as { id?: unknown }).id;
   if (typeof id !== "string" || id === "") return null;
+  // Only someone's publish: a write with no user is the system's (a seed,
+  // a script, an internal write), which fills nothing on its own.
   const by = context.user?.id;
-  return { id, area, by: typeof by === "string" && by !== "" ? by : null };
+  if (typeof by !== "string" || by === "") return null;
+  return { id, area, by };
 }
 
 /** Register the hook on the components collection's committed writes. */

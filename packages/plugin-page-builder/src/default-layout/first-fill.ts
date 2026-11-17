@@ -77,8 +77,8 @@ export interface FirstFillDeps {
 export interface PublishedAs {
   readonly id: string;
   readonly area: StarterArea;
-  /** The user who published it, to be told; null when nobody can be. */
-  readonly by: string | null;
+  /** The user who published it, who is told. */
+  readonly by: string;
 }
 
 /** One row of a set's areas, as stored. */

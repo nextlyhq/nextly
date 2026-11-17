@@ -27,24 +27,46 @@ describe("a component's first publish as a header or footer", () => {
       firstPublishedAs({
         data: live("footer"),
         originalData: { ...live("footer"), status: "draft" },
+        user: { id: "u1" },
       })
-    ).toEqual({ id: "c1", area: "footer", by: null });
+    ).toEqual({ id: "c1", area: "footer", by: "u1" });
     expect(
-      firstPublishedAs({ data: live("footer"), originalData: live(null) })
-    ).toEqual({ id: "c1", area: "footer", by: null });
+      firstPublishedAs({
+        data: live("footer"),
+        originalData: live(null),
+        user: { id: "u1" },
+      })
+    ).toEqual({ id: "c1", area: "footer", by: "u1" });
+  });
+
+  it("does not count a publish nobody made: a seed's, a script's", () => {
+    expect(firstPublishedAs({ data: live("header") })).toBeNull();
+    expect(firstPublishedAs({ data: live("header"), user: null })).toBeNull();
   });
 
   it("does not count a later publish of a header, a draft, a working draft or a component used anywhere", () => {
     expect(
-      firstPublishedAs({ data: live("header"), originalData: live("header") })
+      firstPublishedAs({
+        data: live("header"),
+        originalData: live("header"),
+        user: { id: "u1" },
+      })
     ).toBeNull();
     expect(
-      firstPublishedAs({ data: { ...live("header"), status: "draft" } })
+      firstPublishedAs({
+        data: { ...live("header"), status: "draft" },
+        user: { id: "u1" },
+      })
     ).toBeNull();
     expect(
-      firstPublishedAs({ data: { ...live("header"), _isWorkingDraft: true } })
+      firstPublishedAs({
+        data: { ...live("header"), _isWorkingDraft: true },
+        user: { id: "u1" },
+      })
     ).toBeNull();
-    expect(firstPublishedAs({ data: live(null) })).toBeNull();
-    expect(firstPublishedAs({ data: live("") })).toBeNull();
+    expect(
+      firstPublishedAs({ data: live(null), user: { id: "u1" } })
+    ).toBeNull();
+    expect(firstPublishedAs({ data: live(""), user: { id: "u1" } })).toBeNull();
   });
 });

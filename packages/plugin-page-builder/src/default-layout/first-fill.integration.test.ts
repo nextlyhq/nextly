@@ -75,6 +75,9 @@ function probePlugin(probe: Probe): PluginDefinition {
   });
 }
 
+/** The author every publish here is made as, unless a test says otherwise. */
+const AUTHOR = { id: "author-1" };
+
 const heading = (id: string, text: string) => ({
   id,
   type: "core/heading",
@@ -216,6 +219,7 @@ describe.each(getConfiguredTestDialects())(
           status: data.status,
         },
         overrideAccess: true,
+        user: AUTHOR,
       });
       return String((created.item as Row).id);
     }
@@ -230,6 +234,7 @@ describe.each(getConfiguredTestDialects())(
         id,
         data: { ...data, status: "published", _overwrite: true },
         overrideAccess: true,
+        user: AUTHOR,
       });
     }
 
@@ -277,8 +282,8 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(areasOf(await main(t))).toEqual({ header, footer });
       expect(await marks().read()).toEqual({
-        header: { component: header, tell: null },
-        footer: { component: footer, tell: null },
+        header: { component: header, tell: AUTHOR.id },
+        footer: { component: footer, tell: AUTHOR.id },
       });
     });
 
@@ -396,7 +401,7 @@ describe.each(getConfiguredTestDialects())(
       const filled = areasOf(await main(t)).header;
       expect([a, b]).toContain(filled);
       expect(await marks().read()).toEqual({
-        header: { component: filled, tell: null },
+        header: { component: filled, tell: AUTHOR.id },
       });
     });
 
@@ -422,8 +427,16 @@ describe.each(getConfiguredTestDialects())(
         starter: starterRecordStore(db(), dialectOf()),
       };
       const filled = await Promise.all([
-        fillDefaultOnFirstPublish(deps, { id: a, area: "header", by: null }),
-        fillDefaultOnFirstPublish(deps, { id: b, area: "header", by: null }),
+        fillDefaultOnFirstPublish(deps, {
+          id: a,
+          area: "header",
+          by: AUTHOR.id,
+        }),
+        fillDefaultOnFirstPublish(deps, {
+          id: b,
+          area: "header",
+          by: AUTHOR.id,
+        }),
       ]);
       expect(filled.filter(Boolean)).toHaveLength(1);
       const winner = filled[0] ? a : b;
@@ -443,42 +456,39 @@ describe.each(getConfiguredTestDialects())(
       expect(areasOf(await main(t))).toEqual({ header, footer });
     });
 
-    it("tells the person who published, once", async () => {
+    it("fills nothing for a publish nobody made, and tells the person who published, once", async () => {
       const t = await boot();
-      // The Direct API with no user publishes as nobody: no one to tell.
-      const header = await component(t, "Acme header", {
-        area: "header",
-        status: "published",
-      });
-      expect((await marks().read()).header).toEqual({
-        component: header,
-        tell: null,
-      });
-
-      const created = await t.nextly.create({
+      const record = await starter();
+      // A seed or a script: the Direct API with no user.
+      await t.nextly.create({
         collection: COMPONENTS_SLUG,
         data: {
-          title: "Acme footer",
-          slug: "acme-footer",
-          content: documentOf("acme-footer-node", "Acme footer"),
-          area: "footer",
+          title: "Seeded header",
+          slug: "seeded-header",
+          content: documentOf("seeded-node", "Seeded header"),
+          area: "header",
           status: "published",
         },
         overrideAccess: true,
-        user: { id: "author-1" },
       });
-      const footer = String((created.item as Row).id);
+      expect(areasOf(await main(t)).header).toBe(record.header.id);
+      expect(await marks().read()).toEqual({});
+
+      const footer = await component(t, "Acme footer", {
+        area: "footer",
+        status: "published",
+      });
       expect(areasOf(await main(t)).footer).toBe(footer);
       expect(await marks().take("author-2")).toEqual([]);
       // Two asks at once, as two tabs might: one of them is told.
       const [first, second] = await Promise.all([
-        marks().take("author-1"),
-        marks().take("author-1"),
+        marks().take(AUTHOR.id),
+        marks().take(AUTHOR.id),
       ]);
       expect([...first, ...second]).toEqual([
         { area: "footer", component: footer },
       ]);
-      expect(await marks().take("author-1")).toEqual([]);
+      expect(await marks().take(AUTHOR.id)).toEqual([]);
     });
 
     it("fills nothing on a site that draws its own header and footer", async () => {

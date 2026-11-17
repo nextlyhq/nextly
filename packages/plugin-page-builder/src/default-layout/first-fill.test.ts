@@ -192,7 +192,7 @@ describe("the fill of the default by a first published header", () => {
       await fillDefaultOnFirstPublish(deps, {
         id: "starter-f",
         area: "footer",
-        by: null,
+        by: "u1",
       })
     ).toBe(false);
     expect(deps.nextly.update).not.toHaveBeenCalled();
