@@ -20,6 +20,8 @@ import {
 
 const POSTS = "hkl_posts";
 const SITE = "hkl_site";
+/** Held changes: a save to a published entry waits as a pending change. */
+const DRAFTED = "hkl_drafted";
 
 /** What one hook was told. */
 interface Told {
@@ -119,6 +121,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           // Shared: one value for every language.
           text({ name: "code", localized: false }),
         ],
+      }),
+      defineCollection({
+        slug: DRAFTED,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        hooks: everyHook("drafted"),
+        fields: [text({ name: "title" })],
       }),
     ],
     singles: [
@@ -367,6 +377,57 @@ describe.each(getConfiguredTestDialects())(
           locales: ["en", "es"],
           shared: true,
         });
+      }
+    }, 90_000);
+
+    // A publish of every language that puts each language's pending change
+    // live runs the after-hooks once for each, as a publish of that language
+    // alone runs them, and each run is told its own language.
+    it("tells each after-hook run of a publish of every language its own language", async () => {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: DRAFTED,
+        locale: "en",
+        data: { title: "Harbour", status: "published" },
+      });
+      const id = String(created.item.id);
+      await t.nextly.update({
+        collection: DRAFTED,
+        id,
+        locale: "es",
+        data: { title: "Puerto", status: "published", _overwrite: true },
+      });
+      // Each held as a pending change of its language.
+      for (const [locale, title] of [
+        ["en", "Harbour again"],
+        ["es", "Puerto otra vez"],
+      ] as const) {
+        await t.nextly.update({
+          collection: DRAFTED,
+          id,
+          locale,
+          data: { title, _overwrite: true },
+        });
+      }
+      told.length = 0;
+      const entries = t.getService("collectionsHandler") as unknown as {
+        getEntryService(): {
+          publishAllLocales(args: Record<string, unknown>): Promise<{
+            success: boolean;
+          }>;
+        };
+      };
+      const published = await entries.getEntryService().publishAllLocales({
+        collectionName: DRAFTED,
+        entryId: id,
+        overrideAccess: true,
+        data: { _overwrite: true },
+      });
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      const after = toldBy("drafted:afterChange");
+      expect(after.map(e => e.locale).sort()).toEqual(["en", "es"]);
+      for (const entry of after) {
+        expect(entry.locales, String(entry.locale)).toEqual([entry.locale]);
       }
     }, 90_000);
 

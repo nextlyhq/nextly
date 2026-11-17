@@ -10955,6 +10955,8 @@ export class CollectionMutationService extends BaseService {
       // publish left it and as it stood before, for the update hooks run once
       // the publish is durable. The closure rebuilds it each attempt.
       let promotedForHooks: {
+        /** The language whose pending change went live. */
+        locale: string;
         data: Record<string, unknown>;
         originalData: Record<string, unknown> | null;
       }[] = [];
@@ -11909,6 +11911,7 @@ export class CollectionMutationService extends BaseService {
               ? []
               : [
                   {
+                    locale: promoted.locale,
                     data,
                     originalData: storedBefore.get(promoted.locale) ?? null,
                   },
@@ -12273,6 +12276,8 @@ export class CollectionMutationService extends BaseService {
         // The whole row is still handed over, so a handler that does run can
         // read its siblings.
         const afterRuns: {
+          /** The language a run is for: one whose pending change went live. */
+          locale?: string;
           data: Record<string, unknown>;
           originalData: Record<string, unknown> | null;
           touched?: ReadonlySet<string>;
@@ -12294,40 +12299,51 @@ export class CollectionMutationService extends BaseService {
                 },
               ];
         for (const run of afterRuns) {
-          await this.hookService.hookRegistry.execute(
-            "afterUpdate",
-            this.hookService.buildHookContext({
-              collection: params.collectionName,
-              operation: "update" as const,
+          const runHooks = async () => {
+            await this.hookService.hookRegistry.execute(
+              "afterUpdate",
+              this.hookService.buildHookContext({
+                collection: params.collectionName,
+                operation: "update" as const,
+                data: run.data,
+                originalData: run.originalData ?? undefined,
+                user: params.user,
+                context: sharedContext,
+                req: requestFacts,
+              })
+            );
+            await this.hookService.storedHookExecutor.execute(
+              "afterUpdate",
+              storedHooks,
+              this.hookService.buildPrebuiltHookContext({
+                collection: params.collectionName,
+                operation: "update",
+                data: run.data,
+                queryDatabase: this.queryDatabaseFn,
+                user: params.user,
+                sharedContext,
+                req: requestFacts,
+              })
+            );
+            await runFieldHooks({
+              kind: "collection",
+              slug: params.collectionName,
+              phase: "afterChange",
               data: run.data,
-              originalData: run.originalData ?? undefined,
-              user: params.user,
-              context: sharedContext,
-              req: requestFacts,
-            })
-          );
-          await this.hookService.storedHookExecutor.execute(
-            "afterUpdate",
-            storedHooks,
-            this.hookService.buildPrebuiltHookContext({
-              collection: params.collectionName,
               operation: "update",
-              data: run.data,
-              queryDatabase: this.queryDatabaseFn,
               user: params.user,
-              sharedContext,
-              req: requestFacts,
-            })
-          );
-          await runFieldHooks({
-            kind: "collection",
-            slug: params.collectionName,
-            phase: "afterChange",
-            data: run.data,
-            operation: "update",
-            user: params.user,
-            only: run.touched,
-          });
+              only: run.touched,
+            });
+          };
+          // A run for one language's pending change is told that language, as
+          // a publish of that language alone is; a move of statuses alone is
+          // told every language it moved.
+          await (run.locale === undefined
+            ? runHooks()
+            : withRuleLanguage(
+                { locale: run.locale, locales: [run.locale] },
+                runHooks
+              ));
         }
       });
 
