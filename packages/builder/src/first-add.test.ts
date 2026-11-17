@@ -19,6 +19,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { planLayout } from "./columns-layout";
+import { readStyleValue } from "./style-values";
 import { useEditorState } from "./editor-state";
 import { firstAddChooserOf } from "./first-add";
 import { applyOps, type BuilderOp } from "./op-vocabulary";
@@ -165,6 +166,39 @@ describe("the first-add step", () => {
     });
     expect(rowIn(result.current.document)).toBeUndefined();
     expect(result.current.document.nodes.map(n => n.id)).toEqual(["intro"]);
+  });
+
+  it("a pick writes its layout's widths, not only its count", () => {
+    const { result } = inserted();
+    const row = rowIn(result.current.document);
+    if (row === undefined) throw new Error("row not inserted");
+    const plan = planLayout(row, "wide-left", {
+      state: "base",
+      breakpoint: "base",
+    });
+    if (!plan.ok) throw new Error(plan.reason);
+    act(() => {
+      result.current.firstAdd?.choose(plan.ops);
+    });
+    const laid = rowIn(result.current.document);
+    expect(laid?.slots?.children).toHaveLength(2);
+    expect(
+      readStyleValue(laid?.styles, {
+        state: "base",
+        breakpoint: "base",
+        property: "gridTemplateColumns",
+        path: [],
+      })
+    ).toBe("2fr 1fr");
+    expect(result.current.undoDepth).toBe(1);
+  });
+
+  it("stands when a group edit is refused, as it does for one op", () => {
+    const { result } = inserted();
+    act(() => {
+      result.current.applyAll([{ kind: "remove", id: "ghost" }]);
+    });
+    expect(result.current.firstAdd?.nodeId).toBe("row");
   });
 
   it("ends on undo, and a redo does not bring it back", () => {

@@ -26,7 +26,6 @@
   box-sizing: border-box;
   display: grid;
   align-content: center;
-  padding: 1rem;
   pointer-events: auto;
   border: 1px solid
     color-mix(in srgb, var(--nx-builder-select) 40%, var(--nx-builder-border));
@@ -37,6 +36,12 @@
     400 0.8125rem/1.4 var(--font-sans, system-ui),
     sans-serif;
   cursor: default;
+}
+
+/* The plate's content and its padding, measured as one: the room the block
+   is given while the chooser shows. */
+.nx-first-add__room {
+  padding: 1rem;
 }
 
 .nx-first-add__body {

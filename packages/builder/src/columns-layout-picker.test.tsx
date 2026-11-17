@@ -25,6 +25,7 @@ import * as React from "react";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { COLUMNS_LAYOUTS } from "./columns-layout";
+import { readStyleValue } from "./style-values";
 import {
   COLUMNS_PICKER_WORDS,
   ColumnsLayoutPicker,
@@ -152,6 +153,21 @@ describe("the Columns layout picker", () => {
       editor().undo();
     });
     expect(findNode(editor().document.nodes, "row")).toBeUndefined();
+  });
+
+  it("writes the picked widths: Wide left is two to one", () => {
+    const { editor } = mount();
+    fireEvent.click(screen.getByRole("button", { name: "Wide left" }));
+    const row = findNode(editor().document.nodes, "row");
+    expect(row?.slots?.children).toHaveLength(2);
+    expect(
+      readStyleValue(row?.styles, {
+        state: "base",
+        breakpoint: "base",
+        property: "gridTemplateColumns",
+        path: [],
+      })
+    ).toBe("2fr 1fr");
   });
 
   it("keeps two equal columns on Skip", () => {

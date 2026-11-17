@@ -112,9 +112,16 @@ export function FirstAddChoosers({
       setRect(current => (current === null ? current : null));
       return;
     }
-    // The chooser's own height, as the page measures it: the overlay is
-    // drawn at the canvas's zoom, the page at its own size.
-    const height = body.current?.offsetHeight ?? 0;
+    // The chooser's own height, its padding and the plate's edge included,
+    // as the page measures it: the overlay is drawn at the canvas's zoom, the
+    // page at its own size. Read from the body, not the plate, whose height
+    // follows the block's and would hold a room once made.
+    const plate = body.current?.parentElement;
+    const edge =
+      plate === null || plate === undefined
+        ? 0
+        : plate.offsetHeight - plate.clientHeight;
+    const height = (body.current?.offsetHeight ?? 0) + edge;
     if (height > 0 && isHTMLElement(found.element)) {
       const wanted = `${String(Math.ceil(height / found.scale))}px`;
       const { element: block } = found;
@@ -155,10 +162,15 @@ export function FirstAddChoosers({
   );
 
   // Focus moves into the chooser once it is placed, and goes back afterwards.
+  // Once per block: a chooser placed again (scrolled back into view, or
+  // after a drag) does not take focus from where the author has since gone.
   const returnTo = React.useRef<Element | null>(null);
+  const focusedFor = React.useRef<string | undefined>(undefined);
   const placed = rect !== null;
   React.useEffect(() => {
     if (nodeId === undefined || !placed) return;
+    if (focusedFor.current === nodeId) return;
+    focusedFor.current = nodeId;
     const own = layer.current?.ownerDocument;
     returnTo.current = own?.activeElement ?? null;
     body.current
@@ -195,7 +207,7 @@ export function FirstAddChoosers({
           onPointerDown={event => event.stopPropagation()}
           onContextMenu={event => event.stopPropagation()}
         >
-          <div ref={body}>
+          <div ref={body} className="nx-first-add__room">
             <Chooser editor={editor} firstAdd={firstAdd} onDone={done} />
           </div>
         </div>

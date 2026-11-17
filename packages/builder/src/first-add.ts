@@ -142,8 +142,10 @@ export function useFirstAdd<T extends Host>(
   );
   const applyAll = useCallback<Host["applyAll"]>(
     ops => {
-      put(undefined);
-      return hostApplyAll(ops);
+      const result = hostApplyAll(ops);
+      // As for one op: a refused group changed nothing, so the step stands.
+      if (result !== null) put(undefined);
+      return result;
     },
     [hostApplyAll, put]
   );
