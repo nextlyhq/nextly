@@ -390,34 +390,50 @@ function durationOf(typed: string, unit: string): string {
 }
 
 /**
- * A duration: a number with a menu of ms and s. Changing the unit keeps the
- * number, as a size's unit menu does. A value it cannot split into the two,
+ * A duration: a number with a menu of ms and s. The number box and the menu
+ * share one draft, so the menu changes the unit of the number on screen,
+ * typed or refused, never of the value stored before it; a refused draft
+ * stays refused until it is corrected. A value it cannot split into the two,
  * such as `var(…)`, is edited whole as text, and so is a read-only one.
  */
 function DurationValue(props: ValueFieldProps): React.JSX.Element {
   const { label, value, readOnly, refusedBy, onCommit } = props;
   const id = React.useId();
   const parts = DURATION.exec(value);
+  const number = parts?.[1] ?? "";
+  const unit = (parts?.[2] ?? "ms").toLowerCase();
+  const [draft, setDraft] = useDraft(number);
   if (readOnly || parts === null) return <TextValue {...props} />;
-  const number = parts[1] ?? "";
-  const unit = (parts[2] ?? "ms").toLowerCase();
+  const commit = (text: string): void => {
+    const typed = text.trim();
+    if (typed === "" || (typed === number && refusedBy === undefined)) return;
+    onCommit(durationOf(typed, unit));
+  };
   return (
     <div className="nx-vars-editor__field">
       <label className="nx-vars-editor__label" htmlFor={id}>
         {label}
       </label>
       <div className="nx-vars-editor__duration">
-        <CommitInput
+        <Input
           id={id}
-          value={number}
-          readOnly={false}
-          refusedBy={refusedBy}
-          onCommit={typed => onCommit(durationOf(typed, unit))}
+          autoComplete="off"
+          aria-invalid={refusedBy === undefined ? undefined : true}
+          aria-describedby={refusedBy}
+          className="nx-vars-editor__mono"
+          value={draft}
+          onChange={event => setDraft(event.currentTarget.value)}
+          onBlur={event => commit(event.currentTarget.value)}
+          onKeyDown={event => {
+            if (event.key === "Enter") commit(event.currentTarget.value);
+          }}
         />
         <Select
           value={unit}
           onValueChange={next => {
-            if (next !== unit) onCommit(`${number}${next}`);
+            if (next !== unit || draft.trim() !== number) {
+              onCommit(durationOf(draft, next));
+            }
           }}
         >
           <SelectTrigger

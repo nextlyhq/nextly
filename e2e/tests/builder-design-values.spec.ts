@@ -87,7 +87,8 @@ async function openDesign(page: Page, tab: string): Promise<void> {
 test("a size is a number with a unit menu, saves a bare number as pixels, and its menu opens inside the window at the narrowest", async ({
   page,
 }) => {
-  test.setTimeout(180_000);
+  // The first test of the file also waits for the editor's first compile.
+  test.setTimeout(300_000);
   const before = await storedTokens(page);
   try {
     await seed(page, { tokens: TOKENS });
@@ -222,7 +223,9 @@ test("a duration changes unit keeping its number, and a custom value that would 
     const editor = page.locator(".nx-vars-editor");
 
     await panel.getByRole("button", { name: /^Fast/ }).click();
-    await expect(editor.getByLabel("Light", { exact: true })).toHaveValue("200");
+    await expect(editor.getByLabel("Light", { exact: true })).toHaveValue(
+      "200"
+    );
     await editor.getByLabel("Unit for Light").click();
     await page.getByRole("option", { name: "s", exact: true }).click();
     await expect.poll(() => storedValue(page, "duration.fast")).toBe("200s");

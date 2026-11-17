@@ -167,7 +167,9 @@ describe("a duration", () => {
     fireEvent.click(screen.getByRole("option", { name: "s", hidden: true }));
     // The stored 200 is not what the field shows, so it is not what is saved.
     expect(savedValue(onChange, "duration.fast")).not.toBe("200s");
-    expect(within(editor).getByLabelText("Light").getAttribute("aria-invalid")).toBe("true");
+    expect(
+      within(editor).getByLabelText("Light").getAttribute("aria-invalid")
+    ).toBe("true");
   });
 
   it("shows a duration it cannot split into a number and a unit whole", async () => {
