@@ -28,20 +28,22 @@
  *
  * @module tests/builder-copy-paste.spec
  */
-import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import {
+  expect,
+  type APIRequestContext,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 
 import {
-  clearSelection,
-  clickBlock,
-  field,
   glyphPoint,
   layerRow,
   openLayers,
-  selection,
-  structure,
+  pressSave,
 } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
-import { canvasBlock } from "./support/canvas-frame";
+import { canvasFrame } from "./support/canvas-frame";
+import { storedPageNodes } from "./support/stored-page";
 import { test } from "./support/test";
 
 const PAGES = "/admin/api/collections/pages/entries";
@@ -116,6 +118,42 @@ async function openBuilder(page: Page, id: string): Promise<void> {
   });
 }
 
+/**
+ * One page block in the canvas frame, by its id. Read from the whole frame:
+ * the site's header and footer are drawn in the same frame, around the page.
+ */
+function pageBlock(page: Page, id: string): Locator {
+  return canvasFrame(page).locator(`[data-nx-node="${id}"]`).first();
+}
+
+/** Which blocks the canvas marks selected, primary first. */
+async function selection(page: Page): Promise<string[]> {
+  return canvasFrame(page)
+    .locator("body")
+    .evaluate(body => {
+      const marked = Array.from(body.querySelectorAll("[data-nx-selected]"));
+      const id = (each: Element) => each.getAttribute("data-nx-node") ?? "";
+      return [
+        ...marked.filter(each => each.dataset.nxSelected === "primary"),
+        ...marked.filter(each => each.dataset.nxSelected !== "primary"),
+      ].map(id);
+    });
+}
+
+/** Click a page block at its right edge, halfway down, clear of its toolbar. */
+async function clickBlock(page: Page, id: string): Promise<void> {
+  const box = await pageBlock(page, id).boundingBox();
+  if (box === null) throw new Error(`[e2e] block ${id} rendered no box`);
+  await page.mouse.click(box.x + box.width - 8, box.y + box.height / 2);
+}
+
+/** A page block's inline field for `prop`. */
+function fieldOf(page: Page, id: string, prop: string): Locator {
+  return pageBlock(page, id)
+    .locator(`xpath=descendant-or-self::*[@data-nx-prop="${prop}"]`)
+    .first();
+}
+
 /** Select a block from its Layers row. */
 async function selectInLayers(page: Page, id: string): Promise<void> {
   await openLayers(page);
@@ -123,16 +161,45 @@ async function selectInLayers(page: Page, id: string): Promise<void> {
   await expect.poll(() => selection(page)).toEqual([id]);
 }
 
-/** The blocks drawn directly inside `parent`, in order. */
+/** The blocks drawn inside `parent`, in order. */
 async function childrenOf(page: Page, parent: string): Promise<string[]> {
-  return (await structure(page))
-    .filter(entry => entry.startsWith(`${parent}>`))
-    .map(entry => entry.slice(parent.length + 1));
+  return pageBlock(page, parent).evaluate(element =>
+    Array.from(element.querySelectorAll("[data-nx-node]"), each =>
+      each.getAttribute("data-nx-node")
+    ).filter((id): id is string => id !== null)
+  );
 }
 
-/** The page's top-level blocks, in order. */
-async function topLevel(page: Page): Promise<string[]> {
-  return (await structure(page)).filter(entry => !entry.includes(">"));
+/** Every page block's id, in page order, the site's header and footer aside. */
+async function pageIds(page: Page, within: string): Promise<string[]> {
+  return pageBlock(page, within).evaluate(element => {
+    const root = element.parentElement;
+    return root === null
+      ? []
+      : Array.from(root.querySelectorAll("[data-nx-node]"), each =>
+          each.getAttribute("data-nx-node") ?? ""
+        );
+  });
+}
+
+/** Save the draft and read the page's stored top-level blocks. */
+async function savedTopLevel(
+  page: Page,
+  id: string
+): Promise<{ id: string; type: string; props?: { text?: string } }[]> {
+  const saved = page.waitForResponse(
+    response =>
+      response.url().includes("/collections/pages/entries") &&
+      ["PATCH", "PUT", "POST"].includes(response.request().method()) &&
+      response.ok()
+  );
+  await pressSave(page);
+  await saved;
+  return (await storedPageNodes(page.request, PAGES, id)) as unknown as {
+    id: string;
+    type: string;
+    props?: { text?: string };
+  }[];
 }
 
 test.describe("copying, cutting and pasting blocks", () => {
@@ -153,7 +220,7 @@ test.describe("copying, cutting and pasting blocks", () => {
     await expect.poll(() => childrenOf(page, PRICING)).toHaveLength(1);
     const [copy] = await childrenOf(page, PRICING);
     expect(copy).not.toBe(HEADING);
-    await expect(canvasBlock(page, copy ?? "")).toHaveText("Welcome");
+    await expect(pageBlock(page, copy ?? "")).toHaveText("Welcome");
     await expect.poll(() => selection(page)).toEqual([copy]);
     // The original stays where it was.
     expect(await childrenOf(page, HERO)).toEqual([HEADING]);
@@ -165,7 +232,8 @@ test.describe("copying, cutting and pasting blocks", () => {
   test("pastes right after a selected Heading, and at the end of the page with nothing selected", async ({
     page,
   }) => {
-    await openBuilder(page, await createPage(page.request));
+    const id = await createPage(page.request);
+    await openBuilder(page, id);
 
     await clickBlock(page, HEADING);
     await expect.poll(() => selection(page)).toEqual([HEADING]);
@@ -174,11 +242,22 @@ test.describe("copying, cutting and pasting blocks", () => {
     await expect.poll(() => childrenOf(page, HERO)).toHaveLength(2);
     expect((await childrenOf(page, HERO))[0]).toBe(HEADING);
 
-    await clearSelection(page);
+    // Escape goes up to the Hero, then clears the selection at the top.
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    await expect.poll(() => selection(page)).toEqual([]);
     await page.keyboard.press("Control+v");
-    await expect.poll(() => topLevel(page)).toHaveLength(3);
-    const last = (await topLevel(page)).at(-1) ?? "";
-    await expect(canvasBlock(page, last)).toHaveText("Welcome");
+
+    // The paste selects the copy it made.
+    await expect.poll(async () => (await selection(page)).length).toBe(1);
+    const stored = await savedTopLevel(page, id);
+    expect(stored.map(node => node.type)).toEqual([
+      "core/section",
+      "core/section",
+      "core/heading",
+    ]);
+    expect(stored[2]?.props?.text).toBe("Welcome");
+    expect(stored[2]?.id).not.toBe(HEADING);
   });
 
   test("pastes in another browser tab, on another page of the same site", async ({
@@ -191,14 +270,17 @@ test.describe("copying, cutting and pasting blocks", () => {
     await page.keyboard.press("Control+c");
 
     const other = await context.newPage();
-    await openBuilder(other, await createPage(other.request, true));
-    await expect.poll(() => topLevel(other)).toEqual([]);
+    const otherId = await createPage(other.request, true);
+    await openBuilder(other, otherId);
     await other.keyboard.press("Control+v");
 
-    await expect.poll(() => topLevel(other)).toHaveLength(1);
-    const [pasted] = await topLevel(other);
-    expect(pasted).not.toBe(HEADING);
-    await expect(canvasBlock(other, pasted ?? "")).toHaveText("Welcome");
+    await expect(
+      canvasFrame(other).locator("[data-nx-node]", { hasText: "Welcome" })
+    ).not.toHaveCount(0);
+    const stored = await savedTopLevel(other, otherId);
+    expect(stored.map(node => node.type)).toEqual(["core/heading"]);
+    expect(stored[0]?.props?.text).toBe("Welcome");
+    expect(stored[0]?.id).not.toBe(HEADING);
     await other.close();
   });
 
@@ -222,7 +304,7 @@ test.describe("copying, cutting and pasting blocks", () => {
     await expect.poll(() => childrenOf(page, PRICING)).toHaveLength(1);
     const [copy] = await childrenOf(page, PRICING);
     expect(copy).not.toBe(HEADING);
-    await expect(canvasBlock(page, copy ?? "")).toHaveText("Welcome");
+    await expect(pageBlock(page, copy ?? "")).toHaveText("Welcome");
   });
 
   test("⌘V in a heading's text on the canvas goes to the text even with blocks copied", async ({
@@ -233,9 +315,9 @@ test.describe("copying, cutting and pasting blocks", () => {
     await clickBlock(page, HEADING);
     await expect.poll(() => selection(page)).toEqual([HEADING]);
     await page.keyboard.press("Control+c");
-    const before = await structure(page);
+    const before = await pageIds(page, HERO);
 
-    const text = await field(page, HEADING, "text");
+    const text = fieldOf(page, HEADING, "text");
     const point = await glyphPoint(page, text, 0.5);
     await page.mouse.dblclick(point.x, point.y);
     await expect(text).toHaveAttribute(
@@ -249,16 +331,16 @@ test.describe("copying, cutting and pasting blocks", () => {
     await page.keyboard.press("Escape");
 
     await expect(text).not.toHaveAttribute("contenteditable", /.+/);
-    expect(await structure(page)).toEqual(before);
+    expect(await pageIds(page, HERO)).toEqual(before);
   });
 
   test("⌘C and ⌘V in a heading's text on the canvas copy and paste the text, not the block", async ({
     page,
   }) => {
     await openBuilder(page, await createPage(page.request));
-    const before = await structure(page);
+    const before = await pageIds(page, HERO);
 
-    const text = await field(page, HEADING, "text");
+    const text = fieldOf(page, HEADING, "text");
     const point = await glyphPoint(page, text, 0.5);
     await page.mouse.dblclick(point.x, point.y);
     await expect(text).toHaveAttribute(
@@ -273,8 +355,8 @@ test.describe("copying, cutting and pasting blocks", () => {
     await page.keyboard.press("Enter");
 
     await expect(text).not.toHaveAttribute("contenteditable", /.+/);
-    await expect(canvasBlock(page, HEADING)).toHaveText("WelcomeWelcome");
-    expect(await structure(page)).toEqual(before);
+    await expect(pageBlock(page, HEADING)).toHaveText("WelcomeWelcome");
+    expect(await pageIds(page, HERO)).toEqual(before);
   });
 
   test("⌘C and ⌘V in the panel's text field copy and paste the text, not the block", async ({
@@ -283,7 +365,7 @@ test.describe("copying, cutting and pasting blocks", () => {
     await openBuilder(page, await createPage(page.request));
     await clickBlock(page, HEADING);
     await expect.poll(() => selection(page)).toEqual([HEADING]);
-    const before = await structure(page);
+    const before = await pageIds(page, HERO);
 
     const words = page.getByLabel("Text", { exact: true });
     await words.click();
@@ -293,12 +375,12 @@ test.describe("copying, cutting and pasting blocks", () => {
     await page.keyboard.press("Control+v");
 
     await expect(words).toHaveValue("WelcomeWelcome");
-    expect(await structure(page)).toEqual(before);
+    expect(await pageIds(page, HERO)).toEqual(before);
 
     // ⌘X cuts the words, not the block.
     await page.keyboard.press("Control+a");
     await page.keyboard.press("Control+x");
     await expect(words).toHaveValue("");
-    expect(await structure(page)).toEqual(before);
+    expect(await pageIds(page, HERO)).toEqual(before);
   });
 });
