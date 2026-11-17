@@ -656,9 +656,10 @@ function EditorBody<TFieldValues extends FieldValues>({
           openSettingsRequest={view.pages.settingsRequest}
           renderSettings={editorSettings(view, page, settingsPlace)}
           // The shell owns the region; this fills it. Rendered unconditionally
-          // rather than only when something is selected, because the panel states
-          // "select a block to edit it" — a region that appears and disappears
-          // with the selection makes the canvas resize on every click.
+          // rather than only when something is selected, because with nothing
+          // selected the panel shows the document's own settings: a region
+          // that appears and disappears with the selection makes the canvas
+          // resize on every click.
           // The policy travels with the panel because the Style tab judges a
           // written value at the keystroke and has to reach the same verdict the
           // published compiler will.
@@ -670,7 +671,10 @@ function EditorBody<TFieldValues extends FieldValues>({
           // already holds and cannot enumerate one. This is the MERGED set the
           // canvas compiles with, so the picker offers exactly the tokens the
           // page will resolve.
-          inspector={editorInspector(view, cardVerbs, sharedStyle.host)}
+          inspector={editorInspector(view, cardVerbs, sharedStyle.host, {
+            control,
+            page,
+          })}
           // Switched on the panel id rather than rendering the inserter for
           // whatever the rail reports open. The shell asks for the panel it
           // opened, and a renderer ignoring that argument would draw the inserter
