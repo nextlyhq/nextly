@@ -26,17 +26,11 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@nextlyhq/ui";
-import {
-  Braces,
-  Bold,
-  Hash,
-  Ruler,
-  Timer,
-  Type,
-} from "lucide-react";
+import { Braces, Bold, Hash, Ruler, Timer, Type } from "lucide-react";
 import * as React from "react";
 
 import { DESKTOP_PREVIEW_WIDTH } from "./canvas/canvas-width";
+import { moveColour } from "./colour-groups";
 import { markOf } from "./design-group-toggle";
 import { fluidRange, pxAtWidth } from "./fluid-size";
 import { colourHexOf } from "./style-colour";
@@ -115,6 +109,13 @@ export function VariableRow({
   const onKeyDown = rowKeys(changing, {
     rename: () => setRenaming(true),
     menu: () => setMenuOpen(true),
+    // A colour moves within the site's colour order; no other kind is ordered.
+    ...(entry.row.kind === "color"
+      ? {
+          move: (by: -1 | 1) =>
+            onChange(moveColour(tokens, entry.row.identity, by)),
+        }
+      : {}),
   });
   return (
     <li className="nx-vars__item" data-open={markOf(open)}>
@@ -279,10 +280,21 @@ function RowEditor({
  */
 function rowKeys(
   changing: boolean,
-  on: { rename: () => void; menu: () => void }
+  on: {
+    rename: () => void;
+    menu: () => void;
+    /** A colour's move one place up or down, by Alt+Up and Alt+Down. */
+    move?: ((by: -1 | 1) => void) | undefined;
+  }
 ): ((event: React.KeyboardEvent) => void) | undefined {
   if (!changing) return undefined;
   return event => {
+    const by = moveBy(event);
+    if (by !== undefined && on.move !== undefined) {
+      event.preventDefault();
+      on.move(by);
+      return;
+    }
     const menu =
       event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey);
     if (event.key !== "F2" && !menu) return;
@@ -290,6 +302,13 @@ function rowKeys(
     if (menu) on.menu();
     else on.rename();
   };
+}
+
+/** Which way Alt+Up or Alt+Down moves a row, or nothing for any other key. */
+function moveBy(event: React.KeyboardEvent): -1 | 1 | undefined {
+  if (!event.altKey) return undefined;
+  if (event.key === "ArrowUp") return -1;
+  return event.key === "ArrowDown" ? 1 : undefined;
 }
 
 /**
@@ -660,7 +679,10 @@ function RowTail({
       {words}
     </span>
   );
-  if (variableGroupOf(entry.row) !== "spacing" || entry.row.kind !== "dimension") {
+  if (
+    variableGroupOf(entry.row) !== "spacing" ||
+    entry.row.kind !== "dimension"
+  ) {
     return chip;
   }
   // A spacing draws a bar as long as it is at the desktop width.

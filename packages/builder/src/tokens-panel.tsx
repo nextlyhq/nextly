@@ -41,6 +41,7 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 
 import { useCanvasTokenModeAt } from "./canvas/prefers-dark";
+import { colourGroups } from "./colour-groups";
 import {
   GroupToggle,
   OwnSearch,
@@ -513,45 +514,99 @@ function VariableGroups({
   }
   return (
     <>
-      {shown.map(group => (
-        <React.Fragment key={group.group}>
-          <Group
-            group={group.group}
-            heading={group.heading}
-            entries={group.entries}
-            searching={searching}
-            folds={folds}
-            readOnly={rows.readOnly}
-            openKey={rows.openKey}
-            onAdd={onAdd}
-          >
-            {(entry: VariableEntry) => (
-              <VariableRow
-                key={entry.row.key}
-                entry={entry}
-                tokens={rows.tokens}
-                mode={rows.mode}
-                suppliedOf={rows.suppliedOf}
-                readOnly={rows.readOnly}
-                open={rows.openKey === entry.row.key}
-                onOpenChange={open => rows.toggle(entry.row.key, open)}
-                onChange={rows.commitFrom(entry.row.key)}
-                onDuplicate={() => rows.duplicate(entry)}
-                fresh={
-                  rows.fresh === entry.row.key
-                    ? { marked: rows.held === entry.row.key }
-                    : undefined
-                }
-                usage={rows.usage}
-                reach={rowReach(entry, rows.usage)}
-                onRemoved={() => rows.onRemoved(entry.row.key)}
-              />
-            )}
-          </Group>
-        </React.Fragment>
-      ))}
+      {shown
+        .flatMap(group => sectionsOf(group, rows.tokens, searching))
+        .map(section => (
+          <React.Fragment key={section.key}>
+            <Group
+              group={section.group}
+              heading={section.heading}
+              entries={section.entries}
+              searching={searching}
+              folds={folds}
+              readOnly={rows.readOnly}
+              openKey={rows.openKey}
+              onAdd={onAdd}
+              named={section.named}
+            >
+              {(entry: VariableEntry) => (
+                <VariableRow
+                  key={entry.row.key}
+                  entry={entry}
+                  tokens={rows.tokens}
+                  mode={rows.mode}
+                  suppliedOf={rows.suppliedOf}
+                  readOnly={rows.readOnly}
+                  open={rows.openKey === entry.row.key}
+                  onOpenChange={open => rows.toggle(entry.row.key, open)}
+                  onChange={rows.commitFrom(entry.row.key)}
+                  onDuplicate={() => rows.duplicate(entry)}
+                  fresh={
+                    rows.fresh === entry.row.key
+                      ? { marked: rows.held === entry.row.key }
+                      : undefined
+                  }
+                  usage={rows.usage}
+                  reach={rowReach(entry, rows.usage)}
+                  onRemoved={() => rows.onRemoved(entry.row.key)}
+                />
+              )}
+            </Group>
+          </React.Fragment>
+        ))}
     </>
   );
+}
+
+/** One section of the list: a group, or one named group of colours. */
+interface ListSection {
+  readonly key: string;
+  readonly group: VariableGroup;
+  readonly heading: string;
+  readonly entries: readonly VariableEntry[];
+  readonly named?: { readonly name: string; readonly last: boolean };
+}
+
+/**
+ * The sections a group is listed in: the Colours group as its named groups,
+ * in the site's order, each holding its own colours; any other group whole.
+ * A search lists only the named groups it matches in.
+ */
+function sectionsOf(
+  group: {
+    readonly group: VariableGroup;
+    readonly heading: string;
+    readonly entries: readonly VariableEntry[];
+  },
+  tokens: SiteTokenSet,
+  searching: boolean
+): ListSection[] {
+  const whole: ListSection = { ...group, key: group.group };
+  if (group.group !== "colours" || group.entries.length === 0) return [whole];
+  const byIdentity = new Map(
+    group.entries.map(entry => [entry.row.identity, entry])
+  );
+  const named = colourGroups(tokens)
+    .map(colourGroup => ({
+      name: colourGroup.name,
+      entries: colourGroup.identities.flatMap(identity => {
+        const entry = byIdentity.get(identity);
+        return entry === undefined ? [] : [entry];
+      }),
+    }))
+    .filter(colourGroup => !searching || colourGroup.entries.length > 0);
+  return named.map((colourGroup, at) => ({
+    key: colourGroupFoldKey(colourGroup.name),
+    group: group.group,
+    heading: colourGroup.name,
+    entries: colourGroup.entries,
+    named: { name: colourGroup.name, last: at === named.length - 1 },
+  }));
+}
+
+/** What a named group of colours keeps its fold under. */
+function colourGroupFoldKey(name: string): string {
+  return `colour-group:${name}`;
 }
 
 /**
@@ -942,7 +997,7 @@ function HiddenGroupAdds({
  * so its row and editor are drawn: the stored fold, which a search only
  * sets aside and would bring back once the add clears it.
  */
-function openFold(folds: GroupFolds | undefined, group: VariableGroup): void {
+function openFold(folds: GroupFolds | undefined, group: string): void {
   if (folds?.folded.has(group) === true) folds.onFold(group, false);
 }
 
@@ -1045,10 +1100,16 @@ function Group({
   readOnly,
   openKey,
   onAdd,
+  named,
   children,
 }: {
   group: VariableGroup;
   heading: string;
+  /**
+   * A named group of colours within the Colours group: its name, which keys
+   * its fold, and whether it ends the list and so holds the add row.
+   */
+  named?: { readonly name: string; readonly last: boolean } | undefined;
   entries: readonly VariableEntry[];
   searching: boolean;
   /** Present: the heading folds the group, and shows how many it holds. */
@@ -1062,19 +1123,21 @@ function Group({
   const id = React.useId();
   // A search opens every group it matches in and folds none; the folds come
   // back as they were once it is cleared.
-  const folded = folds !== undefined && !searching && folds.folded.has(group);
+  const foldKey = named === undefined ? group : colourGroupFoldKey(named.name);
+  const folded = folds !== undefined && !searching && folds.folded.has(foldKey);
   return (
     <section
       className="nx-vars__group"
       aria-labelledby={id}
       // Which group this is, for a host bringing one into view.
       data-group={group}
+      data-colour-group={named?.name}
       data-folded={folded ? "" : undefined}
     >
       <div className="nx-vars__group-head">
         <h3 className="nx-vars__group-name" id={id}>
           <GroupHeading
-            group={group}
+            group={foldKey}
             heading={heading}
             count={entries.length}
             folds={folds}
@@ -1096,11 +1159,11 @@ function Group({
       {/* At the end of the list, so a new row is added where it is. A
           folded group opens for what is added to it, so the new row and
           its editor are drawn. */}
-      {readOnly || folded ? null : (
+      {readOnly || folded || named?.last === false ? null : (
         <AddRows
           group={group}
           onAdd={(what, from) => {
-            openFold(folds, group);
+            openFold(folds, foldKey);
             onAdd(what, from);
           }}
         />
@@ -1118,7 +1181,8 @@ function GroupHeading({
   folded,
   searching,
 }: {
-  group: VariableGroup;
+  /** What the group's fold is kept under. */
+  group: string;
   heading: string;
   count: number;
   folds: GroupFolds | undefined;

@@ -56,6 +56,7 @@ import {
   validateStyleValues,
 } from "@nextlyhq/blocks-engine";
 
+import { colourOrder } from "./colour-groups";
 import {
   DEFAULT_FLUID_RANGE,
   fluidValue,
@@ -1031,9 +1032,33 @@ export function variableGroups(
     group,
     heading,
     entries: withKindWhereNamesClash(
-      (byGroup.get(group) ?? []).filter(entry => !paired.has(entry.row))
+      inListedOrder(
+        group,
+        (byGroup.get(group) ?? []).filter(entry => !paired.has(entry.row)),
+        tokens
+      )
     ),
   }));
+}
+
+/**
+ * A group's rows in the order they are listed: colours in the site's colour
+ * order, the one every picker lists them in; any other kind as stored.
+ */
+function inListedOrder(
+  group: VariableGroup,
+  entries: VariableEntry[],
+  tokens: SiteTokenSet | undefined
+): VariableEntry[] {
+  if (group !== "colours") return entries;
+  const rank = new Map(
+    colourOrder(tokens).map((identity, at) => [identity, at])
+  );
+  return [...entries].sort(
+    (a, b) =>
+      (rank.get(a.row.identity) ?? rank.size) -
+      (rank.get(b.row.identity) ?? rank.size)
+  );
 }
 
 /**
