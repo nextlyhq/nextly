@@ -191,8 +191,15 @@ describe("the Saved sections tab's pictures", () => {
       const picture = row.querySelector(".nx-picture");
       expect(picture, title).not.toBeNull();
       expect(picture?.getAttribute("data-state")).toBe("drawn");
-      // Its own section, drawn by the renderer.
-      expect(picture?.textContent).toBe(`${title} text`);
+      // Its own section, drawn by the renderer (its scoped sheet aside).
+      expect(
+        [...(picture?.querySelectorAll(".nx-picture__document *") ?? [])]
+          .filter(
+            node => node.tagName !== "STYLE" && node.children.length === 0
+          )
+          .map(node => node.textContent)
+          .join("")
+      ).toBe(`${title} text`);
       // The picture stands in for the mark rather than beside it.
       expect(row.querySelector(".nx-block-icon")).toBeNull();
     }
@@ -246,5 +253,21 @@ describe("the Saved sections tab's pictures", () => {
     expect(tile("Hero").querySelector(".nx-picture")).toBeNull();
     expect(tile("Hero").querySelector(".nx-block-icon")).not.toBeNull();
     expect(columns()).toBe("3");
+  });
+
+  it("keeps the mark for a section the host draws no picture for, whatever it returns", () => {
+    registerBlocks([TEXT], { source: "acme" });
+    render(
+      <InsertPanel
+        editor={editor()}
+        patterns={SECTIONS}
+        // A host writing `has(entry) && <Picture />` returns false for none.
+        renderPicture={() => false}
+      />
+    );
+
+    openTab("Saved sections");
+    expect(tile("Hero").querySelector(".nx-picture")).toBeNull();
+    expect(tile("Hero").querySelector(".nx-block-icon")).not.toBeNull();
   });
 });

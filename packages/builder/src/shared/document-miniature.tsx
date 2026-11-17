@@ -43,6 +43,7 @@ import { PageRenderer, type PageRendererProps } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
 import { BlockIconMark } from "../block-icon";
+import { siteSurface } from "../canvas/canvas-site-surface";
 
 import {
   MINIATURE_RENDER_WIDTH,
@@ -168,7 +169,8 @@ function stateOf(
   documents: readonly BlockDocument[],
   failed: boolean
 ): PictureState {
-  if (documents.length === 0) return "empty";
+  // A document with no blocks draws nothing either: the empty frame says so.
+  if (documents.every(document => document.nodes.length === 0)) return "empty";
   return failed ? "failed" : "drawn";
 }
 
@@ -221,6 +223,13 @@ function useDrawnDocuments(
   session: MiniatureSession
 ): React.ReactNode {
   /*
+   * Each drawn document compiles its stylesheet under a scope of its own:
+   * block ids are unique within a document, not across them (an imported
+   * section keeps its ids), and unscoped rules from one picture would match
+   * every other picture's blocks in the same panel.
+   */
+  const scopeBase = `nx-picture-scope-${React.useId().replace(/[^\w-]/g, "")}`;
+  /*
    * Held apart from the measured scale and the mode, which change without the
    * documents changing: rebuilt inline, every resize would rerun the whole
    * render beneath it.
@@ -237,6 +246,16 @@ function useDrawnDocuments(
         >
           <PageRenderer
             {...render}
+            // Without a style context the renderer compiles no page sheet,
+            // so there is nothing to scope.
+            styleContext={
+              render.styleContext === undefined
+                ? undefined
+                : {
+                    ...render.styleContext,
+                    scope: `${scopeBase}-${String(index)}`,
+                  }
+            }
             document={document}
             context={session.context}
             // What async blocks drew is kept between pictures and openings,
@@ -245,7 +264,7 @@ function useDrawnDocuments(
           />
         </div>
       )),
-    [documents, render, session]
+    [documents, render, session, scopeBase]
   );
 }
 
@@ -294,6 +313,31 @@ function useSeenInSession(
 }
 
 /**
+ * Keeps a block that throws while React renders what it returned inside its
+ * own picture: the renderer's boundary catches a block's render call, not a
+ * component it returns, and an unrelated saved section must never take the
+ * editor down. The picture shows its icon instead.
+ */
+class PictureBoundary extends React.Component<
+  { readonly onError: () => void; readonly children: React.ReactNode },
+  { readonly failed: boolean }
+> {
+  override state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  override componentDidCatch(): void {
+    this.props.onError();
+  }
+
+  override render(): React.ReactNode {
+    return this.state.failed ? null : this.props.children;
+  }
+}
+
+/**
  * The drawing itself, mounted only once the picture has come on screen and
  * has documents to draw: measured, scaled and composed here, so a tile not
  * yet drawn costs no observer and no render beneath it.
@@ -319,6 +363,11 @@ function DrawnPicture({
   const scale = useWidthScale(frame, renderWidth, true);
   const composed = useDrawnLayout(scaled, true, onBroken);
   const pages = useDrawnDocuments(documents, render, session);
+  // The site's body font and ink, named as the canvas root names them.
+  const surface =
+    typeof render.siteStyles === "object"
+      ? siteSurface(render, render.siteStyles)?.style
+      : undefined;
   const boxHeight = frame.current?.clientHeight ?? 0;
   // A document shorter than the box sits in its middle; a taller one is
   // shown from its top.
@@ -334,9 +383,10 @@ function DrawnPicture({
     >
       <div
         className="nx-picture__page"
+        style={surface}
         {...(mode === undefined ? {} : { [DARK_MODE_ATTRIBUTE]: mode })}
       >
-        {pages}
+        <PictureBoundary onError={onBroken}>{pages}</PictureBoundary>
       </div>
     </MiniatureSurface>
   );

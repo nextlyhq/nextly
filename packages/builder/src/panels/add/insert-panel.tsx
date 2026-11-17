@@ -575,7 +575,10 @@ function tilePicture(
   renderPicture: InsertPanelProps["renderPicture"]
 ): React.ReactNode {
   if (entry.kind !== "pattern" || renderPicture === undefined) return null;
-  return renderPicture(entry);
+  const picture = renderPicture(entry);
+  // A host writing `has(entry) && <Picture />` hands back `false` for none,
+  // which draws nothing; the tile keeps its mark for it, as for `null`.
+  return typeof picture === "boolean" ? null : picture;
 }
 
 /**

@@ -31,6 +31,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import type { BlockResolver } from "@nextlyhq/blocks-react";
 import { act, cleanup, render } from "@testing-library/react";
+import * as React from "react";
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -192,6 +193,92 @@ describe("a picture of documents", () => {
     );
     expect(scaled?.style.transform).toBe("scale(0.1)");
     width.mockRestore();
+  });
+
+  it("shows the empty-frame icon for a document with no blocks", () => {
+    const blank = {
+      formatVersion: 1,
+      kind: "pattern",
+      nodes: [],
+    } as unknown as BlockDocument;
+    const { container } = render(
+      <DocumentMiniature
+        documents={[blank]}
+        render={RENDER}
+        session={createMiniatureSession()}
+      />
+    );
+    expect(
+      container.querySelector(".nx-picture")?.getAttribute("data-state")
+    ).toBe("empty");
+  });
+
+  it("shows the type icon, and keeps the editor up, when a block's returned component throws", () => {
+    function Broken(): React.JSX.Element {
+      throw new Error("cannot draw");
+    }
+    const resolver: BlockResolver = {
+      get: type =>
+        type === "acme/inner"
+          ? ({
+              name: "acme/inner",
+              version: 1,
+              description: "Returns a component that throws.",
+              example: { props: {} },
+              render: () => createElement("div", null, createElement(Broken)),
+            } as never)
+          : BLOCKS[type],
+    };
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { container } = render(
+      <DocumentMiniature
+        documents={[
+          doc("00000000-0000-4000-8000-0000000000d1", "", "acme/inner"),
+        ]}
+        render={{ ...RENDER, blocks: resolver }}
+        session={createMiniatureSession()}
+      />
+    );
+    expect(
+      container.querySelector(".nx-picture")?.getAttribute("data-state")
+    ).toBe("failed");
+    quiet.mockRestore();
+  });
+
+  it("scopes each drawn document's stylesheet, so two with the same block ids stay apart", () => {
+    const styled: MiniatureRender = {
+      ...RENDER,
+      styleContext: {
+        breakpoints: {
+          viewport: [{ id: "base", label: "Desktop" }],
+          container: [],
+        },
+      },
+    };
+    const { container } = render(
+      <>
+        <DocumentMiniature
+          documents={[HEADER, FOOTER]}
+          render={styled}
+          session={createMiniatureSession()}
+        />
+        <DocumentMiniature
+          documents={[HEADER]}
+          render={styled}
+          session={createMiniatureSession()}
+        />
+      </>
+    );
+    const roots = [
+      ...container.querySelectorAll(".nx-picture__document > *"),
+    ].map(root => root.className);
+    expect(roots).toHaveLength(3);
+    // Each root carries a scope class of its own beside the shared root class.
+    const scopes = roots.map(name =>
+      name.split(/\s+/).find(part => part.startsWith("nx-picture-scope-"))
+    );
+    expect(scopes.every(scope => scope !== undefined)).toBe(true);
+    expect(new Set(scopes).size).toBe(3);
   });
 
   it("shows the empty-frame icon with nothing to draw", () => {

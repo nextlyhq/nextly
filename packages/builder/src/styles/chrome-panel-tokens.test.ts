@@ -332,8 +332,20 @@ describe("a picture's frame", () => {
       /^\.nx-picture\[data-drawn="true"\]\s*\{/m,
       /^\.nx-picture__page\s*\{/m,
     ]) {
-      expect(ruleBody(CHROME, prelude)).not.toMatch(/var\(--nx-/);
+      // The site's own surface values, named as the canvas names them, are
+      // the only custom properties it reads.
+      expect(
+        ruleBody(CHROME, prelude).replace(/var\(--nx-canvas-site-[a-z]+/g, "")
+      ).not.toMatch(/var\(--nx-/);
     }
+  });
+
+  it("draws the page in the site's own body font and ink, as the canvas does", () => {
+    const page = ruleBody(CHROME, /^\.nx-picture__page\s*\{/m);
+    expect(page).toMatch(/color:\s*var\(--nx-canvas-site-ink,\s*CanvasText\)/);
+    expect(page).toMatch(
+      /font-family:\s*var\(--nx-canvas-site-font,\s*system-ui\),\s*sans-serif/
+    );
   });
 
   it("starts the drawn page from a plain page's text, not the tile's it sits in", () => {
