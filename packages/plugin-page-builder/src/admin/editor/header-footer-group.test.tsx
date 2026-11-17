@@ -5,7 +5,15 @@
  * header & footer" last, folding, and hidden from an author who may not read
  * sets.
  */
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  act,
+  cleanup,
+  render as renderPlain,
+  screen,
+  within,
+} from "@testing-library/react";
+import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -84,6 +92,23 @@ Element.prototype.scrollIntoView ??= () => {};
 
 const { HeaderFooterGroup } = await import("./header-footer-group");
 
+/** The admin's query client, kept per test, so a test can see what it asks. */
+let queryClient = new QueryClient();
+
+/** Drawn inside the admin's query client, as the panel is. */
+function render(ui: ReactNode) {
+  const result = renderPlain(
+    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
+  );
+  return {
+    ...result,
+    rerender: (next: ReactNode) =>
+      result.rerender(
+        <QueryClientProvider client={queryClient}>{next}</QueryClientProvider>
+      ),
+  };
+}
+
 const set = (
   id: string,
   title: string,
@@ -128,6 +153,7 @@ const rights = {
 };
 
 beforeEach(() => {
+  queryClient = new QueryClient();
   rights.update = true;
   rights.create = true;
   rights.delete = true;
@@ -392,5 +418,23 @@ describe("a set's menu", () => {
     expect(toasts.error).toHaveBeenCalledWith(
       "Main is the site default. Make another set the default before deleting it."
     );
+  });
+
+  it("asks the page's own set read again after a write, so the canvas draws the new default", async () => {
+    // The canvas's read, as the admin caches a plugin route's read.
+    const canvasKey = [
+      "plugin-route",
+      "/admin/api/plugins/@nextlyhq/plugin-page-builder/layouts/choices?selected=main",
+    ];
+    queryClient.setQueryData(canvasKey, { items: [] });
+    const other = ["plugin-route", "/admin/api/plugins/other/layouts/choices"];
+    queryClient.setQueryData(other, { items: [] });
+    render(<HeaderFooterGroup folds={folds} />);
+    await openMenu("Landing");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }));
+    await vi.waitFor(() =>
+      expect(queryClient.getQueryState(canvasKey)?.isInvalidated).toBe(true)
+    );
+    expect(queryClient.getQueryState(other)?.isInvalidated).toBe(false);
   });
 });

@@ -26,10 +26,12 @@ import {
   DropdownMenuTrigger,
   toast,
 } from "@nextlyhq/ui";
+import { useQueryClient } from "@tanstack/react-query";
 import { MoreHorizontal, Plus } from "lucide-react";
 import * as React from "react";
 
 import {
+  LAYOUT_CHOICES_ROUTE_PATH,
   layoutChoicesPath,
   type LayoutChoice,
   type LayoutChoicesResponse,
@@ -88,6 +90,20 @@ function setNote(
   return parts.join(" · ");
 }
 
+/**
+ * Whether a cached read is one of this plugin's set choices reads, by the
+ * key the admin keeps a plugin route's read under: `["plugin-route", path]`.
+ */
+function isChoicesRead(key: readonly unknown[]): boolean {
+  const path = key[1];
+  return (
+    key[0] === "plugin-route" &&
+    typeof path === "string" &&
+    path.includes(PAGE_BUILDER_PLUGIN_NAME) &&
+    path.includes(LAYOUT_CHOICES_ROUTE_PATH)
+  );
+}
+
 /** Whether a failed read was the author being refused the sets. */
 function refused(error: unknown): boolean {
   return (error as { status?: unknown } | null)?.status === 403;
@@ -134,6 +150,16 @@ export function HeaderFooterGroup({
     refetchCounts();
   }, [refetchChoices, refetchCounts]);
   useRefreshOnReturn(true, refresh);
+  // After a write here, every set choices read is asked again too, the
+  // canvas's own among them: a new default, a removed set or a published one
+  // changes the header and footer the page being edited is drawn inside.
+  const queryClient = useQueryClient();
+  const afterWrite = React.useCallback(() => {
+    refresh();
+    void queryClient.invalidateQueries({
+      predicate: query => isChoicesRead(query.queryKey),
+    });
+  }, [refresh, queryClient]);
   const picture = useSetPictures(
     choices.data?.meta.regionDefinitions ?? {},
     choices.data !== undefined
@@ -155,7 +181,7 @@ export function HeaderFooterGroup({
           read={choices}
           counts={counts.data}
           picture={picture}
-          reread={refresh}
+          reread={afterWrite}
         />
       ) : null}
     </section>
