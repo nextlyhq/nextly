@@ -38,6 +38,7 @@ import type { PluginContext, PluginLimiter } from "@nextlyhq/plugin-sdk";
 import type {
   FormAcceptResult,
   FormAfterSending,
+  FormDescription,
   FormFieldDescription,
   FormProvider,
 } from "@nextlyhq/plugin-sdk/blocks";
@@ -187,7 +188,10 @@ type ReadPost =
 
 /** Read a post's body, capped, and parse it as the form encodings a browser sends. */
 async function readPost(request: Request): Promise<ReadPost> {
-  const type = (request.headers.get("content-type") ?? "").toLowerCase();
+  // The media type is compared without case; the header itself is parsed as
+  // sent, since a multipart boundary is matched exactly.
+  const header = request.headers.get("content-type") ?? "";
+  const type = header.toLowerCase();
   const urlencoded = type.startsWith("application/x-www-form-urlencoded");
   if (!urlencoded && !type.startsWith("multipart/form-data")) {
     return refused(415, "Send this form from its page.");
@@ -201,7 +205,7 @@ async function readPost(request: Request): Promise<ReadPost> {
       : [
           ...(
             await new Response(bytes, {
-              headers: { "content-type": type },
+              headers: { "content-type": header },
             }).formData()
           ).entries(),
         ].map(([name, value]) => [
@@ -394,16 +398,18 @@ async function sendToProvider(
   const provider = deps.provider(picked.provider);
   if (provider === undefined) return { kind: "error" };
   let result: FormAcceptResult;
+  let description: FormDescription;
   try {
-    const description = await provider.describe(picked.ref, {
+    const described = await provider.describe(picked.ref, {
       access: { as: "public" },
       ...(locale === undefined ? {} : { locale }),
     });
-    if ("unavailable" in description) {
+    if ("unavailable" in described) {
       return {
-        kind: description.unavailable === "closed" ? "closed" : "error",
+        kind: described.unavailable === "closed" ? "closed" : "error",
       };
     }
+    description = described;
     result = await provider.accept(picked.ref, {
       answers: describedAnswers(description.fields, answers),
       ...(locale === undefined ? {} : { locale }),
@@ -417,7 +423,9 @@ async function sendToProvider(
   }
   switch (result.kind) {
     case "sent":
-      return afterSending(result.afterSending);
+      // The provider's answer overrides the form's own setting; without one,
+      // the form's own applies.
+      return afterSending(result.afterSending ?? description.afterSending);
     case "invalid":
       return { kind: "invalid" };
     case "closed":

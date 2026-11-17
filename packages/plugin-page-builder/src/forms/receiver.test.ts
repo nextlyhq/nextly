@@ -466,6 +466,37 @@ describe("what is refused before anything is read", () => {
     expect(location(sameSite)).toBe("/contact#form-f1-sent");
   });
 
+  it("reads a browser's multipart post, whose boundary has capitals", async () => {
+    // Written out by hand, as Chrome sends it: the boundary is compared
+    // exactly, so a receiver changing its case could read no field at all.
+    const boundary = "----WebKitFormBoundaryAbCdEf123";
+    const part = (name: string, value: string) =>
+      `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`;
+    const body =
+      part("_form", "page:p1") +
+      part("_node", "f1") +
+      part("_return", "/contact") +
+      part("name", ANSWERS.name) +
+      part("email", ANSWERS.email) +
+      `--${boundary}--\r\n`;
+    const { deps, delivered } = parts();
+    const response = await receiveFormPost(
+      new Request("https://site.example/send", {
+        method: "POST",
+        headers: {
+          "content-type": `multipart/form-data; boundary=${boundary}`,
+        },
+        body,
+      }),
+      deps
+    );
+    expect(location(response)).toBe("/contact#form-f1-sent");
+    expect(delivered[0]?.answers.slice(0, 2)).toEqual([
+      { name: "name", values: ["Ada Lovelace"] },
+      { name: "email", values: ["ada@example.com"] },
+    ]);
+  });
+
   it("reads a multipart post the same way, passing on no file", async () => {
     const body = new FormData();
     for (const [name, value] of Object.entries({
@@ -665,6 +696,30 @@ describe("a form picked from a provider", () => {
       const response = await receiveFormPost(post({ email: "a@b.co" }), deps);
       expect(location(response), JSON.stringify(result)).toBe(expected);
     }
+  });
+
+  it("sends the visitor where the form itself says when the provider names nowhere", async () => {
+    const { deps, providers } = parts(picked);
+    const described = fakeProvider();
+    providers.set(
+      "acme",
+      fakeProvider({
+        describe: async ref => {
+          const description = await described.describe(ref, {
+            access: { as: "public" },
+          });
+          return "unavailable" in description
+            ? description
+            : {
+                ...description,
+                afterSending: { kind: "page", href: "/thanks" },
+              };
+        },
+        accept: async () => ({ kind: "sent" }),
+      })
+    );
+    const response = await receiveFormPost(post({ email: "a@b.co" }), deps);
+    expect(location(response)).toBe("/thanks");
   });
 
   it("asks nothing of a provider whose form is closed or gone", async () => {
