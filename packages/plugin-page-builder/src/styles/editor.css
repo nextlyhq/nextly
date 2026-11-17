@@ -826,3 +826,22 @@
 .nx-pb-design__group > .nx-vars__group-head {
   padding: 0.5rem 0.75rem 0;
 }
+
+/* ---------------------------------------------- header & footer pictures */
+/*
+ * A set's picture in the "Header & footer" menu, its trigger and its rows:
+ * 30×20, its header above its footer. The picture part sizes itself to its
+ * container's width at 16:10, so the box here sets both sides and the part
+ * fills it.
+ */
+.nx-pb-hf-picture {
+  display: block;
+  flex: none;
+  width: 30px;
+  height: 20px;
+}
+
+.nx-pb-hf-picture .nx-picture {
+  height: 100%;
+  aspect-ratio: auto;
+}

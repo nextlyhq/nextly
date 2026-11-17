@@ -26,11 +26,7 @@ import {
   EDITOR_WORDS,
   type BuilderShellProps,
 } from "@nextlyhq/builder/shell";
-import {
-  PlaceTabs,
-  usePluginRoute,
-  writePluginRoute,
-} from "@nextlyhq/plugin-sdk/admin";
+import { PlaceTabs, usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 import {
   Alert,
   AlertDescription,
@@ -48,20 +44,14 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
   Tabs,
   TabsContent,
   TabsList,
   TabsTrigger,
 } from "@nextlyhq/ui";
-import { AlertCircle, Check, Loader2, TriangleAlert } from "lucide-react";
+import { AlertCircle, TriangleAlert } from "lucide-react";
 import {
   useEffect,
-  useId,
   useState,
   type ComponentProps,
   type JSX,
@@ -70,20 +60,16 @@ import {
 } from "react";
 
 import {
+  PAGE_COLLECTION_ROUTE_PATH,
+  type PageCollectionResponse,
+} from "../../layout-choices-contract";
+import {
   PAGE_BUILDER_PLUGIN_NAME,
   SITE_SETTINGS_ROUTE_PATH,
   type SiteSettingsRead,
 } from "../../library-contract";
-import type { PublishReadinessResponse } from "../../publish-readiness-contract";
 import { PAGE_BUILDER_SETTINGS_PLACE } from "../../settings-place-contract";
 import { lazyPart } from "../lazy-part";
-import {
-  askReadiness,
-  publishChosen,
-  PublishOfferDialog,
-  reportLeftUnpublished,
-  type PublishChoice,
-} from "../publish-offer";
 
 import { RemovalStatusRow, RemovalStepPanel } from "./breakpoint-removal-step";
 import { undoableHint } from "./breakpoint-undo-flow";
@@ -741,7 +727,6 @@ function SiteSettings({
       {takesOver ? null : (
         <LaterSections
           read={read}
-          reread={reread}
           codeOpen={codeOpen}
           code={{
             onEditingChange: onEditingCode,
@@ -755,23 +740,21 @@ function SiteSettings({
 }
 
 /**
- * The Site sections after the breakpoints: the default Layout, which steps
- * aside while the code is open, and the code.
+ * The Site sections after the breakpoints: the site default's line, which
+ * steps aside while the code is open, and the code.
  */
 function LaterSections({
   read,
-  reread,
   codeOpen,
   code,
 }: {
   read: SiteSettingsRead;
-  reread: () => void;
   codeOpen: boolean;
   code: ComponentProps<typeof SiteCodeSection>;
 }): JSX.Element {
   return (
     <>
-      {codeOpen ? null : <DefaultLayout read={read} reread={reread} />}
+      {codeOpen ? null : <SiteDefaultLine read={read} />}
       <SiteCodeSection {...code} />
     </>
   );
@@ -856,185 +839,50 @@ function BreakpointSteps({
   );
 }
 
-type DefaultLayoutSave =
-  | { kind: "idle" }
-  | { kind: "saving" }
-  | { kind: "saved" }
-  | { kind: "failed"; message: string; retry: () => void };
-
-/** The site's default Layout: chosen here, or read here without the rights. */
-function DefaultLayout({
-  read,
-  reread,
-}: {
-  read: SiteSettingsRead;
-  reread: () => void;
-}): JSX.Element {
-  const selectId = useId();
-  const [save, setSave] = useState<DefaultLayoutSave>({ kind: "idle" });
-  // The Layout just made the default, held until the read says so too, so the
-  // select never shows the old default beside "Saved".
-  const [chosen, setChosen] = useState<string | null>(null);
-  const shown = chosen ?? read.defaultLayout;
-  // Once the read says so too, the read is the answer again: a later change
-  // made elsewhere must show.
-  useEffect(() => {
-    if (chosen !== null && read.defaultLayout === chosen) setChosen(null);
-  }, [chosen, read.defaultLayout]);
-  // A Layout about to wrap every page that names none, asked about first:
-  // the components its areas place that are not live, with the offer to
-  // publish them before it becomes the default. Never a refusal.
-  const [offer, setOffer] = useState<{
-    id: string;
-    readiness: PublishReadinessResponse;
-  } | null>(null);
-  const choose = (id: string): void => {
-    setSave({ kind: "saving" });
-    void askReadiness({ documents: [], layout: id }).then(readiness => {
-      if (
-        readiness === null ||
-        (readiness.dependencies.length === 0 && readiness.missing === 0)
-      ) {
-        makeDefault(id);
-        return;
-      }
-      setSave({ kind: "idle" });
-      setOffer({ id, readiness });
-    });
-  };
-  const answer = (choice: PublishChoice): void => {
-    const asked = offer;
-    setOffer(null);
-    if (asked === null || choice.kind === "cancel") return;
-    if (choice.kind === "only") {
-      makeDefault(asked.id);
-      return;
-    }
-    setSave({ kind: "saving" });
-    publishChosen(choice.dependencies).then(
-      result => {
-        reportLeftUnpublished(result, asked.readiness, "header & footer set");
-        makeDefault(asked.id);
-      },
-      (reason: unknown) => {
-        setSave({
-          kind: "failed",
-          message:
-            reason instanceof Error
-              ? reason.message
-              : "The components could not be published.",
-          retry: () => choose(asked.id),
-        });
-      }
-    );
-  };
-  const makeDefault = (id: string): void => {
-    setSave({ kind: "saving" });
-    writePluginRoute({
-      plugin: PAGE_BUILDER_PLUGIN_NAME,
-      path: `/layouts/${encodeURIComponent(id)}/make-default`,
-      body: {},
-    }).then(
-      () => {
-        setChosen(id);
-        setSave({ kind: "saved" });
-        reread();
-      },
-      (reason: unknown) => {
-        setSave({
-          kind: "failed",
-          message:
-            reason instanceof Error
-              ? reason.message
-              : "The default header & footer set could not be changed.",
-          retry: () => choose(id),
-        });
-      }
-    );
-  };
-  const current = read.layouts.find(layout => layout.id === shown);
-  return (
-    <section aria-labelledby={`${selectId}-title`} className="space-y-2">
-      <h3 id={`${selectId}-title`} className="text-sm font-semibold">
-        Default header & footer set
-      </h3>
-      <label htmlFor={selectId} className="block text-sm">
-        Pages without a header & footer set of their own use
-      </label>
-      <div className="flex flex-wrap items-center gap-3">
-        <Select
-          {...(shown === null ? {} : { value: shown })}
-          disabled={!read.mayChooseDefaultLayout || save.kind === "saving"}
-          onValueChange={choose}
-        >
-          <SelectTrigger id={selectId} className="w-56">
-            <SelectValue placeholder="None" />
-          </SelectTrigger>
-          <SelectContent>
-            {read.layouts.map(layout => (
-              <SelectItem key={layout.id} value={layout.id}>
-                {layout.title}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <SaveWords save={save} />
-      </div>
-      <PublishOfferDialog
-        readiness={offer?.readiness ?? null}
-        subject="header & footer set"
-        onAnswer={answer}
-        onlyLabel="Make default anyway"
-        withLabel={count =>
-          count === 1
-            ? "Publish it, then make default"
-            : `Publish ${String(count)}, then make default`
-        }
-      />
-      {read.mayChooseDefaultLayout ? null : (
-        <p className="text-xs text-muted-foreground">
-          {current === undefined ? "" : `${current.title}. `}You can see the
-          default but not change it: that needs the rights to update and publish
-          header & footer sets.
-        </p>
-      )}
-    </section>
-  );
+/** Where "Change in Pages ▸ Header & footer" opens: the list of sets. */
+function useSetListHref(): string | undefined {
+  const read = usePluginRoute<PageCollectionResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: PAGE_COLLECTION_ROUTE_PATH,
+  });
+  const slug = read.data?.layoutsCollection;
+  return slug === undefined
+    ? undefined
+    : `/admin/collections/${encodeURIComponent(slug)}`;
 }
 
-/** A site setting's save, in the save chip's words. */
-function SaveWords({ save }: { save: DefaultLayoutSave }): JSX.Element {
+/**
+ * The site default, named, and where it is changed: the Header & footer
+ * list's "Make site default", the one place the default is set. Opened in a
+ * new tab, so the page being edited and its undo history stay as they are.
+ */
+function SiteDefaultLine({ read }: { read: SiteSettingsRead }): JSX.Element {
+  const href = useSetListHref();
+  const name =
+    read.layouts.find(layout => layout.id === read.defaultLayout)?.title ??
+    "none set";
   return (
-    <span
-      role="status"
-      className="flex items-center gap-1.5 text-sm text-muted-foreground"
+    <section
+      aria-label="Site default header & footer"
+      className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm"
     >
-      {save.kind === "saving" ? (
-        <>
-          <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-          Saving…
-        </>
-      ) : save.kind === "saved" ? (
-        <>
-          <Check className="size-4 text-success" aria-hidden="true" />
-          Saved
-        </>
-      ) : save.kind === "failed" ? (
-        <>
-          <AlertCircle className="size-4 text-destructive" aria-hidden="true" />
-          <span className="text-destructive">Not saved</span>
-          <span className="sr-only">{save.message}</span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            title={save.message}
-            onClick={save.retry}
-          >
-            Retry
-          </Button>
-        </>
-      ) : null}
-    </span>
+      <p>
+        <span className="text-muted-foreground">
+          Site default header & footer:
+        </span>{" "}
+        <span className="font-medium">{name}</span>
+      </p>
+      {href === undefined ? null : (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+        >
+          Change in Pages ▸ Header & footer
+          <span className="sr-only"> (opens in a new tab)</span>
+        </a>
+      )}
+    </section>
   );
 }

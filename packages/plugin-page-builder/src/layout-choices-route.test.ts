@@ -232,7 +232,7 @@ describe("readLayoutChoices", () => {
         published: true,
         draftChangesNotLive: true,
         regions: [{ area: "header", componentId: "header" }],
-        isEmpty: false,
+        areasFilled: ["header"],
       },
       {
         id: "draft",
@@ -241,12 +241,12 @@ describe("readLayoutChoices", () => {
         draftChangesNotLive: false,
         regions: [],
         // Never published, but its own areas name a header.
-        isEmpty: false,
+        areasFilled: ["header"],
       },
     ]);
   });
 
-  it("marks a set empty when the areas it holds name no component, published or not", async () => {
+  it("names the areas a set fills, none when its areas name no component, published or not", async () => {
     const { nextly } = fake({
       ...store,
       layouts: [
@@ -261,14 +261,14 @@ describe("readLayoutChoices", () => {
       ],
     });
     const { items } = await readLayoutChoices(context(), nextly, asked());
-    const empty = Object.fromEntries(
-      items.map(item => [item.id, item.isEmpty])
+    const areas = Object.fromEntries(
+      items.map(item => [item.id, item.areasFilled])
     );
-    expect(empty).toEqual({
-      main: false,
-      draft: false,
-      seed: true,
-      blank: true,
+    expect(areas).toEqual({
+      main: ["header"],
+      draft: ["header"],
+      seed: [],
+      blank: [],
     });
   });
 
@@ -606,6 +606,106 @@ describe("readLayoutChoices", () => {
     const { meta } = await readLayoutChoices(context(), nextly, asked("l7"));
     expect(Object.keys(meta.regionDefinitions).sort()).toEqual(["h0", "h7"]);
   });
+
+  it("discovers each picture under its own node bound, reading a shared component once", async () => {
+    // Eleven header-only sets, more regions than one page's bound of ten
+    // nodes: each picture fits its bound, so each is answered for. Every
+    // header places the same shared logo, read once for all of them.
+    const instance = (id: string, componentId: string) => ({
+      id,
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId },
+    });
+    const layouts = Array.from({ length: 11 }, (_, i) =>
+      layoutRow(`l${i}`, `Layout ${i}`, `h${i}`)
+    );
+    const components: Record<string, unknown> = { logo: component([]) };
+    for (let i = 0; i < 11; i += 1) {
+      components[`h${i}`] = component([instance(`n${i}`, "logo")]);
+    }
+    const { nextly, calls } = fake({
+      ...store,
+      layouts,
+      components,
+      defaultLayout: "l0",
+    });
+    const { meta } = await readLayoutChoices(
+      context(),
+      nextly,
+      asked(null, DEFAULT_COMPONENT_STORE, {
+        pictures: true,
+        limits: { ...DEFAULT_LIMITS, maxNodes: 10 },
+      })
+    );
+    expect(Object.keys(meta.regionDefinitions).sort()).toEqual(
+      ["logo", ...Array.from({ length: 11 }, (_, i) => `h${i}`)].sort()
+    );
+    const logoReads = calls.filter(
+      call =>
+        call.collection === "components" &&
+        JSON.stringify(call.where ?? {}).includes('"logo"')
+    );
+    expect(logoReads.length).toBeLessThanOrEqual(2);
+  });
+
+  it("reads the pictures' distinct components in one batch, not one read per set", async () => {
+    // Eleven header-only sets, each with a header of its own: every picture
+    // asks for a different component, and all are asked for together.
+    const layouts = Array.from({ length: 11 }, (_, i) =>
+      layoutRow(`l${i}`, `Layout ${i}`, `h${i}`)
+    );
+    const components: Record<string, unknown> = {};
+    for (let i = 0; i < 11; i += 1) components[`h${i}`] = component([]);
+    const { nextly, calls } = fake({
+      ...store,
+      layouts,
+      components,
+      defaultLayout: "l0",
+    });
+    const { meta } = await readLayoutChoices(
+      context(),
+      nextly,
+      asked(null, DEFAULT_COMPONENT_STORE, { pictures: true })
+    );
+    expect(Object.keys(meta.regionDefinitions)).toHaveLength(11);
+    const publishedReads = calls.filter(
+      call => call.collection === "components" && call.status === "published"
+    );
+    expect(publishedReads).toHaveLength(1);
+  });
+
+  it("sends every listed published set's definitions when asked for pictures", async () => {
+    const layouts = [
+      ...Array.from({ length: 3 }, (_, i) =>
+        layoutRow(`l${i}`, `Layout ${i}`, `h${i}`)
+      ),
+      // Not published: nothing of it is drawn, so nothing of it is sent.
+      { ...layoutRow("d", "Draft", "hd"), status: "draft" },
+    ];
+    const components: Record<string, unknown> = {
+      hd: component([]),
+    };
+    for (let i = 0; i < 3; i += 1) components[`h${i}`] = component([]);
+    const { nextly } = fake({
+      ...store,
+      layouts,
+      components,
+      defaultLayout: "l0",
+    });
+    const { meta } = await readLayoutChoices(
+      context(),
+      nextly,
+      asked(null, DEFAULT_COMPONENT_STORE, { pictures: true })
+    );
+    expect(Object.keys(meta.regionDefinitions).sort()).toEqual([
+      "h0",
+      "h1",
+      "h2",
+    ]);
+    // The facts are still asked of the two a page can be drawn inside only.
+    expect(Object.keys(meta.regionComponents)).toEqual(["h0"]);
+  });
   it("reads every Layout and component as the caller, never past their access", async () => {
     const { nextly, calls } = fake({ ...store, filtered: ["main"] });
     await readLayoutChoices(context(), nextly, asked("main"));
@@ -726,12 +826,21 @@ describe("parseChoicesQuery", () => {
       parseChoicesQuery(
         "http://x/layouts/choices?selected=abc&locale=de&q=Land"
       )
-    ).toEqual({ selected: "abc", locale: "de", search: "Land" });
+    ).toEqual({
+      selected: "abc",
+      locale: "de",
+      search: "Land",
+      pictures: false,
+    });
     expect(parseChoicesQuery("http://x/layouts/choices")).toEqual({
       selected: null,
       locale: undefined,
       search: undefined,
+      pictures: false,
     });
+    expect(
+      parseChoicesQuery("http://x/layouts/choices?pictures=1").pictures
+    ).toBe(true);
   });
 
   it("refuses a value it cannot take", () => {
@@ -743,6 +852,9 @@ describe("parseChoicesQuery", () => {
     ).toThrow();
     expect(() =>
       parseChoicesQuery(`http://x/layouts/choices?q=${"x".repeat(201)}`)
+    ).toThrow();
+    expect(() =>
+      parseChoicesQuery("http://x/layouts/choices?pictures=yes")
     ).toThrow();
   });
 });

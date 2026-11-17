@@ -312,24 +312,29 @@ export function InspectorPanel({
 }: InspectorPanelProps): React.JSX.Element {
   const look = editedLook(panel);
   if (look !== undefined && panel.lookEditing !== undefined) {
+    // The host's services reach a look's Style controls as they reach a
+    // block's, so a look's background image is chosen from the Media library
+    // too rather than only pasted as a link.
     return (
-      <LookInspector
-        editor={panel.editor}
-        look={look}
-        host={panel.sharedStyles}
-        onExit={panel.lookEditing.onExit}
-        library={panel.classLibrary ?? []}
-        canvasRoot={panel.canvasRoot}
-        policy={panel.policy}
-        breakpoint={panel.breakpoint}
-        cascade={panel.cascade}
-        breakpoints={panel.breakpoints}
-        previewContainer={panel.previewContainer}
-        liveBreakpoints={panel.liveBreakpoints}
-        onJumpToBreakpoint={panel.onJumpToBreakpoint}
-        tokens={panel.tokens}
-        fonts={panel.fonts}
-      />
+      <ContentServicesContext.Provider value={panel.contentServices}>
+        <LookInspector
+          editor={panel.editor}
+          look={look}
+          host={panel.sharedStyles}
+          onExit={panel.lookEditing.onExit}
+          library={panel.classLibrary ?? []}
+          canvasRoot={panel.canvasRoot}
+          policy={panel.policy}
+          breakpoint={panel.breakpoint}
+          cascade={panel.cascade}
+          breakpoints={panel.breakpoints}
+          previewContainer={panel.previewContainer}
+          liveBreakpoints={panel.liveBreakpoints}
+          onJumpToBreakpoint={panel.onJumpToBreakpoint}
+          tokens={panel.tokens}
+          fonts={panel.fonts}
+        />
+      </ContentServicesContext.Provider>
     );
   }
   return (

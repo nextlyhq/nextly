@@ -135,7 +135,16 @@ export interface PageRendererProps {
    * production path.
    */
   siteStyles?: SiteSheetInput | false;
-  /** Shown in place of an asynchronous block until its output arrives. */
+  /**
+   * Shown in place of an asynchronous block until its output arrives.
+   *
+   * Given, each asynchronous block streams in a Suspense boundary of its own.
+   * Absent, as on a published page, each is drawn in place and the page waits
+   * for it, so the HTML holds every block for a visitor without JavaScript:
+   * React sends a boundary's content in a hidden part that only its script
+   * reveals. An editor surface (`nodeAttribute`, `keepAsyncOutputs`) always
+   * streams.
+   */
   blockFallback?: ReactNode;
   /**
    * The caps this site holds its documents to, used while repairing the stored
