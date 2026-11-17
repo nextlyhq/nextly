@@ -7,6 +7,7 @@
  *
  * @module default-layout/install
  */
+import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
 import type {
   FieldRewriteRequest,
   FieldRewriteResult,
@@ -33,6 +34,8 @@ import {
 } from "./empty-seed";
 import { registerEmptySeedWriteHook } from "./empty-seed-write";
 import { ensureDefaultLayout, type EnsureDefaultDeps } from "./ensure-default";
+import { fillMarkStore } from "./fill-mark";
+import { registerFirstFillHook } from "./first-fill-hook";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./settings-single";
 import { starterRecordStore } from "./starter-record";
 import type { StarterParts } from "./starter-seed";
@@ -143,7 +146,35 @@ export function installDefaultLayout(
     emptySeed: setup.emptySeed,
     warn: setup.warn,
   });
+  // The first header or footer an author publishes fills the seeded default,
+  // once: only where the plugin draws the header and footer from its own
+  // store, the same sites that get the starter.
+  if (setup.starter !== undefined) installFirstFill(ctx, setup);
   return setup;
+}
+
+/** Register the fill on the components collection's first publishes. */
+function installFirstFill(
+  ctx: InstallContext,
+  setup: DefaultLayoutSetup
+): void {
+  const components = ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG;
+  registerFirstFillHook({
+    ctx,
+    components,
+    warn: setup.warn,
+    deps: async () => {
+      const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+      return {
+        nextly: await getCachedNextly(),
+        slugs: setup.slugs,
+        components,
+        componentField: COMPONENT_DOCUMENT_FIELD,
+        marks: fillMarkStore(ctx.db, ctx.dialect),
+        starter: starterRecordStore(ctx.db, ctx.dialect),
+      };
+    },
+  });
 }
 
 /** What a fresh site's seed makes its starter header and footer with. */
