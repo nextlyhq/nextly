@@ -14,15 +14,15 @@ import { useCallback } from "react";
 
 import { toast } from "@admin/components/ui";
 import {
-  type PinTarget,
-  usePinned,
-  useSetPinned,
-} from "@admin/hooks/queries/useDashboardPins";
-import {
   DASHBOARD_LAYOUT_KEY,
   fetchDashboardLayout,
   isConflictError,
 } from "@admin/hooks/queries/useDashboardLayout";
+import {
+  type PinTarget,
+  usePinned,
+  useSetPinned,
+} from "@admin/hooks/queries/useDashboardPins";
 
 import type { ContributedAction } from "../entries/EntryForm/DocumentActionBar";
 import type { EntityRowMenuItem } from "../widgets/frame/entity-row";

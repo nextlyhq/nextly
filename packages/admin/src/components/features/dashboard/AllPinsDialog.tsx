@@ -17,6 +17,8 @@
 import { Pin } from "lucide-react";
 import type { JSX } from "react";
 
+import { resolveIconName } from "@admin/components/features/widgets/archetypes/icon";
+import { useCollectionLabel } from "@admin/components/features/widgets/frame/collection-label";
 import {
   Button,
   Dialog,
@@ -27,8 +29,6 @@ import {
   Spinner,
 } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
-import { resolveIconName } from "@admin/components/features/widgets/archetypes/icon";
-import { useCollectionLabel } from "@admin/components/features/widgets/frame/collection-label";
 import {
   targetOfPin,
   useDashboardPins,
