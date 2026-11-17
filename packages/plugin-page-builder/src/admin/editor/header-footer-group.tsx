@@ -342,9 +342,6 @@ function SetRow({
   onWritten: () => void;
 }): React.JSX.Element {
   const [renaming, setRenaming] = React.useState(false);
-  // Rename starts once the menu has CLOSED, as a page's does: started while
-  // it closes, the menu's focus return would end the rename at once.
-  const renameAfterClose = React.useRef(false);
   // The set's own Remove dialog, as its form opens it; the panel stays.
   const removal = useRemoveLayout({
     entryId: set.id,
@@ -402,93 +399,134 @@ function SetRow({
           <span className="sr-only"> (opens in a new tab)</span>
         </a>
       )}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            aria-label={`More for ${shownTitle}`}
-            className="mr-1 shrink-0 rounded p-0.5 text-muted-foreground opacity-0 focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
-          >
-            <MoreHorizontal aria-hidden="true" className="size-4" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="start"
-          onCloseAutoFocus={event => {
-            if (!renameAfterClose.current) return;
-            renameAfterClose.current = false;
-            event.preventDefault();
-            setRenaming(true);
-          }}
-        >
-          <DropdownMenuItem
-            onSelect={() => {
-              window.open(href, "_blank", "noopener,noreferrer");
-            }}
-          >
-            Open
-          </DropdownMenuItem>
-          {may.makeDefault && !isDefault ? (
-            <DropdownMenuItem
-              onSelect={() =>
-                onMakeDefault({
-                  id: set.id,
-                  title: shownTitle,
-                  published: set.published,
-                })
-              }
-            >
-              {set.published
-                ? "Make site default"
-                : "Publish it, then make default"}
-            </DropdownMenuItem>
-          ) : null}
-          {may.rename ? (
-            <DropdownMenuItem
-              onSelect={() => {
-                renameAfterClose.current = true;
-              }}
-            >
-              Rename
-            </DropdownMenuItem>
-          ) : null}
-          {may.duplicate ? (
-            <DropdownMenuItem
-              onSelect={() =>
-                write(async () => {
-                  const copy = await duplicateLayout(set.id);
-                  toast.success(`${copy.title} was made.`);
-                })
-              }
-            >
-              Duplicate
-            </DropdownMenuItem>
-          ) : null}
-          {may.remove ? (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="text-destructive focus:text-destructive"
-                onSelect={() => {
-                  // The default is taken down only once another set is the
-                  // default: said here, before any check is asked.
-                  if (isDefault) {
-                    toast.error(
-                      `${shownTitle} is the site default. Make another set the default before deleting it.`
-                    );
-                    return;
-                  }
-                  removal.open();
-                }}
-              >
-                Delete…
-              </DropdownMenuItem>
-            </>
-          ) : null}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <SetMenu
+        set={set}
+        shownTitle={shownTitle}
+        href={href}
+        isDefault={isDefault}
+        may={may}
+        onMakeDefault={onMakeDefault}
+        onRename={() => setRenaming(true)}
+        onDuplicate={() =>
+          write(async () => {
+            const copy = await duplicateLayout(set.id);
+            toast.success(`${copy.title} was made.`);
+          })
+        }
+        onDelete={removal.open}
+      />
       {removal.dialog}
     </li>
+  );
+}
+
+/** A set row's ⋯ menu: each item offered only by the right it needs. */
+function SetMenu({
+  set,
+  shownTitle,
+  href,
+  isDefault,
+  may,
+  onMakeDefault,
+  onRename,
+  onDuplicate,
+  onDelete,
+}: {
+  set: LayoutChoice;
+  shownTitle: string;
+  href: string;
+  isDefault: boolean;
+  may: {
+    readonly rename: boolean;
+    readonly duplicate: boolean;
+    readonly makeDefault: boolean;
+    readonly remove: boolean;
+  };
+  onMakeDefault: (asked: MakeDefaultAsked) => void;
+  onRename: () => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+}): React.JSX.Element {
+  // Rename starts once the menu has CLOSED, as a page's does: started while
+  // it closes, the menu's focus return would end the rename at once.
+  const renameAfterClose = React.useRef(false);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`More for ${shownTitle}`}
+          className="mr-1 shrink-0 rounded p-0.5 text-muted-foreground opacity-0 focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
+        >
+          <MoreHorizontal aria-hidden="true" className="size-4" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        onCloseAutoFocus={event => {
+          if (!renameAfterClose.current) return;
+          renameAfterClose.current = false;
+          event.preventDefault();
+          onRename();
+        }}
+      >
+        <DropdownMenuItem
+          onSelect={() => {
+            window.open(href, "_blank", "noopener,noreferrer");
+          }}
+        >
+          Open
+        </DropdownMenuItem>
+        {may.makeDefault && !isDefault ? (
+          <DropdownMenuItem
+            onSelect={() =>
+              onMakeDefault({
+                id: set.id,
+                title: shownTitle,
+                published: set.published,
+              })
+            }
+          >
+            {set.published
+              ? "Make site default"
+              : "Publish it, then make default"}
+          </DropdownMenuItem>
+        ) : null}
+        {may.rename ? (
+          <DropdownMenuItem
+            onSelect={() => {
+              renameAfterClose.current = true;
+            }}
+          >
+            Rename
+          </DropdownMenuItem>
+        ) : null}
+        {may.duplicate ? (
+          <DropdownMenuItem onSelect={onDuplicate}>Duplicate</DropdownMenuItem>
+        ) : null}
+        {may.remove ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className="text-destructive focus:text-destructive"
+              onSelect={() => {
+                // The default is taken down only once another set is the
+                // default: said here, before any check is asked.
+                if (isDefault) {
+                  toast.error(
+                    `${shownTitle} is the site default. Make another set the default before deleting it.`
+                  );
+                  return;
+                }
+                onDelete();
+              }}
+            >
+              Delete…
+            </DropdownMenuItem>
+          </>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
