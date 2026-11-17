@@ -116,9 +116,7 @@ describe("the Spacing tab's groups", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add radius" }));
     await screen.findByRole("dialog", { name: "Edit New radius" });
     expect(
-      document.querySelector(
-        '[data-group="radius"] [data-variable-key="radius.new-radius"]'
-      )
+      document.querySelector('[data-group="radius"] [data-variable-key="radius.new-radius"]')
     ).not.toBeNull();
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
   });
@@ -161,7 +159,9 @@ describe("each row's preview", () => {
 
   it("draws a radius as a square with the radius on its corners", () => {
     render(<SpacingTab />);
-    const square = rowOf(/^Md,/).querySelector<HTMLElement>(".nx-vars__radius");
+    const square = rowOf(/^Md,/).querySelector<HTMLElement>(
+      ".nx-vars__radius"
+    );
     expect(square?.style.borderRadius).toBe("8px");
   });
 

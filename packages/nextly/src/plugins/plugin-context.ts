@@ -2723,7 +2723,9 @@ export function createPluginContext(
         fieldType: string,
         target: PluginStoredValuesTarget
       ): Promise<ReadonlyMap<string, PluginStoredValue>> =>
-        tracked(open(fieldType).then(reads => reads.readOf(fieldType, target))),
+        tracked(
+          open(fieldType).then(reads => reads.readOf(fieldType, target))
+        ),
       fieldPaths: (fieldType: string): Promise<readonly string[]> =>
         tracked(
           open(fieldType).then(reads =>

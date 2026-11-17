@@ -26,7 +26,14 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@nextlyhq/ui";
-import { Braces, Bold, Hash, Ruler, Timer, Type } from "lucide-react";
+import {
+  Braces,
+  Bold,
+  Hash,
+  Ruler,
+  Timer,
+  Type,
+} from "lucide-react";
 import * as React from "react";
 
 import { DESKTOP_PREVIEW_WIDTH } from "./canvas/canvas-width";
@@ -653,10 +660,7 @@ function RowTail({
       {words}
     </span>
   );
-  if (
-    variableGroupOf(entry.row) !== "spacing" ||
-    entry.row.kind !== "dimension"
-  ) {
+  if (variableGroupOf(entry.row) !== "spacing" || entry.row.kind !== "dimension") {
     return chip;
   }
   // A spacing draws a bar as long as it is at the desktop width.

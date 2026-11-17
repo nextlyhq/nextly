@@ -113,20 +113,12 @@ export function storedComponentSource(
   store: ComponentStoreAddress
 ): ComponentSource {
   // The ids asked for and not yet read, by form, each with who is waiting.
-  const asked = new Map<
-    boolean,
-    Map<string, ((read: ReadDocument) => void)[]>
-  >();
+  const asked = new Map<boolean, Map<string, ((read: ReadDocument) => void)[]>>();
   const readAsked = async (draft: boolean): Promise<void> => {
     const waiting = asked.get(draft);
     asked.delete(draft);
     if (waiting === undefined) return;
-    const answerFor = await readTogether(
-      write,
-      store,
-      [...waiting.keys()],
-      draft
-    );
+    const answerFor = await readTogether(write, store, [...waiting.keys()], draft);
     for (const [id, answers] of waiting) {
       for (const answer of answers) answer(answerFor(id));
     }

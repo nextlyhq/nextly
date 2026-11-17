@@ -59,6 +59,7 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
+import type { ParentArrangement } from "./plain-layout";
 import { liveBreakpointsFor } from "./breakpoints";
 import { fieldLabel, selectedNode } from "./inspector";
 import {
@@ -68,7 +69,6 @@ import {
   type InspectorSectionKey,
   type TierContext,
 } from "./inspector-sections";
-import type { ParentArrangement } from "./plain-layout";
 import {
   styleControlsFor,
   type StyleControl,

@@ -282,10 +282,7 @@ describe("collectionOpeningView", () => {
   });
 
   it("is none for a collection that says the form, whatever its main field", () => {
-    const pages = {
-      fields: [title, blocks("content")],
-      admin: { opensIn: "form" },
-    };
+    const pages = { fields: [title, blocks("content")], admin: { opensIn: "form" } };
     expect(collectionOpeningView("pages", pages, views)).toBeUndefined();
   });
 
@@ -312,11 +309,7 @@ describe("collectionOpeningView", () => {
   it("is none while the view is not published (its plugin is off)", () => {
     views = [];
     expect(
-      collectionOpeningView(
-        "pages",
-        { fields: [title, blocks("content")] },
-        views
-      )
+      collectionOpeningView("pages", { fields: [title, blocks("content")] }, views)
     ).toBeUndefined();
   });
 });
