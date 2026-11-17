@@ -399,7 +399,7 @@ export interface ReachedStack {
  */
 export type AppliedAt = (
   tier: string,
-  cssProperty: "display" | "flex-direction"
+  cssProperty: "display" | "flex-direction" | "grid-template-columns"
 ) => { value: string; breakpoint: string; own: boolean } | undefined;
 
 /**

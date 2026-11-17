@@ -174,7 +174,10 @@ export function ColumnsLayoutControl({
   editor: EditorState;
   nodeId: string;
   breakpoints: BreakpointSet | undefined;
-  /** What the cascade applies to the row at a tier, for a stack from elsewhere. */
+  /**
+   * What the cascade applies to the row at a tier, for a stack or a template
+   * reaching it from elsewhere.
+   */
   applied?: AppliedAt | undefined;
 }): React.JSX.Element | null {
   const labelId = React.useId();
@@ -189,7 +192,21 @@ export function ColumnsLayoutControl({
     property: "gridTemplateColumns",
     path: [],
   });
-  const current = layoutOf(stored, defaultTemplate(row), countOf(row));
+  // While the row stores none, the template a shared style gives it is the
+  // one the canvas draws, so a tile chosen over it still writes its own.
+  const reaching =
+    stored === undefined
+      ? applied?.(BASE_BREAKPOINT, "grid-template-columns")
+      : undefined;
+  const inherited =
+    reaching?.own === false && reaching.value !== defaultTemplate(row)
+      ? reaching.value
+      : undefined;
+  const current = layoutOf(
+    stored ?? inherited,
+    defaultTemplate(row),
+    countOf(row)
+  );
   const tiers = stackTiers(breakpoints);
   const reached = reachedStacks(tiers, applied);
   const stack = stackOf(row, tiers, ROW_OWN.state, reached);
@@ -221,7 +238,7 @@ export function ColumnsLayoutControl({
       </div>
       <p id={hintId} className="nx-inspector__note" aria-live="polite">
         {heldReason(row, pointed, ROW_OWN) ??
-          hintFor(current, stored !== undefined)}
+          hintFor(current, (stored ?? inherited) !== undefined)}
       </p>
       {options.length > 1 ? (
         <>

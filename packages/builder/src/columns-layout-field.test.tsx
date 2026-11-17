@@ -20,6 +20,7 @@ import {
   ColumnsLayoutControl,
   columnsContentSection,
 } from "./columns-layout-field";
+import type { AppliedAt } from "./columns-layout";
 import type { EditorState } from "./editor-state";
 
 beforeAll(() => {
@@ -99,7 +100,11 @@ const words: BlockNode = {
   props: { text: "Words" },
 };
 
-function mount(columns: BlockNode[], styles?: BlockNode["styles"]) {
+function mount(
+  columns: BlockNode[],
+  styles?: BlockNode["styles"],
+  applied?: AppliedAt
+) {
   register();
   const document = {
     formatVersion: 1,
@@ -128,6 +133,7 @@ function mount(columns: BlockNode[], styles?: BlockNode["styles"]) {
       editor={editor}
       nodeId="row"
       breakpoints={BREAKPOINTS}
+      applied={applied}
     />
   );
   return editor;
@@ -169,6 +175,21 @@ describe("a Columns row's layout", () => {
       '"base":{"base":{"gridTemplateColumns":"repeat(3, 1fr)"}}'
     );
     expect(ops.filter(op => op.kind === "insert")).toHaveLength(1);
+  });
+
+  it("reads a template a shared style gives the row, and an equal tile chosen over it writes its own", () => {
+    // The row stores no template; a style it wears sets "1fr 2fr".
+    const fromStyle: AppliedAt = (tier, cssProperty) =>
+      tier === "base" && cssProperty === "grid-template-columns"
+        ? { value: "1fr 2fr", breakpoint: "base", own: false }
+        : undefined;
+    const editor = mount([column("a"), column("b")], undefined, fromStyle);
+    expect(checked("2 equal")).toBe("false");
+    expect(checked("Wide right")).toBe("true");
+    fireEvent.click(screen.getByRole("radio", { name: "2 equal" }));
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"base":{"base":{"gridTemplateColumns":"1fr 1fr"}}'
+    );
   });
 
   it("writes the row's own base values, beside a template set for one device", () => {
@@ -336,5 +357,47 @@ describe("a stack reaching a Columns row from a shared style", () => {
     });
     render(<>{section?.body}</>);
     expect(checked("Tablet and mobile")).toBe("true");
+  });
+
+  it("reads the style's template through the same cascade", () => {
+    register();
+    const row = {
+      ...column("a"),
+      id: "row",
+      type: "core/columns",
+      classes: ["cls-1"],
+      slots: { children: [column("a"), column("b")] },
+    } as BlockNode;
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [row],
+    } as unknown as BlockDocument;
+    const editor = {
+      document,
+      selectedId: "row",
+      applyAll: vi.fn(() => document),
+      apply: vi.fn(() => document),
+    } as unknown as EditorState;
+    const section = columnsContentSection({
+      editor,
+      nodeId: "row",
+      blockName: "core/columns",
+      label: "Columns",
+      breakpoints: BREAKPOINTS,
+      cascade: {
+        entries: [
+          fromStyle({
+            property: "grid-template-columns",
+            value: "2fr 1fr",
+            breakpoint: "base",
+          }),
+        ],
+        nodes: document.nodes,
+      } as never,
+      renderedTag: "div",
+    });
+    render(<>{section?.body}</>);
+    expect(checked("Wide left")).toBe("true");
   });
 });
