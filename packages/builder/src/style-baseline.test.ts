@@ -128,6 +128,19 @@ interface Offerable {
 }
 
 /** Every property and keyword the catalog declares, once each. */
+/**
+ * The properties the engine writes only where its own feature test lets them
+ * act, so a browser without them shows the block as it is: the scroll-driven
+ * timeline of "Animation when it appears", which plays only under
+ * `@supports (animation-timeline: view())` and is stopped elsewhere
+ * (`blocks-engine/src/style/appear.ts`). Offered, because a visitor without
+ * them loses only the motion.
+ */
+const FEATURE_TESTED: ReadonlySet<string> = new Set([
+  "animation-timeline",
+  "animation-range",
+]);
+
 function catalogOfferables(): Offerable[] {
   const seen = new Set<string>();
   const out: Offerable[] = [];
@@ -261,9 +274,19 @@ describe("the Baseline gate", () => {
   it("offers only what Baseline marks widely available", () => {
     const offeredButNotWide = catalogOfferables()
       .filter(entry => !withheld(entry))
+      .filter(entry => !FEATURE_TESTED.has(entry.cssProperty))
       .filter(entry => !widelyAvailable(keysOf(entry)))
       .map(describeEntry);
     expect(offeredButNotWide).toEqual([]);
+  });
+
+  it("feature-tests only what is still not widely available", () => {
+    // The other direction, as for the withheld list: once the data marks one
+    // widely available, it needs no exemption.
+    const testedButWide = [...FEATURE_TESTED].filter(cssProperty =>
+      widelyAvailable(keysOf({ cssProperty }))
+    );
+    expect(testedButWide).toEqual([]);
   });
 
   it("withholds only what is still not widely available", () => {

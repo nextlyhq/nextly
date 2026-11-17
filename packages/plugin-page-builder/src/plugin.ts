@@ -457,6 +457,7 @@ export const pageBuilder = (
         bindings.unbindPlan,
         usage.overview,
         bindings.bindingsToFix,
+        bindings.shownOn,
         pages.pageAddress,
         pages.addressWaiting,
         ...pages.pagesWrite,

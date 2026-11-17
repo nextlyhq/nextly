@@ -12,6 +12,8 @@ import {
   type StyleLeaf,
 } from "@nextlyhq/blocks-engine";
 
+import { LAYOUT_CSS_NAMES, type LayoutWrite } from "./plain-layout";
+
 /** One declaration: its property, and its value where one is known. */
 export interface WrittenDeclaration {
   readonly property: string;
@@ -132,4 +134,21 @@ export const BUILT_IN_WRITES = {
 /** What an HTML tag menu writes for a tag: the element, `<section>`. */
 export function tagWrites(tag: string): string {
   return `<${tag}>`;
+}
+
+/**
+ * What a plain layout choice writes, from the writes it plans, so the hint
+ * can't disagree with the write. A cleared value writes nothing; a choice
+ * that only clears says the block flow it leaves.
+ */
+export function layoutWritesText(writes: readonly LayoutWrite[]): string {
+  const declarations = writes
+    .filter(write => write.value !== null)
+    .map(write => ({
+      property: LAYOUT_CSS_NAMES[write.property] ?? write.property,
+      value: write.value ?? undefined,
+    }));
+  return declarations.length === 0
+    ? "display: block"
+    : declarationsText(declarations);
 }

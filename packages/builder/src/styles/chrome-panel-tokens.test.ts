@@ -20,6 +20,10 @@ import { chromeStylesheetSource } from "./chrome-stylesheet";
  * theme change that pulls the two together (the admin's dark ground is pure
  * black, so "a step darker than the background" cannot exist) fails here.
  *
+ * The same resolver holds a picture's frame (a saved section's, a set's) to
+ * WCAG's 3:1 for its edge against the panel and its icon against its ground,
+ * in both themes, and keeps the editor's tokens off the page drawn inside.
+ *
  * @module chrome-panel-tokens.test
  */
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -230,5 +234,136 @@ describe("the panel and well surfaces", () => {
     expect(lookup("--nx-builder-frame-edge", "light")).toBe(
       "var(--nx-builder-border)"
     );
+  });
+});
+
+/**
+ * The literal colours a value ends in, through `var()` and `color-mix()`:
+ * what has to be grey for its lightness alone to decide its luminance.
+ */
+function leafColours(value: string, theme: Theme): string[] {
+  const text = value.trim();
+  const reference = /^var\((--[\w-]+)\)$/.exec(text);
+  if (reference !== null) {
+    return leafColours(lookup(reference[1] ?? "", theme), theme);
+  }
+  const mix = /^color-mix\(([\s\S]*)\)$/.exec(text);
+  if (mix === null) return [text];
+  const [, ...colours] = splitArguments(mix[1] ?? "");
+  return colours.flatMap(stop =>
+    leafColours(stop.replace(/\s[\d.]+%$/, ""), theme)
+  );
+}
+
+/**
+ * The WCAG contrast ratio of two grey tokens. A grey's OKLCH lightness L is
+ * the cube root of its relative luminance (with no chroma, OKLab's three
+ * cone responses are all L³, and so is each linear sRGB channel), so the
+ * ratio follows from the lightness the resolver above already finds.
+ */
+function contrast(a: string, b: string, theme: Theme): number {
+  const [light, dark] = [lightness(a, theme), lightness(b, theme)]
+    .map(l => l ** 3)
+    .sort((x, y) => y - x);
+  return ((light ?? 0) + 0.05) / ((dark ?? 0) + 0.05);
+}
+
+/** A grey in OKLCH: no chroma. */
+const ACHROMATIC = /^oklch\(\s*[\d.]+%?\s+0(?:\.0+)?\s/;
+
+const PICTURE_TOKENS = [
+  "--nx-builder-picture-edge",
+  "--nx-builder-picture-ground",
+  "--nx-builder-picture-icon",
+] as const;
+
+describe("a picture's frame", () => {
+  it.each(["light", "dark"] as const)(
+    "holds its edge to 3:1 against the panel in the %s theme",
+    theme => {
+      expect(
+        contrast(
+          "var(--nx-builder-picture-edge)",
+          "var(--nx-builder-panel)",
+          theme
+        )
+      ).toBeGreaterThanOrEqual(3);
+    }
+  );
+
+  it.each(["light", "dark"] as const)(
+    "holds the icon to 3:1 on the ground it sits on in the %s theme",
+    theme => {
+      expect(
+        contrast(
+          "var(--nx-builder-picture-icon)",
+          "var(--nx-builder-picture-ground)",
+          theme
+        )
+      ).toBeGreaterThanOrEqual(3);
+    }
+  );
+
+  it("mixes every picture token from the admin's greys, never a literal", () => {
+    // Literal-free, so the dark theme follows through the admin's tokens; all
+    // grey, so the ratios above are the luminances the browser draws.
+    for (const name of PICTURE_TOKENS) {
+      for (const theme of ["light", "dark"] as const) {
+        expect(lookup(name, theme), `${name} (${theme})`).not.toMatch(
+          LITERAL_COLOUR
+        );
+        for (const leaf of leafColours(`var(${name})`, theme)) {
+          expect(leaf, `${name} (${theme})`).toMatch(ACHROMATIC);
+        }
+      }
+    }
+  });
+
+  it("draws the frame in the picture tokens, and the page in none of the editor's", () => {
+    const frame = ruleBody(CHROME, /^\.nx-picture\s*\{/m);
+    expect(frame).toMatch(
+      /border:\s*1px solid var\(--nx-builder-picture-edge\)/
+    );
+    expect(frame).toMatch(/background:\s*var\(--nx-builder-picture-ground\)/);
+    expect(frame).toMatch(/color:\s*var\(--nx-builder-picture-icon\)/);
+    // The drawn page keeps the site's own colours: nothing the editor's
+    // tokens say reaches it, only the system colours of its scheme.
+    for (const prelude of [
+      /^\.nx-picture\[data-drawn="true"\]\s*\{/m,
+      /^\.nx-picture__page\s*\{/m,
+    ]) {
+      // The site's own surface values, named as the canvas names them, are
+      // the only custom properties it reads.
+      expect(
+        ruleBody(CHROME, prelude).replace(/var\(--nx-canvas-site-[a-z]+/g, "")
+      ).not.toMatch(/var\(--nx-/);
+    }
+  });
+
+  it("draws the page in the site's own body font and ink, as the canvas does", () => {
+    const page = ruleBody(CHROME, /^\.nx-picture__page\s*\{/m);
+    expect(page).toMatch(/color:\s*var\(--nx-canvas-site-ink,\s*CanvasText\)/);
+    expect(page).toMatch(
+      /font-family:\s*var\(--nx-canvas-site-font,\s*system-ui\),\s*sans-serif/
+    );
+  });
+
+  it("starts the drawn page from a plain page's text, not the tile's it sits in", () => {
+    // The tile centres its label in small type; the canvas's frame starts from
+    // a document's defaults, so the picture's page has to as well, or a
+    // left-aligned heading draws centred and unsized text draws small.
+    const page = ruleBody(CHROME, /^\.nx-picture__page\s*\{/m);
+    for (const reset of [
+      /text-align:\s*start/,
+      /font-size:\s*medium/,
+      /font-weight:\s*normal/,
+      /font-style:\s*normal/,
+      /line-height:\s*normal/,
+      /letter-spacing:\s*normal/,
+      /text-transform:\s*none/,
+      /white-space:\s*normal/,
+    ]) {
+      expect(page).toMatch(reset);
+    }
   });
 });

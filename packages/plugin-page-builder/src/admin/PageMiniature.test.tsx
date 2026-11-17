@@ -214,7 +214,9 @@ describe("PageMiniature", () => {
       '[data-slot="page-miniature-scaled"]'
     );
 
-    expect(scaled?.className).toContain("absolute");
+    expect(scaled?.style.position).toBe("absolute");
+    expect(scaled?.style.left).toBe("0px");
+    expect(scaled?.style.transformOrigin).toBe("top left");
   });
 
   /*

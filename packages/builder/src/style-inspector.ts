@@ -589,6 +589,13 @@ const SHORT_LABELS: Readonly<Record<string, string>> = {
   flexGrow: "Grow",
   flexShrink: "Shrink",
   flexBasis: "Starting size",
+  // The room between a container's blocks, as an author asks for it; rows
+  // and columns apart where a Grid sets them separately.
+  gap: "Space between",
+  rowGap: "Between rows",
+  columnGap: "Between columns",
+  // What it is in an author's words: an entrance animation.
+  appear: "Animation when it appears",
 };
 
 /**
