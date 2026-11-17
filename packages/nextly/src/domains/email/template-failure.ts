@@ -13,10 +13,16 @@
 
 const TEMPLATE_CAUSED = new WeakSet<object>();
 
-/** `error`, marked as caused by the template, for rethrowing. */
-export function templateCaused<E>(error: E): E {
-  if (typeof error === "object" && error !== null) TEMPLATE_CAUSED.add(error);
-  return error;
+/**
+ * `error`, marked as caused by the template, for rethrowing. A thrown value
+ * that is not an error (a template may `throw "broken"`) is wrapped in one
+ * carrying it as its cause, so it can be marked and thrown as an error.
+ */
+export function templateCaused(error: unknown): Error {
+  const marked =
+    error instanceof Error ? error : new Error(String(error), { cause: error });
+  TEMPLATE_CAUSED.add(marked);
+  return marked;
 }
 
 /** Whether `error` was marked as caused by the template. */

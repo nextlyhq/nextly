@@ -517,8 +517,17 @@ export interface EmailDeliveryInput {
  * its content. `none` for a send without a template.
  */
 export type DeliveryTemplateVersion =
-  | { owner: string; overridden: boolean; digest: string | null }
+  | {
+      owner: string;
+      overridden: boolean;
+      digest: string | null;
+      /** A test of the editor's unsaved fields, no saved version. */
+      draft?: true;
+    }
   | "none";
+
+/** The stored digest of a draft test send, which no saved version has. */
+export const DRAFT_TEMPLATE_DIGEST = "draft";
 
 /**
  * A failure as the delivery log keeps it: whether a retry can help
@@ -573,6 +582,6 @@ export function templateVersionColumns(
   return {
     templateOwner: version.owner,
     templateOverridden: version.overridden,
-    templateDigest: version.digest,
+    templateDigest: version.draft ? DRAFT_TEMPLATE_DIGEST : version.digest,
   };
 }

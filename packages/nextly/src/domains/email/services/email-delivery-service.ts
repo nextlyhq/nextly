@@ -57,6 +57,7 @@ import {
   recipientDigest,
   recipientDigests,
   storableError,
+  DRAFT_TEMPLATE_DIGEST,
   templateVersionColumns,
   type DeliveryFailure,
   type DeliveryFailureKind,
@@ -213,11 +214,13 @@ function templateVersionOf(
 ): DeliveryTemplateVersion | "not-recorded" {
   if (row.templateOwner === null) return "not-recorded";
   if (row.templateOwner === "none") return "none";
+  const draft = row.templateDigest === DRAFT_TEMPLATE_DIGEST;
   return {
     owner: row.templateOwner,
     // A boolean on PostgreSQL, 0 or 1 on MySQL and SQLite.
     overridden: Boolean(Number(row.templateOverridden ?? 0)),
-    digest: row.templateDigest,
+    digest: draft ? null : row.templateDigest,
+    ...(draft ? { draft: true as const } : {}),
   };
 }
 
@@ -238,12 +241,6 @@ export interface ListDeliveriesOptions {
   id?: string;
   /** The attempts of one queued email. */
   queuedId?: string;
-  /**
-   * One recipient's records, by the digest as stored and their kind: the
-   * same recipient across a queued email's attempts. Never an address.
-   */
-  recipientHash?: string;
-  recipientKind?: EmailDeliveryRecipientKind;
   /** Hash of the address to look for; callers pass an address, not a hash. */
   recipient?: string;
   status?: EmailDeliveryStatus;
@@ -1000,12 +997,6 @@ export class EmailDeliveryService extends BaseService {
       options.id !== undefined ? eq(this.deliveries.id, options.id) : undefined,
       options.queuedId !== undefined
         ? eq(this.deliveries.queuedId, options.queuedId)
-        : undefined,
-      options.recipientHash !== undefined
-        ? eq(this.deliveries.recipientHash, options.recipientHash)
-        : undefined,
-      options.recipientKind !== undefined
-        ? eq(this.deliveries.recipientKind, options.recipientKind)
         : undefined,
       options.templateSlug !== undefined
         ? eq(this.deliveries.templateSlug, options.templateSlug)

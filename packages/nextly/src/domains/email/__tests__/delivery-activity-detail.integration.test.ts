@@ -31,6 +31,7 @@ import { runJobsPass } from "../../jobs/jobs-runner";
 import { withEmailFailure } from "../failure";
 import { defineEmailProvider } from "../provider-definition";
 import type { EmailDeliveryService } from "../services/email-delivery-service";
+import type { EmailService } from "../services/email-service";
 import type { EmailTemplateService } from "../services/email-template-service";
 import { versionDigest } from "../template-ownership";
 import type { EmailProviderAdapter } from "../types";
@@ -348,7 +349,7 @@ for (const dialect of getConfiguredTestDialects()) {
       }
     });
 
-    it("keeps two erased recipients' timelines apart", async () => {
+    it("reads an erased recipient's delivery in its queued email's whole timeline", async () => {
       const t = await boot(dialect);
       const queued = await t.nextly.email.queue({
         to: ["first@example.com", "second@example.com"],
@@ -367,8 +368,13 @@ for (const dialect of getConfiguredTestDialects()) {
       for (const item of ours) {
         expect(item.erased).toBe(true);
         const detail = await t.nextly.emailDeliveries.findByID({ id: item.id });
-        // Its own record alone: nothing left says which attempts were its.
-        expect(detail?.timeline.map(attempt => attempt.id)).toEqual([item.id]);
+        // Every record of the email, each marked erased, this one among them:
+        // nothing left on them says which were the same person.
+        expect(detail?.timeline.map(attempt => attempt.id).sort()).toEqual(
+          ours.map(other => other.id).sort()
+        );
+        expect(detail?.timeline.every(attempt => attempt.erased)).toBe(true);
+        expect(detail?.timelineTruncated).toBe(false);
       }
     });
 
@@ -401,5 +407,34 @@ for (const dialect of getConfiguredTestDialects()) {
         601
       );
     }, 120_000);
+
+    it("records a test of the editor's unsaved fields as a draft, not a saved version", async () => {
+      const t = await boot(dialect);
+      await t.nextly.emailTemplates.create({
+        data: {
+          name: "Newsletter",
+          slug: "newsletter",
+          subject: "News",
+          htmlContent: "<p>News</p>",
+        },
+      });
+      const emails = t.getService("emailService") as unknown as EmailService;
+      await emails.sendTemplateTest(
+        "newsletter",
+        "a@example.com",
+        {},
+        {
+          subject: "Unsaved news",
+        }
+      );
+
+      const [item] = (await t.nextly.emailDeliveries.find({})).items;
+      expect(item.templateVersion).toEqual({
+        owner: "site",
+        overridden: false,
+        digest: null,
+        draft: true,
+      });
+    });
   });
 }

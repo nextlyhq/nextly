@@ -888,7 +888,13 @@ export class EmailService extends BaseService {
           templateCopies,
         });
       } catch (error) {
-        throw templateCaused(error);
+        // A render or an envelope the template got wrong is refused as the
+        // caller's (4xx); a database that failed reading the layout or the
+        // brand is not the template's, and "Fix template" cannot mend it.
+        if (NextlyError.is(error) && error.statusCode < 500) {
+          throw templateCaused(error);
+        }
+        throw error;
       }
       const { subject, html, text: plainText } = rendered;
 
@@ -917,16 +923,21 @@ export class EmailService extends BaseService {
           idempotencyKey: options?.idempotencyKey,
           excludeRecipients: options?.excludeRecipients,
         },
-        // The version as saved, never what it rendered to.
+        // The version as saved, never what it rendered to. A test of the
+        // editor's unsaved fields sent no saved version, and says so.
         {
           owner: ownerName(dbTemplate.owner),
           overridden: dbTemplate.overridden,
-          digest: versionDigest({
-            subject: dbTemplate.subject,
-            htmlContent: dbTemplate.htmlContent,
-            plainTextContent: dbTemplate.plainTextContent ?? null,
-            preheader: dbTemplate.preheader ?? null,
-          }),
+          digest:
+            draft !== undefined
+              ? null
+              : versionDigest({
+                  subject: dbTemplate.subject,
+                  htmlContent: dbTemplate.htmlContent,
+                  plainTextContent: dbTemplate.plainTextContent ?? null,
+                  preheader: dbTemplate.preheader ?? null,
+                }),
+          ...(draft !== undefined ? { draft: true as const } : {}),
         }
       );
     }

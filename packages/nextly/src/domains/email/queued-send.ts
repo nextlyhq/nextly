@@ -135,11 +135,11 @@ export type QueuedMessage =
 const TEMPLATE_SLUG_LENGTH = 255;
 
 /**
- * The names the queue records in clear: a slug's characters, which no address
- * can be written in. A caller may queue any name, and one of another shape
- * (an address passed by mistake) is kept only sealed, recorded as no template.
+ * The names the queue records in clear: any a template can have, but not one
+ * with whitespace or an `@`, the shape of an address passed by mistake, which
+ * is kept only sealed and recorded as no template.
  */
-const TEMPLATE_SLUG_SHAPE = /^[\w.:/-]+$/;
+const TEMPLATE_SLUG_SHAPE = /^[^\s@]+$/;
 
 /** The queue's table for a dialect. */
 export type EmailQueueTable =
@@ -1312,10 +1312,84 @@ async function resealOne(
  * held message no configured secret opens, naming what to configure, and
  * nothing of the messages.
  */
+/**
+ * Retire the pending job of every cancelled queued email. A cancel retires
+ * its job as it is made (`queued-erasure`); one made before it did leaves a
+ * job a jobs run would only skip, and the overdue count would read it as
+ * waiting. Run at boot, beside the re-seal.
+ */
+export async function retireJobsOfCancelled(
+  adapter: DrizzleAdapter
+): Promise<void> {
+  const dialect = adapter.getCapabilities().dialect;
+  const tables = loadedDialect(dialect).tables;
+  const queue = tables.emailQueue;
+  const jobs = tables.nextlyJobs;
+  const db = adapter.getDrizzle<RetireDb>();
+  for (;;) {
+    const rows = (await db
+      .select({ jobId: queue.jobId })
+      .from(queue)
+      .innerJoin(jobs, eq(jobs.id, queue.jobId))
+      .where(and(eq(queue.state, "cancelled"), eq(jobs.state, "pending")))
+      .limit(RETIRE_BATCH)) as Array<{ jobId: string }>;
+    if (rows.length === 0) return;
+    await db
+      .update(jobs)
+      .set({
+        state: "done",
+        nextAttemptAt: null,
+        lastError: "The queued email was cancelled.",
+        lockedBy: null,
+        lockedUntil: null,
+        dedupeKey: null,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          inArray(
+            jobs.id,
+            rows.map(row => row.jobId)
+          ),
+          eq(jobs.state, "pending")
+        )
+      );
+    if (rows.length < RETIRE_BATCH) return;
+  }
+}
+
+/** Jobs retired per statement at boot. */
+const RETIRE_BATCH = 500;
+
+/** The Drizzle surface the boot retirement needs. */
+interface RetireDb {
+  select(fields: Record<string, unknown>): {
+    from(table: unknown): {
+      innerJoin(
+        table: unknown,
+        on: unknown
+      ): {
+        where(condition: unknown): {
+          limit(count: number): PromiseLike<unknown[]>;
+        };
+      };
+    };
+  };
+  update(table: unknown): {
+    set(values: unknown): { where(condition: unknown): PromiseLike<unknown> };
+  };
+}
+
 export async function resealQueuedMessagesAtBoot(
   adapter: DrizzleAdapter,
   secrets: readonly string[]
 ): Promise<void> {
+  await retireJobsOfCancelled(adapter).catch(error =>
+    getNextlyLogger().error({
+      kind: "queued-email-job-retirement-failed",
+      message: error instanceof Error ? error.message : String(error),
+    })
+  );
   try {
     const { unreadable } = await resealQueuedMessages(adapter, secrets);
     if (unreadable > 0) {

@@ -87,7 +87,7 @@ export const emailDeliveriesMysql = mysqlTable(
     // record of that send; cleared on all of them when any one is erased.
     keyDigest: varchar("key_digest", { length: 64 }),
     queuedId: varchar("queued_id", { length: 36 }),
-    templateOwner: varchar("template_owner", { length: 255 }),
+    templateOwner: text("template_owner"),
     templateOverridden: boolean("template_overridden"),
     templateDigest: varchar("template_digest", { length: 64 }),
     failureKind: varchar("failure_kind", { length: 16 }),

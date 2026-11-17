@@ -129,8 +129,13 @@ interface DeliveryAttempt {
 /** @experimental A delivery's detail sheet. */
 export interface DeliveryDetail extends DeliveryActivity {
   providerMessageId: string | null;
-  /** Its attempts, oldest first: the queued email's, or itself alone. */
+  /**
+   * Oldest first: every delivery its queued email's attempts recorded, to
+   * every recipient, this one among them by its id; or itself alone.
+   */
   timeline: DeliveryAttempt[];
+  /** Whether the timeline stopped at its limit, its oldest left out. */
+  timelineTruncated: boolean;
 }
 
 /** @experimental A queued email's detail sheet. */
@@ -211,8 +216,6 @@ export interface QueuedEmailOverdue {
 /** The longest page a list returns. */
 const MAX_LIMIT = 100;
 const DEFAULT_LIMIT = 50;
-/** The most records one recipient's timeline reads: far past any attempt limit. */
-const MAX_ATTEMPT_ROWS = 500;
 /** Records read per page of a queued email's timeline. */
 const TIMELINE_PAGE = 500;
 /**
@@ -571,22 +574,18 @@ export class EmailDeliveryActivity {
     const id = given.toLowerCase();
     const [record] = await this.deliveries.list({ id, limit: 1 });
     if (!record) return null;
-    // The same recipient's records across its queued email's attempts, by
-    // the stored digest. An erased recipient has none left to match by, and
-    // every erased one would read alike, so its record stands alone.
-    const timeline =
-      record.queuedId && record.recipientHash !== null
-        ? await this.deliveries.list({
-            queuedId: record.queuedId,
-            recipientHash: record.recipientHash,
-            recipientKind: record.recipientKind,
-            limit: MAX_ATTEMPT_ROWS,
-          })
-        : [record];
+    // Its queued email's every attempt, each with its recipient's kind, and
+    // this record among them by its id. Not narrowed to one recipient: a
+    // recipient's digest changes when the secret rotates and is gone once it
+    // is erased, so nothing on the records says which were the same person.
+    const { records, truncated } = record.queuedId
+      ? await this.timelineOf(record.queuedId)
+      : { records: [record], truncated: false };
     return {
       ...deliveryOf(record),
       providerMessageId: record.messageId,
-      timeline: [...timeline].reverse().map(attemptOf),
+      timeline: [...records].reverse().map(attemptOf),
+      timelineTruncated: truncated,
     };
   }
 

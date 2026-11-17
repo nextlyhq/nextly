@@ -217,7 +217,9 @@ export const emailDeliveriesPg = pgTable(
      * its content or what it rendered to. `none` for a send without a
      * template; null on a row written before versions were recorded.
      */
-    templateOwner: varchar("template_owner", { length: 255 }),
+    // Unbounded, as a plugin's name is: a bounded column would refuse the
+    // record, which the recorder swallows, and the send would vanish.
+    templateOwner: text("template_owner"),
     templateOverridden: boolean("template_overridden"),
     templateDigest: varchar("template_digest", { length: 64 }),
     /**

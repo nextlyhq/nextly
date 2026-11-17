@@ -29,7 +29,7 @@ import { env } from "../../../lib/env";
 import { rowLockServer } from "../../audit/audit-log-writer";
 import { pluginSettingsSecrets } from "../../plugins/settings-service";
 import { recipientDigests } from "../delivery-record";
-import { storeQueuedEmail } from "../queued-send";
+import { retireJobsOfCancelled, storeQueuedEmail } from "../queued-send";
 import type { EmailDeliveryService } from "../services/email-delivery-service";
 
 const ORIGIN = "http://localhost";
@@ -684,6 +684,16 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     it("queues a template name longer than any template's, or not slug-shaped, as having no template, on every dialect", async () => {
+      // A name any template may have is kept: `daily+news` among them.
+      const kept = await t.nextly.email.queueWithTemplate({
+        template: "daily+news",
+        to: "queued@example.com",
+      });
+      expect(
+        (await t.nextly.emailDeliveries.findQueued({})).items.find(
+          item => item.id === kept.id
+        )
+      ).toMatchObject({ templateSlug: "daily+news" });
       for (const name of ["x".repeat(300), "alice@example.com"]) {
         const queued = await t.nextly.email.queueWithTemplate({
           template: name,
@@ -769,6 +779,29 @@ for (const dialect of getConfiguredTestDialects()) {
         attempts: 0,
         nextAttemptAt: null,
         messageHeld: false,
+      });
+
+      // One cancelled by a release that left its job pending is retired at
+      // boot, beside the re-seal, so it stops counting too.
+      if (stored.state !== "waiting") {
+        throw new Error("the email was stored with no job to retire");
+      }
+      const jobs = loadedDialect(dialect).tables.nextlyJobs;
+      const db = t.adapter.getDrizzle() as never as {
+        update(table: unknown): {
+          set(values: unknown): { where(c: unknown): Promise<unknown> };
+        };
+      };
+      await db
+        .update(jobs)
+        .set({ state: "pending" })
+        .where(eq(jobs.id as never, stored.jobId));
+      expect(await t.nextly.emailDeliveries.overdue()).toMatchObject({
+        overdue: 1,
+      });
+      await retireJobsOfCancelled(t.adapter);
+      expect(await t.nextly.emailDeliveries.overdue()).toMatchObject({
+        overdue: 0,
       });
     });
   });
