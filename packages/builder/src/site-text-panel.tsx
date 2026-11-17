@@ -35,6 +35,7 @@ import { Button, Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { CssHint, CssNamesLine } from "./css-hint";
+import { commitFocusedField } from "./editor-field-commit";
 import { EDITOR_WORDS } from "./editor-words";
 import { FluidButton, type FluidHook } from "./fluid-popover";
 import {
@@ -159,7 +160,15 @@ function SiteTextRow({
   const heading = /^h[1-6]$/.test(row.role);
   return (
     <li className="nx-vars__item" data-open={open ? "" : undefined}>
-      <Popover open={open} onOpenChange={setOpen} modal>
+      <Popover
+        open={open}
+        onOpenChange={next => {
+          // A field still being typed in commits before the popup closes.
+          if (!next) commitFocusedField(globalThis.document);
+          setOpen(next);
+        }}
+        modal
+      >
         <div className="nx-vars__line">
           <CssHint writes={siteTextWrites(tokens, row.role, row.entry)}>
             <PopoverTrigger asChild>

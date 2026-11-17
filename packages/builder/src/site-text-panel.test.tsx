@@ -238,6 +238,22 @@ describe("a row's popup", () => {
     expect(last.siteText).not.toHaveProperty("h2");
   });
 
+  it("keeps a colour typed in a row's popup when a click outside closes it", async () => {
+    const onChange = vi.fn();
+    render(
+      <Hosted tokens={SITE} groups={["type", "fonts"]} onChange={onChange} />
+    );
+    const popup = await openRow(/^Links/);
+    const colour = within(popup).getByLabelText("Colour");
+    colour.focus();
+    fireEvent.change(colour, { target: { value: "#0044cc" } });
+    // Closed from outside, with no Enter and no Tab first.
+    fireEvent.pointerDown(document.body);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const last = onChange.mock.lastCall?.[0] as SiteTokenSet | undefined;
+    expect(last?.siteText?.link).toEqual({ color: "#0044cc" });
+  });
+
   it("gives Links a colour, a colour on hover and an underline", async () => {
     const onChange = vi.fn();
     render(

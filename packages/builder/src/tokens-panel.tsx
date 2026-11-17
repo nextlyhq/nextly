@@ -57,7 +57,7 @@ import {
   useListedGroups,
   useViewSearch,
 } from "./design-group-toggle";
-import { isHTMLElement } from "./dom-kind";
+import { commitFocusedField } from "./editor-field-commit";
 import { FluidRangeFields } from "./fluid-popover";
 import { ShowMore, withOpenRow } from "./panel-actions";
 import { SiteTextSection } from "./site-text-panel";
@@ -1037,17 +1037,6 @@ function useOpenVariable({
     commitFrom,
     focus: setFocusKey,
   };
-}
-
-/**
- * Commits the variable editor's field that has focus, by leaving it, as Tab
- * would: each field commits on blur, synchronously.
- */
-function commitFocusedField(document: Document | undefined): void {
-  const active = document?.activeElement;
-  if (isHTMLElement(active) && active.closest(".nx-vars-editor")) {
-    active.blur();
-  }
 }
 
 /**
