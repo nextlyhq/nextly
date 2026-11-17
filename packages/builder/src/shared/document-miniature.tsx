@@ -20,10 +20,10 @@
  *
  * **A plain icon in place of a broken picture.** With nothing to draw (an
  * empty set, "None") it shows the empty-frame icon. When the host says the
- * document can't be drawn, when drawing it throws, or when the renderer had
- * to leave a placeholder for any block in it (a type no block is registered
- * for, a component that could not be loaded), it shows the item's own type
- * icon.
+ * document can't be drawn, or when the renderer had to leave a placeholder
+ * for any block in it (a type no block is registered for, a component that
+ * could not be loaded, a block that threw: the renderer contains each of
+ * those itself), it shows the item's own type icon.
  *
  * **Light or dark, as the canvas is previewed.** The mode is stated on the
  * drawn surface as the site's own theme marker, so a site's dark tokens apply
@@ -87,29 +87,6 @@ export interface DocumentMiniatureProps {
 
 /** The gap between two documents drawn one above the other, in composed px. */
 const STACK_GAP = 16;
-
-/**
- * Turns a throw while drawing into the plain icon. A picture is never worth
- * an error the surface around it has to handle.
- */
-class PictureBoundary extends React.Component<
-  { onFail: () => void; children: React.ReactNode },
-  { failed: boolean }
-> {
-  override state = { failed: false };
-
-  static getDerivedStateFromError(): { failed: boolean } {
-    return { failed: true };
-  }
-
-  override componentDidCatch(): void {
-    this.props.onFail();
-  }
-
-  override render(): React.ReactNode {
-    return this.state.failed ? null : this.props.children;
-  }
-}
 
 /** An empty frame: a dashed box, for nothing to draw. */
 function EmptyFrameIcon(): React.JSX.Element {
@@ -227,9 +204,9 @@ export function DocumentMiniature({
 }: DocumentMiniatureProps): React.JSX.Element {
   const frame = React.useRef<HTMLSpanElement>(null);
   const scaled = React.useRef<HTMLDivElement>(null);
-  const [threw, setThrew] = React.useState(false);
-  const broke = React.useCallback(() => setThrew(true), []);
-  const state = stateOf(documents, failed || threw);
+  const [broken, setBroken] = React.useState(false);
+  const broke = React.useCallback(() => setBroken(true), []);
+  const state = stateOf(documents, failed || broken);
   const first = documents[0];
   const seen = useFirstSeen(
     frame,
@@ -261,23 +238,21 @@ export function DocumentMiniature({
       {state === "empty" ? <EmptyFrameIcon /> : null}
       {state === "failed" ? <BlockIconMark icon={icon} size={20} /> : null}
       {drawn ? (
-        <PictureBoundary onFail={broke}>
-          <MiniatureSurface
-            scaledRef={scaled}
-            renderWidth={renderWidth}
-            scale={scale}
-            previewContainer={render.styleContext?.previewContainer}
-            offsetTop={offsetTop}
-            slot="picture"
+        <MiniatureSurface
+          scaledRef={scaled}
+          renderWidth={renderWidth}
+          scale={scale}
+          previewContainer={render.styleContext?.previewContainer}
+          offsetTop={offsetTop}
+          slot="picture"
+        >
+          <div
+            className="nx-picture__page"
+            {...(mode === undefined ? {} : { [DARK_MODE_ATTRIBUTE]: mode })}
           >
-            <div
-              className="nx-picture__page"
-              {...(mode === undefined ? {} : { [DARK_MODE_ATTRIBUTE]: mode })}
-            >
-              {pages}
-            </div>
-          </MiniatureSurface>
-        </PictureBoundary>
+            {pages}
+          </div>
+        </MiniatureSurface>
       ) : null}
     </span>
   );

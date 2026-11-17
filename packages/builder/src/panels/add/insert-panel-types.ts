@@ -16,7 +16,12 @@ import * as React from "react";
 import type { InsertDragEntry } from "../../canvas/canvas-drag";
 import type { EditorState } from "../../editor-state";
 
-import type { InsertEntry, SavedComponent, SavedPattern } from "./inserter";
+import type {
+  InsertEntry,
+  PatternInsertEntry,
+  SavedComponent,
+  SavedPattern,
+} from "./inserter";
 
 /**
  * Where one tier of the host's library read stands, as the panel says it.
@@ -170,6 +175,17 @@ export interface InsertPanelProps {
    * does not hold.
    */
   renderPreview?: (entry: InsertEntry) => React.ReactNode;
+  /**
+   * Draws a small picture of a saved section for its tile, in place of the
+   * tier's mark, when the host has one (`DocumentMiniature`, given the
+   * section's published document and the site's rendering). Answering nothing
+   * keeps the mark.
+   *
+   * The host's for the reason `renderPreview` is: the panel holds no
+   * renderer inputs. The picture waits until its tile is on screen, so
+   * offering one never holds the panel up.
+   */
+  renderPicture?: (entry: PatternInsertEntry) => React.ReactNode;
   /**
    * How many times an add control on the canvas has asked for this panel,
    * counted by the host. Each new count is a press the panel answers, so the

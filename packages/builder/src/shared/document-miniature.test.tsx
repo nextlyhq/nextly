@@ -144,7 +144,11 @@ describe("a picture of documents", () => {
     const session = createMiniatureSession();
     const first = stubObserver();
     const shown = render(
-      <DocumentMiniature documents={[HEADER]} render={RENDER} session={session} />
+      <DocumentMiniature
+        documents={[HEADER]}
+        render={RENDER}
+        session={session}
+      />
     );
     act(() => first.show());
     shown.unmount();
@@ -152,7 +156,11 @@ describe("a picture of documents", () => {
     // Never shown this time: drawn from the session's memory alone.
     stubObserver();
     const { container } = render(
-      <DocumentMiniature documents={[HEADER]} render={RENDER} session={session} />
+      <DocumentMiniature
+        documents={[HEADER]}
+        render={RENDER}
+        session={session}
+      />
     );
     expect(texts(container)).toEqual(["Header"]);
   });
@@ -190,7 +198,11 @@ describe("a picture of documents", () => {
   it("shows the type icon, not a broken picture, when drawing throws", () => {
     // React reports the caught throw; the picture is what is under test.
     vi.spyOn(console, "error").mockImplementation(() => {});
-    const broken = doc("00000000-0000-4000-8000-0000000000b1", "", "acme/broken");
+    const broken = doc(
+      "00000000-0000-4000-8000-0000000000b1",
+      "",
+      "acme/broken"
+    );
     const { container } = render(
       <DocumentMiniature
         documents={[broken]}
@@ -207,7 +219,11 @@ describe("a picture of documents", () => {
   it("shows the type icon when a block in it can't be drawn", () => {
     // A type no block is registered for: what a deleted component or a
     // removed plugin leaves in a saved section.
-    const unknown = doc("00000000-0000-4000-8000-0000000000c1", "", "acme/gone");
+    const unknown = doc(
+      "00000000-0000-4000-8000-0000000000c1",
+      "",
+      "acme/gone"
+    );
     const { container } = render(
       <DocumentMiniature
         documents={[HEADER, unknown]}
