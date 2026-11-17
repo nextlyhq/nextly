@@ -103,16 +103,18 @@ function offeredPreset(
 /**
  * What the number's commit comes to as the popover closes. A number still
  * being typed is committed by taking focus off it (to no other element, so
- * the popover isn't left); otherwise its last commit says, which an Enter has
- * just made.
+ * the popover isn't left). Right after an Enter in the number, the commit
+ * that Enter made says; anywhere else nothing is pending, so an earlier
+ * refusal never holds the popover open.
  */
 function commitTyped(
   root: HTMLElement | null,
-  outcome: React.RefObject<CommitOutcome | undefined>
+  outcome: React.RefObject<CommitOutcome | undefined>,
+  afterEnter: boolean
 ): CommitOutcome | undefined {
   const active = root?.ownerDocument.activeElement;
   if (root === null || !isInput(active) || !root.contains(active)) {
-    return outcome.current;
+    return afterEnter ? outcome.current : undefined;
   }
   outcome.current = undefined;
   active.blur();
@@ -179,8 +181,10 @@ export function SpacingSidePopover(
    * committed first, by moving focus off it within the popover, and a refused
    * commit keeps the popover open on it.
    */
-  const close = (to: SideClose): void => {
-    if (commitTyped(content.current, outcome) === "refused") return;
+  const close = (to: SideClose, afterEnter = false): void => {
+    if (commitTyped(content.current, outcome, afterEnter) === "refused") {
+      return;
+    }
     props.onClose(to);
   };
   // Escape, ✕ and Reset close whatever the number holds: the author is
@@ -212,9 +216,9 @@ export function SpacingSidePopover(
         }
       }}
       onKeyDown={event =>
-        popoverKeys(event, seed !== undefined, to => {
+        popoverKeys(event, seed !== undefined, (to, afterEnter) => {
           event.preventDefault();
-          close(to);
+          close(to, afterEnter);
         })
       }
     >
@@ -376,12 +380,12 @@ function focusStart(root: HTMLElement | null, seed: string | undefined): void {
 function popoverKeys(
   event: React.KeyboardEvent<HTMLDivElement>,
   quick: boolean,
-  close: (to: SideClose) => void
+  close: (to: SideClose, afterEnter?: boolean) => void
 ): void {
   const target = event.target as HTMLElement;
   const inNumber = isInput(target);
   // After the number's own Enter has committed it.
-  if (event.key === "Enter" && inNumber) return close("side");
+  if (event.key === "Enter" && inNumber) return close("side", true);
   if (event.key !== "Tab") return;
   const to =
     quick && inNumber

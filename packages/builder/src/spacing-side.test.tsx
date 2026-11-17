@@ -229,6 +229,22 @@ describe("a spacing-box side", () => {
     expect(document.activeElement).toBe(side("Padding top"));
   });
 
+  it("lets Tab leave past its last control after a refused value was left behind", () => {
+    // A refusal the author has moved on from holds nothing open: Tab past
+    // the last control still goes on to the next side.
+    mount();
+    fireEvent.click(side("Padding top"));
+    const number = screen.getByLabelText("Value for Padding top");
+    fireEvent.change(number, { target: { value: "red" } });
+    // Tab out of the number moves on natively, and its blur is refused.
+    fireEvent.blur(number);
+    const last = screen.getByRole("radio", { name: "This side" });
+    last.focus();
+    fireEvent.keyDown(last, { key: "Tab" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(side("Padding right"));
+  });
+
   it("keeps a refused value in quick entry on Tab, and doesn't move on", () => {
     const editor = mount();
     const top = side("Margin top");
