@@ -295,6 +295,59 @@ describe("a picture inside a gallery", () => {
     );
   });
 
+  it("offers no Same as the gallery to a picture holding a link it would follow, by address or by entry", () => {
+    mount(
+      page(
+        gallery(
+          [
+            picture("p1", { href: "/about" }),
+            picture("p2", { entryCollection: "posts", entryId: "post-1" }),
+            picture("p3"),
+          ],
+          { props: { as: "div", whenClicked: "enlarge" } }
+        )
+      ),
+      "p1"
+    );
+    const choices = () =>
+      within(group("When clicked"))
+        .getAllByRole("radio", { hidden: true })
+        .map(each => each.textContent);
+    expect(choices()).toEqual(["Nothing", "Link", "Enlarge"]);
+    expect(radio("When clicked", "Link").getAttribute("aria-checked")).toBe(
+      "true"
+    );
+    act(() => editor().select("p2"));
+    expect(choices()).toEqual(["Nothing", "Link", "Enlarge"]);
+    expect(radio("When clicked", "Link").getAttribute("aria-checked")).toBe(
+      "true"
+    );
+    // The control: one with no link is offered it, first.
+    act(() => editor().select("p3"));
+    expect(choices()).toEqual([
+      "Same as the gallery (Enlarge)",
+      "Nothing",
+      "Link",
+      "Enlarge",
+    ]);
+  });
+
+  it("offers no Same as the gallery to a linked picture that chose Enlarge, since clearing it would read as Link", () => {
+    mount(
+      page(
+        gallery([picture("p1", { href: "/about", whenClicked: "enlarge" })], {
+          props: { as: "div", whenClicked: "enlarge" },
+        })
+      ),
+      "p1"
+    );
+    expect(
+      within(group("When clicked"))
+        .getAllByRole("radio", { hidden: true })
+        .map(each => each.textContent)
+    ).toEqual(["Nothing", "Link", "Enlarge"]);
+  });
+
   it("is titled Picture N · in the gallery, with a way back to the gallery", () => {
     mount(
       page(gallery([picture("p1"), picture("p2")], { name: "Team photos" })),

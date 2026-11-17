@@ -15,7 +15,10 @@
  * A picture inside a gallery follows the gallery while it says nothing
  * itself and holds no link, so it is offered one more choice, first: "Same
  * as the gallery (Enlarge)", naming what the gallery says. Shown while the
- * picture follows it, and choosing it clears the picture's own choice.
+ * picture follows it, and choosing it clears the picture's own choice. A
+ * picture holding a link is not offered it: cleared, its choice would read
+ * as Link, the link coming before the gallery, so its choices are Nothing,
+ * Link and Enlarge, as any picture's are.
  *
  * @module when-clicked-control
  */
@@ -85,6 +88,23 @@ function storedValues(
   return Object.fromEntries(props.map(prop => [prop.name, prop.value]));
 }
 
+/**
+ * Whether the picture, its own choice cleared, would follow what it sits
+ * in: asked of the block's own reading (`whenClickedOf`), which reads a link
+ * the page would follow (an address, or an entry) before any gallery, and
+ * of a bound link, which the page fills before the block reads it.
+ */
+function followsWhenCleared(
+  group: WhenClickedGroup,
+  values: Readonly<Record<string, unknown>>,
+  bindings: Readonly<Record<string, unknown>> | undefined
+): boolean {
+  const cleared = { ...values, [group.choice]: undefined };
+  return (
+    whenClickedOf(cleared) !== "link" && !isLinkBound(group.link, bindings)
+  );
+}
+
 /** The choice a picture in a gallery shows while it follows the gallery. */
 const FOLLOW_GALLERY = "same-as-gallery";
 
@@ -122,8 +142,11 @@ export function WhenClickedField({
     : [];
   const values = storedValues(props);
   const bindings = findNode(document.nodes, nodeId)?.bindings;
-  // What the gallery the picture sits in says, if it sits in one.
-  const followed = galleryPictureOf(document, nodeId)?.galleryChoice;
+  // What the gallery the picture sits in says, if it sits in one and the
+  // picture would follow it with its own choice cleared.
+  const followed = followsWhenCleared(group, values, bindings)
+    ? galleryPictureOf(document, nodeId)?.galleryChoice
+    : undefined;
   const options = followed === undefined ? own : [FOLLOW_GALLERY, ...own];
   const labelOf = (option: string): string =>
     option === FOLLOW_GALLERY
