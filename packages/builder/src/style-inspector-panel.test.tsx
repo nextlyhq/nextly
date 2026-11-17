@@ -44,7 +44,7 @@ import {
   describeProvenance,
   StyleInspectorPanel,
 } from "./style-inspector-panel";
-import { StyleReportContext } from "./settings-filter";
+import { SettingsFilterProvider, StyleReportContext } from "./settings-filter";
 import { keywordLabel } from "./style-keyword-labels";
 import type { SharedStylesHost } from "./style-target";
 import type { StylePolicy } from "./style-values";
@@ -6315,9 +6315,11 @@ describe("what the Style tab tells the panel's filter", () => {
     };
     const report = vi.fn();
     render(
-      <StyleReportContext.Provider value={report}>
-        <StyleInspectorPanel editor={editor} target={target} />
-      </StyleReportContext.Provider>
+      <SettingsFilterProvider initial={{ onlyChanged: true }}>
+        <StyleReportContext.Provider value={report}>
+          <StyleInspectorPanel editor={editor} target={target} />
+        </StyleReportContext.Provider>
+      </SettingsFilterProvider>
     );
     const sections = report.mock.lastCall?.[0]?.sections as
       | readonly { properties: readonly { property: string; set: boolean }[] }[]

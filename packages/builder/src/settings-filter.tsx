@@ -51,11 +51,16 @@ const FilterStateContext = React.createContext<FilterState>(NO_FILTER);
  */
 export function SettingsFilterProvider({
   children,
+  initial,
 }: {
   children: React.ReactNode;
+  /** What the panel opens filtered by; nothing unless said. */
+  initial?: Partial<SettingsFilter>;
 }): React.JSX.Element {
-  const [query, setQuery] = React.useState("");
-  const [onlyChanged, setOnlyChanged] = React.useState(false);
+  const [query, setQuery] = React.useState(initial?.query ?? "");
+  const [onlyChanged, setOnlyChanged] = React.useState(
+    initial?.onlyChanged ?? false
+  );
   const value = React.useMemo(
     () => ({ query, onlyChanged, setQuery, setOnlyChanged }),
     [query, onlyChanged]
@@ -451,13 +456,17 @@ export function useReportStyle(
   sections: readonly StyleSection[] | undefined
 ): void {
   const report = React.useContext(StyleReportContext);
+  // Told only while the panel is filtered: unfiltered, nothing reads it, and
+  // a report would draw the panel a second time for every selection.
+  const on = filtering(useFilterState());
   const latest = React.useRef(sections);
   latest.current = sections;
-  const signature = sections === undefined ? "" : sectionsSignature(sections);
+  const signature =
+    sections === undefined || !on ? "" : sectionsSignature(sections);
   React.useEffect(() => {
     if (report === undefined || nodeId === undefined) return;
     const now = latest.current;
-    report(now === undefined ? undefined : { nodeId, sections: now });
-  }, [report, nodeId, signature]);
+    report(on && now !== undefined ? { nodeId, sections: now } : undefined);
+  }, [report, nodeId, signature, on]);
   React.useEffect(() => () => report?.(undefined), [report]);
 }
