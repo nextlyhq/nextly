@@ -153,6 +153,9 @@ export function editorInspector<TFieldValues extends FieldValues>(
         fromCode: configSiteStyle.fonts ?? [],
         onManageFonts: () => requestPanel("design", "type"),
       }}
+      // "Edit block styles" under the Block style tiles: Design's Styles tab,
+      // at the block's type.
+      onEditBlockStyles={view.openBlockStyles}
       // In a component's own view: the ids its live definition holds, which a
       // new field must never reuse, how far a removal reaches, and its name
       // for the card heading the view, which is the open document's title.
