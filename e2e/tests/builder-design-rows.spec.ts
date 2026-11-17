@@ -186,8 +186,11 @@ test("+ Add colour keeps the search and the list's place, and opens the new colo
     const editor = page.getByRole("dialog", { name: "Edit New colour" });
     await expect(editor).toBeVisible();
     await expect(editor.getByLabel("Name", { exact: true })).toBeFocused();
-    // The search is kept, and the list did not jump back to its top.
-    await expect(search).toHaveValue("many");
+    // The search is kept, and the list did not jump back to its top. Read
+    // by its field: the open editor hides the rest from the tree.
+    await expect(
+      panel.locator('input[aria-label="Search Design"]')
+    ).toHaveValue("many");
     expect(
       Math.abs((await body.evaluate(element => element.scrollTop)) - scrolled)
     ).toBeLessThan(80);
