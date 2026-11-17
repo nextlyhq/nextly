@@ -139,10 +139,24 @@ function useDrawnLayout(
       setHeight(element.offsetHeight);
     };
     measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
+    // A block that gives up after the drawing (an async block that rejects)
+    // leaves a hidden placeholder that need not change the drawing's size,
+    // so the drawing's content is watched as well as its size.
+    const view = element.ownerDocument.defaultView;
+    const changes =
+      view?.MutationObserver === undefined
+        ? null
+        : new view.MutationObserver(measure);
+    changes?.observe(element, { childList: true, subtree: true });
+    const sizes =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(measure);
+    sizes?.observe(element);
+    return () => {
+      changes?.disconnect();
+      sizes?.disconnect();
+    };
   }, [scaled, drawn, onBroken]);
   return height;
 }

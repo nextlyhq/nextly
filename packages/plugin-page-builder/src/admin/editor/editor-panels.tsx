@@ -46,6 +46,7 @@ import {
   type LibraryReadState,
 } from "../pattern-library-client";
 
+import { usePictureContext } from "./canvas-page-context";
 import {
   useCanvasPreviewMode,
   type CanvasPreviewMode,
@@ -439,7 +440,7 @@ function useDrawnLook(): {
 } {
   return {
     previewMode: useCanvasPreviewMode(),
-    pictureSession: useMiniatureSession(),
+    pictureSession: useMiniatureSession(usePictureContext()),
   };
 }
 

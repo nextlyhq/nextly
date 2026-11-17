@@ -36,6 +36,7 @@ import {
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
   useState,
   type JSX,
   type ReactNode,
@@ -202,13 +203,22 @@ export interface MiniatureSession {
   readonly seen: WeakSet<object>;
 }
 
-/** A session of its own, for a host that keeps one for as long as it edits. */
-export function createMiniatureSession(): MiniatureSession {
-  return { context: createStandaloneContext(), seen: new WeakSet() };
+/**
+ * A session of its own, for a host that keeps one for as long as it edits,
+ * drawing with `context`: the host's read-only resolvers (its media, its
+ * icons), so an image chosen from the host's library is drawn in the picture
+ * as on the canvas. Without one, nothing is resolved.
+ */
+export function createMiniatureSession(
+  context: PageContext = createStandaloneContext()
+): MiniatureSession {
+  return { context, seen: new WeakSet() };
 }
 
-/** One session for as long as the calling component is mounted. */
-export function useMiniatureSession(): MiniatureSession {
-  const [session] = useState(createMiniatureSession);
-  return session;
+/**
+ * One session for as long as the calling component is mounted and `context`
+ * is the same object: a new context is a new session.
+ */
+export function useMiniatureSession(context?: PageContext): MiniatureSession {
+  return useMemo(() => createMiniatureSession(context), [context]);
 }

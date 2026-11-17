@@ -84,6 +84,30 @@ function drawnMedia(item: MediaItem | null): ResolvedMedia | null {
   };
 }
 
+/** Resolve a media id as the canvas draws it, through the admin's read. */
+function canvasMediaResolver(
+  readMedia: (id: string) => Promise<MediaItem | null>
+): (id: string) => Promise<ResolvedMedia | null> {
+  return async id => drawnMedia(await readMedia(id));
+}
+
+/**
+ * The context saved section pictures draw with: media and icons resolved as
+ * the canvas resolves them, read-only, and nothing listed or queried. One
+ * object for as long as the admin's media read is the same.
+ */
+export function usePictureContext(): PageContext {
+  const readMedia = useMediaResolver();
+  return useMemo(
+    () =>
+      createStandaloneContext({
+        resolveMedia: canvasMediaResolver(readMedia),
+        resolveIcon: resolveCanvasIcon,
+      }),
+    [readMedia]
+  );
+}
+
 /**
  * A read budget the canvas renews for each draw: one object, so the context
  * holding it stays the editor's one object, whose allowance is a published
@@ -190,7 +214,7 @@ export function useCanvasPageContext(
   const base = useMemo(
     () =>
       createStandaloneContext({
-        resolveMedia: async id => drawnMedia(await readMedia(id)),
+        resolveMedia: canvasMediaResolver(readMedia),
         resolveIcon: resolveCanvasIcon,
         ...lists.terms,
         data: lists.data,

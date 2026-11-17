@@ -242,6 +242,29 @@ describe("a picture of documents", () => {
     expect(texts(container)).toEqual([]);
   });
 
+  it("shows the type icon when a block gives up after the drawing, with no size change", async () => {
+    const { container } = render(
+      <DocumentMiniature
+        documents={[HEADER]}
+        render={RENDER}
+        session={createMiniatureSession()}
+      />
+    );
+    const picture = container.querySelector(".nx-picture");
+    expect(picture?.getAttribute("data-state")).toBe("drawn");
+    // What an async block that rejects leaves in place of its fallback: a
+    // hidden placeholder, which need not change the drawing's size.
+    await act(async () => {
+      const placeholder = document.createElement("span");
+      placeholder.setAttribute("data-nx-block-placeholder", "");
+      placeholder.hidden = true;
+      container.querySelector(".nx-picture__page")?.append(placeholder);
+      // The observer of the drawing's content answers as a microtask.
+      await Promise.resolve();
+    });
+    expect(picture?.getAttribute("data-state")).toBe("failed");
+  });
+
   it.each(["light", "dark"] as const)(
     "draws the page in the %s preview when the canvas is previewed so",
     mode => {
