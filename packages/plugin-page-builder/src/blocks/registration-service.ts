@@ -36,9 +36,11 @@ import type {
   BlockRegistryReader,
   SupportDefinition,
 } from "@nextlyhq/blocks-engine";
+import { offeredSiteBlocks } from "@nextlyhq/blocks-react";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import { collectDeclarations } from "nextly";
+import { requireNextly } from "nextly/runtime";
 
 import { blocksIn, editorEntryIn, supportsIn } from "./declared-blocks";
 
@@ -378,13 +380,27 @@ export function runningRegistry(
 }
 
 /**
+ * The started site's blocks as the running Nextly instance offers them, for
+ * a copy of the page builder that neither started nor saw a boot: a dev
+ * server compiles a route's modules again, and core may judge a save with a
+ * field type from that copy. Nothing when no instance is running yet.
+ */
+function instanceSiteBlocks(): BlockRegistryReader | undefined {
+  try {
+    return offeredSiteBlocks(requireNextly().plugins);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * A reader of {@link runningRegistry} for `own`, chosen on each lookup.
  * Refused, never answered empty, while nothing has started here: an empty
  * registry silently refuses nothing.
  */
 export function runningBlocks(own: BlockRegistryReader): BlockRegistryReader {
   const current = (): BlockRegistryReader => {
-    const running = runningRegistry(own);
+    const running = runningRegistry(own) ?? instanceSiteBlocks();
     if (running !== undefined) return running;
     throw new Error(
       "[page-builder] this page builder's site has not started, so it has no blocks to read yet."

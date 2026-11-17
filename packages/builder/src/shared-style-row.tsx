@@ -16,9 +16,9 @@ import {
 import { Lock, Moon } from "lucide-react";
 import * as React from "react";
 
+import { usePrefersDark } from "./canvas/prefers-dark";
 import { ChromeTooltip } from "./chrome-tooltip";
 import type { TokenMode } from "./font-library";
-import { usePrefersDark } from "./prefers-dark";
 import { SharedStyleDetails } from "./shared-style-details";
 import {
   sharedStyleTile,

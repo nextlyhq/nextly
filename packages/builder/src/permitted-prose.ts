@@ -21,7 +21,7 @@ import {
   permittedLabel as permittedLabelWith,
 } from "@nextlyhq/blocks-engine";
 
-import { blockLabel } from "./inserter";
+import { blockLabel } from "./panels/add/inserter";
 
 /**
  * One entry of a permitted list, as an author reads it: a block's label, or

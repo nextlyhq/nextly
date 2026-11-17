@@ -129,14 +129,14 @@ describe("node kinds are asked through dom-kind", () => {
     // still finds SOME files. These are where the checks lived.
     expect(paths).toEqual(
       expect.arrayContaining([
-        "canvas.tsx",
-        "canvas-escape.ts",
-        "block-toolbar.tsx",
-        "geometry-dom.ts",
+        "canvas/canvas.tsx",
+        "canvas/canvas-escape.ts",
+        "canvas/block-toolbar.tsx",
+        "canvas/geometry-dom.ts",
         "dom-kind.ts",
         // The last file to carry one, converted together with the change
         // that hands it the canvas's document.
-        "use-inline-text.ts",
+        "canvas/use-inline-text.ts",
       ])
     );
   });

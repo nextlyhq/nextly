@@ -66,12 +66,15 @@ import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
 import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
-import { useCanvasFrame } from "./canvas-frame-context";
+import { useCanvasFrame } from "./canvas/canvas-frame-context";
+import {
+  CanvasTokenModeProvider,
+  useCanvasTokenModeAt,
+} from "./canvas/prefers-dark";
 import type { EditorState } from "./editor-state";
 import { FocalFrame } from "./focal-frame";
 import { FontChoicesContext, type FontChoices } from "./font-family-field";
-import { layerLabel } from "./layers";
-import { CanvasTokenModeProvider, useCanvasTokenModeAt } from "./prefers-dark";
+import { layerLabel } from "./panels/layers/layers";
 import type { SideOrientation } from "./side-orientation";
 import {
   BLOCK_TARGET,

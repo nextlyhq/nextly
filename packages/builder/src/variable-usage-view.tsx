@@ -14,7 +14,7 @@ import { TooltipProvider } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { ChromeTooltip } from "./chrome-tooltip";
-import { blockLabel } from "./inserter";
+import { blockLabel } from "./panels/add/inserter";
 import { UsesTail, UsesUnread } from "./shared-style-details";
 import { sharedStyleKindName } from "./shared-style-library";
 import {

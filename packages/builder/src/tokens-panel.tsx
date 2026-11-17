@@ -50,6 +50,7 @@ import {
 import * as React from "react";
 import { createPortal } from "react-dom";
 
+import { useCanvasTokenModeAt } from "./canvas/prefers-dark";
 import {
   GroupToggle,
   OwnSearch,
@@ -60,7 +61,6 @@ import {
 } from "./design-group-toggle";
 import { isHTMLElement } from "./dom-kind";
 import { ShowMore, withOpenRow } from "./panel-actions";
-import { useCanvasTokenModeAt } from "./prefers-dark";
 import { colourHexOf, colourPairOf } from "./style-colour";
 import { lengthInPx, variableValueText } from "./style-variables";
 import {

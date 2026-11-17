@@ -14,7 +14,7 @@
  * @module shell-state
  */
 
-import { FIT_ZOOM, readZoom, writeZoom, type CanvasZoom } from "./canvas-zoom";
+import { FIT_ZOOM, readZoom, writeZoom, type CanvasZoom } from "./canvas/canvas-zoom";
 
 /**
  * The panels the left rail switches between, in the order an author meets

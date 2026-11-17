@@ -27,8 +27,8 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   {
     block: "core/section",
     setting: "as",
-    tab: "content",
-    section: "Section",
+    tab: "advanced",
+    section: "HTML",
     label: "HTML tag",
   },
   {
@@ -44,13 +44,6 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
     tab: "style",
     section: "Layout",
     label: "Width for this section",
-  },
-  {
-    block: "core/box",
-    setting: "as",
-    tab: "content",
-    section: "Box",
-    label: "HTML tag",
   },
   {
     block: "core/box",
@@ -82,6 +75,13 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   },
   {
     block: "core/box",
+    setting: "as",
+    tab: "advanced",
+    section: "HTML",
+    label: "HTML tag",
+  },
+  {
+    block: "core/box",
     setting: "rel",
     tab: "advanced",
     section: "HTML",
@@ -104,8 +104,8 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   {
     block: "core/columns",
     setting: "as",
-    tab: "content",
-    section: "Columns",
+    tab: "advanced",
+    section: "HTML",
     label: "HTML tag",
   },
   {
@@ -125,8 +125,8 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   {
     block: "core/column",
     setting: "as",
-    tab: "content",
-    section: "Column",
+    tab: "advanced",
+    section: "HTML",
     label: "HTML tag",
   },
   {
@@ -142,13 +142,6 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
     tab: "style",
     section: "Layout",
     label: "Width for this section",
-  },
-  {
-    block: "core/card",
-    setting: "as",
-    tab: "content",
-    section: "Card",
-    label: "HTML tag",
   },
   {
     block: "core/card",
@@ -180,6 +173,13 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   },
   {
     block: "core/card",
+    setting: "as",
+    tab: "advanced",
+    section: "HTML",
+    label: "HTML tag",
+  },
+  {
+    block: "core/card",
     setting: "rel",
     tab: "advanced",
     section: "HTML",
@@ -198,13 +198,6 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
     tab: "style",
     section: "Layout",
     label: "Width for this section",
-  },
-  {
-    block: "core/accordion",
-    setting: "as",
-    tab: "content",
-    section: "Accordion",
-    label: "HTML tag",
   },
   {
     block: "core/accordion",
@@ -212,6 +205,13 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
     tab: "content",
     section: "Behaviour",
     label: "Titles as",
+  },
+  {
+    block: "core/accordion",
+    setting: "as",
+    tab: "advanced",
+    section: "HTML",
+    label: "HTML tag",
   },
   {
     block: "core/accordion",
@@ -503,8 +503,8 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   {
     block: "core/gallery",
     setting: "as",
-    tab: "content",
-    section: "Gallery",
+    tab: "advanced",
+    section: "HTML",
     label: "HTML tag",
   },
   {
@@ -678,8 +678,8 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   {
     block: "core/collection-loop",
     setting: "as",
-    tab: "content",
-    section: "Collection list",
+    tab: "advanced",
+    section: "HTML",
     label: "HTML tag",
   },
   {

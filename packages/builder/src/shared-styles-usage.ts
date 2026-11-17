@@ -9,7 +9,6 @@
 import type { NamedClass } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import { useSurvivingReport } from "./builder-notices";
 import {
   renameSharedStyle,
   type SharedStyleReach,
@@ -20,6 +19,7 @@ import type {
   SharedStylesAccess,
   SharedStylesPanelProps,
 } from "./shared-styles-types";
+import { useSurvivingReport } from "./shell/builder-notices";
 import {
   useUsageReads,
   type CountNow,

@@ -31,7 +31,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
 import type { CardVerbs } from "./block-card";
-import { useSurvivingReport } from "./builder-notices";
 import { ClassSelector } from "./class-selector";
 import { EditingBar, type EditTarget } from "./editing-bar";
 import type { EditorState } from "./editor-state";
@@ -55,6 +54,7 @@ import type {
   PageClassBlocks,
   SharedStylesAccess,
 } from "./shared-styles-panel";
+import { useSurvivingReport } from "./shell/builder-notices";
 
 /**
  * What the host lends the Style tab for shared styles.

@@ -15,7 +15,7 @@ import type {
 import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 
 import { editedTierLive } from "./breakpoints";
-import { breakpointsAtWidth } from "./canvas-width";
+import { breakpointsAtWidth } from "./canvas/canvas-width";
 import type { AppliedAt } from "./columns-layout";
 import type { EditorState } from "./editor-state";
 import type { ProvenanceOf } from "./style-field-surroundings";

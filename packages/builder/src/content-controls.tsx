@@ -396,19 +396,21 @@ function SelectControl({
           <SelectValue placeholder="Choose" />
         </SelectTrigger>
         <SelectContent>
-          {prop.options.map((option, index) => (
-            <SelectItem key={option} value={option}>
-              {labels[index]}
-              {/* What the choice writes, muted, where the block says: an
-                  HTML tag reads as words, with the tag still there. */}
-              {optionCode(prop.schema, option) !== undefined &&
-              labels[index] !== optionCode(prop.schema, option) ? (
-                <span className="nx-inspector__option-value">
-                  {optionCode(prop.schema, option)}
-                </span>
-              ) : null}
-            </SelectItem>
-          ))}
+          {prop.options.map((option, index) => {
+            const written = shownCode(prop.schema, option, labels[index]);
+            return (
+              <SelectItem key={option} value={option}>
+                {labels[index]}
+                {/* What the choice writes, muted, where the block says: an
+                    HTML tag reads as words, with the tag still there. The
+                    closed menu draws the chosen item's text, so it reads the
+                    same. */}
+                {written === undefined ? null : (
+                  <code className="nx-inspector__option-value">{written}</code>
+                )}
+              </SelectItem>
+            );
+          })}
         </SelectContent>
       </Select>
     </div>
@@ -807,6 +809,21 @@ const CONTROLS: Readonly<Record<ContentControlType, ContentControl>> = {
  */
 export function contentControlFor(type: string): ContentControl | undefined {
   return hasContentControl(type) ? CONTROLS[type] : undefined;
+}
+
+/**
+ * The code to show beside a choice's words, or `undefined` where there is none
+ * or the words already are it. Compared without regard to case, so "Section"
+ * and `section` show the tag once, not as "Section section".
+ */
+function shownCode(
+  schema: PropSchema,
+  option: string,
+  words: string | undefined
+): string | undefined {
+  const written = optionCode(schema, option);
+  if (written === undefined) return undefined;
+  return words?.toLowerCase() === written.toLowerCase() ? undefined : written;
 }
 
 /**
