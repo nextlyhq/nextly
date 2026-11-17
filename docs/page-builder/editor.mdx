@@ -277,9 +277,11 @@ loads**. Like any style, it's set per device: a block can rise on desktop and st
 mobile with **None** there. Scrolled into view, the block moves in as it enters the window,
 following the scroll, and a delay holds it back for part of that. The published page
 animates with CSS alone and adds no script, and only the block's opacity and position move,
-so nothing around it shifts. The canvas always shows blocks where they end, and so does the
-published page for a visitor whose device asks for reduced motion, for a printed page, and,
-for **When scrolled into view**, in a browser that can't run scroll-driven animation. A page
+so nothing around it shifts. The published page shows blocks where they end for a visitor
+whose device asks for reduced motion, for a printed page, and, for **When scrolled into
+view**, in a browser that can't run scroll-driven animation. The canvas shows them where
+they end too, except that it plays a block's animation once when you change it, and again
+when you press **Play** beside the setting; under reduced motion it plays nothing. A page
 using a slide clips what sticks out past its sides.
 
 ## Search
