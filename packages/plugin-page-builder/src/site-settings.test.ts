@@ -316,7 +316,7 @@ describe("what the Site tab reads", () => {
     expect(data.finds).toEqual([]);
   });
 
-  it("offers every published Layout to a caller who may choose the default", async () => {
+  it("names the current default, and says the caller may choose it, to a caller who may", async () => {
     const all = holding(
       "manage-page-builder-site",
       "update-site_layouts",
@@ -330,13 +330,18 @@ describe("what the Site tab reads", () => {
       mayChooseDefaultLayout: true,
       defaultLayout: "main",
       breakpoints: SET,
-      layouts: LAYOUTS,
+      // The default only: the tab names it, and the list of sets is where
+      // another is chosen.
+      layouts: [{ id: "main", title: "Main" }],
     });
-    // Published only, from the RESOLVED Layouts collection.
-    expect(data.finds[0]).toMatchObject({
-      collection: "site_layouts",
-      status: "published",
-    });
+    // Published only, from the RESOLVED Layouts collection, by id.
+    expect(data.finds).toEqual([
+      expect.objectContaining({
+        collection: "site_layouts",
+        status: "published",
+        where: { id: { in: ["main"] } },
+      }),
+    ]);
   });
 
   it("names only the current default to a caller who may not choose it", async () => {
@@ -360,39 +365,23 @@ describe("what the Site tab reads", () => {
     }
   });
 
-  it("reads no Layouts for a site with no default, to a caller who may not choose", async () => {
-    const data = siteData(null);
-    const read = await readSiteSettings(
-      route({ caller: holding("manage-page-builder-site").caller }),
-      data.nextly
-    );
-    expect(read.layouts).toEqual([]);
-    expect(data.finds).toEqual([]);
-  });
-
-  it("offers every published Layout, past the first page", async () => {
-    const many = Array.from({ length: 5 }, (_, n) => ({
-      id: `l${n}`,
-      title: `Layout ${n}`,
-    }));
-    const data = siteData("l4", many, 2);
-    const all = holding(
-      "manage-page-builder-site",
-      "update-site_layouts",
-      "publish-site_layouts"
-    );
-    const read = await readSiteSettings(
-      route({ caller: all.caller }),
-      data.nextly
-    );
-    expect(read.layouts.map(layout => layout.id)).toEqual([
-      "l0",
-      "l1",
-      "l2",
-      "l3",
-      "l4",
-    ]);
-    expect(data.finds.length).toBe(3);
+  it("reads no sets for a site with no default, whoever asks", async () => {
+    for (const grants of [
+      ["manage-page-builder-site"],
+      [
+        "manage-page-builder-site",
+        "update-site_layouts",
+        "publish-site_layouts",
+      ],
+    ]) {
+      const data = siteData(null);
+      const read = await readSiteSettings(
+        route({ caller: holding(...grants).caller }),
+        data.nextly
+      );
+      expect(read.layouts).toEqual([]);
+      expect(data.finds).toEqual([]);
+    }
   });
 
   it("tells nobody nothing", async () => {

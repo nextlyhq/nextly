@@ -643,9 +643,9 @@ test.describe("Removing a breakpoint in Settings", () => {
       await expect(
         dialog.getByText("You can undo this from Settings for 30 days.")
       ).toBeVisible();
-      await expect(dialog.getByText("Default header & footer set")).toHaveCount(
-        0
-      );
+      await expect(
+        dialog.getByRole("region", { name: "Site default header & footer" })
+      ).toHaveCount(0);
       expect((await storedTextStyles(page.request, id))[small]).toBeDefined();
 
       // Back: the draft as it was, Small still removed from it.
@@ -702,7 +702,7 @@ test.describe("Removing a breakpoint in Settings", () => {
         dialog.getByText("Its styles are gone from 1 page.")
       ).toBeVisible();
       await expect(
-        dialog.getByText("Default header & footer set")
+        dialog.getByRole("region", { name: "Site default header & footer" })
       ).toBeVisible();
       await expect
         .poll(async () => (await storedTextStyles(page.request, id))[small])
