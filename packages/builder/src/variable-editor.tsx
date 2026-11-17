@@ -178,21 +178,13 @@ export function VariableEditor({
           refused={refused}
         />
       )}
-      {usage === undefined ? null : (
-        <UsageLine
-          identity={row.identity}
-          reach={combinedReach(
-            [
-              row.identity,
-              ...(lineHeight === undefined ? [] : [lineHeight.identity]),
-            ].map(usage.reachOf)
-          )}
-          usage={usage}
-        />
-      )}
-      {token?.kind === "color" ? (
-        <ColourContrast token={token} tokens={tokens} suppliedOf={suppliedOf} />
-      ) : null}
+      <EditorDetails
+        entry={entry}
+        token={token}
+        tokens={tokens}
+        suppliedOf={suppliedOf}
+        usage={usage}
+      />
       {said.length > 0 ? (
         <p className="nx-vars-editor__issue" id={saidId} role="status">
           {said.join(" ")}
@@ -211,6 +203,45 @@ export function VariableEditor({
         />
       )}
     </div>
+  );
+}
+
+/**
+ * What the editor says about the variable below its values: how widely it
+ * is used, where the host reads it, and, for a colour, its contrast.
+ */
+function EditorDetails({
+  entry,
+  token,
+  tokens,
+  suppliedOf,
+  usage,
+}: {
+  entry: VariableEntry;
+  token: SiteToken | undefined;
+  tokens: SiteTokenSet;
+  suppliedOf: (identity: string) => SiteToken | undefined;
+  usage: VariableUsageHere | undefined;
+}): React.JSX.Element {
+  const { row, lineHeight } = entry;
+  // A type size is used through its line height too, so both are counted.
+  const identities =
+    lineHeight === undefined
+      ? [row.identity]
+      : [row.identity, lineHeight.identity];
+  return (
+    <>
+      {usage === undefined ? null : (
+        <UsageLine
+          identity={row.identity}
+          reach={combinedReach(identities.map(usage.reachOf))}
+          usage={usage}
+        />
+      )}
+      {token?.kind === "color" ? (
+        <ColourContrast token={token} tokens={tokens} suppliedOf={suppliedOf} />
+      ) : null}
+    </>
   );
 }
 
