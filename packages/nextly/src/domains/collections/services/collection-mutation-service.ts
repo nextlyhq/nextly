@@ -12643,10 +12643,11 @@ export class CollectionMutationService extends BaseService {
   /**
    * {@link languagesPublishMoves} as `reader` reads its inputs: on the pool, for the publish
    * gate's early answer, which the transition's verdict under the row lock repeats on what it
-   * locked. Only the language codes.
+   * locked; or on a save's transaction under its row lock, for that save's verdict. Only the
+   * language codes.
    */
   private async languagesPublishMovesOn(
-    reader: DrizzleAdapter,
+    reader: TransactionContext | DrizzleAdapter,
     args: {
       collectionName: string;
       entryId: string;
@@ -12675,6 +12676,50 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The languages a save of every language that publishes moves ({@link languagesPublishMovesOn}),
+   * read on `reader`: on the pool for the publish gate's early answer, on the save's transaction
+   * under the row lock for its verdict. The save's sweep publishes the translations stored and
+   * never invents one, so a language holding nothing, or live with no change, is not among them.
+   * Undefined for any other save, and where the translations keep no status of their own.
+   */
+  private async everyLanguageSaveMoves(
+    reader: TransactionContext | DrizzleAdapter,
+    args: {
+      collectionName: string;
+      entryId: string;
+      status: unknown;
+      everyLanguage: boolean;
+      /** The collection, as its caller resolved it before any row lock: never read here. */
+      collection: unknown;
+      companion: CompanionSchema | null;
+      /** The entry's own status as `reader` reads it. */
+      mainStatus: unknown;
+    }
+  ): Promise<string[] | undefined> {
+    if (
+      !args.everyLanguage ||
+      args.status !== "published" ||
+      args.companion?.hasStatus !== true
+    ) {
+      return undefined;
+    }
+    return this.languagesPublishMovesOn(reader, {
+      collectionName: args.collectionName,
+      entryId: args.entryId,
+      companion: args.companion,
+      pendingFrom: this.keepsWorkingDrafts(args.collection)
+        ? {
+            scopeKind: "collection",
+            scopeSlug: args.collectionName,
+            entryId: args.entryId,
+          }
+        : null,
+      parts: undefined,
+      mainStatus: args.mainStatus,
+    });
+  }
+
+  /**
    * The publish gate's view of a save that names a lifecycle status, or null where it names none
    * or the collection has no lifecycle: which parts it moves follows from its status and language.
    */
@@ -12694,6 +12739,8 @@ export class CollectionMutationService extends BaseService {
       withoutReview: { reason: string } | undefined;
       /** Whether a pending shared draft goes live with the save, as its caller read it. */
       sharedDraftPending: boolean;
+      /** For a save of every language that publishes, the languages it moves. */
+      languagesMoved?: readonly string[] | undefined;
     },
     /** The collection, as its caller resolved it before any row lock: never read here. */
     collection: unknown
@@ -12716,6 +12763,9 @@ export class CollectionMutationService extends BaseService {
         ? {}
         : { withoutReview: save.withoutReview }),
       sharedDraftPending: save.sharedDraftPending,
+      ...(save.languagesMoved === undefined
+        ? {}
+        : { languagesMoved: save.languagesMoved }),
     };
   }
 
@@ -16599,6 +16649,16 @@ export class CollectionMutationService extends BaseService {
             body.status,
             gateCollection
           ),
+          languagesMoved: await this.everyLanguageSaveMoves(this.adapter, {
+            collectionName: params.collectionName,
+            entryId: params.entryId,
+            status: body.status,
+            everyLanguage: sweepAllLocales,
+            collection: gateCollection,
+            companion: gateCompanion,
+            mainStatus: (existingEntry as { status?: unknown } | undefined)
+              ?.status,
+          }),
         },
         gateCollection
       );
@@ -17430,6 +17490,16 @@ export class CollectionMutationService extends BaseService {
               intendedStatus,
               gateCollection
             ),
+            languagesMoved: await this.everyLanguageSaveMoves(tx, {
+              collectionName: params.collectionName,
+              entryId: params.entryId,
+              status: intendedStatus,
+              everyLanguage: sweepAllLocales,
+              collection: gateCollection,
+              companion: gateCompanion,
+              mainStatus: (preUpdateRow as { status?: unknown } | undefined)
+                ?.status,
+            }),
           },
           gateCollection
         );

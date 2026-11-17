@@ -59,6 +59,11 @@ export interface StatusSave {
    * publishes one language then puts the shared draft live too, so the shared part moves with it.
    */
   sharedDraftPending?: boolean;
+  /**
+   * For a save of every language that publishes, the languages it moves: one holding nothing, or
+   * live with no change, stays as it is and is not asked about. Every configured one where absent.
+   */
+  languagesMoved?: readonly string[];
 }
 
 /** The parts a status save moves, and which way. */
@@ -70,7 +75,7 @@ export function partsOfStatusSave(save: StatusSave): {
     save.status === "published" ? "publish" : "unpublish";
   if (!save.translated) return { direction, parts: [{ kind: "shared" }] };
   const languages = save.everyLanguage
-    ? save.configured
+    ? (save.languagesMoved ?? save.configured)
     : [save.locale ?? save.defaultLocale].filter(
         (locale): locale is string => locale !== undefined
       );
