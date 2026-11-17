@@ -683,7 +683,7 @@ export function formBuilder(
               formsSlug,
               {
                 pagination: { limit: pageSize, page },
-                sort: [{ field: "id", direction: "asc" }],
+                sort: { field: "id", direction: "asc" },
               }
             );
             forms.push(...(result.data as Array<Record<string, unknown>>));

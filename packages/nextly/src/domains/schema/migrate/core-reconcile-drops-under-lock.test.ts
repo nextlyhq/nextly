@@ -3,9 +3,10 @@
  * the run's claim, so a run that lost the lock drops nothing and a run taking
  * it over can find the statement.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
+import { loadDialectTables } from "../../../database/dialect-tables";
 import { getCoreSchema } from "../../../schemas";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 
@@ -24,20 +25,27 @@ vi.mock("../pipeline/schema-lock", async importOriginal => ({
 
 describe("a retired column's drop and the schema lock", () => {
   let testDb: TestDb;
-  const desired = getCoreSchema("postgresql");
-  const live: NextlySchemaSnapshot = {
-    tables: desired.tables.map(table =>
-      table.name === "dynamic_collections"
-        ? {
-            ...table,
-            columns: [
-              ...table.columns,
-              { name: "access_rules", type: "jsonb", nullable: true },
-            ],
-          }
-        : table
-    ),
-  };
+  // The core schema reads the dialect's table definitions, which load lazily: it is built once
+  // they are loaded, never while the file is collected.
+  let live: NextlySchemaSnapshot;
+
+  beforeAll(async () => {
+    await loadDialectTables("postgresql");
+    const desired = getCoreSchema("postgresql");
+    live = {
+      tables: desired.tables.map(table =>
+        table.name === "dynamic_collections"
+          ? {
+              ...table,
+              columns: [
+                ...table.columns,
+                { name: "access_rules", type: "jsonb", nullable: true },
+              ],
+            }
+          : table
+      ),
+    };
+  });
 
   beforeEach(async () => {
     testDb = await createTestDb();

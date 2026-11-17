@@ -24,6 +24,7 @@
  */
 
 import { isVirtualField } from "../collections/fields/virtual";
+import { WITHOUT_REVIEW_KEY } from "../domains/collections/services/save-door-gate";
 import { TRANSLATION_OVERVIEW_KEY } from "../domains/i18n/companion-join";
 import { fieldProducesColumn } from "../domains/schema/services/field-column-descriptor";
 import { NextlyError } from "../errors";
@@ -287,6 +288,18 @@ const READ_RESPONSE_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * The keys a save names beside its values to say how it is made, read off the body before it is
+ * written and never stored: a publish made without review, which the publish gate is told.
+ */
+const WRITE_OPTION_KEYS: ReadonlySet<string> = new Set([WITHOUT_REVIEW_KEY]);
+
+/** The keys a write accepts and takes off its body before anything reads it as values. */
+const NOT_STORED_KEYS: ReadonlySet<string> = new Set([
+  ...READ_RESPONSE_KEYS,
+  ...WRITE_OPTION_KEYS,
+]);
+
+/**
  * The keys of a write's body that name nothing a write of that entity may carry: no declared
  * field under its declared name, no system column of the entity, none of the keys that say how
  * to write (`_rev`, `_overwrite`, `_restoredFrom`) and none a read adds.
@@ -307,7 +320,7 @@ function undeclaredWriteKeys(
     DOCUMENT_VERSION_KEY,
     DOCUMENT_OVERWRITE_KEY,
     DOCUMENT_RESTORED_FROM_KEY,
-    ...READ_RESPONSE_KEYS,
+    ...NOT_STORED_KEYS,
   ]);
   for (const field of addressableFields(fields)) {
     if (typeof field.name === "string") allowed.add(field.name);
@@ -337,8 +350,8 @@ export function writableBodyOf(
       })),
     });
   }
-  if (!Object.keys(data).some(key => READ_RESPONSE_KEYS.has(key))) return data;
+  if (!Object.keys(data).some(key => NOT_STORED_KEYS.has(key))) return data;
   return Object.fromEntries(
-    Object.entries(data).filter(([key]) => !READ_RESPONSE_KEYS.has(key))
+    Object.entries(data).filter(([key]) => !NOT_STORED_KEYS.has(key))
   );
 }

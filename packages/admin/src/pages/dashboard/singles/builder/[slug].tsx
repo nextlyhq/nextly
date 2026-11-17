@@ -39,6 +39,10 @@ import { useBuilderFieldActions } from "@admin/hooks/useBuilderFieldActions";
 import { useBuilderSettingsChange } from "@admin/hooks/useBuilderSettingsChange";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
+import {
+  useDiscardLetsGoOwned,
+  useFieldGroupsFirst,
+} from "@admin/hooks/useFieldGroupsFirst";
 import { useSchemaChangeConfirmation } from "@admin/hooks/useSchemaChangeConfirmation";
 import {
   displayLabel,
@@ -210,6 +214,9 @@ export default function SingleBuilderEditPage({
   // Resolved once: the save hook refuses outright without a slug, so the
   // fallback below is only ever satisfying the type.
   const entitySlug = slug ?? "";
+  // The field groups not saved yet that this save creates first, and the ones this editor's
+  // picker made, which its save, Discard all and leave let go or release.
+  const groupsFirst = useFieldGroupsFirst("single", slug, builder.fields);
   const localized = settings?.i18n === true;
   // The pending Draft/Published toggle rides with the fields, as `localized` does, so the save
   // refuses a field taking one of the lifecycle's names in the save that turns it on.
@@ -316,6 +323,8 @@ export default function SingleBuilderEditPage({
             pinFields();
             // Re-pin settings baseline so the Save button disables again.
             pinSettings(settings);
+            // Landed: the groups this editor's picker made that no field uses go.
+            groupsFirst.letGoUnused();
             // Mirror the settings change (notably Draft/Published) into the
             // committable ui-schema.json. Not awaited: the mutation callback
             // stays synchronous, and the mirror is best-effort anyway.
@@ -337,7 +346,7 @@ export default function SingleBuilderEditPage({
         }
       );
     },
-    [slug, settings, updateSingle, pinFields, pinSettings]
+    [slug, settings, updateSingle, pinFields, pinSettings, groupsFirst]
   );
 
   // i18n: preview and apply carry the same toggle, so the resolutions the user
@@ -404,16 +413,20 @@ export default function SingleBuilderEditPage({
     // Each changed setting is reviewed with the save, and a save of the
     // settings alone is reviewed too.
     settingChanges: pending.settingChanges,
+    fieldGroupsFirst: groupsFirst.fieldGroupsFirst,
   });
 
   // Discard all on an unsaved Single discards the Single itself: it leaves
   // this tab, and the editor returns to the list.
-  const pendingChanges = useUnsavedDiscard(
-    pending,
-    unsaved !== undefined,
-    "single",
-    entitySlug,
-    ROUTES.BUILDER_SINGLES
+  const pendingChanges = useDiscardLetsGoOwned(
+    useUnsavedDiscard(
+      pending,
+      unsaved !== undefined,
+      "single",
+      entitySlug,
+      ROUTES.BUILDER_SINGLES
+    ),
+    groupsFirst.letGoOwned
   );
 
   // ---------------------------- Loading / error guards ----------------------
@@ -454,9 +467,12 @@ export default function SingleBuilderEditPage({
           ? buildRoute(ROUTES.SINGLE_EDIT, { slug: entitySlug })
           : undefined
       }
-      onDiscard={
-        unsaved ? () => removeUnsavedEntity("single", entitySlug) : undefined
-      }
+      onDiscard={() => {
+        // Left with its changes discarded: an unsaved entity goes, and the field groups its picker
+        // made stay as unsaved field groups of their own, which their own editor may open.
+        if (unsaved) removeUnsavedEntity("single", entitySlug);
+        groupsFirst.release();
+      }}
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}
@@ -488,6 +504,7 @@ export default function SingleBuilderEditPage({
         onConfirm={confirmApply}
         creating={unsaved !== undefined}
         settingChanges={reviewedSettingChanges}
+        fieldGroupCreates={groupsFirst.creates}
       />
     </BuilderPageLayout>
   );

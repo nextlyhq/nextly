@@ -17,6 +17,9 @@ type FieldErrorKind =
   | "unnamed"
   | "no-field-group"
   | "no-options"
+  | "bad-option"
+  | "no-target"
+  | "empty-container"
   | "broken-condition";
 
 /** One field's error: what kind it is, and what to tell the person. */
@@ -30,7 +33,103 @@ const REPORT_ORDER: readonly FieldErrorKind[] = [
   "unnamed",
   "no-field-group",
   "no-options",
+  "bad-option",
+  "no-target",
+  "empty-container",
   "broken-condition",
+];
+
+/**
+ * What is wrong with a select's or radio's options, as the save judges them: every option needs a
+ * label and a value, and no two may share a value, which the stored value could not tell apart.
+ * Values are compared exactly as stored. Null when the options are sound.
+ */
+function optionProblem(field: BuilderField): string | null {
+  const options = Array.isArray(field.options) ? field.options : [];
+  if (options.some(option => !option.value)) {
+    return `Field "${field.name}" has an option with no value`;
+  }
+  if (options.some(option => !option.label)) {
+    return `Field "${field.name}" has an option with no label`;
+  }
+  const seen = new Set<string>();
+  for (const option of options) {
+    if (seen.has(option.value)) {
+      return `Field "${field.name}" has two options with the value "${option.value}"`;
+    }
+    seen.add(option.value);
+  }
+  return null;
+}
+
+/**
+ * Whether a relationship names a collection to link to, as the save requires: `relationTo`, one
+ * or more, or the stored `options.target` a relationship saved the earlier way keeps
+ * (`storedRelationTarget`). An upload needs none: it links to the media library.
+ */
+function linksSomewhere(field: BuilderField): boolean {
+  const { relationTo } = field;
+  if (typeof relationTo === "string" && relationTo.length > 0) return true;
+  if (Array.isArray(relationTo) && relationTo.length > 0) return true;
+  return (field.storedRelationTarget ?? "") !== "";
+}
+
+/** One thing a named field's type needs: the error when the field lacks it, else null. */
+type FieldCheck = (field: BuilderField) => BuilderFieldError | null;
+
+/**
+ * A field group field needs a field group chosen. Either spelling of the stored field type: a
+ * migrated definition whose references were cleared must fail HERE, with the actionable message,
+ * rather than at the API boundary after submission.
+ */
+const needsFieldGroup: FieldCheck = field => {
+  if (!isFieldGroupFieldType(field.type)) return null;
+  const refs = extractFieldGroupReferences(field);
+  if (refs.single !== undefined || (refs.many?.length ?? 0) > 0) return null;
+  return {
+    kind: "no-field-group",
+    message: `Field "${field.name}" must have a field group selected`,
+  };
+};
+
+/** A select or radio needs options, each sound (`optionProblem`). */
+const needsOptions: FieldCheck = field => {
+  if (field.type !== "select" && field.type !== "radio") return null;
+  if (!Array.isArray(field.options) || field.options.length === 0) {
+    return {
+      kind: "no-options",
+      message: `Select/Radio field "${field.name}" must have at least one option`,
+    };
+  }
+  const problem = optionProblem(field);
+  return problem ? { kind: "bad-option", message: problem } : null;
+};
+
+/** A relationship needs a collection to link to (`linksSomewhere`). */
+const needsTarget: FieldCheck = field =>
+  field.type === "relationship" && !linksSomewhere(field)
+    ? {
+        kind: "no-target",
+        message: `Relationship field "${field.name}" must link to a collection`,
+      }
+    : null;
+
+/** A group or repeater stores its values in the fields inside it, so it needs at least one. */
+const needsInnerField: FieldCheck = field =>
+  (field.type === "group" || field.type === "repeater") &&
+  (!Array.isArray(field.fields) || field.fields.length === 0)
+    ? {
+        kind: "empty-container",
+        message: `Field "${field.name}" must hold at least one field`,
+      }
+    : null;
+
+/** A named field's checks, in the order of `REPORT_ORDER`. */
+const FIELD_CHECKS: readonly FieldCheck[] = [
+  needsFieldGroup,
+  needsOptions,
+  needsTarget,
+  needsInnerField,
 ];
 
 /** The one error a field has, or null; a field reports its first. */
@@ -38,28 +137,9 @@ function errorOf(field: BuilderField): BuilderFieldError | null {
   if (!field.name) {
     return { kind: "unnamed", message: "All fields must have a name" };
   }
-  // Either spelling of the stored field type: a migrated definition whose
-  // references were cleared must fail HERE, with the actionable message,
-  // rather than at the API boundary after submission.
-  if (isFieldGroupFieldType(field.type)) {
-    const refs = extractFieldGroupReferences(field);
-    const hasSingle = refs.single !== undefined;
-    const hasMulti = (refs.many?.length ?? 0) > 0;
-    if (!hasSingle && !hasMulti) {
-      return {
-        kind: "no-field-group",
-        message: `Field "${field.name}" must have a field group selected`,
-      };
-    }
-  }
-  if (field.type === "select" || field.type === "radio") {
-    const hasOptions = Array.isArray(field.options) && field.options.length > 0;
-    if (!hasOptions) {
-      return {
-        kind: "no-options",
-        message: `Select/Radio field "${field.name}" must have at least one option`,
-      };
-    }
+  for (const check of FIELD_CHECKS) {
+    const error = check(field);
+    if (error) return error;
   }
   return null;
 }
@@ -90,7 +170,14 @@ export function builderFieldErrors(
           ? { kind: "broken-condition" as const, message: condition.message }
           : null);
       if (error) errors.set(field.id, error);
-      if (Array.isArray(field.fields)) walk(field.fields);
+      // Only a group or a repeater holds nested fields, as the save judges them: a plugin type may
+      // keep a `fields` option of its own as private configuration, which is no field list.
+      if (
+        (field.type === "group" || field.type === "repeater") &&
+        Array.isArray(field.fields)
+      ) {
+        walk(field.fields);
+      }
     }
   };
   walk(fields);
@@ -100,7 +187,8 @@ export function builderFieldErrors(
 /**
  * Run the schema-save preflight checks against the user-defined fields: every
  * field named, every field-group field pointing at a field group, every select
- * or radio given an option, every condition reading a field it can. The refusal
+ * or radio given sound options, every relationship a collection, every group
+ * or repeater a field inside it, every condition reading a field it can. The refusal
  * names the first kind of error found, in that order, and the first field of
  * that kind.
  *

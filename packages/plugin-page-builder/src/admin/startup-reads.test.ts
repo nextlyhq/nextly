@@ -30,7 +30,7 @@ function startup(answers: Record<string, { status: number; body?: unknown }>): {
   return {
     ask: async () => {
       sent += 1;
-      return answers;
+      return { reads: answers };
     },
     sent: () => sent,
   };

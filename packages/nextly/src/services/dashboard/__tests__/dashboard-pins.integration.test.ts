@@ -7,7 +7,8 @@
  * written at once at 19 keep exactly 20; that a pin whose target is gone costs
  * nothing and is removed by a read; that a pin its
  * reader may no longer read is hidden and kept, and shown again when access
- * returns; that deleting an entry, several entries or a Single takes every
+ * returns, is named to its reader by its target alone, and frees its place
+ * once they remove it; that deleting an entry, several entries or a Single takes every
  * reader's pins of it, and no others, also inside a transaction the caller
  * holds on a pool of one connection; and that before `nextly migrate` creates
  * the table, pins read as none, a pin is refused naming the command, and a
@@ -181,9 +182,12 @@ describe.each(getConfiguredTestDialects())(
       for (const id of ids.slice(0, MAX_PINS_PER_READER)) {
         await pins.pin(ana, entry(id));
       }
+      // In plain words: what the limit is, and what to do.
       await expect(
         pins.pin(ana, entry(ids[MAX_PINS_PER_READER]!))
-      ).rejects.toThrow(`at most ${MAX_PINS_PER_READER}`);
+      ).rejects.toThrow(
+        `You can keep up to ${MAX_PINS_PER_READER} pins. Unpin one first.`
+      );
       // Already pinned: not a new pin, so not refused.
       await expect(pins.pin(ana, entry(ids[0]!))).resolves.toBeUndefined();
       expect(await pins.list(ana)).toHaveLength(MAX_PINS_PER_READER);
@@ -209,6 +213,58 @@ describe.each(getConfiguredTestDialects())(
 
       refused.delete("pn-ben");
       expect((await pins.list(ben)).map(pin => pin.title)).toEqual(["First"]);
+    });
+
+    it("names, by target alone, the pins its reader may no longer read, and removing them frees their places", async () => {
+      const t = await boot();
+      const ben = as(await userWhoMay(t, "pn-ben", "read", [NOTES, OTHER]));
+      const gated = await note(t, "Gated plan");
+      const pins = dashboardPinsService();
+      await pins.pin(ben, entry(gated));
+      const others: string[] = [];
+      for (let i = 1; i < MAX_PINS_PER_READER; i++) {
+        const created = await t.nextly.create({
+          collection: OTHER,
+          data: { title: `Other ${i}` },
+        });
+        others.push(String(created.item.id));
+        await pins.pin(ben, {
+          targetType: "collection",
+          targetSlug: OTHER,
+          entryId: others.at(-1)!,
+        });
+      }
+      // The control: while Ben may read it, it is shown, and none is unreadable.
+      const before = await pins.read(ben);
+      expect(before.shown).toHaveLength(MAX_PINS_PER_READER);
+      expect(before.unreadable).toEqual([]);
+
+      refused.add("pn-ben");
+      const after = await pins.read(ben);
+      expect(after.shown).toHaveLength(MAX_PINS_PER_READER - 1);
+      // 🔴 What the pin names, and nothing read from the entry: no title.
+      expect(after.unreadable).toEqual([entry(gated)]);
+      expect(JSON.stringify(after)).not.toContain("Gated plan");
+
+      // It still holds a place: at the limit, a new pin is refused.
+      const fresh = (
+        await t.nextly.create({ collection: OTHER, data: { title: "Fresh" } })
+      ).item.id;
+      const freshPin = {
+        targetType: "collection" as const,
+        targetSlug: OTHER,
+        entryId: String(fresh),
+      };
+      await expect(pins.pin(ben, freshPin)).rejects.toThrow(
+        `You can keep up to ${MAX_PINS_PER_READER} pins. Unpin one first.`
+      );
+
+      // Removed as the dialog removes it, one unpin per pin: the place is free.
+      for (const target of after.unreadable) {
+        await expect(pins.unpin(ben, target)).resolves.toBe(true);
+      }
+      expect((await pins.read(ben)).unreadable).toEqual([]);
+      await expect(pins.pin(ben, freshPin)).resolves.toBeUndefined();
     });
 
     it("deletes every reader's pins of a deleted entry, deleted entries and a deleted Single, and no others", async () => {
@@ -339,7 +395,7 @@ describe.each(getConfiguredTestDialects())(
       const refusal = results.find(result => result.status === "rejected");
       expect(
         ((refusal as PromiseRejectedResult).reason as Error).message
-      ).toContain(`at most ${MAX_PINS_PER_READER}`);
+      ).toContain(`You can keep up to ${MAX_PINS_PER_READER} pins.`);
       expect(await stored(t)).toHaveLength(MAX_PINS_PER_READER);
     });
 

@@ -85,6 +85,7 @@ import {
   tokenPrefixOf,
   type StyleFieldSurroundings,
   AppliedAtTier,
+  BeneathAtTier,
   type EditedAddress,
 } from "./style-field-surroundings";
 import {
@@ -98,6 +99,7 @@ import { useReportStyle } from "./settings-filter";
 import { inspectStyle, type StyleInspection } from "./style-inspector";
 import {
   appliedAtReader,
+  beneathAtReader,
   selectedSubject,
   cascadeFor,
   provenanceReader,
@@ -593,32 +595,42 @@ function StyleInspectorBody({
             nodeId: inspected.nodeId,
           })}
         >
-          <CanvasTokenModeProvider value={tokenMode}>
-            {/*
-             * Spell-check off for the tab's fields: they hold numbers,
-             * lengths, colours and keywords, which a spell-checker marks as
-             * misspelt with the same red line an error would show. Set once
-             * here because the attribute is inherited by every field inside,
-             * including the ones other components draw and any added later.
-             * The Content tab is a different element and keeps its own.
-             */}
-            <div
-              className="nx-style-inspector"
-              data-style-target={target.kind}
-              spellCheck={false}
-            >
-              {showReadOnlyReason ? (
-                <ReadOnlyNote target={target} reason={readOnlyReason} />
-              ) : null}
-              <NoStyleProperties count={inspected.sections.length} />
-              <StyleSections
-                sections={inspected.sections}
-                readOnlyReason={readOnlyReason}
-                surroundings={surroundings}
-                fit={inspected.objectFit}
-              />
-            </div>
-          </CanvasTokenModeProvider>
+          <BeneathAtTier.Provider
+            value={beneathAtReader({
+              cascade,
+              subject,
+              state: inspected.state,
+              breakpoints,
+              nodeId: inspected.nodeId,
+            })}
+          >
+            <CanvasTokenModeProvider value={tokenMode}>
+              {/*
+               * Spell-check off for the tab's fields: they hold numbers,
+               * lengths, colours and keywords, which a spell-checker marks as
+               * misspelt with the same red line an error would show. Set once
+               * here because the attribute is inherited by every field inside,
+               * including the ones other components draw and any added later.
+               * The Content tab is a different element and keeps its own.
+               */}
+              <div
+                className="nx-style-inspector"
+                data-style-target={target.kind}
+                spellCheck={false}
+              >
+                {showReadOnlyReason ? (
+                  <ReadOnlyNote target={target} reason={readOnlyReason} />
+                ) : null}
+                <NoStyleProperties count={inspected.sections.length} />
+                <StyleSections
+                  sections={inspected.sections}
+                  readOnlyReason={readOnlyReason}
+                  surroundings={surroundings}
+                  fit={inspected.objectFit}
+                />
+              </div>
+            </CanvasTokenModeProvider>
+          </BeneathAtTier.Provider>
         </AppliedAtTier.Provider>
       </TokenPrefixContext.Provider>
     </StyleTargetContext.Provider>

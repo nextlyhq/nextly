@@ -25,8 +25,10 @@ import {
   BuilderShell,
   useConditionsUnchecked,
   CanvasFrameProvider,
+  InsertUsageContext,
   OnboardingChecklist,
   RecentColoursStore,
+  selectionAnchor,
   SelectionBreadcrumb,
   VisitorUnreadableProvider,
 } from "@nextlyhq/builder/shell";
@@ -62,10 +64,12 @@ import {
 } from "./editor-conditions";
 import { editorInspector } from "./editor-inspector";
 import {
+  EditorInsertPicker,
   editorPanelRenderer,
   useEditorPanels,
   type EditorPanels,
 } from "./editor-panels";
+import { insertCountsStoreFor } from "./editor-preference-stores";
 import { EditorSearch } from "./editor-search";
 import { editorSettings, usePageFacts } from "./editor-settings";
 import { editorTopBar } from "./editor-top-bar";
@@ -265,6 +269,7 @@ function searchInsertSources(
       ? {}
       : { inside: panels.insertInside }),
     ...(panels.insertAfter === undefined ? {} : { after: panels.insertAfter }),
+    ...(panels.insertAt === undefined ? {} : { at: panels.insertAt }),
   };
 }
 
@@ -747,6 +752,9 @@ function EditorBody<TFieldValues extends FieldValues>({
             // components. Absent, no surface offers it.
             onEditComponent={componentView.onEditComponent}
             onShareVerbs={setCardVerbs}
+            // "/" opens the in-place picker beside the selected block, or at
+            // the end of the page, adding by the placement rule.
+            onAddBlockHere={addBlockHere(panels, editor, canvas.canvasElement)}
           >
             {/*
             Inside the verbs provider, which is what lets the palette run
@@ -767,6 +775,13 @@ function EditorBody<TFieldValues extends FieldValues>({
               componentTitle={componentLibrary.titleOf}
               open={panels.search.open}
               onOpenChange={panels.search.setOpen}
+            />
+            {/* Inside the shell, so it is drawn on the panel surface over the
+                canvas, and inside the verbs provider beside the search. */}
+            <EditorInsertPicker
+              panels={panels}
+              editor={editor}
+              onEditText={componentView.preview.onEditText}
             />
             {editorCanvasRegion(view)}
             {/*
@@ -808,6 +823,22 @@ function EditorBody<TFieldValues extends FieldValues>({
 }
 
 /**
+ * What "/" runs: the in-place picker opened beside the selected block, or at
+ * the end of the page, placing by the rule.
+ */
+function addBlockHere(
+  panels: EditorPanels,
+  editor: EditorMount["editor"],
+  canvas: HTMLElement | null
+): () => void {
+  return () =>
+    panels.insertPicker.open(
+      { kind: "rule" },
+      selectionAnchor(canvas, editor.document, editor.selectedId)
+    );
+}
+
+/**
  * The shell's exit arrow: withheld while the component banner offers its
  * Back, so the view has one way back rather than two arrows going to two
  * places. Leaving through search still commits, as the exit always did.
@@ -836,9 +867,14 @@ function EditorFrame({
   children: React.ReactNode;
 }): React.JSX.Element {
   const recentColours = useMemo(() => recentColoursStore(userId), [userId]);
+  // The author's insert counts, which the in-place picker's six are read from
+  // and every insert adds to.
+  const insertCounts = useMemo(() => insertCountsStoreFor(userId), [userId]);
   const body = (
     <RecentColoursStore.Provider value={recentColours}>
-      {children}
+      <InsertUsageContext.Provider value={insertCounts}>
+        {children}
+      </InsertUsageContext.Provider>
     </RecentColoursStore.Provider>
   );
   if (banner === null) {

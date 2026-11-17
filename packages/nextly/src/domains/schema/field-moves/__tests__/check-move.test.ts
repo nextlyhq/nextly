@@ -14,7 +14,8 @@ const group = (
   name: string,
   fields: FieldDefinition[],
   extra: Record<string, unknown> = {}
-) => ({ name, label: name, type: "group", fields, ...extra }) as FieldDefinition;
+) =>
+  ({ name, label: name, type: "group", fields, ...extra }) as FieldDefinition;
 
 describe("placeOf", () => {
   it("places a top-level field in its own column, by its name in snake case", () => {
@@ -32,7 +33,9 @@ describe("placeOf", () => {
   });
 
   it("looks through a group with no name, whose fields are stored beside it", () => {
-    const fields = [{ type: "group", fields: [text("body")] } as FieldDefinition];
+    const fields = [
+      { type: "group", fields: [text("body")] } as FieldDefinition,
+    ];
     expect(placeOf(fields, ["body"])).toMatchObject({
       place: { kind: "column", column: "body" },
     });
@@ -114,31 +117,63 @@ describe("checkMove", () => {
       relationTo: "users",
       options: { relationType: "oneToOne" },
     } as unknown as FieldDefinition;
-    const checked = checkMove([owner, group("meta", [])], [group("meta", [owner])], {
-      from: ["owner"],
-      to: ["meta", "owner"],
-    });
+    const checked = checkMove(
+      [owner, group("meta", [])],
+      [group("meta", [owner])],
+      {
+        from: ["owner"],
+        to: ["meta", "owner"],
+      }
+    );
     expect(checked).toMatchObject({ ok: false, reason: "unique" });
   });
 
   it("refuses a move into repeating rows as not available yet, and out of them as losing rows", () => {
-    const rowsBefore = [text("title"), { name: "items", type: "repeater", fields: [] } as unknown as FieldDefinition];
-    const rowsAfter = [{ name: "items", type: "repeater", fields: [text("title")] } as unknown as FieldDefinition];
+    const rowsBefore = [
+      text("title"),
+      {
+        name: "items",
+        type: "repeater",
+        fields: [],
+      } as unknown as FieldDefinition,
+    ];
+    const rowsAfter = [
+      {
+        name: "items",
+        type: "repeater",
+        fields: [text("title")],
+      } as unknown as FieldDefinition,
+    ];
     expect(
-      checkMove(rowsBefore, rowsAfter, { from: ["title"], to: ["items", "title"] })
+      checkMove(rowsBefore, rowsAfter, {
+        from: ["title"],
+        to: ["items", "title"],
+      })
     ).toMatchObject({ ok: false, reason: "into-repeater" });
     expect(
-      checkMove(rowsAfter, rowsBefore, { from: ["items", "title"], to: ["title"] })
+      checkMove(rowsAfter, rowsBefore, {
+        from: ["items", "title"],
+        to: ["title"],
+      })
     ).toMatchObject({ ok: false, reason: "out-of-repeater" });
   });
 
   it("refuses a move into or out of a field group, which is changed in its own editor", () => {
-    const placed = { name: "seo", type: "component", component: "seo", fields: [text("title")] } as unknown as FieldDefinition;
+    const placed = {
+      name: "seo",
+      type: "component",
+      component: "seo",
+      fields: [text("title")],
+    } as unknown as FieldDefinition;
     expect(
-      checkMove([placed], [text("title"), { ...placed, fields: [] } as FieldDefinition], {
-        from: ["seo", "title"],
-        to: ["title"],
-      })
+      checkMove(
+        [placed],
+        [text("title"), { ...placed, fields: [] } as FieldDefinition],
+        {
+          from: ["seo", "title"],
+          to: ["title"],
+        }
+      )
     ).toMatchObject({ ok: false, reason: "field-group" });
   });
 
@@ -150,7 +185,12 @@ describe("checkMove", () => {
         to: ["meta", "preview"],
       })
     ).toMatchObject({ ok: false, reason: "no-column" });
-    const placed = { name: "seo", label: "SEO", type: "component", component: "seo" } as unknown as FieldDefinition;
+    const placed = {
+      name: "seo",
+      label: "SEO",
+      type: "component",
+      component: "seo",
+    } as unknown as FieldDefinition;
     expect(
       checkMove([placed, group("meta", [])], [group("meta", [placed])], {
         from: ["seo"],
@@ -163,13 +203,21 @@ describe("checkMove", () => {
     // Virtual before, stored after: there was no column to move from.
     const virtual = text("preview", { virtual: true });
     expect(
-      checkMove([virtual, group("meta", [])], [group("meta", [text("preview")])], {
-        from: ["preview"],
-        to: ["meta", "preview"],
-      })
+      checkMove(
+        [virtual, group("meta", [])],
+        [group("meta", [text("preview")])],
+        {
+          from: ["preview"],
+          to: ["meta", "preview"],
+        }
+      )
     ).toMatchObject({ ok: false });
     // The same type, a number becoming a list of numbers: a scalar is not the list it now holds.
-    const views = { name: "views", label: "Views", type: "number" } as FieldDefinition;
+    const views = {
+      name: "views",
+      label: "Views",
+      type: "number",
+    } as FieldDefinition;
     const many = { ...views, hasMany: true } as FieldDefinition;
     expect(
       checkMove([views, group("meta", [])], [group("meta", [many])], {
@@ -192,7 +240,12 @@ describe("checkMove", () => {
 
   it("refuses a move that stays inside repeating rows, whose column holds a list of rows", () => {
     const rows = (fields: FieldDefinition[]) =>
-      ({ name: "items", label: "Items", type: "repeater", fields }) as unknown as FieldDefinition;
+      ({
+        name: "items",
+        label: "Items",
+        type: "repeater",
+        fields,
+      }) as unknown as FieldDefinition;
     expect(
       checkMove(
         [rows([text("title"), group("meta", [])])],
@@ -203,19 +256,36 @@ describe("checkMove", () => {
   });
 
   it("judges a container that kept its name but changed type as one the field leaves", () => {
-    const rows = { name: "box", type: "repeater", fields: [text("title")] } as unknown as FieldDefinition;
+    const rows = {
+      name: "box",
+      type: "repeater",
+      fields: [text("title")],
+    } as unknown as FieldDefinition;
     const boxGroup = group("box", [group("meta", [text("title")])]);
     expect(
-      checkMove([rows], [boxGroup], { from: ["box", "title"], to: ["box", "meta", "title"] })
+      checkMove([rows], [boxGroup], {
+        from: ["box", "title"],
+        to: ["box", "meta", "title"],
+      })
     ).toMatchObject({ ok: false, reason: "out-of-repeater" });
   });
 
   it("refuses a move into a field group spelled either way", () => {
     for (const type of ["component", "fieldGroup"]) {
-      const placed = { name: "seo", type, fields: [] } as unknown as FieldDefinition;
-      const holding = { ...placed, fields: [text("title")] } as unknown as FieldDefinition;
+      const placed = {
+        name: "seo",
+        type,
+        fields: [],
+      } as unknown as FieldDefinition;
+      const holding = {
+        ...placed,
+        fields: [text("title")],
+      } as unknown as FieldDefinition;
       expect(
-        checkMove([text("title"), placed], [holding], { from: ["title"], to: ["seo", "title"] })
+        checkMove([text("title"), placed], [holding], {
+          from: ["title"],
+          to: ["seo", "title"],
+        })
       ).toMatchObject({ ok: false, reason: "field-group" });
     }
   });
@@ -225,7 +295,12 @@ describe("checkMove", () => {
 
     it("refuses a translated field into a group that keeps one value for every language", () => {
       expect(
-        checkMove(before, after, { from: ["title"], to: ["meta", "title"] }, translated)
+        checkMove(
+          before,
+          after,
+          { from: ["title"], to: ["meta", "title"] },
+          translated
+        )
       ).toMatchObject({ ok: false, reason: "translation-changes" });
     });
 
@@ -234,7 +309,12 @@ describe("checkMove", () => {
         group("meta", [text("summary"), text("title")], { localized: true }),
       ];
       expect(
-        checkMove(before, translatedAfter, { from: ["title"], to: ["meta", "title"] }, translated)
+        checkMove(
+          before,
+          translatedAfter,
+          { from: ["title"], to: ["meta", "title"] },
+          translated
+        )
       ).toMatchObject({ ok: true, move: { perLanguage: true } });
     });
 
@@ -242,7 +322,12 @@ describe("checkMove", () => {
       const shared = [text("code", { localized: false }), group("meta", [])];
       const sharedAfter = [group("meta", [text("code", { localized: false })])];
       expect(
-        checkMove(shared, sharedAfter, { from: ["code"], to: ["meta", "code"] }, translated)
+        checkMove(
+          shared,
+          sharedAfter,
+          { from: ["code"], to: ["meta", "code"] },
+          translated
+        )
       ).toMatchObject({ ok: true, move: { perLanguage: false } });
     });
   });

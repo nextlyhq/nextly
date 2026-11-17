@@ -49,8 +49,28 @@ export interface ContinueRow {
   status?: string;
   /** Whether the reader has pinned it, which decides its menu's verb. */
   pinned: boolean;
+  /**
+   * Which of Mine's groups it is drawn in: one of the reader's pins, or one of
+   * their recent saves. Absent on Team, which has no groups, and from a server
+   * that predates them.
+   */
+  group?: "pinned" | "recent";
+  /** On a pinned row, how many pins the reader may read in all. */
+  pinCount?: number;
   /** What a pin of it names. */
   target: PinTarget;
+}
+
+/**
+ * Mine drawn in its two groups: the pins the card shows, the recent saves
+ * after them, and how many pins the reader has in all, for "View all pins
+ * (N)" while that is more than it shows.
+ */
+export interface ContinueSections {
+  pinned: ContinueRow[];
+  recent: ContinueRow[];
+  /** How many pins the reader may read in all. */
+  pinTotal: number;
 }
 
 /**
@@ -167,6 +187,12 @@ export function continueRowFrom(
   const savedBy = saverOf(row);
   const editedAt = text(row.editedAt);
   const status = statusLabel(row);
+  const group =
+    row.group === "pinned" || row.group === "recent" ? row.group : undefined;
+  const pinCount =
+    typeof row.pinCount === "number" && Number.isInteger(row.pinCount)
+      ? row.pinCount
+      : undefined;
   return {
     key,
     title,
@@ -179,6 +205,8 @@ export function continueRowFrom(
     ...(editedAt === undefined ? {} : { editedAt }),
     ...(status === undefined ? {} : { status }),
     pinned: row.pinned === true,
+    ...(group === undefined ? {} : { group }),
+    ...(pinCount === undefined ? {} : { pinCount }),
     target,
   };
 }
@@ -192,6 +220,27 @@ export function continueRows(
     const read = continueRowFrom(row, addressOf);
     return read ? [read] : [];
   });
+}
+
+/**
+ * Mine's rows in their groups, as the card draws them: its pins, in the order
+ * the source sent them (newest first, as many as it gave them), then its
+ * recent saves, together no more than the `drawn` rows. `undefined` when the
+ * rows hold no pin, which the card draws as one plain list.
+ */
+export function continueSections(
+  rows: readonly ContinueRow[],
+  drawn: number
+): ContinueSections | undefined {
+  const pins = rows.filter(row => row.group === "pinned");
+  if (pins.length === 0) return undefined;
+  const pinned = pins.slice(0, drawn);
+  const recent = rows
+    .filter(row => row.group === "recent")
+    .slice(0, Math.max(0, drawn - pinned.length));
+  // The source's count where it sent one: never fewer than the pins shown.
+  const pinTotal = Math.max(pinned[0]?.pinCount ?? 0, pinned.length);
+  return { pinned, recent, pinTotal };
 }
 
 /** How far back an answer looked, as its empty text ends. */

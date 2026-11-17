@@ -49,6 +49,13 @@ import {
 } from "./style-field-surroundings";
 import { fieldStyles } from "./style-field-target";
 import type { InspectedStyleProperty, StyleSection } from "./style-inspector";
+import {
+  ArrangeFields,
+  arrangedAway,
+  SPACE_PROPERTIES,
+  useArrangeReading,
+  type ArrangeReading,
+} from "./plain-layout-controls";
 import { StylePropertyFields } from "./style-property-fields";
 import type { StyleProvenance } from "./style-provenance";
 import type { StyleTarget } from "./style-target";
@@ -222,7 +229,7 @@ const SHORTCUTS: readonly string[] = Object.values(SHORTCUT_IDS);
  * included, and nothing else.
  */
 function shownProperties(
-  section: StyleSection,
+  properties: readonly InspectedStyleProperty[],
   isRevealed: (property: string) => boolean,
   match: SettingsMatch
 ): {
@@ -235,7 +242,7 @@ function shownProperties(
     // kept one from "+ More" is drawn too.
     const kept = match.kept.get("style");
     return {
-      shown: section.properties.filter(
+      shown: properties.filter(
         property =>
           property.common ||
           isRevealed(property.property) ||
@@ -245,10 +252,10 @@ function shownProperties(
     };
   }
   return {
-    shown: section.properties.filter(
+    shown: properties.filter(
       property => property.common || isRevealed(property.property)
     ),
-    more: section.properties.filter(
+    more: properties.filter(
       property => !property.common && !isRevealed(property.property)
     ),
   };
@@ -286,8 +293,6 @@ function SectionBody({
     () => new Set()
   );
   const isRevealed = (property: string) => revealed.has(property);
-  const match = useSettingsMatch();
-  const { shown, more } = shownProperties(section, isRevealed, match);
   const surroundings: StyleFieldSurroundings = {
     orientation,
     nodeId,
@@ -302,6 +307,18 @@ function SectionBody({
     onChooseForm,
     breakpoints,
   };
+  const reading = useArrangeReading(
+    surroundings,
+    section.key === "layout" &&
+      section.properties.some(
+        // Offered, not only kept: a block that no longer has layout keeps a
+        // stored Display clear-only, as a raw row.
+        property => property.property === "display" && property.offered
+      )
+  );
+  const { listed, arrange } = arrangedSection(section.properties, reading);
+  const match = useSettingsMatch();
+  const { shown, more } = shownProperties(listed, isRevealed, match);
   return (
     <>
       <SectionFields
@@ -309,6 +326,7 @@ function SectionBody({
         shown={shown}
         readOnly={readOnly}
         surroundings={surroundings}
+        arrange={arrange}
       />
       {readOnly || more.length === 0 ? null : (
         <MoreProperties
@@ -317,6 +335,85 @@ function SectionBody({
           onReveal={property =>
             setRevealed(current => new Set(current).add(property))
           }
+        />
+      )}
+    </>
+  );
+}
+
+/** A Layout section's raw rows, and the Arrange drawn above them. */
+interface ArrangedSection {
+  readonly listed: readonly InspectedStyleProperty[];
+  readonly arrange:
+    | {
+        readonly reading: ArrangeReading;
+        readonly spacing: readonly InspectedStyleProperty[];
+      }
+    | undefined;
+}
+
+/**
+ * A container's Layout says its arrangement in plain words. Arrange's rows
+ * hold the properties it draws, so they leave the raw rows and More, except
+ * while it reads Custom, when the raw rows are what hold it.
+ */
+function arrangedSection(
+  properties: readonly InspectedStyleProperty[],
+  reading: ArrangeReading | undefined
+): ArrangedSection {
+  if (reading === undefined) return { listed: properties, arrange: undefined };
+  if (reading.arrange.mode === "custom") {
+    return { listed: properties, arrange: { reading, spacing: [] } };
+  }
+  const { mode } = reading.arrange;
+  return {
+    listed: properties.filter(property => !arrangedAway(property, mode)),
+    arrange: {
+      reading,
+      spacing: properties.filter(property =>
+        SPACE_PROPERTIES.has(property.property)
+      ),
+    },
+  };
+}
+
+/**
+ * "Nothing set here yet" for a section showing no row: not under Arrange,
+ * whose rows are what a container's Layout shows.
+ */
+function NothingSetNote({
+  shown,
+  arrange,
+}: {
+  shown: number;
+  arrange: ArrangedSection["arrange"];
+}): React.JSX.Element | null {
+  if (shown > 0 || arrange !== undefined) return null;
+  return (
+    <p className="nx-inspector__note">
+      Nothing set here yet. Add a property from More.
+    </p>
+  );
+}
+
+/** What leads a Layout section: Content width, then a container's Arrange. */
+function LayoutLead({
+  surroundings,
+  arrange,
+}: {
+  surroundings: StyleFieldSurroundings;
+  arrange: ArrangedSection["arrange"];
+}): React.JSX.Element {
+  return (
+    <>
+      <SettingSlot tab="style" ids={CONTENT_WIDTH_IDS}>
+        <ContentWidthFields surroundings={surroundings} />
+      </SettingSlot>
+      {arrange === undefined ? null : (
+        <ArrangeFields
+          surroundings={surroundings}
+          reading={arrange.reading}
+          spacing={arrange.spacing}
         />
       )}
     </>
@@ -332,11 +429,14 @@ function SectionFields({
   shown,
   readOnly,
   surroundings,
+  arrange,
 }: {
   sectionKey: InspectorSectionKey;
   shown: readonly InspectedStyleProperty[];
   readOnly: boolean;
   surroundings: StyleFieldSurroundings;
+  /** A container's Arrange, with the space fields it draws. */
+  arrange?: ArrangedSection["arrange"];
 }): React.JSX.Element {
   const target = React.useContext(StyleTargetContext);
   const rings =
@@ -347,9 +447,7 @@ function SectionFields({
     <fieldset className="nx-inspector__fields" disabled={readOnly}>
       <SectionHeld.Provider value={readOnly}>
         {sectionKey === "layout" ? (
-          <SettingSlot tab="style" ids={CONTENT_WIDTH_IDS}>
-            <ContentWidthFields surroundings={surroundings} />
-          </SettingSlot>
+          <LayoutLead surroundings={surroundings} arrange={arrange} />
         ) : null}
         {sectionKey === "size" ? (
           <SettingSlot tab="style" ids={SHORTCUTS}>
@@ -392,11 +490,7 @@ function SectionFields({
             />
           </SettingSlot>
         ))}
-        {shown.length === 0 ? (
-          <p className="nx-inspector__note">
-            Nothing set here yet. Add a property from More.
-          </p>
-        ) : null}
+        <NothingSetNote shown={shown.length} arrange={arrange} />
       </SectionHeld.Provider>
     </fieldset>
   );

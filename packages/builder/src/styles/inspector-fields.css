@@ -959,6 +959,124 @@
 }
 
 /*
+ * A container's Arrange: Stack, Row or Grid, the CSS it writes small under
+ * the choice, and the rows the choice offers.
+ */
+.nx-arrange {
+  display: grid;
+  row-gap: var(--nx-builder-row-gap);
+  min-width: 0;
+}
+
+.nx-arrange__css {
+  margin: 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.6875rem;
+  line-height: 1.3;
+  color: var(--nx-muted-foreground);
+  overflow-wrap: anywhere;
+}
+
+.nx-arrange__custom,
+.nx-arrange__unused {
+  margin: 0;
+  font-size: var(--nx-builder-font-size);
+  color: var(--nx-muted-foreground);
+}
+
+.nx-arrange__link,
+.nx-arrange__clear {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--nx-foreground);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  justify-self: start;
+}
+
+.nx-arrange__link:focus-visible,
+.nx-arrange__clear:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
+}
+
+.nx-arrange__select {
+  inline-size: 100%;
+  min-inline-size: 0;
+  block-size: var(--nx-builder-control-height);
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font-size: var(--nx-builder-font-size);
+}
+
+/*
+ * The 3×3 Align: nine named points, the chosen one filled. Small enough to sit
+ * beside its label at the panel's narrowest width.
+ */
+.nx-align-grid__wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nx-align-grid__wrap .nx-inspector__note {
+  margin: 0;
+}
+
+.nx-align-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1.25rem);
+  grid-template-rows: repeat(3, 1.25rem);
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  flex: none;
+}
+
+.nx-align-grid__point {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.nx-align-grid__point::after {
+  content: "";
+  inline-size: 4px;
+  block-size: 4px;
+  border-radius: 50%;
+  background: var(--nx-muted-foreground);
+}
+
+.nx-align-grid__point:hover::after {
+  background: var(--nx-foreground);
+}
+
+.nx-align-grid__point[aria-checked="true"] {
+  background: var(--nx-foreground);
+}
+
+.nx-align-grid__point[aria-checked="true"]::after {
+  background: var(--nx-background);
+}
+
+.nx-align-grid__point:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 0;
+}
+
+/*
  * "Find a setting" and "Only changed", under the tabs on every tab: the field
  * takes the row, the toggle keeps its words, and both fit at 280px.
  */

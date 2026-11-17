@@ -138,7 +138,25 @@ export function lazyPart<Part extends (props: never) => ReactNode>(
 
   // The wrapper takes `Part`'s props and draws `Part` with them, so it stands
   // for `Part`; the checker cannot relate it to a generic signature.
-  return (holds === undefined ? LazyPart : HoldingLazyPart) as unknown as Part;
+  const wrapper = holds === undefined ? LazyPart : HoldingLazyPart;
+  preloads.set(wrapper, () => {
+    // A failure is forgotten by `fetchPart`; the draw asks again.
+    fetchPart().catch(() => undefined);
+  });
+  return wrapper as unknown as Part;
+}
+
+/** How to fetch each lazy part's code before it is drawn, by its wrapper. */
+const preloads = new WeakMap<object, () => void>();
+
+/**
+ * Fetch a lazy part's code now, before it is drawn: where a screen's address
+ * already says the part comes next. The part's first draw takes this fetch
+ * rather than asking again; a failed one is forgotten, so the draw asks
+ * afresh. A component that is not a lazy part is left alone.
+ */
+export function preloadPart(part: object): void {
+  preloads.get(part)?.();
 }
 
 /** Where a part's fetch stands on one screen. */
