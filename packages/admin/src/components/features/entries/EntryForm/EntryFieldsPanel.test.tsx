@@ -63,6 +63,22 @@ vi.mock("./PublicUrlChangeNotice", () => ({
   },
 }));
 
+/** Props the stubbed address chip was drawn with, newest last. */
+const chipProps: Array<Record<string, unknown>> = [];
+
+vi.mock("./DocumentAddressChip", () => ({
+  DocumentAddressChip: (props: Record<string, unknown>) => {
+    chipProps.push(props);
+    return <span>address chip</span>;
+  },
+}));
+
+// The entry's details as the server answers them: its address on the site.
+const SITE_ADDRESS = { site: "https://site.example/", path: "/about-us" };
+vi.mock("./entry-details-read", () => ({
+  useEntryDetails: () => ({ address: SITE_ADDRESS }),
+}));
+
 const { fieldsBesidePanel } = await import("./EntryFieldsPanel");
 
 /**
@@ -387,5 +403,121 @@ describe("the panel a takeover surface offers back", () => {
     expect(new Set(noticeProps.map(props => JSON.stringify(props)))).toEqual(
       new Set([JSON.stringify({ slugName: "slug", active: true })])
     );
+  });
+});
+
+describe("a part of the entry's fields, for a surface that frames them", () => {
+  const page = [...minimal, field("summary"), field("sidebar", "blocks")];
+  const ADDRESS = {
+    detailsOf: { collectionSlug: "pages", entryId: "1", locale: undefined },
+    published: true,
+  };
+
+  it("draws the identity alone, with no heading of its own", () => {
+    render(
+      <div data-testid="host">
+        {fieldsBesidePanel(page, "body", {
+          presentation: "dialog",
+          group: "page",
+        })}
+      </div>
+    );
+    expect(screen.getByTestId("host").textContent).toContain("title,slug");
+    expect(screen.getByTestId("host").textContent).not.toContain("summary");
+    expect(screen.queryByRole("heading", { name: "Page" })).toBeNull();
+  });
+
+  it("draws the rest alone, leaving the identity out", () => {
+    render(
+      <div data-testid="host">
+        {fieldsBesidePanel(page, "body", {
+          presentation: "dialog",
+          group: "content",
+        })}
+      </div>
+    );
+    const text = screen.getByTestId("host").textContent ?? "";
+    expect(text).toContain("summary,sidebar");
+    expect(text).not.toContain("title");
+  });
+
+  it("leaves out the fields named, and answers null where that leaves nothing", () => {
+    render(
+      <div data-testid="host">
+        {fieldsBesidePanel(page, "body", {
+          presentation: "dialog",
+          group: "content",
+          leaveOut: ["sidebar"],
+        })}
+      </div>
+    );
+    const text = screen.getByTestId("host").textContent ?? "";
+    expect(text).toContain("summary");
+    expect(text).not.toContain("sidebar");
+
+    expect(
+      fieldsBesidePanel(page, "body", {
+        group: "content",
+        leaveOut: ["summary", "sidebar"],
+      })
+    ).toBeNull();
+    expect(fieldsBesidePanel(minimal, "body", { group: "content" })).toBeNull();
+  });
+
+  it("draws the slug as the entry's full address, labelled Address, beside the title field", () => {
+    chipProps.length = 0;
+    function Host(): React.JSX.Element {
+      const form = useForm({ defaultValues: { slug: "about-us" } });
+      return (
+        <FormProvider {...form}>
+          {fieldsBesidePanel(page, "body", {
+            presentation: "dialog",
+            group: "page",
+            hasPublicAddress: true,
+            address: ADDRESS,
+          })}
+        </FormProvider>
+      );
+    }
+    render(<Host />);
+
+    // The title is still the form's own field; the slug is not drawn as one.
+    expect(screen.getAllByTestId("labels")[0]?.textContent).toBe("");
+    expect(screen.getByRole("group", { name: "Address" })).toHaveTextContent(
+      "address chip"
+    );
+    const chip = chipProps.at(-1);
+    expect(chip?.address).toEqual(SITE_ADDRESS);
+    expect(chip?.published).toBe(true);
+    expect(chip?.slug).toMatchObject({
+      field: { name: "slug" },
+      locked: false,
+      hasPublicAddress: true,
+    });
+  });
+
+  it("holds the address read-only with the fields, and keeps both groups as fields when both are drawn", () => {
+    chipProps.length = 0;
+    function Host({ both }: { both: boolean }): React.JSX.Element {
+      const form = useForm({ defaultValues: { slug: "about-us" } });
+      return (
+        <FormProvider {...form}>
+          {fieldsBesidePanel(page, "body", {
+            presentation: "dialog",
+            readOnly: true,
+            address: ADDRESS,
+            ...(both ? {} : { group: "page" as const }),
+          })}
+        </FormProvider>
+      );
+    }
+    const { unmount } = render(<Host both={false} />);
+    expect(chipProps.at(-1)?.slug).toMatchObject({ locked: true });
+    unmount();
+
+    chipProps.length = 0;
+    render(<Host both />);
+    expect(chipProps).toEqual([]);
+    expect(screen.getAllByTestId("labels")[0]?.textContent).toBe(",Address");
   });
 });

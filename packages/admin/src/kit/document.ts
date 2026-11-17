@@ -73,7 +73,31 @@ export {
  * of the entry is removed from the page rather than merely covered. Whatever
  * took the body over is the only surface left that can still show them.
  */
-export { useEntryFieldsPanel } from "../components/features/entries/EntryForm/EntryFormContext";
+export {
+  useEntryFieldsPanel,
+  useEntryFieldsLayout,
+} from "../components/features/entries/EntryForm/EntryFormContext";
+
+export type {
+  EntryFieldsGroup,
+  EntryFieldsOptions,
+  EntryFieldsPresentation,
+} from "../components/features/entries/EntryForm/EntryFieldsPanel";
+
+export type {
+  EntryContentField,
+  EntryFieldsLayout,
+  EntryFieldTab,
+} from "../components/features/entries/EntryForm/entry-fields-layout";
+
+/**
+ * How a surface covering the form shows one of its fields, so a refused
+ * save's message offers "Show me" for it.
+ */
+export {
+  useRevealField,
+  type FieldReveal,
+} from "../components/features/entries/EntryForm/field-reveal";
 
 /**
  * A field telling the form it holds work the form's values do not contain.

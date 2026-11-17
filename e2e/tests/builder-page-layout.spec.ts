@@ -163,7 +163,7 @@ async function openBuilder(page: Page, pageId: string): Promise<void> {
   });
 }
 
-/** Open the editor's Settings dialog, whose "This page" tab holds the picker. */
+/** Open the editor's Page settings, whose General tab holds the picker. */
 async function openSettings(page: Page): Promise<void> {
   const dialog = page.getByRole("dialog", { name: "Settings" });
   if (await dialog.isVisible()) return;

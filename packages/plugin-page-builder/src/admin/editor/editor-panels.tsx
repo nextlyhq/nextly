@@ -37,10 +37,7 @@ import {
   type VariablesPreview,
   blockStyleFoldId,
 } from "@nextlyhq/builder/shell";
-import {
-  useDocumentIdentity,
-  useEntryFieldsPanel,
-} from "@nextlyhq/plugin-sdk/admin";
+import { useDocumentIdentity } from "@nextlyhq/plugin-sdk/admin";
 import {
   useCallback,
   useEffect,
@@ -556,7 +553,6 @@ function useDrawnLook(): {
  */
 export function useEditorPanels<TFieldValues extends FieldValues>(
   mount: EditorMount,
-  name: string,
   /**
    * The entry's form, and the canvas the Layout's regions are scrolled to.
    * The page's Layout regions are rows in Layers, drawn on the canvas beside
@@ -568,23 +564,11 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   }
 ): EditorPanels {
   const { editor, clientConfig } = mount;
-  // The Layout section for the Settings dialog's "This page" tab, or null for
-  // a form that is not a page's.
+  // The page's header & footer section, or null for a form that is not a
+  // page's: Page settings draws its menu on General where it is not null.
   const pageLayout = usePageLayoutSettings(page.control);
   // From the form's unsaved values, so a change of Layout redraws at once.
   const layoutRegions = usePageLayoutRegions(page.control, page.canvasRoot);
-  /*
-   * The entry's other fields, ALREADY DRAWN, or null when there are none.
-   *
-   * One value feeds both the rail's availability and the panel's body below,
-   * so the two cannot disagree about whether there is anything to show. Asking
-   * separately is what put an empty Settings panel on the rail: every entry
-   * form has a renderer, so a gate on the renderer's existence is true even for
-   * a collection whose only fields are its title, its slug and this one.
-   */
-  // Flat, for the Settings dialog that frames them: no section cards, the
-  // slug read as the page's address.
-  const entryFields = useEntryFieldsPanel(name, { presentation: "dialog" });
 
   /*
    * The getting-started card, and the host's switch for it.
@@ -625,7 +609,6 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   const lookEditing = useLookEditing(editor);
   const { previewMode, pictureSession } = useDrawnLook();
   return {
-    entryFields,
     lookEditing,
     previewMode,
     pictureSession,
@@ -633,8 +616,8 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     pages,
     checklist,
     designFolds,
-    // Settings is a dialog, not a panel: the entry's fields are drawn in its
-    // "This page" tab.
+    // Settings is a dialog, not a panel: the entry's fields are drawn in Page
+    // settings' General and Fields tabs.
     availablePanels: AVAILABLE_PANELS,
     pageLayout,
     canvasRegions: layoutRegions.canvas,
@@ -793,7 +776,6 @@ function PickerPatternRead({
  */
 export type EditorPanels = OfferedLibrary &
   PanelRequests & {
-    entryFields: ReactNode;
     checklist: UseBuilderChecklistResult;
     /** Where the author's folded Design groups are kept, once they are known. */
     designFolds: PreferenceStore | undefined;

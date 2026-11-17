@@ -317,6 +317,9 @@ function SlugEditInput({
       className="h-5 max-w-full rounded border border-input bg-background px-1 font-mono text-xs text-foreground transition-colors focus:border-primary focus:outline-none"
       aria-label="Address"
       aria-invalid={invalid}
+      // Escape here puts the address back; a dialog around the chip leaves
+      // Escape to it rather than closing.
+      data-own-escape=""
     />
   );
 }

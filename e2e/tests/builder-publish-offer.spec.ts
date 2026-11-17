@@ -393,14 +393,17 @@ test("makes a set the site default from the Header & footer list, asking first a
     ).toHaveCount(0);
     await page.keyboard.press("Escape");
 
-    // Settings → Site names it, and chooses nothing itself.
+    // Site settings names it, and chooses nothing itself.
     await openBuilder(page, pageId);
     await page
       .getByRole("navigation", { name: "Editor panels" })
       .getByRole("button", { name: "Settings" })
       .click();
-    const settings = page.getByRole("dialog", { name: "Settings" });
-    await settings.getByRole("tab", { name: "Site" }).click();
+    await page
+      .getByRole("dialog", { name: /^Page settings · / })
+      .getByRole("button", { name: "Site settings" })
+      .click();
+    const settings = page.getByRole("dialog", { name: "Site settings" });
     const line = settings.getByRole("region", {
       name: "Site default header & footer",
     });

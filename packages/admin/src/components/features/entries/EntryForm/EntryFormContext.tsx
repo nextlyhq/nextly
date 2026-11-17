@@ -22,7 +22,8 @@ import {
 
 import { useOptionalEntryLocale } from "../EntryLocaleContext";
 
-import type { EntryFieldsPresentation } from "./EntryFieldsPanel";
+import type { EntryFieldsLayout } from "./entry-fields-layout";
+import type { EntryFieldsOptions } from "./EntryFieldsPanel";
 
 // ============================================================================
 // Types
@@ -107,8 +108,15 @@ export interface EntryFormContextValue {
    */
   renderEntryFields?: (
     excludePath: string,
-    presentation?: EntryFieldsPresentation
+    options?: EntryFieldsOptions
   ) => ReactNode;
+
+  /**
+   * Where the entry page draws each of the document's fields, for a surface
+   * covering it: read through {@link useEntryFieldsLayout}. Absent wherever
+   * `renderEntryFields` is, for the same reasons.
+   */
+  entryFieldsLayout?: EntryFieldsLayout;
 
   /**
    * Opens the document's full-page preview, where the editor offers one.
@@ -280,8 +288,11 @@ export interface EntryFormContextProviderProps {
    */
   renderEntryFields?: (
     excludePath: string,
-    presentation?: EntryFieldsPresentation
+    options?: EntryFieldsOptions
   ) => ReactNode;
+
+  /** Where the entry page draws each field, beside `renderEntryFields`. */
+  entryFieldsLayout?: EntryFieldsLayout;
 
   /**
    * The editor's handler for its full-page preview. Pass it exactly where the
@@ -347,6 +358,7 @@ export function EntryFormContextProvider({
   kind = "collection",
   documentStatus,
   renderEntryFields,
+  entryFieldsLayout,
   openPreview,
   openPreviewBeside,
   fields,
@@ -380,6 +392,7 @@ export function EntryFormContextProvider({
        * to tell that from a renderer that draws nothing.
        */
       ...(renderEntryFields === undefined ? {} : { renderEntryFields }),
+      ...(entryFieldsLayout === undefined ? {} : { entryFieldsLayout }),
       // Spread for the same reason: absent means the editor offers no preview.
       // A preview beside the form comes only with the preview itself.
       ...(openPreview === undefined
@@ -405,6 +418,7 @@ export function EntryFormContextProvider({
       status,
       hasWorkingDraft,
       renderEntryFields,
+      entryFieldsLayout,
       openPreview,
       openPreviewBeside,
       fields,
@@ -578,19 +592,19 @@ export function useDocumentKeepsRecoveryPoints(): boolean {
  */
 export function useEntryFieldsPanel(
   excludePath: string,
-  options: {
-    /**
-     * How the fields are framed: the form's own sections (`"panel"`, the
-     * default), or flat for a dialog that frames them itself, where the slug
-     * reads as the page's address with the full address under it.
-     */
-    presentation?: EntryFieldsPresentation;
-  } = {}
+  options: EntryFieldsOptions = {}
 ): ReactNode | null {
   const context = useOptionalEntryFormContext();
-  return (
-    context?.renderEntryFields?.(excludePath, options.presentation) ?? null
-  );
+  return context?.renderEntryFields?.(excludePath, options) ?? null;
+}
+
+/**
+ * Where the entry page draws each of the document's fields (its identity,
+ * its own content, or a plugin's tab), for the surface covering it; `null`
+ * where nothing covers the form, as for {@link useEntryFieldsPanel}.
+ */
+export function useEntryFieldsLayout(): EntryFieldsLayout | null {
+  return useOptionalEntryFormContext()?.entryFieldsLayout ?? null;
 }
 
 /**
