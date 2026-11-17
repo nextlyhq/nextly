@@ -63,14 +63,26 @@ function provider(
         listEntries: vi.fn(
           async (
             _collection: string,
-            query: { where?: { id?: { equals?: string } } },
+            query: {
+              where?: { id?: { equals?: string } };
+              pagination?: { limit?: number; page?: number };
+            },
             access: unknown
           ) => {
             reads.push({ where: query.where, access });
             const id = query.where?.id?.equals;
+            const found = rows.filter(row => id === undefined || row.id === id);
+            const limit = query.pagination?.limit ?? found.length;
+            const page = query.pagination?.page ?? 1;
+            const offset = (page - 1) * limit;
             return {
-              data: rows.filter(row => id === undefined || row.id === id),
-              pagination: { total: rows.length, limit: 200, offset: 0 },
+              data: found.slice(offset, offset + limit),
+              pagination: {
+                total: found.length,
+                limit,
+                offset,
+                hasMore: offset + limit < found.length,
+              },
             };
           }
         ),
@@ -122,6 +134,28 @@ describe("the forms plugin as a provider", () => {
       },
     ]);
     expect(reads[0]?.access).toBe(author);
+  });
+
+  it("lists every form, however many pages of them there are", async () => {
+    const many = Array.from({ length: 450 }, (_, index) => ({
+      id: `f${index}`,
+      name: `Form ${index}`,
+      slug: `form-${index}`,
+      status: "published",
+    }));
+    const { forms } = provider(many);
+    const listed = await forms.list({
+      as: "user",
+      user: { id: "u1" } as never,
+    });
+    expect(listed).toHaveLength(450);
+    expect(listed.at(-1)?.ref).toBe("f449");
+  });
+
+  it("reads a form in the language asked, as the services take it", async () => {
+    const { forms, reads } = provider([CONTACT]);
+    await forms.describe("f1", { access: { as: "public" }, locale: "fr" });
+    expect(reads[0]?.access).toEqual({ as: "public", locale: "fr" });
   });
 
   it("describes a form for the public, its button and own message as plain words", async () => {
@@ -212,7 +246,7 @@ describe("the forms plugin as a provider", () => {
     };
     expect(described.script).toEqual({
       module: `/admin/api/plugins/@nextlyhq/plugin-form-builder${BOT_CHECK_SCRIPT_PATH}`,
-      reason: "Draws the form's bot check.",
+      reason: "Draws the form's bot check and its browser token.",
     });
     expect(described.fields.at(-1)).toEqual({
       name: "cf-turnstile-response",
@@ -222,6 +256,25 @@ describe("the forms plugin as a provider", () => {
     });
     // The secret never reaches the description.
     expect(JSON.stringify(described)).not.toContain("secret");
+  });
+
+  it("carries the browser's token for one response per browser, with the script that makes it", async () => {
+    const { forms } = provider([
+      { ...CONTACT, settings: { oneResponse: "browser" } },
+    ]);
+    const described = (await forms.describe("f1", PUBLIC)) as {
+      script?: { module: string };
+      fields: { name: string; kind: string; provider?: unknown }[];
+    };
+    expect(described.fields.at(-1)).toEqual({
+      name: "nextly-browser-token",
+      label: "Browser token",
+      kind: "hidden",
+      provider: { "forms-browser-token": "" },
+    });
+    expect(described.script?.module).toBe(
+      `/admin/api/plugins/@nextlyhq/plugin-form-builder${BOT_CHECK_SCRIPT_PATH}`
+    );
   });
 
   it("needs no script for a form without a bot check", async () => {
@@ -271,6 +324,48 @@ describe("a native post, accepted", () => {
       },
     });
     expect(context.pluginConfig.formOverrides.slug).toBe("forms");
+  });
+
+  it("sends a hidden field's own value, from the stored form", async () => {
+    submitForm.mockResolvedValue({ success: true, outcome: "accepted" });
+    const { forms } = provider([
+      {
+        ...CONTACT,
+        fields: [
+          ...CONTACT.fields,
+          {
+            type: "hidden",
+            name: "source",
+            label: "Source",
+            defaultValue: "website",
+          },
+        ],
+      },
+    ]);
+    await forms.accept("f1", post([["email", ["a@b.co"]]]));
+    expect(submitForm.mock.calls[0]?.[0].data).toMatchObject({
+      email: "a@b.co",
+      source: "website",
+    });
+  });
+
+  it("passes the browser's token on for one response per browser", async () => {
+    submitForm.mockResolvedValue({ success: true, outcome: "accepted" });
+    const { forms } = provider([
+      { ...CONTACT, settings: { oneResponse: "browser" } },
+    ]);
+    // A browser token as the page script makes one (not a secret).
+    const browser = "browser-made-for-this-test";
+    await forms.accept(
+      "f1",
+      post([
+        ["email", ["a@b.co"]],
+        ["nextly-browser-token", [browser]],
+      ])
+    );
+    expect(submitForm.mock.calls[0]?.[0].data).toMatchObject({
+      "nextly-browser-token": browser,
+    });
   });
 
   it("answers each of submitForm's outcomes as the receiver shows it", async () => {

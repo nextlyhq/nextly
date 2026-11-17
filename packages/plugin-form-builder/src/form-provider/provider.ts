@@ -30,6 +30,7 @@ import type {
 import { formAvailability, trustedClientIp, type PluginContext } from "nextly";
 
 import { publicBotCheck } from "../handlers/bot-check";
+import { publicOneResponse } from "../handlers/one-response";
 import { submitForm } from "../handlers/submit-form";
 import type {
   AnyFormField,
@@ -140,9 +141,9 @@ async function formById(
     {
       where: { id: { equals: ref } },
       pagination: { limit: 1 },
-      ...(locale === undefined ? {} : { locale }),
     },
-    access
+    // The language rides with whom it is read as: the services take it there.
+    locale === undefined ? access : { ...access, locale }
   );
   const row = result.data?.[0] as FormRow | undefined;
   // Compared again exactly: a database may compare text loosely.
@@ -189,11 +190,15 @@ function afterSendingOf(settings: FormSettings): FormAfterSending {
   };
 }
 
-/** The described fields, with the bot check's hidden answer where it has one. */
+/**
+ * The described fields, with the hidden answers the plugin's own script
+ * fills: the bot check's token, and the browser's for one response per
+ * browser. `script` says whether the form needs that script at all.
+ */
 function describedFields(
   parts: FormsProviderParts,
   row: FormRow
-): { fields: FormFieldDescription[]; botCheck: boolean } {
+): { fields: FormFieldDescription[]; script: boolean } {
   const stored = Array.isArray(row.fields)
     ? (row.fields as AnyFormField[])
     : [];
@@ -201,8 +206,19 @@ function describedFields(
     const described = describeField(field);
     return described === undefined ? [] : [described];
   });
+  const oneResponse = publicOneResponse(normalizeFormSettings(row.settings));
+  if (oneResponse !== undefined) {
+    fields.push({
+      name: oneResponse.field,
+      label: "Browser token",
+      kind: "hidden",
+      provider: { "forms-browser-token": "" },
+    });
+  }
   const check = publicBotCheck(row.settings, parts.config.spamProtection);
-  if (check === undefined || check === null) return { fields, botCheck: false };
+  if (check === undefined || check === null) {
+    return { fields, script: oneResponse !== undefined };
+  }
   // The answer the bot check's widget fills in, posted with the form. The
   // plugin's own script draws the widget; the block never reads these.
   fields.push({
@@ -214,7 +230,7 @@ function describedFields(
       "forms-site-key": String(check.siteKey),
     },
   });
-  return { fields, botCheck: true };
+  return { fields, script: true };
 }
 
 /** The listing's state of a form: draft, published, or closed now. */
@@ -228,12 +244,58 @@ async function stateOf(
   return availability.kind === "closed" ? "closed" : "published";
 }
 
+/** How many forms one read of the listing takes. */
+const LIST_PAGE = 200;
+
+/** Every form `access` may read, page after page: the picker lists them all. */
+async function everyForm(
+  parts: FormsProviderParts,
+  access: FormAccess
+): Promise<FormRow[]> {
+  const rows: FormRow[] = [];
+  for (let page = 1; ; page += 1) {
+    const result = await parts
+      .context()
+      .services.collections.listEntries(
+        slugsOf(parts).forms,
+        { pagination: { limit: LIST_PAGE, page } },
+        access
+      );
+    const read = (result.data ?? []) as FormRow[];
+    rows.push(...read);
+    const more = (result.pagination as { hasMore?: unknown } | undefined)
+      ?.hasMore;
+    if (more !== true || read.length === 0) return rows;
+  }
+}
+
+/**
+ * The values of the stored form's hidden fields, by name: what the form
+ * itself sends there, read from the stored form, never from the post.
+ */
+function hiddenValuesOf(row: FormRow | undefined): Map<string, string> {
+  const stored = Array.isArray(row?.fields) ? row.fields : [];
+  const values = new Map<string, string>();
+  for (const field of stored as Record<string, unknown>[]) {
+    if (
+      field?.type === "hidden" &&
+      typeof field.name === "string" &&
+      (typeof field.defaultValue === "string" ||
+        typeof field.defaultValue === "number")
+    ) {
+      values.set(field.name, String(field.defaultValue));
+    }
+  }
+  return values;
+}
+
 /** A post's answers as the plugin's JSON address takes a submission's `data`. */
 function submittedData(
   fields: readonly FormFieldDescription[],
-  answers: FormPost["answers"]
+  answers: FormPost["answers"],
+  hidden: ReadonlyMap<string, string>
 ): Record<string, unknown> {
-  const data: Record<string, unknown> = {};
+  const data: Record<string, unknown> = Object.fromEntries(hidden);
   for (const field of fields) {
     const values = (answers.get(field.name) ?? []).filter(
       value => value !== ""
@@ -275,7 +337,7 @@ export function formsProvider(parts: FormsProviderParts): FormProvider {
       }
     }
     const settings = normalizeFormSettings(row.settings);
-    const { fields, botCheck } = describedFields(parts, row);
+    const { fields, script } = describedFields(parts, row);
     return {
       ref,
       title: textOf(row.name) ?? textOf(row.slug) ?? ref,
@@ -285,11 +347,11 @@ export function formsProvider(parts: FormsProviderParts): FormProvider {
       encoding: fields.some(field => field.kind === "file")
         ? "multipart"
         : "urlencoded",
-      ...(botCheck
+      ...(script
         ? {
             script: {
               module: `${API_MOUNT}/plugins/${PLUGIN_NAME}${BOT_CHECK_SCRIPT_PATH}`,
-              reason: "Draws the form's bot check.",
+              reason: "Draws the form's bot check and its browser token.",
             },
           }
         : {}),
@@ -300,14 +362,7 @@ export function formsProvider(parts: FormsProviderParts): FormProvider {
     id: FORMS_PROVIDER_ID,
     label: FORMS_PROVIDER_LABEL,
     async list(access) {
-      const result = await parts
-        .context()
-        .services.collections.listEntries(
-          slugsOf(parts).forms,
-          { pagination: { limit: 200 } },
-          access
-        );
-      const rows = (result.data ?? []) as FormRow[];
+      const rows = await everyForm(parts, access);
       const forms = slugsOf(parts).forms;
       return await Promise.all(
         rows.map(async row => {
@@ -339,7 +394,11 @@ export function formsProvider(parts: FormsProviderParts): FormProvider {
       const result = await submitForm(
         {
           formSlug: slug,
-          data: submittedData(described.fields, post.answers),
+          data: submittedData(
+            described.fields,
+            post.answers,
+            hiddenValuesOf(row)
+          ),
           request,
           metadata: {
             ipAddress: trustedClientIp(request) ?? undefined,

@@ -2,7 +2,8 @@
  * The forms plugin's own script for its forms on a page builder page: it
  * draws the bot check's widget (Cloudflare Turnstile, or Google reCAPTCHA v3)
  * into the hidden answer the form's description adds for it, so the token
- * is posted with the form.
+ * is posted with the form, and fills the browser's own token for a form
+ * taking one response per browser.
  *
  * Served by one public route of the plugin, as a module the page builder
  * adds only to pages drawing a form that has a bot check. A form with none
@@ -22,7 +23,7 @@ export const BOT_CHECK_SCRIPT_PATH = "/page-forms/bot-check.js";
  * The module. Plain browser JavaScript, written once: it reads only the
  * `data-forms-*` values the form's description put on its hidden answer.
  */
-const BOT_CHECK_SCRIPT = `
+export const BOT_CHECK_SCRIPT = `
 const loaded = new Map();
 function load(src) {
   if (!loaded.has(src)) {
@@ -51,17 +52,35 @@ function turnstile(input, siteKey) {
 function recaptcha(input, siteKey) {
   const form = input.form;
   if (!form) return;
-  load("https://www.google.com/recaptcha/api.js?render=" + encodeURIComponent(siteKey));
+  const ready = load("https://www.google.com/recaptcha/api.js?render=" + encodeURIComponent(siteKey));
   form.addEventListener("submit", event => {
-    if (input.value !== "" || !window.grecaptcha) return;
+    if (input.value !== "") return;
+    // Held until the token is made, even while Google's script still loads:
+    // a send without one is kept as spam.
     event.preventDefault();
-    window.grecaptcha.ready(() => {
-      window.grecaptcha.execute(siteKey, { action: "submit" }).then(token => {
+    ready
+      .then(() => new Promise(resolve => window.grecaptcha.ready(resolve)))
+      .then(() => window.grecaptcha.execute(siteKey, { action: "submit" }))
+      .then(token => {
         input.value = token;
         form.submit();
       });
-    });
   });
+}
+function browserToken() {
+  const key = "nextly-forms-browser-token";
+  try {
+    const kept = localStorage.getItem(key);
+    if (kept && /^[A-Za-z0-9_-]{16,128}$/.test(kept)) return kept;
+  } catch {}
+  const made = typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+  try { localStorage.setItem(key, made); } catch {}
+  return made;
+}
+for (const input of document.querySelectorAll("input[data-forms-browser-token]")) {
+  input.value = browserToken();
 }
 for (const input of document.querySelectorAll("input[data-forms-bot-check]")) {
   const siteKey = input.dataset.formsSiteKey;

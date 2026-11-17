@@ -821,10 +821,14 @@ same validation, storage, emails, honeypot, rate limit, bot check and one-respon
 - **Conditional fields** all show on the page, and the plugin ignores the answers to any
   whose condition does not hold, as it does for every submission.
 - A form with a **bot check** loads one small script of this plugin's own on pages that
-  draw it, which renders the Turnstile or reCAPTCHA widget. Without JavaScript no token is
+  draw it, which renders the Turnstile or reCAPTCHA widget, and holds a send until its
+  token is made. Without JavaScript no token is
   sent, and the submission is kept as spam, as at the JSON address.
-- **File** fields are drawn, but a plain form post cannot upload the file through the page
-  builder yet; use the JSON address for forms that take files.
+- A form with a **file** field says "This form needs JavaScript to send a file." beside the
+  field on a page builder page, and the page builder refuses a plain post to it with that
+  sentence, so a file is never dropped without a word. Files still go through this plugin's
+  own upload route (`POST /api/forms/:slug/upload`) and JSON address, as before.
+- A form taking **one response per browser** gets its browser token from the same script.
 
 The JSON address, `POST /api/forms/:slug/submit`, is unchanged. The two plugins reach each
 other only through the page builder's `forms` service and the plugin SDK's form provider
