@@ -14,6 +14,7 @@ import { makeDefaultRoute } from "../default-layout/make-default-route";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "../default-layout/settings-single";
 import { layoutChoicesRoute } from "../layout-choices-route";
 import { registerLayoutComponentGuard } from "../layout-component-guard";
+import { layoutCountsRoute } from "../layout-counts-route";
 import { registerLayoutReadinessNotice } from "../layout-readiness-hook";
 import { removeLayoutRoute } from "../layout-removal/remove-route";
 
@@ -21,7 +22,11 @@ import type { InitContext } from "./install-context";
 import { componentStoreOf } from "./options";
 import type { Definition } from "./state";
 
-/** The guard refusing to delete a component a Layout still names. */
+/**
+ * Both ends of a Layout's component references: a component a Layout still
+ * names can't be deleted or unpublished, and a Layout can't be saved naming a
+ * component that is missing or being deleted (`layout-area-guard.ts`).
+ */
 export function installLayoutComponentGuard(ctx: InitContext): void {
   registerLayoutComponentGuard({
     ctx,
@@ -53,6 +58,7 @@ export function routesForLayouts(def: Definition): {
   readonly makeDefault: PluginRoute;
   readonly removeLayout: PluginRoute;
   readonly layoutChoices: PluginRoute;
+  readonly layoutCounts: PluginRoute;
 } {
   const { opts } = def;
   return {
@@ -74,5 +80,8 @@ export function routesForLayouts(def: Definition): {
       componentStoreOf(opts),
       () => opts.limits ?? DEFAULT_LIMITS
     ),
+    // How many pages use each set the caller may read, counted as the
+    // system and answered as numbers only.
+    layoutCounts: layoutCountsRoute(),
   };
 }

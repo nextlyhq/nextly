@@ -84,6 +84,18 @@ function seoImage(value: unknown): ShareImage | undefined {
  * Only content every visitor sees speaks for the page, as on the published
  * route: a block behind a condition is not read.
  */
+/**
+ * The title a search result or a shared link shows: the page's SEO title,
+ * else its own title, trimmed; nothing in the design offers the title, as on
+ * the published page.
+ */
+export function shareTitle(
+  seo: ShareSeoFields | undefined,
+  pageTitle: string
+): string {
+  return text(seo?.metaTitle) ?? text(pageTitle) ?? "Untitled";
+}
+
 export function sharePreview(args: {
   seo: ShareSeoFields | undefined;
   /**
@@ -105,9 +117,7 @@ export function sharePreview(args: {
           args.definitions ?? (type => getBlock(type)),
           node => !isConditionGated(node)
         );
-  // The page's SEO title, else its own title: nothing in the design offers
-  // the title, as on the published page.
-  const title = text(seo.metaTitle) ?? text(args.pageTitle) ?? "Untitled";
+  const title = shareTitle(args.seo, args.pageTitle);
   const description = text(seo.metaDescription) ?? text(derived.description);
   const first = derived.image?.[0];
   const image =

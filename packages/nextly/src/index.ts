@@ -280,6 +280,7 @@ export type {
   FindMediaByIDArgs,
   FindMediaByIDsArgs,
   MediaCopyArgs,
+  MediaCopiesArgs,
   UpdateMediaArgs,
   DeleteMediaArgs,
   BulkDeleteMediaArgs,
@@ -343,6 +344,17 @@ export type {
   QueuedEmail,
   QueuedEmailState,
   CancelQueuedEmailArgs,
+  // The Email hub's Activity reads, `nextly.emailDeliveries.*`
+  // (experimental).
+  FindEmailDeliveriesArgs,
+  FindQueuedEmailsArgs,
+  EmailLastSentArgs,
+  EmailOverdueArgs,
+  ActivityPage,
+  DeliveryActivity,
+  QueuedEmailActivity,
+  QueuedEmailOverdue,
+  TemplatesLastSent,
 } from "./direct-api/types";
 
 // Email templates (experimental). Template data takes lists and objects;
@@ -1162,7 +1174,6 @@ export type {
 // Version pins: a feature registers itself as a holder once, then points named
 // slots at a document's versions, and retention never removes a version a slot
 // points at. Pins run on the caller's core transaction.
-// @experimental
 export {
   registerVersionPinHolder,
   versionPins,
@@ -1172,7 +1183,23 @@ export {
   type VersionPinHolderDefinition,
   type VersionPinSlot,
 } from "./domains/versions/version-pins";
-export type { VersionRef } from "./domains/versions/versions-repository";
+export type {
+  VersionRef,
+  // What `ctx.services.versions` takes and returns: a plugin names these from
+  // the SDK, which forwards them, rather than reaching into core's files.
+  AutosaveSupersession,
+  AutosaveWriteResult,
+  PendingEditCursor,
+  PendingEditOrder,
+  VersionMeta,
+  VersionRow,
+} from "./domains/versions/versions-repository";
+export type { VersionListOptions } from "./domains/versions/versions-service";
+export type { RestoreVersionResult } from "./domains/versions/restore-version";
+export type { VersionStatus } from "./schemas/versions/types";
+export type { ContentEventSubject } from "./domains/content-events/record";
+export type { ContentEventRecord } from "./domains/content-events/repository";
+export type { SubjectEventsQuery } from "./api/subject-events";
 
 // Which fields a level addresses, with presentational groups flattened.
 // Exported because a plugin that walks a collection's fields was otherwise

@@ -447,7 +447,7 @@ describe("Remove Layout, with nothing in the way", () => {
 
     const answer = await remove(d);
 
-    expect(answer.message).toBe("The Layout was deleted.");
+    expect(answer.message).toBe("The header & footer set was deleted.");
     expect(s.layouts.has("landing")).toBe(false);
     const [written] = s.writes;
     expect(written).toMatchObject({ overrideAccess: false, user: PERSON.user });
@@ -586,7 +586,7 @@ describe("what stops a removal", () => {
       const error = await refusal(remove(d));
 
       expect((error as Error).message).toBe(
-        '1 page uses this Layout: "Home". Choose another Layout for it first.'
+        '1 page uses this header & footer set: "Home". Choose another header & footer set for it first.'
       );
       expect(d.store.rows.size).toBe(0);
       expect(s.layouts.has("landing")).toBe(true);
@@ -658,7 +658,7 @@ describe("a write that committed and then failed", () => {
 
     const answer = await remove(d);
 
-    expect(answer.message).toBe("The Layout was deleted.");
+    expect(answer.message).toBe("The header & footer set was deleted.");
     expect(s.layouts.has("landing")).toBe(false);
     expect(d.store.rows.get("landing")).toMatchObject({ step: "removed" });
   });
@@ -698,7 +698,7 @@ describe("a Layout that changes while it is removed", () => {
   const moved = () =>
     NextlyError.conflict({
       logContext: {
-        legacyMessage: "Use Remove Layout… on the Layout's screen",
+        legacyMessage: "Use Remove header & footer set… on the set's screen",
       },
     });
 
@@ -886,7 +886,7 @@ describe("a promotion landing between the last look at the default and the write
 
     const answer = await remove(d, "unpublish");
 
-    expect(answer.message).toBe("The Layout was unpublished.");
+    expect(answer.message).toBe("The header & footer set was unpublished.");
     expect(s.created).toBe(0);
     expect(d.warned.some(m => m.includes("default repair"))).toBe(true);
   });
@@ -1013,7 +1013,7 @@ describe("a long scan under the fence", () => {
       dryRun: false,
     });
 
-    expect(answer.message).toBe("The Layout was deleted.");
+    expect(answer.message).toBe("The header & footer set was deleted.");
     expect(d.store.renewals).toContainEqual({
       layoutId: "landing",
       token: "token-1",
@@ -1124,7 +1124,7 @@ describe("a page deleted while the scan reads it", () => {
     );
 
     expect(deleted).toBe(true);
-    expect(answer.message).toBe("The Layout was deleted.");
+    expect(answer.message).toBe("The header & footer set was deleted.");
     expect(s.layouts.has("landing")).toBe(false);
   });
 
@@ -1634,7 +1634,7 @@ describe("Move pages, then remove", () => {
       field: "layout",
       expectedVersion: "7",
       reason:
-        'Layout "Landing" is being deleted, so this page was moved to the site default.',
+        'Header & footer set "Landing" is being deleted, so this page was moved to the site default.',
     });
     expect(s.pageWrites).toEqual([]);
     expect(d.store.rows.get("landing")).toMatchObject({
@@ -2080,7 +2080,7 @@ describe("a plain removal, with a page on the Layout only on its live row", () =
     const error = await refusal(remove(d));
 
     expect((error as Error).message).toBe(
-      '1 page uses this Layout: "Live". Choose another Layout for it first.'
+      '1 page uses this header & footer set: "Live". Choose another header & footer set for it first.'
     );
     expect(s.layouts.has("landing")).toBe(true);
   });

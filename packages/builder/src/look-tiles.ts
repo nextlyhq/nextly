@@ -17,6 +17,7 @@ import {
   isTokenRef,
   resolveSiteTokens,
   scaledTokenText,
+  starredLooksOf,
   tokenIdentity,
   type NamedClass,
   type NodeStyles,
@@ -36,6 +37,8 @@ export interface LookTile {
   readonly name: string;
   /** The look's own styles, laid over the block's base for the tile. */
   readonly styles: NodeStyles | undefined;
+  /** A hidden style, shown only to the block already wearing it. */
+  readonly hidden: boolean;
 }
 
 /**
@@ -76,22 +79,48 @@ export function boundLooksOf(
 
 /**
  * The tiles for a block: its own look first, named as its definition names
- * it, then its type's looks. No tiles when the type has no looks: a row of
- * one tile would offer a choice that isn't there.
+ * it, then its type's looks. A hidden look is offered only to the block
+ * already wearing it (`worn`), which keeps it, so a hidden style never
+ * vanishes from a block that has it. No tiles when the type has no looks: a
+ * row of one tile would offer a choice that isn't there.
  */
 export function lookTiles(
   library: readonly NamedClass[],
   blockType: string,
-  ownName: string | undefined
+  ownName: string | undefined,
+  worn: string | null = null
 ): LookTile[] {
-  const looks = looksOfType(library, blockType);
-  if (looks.length === 0) return [];
+  const all = looksOfType(library, blockType);
+  if (all.length === 0) return [];
+  // Picking no style gives the ★ style when one carries it, so that tile is
+  // named and drawn as the ★ style, which isn't offered a second time unless
+  // the block wears it by name.
+  const starred = starredLooksOf(usableSiteClasses(library)).get(blockType);
+  const looks = all.filter(
+    look =>
+      look.id === worn || (look.hidden !== true && look.id !== starred?.id)
+  );
+  const none: LookTile =
+    starred === undefined
+      ? {
+          id: null,
+          name: ownName ?? "Default",
+          styles: undefined,
+          hidden: false,
+        }
+      : {
+          id: null,
+          name: sharedStyleName(starred),
+          styles: starred.styles,
+          hidden: false,
+        };
   return [
-    { id: null, name: ownName ?? "Default", styles: undefined },
+    none,
     ...looks.map(look => ({
       id: look.id,
       name: sharedStyleName(look),
       styles: look.styles,
+      hidden: look.hidden === true,
     })),
   ];
 }

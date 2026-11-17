@@ -15,6 +15,7 @@
 import {
   compileSiteSheet,
   emitTokenBlocks,
+  MAX_TOKEN_LABEL_LENGTH,
   tokenIdentity,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
@@ -24,9 +25,13 @@ import {
   TOKEN_KIND_LABELS,
   addToken,
   addVariable,
+  duplicateVariable,
+  labelClashes,
   labelNewVariable,
   relabelToken,
   variableGroups,
+  variableMatchesByTab,
+  DESIGN_TAB_GROUPS,
   variableLabelIssue,
   clearDarkValue,
   removeToken,
@@ -553,18 +558,58 @@ describe("variables, grouped as the Design panel shows them", () => {
       ])
     );
 
-  it("puts each variable in one of four groups, in the panel's order", () => {
+  it("puts each variable in one of five groups, in the panel's order", () => {
     expect(variableGroups(SET).map(group => group.heading)).toEqual([
       "Colours",
       "Type scale",
+      "Fonts and weights",
       "Spacing, radius & shadows",
-      "Other",
+      "Other values",
     ]);
+    // A font sits with the type, and only what belongs to no other group is
+    // an other value.
     expect(grouped()).toEqual({
       colours: ["Brand"],
       type: ["Body", "Loose"],
+      fonts: ["Body"],
       spacing: ["Space 4", "Card", "Card"],
-      other: ["Content width", "Body"],
+      other: ["Content width"],
+    });
+  });
+
+  it("lists each group under one Design tab", () => {
+    expect(DESIGN_TAB_GROUPS).toEqual({
+      colours: ["colours"],
+      type: ["type", "fonts"],
+      spacing: ["spacing", "other"],
+      styles: [],
+    });
+    // Every group is under exactly one tab.
+    const listed = Object.values(DESIGN_TAB_GROUPS).flat();
+    expect([...listed].sort()).toEqual(
+      variableGroups(SET)
+        .map(group => group.group)
+        .sort()
+    );
+  });
+
+  it("counts a search's matches per tab, by the names shown", () => {
+    // "Body" is a type size and a font: two in Type, none elsewhere.
+    expect(variableMatchesByTab(SET, "body")).toEqual({
+      colours: 0,
+      type: 2,
+      spacing: 0,
+    });
+    expect(variableMatchesByTab(SET, "card")).toEqual({
+      colours: 0,
+      type: 0,
+      spacing: 2,
+    });
+    // Code names are hidden, so they are not what a search matches.
+    expect(variableMatchesByTab(SET, "font-size")).toEqual({
+      colours: 0,
+      type: 0,
+      spacing: 0,
     });
   });
 
@@ -790,5 +835,33 @@ describe("a value is checked before it is accepted", () => {
       "tokens" in writeTokenValue(set, 1, "light", "oklch(0.6 0.2 250)")
     ).toBe(true);
     expect("tokens" in writeTokenValue(set, 0, "light", "auto")).toBe(true);
+  });
+});
+
+describe("duplicating a variable", () => {
+  const base: SiteTokenSet = {
+    tokens: [
+      { name: "color.brand", kind: "color", values: { light: "#1d2b6b" } },
+    ],
+  };
+
+  it("names a second copy apart from the first", () => {
+    const once = duplicateVariable(base, 0, "Brand");
+    expect(once.tokens.tokens[once.at]?.label).toBe("Brand copy");
+    const twice = duplicateVariable(once.tokens, 0, "Brand");
+    expect(twice.tokens.tokens[twice.at]?.label).toBe("Brand copy 2");
+    expect(labelClashes(twice.tokens)).toEqual([]);
+  });
+
+  it("keeps a copy of a long name within the label limit", () => {
+    const long = "L".repeat(MAX_TOKEN_LABEL_LENGTH);
+    const set: SiteTokenSet = {
+      tokens: [{ ...base.tokens[0]!, label: long }],
+    };
+    const made = duplicateVariable(set, 0, long);
+    const label = made.tokens.tokens[made.at]?.label ?? "";
+    expect(label.length).toBeLessThanOrEqual(MAX_TOKEN_LABEL_LENGTH);
+    expect(label.endsWith(" copy")).toBe(true);
+    expect(variableLabelIssue(made.tokens, made.at, label)).toBeUndefined();
   });
 });

@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
 /**
- * The switch that applies visibility conditions on the canvas: in a
- * template's Previewing strip, and in the strip a component gets, where
- * there is no entry to check against.
+ * Previewing as a visitor: the strip above the canvas while the author's
+ * visitor view is on, what it says the conditions did, and why the view
+ * can't be turned on where it can't.
  *
  * @module admin/editor/conditions-strip.test
  */
@@ -13,10 +13,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   conditionsCountWords,
-  PageConditionsStrip,
-  PlacedConditionsStrip,
-  TemplateConditionsPart,
-  type TemplateConditions,
+  VisitorStrip,
+  visitorStripWords,
+  visitorUnavailable,
 } from "./conditions-strip";
 
 afterEach(cleanup);
@@ -34,19 +33,6 @@ function appliedHiding(...names: string[]): AppliedConditions {
       reason: "hidden for this post: Category is not Guides",
       unchecked: false,
     })),
-  };
-}
-
-function conditions(
-  extra: Partial<TemplateConditions> = {}
-): TemplateConditions {
-  return {
-    on: false,
-    toggle: () => undefined,
-    available: true,
-    applied: undefined,
-    noun: "post",
-    ...extra,
   };
 }
 
@@ -115,93 +101,75 @@ describe("what the conditions did, in words", () => {
   });
 });
 
-describe("the switch in a template's Previewing strip", () => {
-  it("is a switch that toggles, with its count in a live region", () => {
-    const toggle = vi.fn();
-    const { rerender } = render(
-      <TemplateConditionsPart conditions={conditions({ toggle })} />
-    );
-    const button = screen.getByRole("switch", { name: "Apply conditions" });
-    expect(button.getAttribute("aria-checked")).toBe("false");
-    // Present and empty while off, so the first change is announced.
-    expect(screen.getByRole("status").textContent).toBe("");
-    fireEvent.click(button);
-    expect(toggle).toHaveBeenCalledTimes(1);
-
-    rerender(
-      <TemplateConditionsPart
-        conditions={conditions({ on: true, applied: appliedHiding("a") })}
-      />
+describe("what the visitor strip says", () => {
+  it("says what was hidden, that it is still checking, or that it couldn't check", () => {
+    expect(
+      visitorStripWords({ applied: appliedHiding("a"), noun: "post" })
+    ).toBe("1 block hidden for this post");
+    // Before the entry is read as a visitor reads it.
+    expect(visitorStripWords({ applied: undefined, noun: "page" })).toBe(
+      "Checking…"
     );
     expect(
-      screen
-        .getByRole("switch", { name: "Apply conditions" })
-        .getAttribute("aria-checked")
-    ).toBe("true");
-    expect(screen.getByRole("status").textContent).toBe(
-      "1 block hidden for this post"
-    );
-  });
-
-  it("is disabled and off while no entry is previewed", () => {
-    render(
-      <TemplateConditionsPart
-        conditions={conditions({ on: true, available: false })}
-      />
-    );
-    const button = screen.getByRole("switch", { name: "Apply conditions" });
-    expect(button.hasAttribute("disabled")).toBe(true);
-    expect(button.getAttribute("aria-checked")).toBe("false");
+      visitorStripWords({ applied: undefined, noun: "page", failed: true })
+    ).toBe("Couldn’t load the visitor view. Stop, then try again.");
   });
 });
 
-describe("the strip a component gets", () => {
-  it("names what is edited and holds the switch disabled, described by why", () => {
+describe("the strip while previewing as a visitor", () => {
+  it("says it, says what was hidden in a live region, and stops", () => {
+    const onStop = vi.fn();
     render(
-      <PlacedConditionsStrip kind="Component" name="Members’ worksheet" />
+      <VisitorStrip said="1 block hidden for this page" onStop={onStop} />
     );
-    expect(screen.getByText("Component")).toBeTruthy();
-    expect(screen.getByText("Members’ worksheet")).toBeTruthy();
-    const button = screen.getByRole("switch", { name: "Apply conditions" });
-    expect(button.hasAttribute("disabled")).toBe(true);
-    const why = document.getElementById(
-      button.getAttribute("aria-describedby") ?? ""
-    );
-    expect(why?.textContent).toBe(
-      "No entry to check here. The published page checks them where it’s placed."
-    );
-  });
-});
-
-describe("the strip a page gets", () => {
-  it("says when the page couldn't be read, and how to try again", () => {
-    render(
-      <PageConditionsStrip
-        conditions={conditions({ on: true, failed: true, noun: "page" })}
-      />
-    );
-    expect(screen.getByRole("status").textContent).toBe(
-      "Couldn’t check this page. Turn the switch off and on to try again."
-    );
-  });
-
-  it("holds the switch and its count, and no entry to name", () => {
-    render(
-      <PageConditionsStrip
-        conditions={conditions({
-          on: true,
-          applied: appliedHiding("a"),
-          noun: "page",
-        })}
-      />
-    );
-    const button = screen.getByRole("switch", { name: "Apply conditions" });
-    expect(button.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText("Previewing as a visitor")).toBeTruthy();
     expect(screen.getByRole("status").textContent).toBe(
       "1 block hidden for this page"
     );
-    // The page is its own: no chip naming an entry, nothing to choose.
-    expect(screen.queryByText("Previewing")).toBeNull();
-    expect(screen.queryByRole("button", { name: /Previewing/ })).toBeNull();
+    const stop = screen.getByRole("button", {
+      name: "Stop previewing as a visitor",
+    });
+    // The word it shows starts the name it is read by.
+    expect(stop.textContent).toBe("Stop");
+    fireEvent.click(stop);
+    expect(onStop).toHaveBeenCalledTimes(1);
+    // Nothing of the switch it replaces.
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.queryByText("Apply conditions")).toBeNull();
+  });
+});
+
+describe("why Preview as visitor can't be turned on", () => {
+  it("is available on a page or template with a conditioned block and an entry to check", () => {
+    expect(visitorUnavailable("page", true, true)).toBeUndefined();
+    // On a collection template, checked against the entry being previewed.
+    expect(visitorUnavailable("template", true, true)).toBeUndefined();
+  });
+
+  it("says no block has conditions where none has", () => {
+    expect(visitorUnavailable("page", false, true)).toBe(
+      "No block on this page has conditions"
+    );
+    expect(visitorUnavailable("template", false, true)).toBe(
+      "No block on this page has conditions"
+    );
+  });
+
+  it("gives a component or a Layout's part the reason it has no entry to check", () => {
+    // A Layout's header and footer are components too.
+    const placed =
+      "No entry to check here. The published page checks them where it’s placed.";
+    expect(visitorUnavailable("component", true, false)).toBe(placed);
+    expect(visitorUnavailable("component", false, false)).toBe(placed);
+  });
+
+  it("says it needs an entry where there is none to check against", () => {
+    // A Single, or a template with no entry previewed yet.
+    expect(visitorUnavailable("page", true, false)).toBe(
+      "Needs an entry to check its conditions against."
+    );
+    expect(visitorUnavailable("template", true, false)).toBe(
+      "Needs an entry to check its conditions against."
+    );
   });
 });

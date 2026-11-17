@@ -511,6 +511,19 @@ export interface PluginDocumentView {
 export interface PluginFieldTypeDocumentView extends PluginDocumentView {
   /** The field type, one of this plugin's own `contributes.fieldTypes`. */
   fieldType: string;
+  /**
+   * @experimental `"mainField"`: open a collection's entries in this view when
+   * the collection's main field is of this view's field type, unless the
+   * collection says where its entries open (`admin.opensIn`). The main field
+   * is the first top-level field, reading into unnamed groups as the form lays
+   * them out, that is not hidden, not the title and not `slug`.
+   *
+   * Allowed only on a view scoped to a field type, and on one such view per
+   * field type; boot refuses anything else. The admin still opens the form
+   * for a reader who may not update the entry, and for an entry opened in a
+   * language other than the default.
+   */
+  opensFirst?: "mainField";
 }
 
 /**

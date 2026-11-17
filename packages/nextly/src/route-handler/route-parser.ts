@@ -854,8 +854,6 @@ function parseCollectionEntryPublishAllRoute(
  * `GET /singles/{slug}/events`: a document's events, nested under it like its
  * version history so the document's `read-{slug}` permission guards them with
  * no separate authorization branch.
- *
- * @experimental
  */
 function parseDocumentEventRoutes(
   resource: string,
@@ -1523,6 +1521,28 @@ function parseSingleRoutes(
     };
   }
 
+  // POST /api/singles/[slug]/publish and /unpublish → publish or unpublish the
+  // parts of the Single the body chooses (@experimental). Admitted as an
+  // update, as a collection entry's are: the service asks each chosen part's
+  // own publish or unpublish rule. Nothing past the action names this route.
+  if (
+    id &&
+    (subresource === "publish" || subresource === "unpublish") &&
+    !subId &&
+    httpMethod === "POST"
+  ) {
+    routeParams.slug = id;
+    return {
+      service: "singles",
+      operation: "update",
+      method:
+        subresource === "publish"
+          ? "publishSingleParts"
+          : "unpublishSingleParts",
+      routeParams,
+    };
+  }
+
   // GET /api/singles/[slug]/schema → get Single schema/metadata
   if (id && subresource === "schema" && httpMethod === "GET") {
     routeParams.slug = id;
@@ -2058,6 +2078,43 @@ function parseEmailTemplateRoutes(
   if (!route) return null;
   routeParams.templateId = id;
   return parsed(route);
+}
+
+// ============================================================================
+// Email Delivery Routes Parser
+// ============================================================================
+
+/** `/api/email-deliveries/<read>`, each a GET, by its URL token. */
+const EMAIL_DELIVERY_READS: Record<string, string> = {
+  queued: "listQueuedEmails",
+  "last-sent": "lastSentByTemplate",
+  overdue: "overdueQueuedEmails",
+};
+
+/**
+ * Parse the Email hub's Activity routes. Each is a read, answered by the
+ * direct-dispatch `email` service, whose handler asks
+ * `read-email-deliveries`:
+ * - GET /api/email-deliveries → delivery records, newest first, filtered
+ * - GET /api/email-deliveries/queued → queued emails, newest first, filtered
+ * - GET /api/email-deliveries/last-sent → when each template was last sent
+ * - GET /api/email-deliveries/overdue → whether queued email is overdue
+ */
+function parseEmailDeliveryRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (httpMethod !== "GET" || subresource) return null;
+  const method = id === undefined ? "listDeliveries" : EMAIL_DELIVERY_READS[id];
+  if (!method) return null;
+  return {
+    service: "email",
+    operation: id === undefined ? "list" : "single",
+    method,
+    routeParams,
+  };
 }
 
 // ============================================================================
@@ -3337,6 +3394,17 @@ export function parseRestRoute(
   // Handle Email Templates endpoints
   if (resource === "email-templates") {
     const result = parseEmailTemplateRoutes(
+      id,
+      subresource,
+      httpMethod,
+      routeParams
+    );
+    if (result) return result;
+  }
+
+  // Handle the Email hub's Activity reads
+  if (resource === "email-deliveries") {
+    const result = parseEmailDeliveryRoutes(
       id,
       subresource,
       httpMethod,

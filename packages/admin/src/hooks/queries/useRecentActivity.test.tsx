@@ -16,7 +16,27 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
   },
 }));
 
+import { documentAddress } from "@admin/lib/navigation/document-address";
+import type { DocumentAddressOf } from "@admin/lib/navigation/useDocumentAddress";
+
 import { activityHref, useRecentActivity } from "./useRecentActivity";
+
+/** The shared rule over a collection that opens its entries in a view. */
+const addressOf: DocumentAddressOf = (document, options = {}) =>
+  documentAddress(
+    document,
+    document.slug === "pages"
+      ? {
+          fields: [
+            { name: "title", type: "text" },
+            { name: "content", type: "blocks" },
+          ],
+          admin: { opensIn: "builder" },
+        }
+      : undefined,
+    { canUpdate: true, defaultLocale: "en", ...options },
+    [{ fieldType: "blocks", path: "builder", component: "@acme/x#Builder" }]
+  );
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({
@@ -126,25 +146,38 @@ describe("where a feed row leads", () => {
   };
 
   it("opens the entry a change was made to", () => {
-    expect(activityHref(row)).toBe("/admin/collections/posts/42");
+    expect(activityHref(row, addressOf)).toBe("/admin/collections/posts/42");
+  });
+
+  it("opens the entry where its collection opens entries, as every other link does", () => {
+    expect(activityHref({ ...row, collection: "pages" }, addressOf)).toBe(
+      "/admin/collections/pages/42/builder?field=content"
+    );
   });
 
   it("opens the Single a change was made to, by its slug", () => {
     expect(
-      activityHref({
-        ...row,
-        collection: "site-settings",
-        subjectKind: "single",
-      })
+      activityHref(
+        {
+          ...row,
+          collection: "site-settings",
+          subjectKind: "single",
+        },
+        addressOf
+      )
     ).toBe("/admin/singles/site-settings");
   });
 
   it("leads nowhere for a deletion, whose subject is gone", () => {
-    expect(activityHref({ ...row, action: "delete" })).toBeUndefined();
+    expect(
+      activityHref({ ...row, action: "delete" }, addressOf)
+    ).toBeUndefined();
   });
 
   it("leads nowhere for a change to settings, or a row naming no entry", () => {
-    expect(activityHref({ ...row, subjectKind: "settings" })).toBeUndefined();
-    expect(activityHref({ ...row, entryId: null })).toBeUndefined();
+    expect(
+      activityHref({ ...row, subjectKind: "settings" }, addressOf)
+    ).toBeUndefined();
+    expect(activityHref({ ...row, entryId: null }, addressOf)).toBeUndefined();
   });
 });

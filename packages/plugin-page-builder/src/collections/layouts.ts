@@ -30,21 +30,22 @@
  * and a resolver reading one back could not tell a variant that was never
  * built from a typo. It lands with the declarations it selects from.
  *
- * ## A component reference here is not enforced by the database
+ * ## A component reference here is enforced by the plugin, not the database
  *
  * `areas` is a repeater, and a repeater is stored as ONE JSON column, so the
  * `relationship` nested in it never becomes a column of its own and emits no
- * foreign key and no delete policy. Deleting a component therefore leaves its
- * id sitting in every Layout that named it, and nothing reports that.
+ * foreign key and no delete policy. The plugin keeps the reference whole from
+ * both ends instead:
  *
- * Stated rather than papered over. A write-time existence check would read as
- * integrity while providing none — the component can be deleted the moment
- * after it passes — and no foreign key would help with the other half of the
- * problem anyway, since a component that still exists but is unpublished is
- * equally unusable to a resolver. What this actually needs is a delete policy
- * (refuse, or orphan and degrade), which is a decision about what an author
- * should experience rather than a repair, and it belongs with the resolver
- * that will be the first thing to read these references.
+ * - a component a Layout names can be neither deleted nor unpublished
+ *   (`layout-component-guard.ts`); the refusal names the Layout;
+ * - a Layout write naming a component that does not exist, or one being
+ *   deleted, is refused, naming the area, and judged again inside the write's
+ *   transaction so a delete running at the same moment can't slip between the
+ *   two (`layout-area-guard.ts`);
+ * - an id a Layout already held, left by a delete no check saw, is dropped by
+ *   the Layout's next save of its areas, and until then a reader draws nothing
+ *   in that area.
  *
  * ## The site's default is not stored here
  *
@@ -109,7 +110,7 @@ function rejectRepeatedAreas(value: RepeaterFieldValue): string | true {
 export function layoutsCollection(): CollectionConfig {
   return defineCollection({
     slug: LAYOUTS_SLUG,
-    labels: { singular: "Layout", plural: "Layouts" },
+    labels: { singular: "Header & footer set", plural: "Header & footer" },
     fields: [
       text({ name: "title", required: true }),
       text({ name: "slug", required: true, unique: true }),

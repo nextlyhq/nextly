@@ -116,14 +116,9 @@ test.describe("a recovery point that is no longer offered", () => {
       expect(on.getByRole("region", { name: "Canvas" })).toBeVisible({
         timeout: 60_000,
       });
-    const offerChip = (on: Page) =>
-      on
-        .locator('[data-topbar="end"]')
-        .getByRole("button", { name: "Unsaved changes: Save or Discard" });
-    const chip = (on: Page) =>
-      on
-        .locator('[data-topbar="end"]')
-        .locator('[data-testid="save-state-indicator"]');
+    // The bar's Save, which makes the offer while changes wait.
+    const saveButton = (on: Page) =>
+      on.locator('[data-topbar="end"]').locator('[data-action="save"]');
 
     // A change stored as a recovery point and never saved.
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -140,14 +135,15 @@ test.describe("a recovery point that is no longer offered", () => {
     // Next visit: offered, and discarded.
     await gotoAdmin(page, builder);
     await canvas(page);
-    await offerChip(page).click();
+    await expect(saveButton(page)).toHaveText("Save");
+    await saveButton(page).click();
     const emptied = pointStored(page, "pages", item.id);
     await page
       .getByRole("dialog")
       .getByRole("button", { name: "Discard" })
       .click();
     await emptied;
-    await expect(chip(page)).toHaveText("Saved");
+    await expect(saveButton(page)).toHaveText("Saved");
 
     // A new tab is a new session: still nothing offered.
     const other = await context.newPage();
@@ -156,7 +152,7 @@ test.describe("a recovery point that is no longer offered", () => {
     await gotoAdmin(other, builder);
     await read;
     await canvas(other);
-    await expect(chip(other)).toHaveText("Saved");
-    await expect(offerChip(other)).toHaveCount(0);
+    // Saved, and so offering nothing.
+    await expect(saveButton(other)).toHaveText("Saved");
   });
 });

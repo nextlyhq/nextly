@@ -137,6 +137,7 @@ import type { MethodHandler, Params } from "../types";
 
 import { respondAddressCheck } from "./address-check-route";
 import { readListOwner, slugListsForOwner } from "./list-owner";
+import { PublishPartsBody } from "./publish-parts-body";
 import { readAccessCallerForDispatch } from "./read-access-caller";
 // Shared guard that centralizes required + stale schema-version validation for
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
@@ -251,22 +252,6 @@ function allLocalesLifecycle(
 }
 
 /**
- * The body of a publish or unpublish of an entry's chosen parts: the languages, or `"all"`, whether
- * the shared part is chosen too, and whether to only say what it would do. The version fields
- * (`_rev`, `_overwrite`) are read beside it, as for every lifecycle move.
- */
-const PublishPartsBody = z
-  .object({
-    locales: z.union([
-      z.literal("all"),
-      z.array(z.string().min(1).max(64)).max(500),
-    ]),
-    shared: z.boolean().optional(),
-    describe: z.boolean().optional(),
-  })
-  .passthrough();
-
-/**
  * Publishing or unpublishing the parts of one entry the body chooses (@experimental). Forwarded as
  * the every-language moves forward theirs: the caller's identity and scope, `routeAuthorized`
  * false, and the version the move was made from.
@@ -296,6 +281,9 @@ function partsLifecycle(
           routeAuthorized: false,
           authenticatedScope: readAuthenticatedScope(),
           data: versionInputOf(body),
+          ...(parts.withoutReview === undefined
+            ? {}
+            : { withoutReview: parts.withoutReview }),
         },
         {
           direction,
@@ -1600,6 +1588,10 @@ const COLLECTIONS_METHODS: Record<
         sourceLocales: isTruthyParam(p["source-locales"]),
         // `?translations=all` attaches every language's values (`_allLocales`).
         translations: parseTranslationsParam(p.translations),
+        // `?details=1` attaches `_details` (address, who made and changed it),
+        // only for a signed-in admin user: anyone else gets the plain entry.
+        details:
+          isTruthyParam(p.details) && readAuthenticatedActor()?.type === "user",
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,

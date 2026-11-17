@@ -101,8 +101,6 @@ export interface RestoreVersionArgs {
   /**
    * The fields to restore, by top-level name; every field the version holds
    * when absent. A name the version does not hold restores nothing.
-   *
-   * @experimental
    */
   fields?: readonly string[];
 }

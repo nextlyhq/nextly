@@ -151,7 +151,7 @@ test.describe("blocks a plugin contributes", () => {
     await expect(page.locator(PLACEHOLDER)).toHaveCount(0);
   });
 
-  test("a custom inspector edits its block, beside the CSS id, attributes and Style", async ({
+  test("a custom inspector edits its block, beside the anchor, attributes and Style", async ({
     page,
   }) => {
     const id = await createPage(page.request);
@@ -170,10 +170,17 @@ test.describe("blocks a plugin contributes", () => {
     await headline.press("Enter");
     await expect(fixture(page, "custom")).toHaveText("Edited headline");
 
-    // What every block keeps beside its own inspector.
-    // Content's last section, where the CSS id and attributes live.
-    await page.getByText("Advanced", { exact: true }).click();
-    const cssId = page.getByRole("textbox", { name: "CSS id" });
+    // What every block keeps beside its own inspector: the Advanced tab,
+    // where the anchor and attributes live.
+    await page.getByRole("tab", { name: "Advanced" }).click();
+    // HTML starts closed on a block whose HTML holds nothing.
+    const html = page
+      .getByTestId("inspector")
+      .locator('[data-section="html"] [data-slot="accordion-trigger"]');
+    if ((await html.getAttribute("aria-expanded")) !== "true") {
+      await html.click();
+    }
+    const cssId = page.getByRole("textbox", { name: "Anchor (ID)" });
     await cssId.fill("fixture-anchor");
     await cssId.press("Enter");
     await page.getByRole("button", { name: "Add attribute" }).click();
@@ -185,9 +192,9 @@ test.describe("blocks a plugin contributes", () => {
     await value.press("Tab");
 
     await page.getByRole("tab", { name: "Style" }).click();
-    // Colour sits in Typography, its first and only section here.
+    // Colour sits in Text, its first and only section here.
     const color = page
-      .getByRole("region", { name: /^Typography/ })
+      .getByRole("region", { name: /^Text(\s?has changes)?$/ })
       .getByRole("textbox", { name: "Colour", exact: true });
     await color.fill("#1155cc");
     await color.press("Enter");

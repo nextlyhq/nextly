@@ -31,27 +31,15 @@
  * long page off after its first screen, and the point of the preview is that
  * an author can read what the page says without opening the editor.
  *
- * ## `transform`, never `zoom`
+ * ## Drawn on the shared picture parts
  *
- * A deliberate divergence from the canvas, which uses `zoom`. `zoom`
- * participates in layout, and the canvas needs that: hit-testing, drag geometry
- * and the drop indicator are all positioned in the scaled box's own
- * coordinates. Nothing here is interactive, so participation buys nothing and
- * costs a reflow of the whole rendered tree on every resize.
- *
- * `transform` alone does NOT keep the scaled content out of the flow, which is
- * the trap: it removes the element from painting and leaves it in layout, so a
- * statically positioned child declared at the compose width stretches every
- * ancestor to that width. The scaled element is absolutely positioned for that
- * reason, and only then is the frame's measured width the column's width.
- *
- * ## An unmeasurable container renders UNSCALED
- *
- * A container reports zero width before layout, and in any environment that
- * does not lay out at all. Scaling by the measured ratio there multiplies the
- * page by zero and draws nothing — a blank frame that looks exactly like a page
- * with no content. Rendering unscaled instead is wrong only in how much of the
- * page is visible, and it is wrong visibly, which is the better failure.
+ * When it is first seen, the scale that fits the composed width into the
+ * frame, and the inert surface the page is drawn on are the builder's picture
+ * parts (`MiniatureSurface` and its hooks), shared with the editor's pictures
+ * of saved sections and header & footer sets. Why the surface scales with
+ * `transform` rather than `zoom`, and why an unmeasured frame draws unscaled,
+ * is written there. What is this surface's own is the frame: as tall as the
+ * page up to a cap, with a link over each section.
  *
  * @module @nextlyhq/plugin-page-builder/admin/PageMiniature
  */
@@ -60,9 +48,14 @@ import {
   createStandaloneContext,
   NODE_ID_ATTRIBUTE,
   PageRenderer,
-  previewContainerStyle,
   type PageRendererProps,
 } from "@nextlyhq/blocks-react";
+import {
+  MINIATURE_RENDER_WIDTH,
+  MiniatureSurface,
+  useFirstSeen,
+  useWidthScale,
+} from "@nextlyhq/builder/shell";
 import {
   useCallback,
   useLayoutEffect,
@@ -71,24 +64,18 @@ import {
   useState,
   type CSSProperties,
   type JSX,
-  type ReactNode,
   type RefObject,
 } from "react";
 
 import { entryBlockResolver } from "./entry-block-resolver";
 import type { PageRenderInputs } from "./page-render-inputs";
 import { navigateWithin } from "./plain-click";
-import { useFirstSeen } from "./use-first-seen";
 
 /**
- * The width the page is composed at before being scaled down.
- *
- * A desktop tier. A page laid out for desktop, rendered at the few hundred
- * pixels a form column offers, would draw its MOBILE layout — a truthful
- * rendering of a viewport the author was not looking at, which reads as the
- * page being wrong rather than as the preview being narrow.
+ * The width the page is composed at before being scaled down: a desktop tier,
+ * the one every picture of a document is composed at.
  */
-const DEFAULT_RENDER_WIDTH = 1280;
+const DEFAULT_RENDER_WIDTH = MINIATURE_RENDER_WIDTH;
 
 export interface PageMiniatureProps {
   /** The document to draw. */
@@ -241,39 +228,6 @@ function measureBoxes(
 }
 
 /**
- * The scale that fits the composed width into the frame, kept current as the
- * frame resizes.
- */
-function useScale(
-  frame: RefObject<HTMLDivElement | null>,
-  renderWidth: number
-): number {
-  const [scale, setScale] = useState(1);
-  useLayoutEffect(() => {
-    const element = frame.current;
-    if (!element) return;
-
-    const measure = (): void => {
-      const width = element.clientWidth;
-      // Zero means "not laid out", never "zero wide". See the module docblock.
-      setScale(width > 0 ? width / renderWidth : 1);
-    };
-
-    measure();
-
-    // Guarded rather than assumed: this component renders in the admin, in
-    // tests, and anywhere a host embeds the form, and an environment without
-    // the observer must still draw the page rather than throw on the way in.
-    if (typeof ResizeObserver === "undefined") return;
-
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [frame, renderWidth]);
-  return scale;
-}
-
-/**
  * The page's own height at the composed width, and where its sections are.
  *
  * Read together, and again whenever the page's own box changes size: an image
@@ -309,93 +263,6 @@ function usePageLayout(
   }, [drawn, scale, measure, scaled]);
 
   return { composedHeight, boxes };
-}
-
-/** The page at its composed width, scaled into the frame, and inert. */
-function ScaledPage({
-  scaledRef,
-  renderWidth,
-  scale,
-  previewContainer,
-  children,
-}: {
-  scaledRef: RefObject<HTMLDivElement | null>;
-  renderWidth: number;
-  scale: number;
-  previewContainer: PageRenderInputs["styleContext"]["previewContainer"];
-  children: ReactNode;
-}): JSX.Element {
-  return (
-    <div
-      ref={scaledRef}
-      data-slot="page-miniature-scaled"
-      /*
-       * ABSOLUTE, and this is load-bearing rather than cosmetic.
-       *
-       * `transform` takes an element out of the PAINTING flow and leaves
-       * it in the LAYOUT flow, so a statically positioned 1280px child
-       * still contributes 1280px of intrinsic width to its ancestors —
-       * measured: the frame's own `clientWidth` came back as 1280 rather
-       * than the column's width, the scale computed from it was therefore
-       * 1, and the page drew full-size and overflowed the form. Taking it
-       * out of flow is what makes the frame's width a property of the
-       * COLUMN, which is the width the scale has to be computed from.
-       */
-      className="absolute left-0 top-0"
-      style={{
-        width: `${renderWidth}px`,
-        transform: `scale(${scale})`,
-        transformOrigin: "top left",
-        /*
-         * The container the compiled responsive rules resolve against, on
-         * the element whose width they must answer for — the COMPOSED
-         * width, not the clipped frame's. `@media` asks the window, so
-         * without this a miniature composed at a desktop width gets
-         * whichever tier the admin window happens to be in.
-         * `previewContainerStyle` supplies the `container-type` beside the
-         * name, because a named container left at the default `normal` is
-         * not a size-query container and every rule the compile emitted
-         * stays inert.
-         */
-        ...previewContainerStyle(previewContainer),
-      }}
-    >
-      <div
-        data-slot="page-miniature-surface"
-        inert
-        aria-hidden="true"
-        /*
-         * A submit raised anywhere in the page cannot reach the form this
-         * miniature sits inside.
-         *
-         * The entry screen is a `<form>`, and a page holding a form block
-         * emits one too — so the preview contains a nested form, which is
-         * invalid HTML. What that costs depends on how the document was
-         * built, and only one path is live here:
-         *
-         * PARSED from HTML source, the inner `</form>` closes the OUTER
-         * form early. Measured on this exact shape: a control after the
-         * nested form reports `input.form === null` — no owner, so it
-         * submits nothing. The admin ships no form markup and builds its
-         * tree through the DOM, so it does not take that path today.
-         *
-         * BUILT through the DOM, which is what happens here, a real nested
-         * form exists and controls keep their nearest-ancestor owner. The
-         * live risk is a submit from the previewed page reaching the entry
-         * form, and this is what refuses it.
-         *
-         * Captured on the WAY DOWN rather than bubbling, so it lands before
-         * any handler inside the page, and matched by the EVENT rather than
-         * by a block's name: a host's own form-rooted block raises the same
-         * event and is refused by the same line, where a check for
-         * `core/form` would have let it through.
-         */
-        onSubmitCapture={event => event.preventDefault()}
-      >
-        {children}
-      </div>
-    </div>
-  );
 }
 
 /**
@@ -485,7 +352,7 @@ export function PageMiniature({
   const pageBox = useRef<HTMLDivElement>(null);
   const scaled = useRef<HTMLDivElement>(null);
   const seen = useFirstSeen(frame);
-  const scale = useScale(frame, renderWidth);
+  const scale = useWidthScale(frame, renderWidth);
   const { composedHeight, boxes } = usePageLayout(
     seen,
     scale,
@@ -546,14 +413,15 @@ export function PageMiniature({
           className="relative w-full"
           style={size.page}
         >
-          <ScaledPage
+          <MiniatureSurface
             scaledRef={scaled}
             renderWidth={renderWidth}
             scale={scale}
             previewContainer={render.styleContext.previewContainer}
+            slot="page-miniature"
           >
             {page}
-          </ScaledPage>
+          </MiniatureSurface>
           {sections === undefined || onNavigate === undefined ? null : (
             <SectionLinks
               sections={sections}

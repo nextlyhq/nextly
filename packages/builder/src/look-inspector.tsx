@@ -31,15 +31,15 @@ import {
   type BlockLookRow,
   type LookKey,
 } from "./block-look-rows";
+import { useSiteOrientation } from "./canvas/use-canvas-reading";
 import type { EditorState } from "./editor-state";
-import { blockLabel } from "./inserter";
 import { lookReach, markLookReach } from "./look-reach";
+import { blockLabel } from "./panels/add/inserter";
 import {
   StyleInspectorPanel,
   type StyleInspectorPanelProps,
 } from "./style-inspector-panel";
 import { useLookTarget, type SharedStylesHost } from "./style-target";
-import { useSiteOrientation } from "./use-canvas-reading";
 
 /** What the host lends the inspector while a look is edited on its own. */
 export interface LookEditing {

@@ -92,7 +92,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       <div>
         <div data-testid="rail">{(availablePanels ?? []).join(",")}</div>
         <div data-testid="panel">
-          {renderPanel?.("design", { current: "classes", choose: () => {} })}
+          {renderPanel?.("design", { current: "styles", choose: () => {} })}
         </div>
         {/* Rendered, not merely constructed: the inspector recorder only runs
             when the element is actually drawn, and the class-creation callback
@@ -223,8 +223,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
   // The header's controls the bar places; drawn by the admin, not here.
-  DocumentSaveIndicator: () => null,
-  DocumentPrimaryAction: () => null,
+  DocumentSaveAndPublish: () => null,
+  useDocumentLifeStage: () => null,
   useDocumentActions: () => null,
   // No preview here: the top bar's Preview draws nothing.
   useDocumentPreview: () => null,

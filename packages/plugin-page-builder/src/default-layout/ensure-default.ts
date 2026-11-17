@@ -43,6 +43,7 @@ import { settleLayoutRemovals } from "../layout-removal/settle";
 import type { LayoutRemovalStore } from "../layout-removal/store";
 import { deleteUnrecordedLayout } from "../layout-removal/system-remove";
 
+import { moveEmptySeedPages, type EmptySeedParts } from "./empty-seed";
 import { seedSlug, seedTitle } from "./seed-names";
 import {
   layoutExists,
@@ -86,6 +87,13 @@ export interface EnsureDefaultDeps {
   readonly removals: LayoutRemovalStore;
   /** Where the repair says why it acted. Called only when it changed something. */
   readonly warn: (message: string, meta?: Record<string, unknown>) => void;
+  /**
+   * What the one-time move of pages off the empty seed writes with, which the
+   * sweep runs after the repair until it has finished. The installed plugin
+   * always supplies it (`installDefaultLayout`); a run built without it, as
+   * the repair's own tests build one, repairs the default and moves nothing.
+   */
+  readonly emptySeed?: EmptySeedParts;
 }
 
 /**
@@ -335,7 +343,8 @@ async function createSeed(
       if (attempt >= SEED_SLUG_ATTEMPTS) {
         throw NextlyError.conflict({
           reason: "state",
-          message: "The default Layout could not be given a free address.",
+          message:
+            "The default header & footer set could not be given a free address.",
           logContext: {
             reason: "default-layout-seed-slug-exhausted",
             attempts: attempt,
@@ -409,7 +418,7 @@ async function createNamed(
     throw new NextlyError({
       code: "INTERNAL_ERROR",
       publicMessage:
-        "The default Layout was created but could not be identified.",
+        "The default header & footer set was created but could not be identified.",
       logMessage: "create returned no usable id for the seeded default Layout",
       logContext: { reason: "default-layout-seed-no-id" },
     });
@@ -442,6 +451,10 @@ export async function queueDefaultLayoutRepair(
  * or clears the Layout removals a stopped request left part-way, since one of
  * those may be what left the default unusable.
  *
+ * Once the default is usable, the pass also moves pages off the empty seed,
+ * until that move has finished once (`empty-seed`); after that it reads one
+ * row and stops.
+ *
  * The deps are resolved per run, through the plugin's installed context, for
  * the reason the usage backfill gives: the Direct API is not resolvable when
  * the job is defined.
@@ -459,6 +472,10 @@ export function defaultLayoutJob(
         store: resolved.removals,
       });
       await ensureDefaultLayout(resolved);
+      const { emptySeed } = resolved;
+      if (emptySeed !== undefined) {
+        await moveEmptySeedPages({ ...resolved, emptySeed });
+      }
     },
   });
 }

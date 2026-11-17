@@ -1,0 +1,56 @@
+:where(.nx-pb-page *) { --nx-pb-overlay: initial; --nx-pb-overlay-strength: initial; --nx-pb-overlay-layer: initial; --nx-pb-overlay-position: initial; --nx-pb-overlay-size: initial; --nx-pb-overlay-repeat: initial; --nx-pb-overlay-attachment: initial; }
+.nx-pb-page.nx-pb-page .nx-pb-132ii16eds5 { align-content: start; box-sizing: border-box; column-gap: 8px; container-type: inline-size; display: grid; gap: 1rem; grid-auto-flow: row dense; grid-template-columns: repeat(3, 1fr); grid-template-rows: auto 1fr; justify-items: center; margin-block-start: 1rem; margin-inline-start: auto; padding-block-start: 8px; padding-inline-end: max(2rem, var(--nx-contain-inset, 0px)); row-gap: 4px }
+.nx-pb-page.nx-pb-page .nx-pb-132ii16eds5 > * { --nx-sized-item: 0 }
+@media (max-width: 640px) {
+  .nx-pb-page.nx-pb-page .nx-pb-132ii16eds5 { color: #222 }
+}
+.nx-pb-page.nx-pb-page .nx-pb-132ii16eds5:where(:hover) { opacity: 1 }
+.nx-pb-page.nx-pb-page .nx-pb-132ii16eds5:where(:focus-visible) { box-shadow: 0 0 0 2px #00e }
+.nx-pb-page.nx-pb-page .nx-pb-nkrroa0h6b { align-items: center; display: flex; flex-direction: row-reverse; flex-wrap: wrap; justify-content: space-between }
+.nx-pb-page.nx-pb-page .nx-pb-nkrroa0h6b > * { --nx-sized-item: 1; --nx-column-flow: 0 }
+@media (max-width: 640px) {
+  .nx-pb-page.nx-pb-page .nx-pb-nkrroa0h6b { color: #222 }
+}
+.nx-pb-page.nx-pb-page .nx-pb-nkrroa0h6b:where(:hover) { opacity: 1 }
+.nx-pb-page.nx-pb-page .nx-pb-nkrroa0h6b:where(:focus-visible) { box-shadow: 0 0 0 2px #00e }
+.nx-pb-page.nx-pb-page .nx-pb-27juih9sxxe { align-self: end; flex-basis: 50%; flex-grow: 1; flex-shrink: 0; justify-self: start; order: -1 }
+@media (max-width: 640px) {
+  .nx-pb-page.nx-pb-page .nx-pb-27juih9sxxe { color: #222 }
+}
+.nx-pb-page.nx-pb-page .nx-pb-27juih9sxxe:where(:hover) { opacity: 1 }
+.nx-pb-page.nx-pb-page .nx-pb-27juih9sxxe:where(:focus-visible) { box-shadow: 0 0 0 2px #00e }
+.nx-pb-page.nx-pb-page .nx-pb-ccclhovb8f { aspect-ratio: 16 / 9; height: 100svh; max-height: none; max-width: 60ch; min-height: 50vh; min-width: 10rem; overflow: hidden auto; width: fit-content; --nx-sized-max-width: 1; --nx-sized-width: 1; --nx-fills-row: 0 }
+@media (max-width: 640px) {
+  .nx-pb-page.nx-pb-page .nx-pb-ccclhovb8f { color: #222 }
+}
+.nx-pb-page.nx-pb-page .nx-pb-ccclhovb8f:where(:hover) { opacity: 1 }
+.nx-pb-page.nx-pb-page .nx-pb-ccclhovb8f:where(:focus-visible) { box-shadow: 0 0 0 2px #00e }
+.nx-pb-page.nx-pb-page .nx-pb-2fifyncw2hi { object-fit: cover; object-position: 25% 75% }
+@media (max-width: 640px) {
+  .nx-pb-page.nx-pb-page .nx-pb-2fifyncw2hi { color: #222 }
+}
+.nx-pb-page.nx-pb-page .nx-pb-2fifyncw2hi:where(:hover) { opacity: 1 }
+.nx-pb-page.nx-pb-page .nx-pb-2fifyncw2hi:where(:focus-visible) { box-shadow: 0 0 0 2px #00e }
+.nx-pb-page.nx-pb-page .nx-pb-1tse6eem4fe { color: #111; font-family: Georgia, serif; font-size: 1.25rem; font-style: italic; font-weight: 600; letter-spacing: 0.02em; line-height: 1.5; list-style-type: square; text-align: center; text-decoration: underline dotted; text-shadow: 0 1px 2px #0003; text-transform: uppercase; word-spacing: 0.1em }
+.nx-pb-page.nx-pb-page .nx-pb-1tse6eem4fe a { color: #00e }
+.nx-pb-page.nx-pb-page .nx-pb-1tse6eem4fe a:hover { color: #00a }
+@media (max-width: 640px) {
+  .nx-pb-page.nx-pb-page .nx-pb-1tse6eem4fe { color: #222 }
+}
+.nx-pb-page.nx-pb-page .nx-pb-1tse6eem4fe:where(:hover) { opacity: 1 }
+.nx-pb-page.nx-pb-page .nx-pb-1tse6eem4fe:where(:focus-visible) { box-shadow: 0 0 0 2px #00e }
+.nx-pb-page.nx-pb-page .nx-pb-n5ptg5ml08 { --nx-pb-disclosure-icon: plus; --nx-pb-disclosure-position: before }
+.nx-pb-page.nx-pb-page .nx-pb-n5ptg5ml08 > details > summary { display: flex; align-items: center; gap: 0.625em; list-style: none }
+.nx-pb-page.nx-pb-page .nx-pb-n5ptg5ml08 > details > summary > .nx-pb-disclosure-icon { display: block; flex: none; inline-size: 1em; block-size: 1em; background-color: currentColor; mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2016%2016'%20fill%3D'none'%20stroke%3D'black'%20stroke-width%3D'1.75'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cpath%20d%3D'M8%203.5v9M3.5%208h9'%2F%3E%3C%2Fsvg%3E") center / contain no-repeat; order: 0; margin-inline-start: 0 }
+.nx-pb-page.nx-pb-page .nx-pb-n5ptg5ml08 > details[open] > summary > .nx-pb-disclosure-icon { mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2016%2016'%20fill%3D'none'%20stroke%3D'black'%20stroke-width%3D'1.75'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cpath%20d%3D'M3.5%208h9'%2F%3E%3C%2Fsvg%3E") center / contain no-repeat; transform: none }
+@media (max-width: 640px) {
+  .nx-pb-page.nx-pb-page .nx-pb-n5ptg5ml08 { color: #222 }
+}
+.nx-pb-page.nx-pb-page .nx-pb-n5ptg5ml08:where(:hover) { opacity: 1 }
+.nx-pb-page.nx-pb-page .nx-pb-n5ptg5ml08:where(:focus-visible) { box-shadow: 0 0 0 2px #00e }
+.nx-pb-page.nx-pb-page .nx-pb-2806fa1kua7 { background-attachment: var(--nx-pb-overlay-attachment,) scroll; --nx-pb-overlay: #000; --nx-pb-overlay-layer: linear-gradient(color-mix(in srgb, var(--nx-pb-overlay, transparent) calc(var(--nx-pb-overlay-strength, 50) * 1%), transparent), color-mix(in srgb, var(--nx-pb-overlay, transparent) calc(var(--nx-pb-overlay-strength, 50) * 1%), transparent)),; --nx-pb-overlay-position: 0% 0%,; --nx-pb-overlay-size: auto,; --nx-pb-overlay-repeat: repeat,; --nx-pb-overlay-attachment: scroll,; --nx-pb-overlay-strength: 40; background-position: var(--nx-pb-overlay-position,) center; background-repeat: var(--nx-pb-overlay-repeat,) no-repeat; background-size: var(--nx-pb-overlay-size,) cover; background-image: var(--nx-pb-overlay-layer,) url("/hero.jpg"); background-color: #fafafa; background-image: var(--nx-pb-overlay-layer,) linear-gradient(#fff, #000); border-color: #ccc; border-style: solid; border-block-end-width: thin; border-block-start-width: 1px; border-end-end-radius: 8px 4px; border-start-start-radius: 4px; box-shadow: 0 1px 3px #0002; filter: blur(2px); mix-blend-mode: multiply; opacity: 0.9; inset-block-start: 0; position: sticky; z-index: 2; transform: rotate(2deg); transition: opacity 200ms ease; --nx-out-of-flow: 0 }
+@media (max-width: 640px) {
+  .nx-pb-page.nx-pb-page .nx-pb-2806fa1kua7 { color: #222 }
+}
+.nx-pb-page.nx-pb-page .nx-pb-2806fa1kua7:where(:hover) { opacity: 1 }
+.nx-pb-page.nx-pb-page .nx-pb-2806fa1kua7:where(:focus-visible) { box-shadow: 0 0 0 2px #00e }

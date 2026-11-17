@@ -33,9 +33,10 @@ import {
   registerBlocks,
   type BlockDocument,
   type BlockNode,
+  type StyleState,
 } from "@nextlyhq/blocks-engine";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
-import { createElement } from "react";
+import { createElement, useState } from "react";
 import {
   afterAll,
   afterEach,
@@ -86,11 +87,12 @@ vi.mock("@nextlyhq/blocks-engine", async importOriginal => {
   };
 });
 
-import { Canvas } from "./canvas";
-import { type CanvasRegion } from "./canvas-regions";
+import { Canvas } from "./canvas/canvas";
+import { type CanvasRegion } from "./canvas/canvas-regions";
 import { useEditorState, type EditorState } from "./editor-state";
-import { HoveredBlockProvider, useHoveredBlock } from "./hovered-block";
-import { InsertPanel } from "./insert-panel";
+import { HoveredBlockProvider, useHoveredBlock } from "./canvas/hovered-block";
+import { InsertPanel } from "./panels/add/insert-panel";
+import { InspectorPanel } from "./inspector-panel";
 import { BlockKeyboardActions } from "./keyboard-actions";
 import { ShortcutProvider } from "@nextlyhq/ui";
 
@@ -342,6 +344,66 @@ describe("the work one selection, hover or insert costs on the canvas", () => {
     // The control: the insert reached the canvas.
     expect(document.querySelector('[data-nx-node="inserted"]')).not.toBeNull();
     expectWithinBudget(counted.regionDraws);
+  });
+});
+
+/**
+ * The editor, its canvas and its settings panel, wired as the page builder
+ * wires them: the panel's interaction state held by the editor, which a
+ * change of tab sets. Each set re-renders the editor around the canvas.
+ */
+/** How many times the editor around the canvas rendered. */
+let hostRenders = 0;
+
+function InspectorHost(): React.JSX.Element {
+  hostRenders += 1;
+  const state = useEditorState({ initialDocument: PAGE });
+  editorRef = state;
+  // A new holder on every set, so each tab change re-renders this editor
+  // even when the state it carries is the same.
+  const [styleState, setStyleState] = useState<{ value: StyleState }>({
+    value: "base",
+  });
+  return (
+    <HoveredBlockProvider>
+      <InspectorPanel
+        editor={state}
+        styleState={{
+          state: styleState.value,
+          onChange: value => setStyleState({ value }),
+        }}
+      />
+      <Canvas
+        document={state.document}
+        siteStyles={SHEET as never}
+        regions={REGIONS}
+        render={RENDER as never}
+        forcedState={styleState.value}
+        selectedId={state.selectedId}
+        selectedIds={state.selection.ids}
+        onSelect={state.select}
+      />
+    </HoveredBlockProvider>
+  );
+}
+
+describe("the page drawn again while the editor around it re-renders", () => {
+  it("switching the settings panel's tab draws no block", () => {
+    const view = render(<InspectorHost />);
+    act(() => editor().select("block-3"));
+    resetCounts();
+    hostRenders = 0;
+    // Every tab the block has: it declares no settings, so no Content.
+    for (const name of ["Style", "Advanced", "Style", "Advanced"]) {
+      fireEvent.mouseDown(view.getByRole("tab", { name }));
+      // The control: the tab opened.
+      expect(
+        view.getByRole("tab", { name }).getAttribute("aria-selected")
+      ).toBe("true");
+    }
+    // The control: the editor around the canvas rendered again.
+    expect(hostRenders).toBeGreaterThan(0);
+    expectWithinBudget(counted.pageDraws);
   });
 });
 

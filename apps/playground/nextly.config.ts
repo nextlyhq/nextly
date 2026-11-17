@@ -40,6 +40,7 @@ import { JOURNAL, JOURNAL_COLLECTIONS } from "./src/blog-fixture/collections";
 import { Authors } from "./src/collections/authors";
 import { BlockPages } from "./src/collections/block-pages";
 import { BoundEntries } from "./src/collections/bound-entries";
+import { BuilderFirstPages } from "./src/collections/builder-first-pages";
 import { EntryArticles } from "./src/collections/entry-articles";
 import { ContributionStories } from "./src/collections/contribution-stories";
 import { ListStories } from "./src/collections/list-stories";
@@ -275,6 +276,12 @@ export default defineConfig({
     // collection with a translated blocks field; registered for the e2e run
     // only, by the same switch as the style fixture below.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [TranslatedPages] : []),
+    // A collection that says its entries open in the Page Builder, for the
+    // browser tests of where an entry opens; registered for the e2e run only,
+    // by the same switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [BuilderFirstPages]
+      : []),
     // A collection embedding field groups that hold a relationship and an
     // upload, for the browser test of a related item the editor cannot read
     // inside one; registered for the e2e run only, by the same switch.

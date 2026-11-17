@@ -59,8 +59,8 @@ import type {
   BulkUpdateEntry,
 } from "../../domains/collections/services/collection-types";
 import {
+  publishCallerOf,
   publishGate,
-  type PublishCaller,
 } from "../../domains/collections/services/publish-gate";
 import {
   publishParts,
@@ -145,27 +145,6 @@ function refusedFilter<T>(where: unknown): CollectionServiceResult<T> | null {
   }
 }
 
-/**
- * Who asks a publish of chosen parts to move, as its gate is told: trusted code, an API key on its
- * own grants (with the owner the request carries), a person, or a visitor with neither.
- */
-function publishCallerOf(params: {
-  overrideAccess?: boolean;
-  user?: UserContext;
-  authenticatedScope?: AuthenticatedScope;
-}): PublishCaller {
-  if (params.overrideAccess === true) return { kind: "trusted" };
-  const userId = params.user?.id;
-  if (params.authenticatedScope?.actorType === "apiKey") {
-    return {
-      kind: "api-key",
-      ...(userId === undefined ? {} : { userId }),
-      scope: params.authenticatedScope,
-    };
-  }
-  return userId === undefined ? { kind: "visitor" } : { kind: "user", userId };
-}
-
 /** What publishing or unpublishing every language of an entry takes. */
 type EveryLanguageLifecycleParams = {
   collectionName: string;
@@ -206,6 +185,12 @@ type EveryLanguageLifecycleParams = {
   context?: Record<string, unknown>;
   /** The parts the transition moves, where fewer than all; see `LifecycleParts`. */
   parts?: LifecycleParts;
+  /** Who performed the transition, recorded on the events and told to the publish gate. */
+  actor?: RequestActor;
+  /** A publish made without review, with the caller's reason, told to the publish gate. */
+  withoutReview?: { reason: string };
+  /** Set by the publish of chosen parts, which asked the publish gate's early answer already. */
+  gateAskedEarly?: boolean;
 };
 
 /**
@@ -555,6 +540,8 @@ export class CollectionEntryService extends BaseService {
     sourceLocales?: boolean;
     /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
     translations?: "all";
+    /** Attach `_details`; see `CollectionQueryService.getEntry`. */
+    details?: boolean;
   }) {
     // Rules are judged in the languages the read was asked in, `locale=all`
     // included; the query reads what that request stands for.
@@ -1014,8 +1001,6 @@ export class CollectionEntryService extends BaseService {
       /**
        * The fields this write restored, and the version each came from,
        * recorded per field on the version it captures (see `restored-from`).
-       *
-       * @experimental
        */
       restoredFrom?: FieldSources;
       /**
@@ -1211,9 +1196,19 @@ export class CollectionEntryService extends BaseService {
       gate: publishGate(),
       collection: params.collectionName,
       caller: publishCallerOf(params),
+      ...(params.actor === undefined ? {} : { actor: params.actor }),
+      ...(params.withoutReview === undefined
+        ? {}
+        : { withoutReview: params.withoutReview }),
       // The transition of every language, told which parts it moves.
       move: (direction, parts, describe) => {
-        const scoped = parts === undefined ? params : { ...params, parts };
+        // The gate's early answer was asked above, with the rest of the request: the move asks
+        // only its verdict under the lock.
+        const scoped = {
+          ...params,
+          ...(parts === undefined ? {} : { parts }),
+          gateAskedEarly: true,
+        };
         if (describe) return this.previewPublishAllLocales(scoped);
         // The value rules were judged above, with the rest of the request.
         return direction === "publish"
