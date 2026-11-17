@@ -173,6 +173,9 @@ export {
  * For a field that shows the page it holds — the page builder's entry view —
  * and offers to open it whole. `open` is the editor's own Preview handler, so
  * the field opens the page the header would, in the language being edited.
+ * `openBeside` opens the preview beside the form, as the header's Preview
+ * press does, folding the document panel; it is absent where the editor has
+ * no such pane, and a control then opens the preview with `open`.
  *
  * `null` wherever the editor offers no Preview action: no preview configured,
  * an entry never saved, a reader, and outside a form. A field shows no such

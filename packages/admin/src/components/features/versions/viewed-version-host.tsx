@@ -44,6 +44,7 @@ import {
 import { cn } from "@admin/lib/utils";
 import type { VersionScope } from "@admin/services/versionApi";
 
+import { ChangeMoveStatus } from "./ChangeNav";
 import {
   ChangesLayoutProvider,
   ChangesLayoutToggle,
@@ -360,19 +361,28 @@ function phonePositionText(
   }
 }
 
-function VersionPhoneBar({
+export function VersionPhoneBar({
   actions,
   state,
   changed,
   position,
+  currentLabel,
   onMove,
 }: {
   actions: VersionActions;
   state: ChangesState;
   changed: number;
   position: number;
+  /** The change the position is on, named as its field is, for the move's announcement. */
+  currentLabel?: string;
   onMove: (delta: -1 | 1) => void;
 }) {
+  // A move from this bar is said aloud as the wider bar's is: that bar is hidden here.
+  const [moved, setMoved] = useState(false);
+  const move = (delta: -1 | 1): void => {
+    setMoved(true);
+    onMove(delta);
+  };
   // The moves only where there are changes to move between. With one change
   // or none they could only be disabled, and on a phone their width is what
   // the version's own actions need.
@@ -394,7 +404,7 @@ function VersionPhoneBar({
             size="sm"
             className="px-2"
             aria-label="Previous change"
-            onClick={() => onMove(-1)}
+            onClick={() => move(-1)}
           >
             <ArrowUp className="h-4 w-4" aria-hidden="true" />
           </Button>
@@ -404,6 +414,12 @@ function VersionPhoneBar({
         <span className="whitespace-nowrap text-sm tabular-nums text-muted-foreground">
           {phonePositionText(state, changed, position)}
         </span>
+        <ChangeMoveStatus
+          moved={moved}
+          position={position}
+          changed={changed}
+          currentLabel={currentLabel}
+        />
         {movable ? (
           <Button
             type="button"
@@ -411,7 +427,7 @@ function VersionPhoneBar({
             size="sm"
             className="px-2"
             aria-label="Next change"
-            onClick={() => onMove(1)}
+            onClick={() => move(1)}
           >
             <ArrowDown className="h-4 w-4" aria-hidden="true" />
           </Button>
@@ -745,6 +761,7 @@ function ViewedVersionFrame({
             state={state}
             changed={order.length}
             position={position}
+            currentLabel={currentChangeLabel}
             onMove={move}
           />
         ) : null}
