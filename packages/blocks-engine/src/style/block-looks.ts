@@ -14,18 +14,13 @@
  */
 
 import type { BlockVariation } from "../block";
-import { type BlockPart, isPartName } from "../document";
-import { isPlainRecord } from "../plain-record";
 
-import { escapeIdentifier } from "./css-value";
 import {
-  classNameOf,
   isUsableNamedClass,
   MAX_NAMED_CLASS_NAME_LENGTH,
   NAMED_CLASS_SLUG_RE,
   type NamedClass,
 } from "./named-class";
-import { blockPartClassName, blockTypeClassName } from "./node-class";
 
 /** What a look reads from a block definition: its type and its variations. */
 interface LookSource {
@@ -136,55 +131,4 @@ function lookOf(
     ...(own ? { isDefault: true as const } : {}),
   };
   return isUsableNamedClass(look) ? look : undefined;
-}
-
-/**
- * The selector a block type's ★ look is written under, below the page root: the type's class
- * on an element wearing none of the type's looks.
- *
- * Two kinds of element are left out. One wearing any of the type's looks (`looks`, the ★ one
- * among them), so no property of the ★ style reaches a block that picked another. And one
- * carrying an inner part of the type, a part no other part names as a wrapper around the root:
- * an image's picture inside its figure carries the type's class too, and is styled through the
- * figure as a worn look's is. The exclusion sits in `:where()`, so it weighs nothing and the
- * rule weighs what a worn look's does.
- *
- * @experimental
- */
-export function starredLookSelector(
-  blockType: string,
-  looks: readonly Pick<NamedClass, "slug">[],
-  parts: unknown
-): string {
-  const left = [
-    ...looks.map(
-      look =>
-        `.${escapeIdentifier(classNameOf({ slug: look.slug, blockType }))}`
-    ),
-    ...innerParts(parts).map(
-      part => `.${escapeIdentifier(blockPartClassName(blockType, part))}`
-    ),
-  ];
-  const typeClass = `.${escapeIdentifier(blockTypeClassName(blockType))}`;
-  return left.length === 0
-    ? typeClass
-    : `${typeClass}:where(:not(${left.join(", ")}))`;
-}
-
-/**
- * A type's parts that sit inside its root rather than wrap it: every part no part names in
- * `takesFromRoot.whenRootIs`, in name order. Read from data a block declares, so a record that
- * is not one names none, and a name a selector can't hold is left out.
- */
-function innerParts(parts: unknown): string[] {
-  if (!isPlainRecord(parts)) return [];
-  const wrappers = new Set<unknown>();
-  for (const part of Object.values(parts)) {
-    const takes: unknown = (part as BlockPart | undefined)?.takesFromRoot;
-    if (!isPlainRecord(takes) || !Array.isArray(takes.whenRootIs)) continue;
-    for (const name of takes.whenRootIs) wrappers.add(name);
-  }
-  return Object.keys(parts)
-    .filter(name => isPartName(name) && !wrappers.has(name))
-    .sort();
 }

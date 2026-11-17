@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import type { BlockDocument, BlockPart, NodeStyles } from "../document";
+import type { BlockDocument, NodeStyles } from "../document";
 import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 
-import { starredLookSelector } from "./block-looks";
 import { compilePageCss } from "./compile-page";
 import { starredLooksOf, type NamedClass } from "./named-class";
-import { CHILD_GAP_CLASS, PAGE_ROOT_CLASS } from "./node-class";
+import { CHILD_GAP_CLASS, nodeClassName, PAGE_ROOT_CLASS } from "./node-class";
 import { styleOrigin } from "./style-origin";
 
 /*
@@ -65,8 +64,8 @@ const compile = (classes: readonly NamedClass[]) =>
     namedClasses: classes,
   });
 
-const STARRED_RULE =
-  ".nx-pb-page.nx-pb-page .nx-bt-core--button:where(:not(.nx-l-button-secondary, .nx-l-button-ghost))";
+/** The ★ rule's selector: the blocks of the type wearing none of its looks, by their own class. */
+const STARRED_RULE = `.nx-pb-page.nx-pb-page :is(.${nodeClassName("plain")})`;
 
 describe("which look is a block type's ★", () => {
   it("is the first worn look of the type marked starred, in library order", () => {
@@ -135,18 +134,15 @@ describe("a block type's ★ look on the page", () => {
     expect(css.indexOf(STARRED_RULE)).toBeLessThan(css.indexOf(".nx-c-card"));
   });
 
-  it("leaves out the type's inner parts, which carry its class too", () => {
-    const parts: Record<string, BlockPart> = {
-      frame: {},
-      picture: {
-        takesFromRoot: { properties: ["borderRadius"], whenRootIs: ["frame"] },
-      },
-    };
-    expect(
-      starredLookSelector("core/image", [{ slug: "image-circle" }], parts)
-    ).toBe(
-      ".nx-bt-core--image:where(:not(.nx-l-image-circle, .nx-bp-core--image--picture))"
-    );
+  it("reaches only the blocks themselves, never an element that carries the type's class", () => {
+    // An image's picture inside its figure, and a list's entry wrappers, carry
+    // the type's class too: a rule on the class would repeat the style on each.
+    const { css } = compile([primary, secondary, { ...ghost, starred: true }]);
+    const starredRules = css
+      .split("\n")
+      .filter(line => line.includes("color: teal") && !line.includes(".nx-l-"));
+    expect(starredRules).toEqual([`${STARRED_RULE} { color: teal }`]);
+    expect(starredRules.join("")).not.toContain(".nx-bt-core--button");
   });
 });
 
@@ -168,7 +164,7 @@ describe("a ★ look that lays out a container", () => {
     });
     // Without it the box keeps its children's flow margins beside `gap`.
     expect(css).toContain(
-      `.${PAGE_ROOT_CLASS} :where(.nx-bt-core--box:where(:not(.nx-l-box-row)).${CHILD_GAP_CLASS} > * + *) { margin-block-start: 0 }`
+      `.${PAGE_ROOT_CLASS} :where(:is(.${nodeClassName("box")}).${CHILD_GAP_CLASS} > * + *) { margin-block-start: 0 }`
     );
   });
 });

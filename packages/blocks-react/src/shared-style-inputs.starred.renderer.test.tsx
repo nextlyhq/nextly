@@ -14,7 +14,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import type { BlockDocument, NamedClass } from "@nextlyhq/blocks-engine";
+import {
+  nodeClassName,
+  type BlockDocument,
+  type NamedClass,
+} from "@nextlyhq/blocks-engine";
 
 import { coreBlocks } from "./blocks";
 import { withTypographyDefaults } from "./blocks/typography-defaults";
@@ -103,10 +107,8 @@ describe("a page saved before its block type's ★ moved", () => {
   it("is drawn with the new ★ once it moves, with no new save", () => {
     const html = renderPublished(saved(stampFor("outline")), "ghost");
     expect(html).not.toContain("rebeccapurple");
-    expect(html).toContain(
-      // In library order: the three share an index, so by id.
-      ".nx-bt-core--button:where(:not(.nx-l-button-ghost, .nx-l-button-outline, .nx-l-button-secondary)) { color: #444444 }"
-    );
+    // Ghost's rule on the button that picked no style, by its own class.
+    expect(html).toContain(`:is(.${nodeClassName("plain")}) { color: #444444 }`);
   });
 
   it("is drawn with the new ★ when one is first chosen", () => {

@@ -42,7 +42,6 @@ import { describeValue, pointer } from "../issue-text";
 import { isPlainRecord } from "../plain-record";
 import type { ValidationIssue } from "../validation";
 
-import { starredLookSelector } from "./block-looks";
 import { childGapForms } from "./child-gap";
 import {
   breakpointContexts,
@@ -641,7 +640,7 @@ export function compilePageCss(
       trace,
       mayFetchUrl,
       routing,
-      blockParts: ctx.blockParts,
+      wearers: starredWearers(nodes, classes, duplicateIds),
       flowGaps,
       defaultsAnchor,
       stateSelectors: stateSelectorsOfCompile,
@@ -1002,20 +1001,57 @@ interface StarredLookCompile {
   readonly trace: StyleTraceEntry[] | undefined;
   readonly mayFetchUrl: StyleCompileContext["mayFetchUrl"];
   readonly routing: ReturnType<typeof partRouting>;
-  readonly blockParts: StyleCompileContext["blockParts"];
+  /** Each block's own class, type and the classes it lists, in document order. */
+  readonly wearers: readonly StarredWearer[];
   /** The flow margins each container type in the document writes, by type. */
   readonly flowGaps: ReadonlyMap<string, readonly Declaration[]>;
   readonly defaultsAnchor: string;
   readonly stateSelectors: Parameters<typeof layoutModeRules>[6];
 }
 
+/** One block the ★ tier may reach: its own class, its type and what it lists. */
+interface StarredWearer {
+  readonly className: string;
+  readonly type: string;
+  readonly classes: readonly unknown[];
+}
+
 /**
- * Each block type's ★ look, written again for the blocks of its type that wear none of the
- * type's looks, under the page root as a worn look is, in type order. Nothing while no look is
- * starred, so a site that never moved ★ compiles as it did.
+ * The document's blocks as the ★ tier reads them: each with the class the
+ * compiler gave it, and the class references the engine reads per node. A
+ * block sharing its id with another is left out, as its own rules are.
+ */
+function starredWearers(
+  nodes: ReturnType<typeof documentNodes>,
+  classes: ReadonlyMap<string, string>,
+  duplicateIds: ReadonlySet<string>
+): StarredWearer[] {
+  const wearers: StarredWearer[] = [];
+  for (const { node } of nodes) {
+    const className = classes.get(node.id);
+    if (className === undefined || duplicateIds.has(node.id)) continue;
+    if (typeof node.type !== "string") continue;
+    wearers.push({
+      className,
+      type: node.type,
+      classes: Array.isArray(node.classes)
+        ? node.classes.slice(0, MAX_CLASSES_PER_NODE)
+        : [],
+    });
+  }
+  return wearers;
+}
+
+/**
+ * Each block type's ★ look, written again for the document's blocks of its
+ * type that wear none of the type's looks, under the page root as a worn
+ * look is, in type order. Named by each block's own class rather than by the
+ * type's, which an image's picture or a list's entry wrappers carry too, so
+ * the look lands on the blocks alone. Nothing while no look is starred, so a
+ * site that never moved ★ compiles as it did.
  *
- * Its value problems were reported once already, by the look's own rule, so they are not
- * reported twice.
+ * Its value problems were reported once already, by the look's own rule, so
+ * they are not reported twice.
  */
 function starredLookRules(
   written: readonly NamedClass[],
@@ -1028,11 +1064,18 @@ function starredLookRules(
     const typeLooks = written.filter(
       cls => isLook(cls) && !isDefaultLook(cls) && cls.blockType === type
     );
-    const selector = starredLookSelector(
-      type,
-      typeLooks,
-      about.blockParts?.[type]
-    );
+    const lookIds = new Set(typeLooks.map(cls => cls.id));
+    const reached = about.wearers
+      .filter(
+        wearer =>
+          wearer.type === type &&
+          !wearer.classes.some(id => typeof id === "string" && lookIds.has(id))
+      )
+      .map(wearer => `.${escapeIdentifier(wearer.className)}`);
+    if (reached.length === 0) continue;
+    // `:is()` weighs its heaviest member, one class, so the rule weighs what
+    // a worn look's does and a state appended to it applies to every block.
+    const selector = `:is(${reached.join(", ")})`;
     rules.push(
       ...envelopeRules(
         look.styles,
@@ -1051,7 +1094,7 @@ function starredLookRules(
             id: look.id,
             slug: look.slug,
             blockType: type,
-            unlessWearing: typeLooks.map(cls => cls.id),
+            unlessWearing: [...lookIds],
           },
           previewStates: about.previewStates,
           trace: about.trace,

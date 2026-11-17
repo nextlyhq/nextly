@@ -36,6 +36,8 @@ export interface LookTile {
   readonly name: string;
   /** The look's own styles, laid over the block's base for the tile. */
   readonly styles: NodeStyles | undefined;
+  /** A hidden style, shown only to the block already wearing it. */
+  readonly hidden: boolean;
 }
 
 /**
@@ -76,22 +78,28 @@ export function boundLooksOf(
 
 /**
  * The tiles for a block: its own look first, named as its definition names
- * it, then its type's looks. No tiles when the type has no looks: a row of
- * one tile would offer a choice that isn't there.
+ * it, then its type's looks. A hidden look is offered only to the block
+ * already wearing it (`worn`), which keeps it, so a hidden style never
+ * vanishes from a block that has it. No tiles when the type has no looks: a
+ * row of one tile would offer a choice that isn't there.
  */
 export function lookTiles(
   library: readonly NamedClass[],
   blockType: string,
-  ownName: string | undefined
+  ownName: string | undefined,
+  worn: string | null = null
 ): LookTile[] {
-  const looks = looksOfType(library, blockType);
+  const looks = looksOfType(library, blockType).filter(
+    look => look.hidden !== true || look.id === worn
+  );
   if (looks.length === 0) return [];
   return [
-    { id: null, name: ownName ?? "Default", styles: undefined },
+    { id: null, name: ownName ?? "Default", styles: undefined, hidden: false },
     ...looks.map(look => ({
       id: look.id,
       name: sharedStyleName(look),
       styles: look.styles,
+      hidden: look.hidden === true,
     })),
   ];
 }

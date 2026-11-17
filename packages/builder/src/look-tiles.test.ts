@@ -294,3 +294,29 @@ describe("the bar's line about a worn look", () => {
     expect(lookLineWords("Circle", "Image").everywhere).not.toMatch(/\d/);
   });
 });
+
+describe("a hidden block style's tile", () => {
+  const hidden = { ...outline, hidden: true as const };
+
+  it("isn't offered to a block that doesn't wear it", () => {
+    expect(
+      lookTiles([card, hidden, secondary], "core/button", "Primary", null).map(
+        tile => tile.id
+      )
+    ).toEqual([null, secondary.id]);
+  });
+
+  it("stays, marked hidden, on a block already wearing it", () => {
+    const tiles = lookTiles(
+      [card, hidden, secondary],
+      "core/button",
+      "Primary",
+      hidden.id
+    );
+    expect(tiles.map(tile => [tile.id, tile.hidden])).toEqual([
+      [null, false],
+      [secondary.id, false],
+      [hidden.id, true],
+    ]);
+  });
+});
