@@ -59,12 +59,24 @@ function shownOn(page: Page) {
   return page.getByRole("region", { name: "Shown on (from the builder)" });
 }
 
+/** Open the Homepage as a form, with its document panel shown. */
+async function openHomepage(page: Page): Promise<void> {
+  await gotoAdmin(page, "/singles/homepage");
+  await expect(page.getByRole("textbox", { name: "Title" })).toBeVisible({
+    timeout: 60_000,
+  });
+  const toggle = page.getByRole("button", { name: "Show document panel" });
+  if (await toggle.isVisible()) await toggle.click();
+}
+
 test.describe("where the builder shows a Single's values", () => {
   test.describe.configure({ timeout: 240_000 });
 
   test("lists a page whose heading shows the Homepage, and opens the builder at that heading", async ({
     page,
   }) => {
+    // Wide enough for the document panel to sit beside the fields.
+    await page.setViewportSize({ width: 1440, height: 900 });
     await gotoAdmin(page, "/");
     const mark = Date.now().toString(36);
     // The Homepage's title, so the picker's option is this run's.
@@ -100,7 +112,7 @@ test.describe("where the builder shows a Single's values", () => {
     await expect
       .poll(
         async () => {
-          await gotoAdmin(page, "/singles/homepage");
+          await openHomepage(page);
           await expect(shownOn(page)).toBeVisible({ timeout: 30_000 });
           await expect(
             shownOn(page).getByText(/Only pages made with the builder/)
