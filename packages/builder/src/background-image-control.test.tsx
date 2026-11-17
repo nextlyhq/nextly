@@ -252,3 +252,52 @@ describe("uploading", () => {
     );
   });
 });
+
+describe("what the review asked of it", () => {
+  it("reads an escaped keyword as the compiler does: no image", () => {
+    // `\\6e one` is `none`, written with a CSS escape; the page draws none.
+    renderField({ stored: "\\6e one" });
+    expect(document.querySelector("img")).toBeNull();
+    expect(screen.getByText(/^No image here/)).toBeDefined();
+  });
+
+  it("opens Replace with nothing selected, since an address is no media id", async () => {
+    const opened: { size: number }[] = [];
+    function Library({ open, initialSelectedIds }: MediaPickerProps) {
+      if (open) opened.push({ size: initialSelectedIds?.size ?? 0 });
+      return null;
+    }
+    renderField({
+      stored: "https://cdn.example.com/hero.jpg",
+      services: { MediaPicker: Library },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose Background image" })
+    );
+    await vi.waitFor(() => expect(opened.length).toBeGreaterThan(0));
+    expect(opened.every(each => each.size === 0)).toBe(true);
+  });
+
+  it("keeps a Remove pressed while an upload runs, rather than the upload's later result", async () => {
+    let finish: (media: PickedMedia) => void = () => {};
+    const uploadMedia = vi.fn(
+      () =>
+        new Promise<PickedMedia>(resolve => {
+          finish = resolve;
+        })
+    );
+    // A keyword set here offers both Upload and Remove at once.
+    const onCommit = renderField({ stored: "none", services: { uploadMedia } });
+    const input =
+      document.querySelector<HTMLInputElement>('input[type="file"]');
+    fireEvent.change(input as HTMLInputElement, {
+      target: { files: [new File(["x"], "a.jpg", { type: "image/jpeg" })] },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove background image" })
+    );
+    finish(PICKED);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(onCommit.mock.calls).toEqual([[null]]);
+  });
+});

@@ -9,7 +9,10 @@
  *
  * @module background-image-control
  */
-import type { StyleValue } from "@nextlyhq/blocks-engine";
+import {
+  paintsBackgroundImage,
+  type StyleValue,
+} from "@nextlyhq/blocks-engine";
 import { Button, Input } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -32,19 +35,19 @@ import { MediaChoice } from "./media-controls";
 type CommitOutcome = "applied" | "refused" | "unchanged";
 
 /**
- * Words that name no image: `none`, which clears an image set at an earlier
- * state, and the CSS-wide keywords, in any case, as the page reads them.
+ * What a stored value says about the image: an image, a keyword that paints
+ * none (`none`, `inherit`, however escaped), or nothing. Whether it paints is
+ * the compiler's own answer, so the field and the page never disagree.
  */
-const NO_IMAGE_WORDS = /^(none|inherit|initial|unset|revert|revert-layer)$/i;
-
-/** What a stored value says about the image: an image, a keyword, or nothing. */
 function readStored(
   stored: StyleValue | undefined
 ): { image: string } | { keyword: string } | undefined {
   if (typeof stored !== "string") return undefined;
   const value = stored.trim();
   if (value === "") return undefined;
-  return NO_IMAGE_WORDS.test(value) ? { keyword: value } : { image: value };
+  return paintsBackgroundImage("url", value)
+    ? { image: value }
+    : { keyword: value };
 }
 
 /**
@@ -113,7 +116,9 @@ function useImageWrites(
     setIssue(null);
     if (onCommit(link) === "applied") input.value = "";
   };
+  // A newer choice than any upload still running, which it must not undo.
   const remove = () => {
+    writes.current += 1;
     setIssue(null);
     onCommit(null);
   };
@@ -238,6 +243,9 @@ export function BackgroundImageField({
             // The library is asked for files, not addresses, so nothing is
             // preselected; the button reads "Replace" once an image is set.
             stored={image ?? null}
+            // An address is no media id: the library opens with nothing
+            // selected, and the button still reads "Replace".
+            selected={null}
             accept="image/*"
             disabled={uploading}
             onChoose={writePicked}
