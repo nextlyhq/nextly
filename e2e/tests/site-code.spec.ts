@@ -29,7 +29,7 @@ test.describe.configure({ lock: [LOCK.siteCode, LOCK.homepage] });
 
 const ROUTE = "/admin/api/plugins/@nextlyhq/plugin-page-builder/site/code";
 const PAGES = "/admin/api/collections/block-pages/entries";
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
 
 /** What the saved code sets each time it runs. */
 const MARKER = "__nxSiteCodeRan";

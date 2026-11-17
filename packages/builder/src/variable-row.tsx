@@ -31,18 +31,20 @@ import {
   Bold,
   Hash,
   Ruler,
-  SquareRoundCorner,
   Timer,
   Type,
 } from "lucide-react";
 import * as React from "react";
 
+import { DESKTOP_PREVIEW_WIDTH } from "./canvas/canvas-width";
 import { markOf } from "./design-group-toggle";
+import { fluidRange, pxAtWidth } from "./fluid-size";
 import { colourHexOf } from "./style-colour";
 import { lengthInPx, variableValueText } from "./style-variables";
 import {
   lengthFamilyOf,
   relabelToken,
+  variableGroupOf,
   variableLabelIssue,
   type VariableEntry,
 } from "./tokens-studio";
@@ -65,6 +67,12 @@ export interface VariableRowProps {
   onRemoved: () => void;
   /** Adds a copy right below, and opens it. */
   onDuplicate: () => void;
+  /**
+   * Just added or copied and never saved, while its editor is open: its
+   * editor's code name follows its name as it is typed. `marked` while a
+   * search would hide it, so it shows marked "New" in a narrowed list.
+   */
+  fresh?: { readonly marked: boolean } | undefined;
   /** How widely it is used, where the host reads it. */
   usage: VariableUsageHere | undefined;
   /** Every variable the row stands for, together, once read. */
@@ -88,6 +96,7 @@ export function VariableRow({
   onChange,
   onRemoved,
   onDuplicate,
+  fresh,
   usage,
   reach,
 }: VariableRowProps): React.JSX.Element {
@@ -123,40 +132,18 @@ export function VariableRow({
                 row={button}
               />
             ) : (
-              <CountTip reach={reach} quiet={open || menuOpen}>
-                <PopoverTrigger asChild>
-                  <button
-                    ref={button}
-                    type="button"
-                    className="nx-vars__row"
-                    data-variable-key={entry.row.key}
-                    // The visible name first, then the values the swatch
-                    // shows, so a screen reader hears both and speech input
-                    // still matches.
-                    aria-label={`${shown}${describe(entry, token, tokens, mode)}${countWords(reach)}`}
-                    data-kind={entry.row.kind}
-                    // Drawn as chosen while its editor is open. Its own mark:
-                    // the row's tooltip sets `data-state` too, over the
-                    // popover's.
-                    data-open={markOf(open)}
-                    onKeyDown={onKeyDown}
-                  >
-                    <RowLead
-                      entry={entry}
-                      token={token}
-                      tokens={tokens}
-                      mode={mode}
-                    />
-                    <RowName entry={entry} />
-                    <RowTail
-                      entry={entry}
-                      token={token}
-                      tokens={tokens}
-                      mode={mode}
-                    />
-                  </button>
-                </PopoverTrigger>
-              </CountTip>
+              <RowTrigger
+                entry={entry}
+                token={token}
+                tokens={tokens}
+                mode={mode}
+                reach={reach}
+                marked={fresh?.marked === true}
+                open={open}
+                quiet={open || menuOpen}
+                button={button}
+                onKeyDown={onKeyDown}
+              />
             )}
             {changing ? (
               <RowMenu
@@ -189,11 +176,69 @@ export function VariableRow({
           onChange={onChange}
           onRemoved={onRemoved}
           removing={removing}
+          isNew={fresh !== undefined}
           usage={usage}
           handOff={handOff}
         />
       </Popover>
     </li>
+  );
+}
+
+/**
+ * The row's button, which opens its editor: named by the visible name, then
+ * the values the swatch shows, so a screen reader hears both and speech
+ * input still matches; its tooltip says how widely it is used.
+ */
+function RowTrigger({
+  entry,
+  token,
+  tokens,
+  mode,
+  reach,
+  marked,
+  open,
+  quiet,
+  button,
+  onKeyDown,
+}: {
+  entry: VariableEntry;
+  token: SiteToken | undefined;
+  tokens: SiteTokenSet;
+  mode: TokenMode;
+  reach: VariableReach | undefined;
+  marked: boolean;
+  open: boolean;
+  /** The tooltip stays closed: the editor or the menu is open. */
+  quiet: boolean;
+  button: React.RefObject<HTMLButtonElement | null>;
+  onKeyDown: ((event: React.KeyboardEvent) => void) | undefined;
+}): React.JSX.Element {
+  return (
+    <CountTip reach={reach} quiet={quiet}>
+      <PopoverTrigger asChild>
+        <button
+          ref={button}
+          type="button"
+          className="nx-vars__row"
+          data-variable-key={entry.row.key}
+          aria-label={rowLabel({ entry, token, tokens, mode, reach, marked })}
+          data-kind={entry.row.kind}
+          // Drawn as chosen while its editor is open. Its own mark: the
+          // row's tooltip sets `data-state` too, over the popover's.
+          data-open={markOf(open)}
+          onKeyDown={onKeyDown}
+        >
+          <RowFace
+            entry={entry}
+            token={token}
+            tokens={tokens}
+            mode={mode}
+            marked={marked}
+          />
+        </button>
+      </PopoverTrigger>
+    </CountTip>
   );
 }
 
@@ -245,6 +290,61 @@ function rowKeys(
     if (menu) on.menu();
     else on.rename();
   };
+}
+
+/**
+ * The row's name as a screen reader hears it: the visible name, "new" while
+ * it is marked so, the values the swatch shows, and how widely it is used.
+ */
+function rowLabel({
+  entry,
+  token,
+  tokens,
+  mode,
+  reach,
+  marked,
+}: {
+  entry: VariableEntry;
+  token: SiteToken | undefined;
+  tokens: SiteTokenSet;
+  mode: TokenMode;
+  reach: VariableReach | undefined;
+  marked: boolean;
+}): string {
+  const fresh = marked ? ", new" : "";
+  return `${shownName(entry)}${fresh}${describe(entry, token, tokens, mode)}${countWords(reach)}`;
+}
+
+/**
+ * What the row draws: its preview, its name, and its value, or "New" in
+ * the value's place while the editor beside it shows the value.
+ */
+function RowFace({
+  entry,
+  token,
+  tokens,
+  mode,
+  marked,
+}: {
+  entry: VariableEntry;
+  token: SiteToken | undefined;
+  tokens: SiteTokenSet;
+  mode: TokenMode;
+  marked: boolean;
+}): React.JSX.Element {
+  return (
+    <>
+      <RowLead entry={entry} token={token} tokens={tokens} mode={mode} />
+      <RowName entry={entry} />
+      {marked ? (
+        <span className="nx-vars__new" aria-hidden="true">
+          New
+        </span>
+      ) : (
+        <RowTail entry={entry} token={token} tokens={tokens} mode={mode} />
+      )}
+    </>
+  );
 }
 
 /** The row's name, and its kind where another row shares the name. */
@@ -464,9 +564,22 @@ function RowLead({
       </span>
     );
   }
-  // A radius draws a corner, so it is told from a spacing step at a glance.
-  const radius = lengthFamilyOf(entry.row) === "radius";
-  const Icon = radius ? SquareRoundCorner : KIND_ICONS[kind];
+  // A radius draws a square with that radius on its corners.
+  if (lengthFamilyOf(entry.row) === "radius") {
+    return (
+      <span
+        className="nx-vars__kind"
+        aria-hidden="true"
+        data-variable-icon="radius"
+      >
+        <span
+          className="nx-vars__radius"
+          style={{ borderRadius: valueFor(token, mode) }}
+        />
+      </span>
+    );
+  }
+  const Icon = KIND_ICONS[kind];
   return (
     <span
       className="nx-vars__kind"
@@ -535,18 +648,51 @@ function RowTail({
   // A colour's one swatch says its values; nothing follows its name.
   if (token === undefined || entry.row.kind === "color") return null;
   const own = valueFor(token, mode);
-  const words = chipText(entry, own);
-  return (
+  const words = tailWords(entry, own);
+  const chip = (
     <span
       className="nx-vars__chip"
       aria-hidden="true"
-      // The whole value on hover when the chip says it in fewer words, as
-      // "Fluid" does; the row's name says it to a screen reader already.
+      // The whole value on hover when the chip says it in other words, as
+      // "Fluid · 16–20px" does; the row's name says it to a screen reader.
       title={words === chipText(entry, own, "raw") ? undefined : own}
     >
       {words}
     </span>
   );
+  if (variableGroupOf(entry.row) !== "spacing" || entry.row.kind !== "dimension") {
+    return chip;
+  }
+  // A spacing draws a bar as long as it is at the desktop width.
+  const px = pxAtWidth(own, DESKTOP_PREVIEW_WIDTH);
+  return (
+    <span className="nx-vars__tail" aria-hidden="true">
+      {px === undefined ? null : (
+        <span
+          className="nx-vars__bar"
+          style={{ width: `${String(Math.round(px))}px` }}
+        />
+      )}
+      {chip}
+    </span>
+  );
+}
+
+/**
+ * What the value chip says: a fluid length's range ("Fluid · 16–20px"),
+ * the content width in px, as the block panel's Boxed option measures it,
+ * or the value in the picker's words.
+ */
+function tailWords(entry: VariableEntry, own: string): string {
+  const range = fluidRange(own);
+  if (range !== undefined && entry.lineHeight === undefined) {
+    return `Fluid · ${String(Math.round(range.minPx))}–${String(Math.round(range.maxPx))}px`;
+  }
+  if (variableGroupOf(entry.row) === "content") {
+    const px = pxAtWidth(own, DESKTOP_PREVIEW_WIDTH);
+    if (px !== undefined) return `${String(Math.round(px))}px`;
+  }
+  return chipText(entry, own);
 }
 
 /**

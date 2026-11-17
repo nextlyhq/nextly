@@ -363,9 +363,15 @@ test.describe("shared styles on a block", () => {
     await storeClasses(page, three);
     await openEditorWith(
       page,
-      [text(A, { classes: ["e2e-three", "e2e-one", "e2e-two"] })],
+      [text(A, { classes: ["e2e-three", "e2e-one", "e2e-two"] }), text(B)],
       A
     );
+    // Something for the first save to store: a second block, taken off.
+    // Choosing a target is not an edit, and a page with no edit has nothing
+    // to save, so its top bar offers no Save.
+    await clickBlock(page, B);
+    await page.keyboard.press("Delete");
+    await expect(await block(page, B)).toHaveCount(0);
     await styleOf(page, A);
 
     expect(await targetLabels(page)).toEqual([

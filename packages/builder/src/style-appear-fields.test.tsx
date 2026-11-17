@@ -3,7 +3,8 @@
 /**
  * "Animation when it appears" on the Style tab: in Effects, named above its
  * four rows, each in an author's words, with the times in milliseconds and
- * the start a menu, since its two choices are sentences.
+ * the start a menu, since its two choices are sentences, and Play beside its
+ * name.
  *
  * @module style-appear-fields.test
  */
@@ -112,6 +113,17 @@ describe("Animation when it appears", () => {
     for (const row of ["Effect", "Duration", "Delay", "Start"]) {
       expect(own.textContent).toContain(row);
     }
+  });
+
+  it("has Play in its heading, beside its name", () => {
+    mount({ effect: "fade-in" });
+    const own = setting();
+    const play = screen.getByRole("button", { name: "Play" });
+    expect(own.contains(play)).toBe(true);
+    const heading = play.closest(".nx-style-inspector__property-head");
+    expect(heading?.textContent).toContain("Animation when it appears");
+    // One Play, for this setting alone.
+    expect(screen.getAllByRole("button", { name: "Play" })).toHaveLength(1);
   });
 
   it("gives each time its unit, in milliseconds", () => {

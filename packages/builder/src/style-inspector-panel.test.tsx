@@ -44,6 +44,7 @@ import {
   describeProvenance,
   StyleInspectorPanel,
 } from "./style-inspector-panel";
+import { SettingsFilterProvider, StyleReportContext } from "./settings-filter";
 import { keywordLabel } from "./style-keyword-labels";
 import type { SharedStylesHost } from "./style-target";
 import type { StylePolicy } from "./style-values";
@@ -191,9 +192,24 @@ function reveal(section: string, label: string): void {
 
 /** The fields of one property, scoped so two properties sharing a side name do not collide. */
 function fieldsOf(property: string) {
-  return within(
-    document.querySelector(`[data-property="${property}"]`) as HTMLElement
-  );
+  return within(propertyRow(property) as HTMLElement);
+}
+
+/**
+ * A property's row, its section opened first where it is closed: a block
+ * with a size opens "Inside its parent", the tab's first, before Size.
+ */
+function propertyRow(property: string): HTMLElement | null {
+  const row = () =>
+    document.querySelector<HTMLElement>(`[data-property="${property}"]`);
+  if (row() !== null) return row();
+  for (const header of document.querySelectorAll<HTMLElement>(
+    '[data-section] [data-slot="accordion-trigger"][aria-expanded="false"]'
+  )) {
+    fireEvent.click(header);
+    if (row() !== null) return row();
+  }
+  return row();
 }
 
 /**
@@ -782,7 +798,18 @@ describe("the shared style target", () => {
 
     it("leaves a hidden look out of the tiles", () => {
       const hidden = { ...outline, hidden: true as const };
-      mountTarget({ library: [card, hidden, { ...outline, id: "look:acme/box:soft", slug: "box-soft", label: "Soft" }] });
+      mountTarget({
+        library: [
+          card,
+          hidden,
+          {
+            ...outline,
+            id: "look:acme/box:soft",
+            slug: "box-soft",
+            label: "Soft",
+          },
+        ],
+      });
       expect(
         within(looks())
           .getAllByRole("radio")
@@ -5874,6 +5901,7 @@ describe("an image's focal point", () => {
     // Scale down is None or Contain, whichever is smaller: it sits too.
     for (const fit of ["cover", "contain", "none", "scale-down"]) {
       mountImage(fit);
+      openSection(/^Size/);
       expect(
         screen.getByRole("radiogroup", { name: "Focal point" })
       ).toBeDefined();
@@ -5888,6 +5916,7 @@ describe("an image's focal point", () => {
     // point says it does.
     for (const fit of ["fill", undefined]) {
       mountImage(fit);
+      openSection(/^Size/);
       expect(
         screen.getByRole("radiogroup", { name: "Focal point" })
       ).toBeDefined();
@@ -5923,8 +5952,15 @@ describe("an image's fit", () => {
       { dimensions: true },
       { base: { [BASE_BREAKPOINT]: { objectFit: "cover" } } }
     );
+    openSection(/^Size/);
     expect(screen.getByRole("radiogroup", { name: "Fit" })).toBeDefined();
-    expect(await hintOf("Fit")).toMatch(/^Object fit/);
+    // Size's own Fit, not Inside its parent's Fill / Fit / Fixed choice.
+    const row = document.querySelector<HTMLElement>(
+      '[data-property="objectFit"]'
+    )!;
+    fireEvent.pointerMove(row.querySelector(".nx-inspector__field")!);
+    const tip = await screen.findByRole("tooltip", {}, { timeout: 2000 });
+    expect(tip.textContent).toMatch(/^Object fit/);
   });
 });
 
@@ -6199,6 +6235,7 @@ describe("which elements count as media for the fit controls", () => {
         cascade={{ nodes: editor.document.nodes, entries: [] } as never}
       />
     );
+    openSection(/^Size/);
     const shown =
       document.querySelector('[data-property="objectFit"]') !== null;
     unmount();
@@ -6216,6 +6253,7 @@ describe("which elements count as media for the fit controls", () => {
   it("shows them before the canvas has said what the block draws", () => {
     register({ dimensions: true });
     render(<StyleInspectorPanel editor={editorFor(documentOf())} />);
+    openSection(/^Size/);
     expect(
       document.querySelector('[data-property="objectFit"]')
     ).not.toBeNull();
@@ -6311,5 +6349,53 @@ describe("the Font control", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Manage fonts…" }));
     expect(onManageFonts).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("what the Style tab tells the panel's filter", () => {
+  it("reports the shared style's own values while one is the target", () => {
+    // The block holds a background; Card, the target, holds a colour. The
+    // filter keeps what these controls show: Card's.
+    register({ color: true, background: true });
+    const editor = editorFor(
+      documentOf({
+        base: { [BASE_BREAKPOINT]: { backgroundColor: "#123456" } },
+      } as NodeStyles)
+    );
+    const target = {
+      kind: "shared" as const,
+      worn: [],
+      style: {
+        id: "cls-1",
+        name: "Card",
+        styles: { base: { [BASE_BREAKPOINT]: { color: "#ff0000" } } },
+      } as never,
+      readOnly: undefined,
+      write: async () => undefined,
+    };
+    const report = vi.fn();
+    render(
+      <SettingsFilterProvider initial={{ onlyChanged: true }}>
+        <StyleReportContext.Provider value={report}>
+          <StyleInspectorPanel editor={editor} target={target} />
+        </StyleReportContext.Provider>
+      </SettingsFilterProvider>
+    );
+    const sections = report.mock.lastCall?.[0]?.sections as
+      | readonly { properties: readonly { property: string; set: boolean }[] }[]
+      | undefined;
+    const set = (sections ?? [])
+      .flatMap(section => section.properties)
+      .filter(property => property.set)
+      .map(property => property.property);
+    expect(set).toContain("color");
+    expect(set).not.toContain("backgroundColor");
+    // And says a shared style is the target, which draws no block shortcuts.
+    expect(report.mock.lastCall?.[0]?.shared).toBe(true);
+    // And reports the style's own values at every state and device, which
+    // "Also changed on" reads, not the block's.
+    expect(report.mock.lastCall?.[0]?.styles).toEqual({
+      base: { [BASE_BREAKPOINT]: { color: "#ff0000" } },
+    });
   });
 });

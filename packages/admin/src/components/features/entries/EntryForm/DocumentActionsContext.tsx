@@ -289,6 +289,26 @@ export function SaveActionFormProvider({
 }
 
 /**
+ * No document's actions for what it holds: an editor drawn inside another
+ * document's editor without a header of its own, such as a relationship
+ * field's quick create or quick edit. Without it the fields inside read the
+ * surrounding document's actions, so a field's own "save" would store that
+ * document instead of the one it is drawn in, and work a field commits before
+ * a save would be asked of the wrong document.
+ */
+export function NoDocumentActions({
+  children,
+}: {
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <DocumentActionsContext.Provider value={null}>
+      {children}
+    </DocumentActionsContext.Provider>
+  );
+}
+
+/**
  * The document's actions, or null outside a document editor: a surface that
  * can also be drawn elsewhere has to say what it offers there itself.
  */

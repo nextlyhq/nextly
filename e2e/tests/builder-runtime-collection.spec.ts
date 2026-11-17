@@ -25,7 +25,7 @@ import { canvasFrame } from "./support/canvas-frame";
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.dashboard, LOCK.schema] });
 
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
 
 test("opens for a collection the Schema Builder made after boot", async ({
   page,
