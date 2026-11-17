@@ -875,10 +875,89 @@ export function checkStoredClasses(
     if (!budget.truncated) {
       issues.push(...classValueIssues(entry, index, policy, budget));
     }
+    issues.push(...blockStyleMarkIssues(entry, index));
+    issues.push(...builtInRenameIssues(entry, index, policy));
     classes.push(withUsableMarks(entry, index, issues));
   });
   issues.push(...mergedLibraryIssues(classes, policy));
+  issues.push(...secondStarIssues(classes, policy));
   return { value: classes, issues };
+}
+
+/**
+ * The block style marks an entry carries that can't be used: the default ★,
+ * `true` only on a style blocks of its type can pick (never a block's own
+ * style, which is the default already, nor a shared style), and `hidden`,
+ * `true` only on a block style. Each adds an issue, which refuses a write.
+ */
+function blockStyleMarkIssues(entry: NamedClass, index: number): string[] {
+  // Read as unknown: a stored entry may hold anything under these keys.
+  const record: { readonly starred?: unknown; readonly hidden?: unknown } =
+    entry;
+  const issues: string[] = [];
+  const pickable = isLook(entry) && !isDefaultLook(entry);
+  if (record.starred !== undefined && (record.starred !== true || !pickable)) {
+    issues.push(
+      `classes[${index}] has a default ★ mark that cannot be used: it is true on a block style a block can pick, and absent otherwise.`
+    );
+  }
+  if (
+    record.hidden !== undefined &&
+    (record.hidden !== true || !isLook(entry))
+  ) {
+    issues.push(
+      `classes[${index}] has a hidden mark that cannot be used: it is true on a hidden block style, and absent otherwise.`
+    );
+  }
+  return issues;
+}
+
+/**
+ * A stored override of a built-in block style (one a block or a plugin
+ * supplies in code) that renames it: its name, its slug, its block type and
+ * whether it is the block's own style stay as the code states them, so a
+ * block style is only ever renamed where its name is written.
+ */
+function builtInRenameIssues(
+  entry: NamedClass,
+  index: number,
+  policy: SectionPolicy
+): string[] {
+  const code = policy.defaults?.classes?.find(each => each.id === entry.id);
+  if (code === undefined || !isLook(code)) return [];
+  const same =
+    entry.label === code.label &&
+    entry.slug === code.slug &&
+    entry.blockType === code.blockType &&
+    entry.isDefault === code.isDefault;
+  return same
+    ? []
+    : [
+        `classes[${index}] is a built-in block style, "${code.label ?? code.slug}", so it can't be renamed.`,
+      ];
+}
+
+/**
+ * Each block type holding more than one default ★ once the stored classes
+ * are merged with the config tier: one style per type carries it.
+ */
+function secondStarIssues(
+  classes: readonly NamedClass[],
+  policy: SectionPolicy
+): string[] {
+  const merged = resolveSiteStyle(policy.defaults, { classes }).classes ?? [];
+  const counts = new Map<string, number>();
+  for (const entry of merged) {
+    if (entry.starred !== true || !isLook(entry)) continue;
+    const type = entry.blockType as string;
+    counts.set(type, (counts.get(type) ?? 0) + 1);
+  }
+  return [...counts]
+    .filter(([, count]) => count > 1)
+    .map(
+      ([type, count]) =>
+        `Only one block style per block type can be the default ★: "${type}" has ${count}.`
+    );
 }
 
 /**

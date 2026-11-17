@@ -61,6 +61,21 @@ export const UPGRADE_CODES = defineCodes({
       },
     ],
   },
+  UPGRADE_LEDGER_UNREADABLE: {
+    cause:
+      "`nextly upgrade` found a `nextly_migrations` table holding records it cannot read, so it moved none of them.",
+    from: [
+      {
+        code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
+        reason: "legacy-ledger-unreadable",
+        describe: error =>
+          whatThenNext(
+            error.publicMessage,
+            "`nextly upgrade` moves the records an earlier release kept in `nextly_migrations` into `nextly_schema_events`, and reads every one before writing any. One of them it cannot read, so nothing was changed."
+          ),
+      },
+    ],
+  },
   UPGRADE_EVENTS_TABLE_TAKEN: {
     cause:
       "A table of another shape already has the name `nextly upgrade` moves the migration records into.",

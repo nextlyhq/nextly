@@ -135,6 +135,29 @@ describe("useHistoryAddress", () => {
     expect(window.history.length).toBe(start);
   });
 
+  it("drops a restore hand-off when history closes before it was answered", () => {
+    // "Restore…" on the comparison page asks once, for the version it names.
+    // Closed before that version loaded, the ask left behind would open a
+    // restore list the next time any version is chosen.
+    at("/admin/collections/posts/e1?history=1&version=5&restore=1");
+    const { result } = renderHook(() => useHistoryAddress());
+
+    act(() => result.current.setOpen(false));
+
+    expect(search().get("restore")).toBeNull();
+    expect(search().get("history")).toBeNull();
+  });
+
+  it("drops a restore hand-off when another version is chosen before it was answered", () => {
+    at("/admin/collections/posts/e1?history=1&version=5&restore=1");
+    const { result } = renderHook(() => useHistoryAddress());
+
+    act(() => result.current.setVersion(3));
+
+    expect(search().get("restore")).toBeNull();
+    expect(search().get("version")).toBe("3");
+  });
+
   it("adds no entry when asked to open what a link already opened, and closes it in place", () => {
     at("/admin/collections/posts/e1?history=1");
     const start = window.history.length;

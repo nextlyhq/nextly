@@ -127,6 +127,8 @@ describe("a restore into the editor", () => {
     restoreIntoEditor({
       editor: {
         restore: { apply: vi.fn(() => ({ undo })) },
+        // The content type's fields, which a restore reads each field's type from.
+        fields: [],
         language: null,
       } as never,
       rows: [
