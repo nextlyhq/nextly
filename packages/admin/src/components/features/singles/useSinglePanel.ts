@@ -8,9 +8,9 @@
  * Who comes from the Single's own read with `?details=1`, as an entry's does
  * (`useEntryDetails`); the server answers it only to a signed-in admin user
  * the read is granted to. The panel reads it while it is drawn, so a
- * document view covering the Single costs no request. History is offered by the rule the document bar
- * offers it by: a saved Single that keeps versions, to a person who may read
- * them (`useHistoryOffered`).
+ * document view covering the Single costs no request. History is offered by
+ * the rule the document bar offers it by: a saved Single that keeps
+ * versions, to a person who may read them (`useHistoryOffered`).
  *
  * @module components/features/singles/useSinglePanel
  */

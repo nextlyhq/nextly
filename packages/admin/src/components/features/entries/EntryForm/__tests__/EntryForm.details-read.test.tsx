@@ -12,14 +12,22 @@
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { cleanup, render, screen, waitFor, within } from "@admin/__tests__/utils";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@admin/__tests__/utils";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import {
   clearRegistry,
   registerComponent,
 } from "@admin/lib/plugins/component-registry";
 
-const { ANSWER } = vi.hoisted(() => ({
+const { ANSWER, barProps } = vi.hoisted(() => ({
+  barProps: vi.fn(),
   ANSWER: {
     createdBy: { kind: "person", name: "Ana Lopez" },
     updatedBy: { kind: "person", name: "Ana Lopez" },
@@ -52,7 +60,10 @@ vi.mock("@admin/lib/api/protectedApi", async importOriginal => {
   };
 });
 vi.mock("../DocumentBar", () => ({
-  DocumentBar: () => <div data-testid="document-bar" />,
+  DocumentBar: (props: Record<string, unknown>) => {
+    barProps(props);
+    return <div data-testid="document-bar" />;
+  },
 }));
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
@@ -113,8 +124,20 @@ async function settle(): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, 50));
 }
 
+/** Lays the editor's frame out this wide, as a browser would. */
+function editorWidth(width: number): void {
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+    function (this: HTMLElement) {
+      return {
+        width: this.hasAttribute("data-document-editor-frame") ? width : 0,
+      } as DOMRect;
+    }
+  );
+}
+
 beforeEach(() => {
   vi.mocked(protectedApi.get).mockClear();
+  barProps.mockClear();
   window.localStorage.clear();
   registerComponent(VIEW, BuilderView);
 });
@@ -122,6 +145,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   clearRegistry();
+  vi.restoreAllMocks();
 });
 
 describe("the entry's details read", () => {
@@ -160,6 +184,27 @@ describe("the entry's details read", () => {
     // Two readers, one key, one request.
     expect(detailsReads()).toHaveLength(1);
     expect(detailsReads()[0]).toContain("/collections/pages/entries/e1?");
+  });
+
+  it("is not made again when the panel is opened later: the panel takes the chip's answer", async () => {
+    // Floating at this width, so the panel is not drawn until asked for.
+    editorWidth(860);
+    render(<EntryForm collection={collection} entry={entry} mode="edit" />);
+    expect(
+      screen.queryByRole("complementary", { name: "Document panel" })
+    ).not.toBeInTheDocument();
+    await waitFor(() => expect(detailsReads()).toHaveLength(1));
+
+    act(() => {
+      (barProps.mock.calls.at(-1)![0].onToggleRail as () => void)();
+    });
+    const panel = screen.getByRole("complementary", { name: "Document panel" });
+    expect(
+      within(panel).getByRole("region", { name: "Details" })
+    ).toHaveTextContent("Ana Lopez");
+    await settle();
+
+    expect(detailsReads()).toHaveLength(1);
   });
 
   it("is not made before the entry exists", async () => {

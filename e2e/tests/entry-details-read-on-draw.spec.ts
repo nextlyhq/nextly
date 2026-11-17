@@ -48,6 +48,10 @@ function recordDetailsReads(page: Page): {
   };
 }
 
+// Wide enough that the side panel is docked beside the fields, so on the
+// entry page both parts that ask are drawn at once.
+test.use({ viewport: { width: 1440, height: 900 } });
+
 test("opening a page in the builder reads no details", async ({ page }) => {
   const tag = uniqueTag();
   const id = await createEntry(page.request, "pages", {
@@ -76,11 +80,12 @@ test("the entry page reads its details once", async ({
   const reads = recordDetailsReads(page);
 
   await gotoAdmin(page, `/collections/posts/${id}`);
-  // Drawn: the chip under the title is one of the parts that ask.
-  await expect(page.getByTestId("document-address")).toContainText(
-    `details-shown-${tag}`,
-    { timeout: 30_000 }
-  );
+  // Shown: Details names who made the entry after the date ("… · name"),
+  // which only the details carry; without them the row gives the date alone.
+  const details = page
+    .getByRole("complementary", { name: "Document panel" })
+    .getByRole("region", { name: "Details" });
+  await expect(details).toContainText(/Created.*·/, { timeout: 30_000 });
   await reads.settled();
 
   // The positive control for the builder case: the same recorder sees the
