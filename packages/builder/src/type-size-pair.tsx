@@ -94,37 +94,95 @@ export function TypeSizeLineHint({
 }): React.JSX.Element | null {
   // The mode the canvas draws, so Detach keeps the value it shows.
   const mode = useCanvasTokenMode();
-  const asked = onBlock && address.property === "lineHeight";
-  if (!asked || tokens === undefined) return null;
+  const hint = lineHintOf(address, styles, onBlock ? tokens : undefined);
+  if (hint === undefined) return null;
+  if (hint.follows) {
+    // Resolved as the field's own Unlink resolves a variable: the value the
+    // canvas shows, as the number a line height stores.
+    const variable = variableFor(hint.partner, tokens, mode);
+    return (
+      <FollowsLine
+        name={hint.name}
+        own={
+          readOnly || variable === undefined ? null : unlinkedValue(variable)
+        }
+        onCommit={onCommit}
+      />
+    );
+  }
+  return hint.own && !readOnly ? (
+    <UseTypeSizeLine
+      name={hint.name}
+      onUse={() => onCommit(tokenRef(hint.partner))}
+    />
+  ) : null;
+}
+
+/**
+ * What the hint under a line height field says, or nothing: the type size
+ * the block's font size points at, its line height, and whether the block's
+ * line height follows it or is its own. Nothing without the site's
+ * variables, or for any other field.
+ */
+function lineHintOf(
+  address: StyleAddress,
+  styles: NodeStyles | undefined,
+  tokens: SiteTokenSet | undefined
+):
+  | { name: string; partner: string; follows: boolean; own: boolean }
+  | undefined {
+  if (address.property !== "lineHeight" || tokens === undefined) {
+    return undefined;
+  }
   const size = readStyleValue(styles, { ...address, property: "fontSize" });
   const choice = pickedTypeSize(tokens, size);
   const partner = choice?.lineHeight;
-  if (choice === undefined || partner === undefined) return null;
+  if (choice === undefined || partner === undefined) return undefined;
   const line = readStyleValue(styles, address);
-  const follows = isTokenRef(line) && line.$token === partner;
-  if (follows) {
-    // Resolved as the field's own Unlink resolves a variable: the value the
-    // canvas shows, as the number a line height stores.
-    const variable = variableFor(partner, tokens, mode);
-    const own = variable === undefined ? null : unlinkedValue(variable);
-    return (
-      <p className="nx-type-pair">
-        <span>{`From ${choice.name} type size`}</span>
-        {readOnly || own === null ? null : (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="nx-type-pair__action"
-            onClick={() => onCommit(own)}
-          >
-            Detach
-          </Button>
-        )}
-      </p>
-    );
-  }
-  if (line === undefined || readOnly) return null;
+  return {
+    name: choice.name,
+    partner,
+    follows: isTokenRef(line) && line.$token === partner,
+    own: line !== undefined,
+  };
+}
+
+/** "From H2 type size", with "Detach" where the block may take its own. */
+function FollowsLine({
+  name,
+  own,
+  onCommit,
+}: {
+  name: string;
+  own: StyleValue | null;
+  onCommit: (value: StyleValue) => unknown;
+}): React.JSX.Element {
+  return (
+    <p className="nx-type-pair">
+      <span>{`From ${name} type size`}</span>
+      {own === null ? null : (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="nx-type-pair__action"
+          onClick={() => onCommit(own)}
+        >
+          Detach
+        </Button>
+      )}
+    </p>
+  );
+}
+
+/** "Use H2's line height", under a block's own line height. */
+function UseTypeSizeLine({
+  name,
+  onUse,
+}: {
+  name: string;
+  onUse: () => void;
+}): React.JSX.Element {
   return (
     <p className="nx-type-pair">
       <Button
@@ -132,9 +190,9 @@ export function TypeSizeLineHint({
         variant="ghost"
         size="sm"
         className="nx-type-pair__action"
-        onClick={() => onCommit(tokenRef(partner))}
+        onClick={onUse}
       >
-        {`Use ${choice.name}'s line height`}
+        {`Use ${name}'s line height`}
       </Button>
     </p>
   );
