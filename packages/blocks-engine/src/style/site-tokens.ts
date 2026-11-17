@@ -192,8 +192,8 @@ export interface SiteTokenSet {
   fluidRange?: { readonly min: number; readonly max: number };
   /**
    * The site's text: Body, the six heading levels, Links, Buttons and
-   * Captions, each a size and line height (and for links a colour and an
-   * underline) set once for every page. A row left out keeps its built-in
+   * Captions, each a font, size and line height (and for links a colour and
+   * an underline) set once for every page. A row left out keeps its built-in
    * value (`resolveSiteText`). Never emitted here: the element tier writes
    * it. Kept with the variables because a row points at them, so the two
    * save, merge and undo as one.
@@ -904,6 +904,14 @@ export function defaultSiteTokens(): SiteToken[] {
       values: { light: "#6b7280", dark: "#9ca3af" },
     },
     { name: "font.body", kind: "fontFamily", values: { light: "system-ui" } },
+    // The font the site's headings are set in once an author picks one. No
+    // rule reads it until then: the heading rows hold no font, so headings
+    // take the body text's, the site's own or the one picked for Body.
+    {
+      name: "font.heading",
+      kind: "fontFamily",
+      values: { light: "system-ui" },
+    },
     ...typeSizeDefaultTokens(),
     { name: "space.4", kind: "dimension", values: { light: "1rem" } },
     ...SPACING_DEFAULTS.map(

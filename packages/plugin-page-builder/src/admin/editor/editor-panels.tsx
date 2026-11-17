@@ -89,6 +89,7 @@ import {
   useSectionPictures,
   type SectionPictureInputs,
 } from "./section-pictures";
+import type { FontRolesTab as FontRolesTabPart } from "./site-font-roles-tab";
 import type { FontsPanelWithUpload as FontsPanelWithUploadPart } from "./site-style-fonts";
 import {
   offerableFaces,
@@ -109,6 +110,14 @@ import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
  */
 const FontsPanelWithUpload: typeof FontsPanelWithUploadPart = lazyPart(() =>
   import("./site-style-fonts").then(m => m.FontsPanelWithUpload)
+);
+
+/**
+ * The Type tab's Body and Headings fonts, fetched with the fonts panel: they
+ * read the font catalogue for "Add Bold".
+ */
+const FontRolesTab: typeof FontRolesTabPart = lazyPart(() =>
+  import("./site-font-roles-tab").then(m => m.FontRolesTab)
 );
 
 /** A key for the document the editor has open, from its identity. */
@@ -1105,10 +1114,11 @@ export function editorPanelRenderer({
           )}
           tabs={{
             colours: () => <VariablesTab tab="colours" />,
-            // Type: the site's fonts, then the type sizes and the font and
-            // weight variables.
+            // Type: the Body and Headings fonts, the site's fonts, then the
+            // type sizes and the font and weight variables.
             type: () => (
               <>
+                <FontRolesTab />
                 <DesignGroup
                   id={SITE_FONTS_GROUP}
                   heading={EDITOR_WORDS.fonts}

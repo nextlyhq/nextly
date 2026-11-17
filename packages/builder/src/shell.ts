@@ -753,6 +753,9 @@ export { blockStyleFoldId } from "./block-looks-group";
 // and a font variable's in Design.
 export { FontChoicesContext } from "./font-family-field";
 export type { FontChoices } from "./font-family-field";
+// The top of Design's Type tab: the Body and Headings fonts every page uses.
+export { SiteFontRoles } from "./site-font-roles";
+export type { SiteFontRolesProps } from "./site-font-roles";
 export type { DesignTab, VariableGroup } from "./tokens-studio";
 /*
  * How widely variables are used, as a host reads it for the Variables view.

@@ -452,3 +452,101 @@
 .nx-notices__dismiss {
   flex: 0 0 auto;
 }
+
+/*
+ * The top of Design's Type tab: "Body font" and "Headings font", each a row
+ * with its font's specimen drawn in it, its name and its font, opening the
+ * same list the Font control does.
+ */
+.nx-font-roles {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 0.5rem;
+}
+
+.nx-font-roles__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.nx-font-roles__row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font: inherit;
+  text-align: left;
+}
+
+button.nx-font-roles__row {
+  cursor: pointer;
+}
+
+button.nx-font-roles__row:hover,
+button.nx-font-roles__row[data-state="open"] {
+  background: var(--nx-muted);
+}
+
+button.nx-font-roles__row:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-font-roles__row > svg {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-font-roles__specimen {
+  font-size: 20px;
+  line-height: 1;
+  text-align: center;
+}
+
+.nx-font-roles__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.nx-font-roles__name {
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.nx-font-roles__value {
+  overflow: hidden;
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Said under the rows, in the panel's own type, when headings fake a bold. */
+.nx-font-roles__note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-background);
+  font-size: var(--text-xs);
+}
+
+.nx-font-roles__note-text {
+  flex: 1 1 100%;
+  margin: 0;
+  overflow-wrap: anywhere;
+}

@@ -535,6 +535,33 @@ export function familyStack(family: string, category?: string): string {
   return `"${cssString(family)}", ${generic}`;
 }
 
+/**
+ * The generic family a site-wide font falls back to: the one of its kind,
+ * serif, monospace, or sans-serif for every other kind (display and
+ * handwriting faces too), so body text never falls back to a script face.
+ */
+function roleGeneric(category: string | undefined): string {
+  return category === "serif" || category === "monospace"
+    ? category
+    : "sans-serif";
+}
+
+/**
+ * What picking a family for the site's Body or Headings font stores: its name
+ * quoted, then the generic family of its kind ({@link roleGeneric}).
+ */
+export function roleStack(family: string, category?: string): string {
+  return `"${cssString(family)}", ${roleGeneric(category)}`;
+}
+
+/**
+ * Whether the faces draw a bold: some face at weight 600 or heavier, which a
+ * browser picks for a bold heading rather than thickening a lighter one.
+ */
+export function drawsBold(faces: readonly FontFaceDef[]): boolean {
+  return [...weightsDrawn(faces)].some(weight => weight >= 600);
+}
+
 /** The specimen, one sentence with ascenders, descenders and round forms. */
 export const SPECIMEN: string =
   "Almost before we knew it, we had left the ground";
