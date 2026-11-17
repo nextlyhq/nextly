@@ -74,7 +74,7 @@ export const OTHER_VERSION_REFUSAL =
   "These blocks were copied from a different version of the editor, so they can’t be pasted here. Copy them again.";
 
 /** Said when copied Entry content would land in a page that is not a template. */
-export const ENTRY_CONTENT_TEMPLATE_ONLY =
+const ENTRY_CONTENT_TEMPLATE_ONLY =
   "An Entry content block goes only in a template, so it can’t be pasted here.";
 
 /** Said when Paste finds no copied blocks on the clipboard. */
