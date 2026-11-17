@@ -4,8 +4,10 @@
  * which rows offer it and to whom, the question a set with unpublished parts
  * asks, and the writes each answer makes, in order.
  */
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SiteSettingsRead } from "../library-contract";
@@ -63,6 +65,18 @@ vi.mock("@nextlyhq/ui", async importOriginal => ({
 
 const { MakeDefaultListTools } = await import("./make-default-action");
 
+/** The query client the list's entries read is cached in, for each test. */
+let queryClient = new QueryClient();
+
+/** The tools drawn as the list draws them, inside the admin's query client. */
+function renderTools(ui: ReactNode) {
+  return render(ui, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+}
+
 const MAY: SiteSettingsRead = {
   mayManageSite: true,
   mayChooseDefaultLayout: true,
@@ -93,6 +107,7 @@ async function select(id: string, row: Record<string, unknown>) {
 }
 
 beforeEach(() => {
+  queryClient = new QueryClient();
   registered.length = 0;
   writes.length = 0;
   siteRead = MAY;
@@ -108,7 +123,7 @@ afterEach(cleanup);
 
 describe("which rows offer it", () => {
   it("offers Make site default on each published set but the default, and Publish it, then make default on one not published", () => {
-    render(<MakeDefaultListTools collectionSlug="layouts" />);
+    renderTools(<MakeDefaultListTools collectionSlug="layouts" />);
     const make = action(MAKE);
     expect(make.list).toBe("layouts");
     expect(make.label).toBe("Make site default");
@@ -123,19 +138,19 @@ describe("which rows offer it", () => {
 
   it("offers nothing to someone who may not make a set the default", () => {
     siteRead = { ...MAY, mayChooseDefaultLayout: false };
-    render(<MakeDefaultListTools collectionSlug="layouts" />);
+    renderTools(<MakeDefaultListTools collectionSlug="layouts" />);
     expect(registered.filter(entry => !entry.removed)).toEqual([]);
   });
 
   it("registers on the list the site resolved, renamed or not", () => {
-    render(<MakeDefaultListTools collectionSlug="site_layouts" />);
+    renderTools(<MakeDefaultListTools collectionSlug="site_layouts" />);
     expect(action(MAKE).list).toBe("site_layouts");
   });
 });
 
 describe("making a set the default", () => {
   it("makes a ready set the default at once, says so, and reads the default again", async () => {
-    render(<MakeDefaultListTools collectionSlug="layouts" />);
+    renderTools(<MakeDefaultListTools collectionSlug="layouts" />);
     await select(MAKE, LANDING);
     expect(writes.map(write => write.path)).toEqual([
       "/publish-readiness",
@@ -151,7 +166,7 @@ describe("making a set the default", () => {
   it("says why when the route refuses", async () => {
     makeDefault = () =>
       Promise.reject(new Error("This header & footer set is being removed."));
-    render(<MakeDefaultListTools collectionSlug="layouts" />);
+    renderTools(<MakeDefaultListTools collectionSlug="layouts" />);
     await select(MAKE, LANDING);
     expect(toasts.error).toHaveBeenCalledWith(
       "This header & footer set is being removed."
@@ -175,7 +190,7 @@ describe("making a set the default", () => {
     });
 
     it("asks first, writing nothing while it asks", async () => {
-      render(<MakeDefaultListTools collectionSlug="layouts" />);
+      renderTools(<MakeDefaultListTools collectionSlug="layouts" />);
       await select(MAKE, LANDING);
       const question = await screen.findByRole("alertdialog");
       expect(question.textContent).toContain(
@@ -185,7 +200,7 @@ describe("making a set the default", () => {
     });
 
     it("makes it the default anyway", async () => {
-      render(<MakeDefaultListTools collectionSlug="layouts" />);
+      renderTools(<MakeDefaultListTools collectionSlug="layouts" />);
       await select(MAKE, LANDING);
       await userEvent.click(
         await screen.findByRole("button", { name: "Make default anyway" })
@@ -199,7 +214,7 @@ describe("making a set the default", () => {
     });
 
     it("publishes them, then makes it the default", async () => {
-      render(<MakeDefaultListTools collectionSlug="layouts" />);
+      renderTools(<MakeDefaultListTools collectionSlug="layouts" />);
       await select(MAKE, LANDING);
       await userEvent.click(
         await screen.findByRole("button", {
@@ -216,7 +231,7 @@ describe("making a set the default", () => {
     });
 
     it("changes nothing when the author cancels", async () => {
-      render(<MakeDefaultListTools collectionSlug="layouts" />);
+      renderTools(<MakeDefaultListTools collectionSlug="layouts" />);
       await select(MAKE, LANDING);
       await userEvent.click(
         await screen.findByRole("button", { name: "Cancel" })
@@ -240,7 +255,7 @@ describe("making a set the default", () => {
       ],
       missing: 0,
     };
-    render(<MakeDefaultListTools collectionSlug="layouts" />);
+    renderTools(<MakeDefaultListTools collectionSlug="layouts" />);
     await select(PUBLISH_THEN, DRAFT);
     expect(writes.map(write => write.path)).toEqual([
       "/publish-readiness",
@@ -271,7 +286,7 @@ describe("making a set the default", () => {
         ],
       },
     };
-    render(<MakeDefaultListTools collectionSlug="layouts" />);
+    renderTools(<MakeDefaultListTools collectionSlug="layouts" />);
     await select(PUBLISH_THEN, DRAFT);
     expect(writes.map(write => write.path)).toEqual([
       "/publish-readiness",
@@ -280,5 +295,47 @@ describe("making a set the default", () => {
     expect(toasts.error).toHaveBeenCalledWith(
       "Campaign wasn't published: It has a required field."
     );
+  });
+
+  it("publishes the set itself when readiness reports no parts, as with the readiness check turned off", async () => {
+    readiness = { dependencies: [], missing: 0 };
+    renderTools(<MakeDefaultListTools collectionSlug="layouts" />);
+    await select(PUBLISH_THEN, DRAFT);
+    expect(writes[1]?.body).toEqual({
+      dependencies: [{ kind: "layout", id: "draft" }],
+    });
+    expect(writes.map(write => write.path)).toEqual([
+      "/publish-readiness",
+      "/publish-dependencies",
+      "/layouts/draft/make-default",
+    ]);
+  });
+
+  it("refreshes the list's entries after publishing, even when making it the default is then refused", async () => {
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    makeDefault = async () => {
+      throw Object.assign(new Error("Refused."), { status: 409 });
+    };
+    renderTools(<MakeDefaultListTools collectionSlug="site_layouts" />);
+    await select(PUBLISH_THEN, DRAFT);
+    expect(writes.map(write => write.path)).toEqual([
+      "/publish-readiness",
+      "/publish-dependencies",
+      "/layouts/draft/make-default",
+    ]);
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["entries", "list", "site_layouts"],
+    });
+  });
+
+  it("leaves the list's entries alone when nothing was published", async () => {
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    renderTools(<MakeDefaultListTools collectionSlug="layouts" />);
+    await select(MAKE, LANDING);
+    expect(writes.map(write => write.path)).toEqual([
+      "/publish-readiness",
+      "/layouts/landing/make-default",
+    ]);
+    expect(invalidate).not.toHaveBeenCalled();
   });
 });

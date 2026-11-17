@@ -28,6 +28,7 @@ import {
   writePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
 import { toast } from "@nextlyhq/ui";
+import { useQueryClient } from "@tanstack/react-query";
 import { PanelsTopLeft, Send } from "lucide-react";
 import { useEffect, useState, type JSX } from "react";
 
@@ -74,6 +75,16 @@ interface MakeDefaultAsked {
 /** How the flow asks the author, and is told the answer. */
 type Ask = (readiness: PublishReadinessResponse) => Promise<PublishChoice>;
 
+/**
+ * What the flow reaches outside itself: the question it may ask, and what it
+ * reports once a publish has written something, so the list showing the sets
+ * can read their new status whatever happens after.
+ */
+interface MakeDefaultFlow {
+  readonly ask: Ask;
+  readonly published: () => void;
+}
+
 /** What a refusal says, past the route's own words where it gives none. */
 function refusalOf(error: unknown): string {
   if ((error as { status?: unknown } | null)?.status === 403) {
@@ -107,7 +118,8 @@ async function makeDefault(asked: MakeDefaultAsked): Promise<boolean> {
 async function publishThenMakeDefault(
   asked: MakeDefaultAsked,
   chosen: readonly UnpublishedDependency[],
-  readiness: PublishReadinessResponse
+  readiness: PublishReadinessResponse,
+  published: () => void
 ): Promise<boolean> {
   let result: Awaited<ReturnType<typeof publishChosen>>;
   try {
@@ -116,6 +128,9 @@ async function publishThenMakeDefault(
     toast.error(refusalOf(error));
     return false;
   }
+  // Reported before the set is made the default: a publish that landed has
+  // changed the rows' status even when making the default is then refused.
+  published();
   const own = result.refused.find(
     refusal => refusal.kind === "layout" && refusal.id === asked.id
   );
@@ -133,7 +148,7 @@ async function publishThenMakeDefault(
  */
 async function makeSiteDefault(
   asked: MakeDefaultAsked,
-  ask: Ask
+  flow: MakeDefaultFlow
 ): Promise<boolean> {
   const readiness = await askReadiness({ documents: [], layout: asked.id });
   // Not published: "Publish it, then make default" says what it does, so it
@@ -145,11 +160,18 @@ async function makeSiteDefault(
       title: asked.title,
       mayPublish: true,
     };
-    const parts = readiness?.dependencies.filter(entry => entry.mayPublish);
+    // The set itself always, whatever readiness reports: a readiness check
+    // turned off answers no dependencies at all, and a publish without the
+    // set would leave it a draft the default cannot be.
+    const parts = (readiness?.dependencies ?? []).filter(
+      entry =>
+        entry.mayPublish && !(entry.kind === "layout" && entry.id === asked.id)
+    );
     return publishThenMakeDefault(
       asked,
-      parts ?? [own],
-      readiness ?? { dependencies: [own], missing: 0 }
+      [...parts, own],
+      readiness ?? { dependencies: [own], missing: 0 },
+      flow.published
     );
   }
   if (
@@ -158,10 +180,15 @@ async function makeSiteDefault(
   ) {
     return makeDefault(asked);
   }
-  const choice = await ask(readiness);
+  const choice = await flow.ask(readiness);
   if (choice.kind === "cancel") return false;
   if (choice.kind === "only") return makeDefault(asked);
-  return publishThenMakeDefault(asked, choice.dependencies, readiness);
+  return publishThenMakeDefault(
+    asked,
+    choice.dependencies,
+    readiness,
+    flow.published
+  );
 }
 
 /** A row's id, by dialect a string or a number, or null for none. */
@@ -248,14 +275,23 @@ export function MakeDefaultListTools({
   const refetchLatest = useLatest(refetch);
   // One function for as long as the list is shown, so the actions are
   // registered once per change of who may and which set is the default.
+  const queryClient = useQueryClient();
+  // The list's own entries read, which a plugin route's write leaves as it
+  // was: invalidated after a publish, so the published set's row shows its
+  // new status and stops offering to publish it.
+  const listLatest = useLatest(collectionSlug ?? "");
   const [start] = useState(() => (asked: MakeDefaultAsked) => {
-    void makeSiteDefault(
-      asked,
-      readiness =>
+    void makeSiteDefault(asked, {
+      ask: readiness =>
         new Promise<PublishChoice>(resolve => {
           setQuestion({ readiness, answer: resolve });
-        })
-    ).then(made => {
+        }),
+      published: () => {
+        void queryClient.invalidateQueries({
+          queryKey: ["entries", "list", listLatest.current],
+        });
+      },
+    }).then(made => {
       // The new default's row no longer offers to become it.
       if (made) refetchLatest.current();
     });
