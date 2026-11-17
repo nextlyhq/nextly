@@ -114,29 +114,33 @@ export function WhenClickedField({
   return (
     <div className="nx-when-clicked" data-content-control="when-clicked">
       <HeldByLock reasonId={held ? reasonId : undefined}>
-        <div className="nx-inspector__field" data-content-control="select">
-          {/* Named by the section it heads, which already says the words,
+        {/* In the column the other rows' fields take beside their bind
+            buttons, so its edges line up with theirs. */}
+        <div className="nx-binding-row">
+          <div className="nx-inspector__field" data-content-control="select">
+            {/* Named by the section it heads, which already says the words,
               so the row draws the choices alone. */}
-          <SegmentedChoice
-            id={id}
-            labelledBy={`${id}-label`}
-            options={options}
-            labels={options.map(option =>
-              prop === undefined ? option : optionLabel(prop.schema, option)
-            )}
-            value={shown}
-            disabled={held}
-            // Only the choice is written, so a stored link stays for the
-            // next time Link is chosen.
-            onChoose={next => {
-              if (next !== shown) onCommitMany({ [group.choice]: next });
-            }}
-          />
-          <span id={`${id}-label`} hidden>
-            {prop === undefined
-              ? "When clicked"
-              : propLabel(prop.name, prop.schema)}
-          </span>
+            <SegmentedChoice
+              id={id}
+              labelledBy={`${id}-label`}
+              options={options}
+              labels={options.map(option =>
+                prop === undefined ? option : optionLabel(prop.schema, option)
+              )}
+              value={shown}
+              disabled={held}
+              // Only the choice is written, so a stored link stays for the
+              // next time Link is chosen.
+              onChoose={next => {
+                if (next !== shown) onCommitMany({ [group.choice]: next });
+              }}
+            />
+            <span id={`${id}-label`} hidden>
+              {prop === undefined
+                ? "When clicked"
+                : propLabel(prop.name, prop.schema)}
+            </span>
+          </div>
         </div>
       </HeldByLock>
       {shown === "link" ? (
