@@ -340,6 +340,10 @@ describe("a spacing-box side", () => {
     fireEvent.change(number, { target: { value: "24" } });
     fireEvent.keyDown(number, { key: "Enter" });
     expect(written(editor, 1)).toContain('"blockStart":"24px"');
+    // Enter writes once and closes: no second commit of the same value, which
+    // the editor, not yet drawn, would take from the page as it was.
+    expect(editor.applyAll).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("sets each side by typing round the box: 4 0 Tab, four times", () => {

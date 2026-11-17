@@ -101,20 +101,25 @@ function offeredPreset(
 }
 
 /**
- * What the number's commit comes to as the popover closes. A number still
- * being typed is committed by taking focus off it (to no other element, so
- * the popover isn't left). Right after an Enter in the number, the commit
- * that Enter made says; anywhere else nothing is pending, so an earlier
- * refusal never holds the popover open.
+ * What the number's commit comes to as the popover closes.
+ *
+ * Right after an Enter in the number, the commit that Enter made says, and
+ * nothing is committed again: a second commit in the same key press is built
+ * before the editor has drawn the first, from the document as it was, and is
+ * refused. A number still being typed (Tab in quick entry) is committed by
+ * taking focus off it, to no other element, so the popover isn't left.
+ * Anywhere else nothing is pending, so an earlier refusal never holds the
+ * popover open.
  */
 function commitTyped(
   root: HTMLElement | null,
   outcome: React.RefObject<CommitOutcome | undefined>,
   afterEnter: boolean
 ): CommitOutcome | undefined {
+  if (afterEnter) return outcome.current;
   const active = root?.ownerDocument.activeElement;
   if (root === null || !isInput(active) || !root.contains(active)) {
-    return afterEnter ? outcome.current : undefined;
+    return undefined;
   }
   outcome.current = undefined;
   active.blur();
@@ -213,6 +218,13 @@ export function SpacingSidePopover(
         const at = event.target;
         if (isElement(at) && props.side.current?.contains(at) === true) {
           event.preventDefault();
+        }
+      }}
+      // An Enter in the number starts with no outcome, so the one it reads
+      // after is the commit that Enter made, or none where nothing changed.
+      onKeyDownCapture={event => {
+        if (event.key === "Enter" && isInput(event.target)) {
+          outcome.current = undefined;
         }
       }}
       onKeyDown={event =>
