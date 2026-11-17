@@ -11,6 +11,7 @@ import {
   relationship,
   select,
   option,
+  previewUrlFromTemplate,
 } from "nextly/config";
 
 // Demo Posts collection for the contributor playground. Exercises the
@@ -109,5 +110,10 @@ export const Posts = defineCollection({
   versions: { drafts: true },
   admin: {
     useAsTitle: "title",
+    // Where a post previews: the address its `(frontend)/[...slug]` route
+    // serves it at. The editor's Preview, beside the form or in a tab, goes
+    // through the preview route, which turns draft mode on, so that route
+    // draws the post's saved draft rather than its published page.
+    preview: { url: previewUrlFromTemplate("/blog/{slug}") },
   },
 });
