@@ -495,12 +495,14 @@ export function buildContentRoute(
     const drawn = {
       ...entry,
       [TEMPLATE_DOCUMENT_KEY]: template.document,
-      // The template is the stored document the entry's page draws, so a
-      // form on it posts naming the template.
+      // The entry drawn by its design: a form on the design, or in the
+      // entry's own blocks the design draws, posts naming the entry, which
+      // the receiver draws as this page does.
       [FORM_DOCUMENT_KEY]: {
-        collection: templates.collection,
-        id: template.id,
+        collection: holder.collection,
+        id: holder.id,
         field: "",
+        design: true,
       },
     };
     // A later page's lookup was answered with the entry's space; its own

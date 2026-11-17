@@ -62,7 +62,12 @@ export function siteForms(parts: {
     },
     service: () => ({
       action: FORM_ACTION,
-      documentOf({ collection, id, field }) {
+      documentOf({ collection, id, field, design }) {
+        // An entry drawn by its design: the receiver draws it as its page
+        // does, its own blocks composed into the design.
+        if (design === true) {
+          return definingDocumentValue({ kind: "entry", collection, id });
+        }
         const where = stores();
         if (collection === where.pages && field === PAGES_CONTENT_FIELD) {
           return definingDocumentValue({ kind: "page", id });

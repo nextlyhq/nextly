@@ -33,11 +33,15 @@ import { offeredSiteForms, type SiteFormsService } from "./resolver";
  */
 export const FORM_DOCUMENT_KEY = "__nextlyFormDocument";
 
-/** A stored row holding a drawn document: its collection, id and field. */
+/**
+ * A stored row holding a drawn document: its collection, id and field, or a
+ * collection's entry drawn by its design (`design`).
+ */
 interface StoredDocumentRow {
   readonly collection: string;
   readonly id: string;
   readonly field: string;
+  readonly design?: boolean;
 }
 
 /** The row a route set under {@link FORM_DOCUMENT_KEY}, if it set one. */
@@ -46,11 +50,11 @@ function setRow(
 ): StoredDocumentRow | undefined {
   const value: unknown = entry[FORM_DOCUMENT_KEY];
   if (typeof value !== "object" || value === null) return undefined;
-  const { collection, id, field } = value as Record<string, unknown>;
+  const { collection, id, field, design } = value as Record<string, unknown>;
   return typeof collection === "string" &&
     typeof id === "string" &&
     typeof field === "string"
-    ? { collection, id, field }
+    ? { collection, id, field, ...(design === true ? { design } : {}) }
     : undefined;
 }
 

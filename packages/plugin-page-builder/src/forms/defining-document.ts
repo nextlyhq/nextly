@@ -22,6 +22,7 @@
  * @module forms/defining-document
  */
 import {
+  composeEntryContent,
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   findNode,
@@ -39,7 +40,12 @@ import {
 } from "@nextlyhq/blocks-react";
 
 import { PAGES_CONTENT_FIELD } from "../collections/pages";
-import { TEMPLATE_CONTENT_FIELD } from "../collections/templates";
+import {
+  entryDesignKey,
+  TEMPLATE_COLLECTION_FIELD,
+  TEMPLATE_CONTENT_FIELD,
+  TEMPLATE_ENTRY_FIELD,
+} from "../collections/templates";
 import {
   AS_THE_SYSTEM,
   asDocument,
@@ -51,15 +57,26 @@ import {
 /** The document a post names as the one defining its form. */
 export type DefiningDocument =
   | { readonly kind: "page" | "template" | "component"; readonly id: string }
-  | { readonly kind: "layout"; readonly id: string; readonly area: RegionArea };
+  | { readonly kind: "layout"; readonly id: string; readonly area: RegionArea }
+  | {
+      /**
+       * A collection's entry drawn by its design (its own, or its
+       * collection's template), with its own blocks composed into the
+       * design's Entry content, as its page draws it.
+       */
+      readonly kind: "entry";
+      readonly collection: string;
+      readonly id: string;
+    };
 
 /** An id as a post may name it; anything else names nothing. */
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
 
 /**
  * Read the hidden field naming the defining document: `page:<id>`,
- * `template:<id>`, `component:<id>` or `layout:<id>:<area>`. `null` for
- * anything else, which the receiver refuses.
+ * `template:<id>`, `component:<id>`, `layout:<id>:<area>` or
+ * `entry:<collection>:<id>`. `null` for anything else, which the receiver
+ * refuses.
  */
 export function parseDefiningDocument(
   raw: string | undefined
@@ -68,6 +85,12 @@ export function parseDefiningDocument(
   const parts = raw.split(":");
   const [kind, id, area] = parts;
   if (id === undefined || !ID.test(id)) return null;
+  if (kind === "entry") {
+    // `entry:<collection>:<id>`: the collection where the others name an id.
+    return parts.length === 3 && area !== undefined && ID.test(area)
+      ? { kind, collection: id, id: area }
+      : null;
+  }
   if (kind === "layout") {
     if (parts.length !== 3) return null;
     const known = REGION_AREAS.find(candidate => candidate === area);
@@ -82,9 +105,13 @@ export function parseDefiningDocument(
 
 /** The hidden field's value naming `document`: the inverse of {@link parseDefiningDocument}. */
 export function definingDocumentValue(document: DefiningDocument): string {
-  return document.kind === "layout"
-    ? `layout:${document.id}:${document.area}`
-    : `${document.kind}:${document.id}`;
+  if (document.kind === "layout") {
+    return `layout:${document.id}:${document.area}`;
+  }
+  if (document.kind === "entry") {
+    return `entry:${document.collection}:${document.id}`;
+  }
+  return `${document.kind}:${document.id}`;
 }
 
 /** A published read through the Direct API, as the public or as the system. */
@@ -192,6 +219,8 @@ async function publishedNodes(
     }
     case "component":
       return componentNodes(api, stores, document.id, locale);
+    case "entry":
+      return entryDrawnNodes(api, stores, document, locale);
     case "layout": {
       const row = await onePublished(api, stores.layouts, document.id, {
         ...AS_THE_SYSTEM,
@@ -228,6 +257,49 @@ async function onePublished(
   // Compared again exactly, and by the id asked for: a database may compare
   // text loosely, and an `afterRead` hook may rewrite what it returns.
   return row !== undefined && row.id === id ? row : null;
+}
+
+/**
+ * A collection entry's page as drawn: its design, its own published design
+ * first and else its collection's, with the entry's blocks composed into the
+ * design's Entry content, each read as the public reads them, as the
+ * entry's page is.
+ */
+async function entryDrawnNodes(
+  api: PublishedReadApi,
+  stores: DefiningStores,
+  document: { readonly collection: string; readonly id: string },
+  locale: string | undefined
+): Promise<BlockNode[] | null> {
+  const language = locale === undefined ? {} : { locale };
+  const entry = await onePublished(api, document.collection, document.id, {
+    overrideAccess: false,
+    ...language,
+  });
+  if (entry === null) return null;
+  const own = entryDesignKey(document.collection, document.id);
+  const { items } = await api.find({
+    collection: stores.templates,
+    where: {
+      or: [
+        { [TEMPLATE_ENTRY_FIELD]: { equals: own } },
+        { [TEMPLATE_COLLECTION_FIELD]: { equals: document.collection } },
+      ],
+    },
+    status: "published",
+    overrideAccess: false,
+    limit: 2,
+    depth: 0,
+    ...language,
+  } as never);
+  const rows = items as readonly Record<string, unknown>[];
+  // Compared again exactly, the own design first, as the route draws it.
+  const design =
+    rows.find(row => row[TEMPLATE_ENTRY_FIELD] === own) ??
+    rows.find(row => row[TEMPLATE_COLLECTION_FIELD] === document.collection);
+  const drawn = asDocument(design?.[TEMPLATE_CONTENT_FIELD]);
+  if (drawn === null) return null;
+  return composeEntryContent(drawn, { valueOf: field => entry[field] }).nodes;
 }
 
 /** A published component's node list, read as the renderer reads it. */

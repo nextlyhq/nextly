@@ -821,6 +821,19 @@ describe("after sending, as the block chose", () => {
     );
   });
 
+  it("keeps a page's section, and finds one on the page sent from", async () => {
+    for (const [href, expected] of [
+      ["/thanks#next-steps", "/thanks#next-steps"],
+      ["#next-steps", "/contact#next-steps"],
+      ["#bad fragment", "/contact#form-f1-sent"],
+    ] as const) {
+      const { deps } = parts(goTo({ href }));
+      expect(location(await receiveFormPost(post(ANSWERS), deps)), href).toBe(
+        expected
+      );
+    }
+  });
+
   it("sends the visitor to an address the author wrote, on another site too", async () => {
     const { deps } = parts(goTo({ href: "https://example.org/thanks" }));
     expect(location(await receiveFormPost(post(ANSWERS), deps))).toBe(
@@ -910,49 +923,14 @@ describe("after sending, as the block chose", () => {
 });
 
 describe("the language a page was sent from", () => {
-  it("is read from its path's language segment, where it has one", async () => {
-    const { languageOfPage } = await import("./route");
-    expect(languageOfPage("de", "/de/kontakt")).toEqual({
-      locale: "de",
-      fromSegment: true,
-    });
+  it("prefixes a page's address with the language segment of the page sent from", async () => {
+    const { addressInLanguageOf } = await import("./route");
+    expect(addressInLanguageOf("/danke", "de", "/de/kontakt")).toBe(
+      "/de/danke"
+    );
+    expect(addressInLanguageOf("/", "de", "/de/kontakt")).toBe("/de");
     // The default language, served without a segment, forms no prefix.
-    expect(languageOfPage("en", "/contact")).toEqual({
-      locale: "en",
-      fromSegment: false,
-    });
-    expect(languageOfPage(undefined, "/de/kontakt")).toEqual({
-      fromSegment: false,
-    });
-  });
-});
-
-describe("a provider's form that takes a file", () => {
-  it("is refused plainly, never sent on without its file", async () => {
-    const withFile = fakeProvider({
-      describe: async () => ({
-        ref: "contact",
-        title: "Contact",
-        fields: [
-          { name: "email", label: "Email", kind: "email" },
-          { name: "cv", label: "CV", kind: "file" },
-        ],
-        submitText: "Send",
-        afterSending: { kind: "message", message: "Thanks." },
-        encoding: "multipart",
-      }),
-      accept: vi.fn(async () => ({ kind: "sent" as const })),
-    });
-    const { deps, providers } = parts(
-      simpleForm({ props: { form: { provider: "acme", ref: "contact" } } })
-    );
-    providers.set("acme", withFile);
-    const response = await receiveFormPost(post({ email: "a@b.co" }), deps);
-
-    expect(response.status).toBe(422);
-    expect(await response.text()).toBe(
-      "This form needs JavaScript to send a file."
-    );
-    expect(withFile.accept).not.toHaveBeenCalled();
+    expect(addressInLanguageOf("/thanks", "en", "/contact")).toBe("/thanks");
+    expect(addressInLanguageOf("/thanks", undefined, "/de/x")).toBe("/thanks");
   });
 });

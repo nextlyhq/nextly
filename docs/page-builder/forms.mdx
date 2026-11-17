@@ -65,14 +65,14 @@ JavaScript.
 
 Beside the visitor's answers, a post carries these hidden fields:
 
-| Field     | What it holds                                                                                                                                                         |
-| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `_form`   | The document that defines the form: `page:<id>`, `template:<id>`, `component:<id>`, or `layout:<id>:<area>` for the component a header & footer set places in an area |
-| `_node`   | The form block's id in that document                                                                                                                                  |
-| `_return` | The path to come back to, such as `/contact`                                                                                                                          |
-| `_item`   | For a form repeated in a collection list, the item's position                                                                                                         |
-| `_locale` | The page's language, when the site has several                                                                                                                        |
-| `_hp`     | The spam trap. The Form block draws it hidden; a person leaves it empty                                                                                               |
+| Field     | What it holds                                                                                                                                                                                                                                                          |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `_form`   | The document that defines the form: `page:<id>`, `template:<id>`, `component:<id>`, `layout:<id>:<area>` for the component a header & footer set places in an area, or `entry:<collection>:<id>` for a collection's entry drawn by its design, its own blocks included |
+| `_node`   | The form block's id in that document                                                                                                                                                                                                                                   |
+| `_return` | The path to come back to, such as `/contact`                                                                                                                                                                                                                           |
+| `_item`   | For a form repeated in a collection list, the item's position                                                                                                                                                                                                          |
+| `_locale` | The page's language, when the site has several                                                                                                                                                                                                                         |
+| `_hp`     | The spam trap. The Form block draws it hidden; a person leaves it empty                                                                                                                                                                                                |
 
 The route answers with a `303` back to `_return`, with the outcome in the fragment:
 `#form-<id>-sent`, `#form-<id>-invalid`, `#form-<id>-closed` or `#form-<id>-error`.

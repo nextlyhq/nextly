@@ -163,3 +163,28 @@ describe("a form in a header or footer", () => {
     expect(page?.props.context?.forms?.document).toBe("page:p1");
   });
 });
+
+describe("an entry's page drawn by its design", () => {
+  it("names the entry, so the receiver draws it as its page does", async () => {
+    const { rows } = offerForms();
+    const { routedFormsFor, FORM_DOCUMENT_KEY } = await import("./next-forms");
+    await routedFormsFor({
+      entry: {
+        id: "e1",
+        [FORM_DOCUMENT_KEY]: {
+          collection: "posts",
+          id: "e1",
+          field: "",
+          design: true,
+        },
+      },
+      field: "__nextlyTemplateDocument",
+      route: { collection: "posts", slug: "blog/hello" },
+      language: { fromSegment: false },
+      revalidate: undefined,
+    });
+    expect(rows).toEqual([
+      { collection: "posts", id: "e1", field: "", design: true },
+    ]);
+  });
+});

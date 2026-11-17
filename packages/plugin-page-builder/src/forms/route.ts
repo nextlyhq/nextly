@@ -125,24 +125,23 @@ async function servedAddressOf(
     | undefined;
   if (typeof service?.pathHeldBy !== "function") return null;
   const path = await service.pathHeldBy(locale, collection, id);
-  if (path === null) return null;
-  const { servedAddress } = await import("nextly/runtime");
-  return await servedAddress(path, languageOfPage(locale, from));
+  return path === null ? null : addressInLanguageOf(path, locale, from);
 }
 
 /**
- * The language a page was served in, as the address rule reads it: from the
- * route's language segment where the page's own path starts with it, and
- * otherwise as the site's own mount for one language, whose paths carry none.
+ * `path`, the address store's language-free path of a page in `locale`, as
+ * the page the visitor sent from was addressed: under that language's
+ * segment where the page's own path starts with it (`/de/kontakt` sends to
+ * `/de/danke`), and as it is where the page carries none, as the default
+ * language and a site mounting one language itself serve their pages.
  */
-export function languageOfPage(
+export function addressInLanguageOf(
+  path: string,
   locale: string | undefined,
   from: string
-): { readonly locale?: string; readonly fromSegment: boolean } {
-  if (locale === undefined) return { fromSegment: false };
+): string {
+  if (locale === undefined) return path;
   const segment = from.split("/")[1] ?? "";
-  return {
-    locale,
-    fromSegment: segment.toLowerCase() === locale.toLowerCase(),
-  };
+  if (segment.toLowerCase() !== locale.toLowerCase()) return path;
+  return path === "/" ? `/${segment}` : `/${segment}${path}`;
 }

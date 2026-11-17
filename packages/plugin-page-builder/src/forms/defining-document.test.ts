@@ -39,12 +39,26 @@ function directApi(rows: Record<string, Record<string, unknown>[]>) {
     {
       find: async (args: Record<string, unknown>) => {
         reads.push(args);
-        const where = args.where as { id: { equals?: string; in?: string[] } };
-        const ids = where.id.in ?? [where.id.equals];
+        const where = args.where as {
+          id?: { equals?: string; in?: string[] };
+          or?: Record<string, { equals?: unknown }>[];
+        };
+        const stored = rows[String(args.collection)] ?? [];
+        if (where.or !== undefined) {
+          // Any of the conditions, each one field's equality.
+          return {
+            items: stored.filter(row =>
+              where.or!.some(condition =>
+                Object.entries(condition).every(
+                  ([field, test]) => row[field] === test.equals
+                )
+              )
+            ),
+          };
+        }
+        const ids = where.id?.in ?? [where.id?.equals];
         return {
-          items: (rows[String(args.collection)] ?? []).filter(row =>
-            ids.includes(String(row.id))
-          ),
+          items: stored.filter(row => ids.includes(String(row.id))),
         };
       },
     },
@@ -301,5 +315,60 @@ describe("a form inside a component placed on a page", () => {
         undefined
       )
     ).toBeNull();
+  });
+});
+
+describe("a form in an entry's own blocks, drawn by its design", () => {
+  it("is found as the entry's page draws it, composed into the design", async () => {
+    const { composeEntryContent, ENTRY_CONTENT_TYPE } = await import(
+      "@nextlyhq/blocks-engine"
+    );
+    const design = {
+      formatVersion: 1,
+      kind: "template",
+      nodes: [
+        form("design-form"),
+        {
+          id: "body",
+          type: ENTRY_CONTENT_TYPE,
+          version: 1,
+          props: { field: "body" },
+        },
+      ],
+    };
+    const own = page([form("entry-form")]);
+    const drawn = composeEntryContent(design as never, {
+      valueOf: field => (field === "body" ? own : undefined),
+    });
+    const drawnIds = drawn.nodes.flatMap(function ids(node): string[] {
+      return [
+        ...(node.type === "core/form" ? [node.id] : []),
+        ...Object.values(node.slots ?? {}).flatMap(list => list.flatMap(ids)),
+      ];
+    });
+    // Must-be-found: the entry's form is drawn, under an id of its own.
+    expect(drawnIds).toContain("design-form");
+    const entryFormId = drawnIds.find(id => id !== "design-form");
+    expect(entryFormId).toBeDefined();
+
+    const { api } = directApi({
+      posts: [{ id: "e1", title: "Hello", body: own }],
+      templates: [
+        {
+          id: "t1",
+          collection: "posts",
+          entry: null,
+          content: design,
+        },
+      ],
+    });
+    const entry = parseDefiningDocument("entry:posts:e1");
+    expect(entry).toEqual({ kind: "entry", collection: "posts", id: "e1" });
+    for (const nodeId of ["design-form", entryFormId ?? ""]) {
+      expect(
+        (await publishedNode(api, STORES, entry!, nodeId, undefined))?.type,
+        nodeId
+      ).toBe("core/form");
+    }
   });
 });

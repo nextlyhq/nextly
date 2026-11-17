@@ -104,6 +104,8 @@ export interface SiteFormsService {
     readonly collection: string;
     readonly id: string;
     readonly field: string;
+    /** The entry is drawn by its design, its own blocks composed into it. */
+    readonly design?: boolean;
   }): string | undefined;
   /** The value naming a component's document, as a form's post names it. */
   componentDocument(id: string): string;

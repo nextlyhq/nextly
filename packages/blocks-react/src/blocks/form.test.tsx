@@ -423,7 +423,7 @@ describe("the answers a send comes back to", () => {
       ["error", FORM_REFUSALS.error],
     ] as const) {
       expect(out).toContain(
-        `<div id="form-contact-${outcome}" class="" data-nx-form-result="${outcome}" tabindex="-1" hidden="">${words.replaceAll("'", "&#x27;")}</div>`
+        `<div id="form-contact-${outcome}" class="" data-nx-form-result="${outcome}" tabindex="-1">${words.replaceAll("'", "&#x27;")}</div>`
       );
     }
   });
@@ -436,9 +436,14 @@ describe("the answers a send comes back to", () => {
   });
 
   it("shows the message the address names, and hides the fields once sent", () => {
+    // Hidden by this rule, not by the `hidden` attribute: a host reset such
+    // as Tailwind's Preflight makes `[hidden]` `display: none !important`
+    // in a layer no rule of the page's can then beat, and the message the
+    // address names would never show.
     expect(FORM_RESULT_CSS).toContain(
-      "[data-nx-form-result]:target{display:block}"
+      "[data-nx-form-result]:not(:target){display:none}"
     );
+    expect(FORM_RESULT_CSS).not.toContain("display:block");
     expect(FORM_RESULT_CSS).toContain(
       'form:has(>[data-nx-form-result="sent"]:target)>:not([data-nx-form-result="sent"]){display:none}'
     );

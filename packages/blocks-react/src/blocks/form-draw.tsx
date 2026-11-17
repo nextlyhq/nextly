@@ -48,17 +48,19 @@ export const FORM_REFUSALS: Readonly<
 };
 
 /**
- * The rules that show the message a send came back to, and hide the fields
- * once it was sent. Hoisted and deduped to one copy per page (`<style href>`
- * with `precedence`).
+ * The rules that hide every message but the one a send came back to, and
+ * hide the fields once it was sent. Hoisted and deduped to one copy per page
+ * (`<style href>` with `precedence`), and carried by every form, so a form
+ * never reaches a page without them.
  *
- * The messages are drawn `hidden`, so a page without this sheet shows none
- * of them rather than all four. A message targeted by the address's
- * fragment is shown; a sent one hides every other part of its form, so the
- * message stands in the form's place.
+ * Hidden by this rule rather than by the `hidden` attribute: a host reset
+ * such as Tailwind's Preflight makes `[hidden]` `display: none !important`
+ * inside a cascade layer, which no rule of the page's can then override, so
+ * a message drawn `hidden` would never show. A sent message hides every
+ * other part of its form, so it stands in the form's place.
  */
 export const FORM_RESULT_CSS: string = [
-  "[data-nx-form-result]:target{display:block}",
+  "[data-nx-form-result]:not(:target){display:none}",
   'form:has(>[data-nx-form-result="sent"]:target)>:not([data-nx-form-result="sent"]){display:none}',
 ].join("");
 
@@ -289,8 +291,8 @@ export function drawField(
 }
 
 /**
- * The four messages a send can come back to, hidden until the address's
- * fragment names one. Each takes focus when it is the fragment's target
+ * The four messages a send can come back to, hidden (`FORM_RESULT_CSS`)
+ * until the address's fragment names one. Each takes focus when it is the fragment's target
  * (`tabindex="-1"`), so a keyboard and a screen reader land on the answer.
  */
 export function drawResults(args: {
@@ -305,7 +307,6 @@ export function drawResults(args: {
       className={args.partClass("message")}
       data-nx-form-result={outcome}
       tabIndex={-1}
-      hidden
     >
       {outcome === "sent" ? args.sentMessage : FORM_REFUSALS[outcome]}
     </div>

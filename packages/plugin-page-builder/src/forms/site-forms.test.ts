@@ -50,6 +50,21 @@ describe("the site's forms service", () => {
       forms.documentOf({ collection: "templates", id: "t1", field: "" })
     ).toBe("template:t1");
     expect(forms.componentDocument("c1")).toBe("component:c1");
+    // An entry its design draws: named as the entry, which the receiver
+    // draws as its page does.
+    expect(
+      forms.documentOf({
+        collection: "posts",
+        id: "e1",
+        field: "",
+        design: true,
+      })
+    ).toBe("entry:posts:e1");
+    expect(parseDefiningDocument("entry:posts:e1")).toEqual({
+      kind: "entry",
+      collection: "posts",
+      id: "e1",
+    });
   });
 
   it("names nothing for a document the receiver cannot read a form from", () => {

@@ -267,7 +267,24 @@ async function blockPageOf(
   }
   if (node.bindings?.href !== undefined) return null;
   const href = storedText(node.props.href);
-  return sameSitePath(href) ?? webAddress(href);
+  return authoredPath(href, from) ?? webAddress(href);
+}
+
+/** A fragment as an author may name a section of a page. */
+const FRAGMENT = /^#[A-Za-z0-9_\-:.]{1,128}$/;
+
+/**
+ * A same-site destination an author wrote, its section kept: a path with
+ * its fragment, or a fragment alone, on the page the visitor sent from.
+ * `null` for anything else.
+ */
+function authoredPath(raw: string, from: string): string | null {
+  const at = raw.indexOf("#");
+  const fragment = at === -1 ? "" : raw.slice(at);
+  if (fragment !== "" && !FRAGMENT.test(fragment)) return null;
+  if (at === 0) return `${from}${fragment}`;
+  const path = sameSitePath(at === -1 ? raw : raw.slice(0, at));
+  return path === null ? null : `${path}${fragment}`;
 }
 
 /** `raw` as an `http` or `https` address an author wrote, or `null`. */
