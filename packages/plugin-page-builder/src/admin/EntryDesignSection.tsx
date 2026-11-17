@@ -67,7 +67,7 @@ import {
   Plus,
   TriangleAlert,
 } from "lucide-react";
-import { useMemo, useState, type JSX, type ReactNode } from "react";
+import { Children, useMemo, useState, type JSX, type ReactNode } from "react";
 
 import type { TemplateAction } from "../templates/template-actions-contract";
 
@@ -262,6 +262,64 @@ function PreviewButton({ show }: { show: () => void }): JSX.Element {
 /** The reason a held action gives, on its control. */
 const HELD_REASON = "This document's changes are on hold.";
 
+/**
+ * The card's row of actions, drawn only with something in it, so an empty row
+ * adds no gap to the card's spacing.
+ */
+function ActionsRow({ children }: { children: ReactNode }): JSX.Element | null {
+  const shown = Children.toArray(children);
+  if (shown.length === 0) return null;
+  return <div className="flex flex-wrap gap-2">{shown}</div>;
+}
+
+/** The offer to give the entry its own design, a copy of the template. */
+function GiveOwnDesign({
+  collection,
+  entryId,
+  singular,
+  template,
+  held,
+  onChanged,
+}: {
+  collection: string;
+  entryId: string;
+  singular: string;
+  template: string;
+  held: boolean;
+  onChanged: () => void;
+}): JSX.Element {
+  const [busy, setBusy] = useState(false);
+
+  const give = (): void => {
+    setBusy(true);
+    runTemplateAction({ kind: "give-entry-design", collection, entry: entryId })
+      .then(
+        () => {
+          toast.success(WORDS.givenToast(template));
+          onChanged();
+        },
+        (error: unknown) =>
+          toast.error(reasonOf(error, "The own design couldn't be created."))
+      )
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="flex-1"
+      disabled={busy || held}
+      {...(held ? { title: HELD_REASON } : {})}
+      onClick={give}
+    >
+      <Brush className="h-4 w-4" aria-hidden="true" />
+      {busy ? WORDS.giving : WORDS.give(singular)}
+    </Button>
+  );
+}
+
 function UsesTemplate({
   answer,
   collection,
@@ -275,25 +333,10 @@ function UsesTemplate({
   held: boolean;
   onChanged: () => void;
 }): JSX.Element {
-  const [busy, setBusy] = useState(false);
   const showPreview = usePreviewOpener();
   const { meta } = answer;
   const template = meta.template;
   const title = template?.title ?? "";
-
-  const give = (): void => {
-    setBusy(true);
-    runTemplateAction({ kind: "give-entry-design", collection, entry: entryId })
-      .then(
-        () => {
-          toast.success(WORDS.givenToast(title));
-          onChanged();
-        },
-        (error: unknown) =>
-          toast.error(reasonOf(error, "The own design couldn't be created."))
-      )
-      .finally(() => setBusy(false));
-  };
 
   return (
     <DesignCard>
@@ -301,26 +344,19 @@ function UsesTemplate({
       <p className="text-xs leading-relaxed text-muted-foreground">
         {WORDS.everyUses(meta.names.singular, meta.names.plural)}
       </p>
-      {/* Drawn only with something in it, so an empty row adds no gap. */}
-      {showPreview !== null || meta.mayGiveDesign ? (
-        <div className="flex flex-wrap gap-2">
-          {showPreview === null ? null : <PreviewButton show={showPreview} />}
-          {meta.mayGiveDesign ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="flex-1"
-              disabled={busy || held}
-              {...(held ? { title: HELD_REASON } : {})}
-              onClick={give}
-            >
-              <Brush className="h-4 w-4" aria-hidden="true" />
-              {busy ? WORDS.giving : WORDS.give(meta.names.singular)}
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
+      <ActionsRow>
+        {showPreview === null ? null : <PreviewButton show={showPreview} />}
+        {meta.mayGiveDesign ? (
+          <GiveOwnDesign
+            collection={collection}
+            entryId={entryId}
+            singular={meta.names.singular}
+            template={title}
+            held={held}
+            onChanged={onChanged}
+          />
+        ) : null}
+      </ActionsRow>
       {meta.mayGiveDesign ? <Note>{WORDS.givenNote}</Note> : null}
       {template === null ? null : (
         <Button
@@ -336,6 +372,39 @@ function UsesTemplate({
         </Button>
       )}
     </DesignCard>
+  );
+}
+
+/**
+ * What an own design means for visitors: they see it once published, and
+ * the template, said as a warning, until then.
+ */
+function OwnDesignSays({
+  published,
+  singular,
+  template,
+}: {
+  published: boolean;
+  singular: string;
+  template: string | null;
+}): JSX.Element {
+  if (published) {
+    return (
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        {WORDS.publishedSays(singular, template)}
+      </p>
+    );
+  }
+  return (
+    <Alert variant="warning" className="p-2.5">
+      <AlertDescription className="flex items-start gap-2 text-xs leading-relaxed">
+        <TriangleAlert
+          className="mt-0.5 h-3.5 w-3.5 shrink-0"
+          aria-hidden="true"
+        />
+        <span>{WORDS.unpublishedWarning(template)}</span>
+      </AlertDescription>
+    </Alert>
   );
 }
 
@@ -401,21 +470,11 @@ function OwnDesign({
       <div className="flex min-w-0 items-center">
         <OwnDesignPill published={published} template={template} />
       </div>
-      {published ? (
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          {WORDS.publishedSays(meta.names.singular, template)}
-        </p>
-      ) : (
-        <Alert variant="warning" className="p-2.5">
-          <AlertDescription className="flex items-start gap-2 text-xs leading-relaxed">
-            <TriangleAlert
-              className="mt-0.5 h-3.5 w-3.5 shrink-0"
-              aria-hidden="true"
-            />
-            <span>{WORDS.unpublishedWarning(template)}</span>
-          </AlertDescription>
-        </Alert>
-      )}
+      <OwnDesignSays
+        published={published}
+        singular={meta.names.singular}
+        template={template}
+      />
       <div className="flex flex-wrap gap-2">
         <Button
           type="button"
