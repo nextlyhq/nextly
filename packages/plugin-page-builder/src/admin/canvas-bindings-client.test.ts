@@ -27,6 +27,8 @@ const editing = vi.hoisted(() => ({
 const writePluginRoute = vi.hoisted(() => vi.fn());
 /** What the canvas handed its change check on each render. */
 const checked = vi.hoisted(() => [] as unknown[]);
+/** The first mark the canvas handed its change check on each render. */
+const firstMarks = vi.hoisted(() => [] as unknown[]);
 
 // The change check has its own tests; here it would share the mocked route
 // with the read under test, so only what it is handed is recorded.
@@ -34,8 +36,15 @@ vi.mock("./editor/canvas-source-check", async importOriginal => ({
   // The rule for when the first reads are in stays real; only the check
   // itself is watched.
   ...(await importOriginal<typeof import("./editor/canvas-source-check")>()),
-  useCanvasSourceCheck: (asked: unknown) => {
+  useCanvasSourceCheck: (
+    asked: unknown,
+    _userId: unknown,
+    _ask: unknown,
+    _firstReadsIn: unknown,
+    firstMark: unknown
+  ) => {
     checked.push(asked);
+    firstMarks.push(firstMark);
   },
 }));
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
@@ -517,6 +526,64 @@ describe("the canvas's binding sources", () => {
           (checked.at(-1) as { lists?: string[] } | undefined)?.lists
         ).toContain("products")
       );
+    } finally {
+      clearBlocks();
+      editing.identity = null;
+    }
+  });
+
+  it("hands the change check the mark its first reads carried", async () => {
+    editing.identity = identity;
+    try {
+      firstMarks.length = 0;
+      writePluginRoute.mockReset();
+      writePluginRoute.mockResolvedValue({ ...answer("Marked"), stamp: "m1" });
+      renderHook(() =>
+        useCanvasBindings([page({ text: { $bind: "title" } })], "de")
+      );
+      await waitFor(() => expect(firstMarks.at(-1)).toBe("m1"));
+      // Nothing before the answer was in.
+      expect(firstMarks.slice(0, -1).every(mark => mark === undefined)).toBe(
+        true
+      );
+    } finally {
+      editing.identity = null;
+    }
+  });
+
+  it("hands no first mark where the check asks about more than the reads did", async () => {
+    editing.identity = identity;
+    try {
+      firstMarks.length = 0;
+      checked.length = 0;
+      writePluginRoute.mockReset();
+      writePluginRoute.mockResolvedValue({
+        ...answer("Kinds"),
+        entry: { id: "p1", title: "Kinds", kind: "products" },
+        stamp: "m2",
+      });
+      // The answer binds the list to products, which the reads did not mark.
+      const listing: BlockDocument = {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "l",
+            type: "core/collection-loop",
+            version: 1,
+            props: { collection: "posts" },
+            bindings: { collection: { $bind: "kind" } },
+          },
+        ],
+      } as BlockDocument;
+      registerBlocks(coreBlocks, { source: "page-builder" });
+      renderHook(() => useCanvasBindings([listing], "nl"));
+      await waitFor(() =>
+        expect(
+          (checked.at(-1) as { lists?: string[] } | undefined)?.lists
+        ).toContain("products")
+      );
+      expect(firstMarks.at(-1)).toBeUndefined();
     } finally {
       clearBlocks();
       editing.identity = null;

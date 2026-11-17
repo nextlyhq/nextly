@@ -13,6 +13,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import { APPEAR_PROPERTY, AppearPlay } from "./appear-play";
 import { batchStyleClearOps } from "./batch-style";
 import { CssHint } from "./css-hint";
 import type { EditorState } from "./editor-state";
@@ -120,15 +121,14 @@ export function StylePropertyFields({
       className="nx-style-inspector__property"
       data-property={property.property}
     >
-      {headed ? (
-        // What the property does, then the CSS its fields write, on hover.
-        <CssHint
-          summary={property.summary}
-          writes={writtenProperties(property.controls)}
-        >
-          <p className="nx-style-inspector__property-label">{property.label}</p>
-        </CssHint>
-      ) : null}
+      <PropertyHeading
+        property={property}
+        headed={headed}
+        nodeId={nodeId}
+        state={state}
+        breakpoint={breakpoint}
+        editor={editor}
+      />
       {/*
         The forms the catalog offers at each union position, so every one is
         reachable. Without this an unset `borderRadius` could only ever be
@@ -220,6 +220,48 @@ export function StylePropertyFields({
           </SideBoxFrame>
         </FoldedUnion.Provider>
       </AlignmentFlow.Provider>
+    </div>
+  );
+}
+
+/**
+ * A property's heading, when it has one, and the action drawn beside it: Play
+ * beside "Animation when it appears", the one property that has one.
+ */
+function PropertyHeading({
+  property,
+  headed,
+  nodeId,
+  state,
+  breakpoint,
+  editor,
+}: {
+  property: InspectedStyleProperty;
+  headed: boolean;
+  nodeId: string;
+  state: StyleState;
+  breakpoint: BreakpointId;
+  editor: EditorState;
+}): React.JSX.Element | null {
+  const label = headed ? (
+    // What the property does, then the CSS its fields write, on hover.
+    <CssHint
+      summary={property.summary}
+      writes={writtenProperties(property.controls)}
+    >
+      <p className="nx-style-inspector__property-label">{property.label}</p>
+    </CssHint>
+  ) : null;
+  if (property.property !== APPEAR_PROPERTY) return label;
+  return (
+    <div className="nx-style-inspector__property-head">
+      {label}
+      <AppearPlay
+        nodeId={nodeId}
+        state={state}
+        breakpoint={breakpoint}
+        editor={editor}
+      />
     </div>
   );
 }

@@ -805,6 +805,9 @@ describe("the blocks entry", () => {
       "CORE_CATEGORIES",
       "CORE_PALETTE_ORDER",
       "FORM_FIELD_TYPES",
+      // Added deliberately: the spam trap's name, which the page builder's
+      // receiver reads, so the form and its receiver name it once.
+      "FORM_HONEYPOT_FIELD",
       "FORM_METHODS",
       "HEADING_LEVELS",
       "IMAGE_LOADING",
@@ -828,6 +831,9 @@ describe("the blocks entry", () => {
       // the entry's own blocks content.
       "entryContent",
       "form",
+      // Added deliberately: the form's fields with their defaults applied,
+      // which the receiver checks a post against as the form draws them.
+      "formFields",
       "gallery",
       "heading",
       "icon",

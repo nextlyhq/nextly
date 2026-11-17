@@ -24,7 +24,11 @@ import {
 } from "../../library-contract";
 import { loopCollectionsPath } from "../../loop-collections-contract";
 import { namedQueriesPath } from "../../named-queries-contract";
-import { holdStartedReads, startBuilderReads } from "../startup-reads";
+import {
+  holdStartedReads,
+  startBuilderReads,
+  startEarlyBuilderReads,
+} from "../startup-reads";
 
 /**
  * The reads the builder opens on, each by the path its own hook asks: in the
@@ -60,4 +64,16 @@ export function BuilderStartup(): null {
   }
   useEffect(() => holdStartedReads(), []);
   return null;
+}
+
+/**
+ * Send the start-up read as the admin loads, at an address that opens the
+ * builder in `locale` on a collection's entry or a Single
+ * (`builder-open-start`): the editor that opens with the same reads takes it.
+ */
+export function startEarlyBuilderOpeningReads(
+  locale: string | undefined,
+  onCollection: boolean
+): void {
+  startEarlyBuilderReads(builderOpeningReads(locale, onCollection));
 }

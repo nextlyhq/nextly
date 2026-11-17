@@ -25,17 +25,7 @@
  * @module reveal-node
  */
 import { nodeElement } from "./canvas";
-
-/**
- * Whether the reader asked the system for less motion, asked of the window the
- * root belongs to — a frame's window answers for the frame.
- */
-function prefersReducedMotion(root: Document | HTMLElement): boolean {
-  const owner = "defaultView" in root ? root : root.ownerDocument;
-  const view = owner.defaultView;
-  if (view === null || typeof view.matchMedia !== "function") return false;
-  return view.matchMedia("(prefers-reduced-motion: reduce)").matches;
-}
+import { prefersReducedMotion } from "./reduced-motion";
 
 /**
  * Scroll the block `id` into view inside `root`.
