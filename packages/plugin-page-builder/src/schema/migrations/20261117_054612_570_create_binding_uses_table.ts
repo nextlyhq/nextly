@@ -24,19 +24,25 @@ const content = {
       up: [
         'CREATE TABLE "page_builder__binding_uses" (\n  "id" text PRIMARY KEY NOT NULL,\n  "document_key" text NOT NULL,\n  "kind" text NOT NULL,\n  "slug" text NOT NULL,\n  "document_id" text,\n  "place" text NOT NULL,\n  "version" text NOT NULL,\n  "locale" text,\n  "blocks_field" text NOT NULL,\n  "node_id" text NOT NULL,\n  "block_type" text NOT NULL,\n  "block_name" text,\n  "prop" text NOT NULL,\n  "path" text NOT NULL,\n  "source_kind" text NOT NULL,\n  "source_key" text NOT NULL,\n  "created_at" timestamp NOT NULL DEFAULT now(),\n  "updated_at" timestamp NOT NULL DEFAULT now()\n);\nCREATE INDEX IF NOT EXISTS "idx_page_builder__binding_uses_source_kind_source_key_001e79k" ON "page_builder__binding_uses" ("source_kind", "source_key");\nCREATE INDEX IF NOT EXISTS "idx_page_builder__binding_uses_document_key" ON "page_builder__binding_uses" ("document_key")',
       ],
-      down: ['DROP TABLE "page_builder__binding_uses" CASCADE'],
+      down: [
+        'DROP TABLE "page_builder__binding_uses" CASCADE',
+      ],
     },
     mysql: {
       up: [
         "CREATE TABLE `page_builder__binding_uses` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `document_key` varchar(512) NOT NULL,\n  `kind` varchar(16) NOT NULL,\n  `slug` varchar(255) NOT NULL,\n  `document_id` varchar(255),\n  `place` varchar(16) NOT NULL,\n  `version` varchar(16) NOT NULL,\n  `locale` text,\n  `blocks_field` text NOT NULL,\n  `node_id` text NOT NULL,\n  `block_type` text NOT NULL,\n  `block_name` text,\n  `prop` text NOT NULL,\n  `path` text NOT NULL,\n  `source_kind` varchar(16) NOT NULL,\n  `source_key` varchar(255) NOT NULL,\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\nCREATE INDEX `idx_page_builder__binding_uses_source_kind_source_key_001e79k` ON `page_builder__binding_uses` (`source_kind`, `source_key`);\nCREATE INDEX `idx_page_builder__binding_uses_document_key` ON `page_builder__binding_uses` (`document_key`)",
       ],
-      down: ["DROP TABLE `page_builder__binding_uses`"],
+      down: [
+        "DROP TABLE `page_builder__binding_uses`",
+      ],
     },
     sqlite: {
       up: [
         'CREATE TABLE "page_builder__binding_uses" (\n  "id" text PRIMARY KEY NOT NULL,\n  "document_key" text NOT NULL,\n  "kind" text NOT NULL,\n  "slug" text NOT NULL,\n  "document_id" text,\n  "place" text NOT NULL,\n  "version" text NOT NULL,\n  "locale" text,\n  "blocks_field" text NOT NULL,\n  "node_id" text NOT NULL,\n  "block_type" text NOT NULL,\n  "block_name" text,\n  "prop" text NOT NULL,\n  "path" text NOT NULL,\n  "source_kind" text NOT NULL,\n  "source_key" text NOT NULL,\n  "created_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\')),\n  "updated_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\'))\n);\nCREATE INDEX IF NOT EXISTS "idx_page_builder__binding_uses_source_kind_source_key_001e79k" ON "page_builder__binding_uses" ("source_kind", "source_key");\nCREATE INDEX IF NOT EXISTS "idx_page_builder__binding_uses_document_key" ON "page_builder__binding_uses" ("document_key")',
       ],
-      down: ['DROP TABLE "page_builder__binding_uses"'],
+      down: [
+        'DROP TABLE "page_builder__binding_uses"',
+      ],
     },
   },
   snapshot: {
