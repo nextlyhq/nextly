@@ -291,6 +291,10 @@
   color: var(--nx-builder-text);
 }
 
+.nx-empty-container-appenders__plate > svg {
+  flex: none;
+}
+
 .nx-empty-container-appenders__words {
   min-width: 0;
   overflow: hidden;

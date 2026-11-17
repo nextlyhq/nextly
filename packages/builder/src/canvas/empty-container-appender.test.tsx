@@ -185,7 +185,11 @@ describe("the empty-container appender", () => {
       />
     );
     const control = screen.getByRole("button", { name: /Box/ });
-    expect(control.textContent).toBe("＋ Add a block, or drop one here");
+    expect(control.textContent).toBe("Add a block, or drop one here");
+    // The "＋" before the words is the icon, kept out of the name.
+    expect(control.querySelector("svg")?.getAttribute("aria-hidden")).toBe(
+      "true"
+    );
     // Its name starts with the words it shows, so speaking them reaches it
     // (WCAG 2.5.3), and goes on to say which container.
     expect(control.getAttribute("aria-label")).toBe(

@@ -189,6 +189,7 @@ import {
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
+import { Plus } from "lucide-react";
 import {
   Fragment,
   useCallback,
@@ -407,8 +408,8 @@ const APPENDER_SIZE_PX = 44;
 const APPENDER_WIDTH_PX = 320;
 
 /**
- * What the control says, after its "+": both ways a block gets in, pressing
- * here and dropping one here.
+ * What the control says, after its "+" icon: both ways a block gets in,
+ * pressing here and dropping one here ("＋ Add a block, or drop one here").
  */
 const APPENDER_WORDS = "Add a block, or drop one here";
 
@@ -893,10 +894,11 @@ function AppendControl({
           SITE's ground, which can be any colour, and the editor's text colour
           holds its contrast only against the editor's own surface. */}
       <span className="nx-empty-container-appenders__plate">
-        {/* The "+" is part of the words as shown, and left out of the name,
-            which a screen reader would otherwise start with "plus". */}
+        {/* The "＋" of the words as decided, drawn as the icon every "+" on
+            the canvas is, and kept whole when a narrow box shortens the
+            words. */}
+        <Plus size={16} aria-hidden="true" />
         <span className="nx-empty-container-appenders__words">
-          <span aria-hidden="true">{"\uFF0B "}</span>
           {APPENDER_WORDS}
         </span>
       </span>

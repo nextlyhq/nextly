@@ -169,16 +169,22 @@ test.describe("the Add panel", () => {
     ]);
   });
 
-  test("an empty container's + adds inside it, then after what it added", async ({
+  test("an empty container's +, browsed on to Add, adds inside it, then after what it added", async ({
     page,
   }) => {
     const id = await createPage(page.request);
     await openBuilder(page, id);
 
+    // The "+" opens the in-place picker inside the Section; "Browse all"
+    // carries that place on to the Add panel.
     await page
       .getByRole("button", {
-        name: "Drop a block here, or click to add one, in Section",
+        name: "Add a block, or drop one here, in Section",
       })
+      .click();
+    await page
+      .getByRole("dialog", { name: "Add a block" })
+      .getByRole("button", { name: "Browse all blocks and sections →" })
       .click();
     await expect(placementLine(page)).toHaveText(
       "Adding inside Section, at the end"

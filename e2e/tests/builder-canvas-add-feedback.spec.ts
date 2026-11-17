@@ -2,13 +2,15 @@
  * Every add control on the canvas visibly answers, and the Add panel's tile
  * card never covers a tile.
  *
- * For each control (the empty page's "Add section", an empty container's
- * "Drop a block here, or click to add one", and a gap's "Add a section
- * after"), pressed with the Add panel closed and again with it open and
- * scrolled: the panel is open, its search has focus, its list is back at the
- * top, and the line naming the place is highlighted and says where the block
- * goes. A press that only re-opened an open panel changed nothing on screen,
- * which is the broken version these rule out.
+ * The empty page's "Add section", pressed with the Add panel closed and again
+ * with it open and scrolled: the panel is open, its search has focus, its
+ * list is back at the top, and the line naming the place is highlighted and
+ * says where the block goes. A press that only re-opened an open panel
+ * changed nothing on screen, which is the broken version this rules out.
+ *
+ * An empty container's "+" and a gap's "+" answer in place instead: each
+ * opens the in-place picker with focus in its search and the place named,
+ * whether the Add panel is closed or open, and leaves the panel as it was.
  *
  * Hovering a first-column tile puts its card outside the panel, level with
  * the tile, and the tile beside it takes the very next click.
@@ -132,6 +134,28 @@ async function expectAnswered(page: Page, place: string): Promise<void> {
   await expect(line).toHaveText(place);
 }
 
+/**
+ * The picker's answer to a press: open with focus in its search, naming the
+ * place; the Add panel left as it was, open or closed. Closed again after.
+ */
+async function expectPicked(
+  page: Page,
+  place: string,
+  addOpen: boolean
+): Promise<void> {
+  const picker = page.getByRole("dialog", { name: "Add a block" });
+  await expect(
+    picker.getByRole("combobox", { name: "Search blocks" })
+  ).toBeFocused();
+  await expect(picker).toHaveAccessibleDescription(place);
+  await expect(railAdd(page)).toHaveAttribute(
+    "aria-pressed",
+    addOpen ? "true" : "false"
+  );
+  await page.keyboard.press("Escape");
+  await expect(picker).toBeHidden();
+}
+
 test.describe("the canvas's add controls", () => {
   test.describe.configure({ timeout: 240_000 });
 
@@ -155,30 +179,30 @@ test.describe("the canvas's add controls", () => {
     }
   });
 
-  test("an empty container's + and a gap's + answer with Add closed and open", async ({
+  test("an empty container's + and a gap's + open the picker in place, with Add closed and open", async ({
     page,
   }) => {
     const id = await createPage(page.request, headingAndSection());
     await openBuilder(page, id);
     const appender = page.getByRole("button", {
-      name: "Drop a block here, or click to add one, in Section",
+      name: "Add a block, or drop one here, in Section",
     });
     for (const open of [false, true]) {
       await setAdd(page, open);
       await appender.click();
-      await expectAnswered(page, "Adding inside Section, at the end");
+      await expectPicked(page, "Adding inside Section, at the end", open);
     }
     // The "+" in the gap after the heading, pressed from the keyboard: it is
     // a button an author can tab to, and Enter runs the same press a click
     // does, whatever the pointer is near.
     const after = page.getByRole("button", {
-      name: "Add a section after Heading",
+      name: "Add a block between Heading and Section",
     });
     for (const open of [false, true]) {
       await setAdd(page, open);
       await after.focus();
       await page.keyboard.press("Enter");
-      await expectAnswered(page, "Adding between Heading and Section");
+      await expectPicked(page, "Adding between Heading and Section", open);
     }
   });
 });
