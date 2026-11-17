@@ -39,7 +39,6 @@ import {
   type ComponentLookup,
   type NestingSource,
   type PlanRefusal,
-  walkNodes,
 } from "@nextlyhq/blocks-engine";
 import { z } from "zod";
 
@@ -97,11 +96,11 @@ function foreignFieldRefusal(
   blocks: readonly BlockNode[],
   fields: readonly string[]
 ): string | undefined {
-  let foreign = false;
-  walkNodes([...blocks], node => {
-    if (node.type !== ENTRY_CONTENT_TYPE) return;
+  // Read from the engine's own list of placements, the one the save judges
+  // a template by and the one the duplicate check counts.
+  const foreign = entryContentPlacements(blocks).some(({ node }) => {
     const field = entryContentFieldOf(node);
-    if (field === undefined || !fields.includes(field)) foreign = true;
+    return field === undefined || !fields.includes(field);
   });
   return foreign ? ENTRY_CONTENT_FIELD_MISSING : undefined;
 }
