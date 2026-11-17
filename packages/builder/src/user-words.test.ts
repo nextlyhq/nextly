@@ -136,7 +136,7 @@ describe("the editor's words", () => {
     expect(files.map(file => relative(SRC_DIR, file))).toEqual(
       expect.arrayContaining([
         "editor-words.ts",
-        "builder-commands.ts",
+        "shell/builder-commands.ts",
         "toolbar-actions.ts",
         "insert-panel.tsx",
       ])
