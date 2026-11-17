@@ -194,12 +194,17 @@ import {
   refuseUnitTheServerCannotHold,
 } from "../../domains/schema/migrate/server-constructs";
 import {
+  danglingOnAddedKeys,
+  proveStatements,
+} from "../../domains/schema/migrate/snapshot-proof";
+import {
   assertRunnableStatements,
   marksNoTransaction,
   splitSqlStatements,
   statementRefusals,
 } from "../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
+import { danglingReferences } from "../../domains/schema/migrate/sqlite-foreign-keys";
 import { readLiveSchema } from "../../domains/schema/migrate/statement-judgement";
 import {
   adoptUniqueIndexesAlreadyThere,
@@ -1757,8 +1762,10 @@ function previewPendingFile(
     logger.info(`    ✖ a real run would refuse it: ${refusal.message}`);
   }
   previewDeletions(deletions, logger);
-  // The file's own UP section. A run that finds the schema already at the file's target adopts it
-  // without running these, and one that finds it at neither end refuses it for drift.
+  // The file's own UP section. A run that finds the schema already at the file's target records it
+  // without running these only when its snapshot proves all of them, and otherwise refuses it
+  // (`MIGRATION_NOT_PROVEN`); one that finds it at neither end refuses it for drift. Neither is
+  // previewed: both depend on where the live schema stands.
   logger.info(`    UP, as written in the file:\n${m.upSql.trim()}`);
 }
 
@@ -4172,11 +4179,13 @@ export function historyRefusalOf(error: unknown): string | undefined {
 
 /**
  * The exit code a command that checks the app's history ends with on `error`:
- * 2 for an applied file edited since it ran, 3 for an app migration the
- * folder lacks, the codes the guide documents, so a deploy script can tell
- * them from any other failure (1).
+ * 2 for an applied file edited since it ran, or a pending file the database
+ * stands at the end of whose snapshot does not prove all of it, 3 for an app
+ * migration the folder lacks, the codes the guide documents, so a deploy
+ * script can tell them from any other failure (1).
  */
 export function migrateExitCode(error: unknown): 1 | 2 | 3 {
+  if (NextlyError.isCode(error, "NEXTLY_MIGRATION_NOT_PROVEN")) return 2;
   if (!(error instanceof CliError)) return 1;
   if (error.code === "MIGRATION_TAMPERED") return 2;
   return error.code === "MIGRATION_MISSING" ? 3 : 1;
@@ -4950,6 +4959,42 @@ export async function runFileMigrations(args: {
         ...(withFile === undefined
           ? {}
           : { beforeRecorded: () => withFile(m.transaction) }),
+        // Where the database already stands at the file's end, it is recorded without running
+        // only when its snapshot proves all of it: each statement as written, judged against both
+        // sides whole, and the checksum the snapshot recorded when the file was written.
+        // Read only where the database stands at the file's end, with each statement judged
+        // against the live database too: the snapshot comparison cannot see an index left invalid
+        // or a constraint not validated.
+        snapshotProof: async () => ({
+          statements: await proveStatements({
+            statements: upStatements,
+            dialect,
+            sides: { before, target },
+            live: {
+              schema: await readLiveSchema(db, dialect, upStatements),
+              // Loaded where it is used, as the core upgrade loads it: most runs never reach here.
+              nullsIn: async (table, column) => {
+                const { countNulls } = await import(
+                  "../../domains/schema/pipeline/classifier/count-helpers"
+                );
+                return countNulls(db, dialect, table, column);
+              },
+            },
+          }),
+          recordedChecksum: targetFile?.migrationHash ?? "",
+          // SQLite enforces a foreign key only as a run's check finds it; a record without running
+          // is held to the same check, for the keys this file adds.
+          dangling:
+            dialect === "sqlite"
+              ? danglingOnAddedKeys(
+                  { before, target },
+                  await danglingReferences({
+                    read: <T>(statement: string) =>
+                      dz.executeQuery<T>(statement),
+                  })
+                )
+              : [],
+        }),
       });
       applied++;
       lastApplied = filename;

@@ -86,6 +86,13 @@ function Studio({
                 kind: "color",
                 values: { light: "#1d2b6b", dark: "#8fa7ff" },
               },
+              // Its row shows the previewed mode's value; a colour's swatch
+              // shows both of its values whatever the preview.
+              {
+                name: "space.gap",
+                kind: "dimension",
+                values: { light: "8px", dark: "12px" },
+              },
             ],
           }}
           supplied={undefined}
@@ -189,12 +196,11 @@ describe("the Design panel's header", () => {
     openTab("Styles");
     expect(await screen.findByText("Styles content")).toBeTruthy();
     expect(dark()).toHaveProperty("ariaPressed", "true");
-    openTab("Colours");
+    openTab("Spacing");
     // The Variables tab draws the mode the header chose.
-    const swatch = (
-      await screen.findByRole("button", { name: /^Brand/ })
-    ).querySelector(".nx-vars__swatch--main") as HTMLElement;
-    expect(swatch.style.getPropertyValue("--nx-swatch")).toBe("#8fa7ff");
+    expect(
+      await screen.findByRole("button", { name: /^Gap, 12px/ })
+    ).toBeTruthy();
     expect(dark()).toHaveProperty("ariaPressed", "true");
   });
 });
