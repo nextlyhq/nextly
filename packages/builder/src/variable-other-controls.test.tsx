@@ -144,6 +144,32 @@ describe("a duration", () => {
     expect(savedValue(onChange, "duration.fast")).toBe("350ms");
   });
 
+  it("changes the unit of what the field shows, not of the value stored before it", async () => {
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const editor = await openEditor(/^Fast/);
+    const light = within(editor).getByLabelText("Light");
+    // Typed and not yet committed: the unit menu takes the number on screen.
+    fireEvent.change(light, { target: { value: "450" } });
+    fireEvent.click(within(editor).getByLabelText("Unit for Light"));
+    fireEvent.click(screen.getByRole("option", { name: "s", hidden: true }));
+    expect(savedValue(onChange, "duration.fast")).toBe("450s");
+  });
+
+  it("keeps a refused duration refused when only its unit is changed", async () => {
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const editor = await openEditor(/^Fast/);
+    const light = within(editor).getByLabelText("Light");
+    enter(light, "350px");
+    expect(light.getAttribute("aria-invalid")).toBe("true");
+    fireEvent.click(within(editor).getByLabelText("Unit for Light"));
+    fireEvent.click(screen.getByRole("option", { name: "s", hidden: true }));
+    // The stored 200 is not what the field shows, so it is not what is saved.
+    expect(savedValue(onChange, "duration.fast")).not.toBe("200s");
+    expect(within(editor).getByLabelText("Light").getAttribute("aria-invalid")).toBe("true");
+  });
+
   it("shows a duration it cannot split into a number and a unit whole", async () => {
     render(<Hosted tokens={SITE} />);
     const editor = await openEditor(/^Flow/);
