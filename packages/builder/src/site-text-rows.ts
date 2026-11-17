@@ -273,3 +273,16 @@ export function siteTextUseWords(
   if (roles.length === 0) return undefined;
   return `Site text: ${roles.map(role => SITE_TEXT_LABELS[role]).join(", ")}`;
 }
+
+/** The type size a value points at, where it points at one. */
+export function pickedTypeSize(
+  tokens: SiteTokenSet | undefined,
+  value: StyleValue | undefined,
+  /** The mode its pair is read in: the one the canvas draws. */
+  mode: TokenMode = "light"
+): TypeSizeChoice | undefined {
+  if (tokens === undefined || !isTokenRef(value)) return undefined;
+  return typeSizeChoices(tokens, mode).find(
+    choice => choice.size === value.$token
+  );
+}

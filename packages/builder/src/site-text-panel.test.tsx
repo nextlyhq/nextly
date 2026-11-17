@@ -207,6 +207,37 @@ describe("a row's popup", () => {
     expect(last.siteText?.h3).toEqual({});
   });
 
+  it("resets a row to the one the site's code supplies, or to the built-in where it supplies none", async () => {
+    const onChange = vi.fn();
+    render(
+      <Hosted
+        tokens={{
+          ...SITE,
+          siteText: { h1: { fontSize: "60px" }, h2: { fontSize: "40px" } },
+        }}
+        supplied={{ tokens: [], siteText: { h1: { fontSize: "50px" } } }}
+        groups={["type", "fonts"]}
+        onChange={onChange}
+      />
+    );
+    fireEvent.click(
+      within(await openRow(/^Heading 1/)).getByRole("button", {
+        name: "Reset",
+      })
+    );
+    let last = onChange.mock.lastCall?.[0] as SiteTokenSet;
+    expect(last.siteText?.h1).toEqual({ fontSize: "50px" });
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(
+      within(await openRow(/^Heading 2/)).getByRole("button", {
+        name: "Reset",
+      })
+    );
+    last = onChange.mock.lastCall?.[0] as SiteTokenSet;
+    expect(last.siteText).not.toHaveProperty("h2");
+  });
+
   it("gives Links a colour, a colour on hover and an underline", async () => {
     const onChange = vi.fn();
     render(

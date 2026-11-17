@@ -17,6 +17,7 @@ import {
   type BlockDocument,
   type BlockNode,
   type NodeStyles,
+  type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import {
   cleanup,
@@ -55,7 +56,10 @@ beforeAll(() => {
 const TOKENS = resolveSiteTokens(undefined);
 
 /** The Style tab over one text block holding these values. */
-function mount(values: Record<string, unknown> = {}) {
+function mount(
+  values: Record<string, unknown> = {},
+  tokens: SiteTokenSet = TOKENS
+) {
   registerBlocks(
     [
       {
@@ -99,7 +103,7 @@ function mount(values: Record<string, unknown> = {}) {
     lockRefusalFor: () => undefined,
     composed: () => undefined,
   } as unknown as EditorState & { applyAll: ReturnType<typeof vi.fn> };
-  render(<StyleInspectorPanel editor={editor} tokens={TOKENS} />);
+  render(<StyleInspectorPanel editor={editor} tokens={tokens} />);
   return { editor, document: document_ };
 }
 
@@ -179,6 +183,39 @@ describe("a line height beside a picked type size", () => {
     fireEvent.click(line.getByRole("button", { name: "Detach" }));
     // Its own value from then on: the type size's, as a number.
     expect(writtenValues(mounted).lineHeight).toBe(1.2);
+  });
+
+  it("Detach keeps the line height the canvas shows, its dark one on a dark canvas", () => {
+    // A canvas pinned dark, as the editor marks it.
+    const page = document.createElement("div");
+    page.setAttribute("data-nx-theme", "dark");
+    const canvas = document.createElement("div");
+    canvas.className = "nx-canvas";
+    page.append(canvas);
+    document.body.append(page);
+    try {
+      const night: SiteTokenSet = {
+        ...TOKENS,
+        tokens: TOKENS.tokens.map(token =>
+          token.name === "line-height.h2"
+            ? { ...token, values: { light: "1.2", dark: "1.6" } }
+            : token
+        ),
+      };
+      const mounted = mount(
+        {
+          fontSize: { $token: "font-size.h2" },
+          lineHeight: { $token: "line-height.h2" },
+        },
+        night
+      );
+      fireEvent.click(
+        field("lineHeight").getByRole("button", { name: "Detach" })
+      );
+      expect(writtenValues(mounted).lineHeight).toBe(1.6);
+    } finally {
+      page.remove();
+    }
   });
 
   it('offers "Use H2\'s line height" where the block has its own', () => {

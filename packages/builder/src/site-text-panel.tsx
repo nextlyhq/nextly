@@ -23,6 +23,7 @@ import {
   SITE_TEXT_UNDERLINES,
   tokenRef,
   type SiteTextEntry,
+  type SiteTextMap,
   type SiteTextRole,
   type SiteTextUnderline,
   type SiteTokenSet,
@@ -63,6 +64,8 @@ export interface SiteTextSectionProps {
   readonly onChange: (tokens: SiteTokenSet) => void;
   readonly readOnly: boolean;
   readonly mode: TokenMode;
+  /** The rows the site's code supplies, which Reset returns a row to. */
+  readonly supplied?: SiteTextMap | undefined;
 }
 
 /** The words each underline is offered by. */
@@ -106,6 +109,7 @@ export function SiteTextSection({
   onChange,
   readOnly,
   mode,
+  supplied,
 }: SiteTextSectionProps): React.JSX.Element {
   const id = React.useId();
   const rows = siteTextRowViews(tokens, mode);
@@ -125,6 +129,7 @@ export function SiteTextSection({
             onChange={onChange}
             readOnly={readOnly}
             mode={mode}
+            resetTo={supplied?.[row.role]}
           />
         ))}
       </ul>
@@ -139,12 +144,14 @@ function SiteTextRow({
   onChange,
   readOnly,
   mode,
+  resetTo,
 }: {
   row: SiteTextRowView;
   tokens: SiteTokenSet;
   onChange: (tokens: SiteTokenSet) => void;
   readOnly: boolean;
   mode: TokenMode;
+  resetTo: SiteTextEntry | undefined;
 }): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
   const namesId = React.useId();
@@ -201,6 +208,7 @@ function SiteTextRow({
               onChange={onChange}
               readOnly={readOnly}
               mode={mode}
+              resetTo={resetTo}
             />
           </CloseVariableEditor.Provider>
         </PopoverContent>
@@ -216,8 +224,10 @@ function SiteTextEditor(props: {
   onChange: (tokens: SiteTokenSet) => void;
   readOnly: boolean;
   mode: TokenMode;
+  /** The row the site's code supplies, or none: the built-in one. */
+  resetTo: SiteTextEntry | undefined;
 }): React.JSX.Element {
-  const { row, tokens, onChange, readOnly } = props;
+  const { row, tokens, onChange, readOnly, resetTo } = props;
   return (
     <div className="nx-vars-editor__body" spellCheck={false}>
       <p className="nx-vars-editor__label nx-site-text__title">{row.label}</p>
@@ -233,9 +243,8 @@ function SiteTextEditor(props: {
             variant="outline"
             size="sm"
             className="nx-vars-editor__button"
-            onClick={() =>
-              onChange(withSiteTextRow(tokens, row.role, undefined))
-            }
+            // Back to the code's row where it supplies one, else the built-in.
+            onClick={() => onChange(withSiteTextRow(tokens, row.role, resetTo))}
           >
             Reset
           </Button>

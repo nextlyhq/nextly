@@ -384,6 +384,7 @@ function VariablesView({
           onChange={onChange}
           readOnly={readOnly}
           mode={mode}
+          supplied={supplied?.siteText}
         />
         <TypeTabRange
           groups={hosted.groups}

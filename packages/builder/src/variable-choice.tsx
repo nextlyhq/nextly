@@ -53,6 +53,7 @@ import * as React from "react";
 import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { ChoiceList } from "./choice-list";
 import { ChromeTooltip } from "./chrome-tooltip";
+import { pickedTypeSize } from "./site-text-rows";
 import {
   variableFor,
   variableLabel,
@@ -67,7 +68,6 @@ import {
   variableGroupOf,
   type VariableGroup,
 } from "./tokens-studio";
-import { pickedTypeSize } from "./type-size-pair";
 
 /** What {@link VariableChoice} is given. */
 export interface VariableChoiceProps {

@@ -20,27 +20,15 @@ import {
   type NodeStyles,
   type SiteTokenSet,
   type StyleValue,
-  type TokenMode,
 } from "@nextlyhq/blocks-engine";
 import { Button } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { typeSizeChoices, type TypeSizeChoice } from "./site-text-rows";
-import { lineHeightFromText } from "./style-folded";
+import { useCanvasTokenMode } from "./canvas/prefers-dark";
+import { pickedTypeSize } from "./site-text-rows";
+import { variableFor } from "./style-colour";
 import { readStyleValue, type StyleAddress } from "./style-values";
-
-/** The type size a value points at, where it points at one. */
-export function pickedTypeSize(
-  tokens: SiteTokenSet | undefined,
-  value: StyleValue | undefined,
-  /** The mode its pair is read in: the one the canvas draws. */
-  mode: TokenMode = "light"
-): TypeSizeChoice | undefined {
-  if (tokens === undefined || !isTokenRef(value)) return undefined;
-  return typeSizeChoices(tokens, mode).find(
-    choice => choice.size === value.$token
-  );
-}
+import { unlinkedValue } from "./variable-choice";
 
 /** The line height's address beside a font size's. */
 function lineHeightAt(address: StyleAddress): StyleAddress {
@@ -82,15 +70,6 @@ function pairedLineHeight(
   return { address: at, value: tokenRef(choice.lineHeight) };
 }
 
-/** The value of a variable, by identity, in light. */
-function lightValue(
-  tokens: SiteTokenSet,
-  identity: string
-): string | undefined {
-  return tokens.tokens.find(token => (token.id ?? token.name) === identity)
-    ?.values.light;
-}
-
 /**
  * Under a block's line height field: "From H2 type size" with "Detach"
  * while the line height follows the type size the block's font size points
@@ -113,6 +92,8 @@ export function TypeSizeLineHint({
   readOnly: boolean;
   onCommit: (value: StyleValue) => unknown;
 }): React.JSX.Element | null {
+  // The mode the canvas draws, so Detach keeps the value it shows.
+  const mode = useCanvasTokenMode();
   const asked = onBlock && address.property === "lineHeight";
   if (!asked || tokens === undefined) return null;
   const size = readStyleValue(styles, { ...address, property: "fontSize" });
@@ -122,7 +103,10 @@ export function TypeSizeLineHint({
   const line = readStyleValue(styles, address);
   const follows = isTokenRef(line) && line.$token === partner;
   if (follows) {
-    const own = lineHeightFromText(lightValue(tokens, partner) ?? "");
+    // Resolved as the field's own Unlink resolves a variable: the value the
+    // canvas shows, as the number a line height stores.
+    const variable = variableFor(partner, tokens, mode);
+    const own = variable === undefined ? null : unlinkedValue(variable);
     return (
       <p className="nx-type-pair">
         <span>{`From ${choice.name} type size`}</span>
