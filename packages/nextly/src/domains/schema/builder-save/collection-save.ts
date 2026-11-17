@@ -56,6 +56,7 @@ import { builderColumnIsUnique } from "../../dynamic-collections/services/dynami
 import { appLanguageOrder } from "../../i18n/configured-locales";
 import { COMPANION_STRUCTURAL_COLUMNS } from "../../i18n/companion-columns";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
+import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
 import { mainTableFields } from "../../i18n/per-language-storage";
 import { companionColumnNames } from "../../i18n/runtime/companion-io";
 import { busyTableBounds, type BusyTableBounds } from "../busy-table/bounds";
@@ -318,6 +319,15 @@ export async function writeCollectionSave(
       }
       await recordWhatWasPushed(deps, written.files, written.table);
     } else if (deps.applies) {
+      // A translated entity's file archives the languages it takes out of translation into
+      // `nextly_i18n_archive`, which a database `nextly migrate` has not prepared lacks. Made
+      // ready here, under the schema lock the file's statements run under.
+      if (save.previous?.localized === true) {
+        await ensureI18nArchive(
+          deps.adapter,
+          deps.adapter.getCapabilities().dialect
+        );
+      }
       await runWritten(deps, written.files, written.table, bounds);
     } else if (options.appliedAfter !== undefined) {
       await options.appliedAfter();
