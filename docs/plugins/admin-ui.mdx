@@ -963,9 +963,10 @@ Startup is refused, naming the plugins involved, when a view's `path`:
 > **Experimental.** `opensFirst` and a collection's `admin.opensIn` may change
 > before they are marked stable.
 
-Every admin link meant to open an entry (a list row, the row menu's Edit, a
-row's language dots, the dashboard's Continue and Recent entries cards) opens it
-in the same place, chosen by one rule:
+Every admin link meant to open an entry opens it in the same place: a list
+row, the row menu's Edit and a row's language dots; the dashboard's Continue,
+Recent entries and Recent activity cards; a release's documents; and the
+documents a media item is used in. The place is chosen by one rule:
 
 1. The collection's `admin.opensIn`, when it declares one: `"form"`, or the
    path of a document view the collection has.

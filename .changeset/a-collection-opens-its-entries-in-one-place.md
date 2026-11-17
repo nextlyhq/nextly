@@ -30,7 +30,8 @@
 ---
 
 Every link meant to open an entry (a list row, the row menu's Edit, a row's
-language dots, the dashboard's Continue and Recent entries cards) now opens it
+language dots, the dashboard's Continue, Recent entries and Recent activity
+cards, a release's documents and a media item's uses) now opens it
 in one place, chosen by one rule. A collection can say where in code, with the
 experimental `admin.opensIn` (`"form"`, or the path of a document view it
 has), and a plugin's field-type view can ask to open first with the

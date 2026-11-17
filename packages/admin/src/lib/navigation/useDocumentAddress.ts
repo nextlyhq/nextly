@@ -39,7 +39,9 @@ export type DocumentAddressOf = (
 export function useDocumentAddress(): DocumentAddressOf {
   const { data } = useEveryNavCollection();
   const { canAccessCollection } = useCurrentUserPermissions();
-  const { enabled, defaultLocale } = useLocalization();
+  // The default language whenever the site names one, multilingual or not: on
+  // a one-language site a saved row still names it, and it is the default.
+  const { defaultLocale } = useLocalization();
   // The views the admin's metadata publishes, enabled plugins' only: read
   // here so a link is drawn again when they arrive.
   const { plugins } = useBranding();
@@ -64,10 +66,10 @@ export function useDocumentAddress(): DocumentAddressOf {
             document.kind === "collection" &&
             canAccessCollection(document.slug, "update"),
           ...(options.locale === undefined ? {} : { locale: options.locale }),
-          ...(enabled && defaultLocale !== "" ? { defaultLocale } : {}),
+          ...(defaultLocale ? { defaultLocale } : {}),
         },
         views
       ),
-    [bySlug, canAccessCollection, enabled, defaultLocale, views]
+    [bySlug, canAccessCollection, defaultLocale, views]
   );
 }
