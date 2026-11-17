@@ -835,7 +835,13 @@ function blockMatch(
   return settingsMatch(
     [
       ...contentEntries(block, node, at.breakpoints),
-      ...styleEntries(styleSections, block),
+      ...styleEntries(styleSections, block, {
+        node,
+        at: {
+          state: at.state ?? "base",
+          breakpoint: at.breakpoint ?? BASE_BREAKPOINT,
+        },
+      }),
       ...advancedEntries(block, node),
     ],
     filter

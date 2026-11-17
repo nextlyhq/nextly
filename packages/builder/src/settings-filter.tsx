@@ -67,7 +67,9 @@ export function SettingsFilterProvider({
   );
   return (
     <FilterStateContext.Provider value={value}>
-      {children}
+      <SearchFoldsProvider active={filtering(value)}>
+        {children}
+      </SearchFoldsProvider>
     </FilterStateContext.Provider>
   );
 }
@@ -469,4 +471,65 @@ export function useReportStyle(
     report(on && now !== undefined ? { nodeId, sections: now } : undefined);
   }, [report, nodeId, signature, on]);
   React.useEffect(() => () => report?.(undefined), [report]);
+}
+
+/**
+ * What a tab's sections are while the panel is filtered, apart from the folds
+ * the author left: those opened or closed during this search, or all opened
+ * or all closed from the panel's menu. None at first: the matches open.
+ */
+export type SearchFold =
+  | {
+      readonly kind: "chosen";
+      readonly search: string;
+      readonly open: readonly string[];
+    }
+  | { readonly kind: "all"; readonly open: boolean };
+
+/** Each tab's folds while filtered, and how to change one. */
+interface SearchFolds {
+  readonly folds: Readonly<Record<string, SearchFold | undefined>>;
+  readonly set: (tab: string, fold: SearchFold) => void;
+}
+
+const NO_SEARCH_FOLDS: SearchFolds = { folds: {}, set: () => {} };
+
+const SearchFoldsContext = React.createContext<SearchFolds>(NO_SEARCH_FOLDS);
+
+/**
+ * Holds the filtered folds under the filter, so the panel's menu folds what
+ * the filter shows, and drops them once the filter is off: the same search
+ * typed again opens its matches afresh, and the author's folds are untouched.
+ */
+function SearchFoldsProvider({
+  active,
+  children,
+}: {
+  active: boolean;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  const [folds, setFolds] = React.useState<
+    Readonly<Record<string, SearchFold | undefined>>
+  >({});
+  React.useEffect(() => {
+    if (!active)
+      setFolds(current => (Object.keys(current).length === 0 ? current : {}));
+  }, [active]);
+  const value = React.useMemo<SearchFolds>(
+    () => ({
+      folds,
+      set: (tab, fold) => setFolds(current => ({ ...current, [tab]: fold })),
+    }),
+    [folds]
+  );
+  return (
+    <SearchFoldsContext.Provider value={value}>
+      {children}
+    </SearchFoldsContext.Provider>
+  );
+}
+
+/** The panel's filtered folds. */
+export function useSearchFolds(): SearchFolds {
+  return React.useContext(SearchFoldsContext);
 }

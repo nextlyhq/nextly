@@ -13,6 +13,17 @@ import {
   type PropSchema,
 } from "@nextlyhq/blocks-engine";
 
+import {
+  BUTTON_BLOCK,
+  SECTION_BLOCK,
+  sizesOffered,
+  type ShortcutAt,
+} from "./block-shortcuts";
+import {
+  HEIGHT_LABELS,
+  SHORTCUT_IDS,
+  SIZE_LABELS,
+} from "./block-shortcuts-field";
 import { BUILT_IN_WRITES } from "./code-hints";
 import { COLUMNS_ROW, stackOf, stackTiers } from "./columns-layout";
 import {
@@ -226,6 +237,56 @@ export function advancedEntries(
   ];
 }
 
+/**
+ * The shortcuts the Size section draws above its fields: a Section's Height,
+ * a Button's Size and Full width, by the words they're drawn with, each set
+ * where the block stores what it writes at the edited address.
+ */
+function shortcutRows(
+  node: BlockNode | undefined,
+  at: ShortcutAt
+): IndexedRow[] {
+  if (node === undefined) return [];
+  const stores = (property: string) =>
+    readStyleValue(node.styles, {
+      state: at.state,
+      breakpoint: at.breakpoint,
+      property,
+      path: [],
+    }) !== undefined;
+  if (node.type === SECTION_BLOCK) {
+    return [
+      {
+        id: SHORTCUT_IDS.height,
+        label: "Height",
+        options: Object.values(HEIGHT_LABELS),
+        css: ["min-height"],
+        set: stores("minHeight"),
+      },
+    ];
+  }
+  if (node.type !== BUTTON_BLOCK) return [];
+  return [
+    ...(sizesOffered(node)
+      ? [
+          {
+            id: SHORTCUT_IDS.size,
+            label: "Size",
+            options: Object.values(SIZE_LABELS),
+            css: ["padding", "font-size"],
+            set: stores("padding") || stores("fontSize"),
+          },
+        ]
+      : []),
+    {
+      id: SHORTCUT_IDS.fullWidth,
+      label: "Full width",
+      css: ["width"],
+      set: stores("width"),
+    },
+  ];
+}
+
 /** The CSS properties a Style property's controls write. */
 function cssOf(property: StyleSection["properties"][number]): string[] {
   const names = new Set<string>();
@@ -242,12 +303,16 @@ function cssOf(property: StyleSection["properties"][number]): string[] {
  */
 export function styleEntries(
   sections: readonly StyleSection[],
-  inspection: BlockInspection | null
+  inspection: BlockInspection | null,
+  shortcuts?: { node: BlockNode | undefined; at: ShortcutAt }
 ): SettingEntry[] {
   const props = inspection?.sections.styleProps ?? [];
   return sections.flatMap(section => {
     const own = props.find(each => each.key === section.key)?.rows ?? [];
     return sectionEntries("style", section, [
+      ...(section.key === "size" && shortcuts !== undefined
+        ? shortcutRows(shortcuts.node, shortcuts.at)
+        : []),
       ...drawnRows(own, new Set()),
       ...section.properties.map(property => ({
         id: property.property,

@@ -89,6 +89,11 @@ const PAGE: BlockDocument = {
       },
     }),
     nodeOf("spacer", "core/spacer"),
+    nodeOf("columns", "core/columns", {
+      props: { as: "div" },
+      styles: { base: { base: { gridTemplateColumns: "1fr 2fr" } } },
+      slots: { children: [] },
+    }),
   ],
 } as BlockDocument;
 
@@ -302,3 +307,45 @@ function openSections(): string[] {
       (each.closest("[data-section]") as HTMLElement).dataset.section ?? ""
   );
 }
+
+describe("the controls the builder draws itself", () => {
+  it("finds a Button's Full width, a Size shortcut", () => {
+    mount();
+    openTab("Style");
+    type("full width");
+    const fullWidth = screen.getByRole("switch", { name: "Full width" });
+    expect(fullWidth.closest("[hidden]")).toBeNull();
+    expect(tab("Style").textContent).toMatch(/\d/);
+  });
+
+  it("keeps a Columns row's Layout and hides Stack on, by the word typed", () => {
+    mount("columns");
+    openTab("Content");
+    type("layout");
+    expect(
+      screen.getByRole("radiogroup", { name: "Layout" }).closest("[hidden]")
+    ).toBeNull();
+    expect(
+      screen
+        .getByRole("switch", { name: "Reverse when stacked", hidden: true })
+        .closest("[hidden]")
+    ).not.toBeNull();
+  });
+});
+
+describe("the panel's menu while filtered", () => {
+  it("folds what the filter shows, and leaves the author's folds for after", () => {
+    mount();
+    openTab("Style");
+    const before = openSections();
+    type("colour");
+    expect(openSections().length).toBeGreaterThan(0);
+    fireEvent.keyDown(screen.getByRole("button", { name: "Panel options" }), {
+      key: "Enter",
+    });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Collapse all" }));
+    expect(openSections()).toEqual([]);
+    type("");
+    expect(openSections()).toEqual(before);
+  });
+});

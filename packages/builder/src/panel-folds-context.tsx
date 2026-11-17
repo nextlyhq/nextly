@@ -9,7 +9,12 @@
  */
 import * as React from "react";
 
-import { sectionShown, useSettingsMatch } from "./settings-filter";
+import {
+  sectionShown,
+  useSearchFolds,
+  useSettingsMatch,
+  type SearchFold,
+} from "./settings-filter";
 import {
   sectionOpens,
   withSectionFold,
@@ -97,19 +102,12 @@ export function useTabFolds(
     String(match.onlyChanged),
     ...matchedKeys,
   ].join("\u0000");
-  const [during, setDuring] = React.useState<{
-    readonly search: string;
-    readonly open: string[];
-  } | null>(null);
-  // Dropped once the filter is off, so the same search typed again opens
-  // its matches afresh.
-  React.useEffect(() => {
-    if (!match.active && during !== null) setDuring(null);
-  }, [match.active, during]);
+  const searchFolds = useSearchFolds();
   if (match.active) {
     return {
-      open: during?.search === searching ? during.open : matchedKeys,
-      onOpenChange: next => setDuring({ search: searching, open: next }),
+      open: filteredOpen(searchFolds.folds[tab], searching, matchedKeys),
+      onOpenChange: next =>
+        searchFolds.set(tab, { kind: "chosen", search: searching, open: next }),
     };
   }
   const open = sections
@@ -134,4 +132,20 @@ export function useTabFolds(
     );
   };
   return { open, onOpenChange };
+}
+
+/**
+ * The open sections while filtered: all or none from the panel's menu, those
+ * the author chose during this search, else the matches.
+ */
+function filteredOpen(
+  fold: SearchFold | undefined,
+  searching: string,
+  matched: string[]
+): string[] {
+  if (fold?.kind === "all") return fold.open ? matched : [];
+  if (fold?.kind === "chosen" && fold.search === searching) {
+    return [...fold.open];
+  }
+  return matched;
 }

@@ -28,6 +28,7 @@ import { ContentWidthFields } from "./content-width-fields";
 import { FocalFrame } from "./focal-frame";
 import type { InspectorSectionKey } from "./inspector-sections";
 import { useTabFolds } from "./panel-folds-context";
+import { SHORTCUT_IDS } from "./block-shortcuts-field";
 import {
   SettingSlot,
   sectionShown,
@@ -209,8 +210,8 @@ const StyleSectionItem: React.NamedExoticComponent<StyleSectionItemProps> =
 /** The block's settings Content width draws, which the filter keeps it by. */
 const CONTENT_WIDTH_IDS: readonly string[] = ["contained", "contentWidth"];
 
-/** What a block's Size shortcuts write, which the filter keeps them by. */
-const SHORTCUT_IDS: readonly string[] = ["minHeight", "width", "padding"];
+/** The Size shortcuts, which the filter keeps them by. */
+const SHORTCUTS: readonly string[] = Object.values(SHORTCUT_IDS);
 
 /**
  * A section's properties drawn at once, and those behind "+ More". While the
@@ -342,7 +343,7 @@ function SectionFields({
           </SettingSlot>
         ) : null}
         {sectionKey === "size" ? (
-          <SettingSlot tab="style" ids={SHORTCUT_IDS}>
+          <SettingSlot tab="style" ids={SHORTCUTS}>
             <BlockShortcutsFields
               surroundings={surroundings}
               minHeightDrawn={(rings?.rest ?? shown).some(
