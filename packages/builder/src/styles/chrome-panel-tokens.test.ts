@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
+import { chromeStylesheetSource } from "./chrome-stylesheet";
 
 /**
  * The editor's panels and the canvas well must look apart in both themes:
@@ -32,7 +32,7 @@ const CHROME = stripComments(
 );
 
 const THEME = stripComments(
-  readFileSync(join(HERE, "../../ui/src/styles/theme.css"), "utf8")
+  readFileSync(join(HERE, "../../../ui/src/styles/theme.css"), "utf8")
 );
 
 /** The body of the first rule whose prelude matches `prelude`. */

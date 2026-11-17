@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
+import { chromeStylesheetSource } from "./chrome-stylesheet";
 
 // Comments dropped and whitespace folded, so a rule reads on one line.
 const FLAT = chromeStylesheetSource(url =>
