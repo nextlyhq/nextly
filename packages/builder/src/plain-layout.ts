@@ -1025,7 +1025,8 @@ const WIDTH_WRITES: Readonly<
     },
   },
   grid: {
-    fill: { justifySelf: null, width: null },
+    // Stretched itself, so the Grid's own Align can't keep it to its content.
+    fill: { justifySelf: "stretch", width: null },
     fit: { justifySelf: "start", width: null },
     fixed: { width: SIZE, justifySelf: null },
   },
@@ -1068,7 +1069,17 @@ export function planChildWidth(
   choice: ChildFit,
   size?: string
 ): LayoutWrite[] {
+  // In flow an inline-level block (a Button) is as wide as its content at
+  // an automatic width: Fill gives it the line's width.
+  if (parent === "flow" && choice === "fill" && inlineLevel(tiers, editing)) {
+    return childWrites(tiers, editing, { width: "100%" }, size);
+  }
   return childWrites(tiers, editing, WIDTH_WRITES[parent][choice], size);
+}
+
+/** Whether the block lays out inline: its display in force is inline-level. */
+function inlineLevel(tiers: LayoutTiers, editing: string): boolean {
+  return tiers.inForce(editing).display?.startsWith("inline") === true;
 }
 
 /** The writes a Height choice makes, under a Row or a Grid. */
@@ -1111,17 +1122,39 @@ function crossSize(
   return stretched(self) ? { choice: "fill" } : { choice: "custom" };
 }
 
+/**
+ * A flowing block's width: an automatic one fills the line for a block-level
+ * box and fits the content of an inline-level one; 100% fills either.
+ */
+function flowWidth(width: string | undefined, inline: boolean): ChildSize {
+  if (width === "100%") return { choice: "fill" };
+  if (automatic(width)) return { choice: inline ? "fit" : "fill" };
+  return width === "fit-content"
+    ? { choice: "fit" }
+    : { choice: "fixed", size: width ?? "" };
+}
+
 /** A Row child's width: grown, its content's, or set. */
 function rowWidth(values: LayoutValues): ChildSize {
+  const grow = values.flexGrow ?? "0";
+  const basis = values.flexBasis ?? "auto";
+  // Anything a choice doesn't write (a basis of its own, a grow of 2) is
+  // Custom, so its rows stay drawn to say it.
   if (!automatic(values.width)) {
-    return { choice: "fixed", size: values.width ?? "" };
+    return grow === "0" && basis === "auto"
+      ? { choice: "fixed", size: values.width ?? "" }
+      : { choice: "custom" };
   }
-  const grow = values.flexGrow;
-  if (grow === "1") return { choice: "fill" };
-  return grow === undefined || grow === "0"
+  if (grow === "1") {
+    return ZERO_BASES.has(basis) ? { choice: "fill" } : { choice: "custom" };
+  }
+  return grow === "0" && basis === "auto"
     ? { choice: "fit" }
     : { choice: "custom" };
 }
+
+/** A basis of nothing, as Fill writes it and as it may be spelled. */
+const ZERO_BASES: ReadonlySet<string> = new Set(["0", "0%", "0px"]);
 
 /**
  * The Width choice the block's values read as at the edited device, by the
@@ -1136,13 +1169,8 @@ export function readChildWidth(
 ): ChildSize {
   const values = tiers.inForce(editing);
   switch (parent) {
-    case "flow": {
-      const width = values.width;
-      if (automatic(width)) return { choice: "fill" };
-      return width === "fit-content"
-        ? { choice: "fit" }
-        : { choice: "fixed", size: width ?? "" };
-    }
+    case "flow":
+      return flowWidth(values.width, inlineLevel(tiers, editing));
     case "column":
       return crossSize(values.width, values.alignSelf);
     case "row":

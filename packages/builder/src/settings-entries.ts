@@ -323,18 +323,27 @@ function shortcutRows(
  */
 function childSizeRows(
   parent: ParentArrangement | undefined,
-  properties: StyleSection["properties"]
+  sections: readonly StyleSection[]
 ): IndexedRow[] {
   if (parent === undefined) return [];
   const choices = ["Fill", "Fit", "Fixed"];
-  const set = properties.some(property => property.set);
+  // Each axis is set by what it writes, wherever its rows are (a width is
+  // Size's): a share's or an order's value says nothing of the other axis.
+  const stored = new Set(
+    sections
+      .flatMap(section => section.properties)
+      .filter(property => property.set)
+      .map(property => property.property)
+  );
+  const holds = (properties: readonly string[]) =>
+    properties.some(property => stored.has(property));
   return [
     {
       id: CHILD_SIZE_IDS.width,
       label: "Width",
       options: choices,
       css: ["width", "flex", "align-self", "justify-self"],
-      set,
+      set: holds(WIDTH_WRITTEN[parent]),
     },
     ...(parent === "row" || parent === "grid"
       ? [
@@ -343,12 +352,20 @@ function childSizeRows(
             label: "Height",
             options: choices,
             css: ["height", "align-self"],
-            set,
+            set: holds(["height", "alignSelf"]),
           },
         ]
       : []),
   ];
 }
+
+/** The properties Width writes, by the parent's arrangement. */
+const WIDTH_WRITTEN: Readonly<Record<ParentArrangement, readonly string[]>> = {
+  flow: ["width"],
+  column: ["width", "alignSelf"],
+  row: ["width", "flexGrow", "flexShrink", "flexBasis", "minWidth"],
+  grid: ["width", "justifySelf"],
+};
 
 /** The CSS properties a Style property's controls write. */
 function cssOf(property: StyleSection["properties"][number]): string[] {
@@ -395,7 +412,7 @@ export function styleEntries(
     const own = props.find(each => each.key === section.key)?.rows ?? [];
     return sectionEntries("style", section, [
       ...(section.key === "inside-parent"
-        ? childSizeRows(parent, section.properties)
+        ? childSizeRows(parent, sections)
         : []),
       ...(section.key === "size" && shortcuts !== undefined
         ? shortcutRows(shortcuts.node, shortcuts.at)

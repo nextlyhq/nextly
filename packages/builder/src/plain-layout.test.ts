@@ -704,7 +704,10 @@ describe("Inside its parent: Width", () => {
   });
 
   it("in a Grid: stretched, at the start, or set", () => {
-    expect(writesOf("grid", "fill").own.base).toEqual({});
+    // Stretched itself, whatever the Grid's own Align.
+    expect(writesOf("grid", "fill").own.base).toEqual({
+      justifySelf: "stretch",
+    });
     expect(writesOf("grid", "fit").own.base).toEqual({ justifySelf: "start" });
     expect(writesOf("grid", "fixed", "200px").own.base).toEqual({
       width: "200px",
@@ -781,5 +784,26 @@ describe("Inside its parent: Height, under a Row or a Grid", () => {
     const fit = new Block();
     fit.apply(planChildHeight(fit.tiers(), "base", "fit"));
     expect(fit.own.base).toEqual({ alignSelf: "start" });
+  });
+});
+
+describe("Inside its parent: what a choice can't say", () => {
+  it("fills the line for an inline-level block in flow", () => {
+    const block = new Block({ display: "inline-block" });
+    expect(readChildWidth(block.tiers(), "base", "flow")).toEqual({
+      choice: "fit",
+    });
+    block.apply(planChildWidth(block.tiers(), "base", "flow", "fill"));
+    expect(block.own.base.width).toBe("100%");
+    expect(readChildWidth(block.tiers(), "base", "flow")).toEqual({
+      choice: "fill",
+    });
+  });
+
+  it("reads a Row child's basis of its own as Custom", () => {
+    const block = new Block({ flexGrow: "0", flexBasis: "240px" });
+    expect(readChildWidth(block.tiers(), "base", "row")).toEqual({
+      choice: "custom",
+    });
   });
 });

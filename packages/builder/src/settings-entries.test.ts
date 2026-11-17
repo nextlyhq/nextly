@@ -86,3 +86,27 @@ describe("a setting bound to data", () => {
     });
   });
 });
+
+describe("Inside its parent's Width and Height under Only changed", () => {
+  it("are set by what each axis writes, a width in Size included", async () => {
+    const { styleEntries } = await import("./settings-entries");
+    const { inspectStyle } = await import("./style-inspector");
+    const document = pageWith({
+      type: "core/button",
+      props: { type: "button" },
+      styles: { base: { base: { width: "200px", order: "2" } } },
+    } as never);
+    const inspection = inspectSelection(document, "a");
+    const style = inspectStyle(document, "a");
+    const entries = styleEntries(
+      style?.sections ?? [],
+      inspection,
+      undefined,
+      "row"
+    );
+    const byId = new Map(entries.map(entry => [entry.id, entry]));
+    expect(byId.get("child:width")?.set).toBe(true);
+    // An order says nothing of the height.
+    expect(byId.get("child:height")?.set).toBe(false);
+  });
+});
