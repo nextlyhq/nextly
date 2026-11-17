@@ -52,8 +52,12 @@ export interface SectionPictureInputs {
   session: MiniatureSession;
 }
 
-/** This site's rendering for a picture, compiled once per change of input. */
-function usePictureRender(
+/**
+ * This site's rendering for a picture, compiled once per change of input.
+ * The header & footer menu's set pictures draw with it too, so a picture
+ * looks the same wherever it is chosen.
+ */
+export function usePictureRender(
   siteStyle: SiteStyleData | undefined,
   definitions: DefinitionsById
 ): MiniatureRender {

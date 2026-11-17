@@ -340,3 +340,21 @@ describe("the site's fluid range across the tiers", () => {
     ).toEqual({ min: 360, max: 1280 });
   });
 });
+
+describe("the site's colour order across the tiers", () => {
+  it("is stored where the site set one, and read back over the code's", () => {
+    const order = ["color.text", "color.primary"];
+    expect(
+      tokenOverrideOf({ tokens: [] }, { tokens: [], order }).order
+    ).toEqual(order);
+    expect(tokenOverrideOf({ tokens: [] }, { tokens: [] })).not.toHaveProperty(
+      "order"
+    );
+    expect(
+      resolveSiteStyle(
+        { tokens: { tokens: [] } },
+        { tokens: { tokens: [], order } }
+      ).tokens?.order
+    ).toEqual(order);
+  });
+});

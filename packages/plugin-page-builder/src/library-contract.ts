@@ -808,7 +808,7 @@ export interface StoredSiteStyle {
 /** Where Settings' Site tab reads what it shows and what this caller may change. */
 export const SITE_SETTINGS_ROUTE_PATH = "/site/settings";
 
-/** A Layout the site's default may be, as the Site tab offers it. */
+/** The site's default Layout, as the Site tab names it. */
 export interface SiteLayoutOption {
   readonly id: string;
   readonly title: string;
@@ -826,7 +826,8 @@ export interface SiteSettingsRead {
   readonly mayManageSite: boolean;
   /**
    * Whether this caller may choose the site's default Layout, which also
-   * needs the rights to update and publish Layouts.
+   * needs the rights to update and publish Layouts: the Header & footer list
+   * then offers "Make site default".
    */
   readonly mayChooseDefaultLayout: boolean;
   /** The site's default Layout, by id, or `null` when it has none. */
@@ -838,8 +839,9 @@ export interface SiteSettingsRead {
    */
   readonly breakpoints: BreakpointSet | null;
   /**
-   * The published Layouts: every one the caller may choose from, or only the
-   * current default, to name it, for a caller who may not choose.
+   * The current default, when it is published, so the Site tab can name it;
+   * empty otherwise. Another set is made the default from the Header &
+   * footer list.
    */
   readonly layouts: readonly SiteLayoutOption[];
   /**

@@ -31,6 +31,25 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useDocumentLocale: vi.fn(() => null),
 }));
 
+// Each picture stands for the set it draws, by its regions' components: the
+// drawing itself is the pictures module's own test.
+vi.mock("./header-footer-pictures", () => ({
+  useSetPictures:
+    (definitions: Readonly<Record<string, unknown>>, complete: boolean) =>
+    (picture: readonly { componentId: string }[]) => (
+      <span
+        data-testid="picture"
+        data-regions={picture.map(region => region.componentId).join(",")}
+        // Whether every region's definition was handed in, and whether the
+        // reads holding them are done: what the real picture draws from.
+        data-defined={String(
+          picture.every(region => region.componentId in definitions)
+        )}
+        data-complete={String(complete)}
+      />
+    ),
+}));
+
 import {
   useDocumentIdentity,
   useDocumentLocale,
@@ -65,7 +84,7 @@ const choices: LayoutChoicesResponse = {
       title: "Main",
       published: true,
       draftChangesNotLive: false,
-      isEmpty: false,
+      areasFilled: ["header"],
       regions: [{ area: "header", componentId: "h" }],
     },
     {
@@ -73,7 +92,7 @@ const choices: LayoutChoicesResponse = {
       title: "Landing",
       published: true,
       draftChangesNotLive: true,
-      isEmpty: false,
+      areasFilled: ["header", "footer"],
       regions: [
         { area: "header", componentId: "lh" },
         { area: "footer", componentId: "lf" },
@@ -164,14 +183,43 @@ function renderPicker(
   );
 }
 
-async function choose(label: string) {
+/** Open the menu from its trigger. */
+async function openMenu() {
   const trigger = screen.getByRole("combobox", { name: "Header & footer" });
   await act(async () => {
-    fireEvent.keyDown(trigger, { key: "Enter" });
+    fireEvent.click(trigger);
   });
+}
+
+/** An option by its name, the bold first line of its row. */
+function optionNamed(name: string): HTMLElement {
+  const found = screen
+    .getAllByRole("option")
+    .find(
+      option =>
+        option.querySelector('[data-slot="hf-name"]')?.textContent === name
+    );
+  if (found === undefined) throw new Error(`No option named ${name}`);
+  return found;
+}
+
+async function choose(name: string) {
+  await openMenu();
   await act(async () => {
-    fireEvent.click(screen.getByRole("option", { name: label }));
+    fireEvent.click(optionNamed(name));
   });
+}
+
+/** Each row: its name, its note, and the regions its picture draws. */
+function rows(): { name: string; note: string | null; picture: string }[] {
+  return screen.getAllByRole("option").map(option => ({
+    name: option.querySelector('[data-slot="hf-name"]')?.textContent ?? "",
+    note: option.querySelector('[data-slot="hf-note"]')?.textContent ?? null,
+    picture:
+      option
+        .querySelector('[data-testid="picture"]')
+        ?.getAttribute("data-regions") ?? "none",
+  }));
 }
 
 describe("the page's Layout picker", () => {
@@ -196,9 +244,85 @@ describe("the page's Layout picker", () => {
     });
   });
 
-  it("writes the switch for No header or footer", async () => {
+  it("lists the site default, a separator, each other set, None, a separator and Manage, each with its picture and note", async () => {
+    renderPicker();
+    await openMenu();
+    expect(rows()).toEqual([
+      {
+        name: "Site default (Main)",
+        note: "Follows the site if the default changes",
+        picture: "h",
+      },
+      { name: "Landing", note: "Header and footer", picture: "lh,lf" },
+      { name: "None", note: "No header or footer", picture: "" },
+      // Not a choice: it opens the list of sets.
+      { name: "", note: null, picture: "none" },
+    ]);
+    const list = screen.getByRole("listbox", { name: "Header & footer" });
+    const order = [
+      ...list.querySelectorAll('[role="option"], [role="separator"]'),
+    ].map(element =>
+      element.getAttribute("role") === "separator"
+        ? "—"
+        : (element.querySelector('[data-slot="hf-name"]')?.textContent ??
+          element.textContent)
+    );
+    expect(order).toEqual([
+      "Site default (Main)",
+      "—",
+      "Landing",
+      "None",
+      "—",
+      "Manage headers & footers ↗(opens in a new tab)",
+    ]);
+  });
+
+  it("shows the current choice in the trigger with its picture, and checks it in the list", async () => {
     renderPicker({ layout: "landing", noHeaderFooter: false });
-    await choose("No header or footer");
+    const trigger = screen.getByRole("combobox", { name: "Header & footer" });
+    expect(trigger.textContent).toBe("Landing");
+    expect(
+      trigger
+        .querySelector('[data-testid="picture"]')
+        ?.getAttribute("data-regions")
+    ).toBe("lh,lf");
+    await openMenu();
+    expect(optionNamed("Landing").textContent).toContain("(current)");
+    expect(optionNamed("None").textContent).not.toContain("(current)");
+  });
+
+  it("opens the list of sets in a new tab from Manage headers & footers", async () => {
+    const opened = vi.spyOn(window, "open").mockReturnValue(null);
+    renderPicker();
+    await openMenu();
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("option", { name: /Manage headers & footers/ })
+      );
+    });
+    expect(opened).toHaveBeenCalledWith(
+      "/admin/collections/layouts",
+      "_blank",
+      "noopener"
+    );
+    opened.mockRestore();
+  });
+
+  it("asks for every set's picture once the menu first opens, and not before", async () => {
+    renderPicker();
+    const pictures = () =>
+      read.mock.calls.filter(
+        ([request]) =>
+          request.path.includes("pictures=1") && request.enabled === true
+      );
+    expect(pictures()).toEqual([]);
+    await openMenu();
+    expect(pictures().length).toBeGreaterThan(0);
+  });
+
+  it("writes the switch for None", async () => {
+    renderPicker({ layout: "landing", noHeaderFooter: false });
+    await choose("None");
     expect(values()).toMatchObject({ layout: "landing", noHeaderFooter: true });
   });
 
@@ -218,7 +342,7 @@ describe("the page's Layout picker", () => {
   it("offers a retry when the choices could not be read", () => {
     answering(undefined, Object.assign(new Error("Boom"), { status: 500 }));
     renderPicker();
-    expect(screen.getByText("Couldn't load header & footer sets")).toBeTruthy();
+    expect(screen.getByText("Couldn't load headers & footers")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
   });
 
@@ -246,7 +370,7 @@ describe("the page's Layout picker", () => {
       title: `Layout ${i}`,
       published: true,
       draftChangesNotLive: false,
-      isEmpty: false,
+      areasFilled: ["header"],
       regions: [],
     });
     const first = {
@@ -288,12 +412,12 @@ describe("the page's Layout picker", () => {
       screen.getByText("Showing the first 200; search to find more.")
     ).toBeTruthy();
     const search = screen.getByRole("combobox", {
-      name: "Search header & footer sets",
+      name: "Search headers & footers",
     });
     await act(async () => {
       fireEvent.change(search, { target: { value: "Layout 230" } });
     });
-    const found = await screen.findByRole("option", { name: "Layout 230" });
+    const found = await screen.findByRole("option", { name: /^Layout 230/ });
     await act(async () => {
       fireEvent.click(found);
     });
@@ -313,7 +437,7 @@ describe("the page's Layout picker", () => {
       title: `Layout ${i}`,
       published: true,
       draftChangesNotLive: false,
-      isEmpty: false,
+      areasFilled: ["header"],
       regions: [],
     });
     const first = {
@@ -354,7 +478,7 @@ describe("the page's Layout picker", () => {
     });
     await act(async () => {
       fireEvent.change(
-        screen.getByRole("combobox", { name: "Search header & footer sets" }),
+        screen.getByRole("combobox", { name: "Search headers & footers" }),
         { target: { value: query } }
       );
     });
@@ -365,11 +489,44 @@ describe("the page's Layout picker", () => {
     return { retry };
   }
 
+  it("draws a set found past the list from the search's own definitions", async () => {
+    const found = {
+      id: "l230",
+      title: "Layout 230",
+      published: true,
+      draftChangesNotLive: false,
+      areasFilled: ["header" as const],
+      regions: [{ area: "header" as const, componentId: "far" }],
+    };
+    await searchCapped({
+      data: {
+        items: [found],
+        meta: {
+          ...choices.meta,
+          defaultLayout: "l0",
+          more: false,
+          matched: ["l230"],
+          regionDefinitions: { far: { formatVersion: 1, nodes: [] } },
+        },
+      },
+    });
+    // The search asks for the pictures of what it finds.
+    expect(
+      choicePaths().some(
+        path => path.includes("q=Layout+230") && path.includes("pictures=1")
+      )
+    ).toBe(true);
+    const picture = optionNamed("Layout 230").querySelector(
+      '[data-testid="picture"]'
+    );
+    expect(picture?.getAttribute("data-defined")).toBe("true");
+  });
+
   it("says it is searching, and shows none of the first answer, while a search is on its way", async () => {
     await searchCapped({});
     expect(screen.getByText("Searching…")).toBeTruthy();
     // The first answer's Layouts are not matches for what was typed.
-    expect(screen.queryByRole("option", { name: "Layout 5" })).toBeNull();
+    expect(screen.queryByRole("option", { name: /^Layout 5/ })).toBeNull();
   });
 
   it("says no Layouts match a search that matches none, keeping the current choice", async () => {
@@ -384,7 +541,7 @@ describe("the page's Layout picker", () => {
               title: "Layout 0",
               published: true,
               draftChangesNotLive: false,
-              isEmpty: false,
+              areasFilled: ["header"],
               regions: [],
             },
           ],
@@ -419,7 +576,7 @@ describe("the page's Layout picker", () => {
               title: "Layout 0",
               published: true,
               draftChangesNotLive: false,
-              isEmpty: false,
+              areasFilled: ["header"],
               regions: [],
             },
             {
@@ -427,7 +584,7 @@ describe("the page's Layout picker", () => {
               title: "Café",
               published: true,
               draftChangesNotLive: false,
-              isEmpty: false,
+              areasFilled: ["header"],
               regions: [],
             },
           ],
@@ -441,19 +598,15 @@ describe("the page's Layout picker", () => {
       },
       "cafe"
     );
-    expect(
-      screen.getAllByRole("option").map(option => option.textContent)
-    ).toEqual(["Café"]);
+    expect(rows().map(row => row.name)).toEqual(["Café"]);
   });
 
   it("says a search failed and offers to try again, with no stale options", async () => {
     const { retry } = await searchCapped({
       error: Object.assign(new Error("Boom"), { status: 500 }),
     });
-    expect(
-      screen.getByText("Couldn't search header & footer sets")
-    ).toBeTruthy();
-    expect(screen.queryByRole("option", { name: "Layout 5" })).toBeNull();
+    expect(screen.getByText("Couldn't search headers & footers")).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /^Layout 5/ })).toBeNull();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     });
@@ -487,14 +640,90 @@ describe("the page's Layout picker", () => {
     expect(refetch).toHaveBeenCalled();
   });
 
-  it("keeps the plain dropdown when every Layout fits in one answer", () => {
+  it("searches a site with more than ten sets, saying when none match", async () => {
+    const set = (i: number) => ({
+      id: `s${i}`,
+      title: `Set ${i}`,
+      published: true,
+      draftChangesNotLive: false,
+      areasFilled: ["header" as const],
+      regions: [{ area: "header" as const, componentId: `h${i}` }],
+    });
+    // The default and eleven more, all fitting one answer.
+    const eleven = {
+      items: Array.from({ length: 12 }, (_, i) => set(i)),
+      meta: { ...choices.meta, defaultLayout: "s0" },
+    };
+    answering(eleven);
+    read.mockImplementation(({ path }) => {
+      const data =
+        path === PAGE_COLLECTION_ROUTE_PATH
+          ? { pagesCollection: "pages" }
+          : path.includes("q=")
+            ? {
+                ...eleven,
+                items: [set(0)],
+                meta: { ...eleven.meta, matched: [] },
+              }
+            : eleven;
+      return {
+        data,
+        error: null,
+        pending: false,
+        refetch: () => {},
+      } as unknown as ReturnType<typeof usePluginRoute>;
+    });
+    renderPicker();
+    await openMenu();
+    expect(rows()).toHaveLength(14);
+    // No "first 200" line: every set is in the list.
+    expect(
+      screen.queryByText("Showing the first 200; search to find more.")
+    ).toBeNull();
+    await act(async () => {
+      fireEvent.change(
+        screen.getByRole("combobox", { name: "Search headers & footers" }),
+        { target: { value: "zzz" } }
+      );
+    });
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 250));
+    });
+    expect(screen.getByText("No header & footer sets match.")).toBeTruthy();
+    expect(screen.queryAllByRole("option")).toEqual([]);
+  });
+
+  it("searches eleven sets when the page follows the default among them", async () => {
+    const set = (i: number) => ({
+      id: `s${i}`,
+      title: `Set ${i}`,
+      published: true,
+      draftChangesNotLive: false,
+      areasFilled: ["header" as const],
+      regions: [{ area: "header" as const, componentId: `h${i}` }],
+    });
+    // Eleven sets in all, the first the site default: the menu draws that one
+    // as "Site default" rather than by name, and it is still one of eleven.
+    answering({
+      items: Array.from({ length: 11 }, (_, i) => set(i)),
+      meta: { ...choices.meta, defaultLayout: "s0" },
+    });
+    renderPicker();
+    await openMenu();
+    expect(
+      screen.getByRole("combobox", { name: "Search headers & footers" })
+    ).toBeTruthy();
+  });
+
+  it("is not searched with ten sets or fewer", async () => {
     renderPicker();
     expect(
       screen.queryByText("Showing the first 200; search to find more.")
     ).toBeNull();
-    // The dropdown's own trigger, not a search field.
+    await openMenu();
+    // The list alone, with no search field above it.
     expect(
-      screen.queryByRole("combobox", { name: "Search header & footer sets" })
+      screen.queryByRole("combobox", { name: "Search headers & footers" })
     ).toBe(null);
   });
 
@@ -731,21 +960,18 @@ describe("a Layout behind Remove Layout's fence in the list", () => {
           title: "Campaign",
           published: false,
           draftChangesNotLive: false,
-          isEmpty: false,
+          areasFilled: ["header"],
           regions: [],
           removal: "unpublished",
         },
       ],
     });
     renderPicker();
-    const trigger = screen.getByRole("combobox", { name: "Header & footer" });
-    await act(async () => {
-      fireEvent.keyDown(trigger, { key: "Enter" });
-    });
+    await openMenu();
 
-    const option = screen.getByRole("option", { name: /Campaign/ });
+    const option = optionNamed("Campaign");
     expect(option.textContent).toBe(
-      "Campaign · Unpublished. Publish it again to choose it."
+      "CampaignUnpublished. Publish it again to choose it."
     );
     const reason =
       "This header & footer set was unpublished with Remove header & footer set, so pages can't choose it until it is published again. Choose another header & footer set.";

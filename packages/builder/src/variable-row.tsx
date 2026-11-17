@@ -26,19 +26,14 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@nextlyhq/ui";
-import {
-  Braces,
-  Bold,
-  Hash,
-  Ruler,
-  Timer,
-  Type,
-} from "lucide-react";
+import { Braces, Bold, Hash, Ruler, Timer, Type } from "lucide-react";
 import * as React from "react";
 
 import { DESKTOP_PREVIEW_WIDTH } from "./canvas/canvas-width";
+import { useColourRowDrag, useColourRowMove } from "./colour-group-ui";
 import { markOf } from "./design-group-toggle";
 import { fluidRange, pxAtWidth } from "./fluid-size";
+import { useInPlaceField } from "./in-place-field";
 import { colourHexOf } from "./style-colour";
 import { lengthInPx, variableValueText } from "./style-variables";
 import {
@@ -49,7 +44,7 @@ import {
   type VariableEntry,
 } from "./tokens-studio";
 import { VariableEditor, type VariableEditorProps } from "./variable-editor";
-import { RowMenu } from "./variable-row-menu";
+import { RowMenu, type RowMenuActions } from "./variable-row-menu";
 import { swatchStyle } from "./variable-swatch";
 import { variableCountWords, type VariableReach } from "./variable-usage";
 import { CountTip, type VariableUsageHere } from "./variable-usage-view";
@@ -105,67 +100,58 @@ export function VariableRow({
   const [renaming, setRenaming] = React.useState(false);
   const [menuOpen, setMenuOpen] = React.useState(false);
   const button = React.useRef<HTMLButtonElement>(null);
-  const opened = (next: boolean): void => {
-    if (!next) setRemoving(false);
-    onOpenChange(next);
-  };
+  const opened = closingEndsRemove(setRemoving, onOpenChange);
   const handOff = useHandOff(opened);
   const shown = shownName(entry);
   const changing = !readOnly && token !== undefined;
+  // A colour row moves with Alt+Up and Alt+Down.
+  const move = useColourRowMove(entry.row, tokens, onChange);
   const onKeyDown = rowKeys(changing, {
-    rename: () => setRenaming(true),
-    menu: () => setMenuOpen(true),
+    rename: setRenaming,
+    menu: setMenuOpen,
+    move,
   });
+  // A colour row can be dragged to another place in the colour order.
+  const drag = useColourRowDrag(entry.row);
   return (
-    <li className="nx-vars__item" data-open={markOf(open)}>
+    <li className="nx-vars__item" data-open={markOf(open)} {...drag}>
       <Popover open={open} onOpenChange={opened} modal>
         {/* The editor opens beside the whole row, the ⋯ with it. */}
         <PopoverAnchor asChild>
           <div className="nx-vars__line">
-            {renaming && token !== undefined ? (
-              <RenameField
-                entry={entry}
-                token={token}
-                tokens={tokens}
-                onChange={onChange}
-                onDone={() => setRenaming(false)}
-                row={button}
-              />
-            ) : (
-              <RowTrigger
-                entry={entry}
-                token={token}
-                tokens={tokens}
-                mode={mode}
-                reach={reach}
-                marked={fresh?.marked === true}
-                open={open}
-                quiet={open || menuOpen}
-                button={button}
-                onKeyDown={onKeyDown}
-              />
-            )}
-            {changing ? (
-              <RowMenu
-                entry={entry}
-                token={token}
-                tokens={tokens}
-                suppliedOf={suppliedOf}
-                usage={usage}
-                label={shown}
-                open={menuOpen}
-                onOpenChange={setMenuOpen}
-                onChange={onChange}
-                actions={{
-                  onRename: () => setRenaming(true),
-                  onDuplicate,
-                  onEdit: startRemove => {
-                    setRemoving(startRemove);
-                    onOpenChange(true);
-                  },
-                }}
-              />
-            ) : null}
+            <RowNameOrField
+              renaming={renaming}
+              onRenamed={() => setRenaming(false)}
+              entry={entry}
+              token={token}
+              tokens={tokens}
+              mode={mode}
+              reach={reach}
+              marked={fresh?.marked === true}
+              open={open}
+              quiet={open || menuOpen}
+              button={button}
+              onChange={onChange}
+              onKeyDown={onKeyDown}
+            />
+            <RowActions
+              changing={changing}
+              entry={entry}
+              token={token}
+              tokens={tokens}
+              suppliedOf={suppliedOf}
+              usage={usage}
+              label={shown}
+              open={menuOpen}
+              onOpenChange={setMenuOpen}
+              onChange={onChange}
+              actions={menuActionsOf({
+                setRenaming,
+                setRemoving,
+                onDuplicate,
+                onOpenChange,
+              })}
+            />
           </div>
         </PopoverAnchor>
         <RowEditor
@@ -183,6 +169,39 @@ export function VariableRow({
       </Popover>
     </li>
   );
+}
+
+/**
+ * What the row's ⋯ menu does: rename in place, copy, and open the editor,
+ * at its remove step where asked.
+ */
+function menuActionsOf(row: {
+  setRenaming: (renaming: boolean) => void;
+  setRemoving: (removing: boolean) => void;
+  onDuplicate: () => void;
+  onOpenChange: (open: boolean) => void;
+}): RowMenuActions {
+  return {
+    onRename: () => row.setRenaming(true),
+    onDuplicate: row.onDuplicate,
+    onEdit: startRemove => {
+      row.setRemoving(startRemove);
+      row.onOpenChange(true);
+    },
+  };
+}
+
+/** The row's ⋯ menu, where its variable can be changed; nothing otherwise. */
+function RowActions({
+  changing,
+  token,
+  ...menu
+}: Omit<React.ComponentProps<typeof RowMenu>, "token"> & {
+  changing: boolean;
+  token: SiteToken | undefined;
+}): React.JSX.Element | null {
+  if (!changing || token === undefined) return null;
+  return <RowMenu token={token} {...menu} />;
 }
 
 /**
@@ -279,17 +298,37 @@ function RowEditor({
  */
 function rowKeys(
   changing: boolean,
-  on: { rename: () => void; menu: () => void }
+  on: {
+    /** Starts renaming in place; called with `true`. */
+    rename: (renaming: true) => void;
+    /** Opens the row's ⋯ menu; called with `true`. */
+    menu: (open: true) => void;
+    /** A colour's move one place up or down, by Alt+Up and Alt+Down. */
+    move?: ((by: -1 | 1) => void) | undefined;
+  }
 ): ((event: React.KeyboardEvent) => void) | undefined {
   if (!changing) return undefined;
   return event => {
+    const by = moveBy(event);
+    if (by !== undefined && on.move !== undefined) {
+      event.preventDefault();
+      on.move(by);
+      return;
+    }
     const menu =
       event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey);
     if (event.key !== "F2" && !menu) return;
     event.preventDefault();
-    if (menu) on.menu();
-    else on.rename();
+    if (menu) on.menu(true);
+    else on.rename(true);
   };
+}
+
+/** Which way Alt+Up or Alt+Down moves a row, or nothing for any other key. */
+function moveBy(event: React.KeyboardEvent): -1 | 1 | undefined {
+  if (!event.altKey) return undefined;
+  if (event.key === "ArrowUp") return -1;
+  return event.key === "ArrowDown" ? 1 : undefined;
 }
 
 /**
@@ -386,12 +425,7 @@ function RenameField({
   const [issue, setIssue] = React.useState<string | undefined>();
   // Once: Enter's own close takes the field away, and the blur that follows
   // must not keep or cancel a second time.
-  const done = React.useRef(false);
-  const field = React.useRef<HTMLInputElement>(null);
-  React.useEffect(() => {
-    field.current?.focus();
-    field.current?.select();
-  }, []);
+  const { field, done } = useInPlaceField();
   const finish = (refocus: boolean): void => {
     done.current = true;
     onDone();
@@ -489,6 +523,45 @@ function ColourSwatch({
       }}
     />
   );
+}
+
+/**
+ * The row's button, or while it is renamed in place, the name field that
+ * takes its place.
+ */
+function RowNameOrField({
+  renaming,
+  onRenamed,
+  onChange,
+  ...row
+}: React.ComponentProps<typeof RowTrigger> & {
+  renaming: boolean;
+  onRenamed: () => void;
+  onChange: (tokens: SiteTokenSet) => void;
+}): React.JSX.Element {
+  const { entry, token, tokens, button } = row;
+  if (!renaming || token === undefined) return <RowTrigger {...row} />;
+  return (
+    <RenameField
+      entry={entry}
+      token={token}
+      tokens={tokens}
+      onChange={onChange}
+      onDone={onRenamed}
+      row={button}
+    />
+  );
+}
+
+/** The editor's open change, a close leaving the remove step behind. */
+function closingEndsRemove(
+  setRemoving: (removing: boolean) => void,
+  onOpenChange: (open: boolean) => void
+): (open: boolean) => void {
+  return open => {
+    if (!open) setRemoving(false);
+    onOpenChange(open);
+  };
 }
 
 /**
@@ -660,7 +733,10 @@ function RowTail({
       {words}
     </span>
   );
-  if (variableGroupOf(entry.row) !== "spacing" || entry.row.kind !== "dimension") {
+  if (
+    variableGroupOf(entry.row) !== "spacing" ||
+    entry.row.kind !== "dimension"
+  ) {
     return chip;
   }
   // A spacing draws a bar as long as it is at the desktop width.

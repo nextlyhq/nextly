@@ -1011,3 +1011,44 @@ describe("the site's fluid range", () => {
     }
   });
 });
+
+describe("colour groups and the colour order", () => {
+  const brand = {
+    name: "color.brand",
+    kind: "color",
+    values: { light: "#123456" },
+  };
+
+  it("keeps a colour's group and the site's order", () => {
+    const checked = checkStoredTokens({
+      tokens: [{ ...brand, group: "Accents" }],
+      order: ["color.brand", "color.text"],
+    });
+    expect(checked.issues).toEqual([]);
+    expect(checked.value?.tokens[0]?.group).toBe("Accents");
+    expect(checked.value?.order).toEqual(["color.brand", "color.text"]);
+  });
+
+  it("refuses a group that is no name, saying why", () => {
+    for (const group of ["", "   ", 7, "x".repeat(500)]) {
+      const issues = checkStoredTokens({
+        tokens: [{ ...brand, group }],
+      }).issues;
+      expect(issues.join(" "), String(group)).toMatch(/group/);
+    }
+  });
+
+  it("refuses an order that is not a list of different code names", () => {
+    for (const order of [
+      "color.brand",
+      ["color.brand", "color.brand"],
+      ["color.brand", 3],
+      ["x".repeat(500)],
+    ]) {
+      expect(
+        checkStoredTokens({ tokens: [brand], order }).issues.join(" "),
+        JSON.stringify(order)
+      ).toMatch(/order/);
+    }
+  });
+});
