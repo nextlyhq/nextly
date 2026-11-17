@@ -29,7 +29,7 @@ import {
   getLoggerFromDI,
   getMigrationJournalFromDI,
 } from "../../../dispatcher/helpers/di";
-import { NextlyError } from "../../../errors";
+import { NextlyError, type ValidationPublicData } from "../../../errors";
 import { getProductionNotifier } from "../../../runtime/notifications/index";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { consoleLogger } from "../../../shared/types";
@@ -611,13 +611,16 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
 
 /**
  * The refusal of an apply the pipeline did not complete: another table's drift named, with the
- * way on, or else the push's own words, under the code its status already was.
+ * way on, or else the push's own words, under the code its status already was. A precondition the
+ * push refused carries each refusal by field and code, which the admin reads to say which field
+ * and why; those are passed on.
  */
 function refusedApply(
   slug: string,
   drifted: readonly string[],
-  message: string
+  error: { code: string; message: string; details?: unknown }
 ): NextlyError {
+  const { message } = error;
   // Another table stopped it: named, with what differs and the way on, so the change is not
   // taken for the one refused.
   if (drifted.length > 0) {
@@ -634,7 +637,32 @@ function refusedApply(
   return new NextlyError({
     code: "NEXTLY_MIGRATION_APPLY_FAILED",
     publicMessage: message,
+    ...(error.code === "PRECONDITION_FAILED" && isValidationData(error.details)
+      ? { publicData: error.details }
+      : {}),
   });
+}
+
+/** Whether a refused precondition's payload is the validation errors, each by path and code. */
+function isValidationData(data: unknown): data is ValidationPublicData {
+  if (data === null || typeof data !== "object" || !("errors" in data)) {
+    return false;
+  }
+  const { errors } = data;
+  return (
+    Array.isArray(errors) &&
+    errors.every(
+      (e: unknown) =>
+        e !== null &&
+        typeof e === "object" &&
+        "path" in e &&
+        typeof e.path === "string" &&
+        "code" in e &&
+        typeof e.code === "string" &&
+        "message" in e &&
+        typeof e.message === "string"
+    )
+  );
 }
 
 /** `desired` with this collection's fields replaced, as a new schema the pipeline has not seen. */
@@ -885,7 +913,7 @@ async function applyHoldingSchemaLock(
 
   const result = await apply(desired, "ui", { promptChannel: "auto" });
   if (!result.success) {
-    throw refusedApply(slug, promptDispatcher.drifted, result.error.message);
+    throw refusedApply(slug, promptDispatcher.drifted, result.error);
   }
   const filled = await fillAddedFields({
     adapter,
@@ -897,7 +925,7 @@ async function applyHoldingSchemaLock(
       }),
   });
   if (filled !== undefined && !filled.success) {
-    throw refusedApply(slug, promptDispatcher.drifted, filled.error.message);
+    throw refusedApply(slug, promptDispatcher.drifted, filled.error);
   }
 
   // The push excludes companion `_locales` tables from its diff: the localization layer owns
