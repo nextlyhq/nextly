@@ -37,8 +37,6 @@ vi.mock("@admin/services/seedApi", () => ({
   },
 }));
 vi.mock("@admin/hooks/queries/useSingles", () => ({
-  // No Single's fields are known here, so "Fill in" opens each one's form.
-  useEverySingle: () => ({ data: [] }),
   useSingles: () => ({
     data: {
       items: [
@@ -47,6 +45,19 @@ vi.mock("@admin/hooks/queries/useSingles", () => ({
       ],
     },
   }),
+}));
+
+// "Fill in" opens a Single where the admin's one "open this document" rule
+// does: answered here as the rule would for a footer whose main field is a
+// page layout, and as the form for any other Single.
+vi.mock("@admin/lib/navigation/useDocumentAddress", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  useDocumentAddress:
+    () =>
+    ({ kind, slug }: { kind: string; slug: string }) =>
+      kind === "single" && slug === "footer"
+        ? "/admin/singles/footer/builder?field=layout"
+        : `/admin/singles/${slug}`,
 }));
 
 import { SetupCard } from "./SetupCard";
@@ -304,7 +315,10 @@ describe("the setup card's checklist", () => {
     )!;
     expect(footer).toHaveTextContent("Not filled in yet");
     const fill = within(footer).getByRole("link", { name: "Fill in: footer" });
-    expect(fill).toHaveAttribute("href", "/admin/singles/footer");
+    expect(fill).toHaveAttribute(
+      "href",
+      "/admin/singles/footer/builder?field=layout"
+    );
     expect(fill).toHaveClass("h-7", "border-control-border");
     fireEvent.click(show);
     expect(screen.queryByRole("list", { name: /Your Singles/ })).toBeNull();

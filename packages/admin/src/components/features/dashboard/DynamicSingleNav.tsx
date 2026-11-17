@@ -26,6 +26,27 @@ import {
   singleDisplayName,
 } from "@admin/lib/sidebar-landing";
 import { cn } from "@admin/lib/utils";
+import type { ApiSingle } from "@admin/types/entities";
+
+/**
+ * A Single removed from code stays listed, marked, with the step that retires
+ * it as the link's description: what the mark needs, or null for any other
+ * Single. Kept apart from the list's item so the item's own branching stays small.
+ */
+function removedMarkOf(
+  single: ApiSingle,
+  displayName: string
+): {
+  entity: { kind: "single"; label: string; slug: string };
+  state: ApiSingle["removedFromCodeState"];
+} | null {
+  return isRemovedFromCode(single)
+    ? {
+        entity: { kind: "single", label: displayName, slug: single.slug },
+        state: single.removedFromCodeState,
+      }
+    : null;
+}
 
 interface DynamicSingleNavProps {
   isActive: (href?: string) => boolean;
@@ -82,18 +103,7 @@ export function DynamicSingleNav({
         );
         const singlePinned = isPinned(single.slug);
         const displayName = singleDisplayName(single);
-        // A Single removed from code stays listed, marked, with the step that
-        // retires it as the link's description.
-        const removed = isRemovedFromCode(single)
-          ? {
-              entity: {
-                kind: "single" as const,
-                label: displayName,
-                slug: single.slug,
-              },
-              state: single.removedFromCodeState,
-            }
-          : null;
+        const removed = removedMarkOf(single, displayName);
 
         return (
           <SidebarMenuItem key={single.slug}>

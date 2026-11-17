@@ -101,15 +101,17 @@ test.describe("the Page Builder's own screen", () => {
     page,
   }) => {
     await seed(page, [heading("stays", "Stays"), heading("goes", "Goes")]);
-    // Arrived by clicks from elsewhere in the admin, as an author does: a link
-    // to the Homepage opens its builder, Open as form its form, and the card
-    // the builder again. The history holds somewhere off the page, then the
-    // page's builder, its form and its builder.
-    await gotoAdmin(page, "/");
-    await page
-      .locator('a[href="/admin/singles/homepage/builder?field=layout"]')
-      .first()
-      .click();
+    // Arrived by clicks from elsewhere in the admin, as an author does: the
+    // Content screen's row opens the Homepage's builder, Open as form its
+    // form, and the card the builder again. The history holds somewhere off
+    // the page, then the page's builder, its form and its builder.
+    await gotoAdmin(page, "/content");
+    const row = page
+      .getByRole("table", { name: "Singles" })
+      .getByRole("link", { name: "Homepage", exact: true });
+    // Drawn with the builder's address once the reader's access has arrived.
+    await expect(row).toHaveAttribute("href", BUILDER_URL);
+    await row.click();
     await expect(page).toHaveURL(BUILDER_URL);
     await openAsForm(page);
     await expect(page).toHaveURL(FORM_URL);
