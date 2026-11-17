@@ -10,8 +10,10 @@
  * cannot see becomes a placeholder it can remove but not open
  * (`lib/form/stored-references`).
  *
- * The two reads are separate requests, so the merge is only made from a pair
- * that describes one version of the document. Until a pair settles, the last
+ * The two reads are kept apart, each under its own key, though the populated
+ * read usually carries the stored one in its answer (`stored-entry-seed`), so
+ * the merge is only made from a pair that describes one version of the
+ * document. Until a pair settles, the last
  * merge is kept: while a save is in flight, or a read is refetching, one read
  * can be newer than the other, and a merge of the two would put back a link
  * the save just removed, and the form would be reset to it.
@@ -32,18 +34,17 @@ import {
   populatedAmongStored,
   withStoredReferences,
 } from "@admin/lib/form/stored-references";
-import { entryApi, entryKeys } from "@admin/services/entryApi";
+import { entryApi } from "@admin/services/entryApi";
 import { singleApi } from "@admin/services/singleApi";
 
+import {
+  STORED_REFERENCES,
+  storedEntryKey,
+  takeCarriedStored,
+} from "./stored-entry-seed";
 import { singleDocumentKeys } from "./useSingles";
 
 type Doc = Record<string, unknown>;
-
-/**
- * The depth-0 read is keyed under the document's own detail key, so whatever
- * invalidates that document after a save refetches this read with it.
- */
-const STORED_REFERENCES = "stored-references";
 
 /** Which document, in which language and view, the editor is reading. */
 interface ReadScope {
@@ -52,7 +53,11 @@ interface ReadScope {
   draft?: boolean;
 }
 
-/** A collection entry read at depth 0, as the edit page reads it otherwise. */
+/**
+ * A collection entry read at depth 0, as the edit page reads it otherwise:
+ * taken from the populated read's answer when that read carries it, and read
+ * on its own when none does.
+ */
 export function useStoredEntry({
   collectionSlug,
   entryId,
@@ -66,19 +71,19 @@ export function useStoredEntry({
   /** False holds the read back, as `useEntry`'s option does. */
   enabled?: boolean;
 }): UseQueryResult<Doc, Error> {
+  const queryKey = storedEntryKey(collectionSlug ?? "", entryId ?? "", {
+    locale,
+    fallbackLocale,
+    draft,
+  });
   return useQuery<Doc, Error>({
-    queryKey: [
-      ...entryKeys.detailScoped(collectionSlug ?? "", entryId ?? "", {
-        locale,
-        fallbackLocale,
-        draft,
-      }),
-      STORED_REFERENCES,
-    ],
+    queryKey,
     queryFn: async () => {
       if (!collectionSlug || !entryId) {
         throw new Error("Collection and entry ID are required");
       }
+      const carried = await takeCarriedStored(queryKey);
+      if (carried !== undefined) return carried;
       return await entryApi.findByID(collectionSlug, entryId, {
         depth: 0,
         ...(locale ? { locale } : {}),

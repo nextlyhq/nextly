@@ -107,6 +107,7 @@ import {
   getLoggerFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
+import { entryWithStored } from "../helpers/entry-with-stored";
 import { readRequestLocalized } from "../helpers/request-localized";
 import {
   paginatedResponseToMeta,
@@ -1563,8 +1564,9 @@ const COLLECTIONS_METHODS: Record<
       // path where a missing user matters most: without it the gate falls
       // through to the permission-less default on a direct read.
       const user = readAuthenticatedUser();
-
-      const result = await svc.getEntry({
+      // Who reads, which entry, and in which language and view: shared by the
+      // entry's read and, with `?stored=1`, its stored read.
+      const scope = {
         // The request this operation's hooks are told about.
         request,
         collectionName: p.collectionName,
@@ -1575,12 +1577,6 @@ const COLLECTIONS_METHODS: Record<
         // permissions of the user that owns it, matching listEntries, countEntries
         // and the publish gate.
         authenticatedScope: readAuthenticatedScope(),
-        depth:
-          p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,
-        select: parseSelectParam(p.select),
-        richTextFormat: parseRichTextFormat(p.richTextFormat),
-        // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
-        richTextStyles: parseRichTextStyles(p.richTextStyles),
         status,
         // `?draft=true` overlays the pending working draft in place of the live
         // row (draft/published split), matching Payload's read-side `draft`
@@ -1591,6 +1587,21 @@ const COLLECTIONS_METHODS: Record<
         // disables fallback. Non-localized collections ignore both.
         locale: p.locale,
         fallbackLocale: p["fallback-locale"],
+      };
+      const read = async (params: Parameters<typeof svc.getEntry>[0]) =>
+        unwrapServiceResult(await svc.getEntry(params), {
+          collectionName: p.collectionName,
+          entryId: p.entryId,
+        });
+
+      const entry = read({
+        ...scope,
+        depth:
+          p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,
+        select: parseSelectParam(p.select),
+        richTextFormat: parseRichTextFormat(p.richTextFormat),
+        // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
+        richTextStyles: parseRichTextStyles(p.richTextStyles),
         // `?fallback=document`: answer in the first published language of the
         // chain where the entry is not published in the requested one.
         wholeDocumentFallback: parseFallbackParam(p.fallback),
@@ -1605,11 +1616,16 @@ const COLLECTIONS_METHODS: Record<
         details:
           isTruthyParam(p.details) && readAuthenticatedActor()?.type === "user",
       });
-      const entry = unwrapServiceResult(result, {
-        collectionName: p.collectionName,
-        entryId: p.entryId,
-      });
-      return respondDoc(entry);
+      if (!isTruthyParam(p.stored)) return respondDoc(await entry);
+      // `?stored=1` attaches `_stored`: the entry as a depth-0 read in the
+      // same language and view gives it, every link as stored, read beside
+      // the entry's own read as the same caller. Either failing fails both.
+      return respondDoc(
+        await entryWithStored(
+          entry as Promise<object>,
+          read({ ...scope, depth: 0 })
+        )
+      );
     },
   },
   updateEntry: {

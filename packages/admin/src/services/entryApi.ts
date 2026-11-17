@@ -562,7 +562,14 @@ export const entryApi = {
     options?: Pick<
       FindParams,
       "depth" | "locale" | "fallbackLocale" | "draft" | "translationStatus"
-    >,
+    > & {
+      /**
+       * Also answer with the entry as stored, as a depth-0 read in the same
+       * language and view gives it, under `_stored`. A collection entry's
+       * read only; the users read ignores it.
+       */
+      stored?: boolean;
+    },
     { knownSingle = false }: CollectionReadOptions = {}
   ): Promise<Entry> => {
     const query = new URLSearchParams();
@@ -576,6 +583,7 @@ export const entryApi = {
     if (options?.draft !== undefined) query.set("draft", String(options.draft));
     // Opt into the per-locale translation-status overview map.
     if (options?.translationStatus) query.set("translation-status", "1");
+    if (options?.stored && collectionSlug !== "users") query.set("stored", "1");
     // Why: admin context is trusted (the route is gated by
     // requireCollectionAccess). Pass `status=all` so the server's default
     // published-only filter doesn't 404 the admin out of its own draft

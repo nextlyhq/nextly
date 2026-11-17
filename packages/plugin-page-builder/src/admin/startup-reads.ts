@@ -67,8 +67,13 @@ async function askRoute(reads: readonly string[]): Promise<Answers> {
 
 /** One start-up request, for one person. */
 interface Started {
-  readonly userId: string;
-  readonly key: string;
+  /**
+   * Whom it was read for; `null` for one sent as the admin loaded, before
+   * anyone asked, until the editor that opens first claims it.
+   */
+  userId: string | null;
+  /** The reads it names, sorted, as one string. */
+  readonly readsKey: string;
   readonly reads: ReadonlySet<string>;
   readonly answers: Promise<Answers | undefined>;
   readonly taken: Set<string>;
@@ -116,11 +121,47 @@ export function startBuilderReads(
     forgetStartedReads();
     return;
   }
-  const key = JSON.stringify([userId, [...reads].sort()]);
-  if (started?.key === key && handsOff(started, now())) return;
+  const readsKey = JSON.stringify([...reads].sort());
+  if (started?.readsKey === readsKey && handsOff(started, now())) {
+    // Sent as the admin loaded, for whoever opens the builder first: this
+    // editor, whose person is the session's that sent it.
+    if (started.userId === null) {
+      started.userId = userId;
+      changed();
+    }
+    if (started.userId === userId) return;
+  }
+  started = startedFor(userId, reads, readsKey, ask, now);
+  changed();
+}
+
+/**
+ * Send the builder's start-up read for `reads` as the admin loads, at an
+ * address that opens the builder, before any editor asks: the first editor to
+ * open with the same reads, while it still hands its answers out, takes it as
+ * its own (`startBuilderReads`). Nothing is handed out before that.
+ */
+export function startEarlyBuilderReads(
+  reads: readonly string[],
+  ask: AskStartup = askRoute,
+  now: () => number = Date.now
+): void {
+  if (reads.length === 0 || started !== undefined) return;
+  started = startedFor(null, reads, JSON.stringify([...reads].sort()), ask, now);
+  changed();
+}
+
+/** A start-up request for `reads`, sent now. */
+function startedFor(
+  userId: string | null,
+  reads: readonly string[],
+  readsKey: string,
+  ask: AskStartup,
+  now: () => number
+): Started {
   const entry: Started = {
     userId,
-    key,
+    readsKey,
     reads: new Set(reads),
     taken: new Set(),
     answers: ask(reads).then(
@@ -133,8 +174,7 @@ export function startBuilderReads(
     entry.settledAt = now();
     if (started === entry) changed();
   });
-  started = entry;
-  changed();
+  return entry;
 }
 
 /** Drop the start-up answers: another person signed in, or nobody is. */
@@ -152,6 +192,8 @@ function handingOut(
 ): Started | undefined {
   const entry = started;
   if (entry === undefined || !entry.reads.has(path)) return undefined;
+  // Not yet claimed by an editor: whom it was read for is not known.
+  if (entry.userId === null) return undefined;
   if (userId !== undefined && userId !== entry.userId) return undefined;
   return handsOff(entry, now) ? entry : undefined;
 }

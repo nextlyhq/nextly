@@ -42,6 +42,7 @@ import { TRANSFER_IMPORT_COMPONENT } from "../transfer/transfer-contract";
 import type { BindingsToFixCard as BindingsToFixCardPart } from "./bindings-report/BindingsToFixCard";
 import type { BindingsToFixPage as BindingsToFixPagePart } from "./bindings-report/BindingsToFixPage";
 import type { BlocksField as BlocksFieldPart } from "./BlocksField";
+import { startBuilderOpen } from "./builder-open-start";
 import type {
   ComponentListTools as ComponentListToolsPart,
   ComponentStoreDeleteHost as ComponentStoreDeleteHostPart,
@@ -50,7 +51,7 @@ import type {
 import type { PageBuilderView as PageBuilderViewPart } from "./editor/PageBuilderView";
 import { registerEntryDesignColumn } from "./entry-design-column";
 import type { EntryDesignSection as EntryDesignSectionPart } from "./EntryDesignSection";
-import { lazyPart, withEditorStylesheet } from "./lazy-part";
+import { lazyPart, preloadPart, withEditorStylesheet } from "./lazy-part";
 import type { PageBuilderOverview as PageBuilderOverviewPart } from "./overview/PageBuilderOverview";
 import { PUBLISHING_ACTIONS } from "./publishing-actions";
 import type { RemoveLayoutToolbarSlot as RemoveLayoutToolbarSlotPart } from "./RemoveLayoutAction";
@@ -195,6 +196,18 @@ registerExportActions();
 
 // The Design column on the lists of collections that have a template.
 registerEntryDesignColumn();
+
+// Opened straight at the builder's address: its code and its start-up read
+// are asked for now, as the admin loads, rather than once it is drawn.
+startBuilderOpen(typeof window === "undefined" ? undefined : window.location, {
+  preload: () => preloadPart(PageBuilderView),
+  startReads: async ({ locale, onCollection }) => {
+    const { startEarlyBuilderOpeningReads } = await import(
+      "./editor/builder-startup"
+    );
+    startEarlyBuilderOpeningReads(locale, onCollection);
+  },
+});
 
 export {
   BindingsToFixCard,
