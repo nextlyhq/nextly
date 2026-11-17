@@ -168,6 +168,31 @@ describe("the pages a header & footer set is used on", () => {
     expect(Object.keys(counts)).toEqual(["main"]);
   });
 
+  it("count a page once when a paged read returned its row twice", () => {
+    // Offset paging repeats a row when a page is written between two reads.
+    const twice = page("landing");
+    const counts = countSetPages(
+      ["main", "landing"],
+      whole({ pages: [twice, page(null), twice] }),
+      site({ defaultLayout: "main", published: ["main", "landing"] })
+    );
+
+    expect(counts).toEqual({
+      main: { pages: 1, floor: false },
+      landing: { pages: 1, floor: false },
+    });
+  });
+
+  it("keep the default whole for a page naming it while the bounded published read stopped", () => {
+    const counts = countSetPages(
+      ["main"],
+      whole({ pages: [page("main")] }),
+      site({ defaultLayout: "main", published: [], publishedComplete: false })
+    );
+
+    expect(counts.main).toEqual({ pages: 1, floor: false });
+  });
+
   it("are floors, every one, when the page read stopped at its bound", () => {
     const counts = countSetPages(
       ["main", "landing"],

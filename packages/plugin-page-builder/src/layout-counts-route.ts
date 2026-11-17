@@ -73,9 +73,9 @@ function idsOf(rows: readonly unknown[]): string[] {
 
 /**
  * Read the counts for the caller: the sets they may read, then, only if there
- * is one, the default, the published sets (only where a default can be fallen
- * back to) and every stored page's choice. A fixed number of bounded reads,
- * whatever the number of pages.
+ * is one, the default, the published sets and every stored page's choice, or,
+ * where the caller may not read the default, only the pages naming their
+ * sets. A fixed number of bounded reads, whatever the number of pages.
  */
 export async function readLayoutPageCounts(
   ctx: LayoutCountsContext,
@@ -110,16 +110,18 @@ export async function readLayoutPageCounts(
     layouts,
     settings,
   });
-  const published =
-    defaultLayout === null
-      ? // Nothing falls back where there is no default, so whether a named
-        // set is published decides nothing.
-        { ids: new Set<string>(), complete: true }
-      : await publishedSets(nextly, layouts, bounds.published);
+  // The pages falling back to the default count for the default alone, so
+  // where the caller may not read it (or there is none) they decide nothing:
+  // the pages naming the caller's sets are the whole answer, and whether a
+  // named set is published is never asked.
+  const answersDefault = defaultLayout !== null && sets.includes(defaultLayout);
+  const published = answersDefault
+    ? await publishedSets(nextly, layouts, bounds.published)
+    : { ids: new Set<string>(), complete: true };
   const pages = await readPageLayoutRows(
     nextly,
     ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
-    { naming: null, bound: bounds.pages }
+    { naming: answersDefault ? null : sets, bound: bounds.pages }
   );
   return countSetPages(sets, pages, { defaultLayout, published });
 }

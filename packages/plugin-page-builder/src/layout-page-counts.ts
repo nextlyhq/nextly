@@ -18,7 +18,8 @@
  * count a floor. A published-sets read that stopped cannot place a page
  * naming a set it did not return: that set may be published past the bound,
  * so the page is left out of the default's count, which becomes a floor. A
- * count is never more than the truth.
+ * page a paged read returned twice is counted once. A count is never more
+ * than the truth.
  *
  * @module layout-page-counts
  */
@@ -58,7 +59,14 @@ export function countSetPages(
   site: SetCountSite
 ): LayoutPageCountsResponse {
   const tally: Tally = { counts: new Map(), defaultUnplaced: false };
-  for (const page of read.pages) countPage(page, site, tally);
+  // Each page once: a paged read repeats a row when a page is written
+  // between two of its reads, and a count is never more than the truth.
+  const seen = new Set<string>();
+  for (const page of read.pages) {
+    if (seen.has(page.id)) continue;
+    seen.add(page.id);
+    countPage(page, site, tally);
+  }
   const answer: Record<string, LayoutPageCount> = {};
   for (const set of sets) {
     answer[set] = {

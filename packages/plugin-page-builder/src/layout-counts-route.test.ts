@@ -161,6 +161,26 @@ describe("the set counts read", () => {
     expect(calls.some(call => call.status === "published")).toBe(false);
   });
 
+  it("reads only the pages naming the caller's sets, and no published sets, when the caller may not read the default", async () => {
+    const { nextly, calls } = fake({
+      ...site,
+      hidden: ["main", "secret"],
+    });
+
+    const answer = await readLayoutPageCounts(context(), nextly);
+
+    // The default's id is not theirs to learn, so its pages decide nothing.
+    expect(answer).toEqual({
+      landing: { pages: 1, floor: false },
+      unfinished: { pages: 1, floor: false },
+    });
+    expect(calls.some(call => call.status === "published")).toBe(false);
+    const pages = calls.find(call => call.collection === "pages");
+    expect(pages?.where).toEqual({
+      layout: { in: ["landing", "unfinished"] },
+    });
+  });
+
   it("says the counts are floors when the page read stopped at its bound", async () => {
     const { nextly } = fake(site);
 
