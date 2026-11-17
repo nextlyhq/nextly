@@ -610,9 +610,7 @@ function SelectionInspector({
     breakpoint,
     breakpoints: styleOnly.breakpoints,
     reported:
-      reportedStyle?.nodeId === block.nodeId
-        ? reportedStyle.sections
-        : undefined,
+      reportedStyle?.nodeId === block.nodeId ? reportedStyle : undefined,
   });
 
   return (
@@ -818,14 +816,14 @@ function blockMatch(
     breakpoint: BreakpointId | undefined;
     breakpoints: BreakpointSet | undefined;
     /** What the Style tab draws, while it is open, for its target. */
-    reported: readonly StyleSection[] | undefined;
+    reported: ReportedStyle | undefined;
   }
 ): SettingsMatch {
   if (!filtering(filter)) return settingsMatch([], filter);
   // The Style tab's own sections while it is open: the target it edits may
   // be a shared style. Closed, it edits the block, read here the same way.
   const styleSections =
-    at.reported ??
+    at.reported?.sections ??
     inspectStyle(document, block.nodeId, {
       state: at.state ?? "base",
       breakpoint: at.breakpoint ?? BASE_BREAKPOINT,
@@ -835,13 +833,20 @@ function blockMatch(
   return settingsMatch(
     [
       ...contentEntries(block, node, at.breakpoints),
-      ...styleEntries(styleSections, block, {
-        node,
-        at: {
-          state: at.state ?? "base",
-          breakpoint: at.breakpoint ?? BASE_BREAKPOINT,
-        },
-      }),
+      ...styleEntries(
+        styleSections,
+        block,
+        // A shared style draws no block shortcuts: only the block's own do.
+        at.reported?.shared === true
+          ? undefined
+          : {
+              node,
+              at: {
+                state: at.state ?? "base",
+                breakpoint: at.breakpoint ?? BASE_BREAKPOINT,
+              },
+            }
+      ),
       ...advancedEntries(block, node),
     ],
     filter

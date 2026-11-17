@@ -6330,5 +6330,7 @@ describe("what the Style tab tells the panel's filter", () => {
       .map(property => property.property);
     expect(set).toContain("color");
     expect(set).not.toContain("backgroundColor");
+    // And says a shared style is the target, which draws no block shortcuts.
+    expect(report.mock.lastCall?.[0]?.shared).toBe(true);
   });
 });

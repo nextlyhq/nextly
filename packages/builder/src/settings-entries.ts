@@ -25,6 +25,7 @@ import {
   SIZE_LABELS,
 } from "./block-shortcuts-field";
 import { BUILT_IN_WRITES } from "./code-hints";
+import { CONTENT_WIDTH_CHOICES } from "./content-width-control";
 import { keywordLabel } from "./style-keyword-labels";
 import { COLUMNS_ROW, stackOf, stackTiers } from "./columns-layout";
 import {
@@ -239,6 +240,21 @@ export function advancedEntries(
 }
 
 /**
+ * A block setting Style draws with a control of its own, given that
+ * control's choices: Content width's Boxed and Full width.
+ */
+function withDrawnChoices(row: IndexedRow): IndexedRow {
+  if (row.id !== CONTAINED_PROP) return row;
+  return {
+    ...row,
+    options: CONTENT_WIDTH_CHOICES.map(choice => choice.label),
+  };
+}
+
+/** The prop Content width's choice is stored in. */
+const CONTAINED_PROP = "contained";
+
+/**
  * The shortcuts the Size section draws above its fields: a Section's Height,
  * a Button's Size and Full width, by the words they're drawn with, each set
  * where the block stores what it writes at the edited address.
@@ -334,7 +350,7 @@ export function styleEntries(
       ...(section.key === "size" && shortcuts !== undefined
         ? shortcutRows(shortcuts.node, shortcuts.at)
         : []),
-      ...drawnRows(own, new Set()),
+      ...drawnRows(own, new Set()).map(withDrawnChoices),
       ...section.properties.map(property => ({
         id: property.property,
         label: property.label,

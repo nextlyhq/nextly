@@ -485,7 +485,11 @@ function StyleInspectorBody({
   });
 
   // What the panel's filter keeps in Style: what these controls draw.
-  useReportStyle(inspection?.nodeId, inspection?.sections);
+  useReportStyle(
+    inspection?.nodeId,
+    inspection?.sections,
+    target.kind === "shared"
+  );
 
   const chooseForm = (property: string, path: readonly string[], arm: number) =>
     setChosenForms(current => ({ ...current, [formKey(property, path)]: arm }));

@@ -424,6 +424,8 @@ export function ChangedElsewhere({
 export interface ReportedStyle {
   readonly nodeId: string;
   readonly sections: readonly StyleSection[];
+  /** Whether a shared style is the target, which draws no block shortcuts. */
+  readonly shared: boolean;
 }
 
 /**
@@ -455,7 +457,8 @@ function sectionsSignature(sections: readonly StyleSection[]): string {
  */
 export function useReportStyle(
   nodeId: string | undefined,
-  sections: readonly StyleSection[] | undefined
+  sections: readonly StyleSection[] | undefined,
+  shared = false
 ): void {
   const report = React.useContext(StyleReportContext);
   // Told only while the panel is filtered: unfiltered, nothing reads it, and
@@ -468,8 +471,10 @@ export function useReportStyle(
   React.useEffect(() => {
     if (report === undefined || nodeId === undefined) return;
     const now = latest.current;
-    report(on && now !== undefined ? { nodeId, sections: now } : undefined);
-  }, [report, nodeId, signature, on]);
+    report(
+      on && now !== undefined ? { nodeId, sections: now, shared } : undefined
+    );
+  }, [report, nodeId, signature, on, shared]);
   React.useEffect(() => () => report?.(undefined), [report]);
 }
 

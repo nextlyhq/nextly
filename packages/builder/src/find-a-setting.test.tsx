@@ -391,3 +391,13 @@ describe("a Section's Height presets over its min height", () => {
     expect(preset.closest("[hidden]")).toBeNull();
   });
 });
+
+describe("Content width by its choices", () => {
+  it("is found by Boxed", () => {
+    mount("section");
+    openTab("Style");
+    type("boxed");
+    const control = screen.getByRole("radiogroup", { name: "Content width" });
+    expect(control.closest("[hidden]")).toBeNull();
+  });
+});
