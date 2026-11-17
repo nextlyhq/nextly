@@ -25,6 +25,8 @@ import {
   type RegionCardFacts,
 } from "../page-layout";
 
+import type { EditedLook, LookEditingState } from "./look-editing";
+
 /** The selected region and what reads it. */
 export interface SelectedRegion {
   readonly selection: RegionSelection;
@@ -39,16 +41,48 @@ export interface SelectedRegion {
   readonly selectOnCanvas: EditorState["select"];
 }
 
-/** The region selection for the regions drawn around the page. */
-function useSelectedRegion(
-  editor: Pick<EditorState, "selectedId" | "select">,
-  drawn: PageLayoutRegions
-): SelectedRegion {
-  const areas = useMemo(
-    (): readonly RegionArea[] => drawn.canvas.map(region => region.area),
-    [drawn.canvas]
+/**
+ * A look edited on its own and a selected region, which both take the
+ * sidebar: choosing either leaves the other, so the sidebar shows what the
+ * author chose last.
+ */
+export function useLookBesideRegion(
+  look: LookEditingState,
+  region: RegionSelection
+): { lookEditing: LookEditingState; selection: RegionSelection } {
+  const { edit, exit } = look;
+  const { select, clear } = region;
+  const editLook = useCallback(
+    (next: EditedLook) => {
+      clear();
+      edit(next);
+    },
+    [clear, edit]
   );
-  const selection = useRegionSelection(editor, areas);
+  const selectRegion = useCallback(
+    (area: RegionArea) => {
+      exit();
+      select(area);
+    },
+    [exit, select]
+  );
+  const lookEditing = useMemo(
+    () => ({ ...look, edit: editLook }),
+    [look, editLook]
+  );
+  const selection = useMemo(
+    () => ({ ...region, select: selectRegion }),
+    [region, selectRegion]
+  );
+  return { lookEditing, selection };
+}
+
+/** What follows from the region selected, for the regions drawn. */
+function useSelectedRegion(
+  editor: Pick<EditorState, "select">,
+  drawn: PageLayoutRegions,
+  selection: RegionSelection
+): SelectedRegion {
   const { area, select, clear } = selection;
   const layers = useMemo(
     () =>
@@ -89,9 +123,24 @@ function useSelectedRegion(
 export function usePageRegions<T extends FieldValues>(
   control: Control<T>,
   canvasRoot: HTMLElement | null,
-  editor: Pick<EditorState, "selectedId" | "select">
-): PageLayoutRegions & { readonly selectedRegion: SelectedRegion } {
+  editor: Pick<EditorState, "selectedId" | "select">,
+  /** The look edited on its own, which a selected region leaves. */
+  look: LookEditingState
+): PageLayoutRegions & {
+  readonly selectedRegion: SelectedRegion;
+  /** The look edited on its own, leaving the region when one is chosen. */
+  readonly lookEditing: LookEditingState;
+} {
   const drawn = usePageLayoutRegions(control, canvasRoot);
-  const selectedRegion = useSelectedRegion(editor, drawn);
-  return useMemo(() => ({ ...drawn, selectedRegion }), [drawn, selectedRegion]);
+  const areas = useMemo(
+    (): readonly RegionArea[] => drawn.canvas.map(region => region.area),
+    [drawn.canvas]
+  );
+  const region = useRegionSelection(editor, areas);
+  const { lookEditing, selection } = useLookBesideRegion(look, region);
+  const selectedRegion = useSelectedRegion(editor, drawn, selection);
+  return useMemo(
+    () => ({ ...drawn, selectedRegion, lookEditing }),
+    [drawn, selectedRegion, lookEditing]
+  );
 }

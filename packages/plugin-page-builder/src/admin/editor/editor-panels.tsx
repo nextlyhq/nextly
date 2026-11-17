@@ -574,7 +574,12 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   const pageLayout = usePageLayoutSettings(page.control);
   // From the form's unsaved values, so a change of Layout redraws at once,
   // with the header or footer selected on the canvas or in Layers.
-  const layoutRegions = usePageRegions(page.control, page.canvasRoot, editor);
+  const layoutRegions = usePageRegions(
+    page.control,
+    page.canvasRoot,
+    editor,
+    useLookEditing(editor)
+  );
   /*
    * The entry's other fields, ALREADY DRAWN, or null when there are none.
    *
@@ -623,8 +628,9 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   // The Pages panel, and the request its rows send to open Settings.
   const pages = usePagesPanel(mount.initialDocument.kind === "page");
   // Which look the inspector edits on its own: chosen in the Design panel,
-  // left by selecting a block, by the bar's Back, or by Esc.
-  const lookEditing = useLookEditing(editor);
+  // left by selecting a block or a header or footer, by the bar's Back, or
+  // by Esc. Choosing one leaves a selected header or footer.
+  const { lookEditing } = layoutRegions;
   const { previewMode, pictureSession } = useDrawnLook();
   return {
     entryFields,

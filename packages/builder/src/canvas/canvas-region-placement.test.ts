@@ -52,9 +52,20 @@ describe("which corner inside a region its tag sits in", () => {
     expect(
       regionMarkPlacement({ edge: { top: 900, bottom: 972 }, height, viewport })
     ).toBe("top");
-    // A region too short to show the tag under its own top: still the top.
+  });
+
+  it("draws no tag in a region shorter than the tag, rather than over the page", () => {
+    // A 48px header at 25%: 12px on screen, the tag 24px with its gap.
+    expect(
+      regionMarkPlacement({ edge: { top: 0, bottom: 12 }, height, viewport })
+    ).toBe("none");
+    // Scrolled half away, still too short for it.
     expect(
       regionMarkPlacement({ edge: { top: -10, bottom: 12 }, height, viewport })
+    ).toBe("none");
+    // CONTROL: exactly as tall as the tag takes it.
+    expect(
+      regionMarkPlacement({ edge: { top: 0, bottom: 24 }, height, viewport })
     ).toBe("top");
   });
 });

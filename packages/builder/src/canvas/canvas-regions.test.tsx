@@ -408,6 +408,11 @@ describe("the regions of a page's Layout on the canvas", () => {
     expect(rules).toMatch(
       /\.nx-canvas-region__tag\s*\{[^}]*position:\s*absolute;[^}]*pointer-events:\s*none;/
     );
+    // In a region too short for it the tag keeps its size, for the next
+    // measure, but is not seen.
+    expect(rules).toMatch(
+      /\.nx-canvas-region__tag\[data-placement="none"\]\s*\{\s*visibility:\s*hidden;/
+    );
     // Hover is the stylesheet's alone: no React state for the pointer.
     expect(rules).toMatch(/\.nx-canvas-region:hover::after/);
     expect(rules).toMatch(/\.nx-canvas-region\[data-selected\]::after/);

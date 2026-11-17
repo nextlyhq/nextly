@@ -698,6 +698,12 @@ ${EMPTY_LIST}[data-nx-list-visitors]:not([data-nx-list-still])::before {
   bottom: 0.25rem;
 }
 
+/* A region shorter than its tag shows none, rather than one over the page:
+   kept in the layout, so the next measure still reads its size. */
+.nx-canvas-region__tag[data-placement="none"] {
+  visibility: hidden;
+}
+
 .nx-canvas-region:is(:hover, :focus-visible) > .nx-canvas-region__tag,
 .nx-canvas-region[data-selected] > .nx-canvas-region__tag {
   display: block;
