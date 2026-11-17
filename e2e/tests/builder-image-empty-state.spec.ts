@@ -265,7 +265,7 @@ test.describe("a file dropped on an Image", () => {
       frame,
       PDF
     );
-    await expect(page.getByRole("alert")).toHaveText(
+    await expect(page.locator(".nx-image-state").getByRole("alert")).toHaveText(
       "That file isn't an image"
     );
     expect(await picture.getAttribute("src")).toBe(before);
