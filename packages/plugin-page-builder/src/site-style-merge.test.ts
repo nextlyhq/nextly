@@ -285,6 +285,27 @@ describe("merging sizes made with Fluid… and the fluid range", () => {
     );
   });
 
+  it("writes a fluid Site text row again across the range the merge kept", () => {
+    // Mine changed the range; theirs added a fluid Heading 2 across the old
+    // one. Kept as theirs wrote it, the row would grow between the old widths
+    // while Fluid… shows the new ones.
+    const h2 = (range: typeof OLD) => ({
+      fontSize: fluidValue({ small: 24, large: 40 }, range),
+      fluid: { small: 24, large: 40 },
+    });
+    const merged = mergeSiteStyleSection(
+      "tokens",
+      { tokens: [], fluidRange: OLD },
+      { tokens: [], fluidRange: NEW },
+      { tokens: [], fluidRange: OLD, siteText: { h2: h2(OLD) } },
+      "mine"
+    );
+    const value = merged.value as {
+      siteText: { h2: { fontSize: string; fluid: unknown } };
+    };
+    expect(value.siteText.h2).toEqual(h2(NEW));
+  });
+
   it("merges the range whole, never one width from each side", () => {
     // Field by field, the width mine left alone took theirs, which held no
     // range: { max: 1440 } alone, a range the save refuses.
