@@ -913,7 +913,12 @@ describe("VersionHistorySheet", () => {
       await screen.findByRole("button", { name: /Restore 1 field/ })
     );
 
-    expect(apply).toHaveBeenCalledWith({ title: "Then" }, 3);
+    // With each field's type, which the restore compares the field by.
+    expect(apply).toHaveBeenCalledWith(
+      { title: "Then" },
+      3,
+      expect.any(Function)
+    );
     // Nothing goes to the server: the person's save is the only write.
     expect(mutateMock).not.toHaveBeenCalled();
     expect(toastSuccessMock).toHaveBeenCalledWith(
