@@ -28,7 +28,7 @@ import * as React from "react";
 
 import { ChromeTooltip } from "./chrome-tooltip";
 import { EDITOR_WORDS } from "./editor-words";
-import { RAIL_GROUPS, RAIL_WIDTH, type LeftPanel } from "./shell-state";
+import { LEFT_PANELS, RAIL_WIDTH, type LeftPanel } from "./shell-state";
 
 /**
  * Each panel's name, from the editor's words, its icon, and the single key
@@ -48,7 +48,6 @@ const PANEL_CHROME: Record<
   pages: { label: EDITOR_WORDS.pages, Icon: Files, key: "p" },
   components: { label: EDITOR_WORDS.components, Icon: Component, key: "c" },
   design: { label: EDITOR_WORDS.design, Icon: Palette, key: "d" },
-  settings: { label: EDITOR_WORDS.settings, Icon: Settings },
 };
 
 /** A panel's name, as the rail shows it and the open panel's region is named. */
@@ -134,8 +133,7 @@ export function panelKeyShortcuts(
   isAvailable: (panel: LeftPanel) => boolean,
   layer: string = PANEL_KEYS_LAYER
 ): (ActiveShortcut & { panel: LeftPanel })[] {
-  return [...RAIL_GROUPS.top, ...RAIL_GROUPS.bottom]
-    .filter(isAvailable)
+  return LEFT_PANELS.filter(isAvailable)
     .flatMap(panel => {
       const { label, key } = PANEL_CHROME[panel];
       return key === undefined
@@ -264,15 +262,14 @@ export function EditorRail({
           shows the next name at once. */}
       <TooltipProvider delayDuration={300}>
         <ul className="flex flex-col gap-1">
-          {RAIL_GROUPS.top.filter(isAvailable).map(item)}
+          {LEFT_PANELS.filter(isAvailable).map(item)}
         </ul>
         <ul className="mt-auto flex flex-col gap-1">
-          {RAIL_GROUPS.bottom.filter(isAvailable).map(item)}
           {onSettings === undefined ? null : (
             <li className="flex justify-center">
               <RailItem
-                label={PANEL_CHROME.settings.label}
-                Icon={PANEL_CHROME.settings.Icon}
+                label={EDITOR_WORDS.settings}
+                Icon={Settings}
                 pressed={settingsOpen}
                 onClick={onSettings}
                 data-rail-action="settings"
