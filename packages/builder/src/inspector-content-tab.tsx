@@ -29,6 +29,7 @@ import {
   blockIsReadOnly,
   builderContentSectionOf,
   contentRowsOf,
+  designReadOnlyReason,
   fieldLabel,
   lockViewOf,
   propIsWritable,
@@ -145,7 +146,8 @@ export function commitProp(
 function builderSectionsOf(
   inspection: BlockInspection,
   editor: EditorState,
-  around: ContentAround | undefined
+  around: ContentAround | undefined,
+  reasonId: string
 ): PanelSection[] {
   const label = builderContentSectionOf(inspection.blockName);
   if (label === undefined) return [];
@@ -157,6 +159,15 @@ function builderSectionsOf(
     breakpoints: around?.breakpoints,
     cascade: around?.cascade,
     renderedTag: around?.renderedTag,
+    // Layout and Stack on write the row's design, so a design lock holds them.
+    heldBy:
+      designReadOnlyReason(
+        editor.document,
+        inspection.nodeId,
+        lockViewOf(editor)
+      ) === undefined
+        ? undefined
+        : reasonId,
   });
   return section === undefined ? [] : [section];
 }
@@ -222,7 +233,7 @@ function ContentSurface({
   // the one the builder draws for a core block (Columns' layout); a block
   // with none draws the fields' own note that there is nothing to set.
   const sections = [
-    ...builderSectionsOf(inspection, editor, around),
+    ...builderSectionsOf(inspection, editor, around, reasonId),
     ...inspection.sections.content.map(section => ({
       key: section.label,
       label: section.label,

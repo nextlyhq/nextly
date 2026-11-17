@@ -226,6 +226,76 @@ describe("a Columns block's layout", () => {
       JSON.stringify(vi.mocked(editor.applyAll).mock.calls[0]?.[0])
     ).toContain('"base":{"base":{"gridTemplateColumns":"repeat(3, 1fr)"}}');
   });
+
+  /**
+   * Every Layout tile, Stack on choice and the reverse switch is held, with
+   * the lock's reason as its description, and choosing any writes nothing.
+   */
+  function expectHeld(editor: EditorState): void {
+    const content = screen.getByRole("tabpanel", { name: "Content" });
+    const controls = [
+      ...within(
+        within(content).getByRole("radiogroup", { name: "Layout" })
+      ).getAllByRole("radio"),
+      ...within(
+        within(content).getByRole("radiogroup", { name: "Stack on" })
+      ).getAllByRole("radio"),
+      within(content).getByRole("switch", { name: "Reverse when stacked" }),
+    ];
+    for (const control of controls) {
+      const held = control.closest("fieldset");
+      expect(held?.disabled).toBe(true);
+      const reason = held?.getAttribute("aria-describedby") ?? "";
+      expect(document.getElementById(reason)?.textContent).toMatch(/lock/i);
+      fireEvent.click(control);
+    }
+    expect(vi.mocked(editor.applyAll)).not.toHaveBeenCalled();
+    expect(vi.mocked(editor.apply)).not.toHaveBeenCalled();
+  }
+
+  it("is held, writing nothing, while the row is locked in Layers", () => {
+    const [row] = ROW.nodes;
+    const locked = {
+      ...ROW,
+      nodes: [{ ...row, locked: true }],
+    } as BlockDocument;
+    const editor = editorFor("row", locked);
+    render(<InspectorPanel editor={editor} breakpoints={BREAKPOINTS} />);
+    expectHeld(editor);
+  });
+
+  it("is held, writing nothing, inside an area locked to its content", () => {
+    registerBlocks(
+      [
+        {
+          name: "acme/frame",
+          version: 1,
+          description: "A frame whose children keep their design.",
+          example: { props: {} },
+          editor: { label: "Frame" },
+          props: {},
+          slots: { children: { lock: "contentOnly" } },
+          render: () => null,
+        },
+      ] as never,
+      { source: "columns-lock-test" }
+    );
+    const framed = {
+      ...ROW,
+      nodes: [
+        {
+          id: "frame",
+          type: "acme/frame",
+          version: 1,
+          props: {},
+          slots: { children: ROW.nodes },
+        },
+      ],
+    } as BlockDocument;
+    const editor = editorFor("row", framed);
+    render(<InspectorPanel editor={editor} breakpoints={BREAKPOINTS} />);
+    expectHeld(editor);
+  });
 });
 
 describe("the tab that shows as the selection moves", () => {

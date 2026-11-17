@@ -36,6 +36,7 @@ import {
   type StackOn,
 } from "./columns-layout";
 import type { EditorState } from "./editor-state";
+import { HeldByLock } from "./held-by-lock";
 import type { PanelSection } from "./panel-section";
 import { arrowTo, SegmentChoices } from "./segment-choices";
 import { appliedAtReader, selectedSubject } from "./style-panel-reading";
@@ -101,6 +102,7 @@ function WidthTiles({
   hintId,
   onPoint,
   editor,
+  held: locked,
 }: {
   row: Row;
   current: string;
@@ -108,6 +110,8 @@ function WidthTiles({
   hintId: string;
   onPoint: (key: string | undefined) => void;
   editor: EditorState;
+  /** Whether the row's design is locked, so a choice writes nothing. */
+  held: boolean;
 }): React.JSX.Element {
   const plans = COLUMNS_LAYOUTS.map(layout =>
     planLayout(row, layout.key, ROW_OWN)
@@ -119,7 +123,7 @@ function WidthTiles({
   );
   const choose = (index: number) => {
     const plan = plans[index];
-    if (plan?.ok !== true) return;
+    if (locked || plan?.ok !== true) return;
     // The chosen tile again writes no template, only the columns it still
     // needs: a row reading "3 equal" with a column deleted gets it back.
     const ops =
@@ -170,10 +174,16 @@ export function ColumnsLayoutControl({
   nodeId,
   breakpoints,
   applied,
+  heldBy,
 }: {
   editor: EditorState;
   nodeId: string;
   breakpoints: BreakpointSet | undefined;
+  /**
+   * The id of the lock's reason while the row's design is locked: every
+   * control is then held, described by it, and writes nothing.
+   */
+  heldBy?: string | undefined;
   /**
    * What the cascade applies to the row at a tier, for a stack or a template
    * reaching it from elsewhere.
@@ -214,6 +224,7 @@ export function ColumnsLayoutControl({
     on => on === "never" || tiers[on] !== undefined
   );
   const restack = (on: StackOn, reversed: boolean) => {
+    if (heldBy !== undefined) return;
     const op = planStack(row, on, reversed, {
       tiers,
       state: ROW_OWN.state,
@@ -222,52 +233,55 @@ export function ColumnsLayoutControl({
     if (op !== null) editor.apply(op);
   };
   return (
-    <div className="nx-columns-layout" data-control="columns-layout">
-      <div className="nx-inspector__field nx-columns-layout__layout">
-        <span className="nx-inspector__field-name" id={labelId}>
-          Layout
-        </span>
-        <WidthTiles
-          row={row}
-          current={current}
-          labelId={labelId}
-          hintId={hintId}
-          onPoint={setPointed}
-          editor={editor}
-        />
+    <HeldByLock reasonId={heldBy}>
+      <div className="nx-columns-layout" data-control="columns-layout">
+        <div className="nx-inspector__field nx-columns-layout__layout">
+          <span className="nx-inspector__field-name" id={labelId}>
+            Layout
+          </span>
+          <WidthTiles
+            row={row}
+            current={current}
+            labelId={labelId}
+            hintId={hintId}
+            onPoint={setPointed}
+            editor={editor}
+            held={heldBy !== undefined}
+          />
+        </div>
+        <p id={hintId} className="nx-inspector__note" aria-live="polite">
+          {heldReason(row, pointed, ROW_OWN) ??
+            hintFor(current, (stored ?? inherited) !== undefined)}
+        </p>
+        {options.length > 1 ? (
+          <>
+            <div className="nx-inspector__field">
+              <span className="nx-inspector__field-name" id={stackId}>
+                Stack on
+              </span>
+              <SegmentChoices
+                options={options}
+                on={stack.on}
+                labels={STACK_LABELS}
+                labelId={stackId}
+                onChoose={on => restack(on, stack.reversed)}
+              />
+            </div>
+            <div className="nx-inspector__field">
+              <span className="nx-inspector__field-name">
+                Reverse when stacked
+              </span>
+              <Switch
+                aria-label="Reverse when stacked"
+                checked={stack.reversed}
+                disabled={stack.on === "never"}
+                onCheckedChange={reversed => restack(stack.on, reversed)}
+              />
+            </div>
+          </>
+        ) : null}
       </div>
-      <p id={hintId} className="nx-inspector__note" aria-live="polite">
-        {heldReason(row, pointed, ROW_OWN) ??
-          hintFor(current, (stored ?? inherited) !== undefined)}
-      </p>
-      {options.length > 1 ? (
-        <>
-          <div className="nx-inspector__field">
-            <span className="nx-inspector__field-name" id={stackId}>
-              Stack on
-            </span>
-            <SegmentChoices
-              options={options}
-              on={stack.on}
-              labels={STACK_LABELS}
-              labelId={stackId}
-              onChoose={on => restack(on, stack.reversed)}
-            />
-          </div>
-          <div className="nx-inspector__field">
-            <span className="nx-inspector__field-name">
-              Reverse when stacked
-            </span>
-            <Switch
-              aria-label="Reverse when stacked"
-              checked={stack.reversed}
-              disabled={stack.on === "never"}
-              onCheckedChange={reversed => restack(stack.on, reversed)}
-            />
-          </div>
-        </>
-      ) : null}
-    </div>
+    </HeldByLock>
   );
 }
 
@@ -284,6 +298,8 @@ export interface ColumnsSectionContext {
   readonly cascade: PageStyleCascade | undefined;
   /** The tag the canvas draws the row as, which the cascade's subject names. */
   readonly renderedTag: string | undefined;
+  /** The id of the lock's reason while the row's design is locked. */
+  readonly heldBy?: string | undefined;
 }
 
 /**
@@ -316,6 +332,7 @@ export function columnsContentSection(
         nodeId={nodeId}
         breakpoints={breakpoints}
         applied={applied}
+        heldBy={context.heldBy}
       />
     ),
   };
