@@ -27,7 +27,7 @@ import { useEntryLocale } from "../EntryLocaleContext";
 import { DocumentAddressChip, type DocumentSlug } from "./DocumentAddressChip";
 import { DOCUMENT_COLUMN_INSET } from "./DocumentEditorLayout";
 import { DocumentStatusPill } from "./DocumentStatusPill";
-import type { EntryAddress } from "./entry-details-read";
+import { useEntryDetails, type EntryDetailsTarget } from "./entry-details-read";
 import { EntryTitleInput } from "./EntryTitleInput";
 import { useTitleMayCarryPill, useTitlePillRef } from "./title-in-view";
 import type { EntryFormMode } from "./useEntryForm";
@@ -57,10 +57,12 @@ export interface DocumentTitleBlockProps {
   /** An entry's slug; absent, with no address, draws no address line, as for a Single. */
   slug?: DocumentSlug | undefined;
   /**
-   * Where the site serves the entry, as the server resolves it: null where
-   * its type has no public address, undefined while that is not known.
+   * The entry whose address the chip shows, as the server resolves it from
+   * the entry's details. Read only while this block is drawn, so a document
+   * view covering the form costs no request. Absent, as for a Single, no
+   * address is read.
    */
-  address?: EntryAddress | null | undefined;
+  detailsOf?: EntryDetailsTarget | undefined;
   /**
    * The document's status, for the pill beside the title; absent draws none
    * and leaves the pill to the bar.
@@ -75,10 +77,13 @@ export function DocumentTitleBlock({
   documentLocked = false,
   isSubmitting = false,
   slug,
-  address,
+  detailsOf,
   status,
 }: DocumentTitleBlockProps): JSX.Element | null {
   const form = useFormContext();
+  // Null where the entry's type has no public address, undefined while that
+  // is not known.
+  const address = useEntryDetails(detailsOf)?.address;
   const entryLocale = useEntryLocale();
   const inputRef = useRef<HTMLInputElement | null>(null);
   // True while the document area is showing a past version rather than the

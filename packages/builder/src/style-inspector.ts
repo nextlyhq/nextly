@@ -575,7 +575,7 @@ const SHORT_LABELS: Readonly<Record<string, string>> = {
   // In an Accordion's own Icon section, where "Disclosure" says nothing an
   // author does not already see.
   disclosureIcon: "Icon",
-  disclosurePosition: "Position",
+  disclosurePosition: "Icon position",
   // In the Background section, where "Background" already says whose it is;
   // the whole name was cut to "Background gradi…".
   backgroundGradient: "Gradient",

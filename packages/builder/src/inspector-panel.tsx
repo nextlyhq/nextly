@@ -618,6 +618,11 @@ function SelectionInspector({
           services={contentServices}
           reasonId={reasonId}
           fields={fields}
+          around={{
+            breakpoints: styleOnly.breakpoints,
+            cascade,
+            renderedTag: canvas.tag,
+          }}
         />
 
         <TabsContent value="style">

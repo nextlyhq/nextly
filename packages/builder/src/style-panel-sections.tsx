@@ -33,7 +33,6 @@ import { SectionHeld } from "./section-held";
 import { spacingRings } from "./spacing-box";
 import { SpacingBox } from "./spacing-box-fields";
 import {
-  ColumnsLayoutFields,
   BlockShortcutsFields,
   BlockPresetsOver,
 } from "./style-block-shortcuts";
@@ -333,7 +332,6 @@ function SectionFields({
         {sectionKey === "layout" ? (
           <>
             <ContentWidthFields surroundings={surroundings} />
-            <ColumnsLayoutFields surroundings={surroundings} />
             {arrange === undefined ? null : (
               <ArrangeFields
                 surroundings={surroundings}
