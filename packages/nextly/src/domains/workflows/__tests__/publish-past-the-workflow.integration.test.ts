@@ -50,6 +50,7 @@ import {
 import { applyDueReleases } from "../../releases/apply-due-releases";
 import { createReleaseMutations } from "../../releases/release-mutations";
 import { ReleasesRepository } from "../../releases/releases-repository";
+import { draftsKeptByPart } from "../../versions/part-drafts";
 import { defineWorkflow } from "../define-workflow";
 import { workflowDefinitionHash } from "../hash";
 import { takeWorkflowStep, type WorkflowCaller } from "../steps";
@@ -777,6 +778,63 @@ describe.each(getConfiguredTestDialects())(
         expect(answer.status).toBe(400);
         expect(JSON.stringify(answer.json)).toContain("NOT_APPROVED");
         expect(await visitorRead(POSTS, id)).toBeNull();
+      });
+    });
+
+    describe("publishing one language whose draft holds the whole document", () => {
+      // Without per-language storage a language's draft holds the whole document, its shared values
+      // included, so putting that language live puts its shared edits live too.
+      const publishSpanish = (id: string, session: Record<string, string>) =>
+        rest(
+          "PATCH",
+          ["collections", POSTS, "entries", id],
+          session,
+          { status: "published", _overwrite: true },
+          "?locale=es"
+        );
+
+      /** A live Post whose Spanish draft edits the shared code, with Spanish approved. */
+      async function spanishDraftEditingShared(
+        session: Record<string, string>
+      ): Promise<string> {
+        expect(draftsKeptByPart()).toBe(false);
+        const id = await draftOf(POSTS, { title: "Hello", code: "C-1" });
+        await save(POSTS, id, { title: "Hola" }, "es");
+        await approve(POSTS, id, ["en", "es", null]);
+        const first = (await DOORS.find(
+          door => door.name === "REST publish of every language"
+        )!.publish(id, session)) as Answer;
+        expect(first.status, JSON.stringify(first.json)).toBeLessThan(400);
+        await save(POSTS, id, { title: "Hola 2", code: "C-2" }, "es");
+        await approve(POSTS, id, ["es"]);
+        return id;
+      }
+
+      it("asks the gate of the shared part too, and refuses it unapproved", async () => {
+        await boot(dialect);
+        const session = await publisher();
+        const id = await spanishDraftEditingShared(session);
+
+        const answer = await publishSpanish(id, session);
+
+        expect(answer.status, JSON.stringify(answer.json)).toBe(400);
+        expect(JSON.stringify(answer.json)).toContain("NOT_APPROVED");
+        expect(JSON.stringify(answer.json)).toContain('"path":"shared"');
+        expect((await visitorRead(POSTS, id, "es"))?.code).toBe("C-1");
+      });
+
+      it("publishes once the shared part is approved too, which is the control", async () => {
+        await boot(dialect);
+        const session = await publisher();
+        const id = await spanishDraftEditingShared(session);
+        await approve(POSTS, id, [null]);
+
+        const answer = await publishSpanish(id, session);
+
+        expect(answer.status, JSON.stringify(answer.json)).toBeLessThan(400);
+        const spanish = await visitorRead(POSTS, id, "es");
+        expect(spanish?.title).toBe("Hola 2");
+        expect(spanish?.code).toBe("C-2");
       });
     });
 
