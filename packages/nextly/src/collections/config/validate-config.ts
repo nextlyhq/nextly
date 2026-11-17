@@ -33,7 +33,10 @@ import {
   publicAddressErrors,
   publicAddressFieldProblem,
 } from "../../domains/public-addresses/public-address-template";
-import { uniqueNotOnListMessage } from "../../domains/schema/field-rules";
+import {
+  isListMarkedUnique,
+  uniqueNotOnListMessage,
+} from "../../domains/schema/field-rules";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import {
   isManagedIndexName,
@@ -41,7 +44,6 @@ import {
 } from "../../domains/schema/pipeline/diff/index-util";
 import {
   fieldProducesColumn,
-  relationHoldsReferenceList,
   toSnakeCase,
 } from "../../domains/schema/services/field-column-descriptor";
 import {
@@ -438,7 +440,7 @@ export function uniqueOnListError(
   field: Record<string, unknown>,
   path: string
 ): { path: string; message: string; code: "UNIQUE_NOT_ON_LIST" } | null {
-  if (field.unique !== true || !relationHoldsReferenceList(field)) return null;
+  if (!isListMarkedUnique(field)) return null;
   return {
     path: `${path}.unique`,
     message: uniqueNotOnListMessage(String(field.name)),
