@@ -11,6 +11,7 @@ import * as React from "react";
 import { CanvasFrameShortcuts } from "../canvas/canvas-frame-context";
 import { FIT_ZOOM, type CanvasZoom } from "../canvas/canvas-zoom";
 import { HoveredBlockProvider } from "../canvas/hovered-block";
+import { CssNamesContext, type CssNames } from "../css-names-context";
 import type { SectionFolds } from "../panel-folds";
 import { PanelFoldsContext, type PanelFolds } from "../panel-folds-context";
 import {
@@ -367,6 +368,15 @@ export function BuilderShell({
   const notices = supplied ?? own;
   // The block panel's section folds, kept with the other preferences and lent
   // to the inspector, which is rendered below as a prop.
+  // "Show CSS names", kept with the other preferences and lent to the panel.
+  const showCssNames = preferences.showCssNames === true;
+  const cssNames = React.useMemo<CssNames>(
+    () => ({
+      shown: showCssNames,
+      set: shown => update(current => ({ ...current, showCssNames: shown })),
+    }),
+    [showCssNames, update]
+  );
   const sectionFolds = preferences.sectionFolds ?? NO_FOLDS;
   const panelFolds = React.useMemo<PanelFolds>(
     () => ({
@@ -581,22 +591,24 @@ export function BuilderShell({
                     value={props.openSettingsRequest}
                   >
                     <PanelFoldsContext.Provider value={panelFolds}>
-                      <ShellRegions
-                        appliedScale={appliedScale}
-                        onZoomPick={onZoomPick}
-                        {...props}
-                        preferences={preferences}
-                        update={update}
-                        active={shellFits}
-                        loadCount={loadCount}
-                        /*
-                         * The caller's `className` stops here: the measuring wrapper
-                         * above carries it. Passing it on would apply the host's grid
-                         * area, height or border a second time, on a box nested inside
-                         * the one already carrying it.
-                         */
-                        className={undefined}
-                      />
+                      <CssNamesContext.Provider value={cssNames}>
+                        <ShellRegions
+                          appliedScale={appliedScale}
+                          onZoomPick={onZoomPick}
+                          {...props}
+                          preferences={preferences}
+                          update={update}
+                          active={shellFits}
+                          loadCount={loadCount}
+                          /*
+                           * The caller's `className` stops here: the measuring wrapper
+                           * above carries it. Passing it on would apply the host's grid
+                           * area, height or border a second time, on a box nested inside
+                           * the one already carrying it.
+                           */
+                          className={undefined}
+                        />
+                      </CssNamesContext.Provider>
                     </PanelFoldsContext.Provider>
                   </SettingsRequestContext.Provider>
                 </NoticeSinkProvider>

@@ -23,6 +23,7 @@ import {
 import * as React from "react";
 
 import { useCanvasTokenMode } from "./canvas/prefers-dark";
+import { useFieldDescription } from "./css-hint";
 import { InheritedValue } from "./inherited-value";
 import { useLabelScrub } from "./label-scrub";
 import { CompactSides } from "./spacing-box";
@@ -142,6 +143,8 @@ export function NumericField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   // Words for a unit shown only as a sign beside the field, for its description.
   const unitWords = React.useContext(UnitWords);
   // The value reaching the field from another tier, which it shows as a hint.
@@ -256,7 +259,7 @@ export function NumericField({
             // the text input, because a screen-reader user who returns to the
             // menu is otherwise on the control that failed with nothing saying
             // so and no way to reach the reason.
-            aria-describedby={describedBy}
+            aria-describedby={described}
             aria-invalid={describedBy === undefined ? undefined : true}
           >
             <SelectValue placeholder={suffix.placeholder} />

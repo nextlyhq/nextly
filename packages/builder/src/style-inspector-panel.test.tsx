@@ -49,6 +49,18 @@ import type { SharedStylesHost } from "./style-target";
 import type { StylePolicy } from "./style-values";
 
 /**
+ * What a field's tooltip says, as an author hovering it reads it: what the
+ * control does in words, then what it writes.
+ */
+async function hintOf(label: string): Promise<string> {
+  const field = screen.getByText(label).closest(".nx-inspector__field");
+  if (field === null) throw new Error(`no field for ${label}`);
+  fireEvent.pointerMove(field);
+  const tip = await screen.findByRole("tooltip", {}, { timeout: 2000 });
+  return tip.textContent ?? "";
+}
+
+/**
  * Open a section of the panel unless it is open already: sections fold on
  * their own, and one holding a value, or the first, starts open.
  */
@@ -227,7 +239,9 @@ describe("the Style tab beside Content", () => {
     render(<InspectorPanel editor={editorFor(documentOf(), null)} />);
 
     expect(screen.queryByRole("tab", { name: "Style" })).toBeNull();
-    expect(screen.getByText("Select a block to edit it.")).toBeDefined();
+    expect(
+      document.querySelector('[data-empty="no-selection"]')
+    ).not.toBeNull();
   });
 });
 
@@ -235,8 +249,8 @@ describe("when there is nothing to style", () => {
   it("says to select a block, rather than rendering an empty panel", () => {
     /*
      * Not covered by the wrapper's own no-selection case: that one renders
-     * `InspectorPanel`, which says "Select a block to edit it." This panel says
-     * "style", and a query matching one does not match the other.
+     * `InspectorPanel`, which shows the document's own settings. This panel
+     * says "style", and draws alone, so it says what to do.
      */
     register({ spacing: true });
     const { container } = render(
@@ -1723,7 +1737,7 @@ describe("controls", () => {
     expect(fieldsOf("color").getByPlaceholderText("Name or hex")).toBeDefined();
   });
 
-  it("sets alignment with icons that follow the container's direction", () => {
+  it("sets alignment with icons that follow the container's direction", async () => {
     // A column's main axis runs down the page, so "start" points up, not left.
     const styles = {
       base: {
@@ -1735,9 +1749,7 @@ describe("controls", () => {
     // "Justify", its CSS name in the label's tooltip: "Justify content" was cut
     // short in the 7rem label column.
     const group = screen.getByRole("radiogroup", { name: "Justify" });
-    expect(screen.getByText("Justify").closest("label")?.title).toMatch(
-      /^Justify content/
-    );
+    expect(await hintOf("Justify")).toMatch(/^Justify content/);
     const start = within(group).getByRole("radio", { name: "Start" });
     expect(start.getAttribute("data-icon")).toBe("AlignVerticalJustifyStart");
 
@@ -5062,9 +5074,9 @@ describe("a segmented keyword control behaves as a toggle", () => {
       mountWith(stored);
 
       for (const button of allOptions()) {
-        // The button's keyword is its tooltip; its words are its text.
+        // The button's words are the keyword's plain name.
         expect(button.getAttribute("aria-pressed")).toBe(
-          String(button.getAttribute("title") === stored)
+          String(button.textContent === keywordLabel("font-style", stored))
         );
       }
     }
@@ -5739,10 +5751,10 @@ describe("opacity in percent", () => {
     expect(submitted).not.toHaveBeenCalled();
   });
 
-  it("says in its label's tooltip that it is in percent", () => {
+  it("says in its label's tooltip that it is in percent", async () => {
     // The catalog's summary reads "0 to 1", which the field no longer takes.
     mount({ effects: true });
-    const title = screen.getByText("Opacity").closest("label")?.title ?? "";
+    const title = await hintOf("Opacity");
     expect(title).toMatch(/percent/);
     expect(title).not.toMatch(/0 to 1/);
   });
@@ -5851,7 +5863,7 @@ describe("an image's focal point", () => {
 });
 
 describe("an image's fit", () => {
-  it("is named Fit, its CSS name in the label's tooltip", () => {
+  it("is named Fit, its CSS name in the label's tooltip", async () => {
     // "Object fit" is how CSS names it. Plain "Fit", since the same row fits
     // a video, an embed or a canvas as well as an image.
     mount(
@@ -5859,9 +5871,7 @@ describe("an image's fit", () => {
       { base: { [BASE_BREAKPOINT]: { objectFit: "cover" } } }
     );
     expect(screen.getByRole("radiogroup", { name: "Fit" })).toBeDefined();
-    expect(screen.getByText("Fit").closest("label")?.title).toMatch(
-      /^Object fit/
-    );
+    expect(await hintOf("Fit")).toMatch(/^Object fit/);
   });
 });
 
@@ -5956,16 +5966,14 @@ describe("text decoration", () => {
 });
 
 describe("letter case", () => {
-  it("is named in plain words, its CSS name in the label's tooltip", () => {
+  it("is named in plain words, its CSS name in the label's tooltip", async () => {
     // "Text transform" says how CSS does it; "Letter case" says what it is.
     mount(
       { typography: true },
       { base: { [BASE_BREAKPOINT]: { textTransform: "uppercase" } } }
     );
     const group = screen.getByRole("radiogroup", { name: "Letter case" });
-    expect(screen.getByText("Letter case").closest("label")?.title).toMatch(
-      /^Text transform/
-    );
+    expect(await hintOf("Letter case")).toMatch(/^Text transform/);
     expect(
       within(group).getByRole("radio", { name: "Uppercase" })
     ).toBeDefined();
@@ -6248,9 +6256,7 @@ describe("the Font control", () => {
     fireEvent.click(
       fieldsOf("fontFamily").getByRole("button", { name: /^Font, / })
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Add or manage fonts…" })
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Manage fonts…" }));
     expect(onManageFonts).toHaveBeenCalledTimes(1);
   });
 });

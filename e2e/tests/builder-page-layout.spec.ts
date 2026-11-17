@@ -197,10 +197,12 @@ test("offers one Layout choice and says which Layout is in effect and why", asyn
   // And in the editor's Settings.
   await openBuilder(page, pageId);
   await openSettings(page);
+  // The dialog's, not the right panel's beside it, which says the same.
+  const settings = page.getByRole("dialog", { name: "Settings" });
   const picker = page.getByRole("combobox", { name: "Header & footer" });
   await expect(picker).toBeVisible();
   await expect(
-    page.getByText(
+    settings.getByText(
       `Follows the site default, ${MAIN}, because this page doesn't choose its own header & footer set.`
     )
   ).toBeVisible();
@@ -228,7 +230,9 @@ test("offers one Layout choice and says which Layout is in effect and why", asyn
     `${UNFINISHED} (not published: the site default shows until it is)`
   );
   await expect(
-    page.getByText(`${UNFINISHED} (not published, so the site default shows)`)
+    settings.getByText(
+      `${UNFINISHED} (not published, so the site default shows)`
+    )
   ).toBeVisible();
 
   await choose(page, "No header or footer");

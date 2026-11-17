@@ -72,7 +72,8 @@ export function DetailsSection({
   );
 }
 
-function DetailRow({
+/** One labelled line of a panel section's list, its value at the end. */
+export function DetailRow({
   icon: Icon,
   label,
   children,
@@ -80,7 +81,7 @@ function DetailRow({
   icon: typeof Hash;
   label: string;
   children: React.ReactNode;
-}) {
+}): React.ReactElement {
   return (
     <div className="flex items-center justify-between gap-3">
       <dt className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
@@ -126,13 +127,13 @@ function WhenRow({
  * The API address, cut short to fit, and a control that copies it whole, as
  * a URL on this admin's own site, which is where it is read.
  */
-function ApiAddressCopy({
+export function ApiAddressCopy({
   address,
   id,
 }: {
   address: string;
   id: string | null | undefined;
-}) {
+}): React.ReactElement {
   const full =
     typeof window === "undefined"
       ? address

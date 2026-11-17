@@ -928,3 +928,32 @@
   outline: 2px solid var(--nx-accent);
   outline-offset: -2px;
 }
+
+/*
+ * What a control writes, in its tooltip: what it does in words, then the code
+ * on a line of its own, in the panel's monospace.
+ */
+.nx-css-hint {
+  display: grid;
+  gap: 0.125rem;
+  max-inline-size: 18rem;
+}
+
+.nx-css-hint__code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--nx-builder-font-size);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * A control's CSS names under its label, while Show CSS names is on: small,
+ * quiet and in monospace, so the label still reads first.
+ */
+.nx-css-names {
+  display: block;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.6875rem;
+  line-height: 1.3;
+  color: var(--nx-builder-text-muted);
+  overflow-wrap: anywhere;
+}
