@@ -29,6 +29,7 @@ import * as React from "react";
 import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
 import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { commitOnEnter } from "./commit-on-enter";
+import { CssHint, OptionWrites } from "./css-hint";
 import { DecorationField, drawsDecoration } from "./decoration-field";
 import { FocalPointField } from "./focal-point-field";
 import { IconChoiceField } from "./icon-choice-field";
@@ -854,6 +855,8 @@ function ToggleField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // What each option writes, from the field it is drawn in.
+  const optionWrites = React.useContext(OptionWrites);
   return (
     <div
       // The field's id sits on the GROUP rather than on any one button. The
@@ -872,25 +875,29 @@ function ToggleField({
       {options.map(option => {
         const pressed = stored === option;
         return (
-          <button
+          // What this option writes, on hover or keyboard focus.
+          <CssHint
             key={option}
-            type="button"
-            aria-pressed={pressed}
-            // Marked on the BUTTONS rather than on the group, which carries the
-            // description. `aria-invalid` is not a state `role="group"`
-            // supports, so setting it there would be an attribute a screen
-            // reader is entitled to ignore — and the file's own rule is that a
-            // control described by a refusal must also read as invalid, or it
-            // announces the message as a hint rather than as a failure.
-            aria-invalid={describedBy === undefined ? undefined : true}
-            // Pressing the pressed option CLEARS rather than re-writing it,
-            // which is the only way a group of options can reach unset without
-            // spending a button on "neither".
-            onClick={() => onCommit(pressed ? null : option)}
-            title={option}
+            writes={optionWrites?.(option) ?? `${cssProperty}: ${option}`}
           >
-            {keywordLabel(cssProperty, option)}
-          </button>
+            <button
+              type="button"
+              aria-pressed={pressed}
+              // Marked on the BUTTONS rather than on the group, which carries the
+              // description. `aria-invalid` is not a state `role="group"`
+              // supports, so setting it there would be an attribute a screen
+              // reader is entitled to ignore — and the file's own rule is that a
+              // control described by a refusal must also read as invalid, or it
+              // announces the message as a hint rather than as a failure.
+              aria-invalid={describedBy === undefined ? undefined : true}
+              // Pressing the pressed option CLEARS rather than re-writing it,
+              // which is the only way a group of options can reach unset without
+              // spending a button on "neither".
+              onClick={() => onCommit(pressed ? null : option)}
+            >
+              {keywordLabel(cssProperty, option)}
+            </button>
+          </CssHint>
         );
       })}
     </div>
