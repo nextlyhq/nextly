@@ -67,6 +67,27 @@ describe("the builder's start-up read, in the editor", () => {
     expect(style).toHaveBeenCalledTimes(1);
   });
 
+  it("hands the answer to the next ask when the ask that took it was given up", async () => {
+    const { ask } = startup({
+      "/site/style": { status: 200, body: { sections: 1 } },
+    });
+    startBuilderReads("ada", ["/site/style"], ask);
+    const style = route({ sections: 2 });
+    // A read its cache gave up as it began (a mount undone at once).
+    const gaveUp = new AbortController();
+    const first = readStarted(
+      "/site/style",
+      style,
+      undefined,
+      Date.now,
+      gaveUp.signal
+    );
+    gaveUp.abort();
+    await first;
+    expect(await readStarted("/site/style", style)).toEqual({ sections: 1 });
+    expect(style).not.toHaveBeenCalled();
+  });
+
   it("sends one start-up request however often the editor renders as it opens", () => {
     const { ask, sent } = startup({});
     startBuilderReads("ada", ["/a", "/b"], ask);

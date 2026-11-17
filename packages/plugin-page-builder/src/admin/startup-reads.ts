@@ -26,7 +26,9 @@
  *   `BuilderStartup` says so), and a reader that knows who is asking is
  *   handed nothing read for someone else.
  *
- * A reader (`readStarted`) takes an answer once, as a cache's first read. A
+ * A reader (`readStarted`) takes an answer once, as a cache's first read,
+ * unless that read is given up (a mount undone at once), when the next takes
+ * it. A
  * hook (`useStartedAnswer`) shows it on every mount made while it is handed
  * out, as one cache entry would be, until that mount asks again.
  *
@@ -162,11 +164,16 @@ export function readStarted<T>(
   path: string,
   read: () => Promise<T>,
   userId?: string | null,
-  now: () => number = Date.now
+  now: () => number = Date.now,
+  /** The ask's own signal: an ask given up hands the answer to the next. */
+  signal?: AbortSignal
 ): Promise<T> {
   const entry = handingOut(path, userId, now());
   if (entry === undefined || entry.taken.has(path)) return read();
   entry.taken.add(path);
+  signal?.addEventListener("abort", () => entry.taken.delete(path), {
+    once: true,
+  });
   return entry.answers.then(answers => {
     const answer = answers?.[path];
     return answered(answer) ? (answer?.body as T) : read();

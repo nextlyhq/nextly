@@ -78,12 +78,17 @@ export function useStoredSiteStyle(): StoredSiteStyleRead {
     queryKey: STORED_SITE_STYLE_KEY,
     queryFn: async ({ signal }) => {
       // The builder's start-up answer when it opens, the route otherwise.
-      const body = await readStarted(SITE_STYLE_ROUTE_PATH, () =>
-        readPluginRoute<StoredSiteStyle>({
-          plugin: PAGE_BUILDER_PLUGIN_NAME,
-          path: SITE_STYLE_ROUTE_PATH,
-          signal,
-        })
+      const body = await readStarted(
+        SITE_STYLE_ROUTE_PATH,
+        () =>
+          readPluginRoute<StoredSiteStyle>({
+            plugin: PAGE_BUILDER_PLUGIN_NAME,
+            path: SITE_STYLE_ROUTE_PATH,
+            signal,
+          }),
+        undefined,
+        Date.now,
+        signal
       );
       // The route always answers its four sections. An empty answer is a
       // transport fault, and drawing the defaults over it would hide that.
