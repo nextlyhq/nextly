@@ -20,7 +20,7 @@ import {
   DialogTitle,
   PageHeader,
 } from "@nextlyhq/ui";
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useId, useMemo, useRef } from "react";
 import type { JSX } from "react";
 
 import { Code, Plus } from "@admin/components/icons";
@@ -151,6 +151,57 @@ function toTablePaginationState(
 
 /** The list's order until the person or their link chooses one: newest entries first. */
 const DEFAULT_SORT = "-createdAt";
+
+/**
+ * Above this many characters the collection's description under its name is
+ * clamped to two lines. About two lines at the header's width on a desktop
+ * screen; shorter text wraps to at most a few lines on a phone, which the page
+ * can afford.
+ */
+const DESCRIPTION_CLAMP_LENGTH = 160;
+
+/**
+ * The collection's description under its name, held to two lines when it is
+ * long, with a control to read the rest.
+ *
+ * The builder keeps new descriptions short, but one set in code, or saved
+ * before that limit, can be any length, and drawn whole it pushed the list
+ * itself off the screen.
+ *
+ * Whether to clamp is judged by LENGTH rather than by measuring the drawn text,
+ * as the jobs table's error cell does: below the threshold the text is shown
+ * whole and offers no control, so nothing is ever cut without a way to read
+ * it. The clamp is visual only — the whole text stays in the page, so it is
+ * read in full by assistive technology either way.
+ */
+function ListDescription({ text }: { text: string }): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const textId = useId();
+
+  if (text.length <= DESCRIPTION_CLAMP_LENGTH) {
+    return <span className="break-words">{text}</span>;
+  }
+
+  return (
+    <>
+      <span
+        id={textId}
+        className={expanded ? "block break-words" : "line-clamp-2 break-words"}
+      >
+        {text}
+      </span>
+      <button
+        type="button"
+        className="mt-1 text-sm font-medium text-foreground underline underline-offset-2 hover:no-underline"
+        aria-expanded={expanded}
+        aria-controls={textId}
+        onClick={() => setExpanded(current => !current)}
+      >
+        {expanded ? "Show less" : "Show more"}
+      </button>
+    </>
+  );
+}
 
 /**
  * Entry list container with pagination, sorting, search, and bulk operations.
@@ -795,7 +846,11 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
               <PageHeader
                 className="m-0"
                 title={labels.plural}
-                description={collection?.description || undefined}
+                description={
+                  collection?.description ? (
+                    <ListDescription text={collection.description} />
+                  ) : undefined
+                }
                 actions={
                   <div className="flex items-center gap-2 w-full sm:w-auto">
                     <Button

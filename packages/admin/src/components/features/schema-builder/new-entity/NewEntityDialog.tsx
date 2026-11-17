@@ -23,7 +23,6 @@ import {
   DialogTitle,
   Input,
   Label,
-  Textarea,
 } from "@nextlyhq/ui";
 import { type JSX, useId, useState } from "react";
 
@@ -44,10 +43,14 @@ import {
 } from "../builder-settings-modal/advanced-switches";
 import { AdvancedTab } from "../builder-settings-modal/AdvancedTab";
 import {
+  DescriptionField,
+  descriptionTooLong,
+  RequiredMark,
+} from "../builder-settings-modal/BasicsTab";
+import {
   ICON_PICKER_ICONS,
   IconPicker,
 } from "../builder-settings-modal/IconPicker";
-import { RequiredMark } from "../builder-settings-modal/RequiredMark";
 import {
   createDefaults,
   normalizedSettings,
@@ -89,6 +92,11 @@ function createBlockedBy(
   if (values.slug.trim() === "") return "Add an API address.";
   if (check.status === "checking") return "Checking the address…";
   if (check.status === "refused") return "Choose another address.";
+  // After the names and address: the description is optional, and folded
+  // under More options.
+  if (descriptionTooLong(values.description)) {
+    return "Shorten the description.";
+  }
   return templateBlockedBy;
 }
 
@@ -392,17 +400,11 @@ function MoreOptions({
       </Button>
       {open && (
         <div className="space-y-4 rounded-md border border-border p-3">
-          <div className="space-y-1">
-            <Label htmlFor={`${ids}-description`}>Description</Label>
-            <Textarea
-              id={`${ids}-description`}
-              rows={2}
-              value={values.description ?? ""}
-              onChange={e =>
-                onChange({ ...values, description: e.target.value })
-              }
-            />
-          </div>
+          <DescriptionField
+            id={`${ids}-description`}
+            value={values.description ?? ""}
+            onChange={next => onChange({ ...values, description: next })}
+          />
           <AdvancedTab
             fields={config.advancedFields.filter(
               field => field !== "showSystemFields"

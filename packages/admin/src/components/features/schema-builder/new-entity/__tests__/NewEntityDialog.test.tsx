@@ -5,7 +5,7 @@
  * checked by the server's rule as it is typed, and the further options folded
  * under one control that says which are on.
  */
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -42,6 +42,7 @@ vi.mock("@admin/services/addressCheckApi", () => ({
   },
 }));
 
+import { DESCRIPTION_MAX_LENGTH } from "../../builder-settings-modal/BasicsTab";
 import {
   addUnsavedEntity,
   removeUnsavedEntity,
@@ -468,6 +469,43 @@ describe("NewEntityDialog", () => {
       expect.objectContaining({ description: "" }),
       // No template picked: Create hands over no template fields.
       []
+    );
+  });
+
+  // A description longer than the builder's limit is said to be over beside
+  // the field, counted beneath it, and holds Create until it is shortened —
+  // never cut on its way out.
+  it("holds Create while the description is over its limit", async () => {
+    const { onCreate, user } = renderDialog();
+    await user.type(nameInput(), "Product");
+    await user.click(screen.getByRole("button", { name: /More options/ }));
+    const description = screen.getByLabelText("Description");
+    expect(screen.getByText(`0/${DESCRIPTION_MAX_LENGTH}`)).toBeInTheDocument();
+
+    fireEvent.change(description, {
+      target: { value: "a".repeat(DESCRIPTION_MAX_LENGTH + 1) },
+    });
+    await waitFor(() =>
+      expect(createButton()).toHaveAccessibleDescription(
+        "Shorten the description."
+      )
+    );
+    expect(createButton()).toBeDisabled();
+    expect(description).toHaveAttribute("aria-invalid", "true");
+    expect(description).toHaveAccessibleDescription(
+      `Keep the description to ${DESCRIPTION_MAX_LENGTH} characters or fewer. ${DESCRIPTION_MAX_LENGTH + 1}/${DESCRIPTION_MAX_LENGTH}`
+    );
+
+    fireEvent.change(description, {
+      target: { value: "a".repeat(DESCRIPTION_MAX_LENGTH) },
+    });
+    await waitFor(() => expect(createButton()).toBeEnabled());
+    expect(description).toHaveAttribute("aria-invalid", "false");
+    await user.click(createButton());
+    expect(onCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        description: "a".repeat(DESCRIPTION_MAX_LENGTH),
+      })
     );
   });
 

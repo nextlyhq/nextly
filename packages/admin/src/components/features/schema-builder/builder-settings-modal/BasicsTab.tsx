@@ -26,7 +26,6 @@ import type { BasicsField, BuilderKind } from "../builder-config";
 import type { BuilderSettingsValues } from "../BuilderSettingsModal";
 
 import { IconPicker } from "./IconPicker";
-import { RequiredMark } from "./RequiredMark";
 import { SlugInput } from "./SlugInput";
 
 type Props = {
@@ -184,15 +183,11 @@ export function BasicsTab({
       )}
 
       {fields.includes("description") && (
-        <div className="space-y-1">
-          <Label htmlFor="description">Description</Label>
-          <Textarea
-            id="description"
-            value={values.description ?? ""}
-            onChange={e => set("description", e.target.value)}
-            rows={2}
-          />
-        </div>
+        <DescriptionField
+          id="description"
+          value={values.description ?? ""}
+          onChange={next => set("description", next)}
+        />
       )}
 
       {fields.includes("startingField") && (
@@ -277,5 +272,98 @@ function StartingFieldChoice({
         })}
       </div>
     </fieldset>
+  );
+}
+
+/**
+ * The asterisk after the label of a field the dialog will not go on without.
+ *
+ * Drawn the way the entry form draws it (`FieldWrapper`), so a required field
+ * looks the same in the builder as in the content it shapes. Hidden from
+ * assistive technology: the input's own `required` says it there, and a
+ * spoken "star" after the name would only repeat it less clearly. Shared with
+ * the new-entity dialog.
+ */
+export function RequiredMark(): JSX.Element {
+  return (
+    <span className="text-danger-text ml-1" aria-hidden="true">
+      *
+    </span>
+  );
+}
+
+/**
+ * How long a collection's, Single's or field group's description may be when
+ * it is written in the builder: 255, the limit the admin's other descriptions
+ * keep (roles and permissions). A description is a sentence or two under the
+ * entity's name on its entries page, not a place for documentation.
+ *
+ * 🔴 Judged by the builder's dialogs only. The API and the column take any
+ * length, so a description set in code, or saved before this limit, still
+ * loads and still shows — the dialogs say it is over and hold the save until
+ * it is shortened, rather than cutting it.
+ */
+export const DESCRIPTION_MAX_LENGTH = 255;
+
+/** Whether a description is longer than the builder accepts. */
+export function descriptionTooLong(description: string | undefined): boolean {
+  return (description ?? "").length > DESCRIPTION_MAX_LENGTH;
+}
+
+/**
+ * The description box of this tab and of the new-entity dialog, with how much
+ * of the limit it uses said beneath it.
+ *
+ * Not capped with `maxLength`: a browser cuts pasted text at the cap without a
+ * word, and a description longer than the limit that was saved before it, or
+ * set in code, would sit there with nothing saying why it cannot grow. The
+ * count is shown instead, and past the limit the field says so and the dialog
+ * holds its save (`descriptionTooLong`).
+ */
+export function DescriptionField({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  onChange: (next: string) => void;
+}): JSX.Element {
+  const over = value.length > DESCRIPTION_MAX_LENGTH;
+  const countId = `${id}-count`;
+  const errorId = `${id}-error`;
+  return (
+    <div className="space-y-1">
+      <Label htmlFor={id}>Description</Label>
+      <Textarea
+        id={id}
+        rows={2}
+        value={value}
+        aria-invalid={over}
+        aria-describedby={over ? `${errorId} ${countId}` : countId}
+        onChange={e => onChange(e.target.value)}
+      />
+      <div className="flex items-start justify-between gap-2 text-xs">
+        {/* In the error text colour the form messages use, which reads at
+            4.5:1 in both schemes. */}
+        {over ? (
+          <p id={errorId} className="text-danger-text">
+            Keep the description to {DESCRIPTION_MAX_LENGTH} characters or
+            fewer.
+          </p>
+        ) : (
+          <span />
+        )}
+        <p
+          id={countId}
+          className={cn(
+            "shrink-0 tabular-nums",
+            over ? "text-danger-text" : "text-muted-foreground"
+          )}
+        >
+          {value.length}/{DESCRIPTION_MAX_LENGTH}
+        </p>
+      </div>
+    </div>
   );
 }
