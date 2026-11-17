@@ -55,13 +55,19 @@ export function useAreaComponents(
   return { data: read.data, error: read.error, refetch: read.refetch };
 }
 
-/** Put `component` in `area` of set `setId`, published. */
+/**
+ * Put `component` in `area` of set `setId`, published, answering what was
+ * written and the route's sentence saying so.
+ */
 export async function putComponentInArea(
   setId: string,
   area: RegionArea,
   component: string
-): Promise<WrittenArea> {
-  const answer = await writePluginRoute<{ item?: WrittenArea }>({
+): Promise<{ readonly message: string; readonly item: WrittenArea }> {
+  const answer = await writePluginRoute<{
+    message?: string;
+    item?: WrittenArea;
+  }>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: layoutAreaPath(setId, area),
     method: "PATCH",
@@ -70,5 +76,5 @@ export async function putComponentInArea(
   if (answer?.item === undefined) {
     throw new Error("The set route answered without what it wrote.");
   }
-  return answer.item;
+  return { message: answer.message ?? "", item: answer.item };
 }

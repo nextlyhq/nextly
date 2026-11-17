@@ -215,7 +215,8 @@ describe("Use a component ▾ on the starter's card", () => {
 
   it("puts the chosen component in the set, says so, and asks every set choices read again", async () => {
     write.mockResolvedValue({
-      message: "ok",
+      message:
+        "Ridgeline header is now the header of every page that uses the Main header & footer.",
       item: {
         set: { id: "main", title: "Main" },
         area: "header",

@@ -334,7 +334,7 @@ describe.each(getConfiguredTestDialects())(
           component: { id: ids.ridgeline, title: "ridgeline" },
         });
         expect(body.message).toBe(
-          "ridgeline is now the header of the chosen header & footer."
+          "ridgeline is now the header of every page that uses the chosen header & footer."
         );
         expect(await areasOf(main)).toEqual({
           header: ids.ridgeline,

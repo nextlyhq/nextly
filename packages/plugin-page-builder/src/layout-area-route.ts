@@ -394,7 +394,7 @@ export function layoutAreaRoutes(
           directLayoutAreaWrites(ctx, store)
         );
         return respondMutation<WrittenArea>(
-          `${written.component.title} is now the ${AREA_WORDS[area]} of the ${written.set.title} header & footer.`,
+          `${written.component.title} is now the ${AREA_WORDS[area]} of every page that uses the ${written.set.title} header & footer.`,
           written
         );
       },

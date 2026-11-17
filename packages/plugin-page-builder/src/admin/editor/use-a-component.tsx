@@ -81,10 +81,9 @@ export function UseAComponent({
     if (component === current) return;
     setBusy(true);
     try {
-      const written = await putComponentInArea(setId, area, component);
-      toast.success(
-        `${written.component.title} is now the ${area} of every page that uses the ${written.set.title} header & footer.`
-      );
+      // The route's own sentence, so the toast and the API say one thing.
+      const { message } = await putComponentInArea(setId, area, component);
+      toast.success(message);
       askChoicesAgain();
     } catch (error) {
       toast.error(refusalOf(error, area));
