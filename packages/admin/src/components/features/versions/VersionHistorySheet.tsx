@@ -333,9 +333,16 @@ export function VersionHistorySheet({
     previousTarget?.kind === "version" ? previousTarget.versionNo : null;
   // The newest version in the chosen one's language, to compare against for
   // everything since it, and to read the fields a first version holds that
-  // the content type no longer has.
+  // the content type no longer has. The language comes from the version's own
+  // read too, so a version a link names beyond the loaded rows still finds it.
   const newestVersionNo =
-    selected === null ? null : newestInLocale(versions, selected);
+    selected === null
+      ? null
+      : newestInLocale(
+          versions,
+          selected,
+          detail.data === undefined ? undefined : (detail.data.locale ?? null)
+        );
 
   // Hand the chosen version to the document area, and take it back whenever
   // nothing is chosen — including when the panel closes, so dismissing it never

@@ -745,6 +745,44 @@ describe("VersionHistorySheet", () => {
     );
   });
 
+  it("hands the document the newest in a linked version's language, though its row is not loaded", async () => {
+    // A link names version 1, beyond the loaded rows; its own read says it
+    // holds English, and the newest English version is loaded.
+    window.history.pushState(
+      {},
+      "",
+      "/admin/collections/posts/e1?history=1&version=1"
+    );
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: {
+          pages: [
+            {
+              items: [
+                { ...version(6), locale: "es" },
+                { ...version(5), locale: "en" },
+              ],
+              meta: { hasNext: true },
+            },
+          ],
+        },
+        hasNextPage: true,
+      })
+    );
+    useVersionMock.mockReturnValue(
+      detailState({ data: { ...version(1), locale: "en", snapshot: {} } })
+    );
+    const { setViewing } = renderPublishing();
+
+    await waitFor(() =>
+      expect(setViewing.mock.calls.at(-1)?.[0]).toMatchObject({
+        versionNo: 1,
+        newestInLocale: 5,
+      })
+    );
+    window.history.pushState({}, "", "/");
+  });
+
   it("hands the document the version before, once it is loaded", async () => {
     useVersionsMock.mockReturnValue(
       listState({
