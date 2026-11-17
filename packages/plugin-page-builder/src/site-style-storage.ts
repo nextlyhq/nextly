@@ -430,7 +430,10 @@ function variableRemovalGuard(
     if (dropped.length === 0) return;
     // A Site text row the write leaves pointing at a dropped variable, from
     // the section in hand: a value of this write, asked before any read.
-    refuseDroppedSiteTextUses(dropped, data.tokens);
+    refuseDroppedSiteTextUses(
+      dropped,
+      siteTokensOverCode(defaults, data.tokens)
+    );
     const inUse = check?.();
     if (inUse === undefined) return;
     // The shared styles as they will be once this write lands: the classes it
@@ -447,15 +450,15 @@ function variableRemovalGuard(
 }
 
 /**
- * Refuse a write that drops a variable a Site text row still points at, as
- * the write leaves the rows, naming each row, as the remove route does.
+ * Refuse a write that drops a variable a Site text row still points at, the
+ * code's rows included, as the write leaves them, naming each row, as the
+ * remove route does.
  */
 function refuseDroppedSiteTextUses(
   dropped: readonly NamedVariable[],
-  tokens: unknown
+  merged: SiteTokenSet
 ): void {
-  const section = readStoredJson(tokens);
-  const reasons = siteTextReasons(dropped, section);
+  const reasons = siteTextReasons(dropped, merged);
   if (reasons.length === 0) return;
   throw NextlyError.validation({
     errors: reasons.map(reason => ({
