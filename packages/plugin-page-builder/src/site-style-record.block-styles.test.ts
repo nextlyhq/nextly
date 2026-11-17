@@ -98,4 +98,53 @@ describe("a built-in block style's name", () => {
     expect(issuesOf([edited])).toEqual([]);
     expect(issuesOf([{ ...ghost, label: "Ghost outline" }])).toEqual([]);
   });
+
+  it("is not renamed by an override that leaves it out: the code's name holds", () => {
+    // An override stores what the site changed. Its name, slug, block type
+    // and own-style mark come from the code when the tiers merge, so one
+    // that omits them, as an edit of the image's own style does, renames
+    // nothing.
+    const square = builtIn("look:core/image:square");
+    const styles = { base: { base: { color: "#123456" } } };
+    // As the image's own style is stored when only its styles change.
+    expect(
+      issuesOf([{ id: square.id, slug: square.slug, orderIndex: 2, styles }])
+    ).toEqual([]);
+    // Its block type and own-style mark stated as the code states them.
+    expect(
+      issuesOf([
+        {
+          id: square.id,
+          slug: square.slug,
+          blockType: square.blockType,
+          isDefault: true,
+          orderIndex: 2,
+          styles,
+        },
+      ])
+    ).toEqual([]);
+    // Stated and different, it is still a rename, and refused.
+    expect(
+      issuesOf([
+        {
+          id: square.id,
+          slug: square.slug,
+          label: "Box",
+          orderIndex: 2,
+          styles,
+        },
+      ])
+    ).not.toEqual([]);
+    expect(
+      issuesOf([
+        {
+          id: square.id,
+          slug: square.slug,
+          isDefault: false,
+          orderIndex: 2,
+          styles,
+        },
+      ])
+    ).not.toEqual([]);
+  });
 });

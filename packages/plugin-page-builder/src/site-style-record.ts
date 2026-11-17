@@ -917,6 +917,11 @@ function blockStyleMarkIssues(entry: NamedClass, index: number): string[] {
  * supplies in code) that renames it: its name, its slug, its block type and
  * whether it is the block's own style stay as the code states them, so a
  * block style is only ever renamed where its name is written.
+ *
+ * Only what the override states is compared. One that leaves a field out
+ * takes the code's when the tiers merge, so it renames nothing; an edit of
+ * a built-in's styles is stored that way, and an export carried into a site
+ * with the same built-ins must be taken back in.
  */
 function builtInRenameIssues(
   entry: NamedClass,
@@ -925,11 +930,9 @@ function builtInRenameIssues(
 ): string[] {
   const code = policy.defaults?.classes?.find(each => each.id === entry.id);
   if (code === undefined || !isLook(code)) return [];
-  const same =
-    entry.label === code.label &&
-    entry.slug === code.slug &&
-    entry.blockType === code.blockType &&
-    entry.isDefault === code.isDefault;
+  const same = (["label", "slug", "blockType", "isDefault"] as const).every(
+    field => entry[field] === undefined || entry[field] === code[field]
+  );
   return same
     ? []
     : [
