@@ -537,7 +537,6 @@ import {
   judgeStatusSave,
   refusePublishEarly,
   refuseStatusSaveEarly,
-  sharedDraftPendingOn,
   type StatusSave,
   WITHOUT_REVIEW_KEY,
   withoutReviewOfBody,
@@ -12737,7 +12736,7 @@ export class CollectionMutationService extends BaseService {
       locale: string | undefined;
       everyLanguage: boolean;
       withoutReview: { reason: string } | undefined;
-      /** Whether a pending shared draft goes live with the save, as its caller read it. */
+      /** Whether the save puts a pending change to the shared part live, as its caller read it. */
       sharedDraftPending: boolean;
       /** For a save of every language that publishes, the languages it moves. */
       languagesMoved?: readonly string[] | undefined;
@@ -12770,24 +12769,34 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * Whether a save that publishes this entry also puts a pending shared draft live: only where
-   * the entry is translated and keeps its parts apart, read on `reader`.
+   * Whether a save that publishes this entry in `locale` also puts a pending change to its shared
+   * part live, read on `reader`: a working draft the save promotes whose slot holds the shared part
+   * (`draftSlotParts`). Kept by part, that is the shared draft; otherwise the language's own draft
+   * holds the whole document, its shared values included. Only where the entry is translated.
    */
   private async publishedSaveCarriesSharedDraft(
     reader: VersionsDbApi,
     collectionName: string,
     entryId: string,
     status: unknown,
-    collection: unknown
+    collection: unknown,
+    locale: string | undefined
   ): Promise<boolean> {
-    if (status !== "published" || !draftsKeptByPart()) return false;
+    if (status !== "published") return false;
     if ((collection as { localized?: boolean }).localized !== true)
       return false;
-    return sharedDraftPendingOn(reader, {
-      scopeKind: "collection",
-      scopeSlug: collectionName,
-      entryId,
-    });
+    const drafts = await findPartDrafts(
+      new VersionsRepository(reader),
+      { scopeKind: "collection", scopeSlug: collectionName, entryId },
+      locale ?? SHARED_DRAFT_SLOT
+    );
+    return (
+      (drafts.shared !== undefined &&
+        draftSlotParts(SHARED_DRAFT_SLOT).shared) ||
+      (drafts.language !== undefined &&
+        locale !== undefined &&
+        draftSlotParts(locale).shared)
+    );
   }
 
   /**
@@ -16647,7 +16656,8 @@ export class CollectionMutationService extends BaseService {
             params.collectionName,
             params.entryId,
             body.status,
-            gateCollection
+            gateCollection,
+            params.locale
           ),
           languagesMoved: await this.everyLanguageSaveMoves(this.adapter, {
             collectionName: params.collectionName,
@@ -17488,7 +17498,8 @@ export class CollectionMutationService extends BaseService {
               params.collectionName,
               params.entryId,
               intendedStatus,
-              gateCollection
+              gateCollection,
+              params.locale
             ),
             languagesMoved: await this.everyLanguageSaveMoves(tx, {
               collectionName: params.collectionName,

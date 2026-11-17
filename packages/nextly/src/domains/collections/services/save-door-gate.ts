@@ -55,8 +55,8 @@ export interface StatusSave {
   actor?: RequestActor;
   withoutReview?: { reason: string };
   /**
-   * Whether the document keeps its parts apart and holds a pending shared draft: a save that
-   * publishes one language then puts the shared draft live too, so the shared part moves with it.
+   * Whether a draft the save puts live holds the shared part (`draftSlotParts`): the shared draft
+   * kept apart, or a language's draft holding the whole document. The shared part then moves too.
    */
   sharedDraftPending?: boolean;
   /**
