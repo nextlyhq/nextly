@@ -1215,19 +1215,24 @@ function atStart(value: string | undefined): boolean {
 /**
  * A size across the parent's axis: set, at the start, or stretched. An
  * automatic self-alignment takes the parent's for its items: under one that
- * doesn't stretch (centred, at the end) the block is neither filled nor at
- * its start, so it reads as Custom.
+ * doesn't stretch (centred, at the end) an automatic size is neither filled
+ * nor at its start, so it reads as Custom. A size of its own is Fixed there
+ * still: Fixed leaves the alignment to the parent.
  */
 function crossSize(
   size: string | undefined,
   ownSelf: string | undefined,
   items?: string
 ): ChildSize {
-  const self = automaticSelf(ownSelf) ? itemsSelf(items) : ownSelf;
+  const deferred = automaticSelf(ownSelf);
+  const self = deferred ? itemsSelf(items) : ownSelf;
+  const chosen = atStart(self) || stretched(self);
+  if (!automatic(size) && (chosen || deferred)) {
+    return { choice: "fixed", size: size ?? "" };
+  }
   // A self-alignment no choice writes (centred, at the end) is Custom, so
-  // its row stays drawn to say it, whatever the size.
-  if (!atStart(self) && !stretched(self)) return { choice: "custom" };
-  if (!automatic(size)) return { choice: "fixed", size: size ?? "" };
+  // its row stays drawn to say it.
+  if (!chosen) return { choice: "custom" };
   return atStart(self) ? { choice: "fit" } : { choice: "fill" };
 }
 
