@@ -287,15 +287,6 @@ test.describe("a Forms form on a page, with JavaScript on", () => {
 });
 
 test.describe("a Forms form on a page, with JavaScript off", () => {
-  // Every test here needs the page readable from its HTML alone, and the
-  // published route streams the page's body in a part only script reveals.
-  // These run once the published-page hidden-body fix lands.
-  test.skip(
-    true,
-    "The published route sends the page body hidden until JavaScript runs; " +
-      "enabled once it renders in the first HTML."
-  );
-
   test("is drawn from the plugin, sent, and kept as the plugin keeps it", async ({
     page,
     browser,

@@ -64,6 +64,16 @@ beforeAll(() => {
         render: () => null,
       },
       {
+        name: "acme/hero",
+        version: 1,
+        description: "A hero with a background image.",
+        example: { props: {} },
+        editor: { label: "Hero" },
+        props: {},
+        supports: { background: { image: true } },
+        render: () => null,
+      },
+      {
         name: "acme/panel",
         version: 1,
         description: "A panel with spacing and a border.",
@@ -754,5 +764,50 @@ describe("a block style's states and devices, in the style editor", () => {
     );
     expect(normal).not.toMatch(/:hover/);
     expect(normal).toContain("color: #ff0000");
+  });
+});
+
+describe("a look's background image", () => {
+  it("reaches the host's Media library, as a block's Style tab does", () => {
+    // Without the host's services here, a look offers only a link: the
+    // Choose button is the services reaching the look's controls.
+    const heroLook: NamedClass = {
+      id: "look:acme/hero:plain",
+      slug: "hero-plain",
+      label: "Plain",
+      orderIndex: 0,
+      blockType: "acme/hero",
+      isDefault: true,
+      styles: {},
+    };
+    const MediaPicker = () => null;
+    render(
+      <InspectorPanel
+        editor={editorFor(null)}
+        classLibrary={[heroLook]}
+        sharedStyles={{
+          mayChange: true,
+          writeStyles: vi.fn(
+            async () => undefined
+          ) as unknown as SharedStylesHost["writeStyles"],
+        }}
+        contentServices={{ MediaPicker } as never}
+        lookEditing={{
+          look: { id: heroLook.id, blockType: "acme/hero" },
+          onExit: vi.fn(),
+        }}
+      />
+    );
+    // The section's own trigger, opened unless it already is.
+    for (const trigger of document.querySelectorAll<HTMLElement>(
+      '[data-slot="accordion-trigger"][aria-expanded="false"]'
+    )) {
+      if (trigger.textContent?.startsWith("Background")) {
+        fireEvent.click(trigger);
+      }
+    }
+    expect(
+      screen.getByRole("button", { name: "Choose Background image" })
+    ).toBeTruthy();
   });
 });

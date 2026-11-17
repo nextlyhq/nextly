@@ -29,7 +29,10 @@ import {
 import * as React from "react";
 
 import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
-import { BackgroundPositionField } from "./background-fields";
+import {
+  BackgroundPositionField,
+  BackgroundSizeField,
+} from "./background-fields";
 import { BackgroundImageField } from "./background-image-control";
 import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { commitOnEnter } from "./commit-on-enter";
@@ -497,6 +500,13 @@ const OWN_FIELDS: Readonly<
   "background-position": {
     draws: stored => stored === undefined || typeof stored === "string",
     Field: BackgroundPositionField,
+    buttons: true,
+  },
+  // How it is sized: Cover, Fit or Tile, each with the repeat it needs, or
+  // any other size written as CSS.
+  "background-size": {
+    draws: stored => stored === undefined || typeof stored === "string",
+    Field: BackgroundSizeField,
     buttons: true,
   },
 };
