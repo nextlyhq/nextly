@@ -643,6 +643,17 @@ export interface PluginFieldWrite {
    * in a group kept per language is not.
    */
   readStored(target: PluginStoredValueTarget): Promise<PluginStoredValue>;
+  /**
+   * @experimental Read one stored field of several entries of one collection,
+   * by the rules of {@link readStored}: what it answers for each id, keyed by
+   * id, read in one query for the rows and one for their working drafts
+   * rather than a pair per entry. An id that names no stored entry is absent
+   * from the map. A refusal refuses the whole read, since the field, and
+   * whether it may be read, is the same for every entry.
+   */
+  readStoredOf(
+    target: PluginStoredValuesTarget
+  ): Promise<ReadonlyMap<string, PluginStoredValue>>;
 }
 
 /**
@@ -681,6 +692,17 @@ export interface PluginStoredEntryTarget extends PluginStoredFieldTarget {
   readonly collection: string;
   /** The entry's id. */
   readonly id: string;
+}
+
+/**
+ * @experimental One field of several entries of a collection, read by
+ * {@link PluginFieldWrite.readStoredOf}.
+ */
+export interface PluginStoredValuesTarget extends PluginStoredFieldTarget {
+  /** The collection's slug. */
+  readonly collection: string;
+  /** The entries' ids. */
+  readonly ids: readonly string[];
 }
 
 /** @experimental A field of a single, which has one document and no id. */

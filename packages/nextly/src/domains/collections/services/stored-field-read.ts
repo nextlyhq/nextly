@@ -21,8 +21,11 @@
  * read uses (`resolveDraftOverlay`), so "the draft" means one thing everywhere.
  *
  * It returns only the fields it is asked for, read from one row and one
- * working draft however many there are. What a caller may name is decided by
- * the caller of this module, as a {@link FieldScope}; nothing here widens it.
+ * working draft however many there are. A field of several entries of one
+ * collection is read the same way, from one query for their rows and one for
+ * their working drafts ({@link readStoredFieldOf}). What a caller may name is
+ * decided by the caller of this module, as a {@link FieldScope}; nothing here
+ * widens it.
  *
  * It is also where a conditional write is judged. A writer that read a stored
  * value and computed a replacement from it registers what it read against the
@@ -37,7 +40,7 @@
  */
 import { createHash } from "node:crypto";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 import type {
   DynamicCollectionRecord,
@@ -54,6 +57,7 @@ import {
 } from "../../../lib/system-columns";
 import type {
   PluginStoredValue,
+  PluginStoredValuesTarget,
   PluginStoredValueTarget,
 } from "../../../plugins/contributions";
 import { addressableFields } from "../../../shared/addressable-fields";
@@ -81,12 +85,15 @@ import {
 import {
   combinedDraft,
   draftsKeptByPart,
-  findPartDrafts,
   holdsPendingChange,
   SHARED_DRAFT_SLOT,
 } from "../../versions/part-drafts";
 import { resolveComponentSchemas } from "../../versions/restore-version";
-import { VersionsRepository } from "../../versions/versions-repository";
+import {
+  VersionsRepository,
+  type VersionRef,
+  type VersionRow,
+} from "../../versions/versions-repository";
 
 import { collectionFields, collectionTableName } from "./collection-utils";
 
@@ -134,6 +141,8 @@ export function entryWriteContext(args: {
     inTransaction: args.connection.executor !== undefined,
     readStored: (allowedType, target) =>
       readStoredField(args.connection, allowedType, target, records),
+    readStoredOf: (allowedType, target) =>
+      readStoredFieldOf(args.connection, allowedType, target, records),
   };
 }
 
@@ -144,6 +153,11 @@ export interface StoredReads {
     allowedType: string,
     target: StoredFieldTarget
   ): Promise<PluginStoredValue>;
+  /** One stored value of `allowedType` of several entries, as {@link readStoredFieldOf} reads them. */
+  readOf(
+    allowedType: string,
+    target: StoredFieldOfTarget
+  ): Promise<Map<string, PluginStoredValue>>;
   /** The document's fields of `allowedType`, as a stored read names them. */
   fieldPaths(
     document: { readonly collection: string } | { readonly single: string },
@@ -161,6 +175,8 @@ export function storedReadsOn(connection: StoredFieldConnection): StoredReads {
   return {
     read: (allowedType, target) =>
       readStoredField(connection, allowedType, target, records),
+    readOf: (allowedType, target) =>
+      readStoredFieldOf(connection, allowedType, target, records),
     fieldPaths: async (document, allowedType) => {
       const fields =
         "single" in document
@@ -281,6 +297,19 @@ export type StoredFieldsTarget = DistributiveOmit<
   readonly fields: readonly string[];
 };
 
+/** What one stored read of one field of several entries is pointed at. */
+export type StoredFieldOfTarget = PluginStoredValuesTarget;
+
+/**
+ * What a read of stored fields is pointed at inside this module: one entry or
+ * a single ({@link StoredFieldsTarget}), or several entries of one collection.
+ */
+type StoredRowsTarget =
+  | StoredFieldsTarget
+  | (Omit<StoredFieldOfTarget, "field"> & {
+      readonly fields: readonly string[];
+    });
+
 /** `Omit` taken of each member of a union, so the union survives it. */
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
   ? Omit<T, K>
@@ -359,12 +388,72 @@ export async function readStoredFieldsOn(
   connection: StoredFieldConnection,
   scope: FieldScope,
   target: StoredFieldsTarget,
-  options: {
-    records?: RegistryRecords;
-    askDraft?: boolean;
-    askState?: boolean;
-  } = {}
+  options: StoredRowsOptions = {}
 ): Promise<StoredFieldsRead> {
+  const reads = await readStoredRows(connection, scope, target, options);
+  const [read] = reads.values();
+  return read ?? notStored([...new Set(target.fields)]);
+}
+
+/**
+ * Read one stored field of several entries of one collection, as `form` holds
+ * each: what {@link readStoredField} answers for each id, keyed by id, read by
+ * the same rules from one query for the rows and one for their working drafts
+ * ({@link readStoredRows}). An id that names no stored entry is absent from
+ * the map. A refusal refuses the whole read: the field, and whether it may be
+ * read, is the same for every entry.
+ */
+async function readStoredFieldOf(
+  connection: StoredFieldConnection,
+  allowedType: string,
+  target: StoredFieldOfTarget,
+  records: RegistryRecords = registryRecords(connection)
+): Promise<Map<string, PluginStoredValue>> {
+  const { field, ...document } = target;
+  const found = new Map<string, PluginStoredValue>();
+  const reads = await readStoredRows(
+    connection,
+    scopeOfType(allowedType),
+    { ...document, fields: [field] },
+    { records }
+  );
+  for (const [stored, read] of reads) {
+    const value = read.values.get(field) ?? { kind: "absent" };
+    // Under the id it was asked by: a database whose ids compare without
+    // regard to case finds a row by an id spelt otherwise, as a read of that
+    // one entry does.
+    for (const id of askedFor(stored, document.ids)) found.set(id, value);
+  }
+  return found;
+}
+
+/** The ids among `asked` that found the row stored under `stored`. */
+function askedFor(stored: string, asked: readonly string[]): string[] {
+  if (asked.includes(stored)) return [stored];
+  const folded = stored.toLowerCase();
+  return asked.filter(id => id.toLowerCase() === folded);
+}
+
+/** How a read of stored fields is made, beyond what it is pointed at. */
+interface StoredRowsOptions {
+  records?: RegistryRecords;
+  askDraft?: boolean;
+  askState?: boolean;
+}
+
+/**
+ * Each stored row `target` names, read as {@link readStoredFieldsOn} says, by
+ * the row's id: the rows in one query, their working drafts in one, and the
+ * one language row of each that a field kept per language is read from in
+ * one more, however many rows are named. A row that is not stored is not in
+ * the map.
+ */
+async function readStoredRows(
+  connection: StoredFieldConnection,
+  scope: FieldScope,
+  target: StoredRowsTarget,
+  options: StoredRowsOptions
+): Promise<Map<string, StoredFieldsRead>> {
   const records = options.records ?? registryRecords(connection);
   const fields = [...new Set(target.fields)];
   const entity = await storedEntity(connection, records, target, scope);
@@ -374,36 +463,43 @@ export async function readStoredFieldsOn(
     options.askState === true
       ? stateSource(entity, locale, connection.defaultLocale)
       : undefined;
-  const row = await storedRow(
+  const rows = await storedRows(
     connection,
     entity,
     target,
     rowColumns(placed, state)
   );
-  if (row === undefined) return notStored(fields);
-  const id = String(row.id);
-  const draft =
+  const reads = new Map<string, StoredFieldsRead>();
+  if (rows.length === 0) return reads;
+  const ids = rows.map(row => String(row.id));
+  const drafts =
     showsUnpublished(target.form) || options.askDraft === true
-      ? await pendingWorkingDraft(connection, entity, id, locale)
-      : undefined;
+      ? await pendingWorkingDrafts(connection, entity, ids, locale)
+      : new Map<string, PendingDraft>();
   // The working draft a `draft` read shows, and the one language row every
   // field kept per language that it does not carry is read from, in one query
-  // however many such fields are asked for.
-  const shownDraft = showsUnpublished(target.form) ? draft : undefined;
-  const language = await languageRow(
+  // however many such fields and rows are asked for.
+  const shownDraft = (id: string) =>
+    showsUnpublished(target.form) ? drafts.get(id) : undefined;
+  const languages = await languageRows(
     connection,
     {
-      fields: fromLanguageRow(placed, shownDraft),
+      fields: ids.map(id => fromLanguageRow(placed, shownDraft(id))),
       state: state === "language" ? companionOf(entity) : null,
     },
-    { id, locale, target }
+    { ids, locale, target }
   );
-  return {
-    found: true,
-    values: shownValues(placed, row, language.values, shownDraft),
-    workingDraft: draft !== undefined,
-    ...liveStateOf(state, row, language),
-  };
+  rows.forEach((row, at) => {
+    const id = ids[at] ?? String(row.id);
+    const language = languages.get(id) ?? NO_LANGUAGE_ROW;
+    reads.set(id, {
+      found: true,
+      values: shownValues(placed, row, language.values, shownDraft(id)),
+      workingDraft: drafts.has(id),
+      ...liveStateOf(state, row, language),
+    });
+  });
+  return reads;
 }
 
 /**
@@ -446,7 +542,7 @@ interface PlacedField {
  */
 function placedFields(
   entity: StoredEntity,
-  target: StoredFieldsTarget,
+  target: StoredRowsTarget,
   scope: FieldScope,
   fields: readonly string[]
 ): PlacedField[] {
@@ -601,7 +697,7 @@ interface StoredFieldPath {
  */
 function storedFieldPath(
   entity: StoredEntity,
-  target: StoredFieldTarget,
+  target: RefusedTarget & { readonly field: string },
   scope: FieldScope
 ): StoredFieldPath {
   const refuse = (why: string) => refused(target, scope.only, why);
@@ -784,7 +880,7 @@ interface StoredEntity {
 async function storedEntity(
   connection: StoredFieldConnection,
   records: RegistryRecords,
-  target: StoredFieldsTarget,
+  target: StoredRowsTarget,
   scope: FieldScope
 ): Promise<StoredEntity> {
   // A refusal names the field where one was asked for, as it always has.
@@ -829,7 +925,7 @@ async function storedEntity(
 interface CompanionSelect {
   select(projection: Record<string, unknown>): {
     from(table: unknown): {
-      where(condition: unknown): {
+      where(condition: unknown): Promise<Record<string, unknown>[]> & {
         limit(count: number): Promise<Record<string, unknown>[]>;
       };
     };
@@ -881,30 +977,57 @@ function companionOf(entity: StoredEntity): CompanionSchema | null {
 }
 
 /**
- * The entity's stored row: the entry by id, or the single's one row. Its id,
- * which keys the companion rows and the working draft, and each of `columns`,
- * the ones the main row holds of what is read.
+ * The entity's stored rows: the entries by id, or the single's one row. Each
+ * one's id, which keys the companion rows and the working draft, and each of
+ * `columns`, the ones the main row holds of what is read.
+ *
+ * Several entries are read in one query, a batch of
+ * {@link STORED_ROWS_AT_ONCE} ids at a time; an id naming no row is not
+ * answered.
  */
-async function storedRow(
+async function storedRows(
   connection: StoredFieldConnection,
   entity: StoredEntity,
-  target: StoredFieldsTarget,
+  target: StoredRowsTarget,
   columns: readonly string[]
-): Promise<Record<string, unknown> | undefined> {
-  const rows = await connection.db.select<Record<string, unknown>>(
-    entity.tableName,
-    {
-      // Only what is asked for: a row can hold other large values, and a
-      // composition reads up to a hundred definitions in one save.
-      columns: ["id", ...new Set(columns)],
-      ...("single" in target
-        ? {}
-        : { where: { and: [{ column: "id", op: "=", value: target.id }] } }),
+): Promise<Record<string, unknown>[]> {
+  // Only what is asked for: a row can hold other large values, and a
+  // composition reads up to a hundred definitions in one save.
+  const selected = ["id", ...new Set(columns)];
+  if ("single" in target) {
+    return connection.db.select<Record<string, unknown>>(entity.tableName, {
+      columns: selected,
       limit: 1,
-    }
-  );
-  return rows[0];
+    });
+  }
+  const ids = "ids" in target ? [...new Set(target.ids)] : [target.id];
+  const rows: Record<string, unknown>[] = [];
+  for (let at = 0; at < ids.length; at += STORED_ROWS_AT_ONCE) {
+    const batch = ids.slice(at, at + STORED_ROWS_AT_ONCE);
+    rows.push(
+      ...(await connection.db.select<Record<string, unknown>>(
+        entity.tableName,
+        batch.length === 1
+          ? {
+              columns: selected,
+              where: { and: [{ column: "id", op: "=", value: batch[0] }] },
+              limit: 1,
+            }
+          : {
+              columns: selected,
+              where: { and: [{ column: "id", op: "IN", value: batch }] },
+            }
+      ))
+    );
+  }
+  return rows;
 }
+
+/**
+ * How many entries one query reads: well under the bound parameters every
+ * dialect accepts in one statement, beside the columns and the rest.
+ */
+const STORED_ROWS_AT_ONCE = 500;
 
 /** What one read of a language row is asked for. */
 interface LanguageRowAsk {
@@ -928,27 +1051,44 @@ interface LanguageRow {
 const NO_LANGUAGE_ROW: LanguageRow = { values: new Map(), state: null };
 
 /**
- * One language's row of the companion table, read once: the values of the
- * fields kept per language asked for, with no fallback to another language,
- * and the language's own state where it is asked. None is read where neither
- * is asked for.
+ * One language's row of the companion table for each entry, read once: the
+ * values of the fields kept per language each entry asks for, with no
+ * fallback to another language, and the language's own state where it is
+ * asked. Each entry's row is found by its id; none is read where no entry
+ * asks for anything.
  *
  * Every field read here belongs to one entity, so to one companion table and
- * one row of it for this entry and language.
+ * one row of it for each entry and language. The rows of several entries are
+ * read in one query, holding every field any of them asks for: an entry is
+ * answered the fields it asked for, and a field it did not ask for is one its
+ * shown draft carries, which wins over the language row
+ * ({@link shownValue}).
  */
-async function languageRow(
+async function languageRows(
   connection: StoredFieldConnection,
-  ask: LanguageRowAsk,
+  ask: {
+    /** Each entry's fields, in the order of `at.ids`. */
+    readonly fields: readonly LanguageRowAsk["fields"][];
+    readonly state: CompanionSchema | null;
+  },
   at: {
-    readonly id: string;
+    readonly ids: readonly string[];
     readonly locale: string | null;
-    readonly target: StoredFieldsTarget;
+    readonly target: StoredRowsTarget;
   }
-): Promise<LanguageRow> {
-  const companion = ask.fields[0]?.kept.companion ?? ask.state;
-  if (companion === null || companion === undefined) return NO_LANGUAGE_ROW;
-  const locale = await readableLanguage(connection, companion, ask, at);
-  // Only the columns asked for, of the one row for this entry and language: a
+): Promise<Map<string, LanguageRow>> {
+  const found = new Map<string, LanguageRow>();
+  const asking = at.ids.filter(
+    (_id, index) => ask.state !== null || (ask.fields[index] ?? []).length > 0
+  );
+  const fields = unionOfFields(ask.fields);
+  const merged: LanguageRowAsk = { fields, state: ask.state };
+  const companion = fields[0]?.kept.companion ?? ask.state;
+  if (companion === null || companion === undefined || asking.length === 0) {
+    return found;
+  }
+  const locale = await readableLanguage(connection, companion, merged, at);
+  // Only the columns asked for, of the one row for each entry and language: a
   // translation row can hold every other large value of the page, and a save
   // reads this for each stored form. Read as stored, whatever the language's
   // status, as the main row is for a field kept there. Each column is selected
@@ -956,24 +1096,78 @@ async function languageRow(
   const table = companion.table as Record<string, unknown>;
   const projection = {
     ...Object.fromEntries(
-      ask.fields.map(({ kept }, index) => [
-        `c${index}`,
-        table[kept.field.column],
-      ])
+      fields.map(({ kept }, index) => [`c${index}`, table[kept.field.column]])
     ),
     ...(ask.state === null ? {} : { s: table._status }),
   };
-  const rows = await (
-    (connection.executor ??
-      getService("adapter").getDrizzle()) as CompanionSelect
-  )
-    .select(projection)
-    .from(companion.table)
-    .where(
-      and(eq(table._parent as never, at.id), eq(table._locale as never, locale))
-    )
-    .limit(1);
-  return { values: languageValuesOf(ask, rows[0]), state: stateOf(rows[0]?.s) };
+  const rows = await languageRowsOf(connection, companion, {
+    projection,
+    ids: asking,
+    locale,
+  });
+  for (const [id, row] of rows) {
+    found.set(id, {
+      values: languageValuesOf(merged, row),
+      state: stateOf(row?.s),
+    });
+  }
+  return found;
+}
+
+/**
+ * The row of `companion` in `ask.locale` for each of `ask.ids`, selecting
+ * `ask.projection`, by entry: `undefined` for an entry with none. A batch of
+ * {@link STORED_ROWS_AT_ONCE} entries a query, each row told apart by the
+ * entry it belongs to; one entry alone is read by its key.
+ */
+async function languageRowsOf(
+  connection: StoredFieldConnection,
+  companion: CompanionSchema,
+  ask: {
+    readonly projection: Record<string, unknown>;
+    readonly ids: readonly string[];
+    readonly locale: string;
+  }
+): Promise<Map<string, Record<string, unknown> | undefined>> {
+  const table = companion.table as Record<string, unknown>;
+  const executor = (connection.executor ??
+    getService("adapter").getDrizzle()) as CompanionSelect;
+  const inLanguage = eq(table._locale as never, ask.locale);
+  const found = new Map<string, Record<string, unknown> | undefined>();
+  for (let from = 0; from < ask.ids.length; from += STORED_ROWS_AT_ONCE) {
+    const batch = ask.ids.slice(from, from + STORED_ROWS_AT_ONCE);
+    const [only] = batch;
+    if (batch.length === 1 && only !== undefined) {
+      const rows = await executor
+        .select(ask.projection)
+        .from(companion.table)
+        .where(and(eq(table._parent as never, only), inLanguage))
+        .limit(1);
+      found.set(only, rows[0]);
+      continue;
+    }
+    const rows = await executor
+      .select({ ...ask.projection, p: table._parent })
+      .from(companion.table)
+      .where(and(inArray(table._parent as never, batch), inLanguage));
+    for (const row of rows) found.set(String(row.p), row);
+  }
+  return found;
+}
+
+/** Every field kept per language any entry asks for, each once. */
+function unionOfFields(
+  asked: readonly LanguageRowAsk["fields"][]
+): LanguageRowAsk["fields"] {
+  const byName = new Map<string, LanguageRowAsk["fields"][number]>();
+  for (const fields of asked) {
+    for (const entry of fields) {
+      if (!byName.has(entry.kept.field.name)) {
+        byName.set(entry.kept.field.name, entry);
+      }
+    }
+  }
+  return [...byName.values()];
 }
 
 /**
@@ -989,7 +1183,7 @@ async function readableLanguage(
   connection: StoredFieldConnection,
   companion: CompanionSchema,
   ask: LanguageRowAsk,
-  at: { readonly locale: string | null; readonly target: StoredFieldsTarget }
+  at: { readonly locale: string | null; readonly target: StoredRowsTarget }
 ): Promise<string> {
   const field = ask.fields[0]?.field ?? "status";
   if (at.locale === null) {
@@ -1042,19 +1236,22 @@ interface PendingDraft {
 }
 
 /**
- * The pending working draft, where a preview would show it.
+ * The pending working draft of each of `ids`, where a preview would show it,
+ * by id.
  *
- * `undefined` where the preview would show the stored row: the document has
- * no draft lifecycle, none is pending, or the shared rule declines to overlay
- * it. A document kept per language keeps a draft per language, so the one
- * looked for is `locale`'s.
+ * An id is missing where the preview would show the stored row: the document
+ * has no draft lifecycle, none is pending, or the shared rule declines to
+ * overlay it. A document kept per language keeps a draft per language, so the
+ * one looked for is `locale`'s. Every id's draft is read in one query (two
+ * where drafts are kept by part), since the rule is the entity's, not the
+ * row's.
  */
-async function pendingWorkingDraft(
+async function pendingWorkingDrafts(
   connection: StoredFieldConnection,
   entity: StoredEntity,
-  id: string,
+  ids: readonly string[],
   locale: string | null
-): Promise<PendingDraft | undefined> {
+): Promise<Map<string, PendingDraft>> {
   const facts = draftDocumentFacts({
     ...(entity.record as DraftDocumentConfig),
     localized: entity.localized,
@@ -1080,33 +1277,68 @@ async function pendingWorkingDraft(
   // The cheap half first, as the preview read does: with no schemas the rule can
   // only be more permissive, so a refusal here is final.
   const provisional = overlay(null);
-  if (!provisional.overlay) return undefined;
+  if (!provisional.overlay) return new Map();
 
-  const ref = { scopeKind: entity.kind, scopeSlug: entity.slug, entryId: id };
-  const repo = new VersionsRepository(connection.db);
-  // Kept by part (`part-drafts`), the pending change is the shared draft and
-  // this language's, read as the one change they make together: a shared
-  // field's held edit lives in the shared draft whatever language asks, and a
-  // read of the language's draft alone would report the live value and no
-  // pending change.
-  const parts =
-    draftsKeptByPart() && provisional.draftLocale !== SHARED_DRAFT_SLOT
-      ? await findPartDrafts(repo, ref, provisional.draftLocale)
-      : undefined;
-  const draft = parts
-    ? holdsPendingChange(parts)
-      ? { snapshot: combinedDraft({}, parts) }
-      : undefined
-    : await repo.findWorkingDraft(ref, provisional.draftLocale);
-  if (draft === undefined) return undefined;
+  const found = await workingDraftsOf(
+    new VersionsRepository(connection.db),
+    { scopeKind: entity.kind, scopeSlug: entity.slug },
+    ids,
+    provisional.draftLocale
+  );
+  if (found.size === 0) return found;
 
   // The confirming half, against resolved schemas: a draft nothing could promote
   // is not one the preview shows.
   // On the write's own connection: inside a transaction a pooled read could
   // wait behind the very connection the transaction holds.
   const schemas = await resolveComponentSchemas(fields, connection.executor);
-  if (!overlay(schemas).overlay) return undefined;
-  return { snapshot: draft.snapshot };
+  return overlay(schemas).overlay ? found : new Map();
+}
+
+/**
+ * The pending change in `draftLocale` of each of `ids`, by id, a batch of
+ * {@link STORED_ROWS_AT_ONCE} ids a query.
+ *
+ * Kept by part (`part-drafts`), the pending change is the shared draft and
+ * this language's, read as the one change they make together: a shared
+ * field's held edit lives in the shared draft whatever language asks, and a
+ * read of the language's draft alone would report the live value and no
+ * pending change.
+ */
+async function workingDraftsOf(
+  repo: VersionsRepository,
+  scope: Pick<VersionRef, "scopeKind" | "scopeSlug">,
+  ids: readonly string[],
+  draftLocale: string | null
+): Promise<Map<string, PendingDraft>> {
+  const draftsOf = async (slot: string | null) => {
+    const drafts = new Map<string, VersionRow>();
+    for (let at = 0; at < ids.length; at += STORED_ROWS_AT_ONCE) {
+      const batch = ids.slice(at, at + STORED_ROWS_AT_ONCE);
+      const read = await repo.findWorkingDraftsOf(scope, batch, slot);
+      for (const [id, draft] of read) drafts.set(id, draft);
+    }
+    return drafts;
+  };
+  const found = new Map<string, PendingDraft>();
+  if (!draftsKeptByPart() || draftLocale === SHARED_DRAFT_SLOT) {
+    for (const [id, draft] of await draftsOf(draftLocale)) {
+      found.set(id, { snapshot: draft.snapshot });
+    }
+    return found;
+  }
+  const shared = await draftsOf(SHARED_DRAFT_SLOT);
+  const language = await draftsOf(draftLocale);
+  for (const id of ids) {
+    const parts = {
+      ...(shared.has(id) ? { shared: shared.get(id) as VersionRow } : {}),
+      ...(language.has(id) ? { language: language.get(id) as VersionRow } : {}),
+    };
+    if (holdsPendingChange(parts)) {
+      found.set(id, { snapshot: combinedDraft({}, parts) });
+    }
+  }
+  return found;
 }
 
 /**
@@ -1161,7 +1393,10 @@ function refused(
 }
 
 /** What a refusal names: the document, and the field where there is one. */
-type RefusedTarget = DistributiveOmit<PluginStoredValueTarget, "field"> & {
+type RefusedTarget = (
+  | DistributiveOmit<PluginStoredValueTarget, "field">
+  | Omit<PluginStoredValuesTarget, "field">
+) & {
   readonly field?: string;
 };
 
