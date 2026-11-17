@@ -90,8 +90,20 @@ const MINIATURE = '[data-slot="page-miniature-surface"]';
 // the card as it is first drawn.
 const PREVIEW = '[data-slot="page-builder-card"]';
 
+/**
+ * What the card shows: its text, leaving out the folded section list, which
+ * names each section by its first line and is in the page, hidden, until the
+ * fold is opened.
+ */
+function shownText(card: Element | null): string {
+  if (card === null) return "";
+  const shown = card.cloneNode(true) as Element;
+  for (const hidden of shown.querySelectorAll("[hidden]")) hidden.remove();
+  return shown.textContent ?? "";
+}
+
 function previewText(container: HTMLElement): string {
-  return container.querySelector(PREVIEW)?.textContent ?? "";
+  return shownText(container.querySelector(PREVIEW));
 }
 
 describe("PageBuilderCard", () => {
@@ -512,6 +524,11 @@ describe("PageBuilderCard's sections fold", () => {
     const fold = screen.getByRole("button", { name: "Sections (5)" });
     expect(fold.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByRole("list", { name: "Sections (5)" })).toBeNull();
+    // What the fold controls is there, hidden, so its reference holds.
+    const controlled = document.getElementById(
+      fold.getAttribute("aria-controls") ?? ""
+    );
+    expect(controlled?.hidden).toBe(true);
     expect(screen.queryByRole("link", { name: /^Edit section/ })).toBeNull();
   });
 

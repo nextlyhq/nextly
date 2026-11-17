@@ -201,24 +201,38 @@ for (const width of [1280, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       await openForm(page, pageId, panel);
 
-      // The card is no wider than the column the form gives it.
+      // The column the form gives its fields: the form the card sits in,
+      // which the shell lays out beside the panel whatever the card holds.
       const column = await card(page)
-        .locator("xpath=..")
+        .locator("xpath=ancestor::form[1]")
         .evaluate(element => element.getBoundingClientRect().right);
-      expect(await rightOf(card(page))).toBeLessThanOrEqual(
-        Math.round(column) + 1
-      );
 
-      // Nothing inside the card runs past it, and the page does not scroll
-      // sideways.
-      const spill = await card(page).evaluate(
-        element => element.scrollWidth - element.clientWidth
-      );
-      expect(spill).toBeLessThanOrEqual(0);
-      const pageSpill = await page.evaluate(
-        () => document.documentElement.scrollWidth - window.innerWidth
-      );
-      expect(pageSpill).toBeLessThanOrEqual(0);
+      // Folded, as it opens, and with the sections shown, whose long rows
+      // are the widest thing the card can hold.
+      for (const shown of ["folded", "open"] as const) {
+        if (shown === "open") {
+          await card(page)
+            .getByRole("button", { name: /^Sections \(\d+\)$/ })
+            .click();
+        }
+        expect(
+          await rightOf(card(page)),
+          `the card, its sections ${shown}`
+        ).toBeLessThanOrEqual(Math.round(column) + 1);
+        // Nothing inside the card runs past it, and the page does not scroll
+        // sideways.
+        const spill = await card(page).evaluate(
+          element => element.scrollWidth - element.clientWidth
+        );
+        expect(
+          spill,
+          `inside the card, its sections ${shown}`
+        ).toBeLessThanOrEqual(0);
+        const pageSpill = await page.evaluate(
+          () => document.documentElement.scrollWidth - window.innerWidth
+        );
+        expect(pageSpill).toBeLessThanOrEqual(0);
+      }
 
       // "Open in builder" is wholly on screen once scrolled to vertically.
       const button = openInBuilder(page);
@@ -355,17 +369,20 @@ test("a new post saves its draft and opens the builder", async ({ page }) => {
     timeout: 30_000,
   });
 
-  // Saved as a draft under the title typed.
-  const id = /\/posts\/([^/?#]+)\/builder/.exec(page.url())![1]!;
-  const stored = await page.request.get(
-    `${API}/collections/posts/entries/${id}`
+  // Saved as a draft, under the title typed, as the entry the builder opened.
+  const id = /\/posts\/([^/?#]+)\/builder/.exec(page.url())?.[1];
+  // Drafts included: this post has never been published.
+  const read = await page.request.get(
+    `${API}/collections/posts/entries/${id}?status=all`
   );
-  expect(stored.ok()).toBe(true);
-  const { item } = (await stored.json()) as {
-    item: { title: string; status: string };
+  expect(read.ok(), `reading the post: ${read.status()}`).toBe(true);
+  const body = (await read.json()) as {
+    title?: string;
+    status?: string;
+    item?: { title?: string; status?: string };
   };
-  expect(item.title).toBe(name);
-  expect(item.status).toBe("draft");
+  const stored = body.item ?? body;
+  expect([stored.title, stored.status]).toEqual([name, "draft"]);
 });
 
 test("a new post the form's rules refuse stays on the form, with the errors shown", async ({
@@ -378,7 +395,10 @@ test("a new post the form's rules refuse stays on the form, with the errors show
   const title = page
     .locator("main")
     .getByRole("textbox", { name: "Title", exact: true });
-  await expect(title).toHaveAttribute("aria-invalid", "true");
+  // The form's own refusal, naming the field.
+  await expect(page.getByText("Please fix the following errors")).toBeVisible();
+  await expect(page.getByText("This field is required").first()).toBeVisible();
+  await expect(title).toHaveValue("");
   await expect(page).toHaveURL(/\/admin\/collections\/posts\/create$/);
   // Still the form, still offering the way in.
   await expect(action).toBeEnabled();

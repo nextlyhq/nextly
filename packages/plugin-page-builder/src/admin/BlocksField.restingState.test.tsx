@@ -210,6 +210,18 @@ const MINIATURE = '[data-slot="page-miniature-surface"]';
 // of the preview alone to say anything about whether the page was drawn.
 const PREVIEW = '[data-slot="page-builder-card"]';
 
+/**
+ * What the card shows: its text, leaving out the folded section list, which
+ * names each section by its first line and is in the page, hidden, until the
+ * fold is opened.
+ */
+function shownText(card: Element | null): string {
+  if (card === null) return "";
+  const shown = card.cloneNode(true) as Element;
+  for (const hidden of shown.querySelectorAll("[hidden]")) hidden.remove();
+  return shown.textContent ?? "";
+}
+
 function drawn(container: HTMLElement): string {
   return container.querySelector(MINIATURE)?.textContent ?? "";
 }
@@ -343,7 +355,7 @@ describe("the entry form at rest", () => {
     const { container } = render(<Host />);
 
     expect(container.querySelector(MINIATURE)).toBeNull();
-    expect(container.querySelector(PREVIEW)?.textContent).not.toContain(
+    expect(shownText(container.querySelector(PREVIEW))).not.toContain(
       PAGE_TEXT
     );
   });
@@ -374,7 +386,7 @@ describe("the entry form at rest", () => {
     const { container } = render(<Host />);
 
     expect(container.querySelector(MINIATURE)).toBeNull();
-    expect(container.querySelector(PREVIEW)?.textContent).not.toContain(
+    expect(shownText(container.querySelector(PREVIEW))).not.toContain(
       PAGE_TEXT
     );
   });
@@ -517,8 +529,13 @@ describe("the entry form on an entry never saved", () => {
     ]);
   });
 
-  it("offers no save where the form offers none to this author", () => {
-    documentActions = { actions: [], run: vi.fn() };
+  it.each([
+    ["a form that offers no save", { actions: [], run: vi.fn() }],
+    // A quick create inside another document's form: that document's actions
+    // are not this one's, and the editor answers none.
+    ["an editor with no actions of its own", null],
+  ])("offers no save in %s, and says when it opens", (_, actions) => {
+    documentActions = actions;
     render(<Host />);
 
     expect(
@@ -527,5 +544,58 @@ describe("the entry form on an entry never saved", () => {
     expect(
       screen.queryByRole("button", { name: SAVE_AND_OPEN_LABEL })
     ).toBeNull();
+    expect(
+      (
+        screen.getByRole("button", {
+          name: OPEN_BUILDER_LABEL,
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+    expect(
+      screen.getByText("Opens in the builder once this entry is saved.")
+    ).toBeDefined();
+  });
+
+  it("says why a save was refused where nothing else on screen does", async () => {
+    const save = vi.fn(async () => ({
+      ok: false,
+      reason: "busy",
+      message: "Another save is still running.",
+    }));
+    documentActions = {
+      actions: [{ id: "save" }],
+      run: vi.fn(),
+      saveWithoutPublishing: save,
+    };
+    render(<Host />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: SAVE_DRAFT_AND_OPEN_LABEL })
+    );
+    expect(
+      await screen.findByText("Another save is still running.")
+    ).toBeDefined();
+  });
+
+  it("leaves the form's own validation errors to the form", async () => {
+    const save = vi.fn(async () => ({
+      ok: false,
+      reason: "invalid",
+      message: "Please fix the errors.",
+    }));
+    documentActions = {
+      actions: [{ id: "save" }],
+      run: vi.fn(),
+      saveWithoutPublishing: save,
+    };
+    render(<Host />);
+
+    const action = screen.getByRole("button", {
+      name: SAVE_DRAFT_AND_OPEN_LABEL,
+    }) as HTMLButtonElement;
+    fireEvent.click(action);
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(action.disabled).toBe(false));
+    expect(screen.queryByText("Please fix the errors.")).toBeNull();
   });
 });

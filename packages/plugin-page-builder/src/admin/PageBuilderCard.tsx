@@ -130,6 +130,8 @@ export interface SaveAndOpen {
   run: () => void;
   /** Whether that save is under way, during which it is not asked again. */
   saving: boolean;
+  /** Why the last save was refused, where nothing else on screen says so. */
+  refusal?: string;
 }
 
 export interface PageBuilderCardProps {
@@ -421,14 +423,20 @@ function SectionsToggle({
   );
 }
 
-/** The sections, in page order, each a way into the builder at that section. */
+/**
+ * The sections, in page order, each a way into the builder at that section.
+ * Kept in the page while folded, hidden, so the fold's `aria-controls` always
+ * names an element that is there.
+ */
 function SectionList({
   id,
+  open,
   sections,
   hrefFor,
   onNavigate,
 }: {
   id: string;
+  open: boolean;
   sections: readonly PageSection[];
   hrefFor: ((section: PageSection) => string) | undefined;
   onNavigate: (href: string) => void;
@@ -436,7 +444,8 @@ function SectionList({
   return (
     <div
       id={id}
-      className="flex min-w-0 flex-col gap-2 border-t border-border p-3"
+      hidden={!open}
+      className={`${open ? "flex" : "hidden"} min-w-0 flex-col gap-2 border-t border-border p-3`}
     >
       <ol
         aria-label={sectionsLabel(sections.length)}
@@ -478,7 +487,9 @@ function SectionRow({
       >
         {section.number}
       </span>
-      <span className="shrink-0 text-sm font-medium text-foreground">
+      {/* Shrinks before "Edit" does: a long component title is cut short
+          rather than pushing the row's way in out of the card. */}
+      <span className="min-w-0 max-w-[60%] shrink-0 truncate text-sm font-medium text-foreground">
         {section.label}
       </span>
       <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
@@ -736,14 +747,13 @@ export function PageBuilderCard({
             {said}
           </p>
         )}
-        {sectionsOpen ? (
-          <SectionList
-            id={listId}
-            sections={sections}
-            hrefFor={hrefFor}
-            onNavigate={onNavigate}
-          />
-        ) : null}
+        <SectionList
+          id={listId}
+          open={sectionsOpen}
+          sections={sections}
+          hrefFor={hrefFor}
+          onNavigate={onNavigate}
+        />
       </div>
       {after}
     </div>

@@ -112,7 +112,7 @@ vi.mock("./component-library-client", () => ({
   useComponentLibrary: () => LIBRARY,
 }));
 
-import { PageMiniature } from "./PageMiniature";
+import { PageMiniature, type MiniatureRegion } from "./PageMiniature";
 import { useRestingPageRender } from "./use-resting-page-render";
 
 afterEach(cleanup);
@@ -134,7 +134,13 @@ function pageWith(text: string): BlockDocument {
 }
 
 /** The entry form, reduced: a Title field beside the blocks field's preview. */
-function EntryForm({ document }: { document: BlockDocument }): JSX.Element {
+function EntryForm({
+  document,
+  regions,
+}: {
+  document: BlockDocument;
+  regions?: readonly MiniatureRegion[];
+}): JSX.Element {
   const [title, setTitle] = useState("");
   const resting = useRestingPageRender("page-builder", document);
   return (
@@ -148,6 +154,7 @@ function EntryForm({ document }: { document: BlockDocument }): JSX.Element {
         document={document}
         siteStyles={resting.siteStyles}
         render={resting.render}
+        {...(regions === undefined ? {} : { regions })}
       />
     </>
   );
@@ -175,6 +182,26 @@ describe("the entry page's preview of the page", () => {
       fireEvent.change(title, { target: { value } });
     }
     // The control: the field took the keystrokes, so the form re-rendered.
+    expect((title as HTMLInputElement).value).toBe("Abc");
+    expect(counted.draws).toBe(0);
+  });
+
+  it("draws nothing again inside its header & footer set while another field changes", async () => {
+    // The regions as the field holds them: one answer while the set chosen
+    // is the same, as the page's Layout read gives it.
+    const regions: readonly MiniatureRegion[] = [
+      { area: "header", document: pageWith("Site header") },
+    ];
+    await act(async () => {
+      render(<EntryForm document={pageWith("Hello")} regions={regions} />);
+    });
+    // The control: the header is drawn, so the regions reach the picture.
+    expect(screen.getByText("Site header")).toBeTruthy();
+    counted.draws = 0;
+    const title = screen.getByLabelText("Title");
+    for (const value of ["A", "Ab", "Abc"]) {
+      fireEvent.change(title, { target: { value } });
+    }
     expect((title as HTMLInputElement).value).toBe("Abc");
     expect(counted.draws).toBe(0);
   });

@@ -279,6 +279,7 @@ function useSaveAndOpen(
 ): SaveAndOpen | undefined {
   const actions = useDocumentActions();
   const [saving, setSaving] = useState(false);
+  const [refusal, setRefusal] = useState<string>();
   if (!("unsaved" in address) || identity?.kind !== "collection") {
     return undefined;
   }
@@ -288,19 +289,35 @@ function useSaveAndOpen(
   return {
     label: save.label,
     saving,
+    ...(refusal === undefined ? {} : { refusal }),
     run: () => {
       if (saving) return;
       setSaving(true);
+      setRefusal(undefined);
       void save
         .run()
         .then(outcome => {
           if (outcome.ok && outcome.item !== undefined) {
             openBuilderAfterSave(collection, outcome.item.id, field);
           }
+          setRefusal(unsaidRefusal(outcome));
         })
         .finally(() => setSaving(false));
     },
   };
+}
+
+/**
+ * Why a save was refused, where nothing else on the screen says it: the
+ * form shows its own validation errors, and an outcome marked reported has
+ * been said already. A save the author cancelled needs no words.
+ */
+function unsaidRefusal(outcome: DocumentActionOutcome): string | undefined {
+  if (outcome.ok || outcome.reported === true) return undefined;
+  if (outcome.reason === "invalid" || outcome.reason === "cancelled") {
+    return undefined;
+  }
+  return outcome.message;
 }
 
 /** The first save a new entry's form offers, with what the way in says. */
@@ -342,6 +359,9 @@ function useOpenAfterSave(
   }, [href, kind, slug, documentId, field]);
 }
 
+/** Why an entry never saved has no way in where its editor offers no save. */
+const OPENS_ONCE_SAVED = "Opens in the builder once this entry is saved.";
+
 /**
  * The card's way in from the builder's address: its link, or the save that
  * gives an entry never saved one, and the sentence beneath it — why there is
@@ -360,9 +380,14 @@ function cardWayIn(
     return { href: undefined, note: address.unavailable };
   }
   if ("unsaved" in address) {
-    return saveAndOpen === undefined
-      ? { href: undefined }
-      : { href: undefined, saveAndOpen };
+    // An editor offering no save of its own, such as a quick create inside
+    // another document's form: the entry opens in the builder once saved.
+    if (saveAndOpen === undefined) {
+      return { href: undefined, note: OPENS_ONCE_SAVED };
+    }
+    return saveAndOpen.refusal === undefined
+      ? { href: undefined, saveAndOpen }
+      : { href: undefined, saveAndOpen, note: saveAndOpen.refusal };
   }
   return address.note === undefined
     ? { href: address.href }
