@@ -118,10 +118,12 @@ export interface CustomEditViewProps {
  * of the create form when "+ New" is pressed on a collection whose entries
  * open in that view.
  *
- * The dialog draws its whole self (title, fields, buttons) and is mounted
- * only while open. It is opened only for a reader who may create the
- * collection's entries and update them, as an entry opens in a view only for
- * one who may update it.
+ * The admin draws the dialog itself, titled "New <singular>", with its focus,
+ * Escape and overlay handling; the component draws its body (fields and its
+ * own buttons) and is mounted only while open. It is opened only for a reader
+ * who may create the collection's entries and update them, as an entry opens
+ * in a view only for one who may update it, so it can offer to open what it
+ * creates without asking.
  */
 export interface DocumentCreateDialogProps {
   /** The collection "+ New" was pressed on, for the dialog to word itself. */

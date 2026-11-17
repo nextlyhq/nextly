@@ -1028,9 +1028,11 @@ text with words in it.
 
 A view can offer its own short create dialog: declare `createDialog`, a
 component path like `component`, on the view. On a collection whose entries
-open in that view (by the rule above), the list's "+ New" opens your component
-over the list instead of going to the create form. It draws its whole dialog,
-creates the entry through its own route or the REST API, and receives
+open in that view (by the rule above), the list's "+ New" opens a dialog over
+the list instead of going to the create form. The admin draws the dialog,
+titled "New" and the collection's singular name ("New page"), with its focus, Escape and overlay
+handling; your component draws its body, including its own buttons, creates
+the entry through its own route or the REST API, and receives
 `DocumentCreateDialogProps` from `@nextlyhq/plugin-sdk/admin`: the
 `collection` (its `slug` and `labels`) and `close(createdId?)`. Call
 `close(id)` with the new entry's id and the admin opens it where its

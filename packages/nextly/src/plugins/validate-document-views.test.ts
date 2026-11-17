@@ -567,6 +567,19 @@ describe("a view's own create dialog (`createDialog`)", () => {
     expect(error.logMessage).toContain("createDialog");
   });
 
+  it("refuses a blank createDialog on a field-type view too", () => {
+    // Both declaration sites reach the same check.
+    const error = refusal([
+      fieldTypePlugin(
+        "@acme/builder",
+        ["blocks"],
+        [{ path: "builder", fieldType: "blocks", createDialog: " " }]
+      ),
+    ]);
+    expect(error.code).toBe("NEXTLY_PLUGIN_DOCUMENT_VIEW_INVALID");
+    expect(error.logMessage).toContain("createDialog");
+  });
+
   it("accepts a view with a create dialog to open", () => {
     // The control for the refusals above.
     expect(() =>

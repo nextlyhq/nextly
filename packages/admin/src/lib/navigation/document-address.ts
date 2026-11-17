@@ -244,6 +244,26 @@ function viewAddress(
     : `${address}?${new URLSearchParams({ field: destination.field }).toString()}`;
 }
 
+/**
+ * The collection, when a document of it may be opened in a view at all: a
+ * collection's (not a Single's) whose collection is known, for a reader who
+ * may update it (a view edits it), asked for in the default language (a view
+ * edits that one). The one statement of those conditions, which where an
+ * entry opens, its other ways in and the list's create dialog all read.
+ */
+function viewableCollection(
+  document: OpenedDocument,
+  collection: OpenableCollection | undefined,
+  request: OpenRequest
+): OpenableCollection | undefined {
+  return document.kind !== "collection" ||
+    collection === undefined ||
+    !request.canUpdate ||
+    otherLanguage(request)
+    ? undefined
+    : collection;
+}
+
 /** A collection entry that may be opened in a view, with its collection. */
 interface ViewableEntry {
   slug: string;
@@ -251,26 +271,16 @@ interface ViewableEntry {
   collection: OpenableCollection;
 }
 
-/**
- * The entry, when it may be opened in a view at all: a collection entry whose
- * collection is known, which the reader may update (a view edits it), asked
- * for in the default language (a view edits that one).
- */
+/** The entry, when it may be opened in a view at all (`viewableCollection`). */
 function viewableEntry(
   document: OpenedDocument,
   collection: OpenableCollection | undefined,
   request: OpenRequest
 ): ViewableEntry | undefined {
-  if (
-    document.kind !== "collection" ||
-    document.id === undefined ||
-    collection === undefined ||
-    !request.canUpdate ||
-    otherLanguage(request)
-  ) {
-    return undefined;
-  }
-  return { slug: document.slug, id: document.id, collection };
+  const viewable = viewableCollection(document, collection, request);
+  return viewable === undefined || document.id === undefined
+    ? undefined
+    : { slug: document.slug, id: document.id, collection: viewable };
 }
 
 /**
@@ -432,15 +442,9 @@ export function createDialogOf(
   request: OpenRequest,
   views: readonly RegisteredDocumentView[]
 ): string | undefined {
-  if (
-    document.kind !== "collection" ||
-    collection === undefined ||
-    !request.canUpdate ||
-    otherLanguage(request)
-  ) {
-    return undefined;
-  }
-  const opened = ruleDestination(document.slug, collection, views).view;
+  const viewable = viewableCollection(document, collection, request);
+  if (viewable === undefined) return undefined;
+  const opened = ruleDestination(document.slug, viewable, views).view;
   return opened === undefined
     ? undefined
     : viewAt(views, document.slug, opened)?.createDialog;

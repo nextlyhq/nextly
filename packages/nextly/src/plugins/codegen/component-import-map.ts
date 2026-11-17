@@ -56,6 +56,7 @@ export type ComponentMapUse =
   | "settings"
   | "collection view"
   | "document view"
+  | "create dialog"
   | "slot"
   | "contribution"
   | "field type"
@@ -217,7 +218,7 @@ function collectAdminEntries(
       entry(view.component, owner, "document view"),
       ...(view.createDialog === undefined
         ? []
-        : [entry(view.createDialog, owner, "document view")]),
+        : [entry(view.createDialog, owner, "create dialog")]),
     ]),
     ...collectAdminSlotPaths(plugin).map(tagged("slot")),
     ...collectContributionPaths(admin.contributions).map(

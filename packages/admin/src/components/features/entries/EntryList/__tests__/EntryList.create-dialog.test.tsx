@@ -6,7 +6,7 @@
  * the form, a view with no dialog, or a dialog this admin can't draw keep
  * the create form. The data hooks are replaced and the page itself is real.
  */
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -26,7 +26,7 @@ const sections = { name: "sections", type: "blocks", label: "Sections" };
 /** Notes whose entries open in the builder, as the collection declares. */
 const OPENS_IN_BUILDER = {
   name: "notes",
-  label: "Notes",
+  label: "Note",
   fields: [title, excerpt, sections],
   admin: { useAsTitle: "title", opensIn: "builder" },
 };
@@ -43,11 +43,13 @@ let declaresDialog = true;
 /** The test view's create dialog, as a plugin would declare it. */
 const DIALOG = "@acme/builder#NewNote";
 
-/** A dialog that creates "n9", or is closed without creating. */
+/** A dialog body that creates "n9", or closes without creating. */
 function NewNoteDialog({ collection, close }: DocumentCreateDialogProps) {
   return (
-    <div role="dialog" aria-label={`New ${collection.labels.singular}`}>
-      <p>For {collection.slug}</p>
+    <div>
+      <p>
+        For {collection.slug}, a {collection.labels.singular}
+      </p>
       <button type="button" onClick={() => close("n9")}>
         Create
       </button>
@@ -57,6 +59,9 @@ function NewNoteDialog({ collection, close }: DocumentCreateDialogProps) {
     </div>
   );
 }
+
+/** The admin's dialog around the plugin's body, named by the collection. */
+const createDialog = () => screen.queryByRole("dialog", { name: "New note" });
 
 vi.mock("@admin/hooks/queries", () => ({
   useEntries: () => ({
@@ -155,8 +160,8 @@ describe('EntryList — "+ New" opens the view\'s create dialog', () => {
   it("opens the dialog over the list, given the collection, where entries open in the view", async () => {
     const user = userEvent.setup();
     await pressNew(user);
-    const dialog = screen.getByRole("dialog", { name: /^New / });
-    expect(within(dialog).getByText("For notes")).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "New note" });
+    expect(within(dialog).getByText("For notes, a Note")).toBeInTheDocument();
     expect(navigateTo).not.toHaveBeenCalled();
   });
 
@@ -167,16 +172,54 @@ describe('EntryList — "+ New" opens the view\'s create dialog', () => {
     expect(navigateTo).toHaveBeenCalledWith(
       "/admin/collections/notes/n9/builder?field=sections"
     );
-    expect(screen.queryByRole("dialog", { name: /^New / })).toBeNull();
+    expect(createDialog()).toBeNull();
   });
 
   it("leaves the list as it was when the dialog closes without creating", async () => {
     const user = userEvent.setup();
     await pressNew(user);
     await user.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByRole("dialog", { name: /^New / })).toBeNull();
+    expect(createDialog()).toBeNull();
     expect(navigateTo).not.toHaveBeenCalled();
     expect(table().getByRole("link", { name: "First note" })).toBeVisible();
+  });
+
+  it("leaves the list as it was when the dialog is dismissed with Escape, giving focus back to New", async () => {
+    const user = userEvent.setup();
+    await pressNew(user);
+    await user.keyboard("{Escape}");
+    expect(createDialog()).toBeNull();
+    expect(navigateTo).not.toHaveBeenCalled();
+    // The admin's dialog gives focus back to what opened it once it closes.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^New / })).toHaveFocus()
+    );
+  });
+
+  it("keeps a way out when the dialog's body throws while drawing", async () => {
+    clearRegistry();
+    registerComponents({
+      [DIALOG]: function Broken(): never {
+        throw new Error("the plugin's body broke");
+      },
+    });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const user = userEvent.setup();
+    await pressNew(user);
+    // The admin's frame stays, so the person can still leave it.
+    expect(createDialog()).not.toBeNull();
+    await user.keyboard("{Escape}");
+    expect(createDialog()).toBeNull();
+    expect(navigateTo).not.toHaveBeenCalled();
+    errors.mockRestore();
+  });
+
+  it("goes to the create form for a reader who may not update the entries, which open as the form for them", async () => {
+    mayUpdate = false;
+    const user = userEvent.setup();
+    await pressNew(user);
+    expect(navigateTo).toHaveBeenCalledWith("/admin/collections/notes/create");
+    expect(createDialog()).toBeNull();
   });
 
   it("goes to the create form where the entries open as the form", async () => {
@@ -184,7 +227,7 @@ describe('EntryList — "+ New" opens the view\'s create dialog', () => {
     const user = userEvent.setup();
     await pressNew(user);
     expect(navigateTo).toHaveBeenCalledWith("/admin/collections/notes/create");
-    expect(screen.queryByRole("dialog", { name: /^New / })).toBeNull();
+    expect(createDialog()).toBeNull();
   });
 
   it("goes to the create form where the view declares no dialog", async () => {
