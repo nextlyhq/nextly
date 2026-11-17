@@ -429,3 +429,15 @@ export { BREAKPOINT_AXES } from "../style/breakpoint-axes";
  * author defined and in what order they apply.
  */
 export { authoredBreakpoints, inCascadeOrder } from "../style/breakpoint-set";
+
+/**
+ * The value a size made with Fluid… takes, for a site's fluid range. Public
+ * because both the editor that writes it and a save that merges two authors'
+ * edits must write the same value from the same sizes and range.
+ */
+export {
+  DEFAULT_FLUID_RANGE,
+  fluidValue,
+  type FluidRangeWidths,
+  type FluidSizes,
+} from "../style/fluid-value";

@@ -31,6 +31,8 @@ export interface FluidHook {
   readonly onFluid: (sizes: FluidSizes) => void;
   /** The site's fluid range. */
   readonly range?: FluidRangeWidths;
+  /** Change the site's fluid range, from "Change range". */
+  readonly onRange?: (range: FluidRangeWidths) => void;
 }
 
 /** The sizes to start from: the stored ones, else the value's nearest. */
@@ -117,6 +119,9 @@ function FluidForm({
           ? "Type two sizes in px."
           : `${String(ready.small)}px at ${String(range.min)}px, growing to ${String(ready.large)}px at ${String(range.max)}px`}
       </p>
+      {hook.onRange === undefined ? null : (
+        <RangeLink range={range} onRange={hook.onRange} />
+      )}
       <Button
         type="button"
         size="sm"
@@ -131,6 +136,144 @@ function FluidForm({
       >
         Make fluid
       </Button>
+    </div>
+  );
+}
+
+/** "Change range", and the site's fluid range under it while it is open. */
+function RangeLink({
+  range,
+  onRange,
+}: {
+  range: FluidRangeWidths;
+  onRange: (range: FluidRangeWidths) => void;
+}): React.JSX.Element {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        className="nx-vars__link nx-fluid__range-link"
+        aria-expanded={open}
+        onClick={() => setOpen(current => !current)}
+      >
+        Change range
+      </button>
+      {open ? (
+        <FluidRangeFields range={range} onRange={onRange} readOnly={false} />
+      ) : null}
+    </>
+  );
+}
+
+/** The range's two widths as the fields show them. */
+interface RangeDrafts {
+  readonly min: string;
+  readonly max: string;
+}
+
+/**
+ * The fields' typing, until the stored range changes underneath them (an
+ * undo, another author's save), which replaces both.
+ */
+function useRangeDrafts(
+  range: FluidRangeWidths
+): [RangeDrafts, React.Dispatch<React.SetStateAction<RangeDrafts>>] {
+  const stored = `${String(range.min)} ${String(range.max)}`;
+  const [drafts, setDrafts] = React.useState<RangeDrafts>(() =>
+    draftsOf(range)
+  );
+  const [shown, setShown] = React.useState(stored);
+  if (shown !== stored) {
+    setShown(stored);
+    setDrafts(draftsOf(range));
+  }
+  return [drafts, setDrafts];
+}
+
+function draftsOf(range: FluidRangeWidths): RangeDrafts {
+  return { min: String(range.min), max: String(range.max) };
+}
+
+/** The end whose own text is no width, or `undefined` when both are widths. */
+function unreadableEnd(next: {
+  min: number | undefined;
+  max: number | undefined;
+}): "min" | "max" | undefined {
+  if (next.min === undefined) return "min";
+  return next.max === undefined ? "max" : undefined;
+}
+
+/**
+ * The site's fluid range: "Smallest screen" and "Largest screen", in px.
+ * Each field commits when it is left or on Enter; a range whose smallest
+ * screen is not the smaller is refused in its field, saying why, and not
+ * written. The one control for the range, in the Type tab and from every
+ * "Fluid…".
+ */
+export function FluidRangeFields({
+  range,
+  onRange,
+  readOnly,
+}: {
+  range: FluidRangeWidths;
+  onRange: (range: FluidRangeWidths) => void;
+  readOnly: boolean;
+}): React.JSX.Element {
+  const id = React.useId();
+  const [drafts, setDrafts] = useRangeDrafts(range);
+  const [refused, setRefused] = React.useState<"min" | "max" | undefined>();
+  // Both fields are read on either's commit, so the pair saved is the pair on
+  // screen: a refused width stays typed, and putting the other right saves
+  // both rather than the stored one beside it.
+  const commit = (end: "min" | "max"): void => {
+    const next = { min: sizeOf(drafts.min), max: sizeOf(drafts.max) };
+    if (
+      next.min === undefined ||
+      next.max === undefined ||
+      next.min >= next.max
+    ) {
+      setRefused(unreadableEnd(next) ?? end);
+      return;
+    }
+    setRefused(undefined);
+    if (next.min !== range.min || next.max !== range.max) {
+      onRange({ min: next.min, max: next.max });
+    }
+  };
+  const field = (end: "min" | "max", label: string): React.JSX.Element => (
+    <>
+      <label className="nx-vars-editor__label" htmlFor={`${id}-${end}`}>
+        {label}
+      </label>
+      <Input
+        id={`${id}-${end}`}
+        inputMode="decimal"
+        autoComplete="off"
+        readOnly={readOnly}
+        value={drafts[end]}
+        aria-invalid={refused === end ? true : undefined}
+        aria-describedby={refused === end ? `${id}-said` : undefined}
+        onChange={event => {
+          const text = event.currentTarget.value;
+          setDrafts(current => ({ ...current, [end]: text }));
+        }}
+        onBlur={() => commit(end)}
+        onKeyDown={event => {
+          if (event.key === "Enter") commit(end);
+        }}
+      />
+    </>
+  );
+  return (
+    <div className="nx-fluid__range" role="group" aria-label="Fluid range">
+      {field("min", "Smallest screen")}
+      {field("max", "Largest screen")}
+      {refused === undefined ? null : (
+        <p className="nx-fluid__said" id={`${id}-said`} role="status">
+          The smallest screen comes first, and both are widths in px.
+        </p>
+      )}
     </div>
   );
 }

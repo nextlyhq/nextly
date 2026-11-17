@@ -30,12 +30,13 @@ import { Undo2 } from "lucide-react";
 import * as React from "react";
 
 import { FluidButton, type FluidHook } from "./fluid-popover";
-import { DEFAULT_FLUID_RANGE } from "./fluid-size";
 import { useRecentColours } from "./recent-colours";
 import { colourHexOf } from "./style-colour";
 import {
   clearDarkValue,
   labelNewVariable,
+  fluidRangeOf,
+  setFluidRange,
   setFluidSize,
   relabelToken,
   variableLabelIssue,
@@ -681,11 +682,13 @@ function fluidHookOf({
   readOnly: boolean;
 }): FluidHook | undefined {
   if (readOnly || token.kind !== "dimension") return undefined;
+  const range = fluidRangeOf(tokens);
   return {
     sizes: token.fluid,
     value: token.values.light,
-    onFluid: sizes =>
-      onChange(setFluidSize(tokens, at, sizes, DEFAULT_FLUID_RANGE)),
+    range,
+    onFluid: sizes => onChange(setFluidSize(tokens, at, sizes, range)),
+    onRange: next => onChange(setFluidRange(tokens, next)),
   };
 }
 
