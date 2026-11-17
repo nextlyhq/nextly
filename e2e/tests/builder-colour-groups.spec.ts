@@ -161,17 +161,18 @@ test("colours sit in named groups an author adds to, moves between and removes, 
     await clickBlock(page, "groups-text");
     const inspector = page.getByTestId("inspector");
     await inspector.getByRole("tab", { name: "Style" }).click();
+    // The text colour sits in the Style tab's Text section, opened by its
+    // own state: a section read while the inspector redraws would toggle shut.
+    const text = inspector.getByRole("button", {
+      name: /^Text(\s?has changes)?$/,
+    });
+    if ((await text.getAttribute("aria-expanded")) !== "true") {
+      await text.click();
+    }
+    await expect(text).toHaveAttribute("aria-expanded", "true");
     const colour = inspector.getByRole("button", {
       name: /^Colour for Colou?r/,
     });
-    if (!(await colour.isVisible())) {
-      // The text colour sits in the Style tab's text section; opened if shut.
-      await inspector
-        .locator('[data-slot="accordion-trigger"]')
-        .filter({ hasText: /^(Text|Typography)/ })
-        .first()
-        .click();
-    }
     await colour.click();
     const options = page
       .getByRole("listbox", { name: "Colour variables" })
