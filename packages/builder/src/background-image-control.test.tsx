@@ -397,3 +397,27 @@ describe("an upload finishing after the style being edited changed", () => {
     expect(onBlock).not.toHaveBeenCalled();
   });
 });
+
+describe("an upload finishing after the field is gone", () => {
+  it("writes nothing once the field has unmounted (another device or state shown)", async () => {
+    // The field is keyed by state and device; switching unmounts it, and its
+    // commit is then frozen on the page as it was.
+    let finish: (media: PickedMedia) => void = () => {};
+    const uploadMedia = vi.fn(
+      () =>
+        new Promise<PickedMedia>(resolve => {
+          finish = resolve;
+        })
+    );
+    const onCommit = renderField({ services: { uploadMedia } });
+    const input =
+      document.querySelector<HTMLInputElement>('input[type="file"]');
+    fireEvent.change(input as HTMLInputElement, {
+      target: { files: [new File(["x"], "a.jpg", { type: "image/jpeg" })] },
+    });
+    cleanup();
+    finish(PICKED);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+});

@@ -90,6 +90,14 @@ function useImageWrites(
     commitNow.current = onCommit;
     targetNow.current = target;
   });
+  // Leaving (another device or state shown remounts the field) ends any
+  // upload still running: its commit would write against the page as it was.
+  React.useEffect(
+    () => () => {
+      writes.current += 1;
+    },
+    []
+  );
 
   // A picked or uploaded file is written by its address; one without an
   // address has nothing a page could draw.
