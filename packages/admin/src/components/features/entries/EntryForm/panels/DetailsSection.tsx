@@ -72,7 +72,8 @@ export function DetailsSection({
   );
 }
 
-function DetailRow({
+/** One labelled line of a panel section's list, its value at the end. */
+export function DetailRow({
   icon: Icon,
   label,
   children,
@@ -126,7 +127,7 @@ function WhenRow({
  * The API address, cut short to fit, and a control that copies it whole, as
  * a URL on this admin's own site, which is where it is read.
  */
-function ApiAddressCopy({
+export function ApiAddressCopy({
   address,
   id,
 }: {

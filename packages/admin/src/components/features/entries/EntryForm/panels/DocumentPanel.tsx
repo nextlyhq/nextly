@@ -28,6 +28,12 @@ import type { EntryData, EntryFormMode } from "../useEntryForm";
 import { DetailsSection } from "./DetailsSection";
 import { PanelSection } from "./PanelSection";
 import { PublishingSection } from "./PublishingSection";
+import {
+  ForDevelopersSection,
+  LastChangedSection,
+  WhatThisIsSection,
+  type SinglePanelFacts,
+} from "./SinglePanelSections";
 import { StatusSection, type PanelDocumentStatus } from "./StatusSection";
 
 // The document panel's sections, in the one order both editors draw them:
@@ -38,8 +44,15 @@ import { StatusSection, type PanelDocumentStatus } from "./StatusSection";
 // A side panel section a plugin declares at an edit page's place is drawn
 // where the server placed it among the built-in four (`panelOrder`, from
 // `placedPanelOrder`), and a built-in it replaces is not drawn.
+//
+// A Single's panel says more about the document, since a Single rarely has
+// a lifecycle or languages to fill it: what this is, first; when it was last
+// changed and by whom, after the lifecycle and language sections and before
+// any plugin's; and Details drawn as "For developers", in Details' own
+// place, so a section anchored to Details stays beside it.
 
 export { pillStateFromForm, PILL_LABEL, type PillState } from "./pill-state";
+export type { SinglePanelFacts } from "./SinglePanelSections";
 
 export interface DocumentPanelProps {
   /** Form mode. Nothing is drawn before the document exists. */
@@ -99,6 +112,11 @@ export interface DocumentPanelProps {
    * sections are handed `pluginSectionProps`; with neither, none is drawn.
    */
   placedSectionProps?: SidebarSectionProps | DocumentPanelSectionProps;
+  /**
+   * The Single this panel is about, which makes it a Single's panel (what
+   * this is, last changed, For developers). Absent, it is an entry's.
+   */
+  single?: SinglePanelFacts;
 }
 
 /** The built-in sections, in the order drawn when nothing places them. */
@@ -126,6 +144,7 @@ export function DocumentPanel({
   pluginSectionProps,
   panelOrder = BUILT_IN_ORDER,
   placedSectionProps = pluginSectionProps,
+  single,
 }: DocumentPanelProps): React.ReactElement | null {
   // Nothing to say until the document exists.
   if (mode === "create") return null;
@@ -169,7 +188,9 @@ export function DocumentPanel({
           </LanguageSection>
         );
       case "details":
-        return (
+        return single ? (
+          <ForDevelopersSection apiAddress={apiAddress} id={entry?.id} />
+        ) : (
           <DetailsSection
             entry={entry}
             apiAddress={apiAddress}
@@ -183,21 +204,47 @@ export function DocumentPanel({
     }
   };
 
+  // A Single's last change, said after the last of its lifecycle and
+  // language sections, so every section a plugin adds comes after it.
+  const lastChanged = single ? (
+    <LastChangedSection
+      at={
+        details?.updatedAt ??
+        entry?.updatedAt ??
+        (entry?.updated_at as string | undefined) ??
+        undefined
+      }
+      by={details?.updatedBy}
+      onOpenHistory={single.onOpenHistory}
+    />
+  ) : null;
+  const lastChangedAfter = single ? lastAboutTheDocument(panelOrder) : -1;
+
   return (
     <div className="flex flex-col" data-testid="document-panel-sections">
-      {panelOrder.map(part =>
-        part.kind === "builtIn" ? (
-          <Fragment key={`built-in:${part.name}`}>
-            {builtIn(part.name)}
-          </Fragment>
-        ) : placedSectionProps === undefined ? null : (
-          <PlacedSection
-            key={`placed:${part.id}`}
-            part={part}
-            props={placedSectionProps}
-          />
-        )
-      )}
+      {single ? (
+        <WhatThisIsSection
+          label={single.label}
+          description={single.description}
+        />
+      ) : null}
+      {lastChangedAfter === -1 ? lastChanged : null}
+      {panelOrder.map((part, index) => (
+        <Fragment
+          key={
+            part.kind === "builtIn"
+              ? `built-in:${part.name}`
+              : `placed:${part.id}`
+          }
+        >
+          {part.kind === "builtIn" ? (
+            builtIn(part.name)
+          ) : placedSectionProps === undefined ? null : (
+            <PlacedSection part={part} props={placedSectionProps} />
+          )}
+          {index === lastChangedAfter ? lastChanged : null}
+        </Fragment>
+      ))}
       {pluginSectionProps === undefined
         ? null
         : pluginSections.map(section => (
@@ -227,6 +274,27 @@ export function DocumentPanel({
           ))}
     </div>
   );
+}
+
+/** The built-in sections about the document itself, before any plugin's. */
+const ABOUT_THE_DOCUMENT: ReadonlySet<string> = new Set([
+  "status",
+  "publishing",
+  "language",
+]);
+
+/**
+ * Where in `order` the last of the sections about the document itself
+ * stands (Status, Publishing, Language), or -1 where none is there.
+ */
+function lastAboutTheDocument(order: readonly PanelOrderEntry[]): number {
+  let last = -1;
+  order.forEach((part, index) => {
+    if (part.kind === "builtIn" && ABOUT_THE_DOCUMENT.has(part.name)) {
+      last = index;
+    }
+  });
+  return last;
 }
 
 /**

@@ -12,13 +12,15 @@
  * reading the entry did not allow.
  *
  * Keyed under the entry's own detail key, so whatever refreshes the entry
- * after a save refreshes this too.
+ * after a save refreshes this too. A Single's are read the same way, from
+ * the Single's own read and under its own document key.
  *
  * @module components/features/entries/EntryForm/entry-details-read
  */
 
 import { useQuery } from "@tanstack/react-query";
 
+import { singleDocumentKeys } from "@admin/hooks/queries/useSingles";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import { entryKeys } from "@admin/services/entryApi";
 
@@ -56,17 +58,24 @@ export interface EntryDetails {
  * first save, or where the server answered none.
  */
 export function useEntryDetails({
+  scope = "collection",
   collectionSlug,
   entryId,
   locale,
 }: {
+  /** Whether `collectionSlug` names a collection or a Single. */
+  scope?: "collection" | "single";
+  /** The collection's slug, or the Single's. */
   collectionSlug: string;
+  /** The entry's id; for a Single, its document's, once it exists. */
   entryId: string | undefined;
   locale: string | undefined;
 }): EntryDetails | undefined {
   const { data } = useQuery({
     queryKey: [
-      ...entryKeys.detail(collectionSlug, entryId ?? ""),
+      ...(scope === "single"
+        ? singleDocumentKeys.detail(collectionSlug)
+        : entryKeys.detail(collectionSlug, entryId ?? "")),
       "details",
       { locale: locale ?? null },
     ],
@@ -81,7 +90,9 @@ export function useEntryDetails({
       });
       if (locale) query.set("locale", locale);
       const entry = await protectedApi.get<{ _details?: EntryDetails }>(
-        `/collections/${collectionSlug}/entries/${entryId}?${query.toString()}`
+        scope === "single"
+          ? `/singles/${collectionSlug}?${query.toString()}`
+          : `/collections/${collectionSlug}/entries/${entryId}?${query.toString()}`
       );
       // Kept under its own key in the cached value, so a write that patches
       // every read of the entry in the cache leaves the details as they are.
