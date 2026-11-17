@@ -42,6 +42,14 @@ import { createPortal } from "react-dom";
 
 import { useCanvasTokenModeAt } from "./canvas/prefers-dark";
 import {
+  ColourGroupHead,
+  ColourGroupHostContext,
+  NewGroupButton,
+  useColourGroupDrop,
+  useColourGroupHost,
+} from "./colour-group-ui";
+import { colourGroups, inColourGroup } from "./colour-groups";
+import {
   GroupToggle,
   OwnSearch,
   ViewBody,
@@ -314,8 +322,17 @@ function VariablesView({
   const { query, needle, searching, setQuery, own } = useViewSearch(
     hosted.search
   );
-  const { root, openKey, fresh, toggle, add, duplicate, forget, commitFrom } =
-    useOpenVariable({ tokens, onChange, currentTokens, onSettle });
+  const {
+    root,
+    openKey,
+    fresh,
+    toggle,
+    add,
+    duplicate,
+    forget,
+    commitFrom,
+    focus,
+  } = useOpenVariable({ tokens, onChange, currentTokens, onSettle });
   const ownSearch = React.useRef<HTMLInputElement>(null);
   // Where focus goes once a variable is removed: the host's search where it
   // keeps one, else the view's own.
@@ -393,6 +410,7 @@ function VariablesView({
             fresh,
             forget,
             search,
+            focus,
           })}
         />
       </ViewBody>
@@ -510,6 +528,8 @@ interface RowsHost {
   readonly held: string | null;
   /** The row just added or copied, never saved, while its editor is open. */
   readonly fresh: string | null;
+  /** Focuses a row once it is drawn, wherever it is drawn now. */
+  readonly focus: (key: string) => void;
 }
 
 /** The groups a search leaves, or that none match. */
@@ -527,53 +547,164 @@ function VariableGroups({
   }[];
   searching: boolean;
   folds: GroupFolds | undefined;
-  onAdd: OnAdd;
+  onAdd: OnAddTo;
   rows: RowsHost;
 }): React.JSX.Element {
+  const colours = useColourGroupHost(
+    rows.tokens,
+    rows.readOnly,
+    rows.commitFrom(COLOUR_GROUPS_KEY)
+  );
   if (shown.length === 0) {
     return <p className="nx-vars__note">No variables match this search.</p>;
   }
   return (
-    <>
-      {shown.map(group => (
-        <React.Fragment key={group.group}>
-          <Group
-            group={group.group}
-            heading={group.heading}
-            entries={group.entries}
-            searching={searching}
-            folds={folds}
-            readOnly={rows.readOnly}
-            openKey={rows.openKey}
-            onAdd={onAdd}
-          >
-            {(entry: VariableEntry) => (
-              <VariableRow
-                key={entry.row.key}
-                entry={entry}
-                tokens={rows.tokens}
-                mode={rows.mode}
-                suppliedOf={rows.suppliedOf}
-                readOnly={rows.readOnly}
-                open={rows.openKey === entry.row.key}
-                onOpenChange={open => rows.toggle(entry.row.key, open)}
-                onChange={rows.commitFrom(entry.row.key)}
-                onDuplicate={() => rows.duplicate(entry)}
-                fresh={
-                  rows.fresh === entry.row.key
-                    ? { marked: rows.held === entry.row.key }
-                    : undefined
-                }
-                usage={rows.usage}
-                reach={rowReach(entry, rows.usage)}
-                onRemoved={() => rows.onRemoved(entry.row.key)}
-              />
-            )}
-          </Group>
-        </React.Fragment>
-      ))}
-    </>
+    <ColourGroupHostContext.Provider
+      value={{
+        ...colours,
+        onMoved: (row, next) => movedInto(row, next, folds, rows.focus),
+      }}
+    >
+      {shown
+        .flatMap(group =>
+          sectionsOf(group, rows.tokens, searching, colours.pending)
+        )
+        .map(section => (
+          <React.Fragment key={section.key}>
+            <Group
+              group={section.group}
+              heading={section.heading}
+              entries={section.entries}
+              searching={searching}
+              folds={folds}
+              readOnly={rows.readOnly}
+              openKey={rows.openKey}
+              onAdd={onAdd}
+              named={section.named}
+            >
+              {(entry: VariableEntry) => (
+                <VariableRow
+                  key={entry.row.key}
+                  entry={entry}
+                  tokens={rows.tokens}
+                  mode={rows.mode}
+                  suppliedOf={rows.suppliedOf}
+                  readOnly={rows.readOnly}
+                  open={rows.openKey === entry.row.key}
+                  onOpenChange={open => rows.toggle(entry.row.key, open)}
+                  onChange={rows.commitFrom(entry.row.key)}
+                  onDuplicate={() => rows.duplicate(entry)}
+                  fresh={
+                    rows.fresh === entry.row.key
+                      ? { marked: rows.held === entry.row.key }
+                      : undefined
+                  }
+                  usage={rows.usage}
+                  reach={rowReach(entry, rows.usage)}
+                  onRemoved={() => rows.onRemoved(entry.row.key)}
+                />
+              )}
+            </Group>
+          </React.Fragment>
+        ))}
+    </ColourGroupHostContext.Provider>
   );
+}
+
+/**
+ * After a colour row moved: moved into another group it is drawn there anew,
+ * so that group is opened and the row keeps the focus.
+ */
+function movedInto(
+  row: { readonly key: string; readonly identity: string },
+  next: SiteTokenSet,
+  folds: GroupFolds | undefined,
+  focus: (key: string) => void
+): void {
+  const into = colourGroups(next).find(group =>
+    group.identities.includes(row.identity)
+  );
+  if (into !== undefined) openFold(folds, colourGroupFoldKey(into.name));
+  focus(row.key);
+}
+
+/** What the Colours tab's group changes commit under: no row's editor. */
+const COLOUR_GROUPS_KEY = "colour-groups";
+
+/** An add, with the named group of colours whose list its add row ends. */
+type OnAddTo = (
+  what: Parameters<OnAdd>[0],
+  from: Parameters<OnAdd>[1],
+  group?: string
+) => void;
+
+/** One section of the list: a group, or one named group of colours. */
+interface ListSection {
+  readonly key: string;
+  readonly group: VariableGroup;
+  readonly heading: string;
+  readonly entries: readonly VariableEntry[];
+  readonly named?: { readonly name: string; readonly last: boolean };
+}
+
+/**
+ * The sections a group is listed in: the Colours group as its named groups,
+ * in the site's order, each holding its own colours; any other group whole.
+ * A search lists only the named groups it matches in.
+ */
+function sectionsOf(
+  group: {
+    readonly group: VariableGroup;
+    readonly heading: string;
+    readonly entries: readonly VariableEntry[];
+  },
+  tokens: SiteTokenSet,
+  searching: boolean,
+  /** Groups made with "+ New group" that hold no colour yet. */
+  pending: readonly string[] = []
+): ListSection[] {
+  const whole: ListSection = { ...group, key: group.group };
+  if (group.group !== "colours" || group.entries.length === 0) return [whole];
+  const byIdentity = new Map(
+    group.entries.map(entry => [entry.row.identity, entry])
+  );
+  const named = colourGroups(tokens)
+    .map(colourGroup => ({
+      name: colourGroup.name,
+      entries: colourGroup.identities.flatMap(identity => {
+        const entry = byIdentity.get(identity);
+        return entry === undefined ? [] : [entry];
+      }),
+    }))
+    .filter(colourGroup => !searching || colourGroup.entries.length > 0)
+    .concat(searching ? [] : pending.map(name => ({ name, entries: [] })));
+  return named.map((colourGroup, at) => ({
+    key: colourGroupFoldKey(colourGroup.name),
+    group: group.group,
+    heading: colourGroup.name,
+    entries: colourGroup.entries,
+    named: { name: colourGroup.name, last: at === named.length - 1 },
+  }));
+}
+
+/** What a named group with no colour in it says. */
+const NEW_GROUP_EMPTY = "Drag a colour here, or use Move to group…";
+
+/** A named group's heading with its name field and ⋯; any other as it is. */
+function ColourGroupHeadIf({
+  name,
+  children,
+}: {
+  name: string | undefined;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  if (name === undefined) return <>{children}</>;
+  return <ColourGroupHead name={name}>{children}</ColourGroupHead>;
+}
+
+/** What a named group of colours keeps its fold under. */
+function colourGroupFoldKey(name: string): string {
+  return `colour-group:${name}`;
 }
 
 /**
@@ -784,11 +915,13 @@ function useOpenVariable({
   /** The row just added, while its editor is open; a search keeps it. */
   fresh: string | null;
   toggle: (key: string, open: boolean) => void;
-  add: OnAdd;
+  add: OnAddTo;
   duplicate: (entry: VariableEntry) => void;
   forget: (key: string) => void;
   /** Each row editor's commit; see {@link useCommitsSettled}. */
   commitFrom: (key: string) => (next: SiteTokenSet) => void;
+  /** Focuses a row once it is drawn, as after a move to another group. */
+  focus: (key: string) => void;
 } {
   const root = React.useRef<HTMLDivElement>(null);
   const [openKey, setOpenKey] = React.useState<string | null>(null);
@@ -803,11 +936,22 @@ function useOpenVariable({
   // after its label) or after the editor closed onto a new row.
   React.useEffect(() => {
     if (focusKey === null) return;
-    const row = root.current?.querySelector<HTMLElement>(
-      `[data-variable-key="${CSS.escape(focusKey)}"]`
-    );
-    if (row) row.focus();
-    else if (origin.current?.isConnected === true) origin.current.focus();
+    const find = (): HTMLElement | null | undefined =>
+      root.current?.querySelector<HTMLElement>(
+        `[data-variable-key="${CSS.escape(focusKey)}"]`
+      );
+    const row = find();
+    if (row) {
+      row.focus();
+      // A row drawn anew, as one moved into another group is, has its button
+      // replaced once just after it mounts, as its editor's anchor registers.
+      // Focus follows the new one, unless it has gone elsewhere since.
+      window.setTimeout(() => {
+        const owner = row.ownerDocument;
+        if (row.isConnected || owner.activeElement !== owner.body) return;
+        find()?.focus();
+      }, 0);
+    } else if (origin.current?.isConnected === true) origin.current.focus();
     setFocusKey(null);
   }, [focusKey, tokens]);
 
@@ -835,10 +979,12 @@ function useOpenVariable({
     setOpenKey(key);
   };
 
-  // The search is kept: the new row is added where the author is.
-  const add: OnAdd = (what, from) => {
+  // The search is kept: the new row is added where the author is, in the
+  // named group of colours its add row ends.
+  const add: OnAddTo = (what, from, group) => {
     origin.current = from;
-    opened(addVariable(currentTokens() ?? tokens, what));
+    const made = addVariable(currentTokens() ?? tokens, what);
+    opened({ ...made, tokens: inColourGroup(made.tokens, made.at, group) });
   };
 
   const duplicate = (entry: VariableEntry): void => {
@@ -888,6 +1034,7 @@ function useOpenVariable({
     duplicate,
     forget,
     commitFrom,
+    focus: setFocusKey,
   };
 }
 
@@ -964,7 +1111,7 @@ function HiddenGroupAdds({
  * so its row and editor are drawn: the stored fold, which a search only
  * sets aside and would bring back once the add clears it.
  */
-function openFold(folds: GroupFolds | undefined, group: VariableGroup): void {
+function openFold(folds: GroupFolds | undefined, group: string): void {
   if (folds?.folded.has(group) === true) folds.onFold(group, false);
 }
 
@@ -1067,10 +1214,16 @@ function Group({
   readOnly,
   openKey,
   onAdd,
+  named,
   children,
 }: {
   group: VariableGroup;
   heading: string;
+  /**
+   * A named group of colours within the Colours group: its name, which keys
+   * its fold, and whether it ends the list and so holds the add row.
+   */
+  named?: { readonly name: string; readonly last: boolean } | undefined;
   entries: readonly VariableEntry[];
   searching: boolean;
   /** Present: the heading folds the group, and shows how many it holds. */
@@ -1078,56 +1231,141 @@ function Group({
   readOnly: boolean;
   /** The row whose editor is open, which is drawn even past the page. */
   openKey: string | null;
-  onAdd: OnAdd;
+  onAdd: OnAddTo;
   children: (entry: VariableEntry) => React.ReactNode;
 }): React.JSX.Element {
   const id = React.useId();
   // A search opens every group it matches in and folds none; the folds come
   // back as they were once it is cleared.
-  const folded = folds !== undefined && !searching && folds.folded.has(group);
+  const { foldKey, folded } = foldOf(group, named, folds, searching);
   return (
     <section
       className="nx-vars__group"
       aria-labelledby={id}
       // Which group this is, for a host bringing one into view.
       data-group={group}
+      data-colour-group={named?.name}
       data-folded={folded ? "" : undefined}
     >
-      <div className="nx-vars__group-head">
-        <h3 className="nx-vars__group-name" id={id}>
-          <GroupHeading
-            group={group}
-            heading={heading}
-            count={entries.length}
-            folds={folds}
-            folded={folded}
-            searching={searching}
-          />
-        </h3>
-      </div>
+      <GroupHead
+        id={id}
+        name={named?.name}
+        foldKey={foldKey}
+        heading={heading}
+        count={entries.length}
+        folds={folds}
+        folded={folded}
+        searching={searching}
+      />
       {folded ? null : (
         <GroupRows
           entries={entries}
-          empty={ADDS[group].empty}
+          empty={named === undefined ? ADDS[group].empty : NEW_GROUP_EMPTY}
           searching={searching}
           openKey={openKey}
         >
           {children}
         </GroupRows>
       )}
-      {/* At the end of the list, so a new row is added where it is. A
-          folded group opens for what is added to it, so the new row and
-          its editor are drawn. */}
       {readOnly || folded ? null : (
-        <AddRows
+        <GroupEnd
           group={group}
+          named={named}
           onAdd={(what, from) => {
-            openFold(folds, group);
-            onAdd(what, from);
+            openFold(folds, foldKey);
+            onAdd(what, from, named?.name);
           }}
         />
       )}
     </section>
+  );
+}
+
+/**
+ * What a group's fold is kept under, and whether it is folded: a search
+ * opens every group it matches in and folds none, and the folds come back
+ * as they were once it is cleared.
+ */
+function foldOf(
+  group: VariableGroup,
+  named: { readonly name: string } | undefined,
+  folds: GroupFolds | undefined,
+  searching: boolean
+): { foldKey: string; folded: boolean } {
+  const foldKey = named === undefined ? group : colourGroupFoldKey(named.name);
+  return {
+    foldKey,
+    folded: folds !== undefined && !searching && folds.folded.has(foldKey),
+  };
+}
+
+/**
+ * A group's heading: its name, folding where the group folds; a named group
+ * of colours with its name field, its ⋯ and a drop for a dragged colour.
+ */
+function GroupHead({
+  id,
+  name,
+  foldKey,
+  heading,
+  count,
+  folds,
+  folded,
+  searching,
+}: {
+  id: string;
+  /** A named group of colours' name. */
+  name: string | undefined;
+  foldKey: string;
+  heading: string;
+  count: number;
+  folds: GroupFolds | undefined;
+  folded: boolean;
+  searching: boolean;
+}): React.JSX.Element {
+  // A colour dropped on a named group's heading goes to its end.
+  const dropOnHead = useColourGroupDrop(name ?? "");
+  return (
+    <div
+      className="nx-vars__group-head"
+      {...(name === undefined ? {} : dropOnHead)}
+    >
+      <ColourGroupHeadIf name={name}>
+        <h3 className="nx-vars__group-name" id={id}>
+          <GroupHeading
+            group={foldKey}
+            heading={heading}
+            count={count}
+            folds={folds}
+            folded={folded}
+            searching={searching}
+          />
+        </h3>
+      </ColourGroupHeadIf>
+    </div>
+  );
+}
+
+/**
+ * What ends an open group's list, so a new row is added where it is: its
+ * add row, and under the last named group of colours, "+ New group". A named
+ * group before the last ends with neither.
+ */
+function GroupEnd({
+  group,
+  named,
+  onAdd,
+}: {
+  group: VariableGroup;
+  named: { readonly name: string; readonly last: boolean } | undefined;
+  onAdd: OnAdd;
+}): React.JSX.Element | null {
+  if (named?.last === false) return null;
+  return (
+    <>
+      <AddRows group={group} onAdd={onAdd} />
+      {named === undefined ? null : <NewGroupButton />}
+    </>
   );
 }
 
@@ -1140,7 +1378,8 @@ function GroupHeading({
   folded,
   searching,
 }: {
-  group: VariableGroup;
+  /** What the group's fold is kept under. */
+  group: string;
   heading: string;
   count: number;
   folds: GroupFolds | undefined;

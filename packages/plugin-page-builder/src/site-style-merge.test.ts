@@ -343,6 +343,22 @@ describe("merging sizes made with Fluid… and the fluid range", () => {
   });
 });
 
+describe("merging the colour order", () => {
+  it("merges the order whole, never one position from each side", () => {
+    const merged = mergeSiteStyleSection(
+      "tokens",
+      { tokens: [], order: ["a", "b", "c"] },
+      { tokens: [], order: ["c", "a", "b"] },
+      { tokens: [], order: ["a", "c", "b"] },
+      "mine"
+    );
+    expect((merged.value as { order: unknown }).order).toEqual(["c", "a", "b"]);
+    expect(merged.conflicts).toMatchObject([
+      { key: "order", setting: true, kind: "changed", kept: "mine" },
+    ]);
+  });
+});
+
 describe("merging classes", () => {
   it("keeps their lock beside mine padding, with no conflict", () => {
     const mine = {

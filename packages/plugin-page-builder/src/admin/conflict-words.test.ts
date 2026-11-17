@@ -292,6 +292,21 @@ describe("naming an entry", () => {
     ).toBe("c9");
   });
 
+  it("names the colour order in words", () => {
+    const order: EntryConflict = {
+      key: "order",
+      setting: true,
+      kind: "changed",
+      kept: "mine",
+      base: undefined,
+      mine: ["a"],
+      theirs: ["b"],
+    };
+    expect(conflictWords("tokens", bySam(order))).toBe(
+      "Sam changed the colour order while you were editing. Your value was kept. Undo puts theirs back."
+    );
+  });
+
   it("names the fluid range in words", () => {
     const range: EntryConflict = {
       key: "fluidRange",

@@ -265,6 +265,11 @@ export function tokenOverrideOf(
       ? {}
       : { darkMode: edited.darkMode }),
     ...storedFluidRange(defaults, edited, tokens),
+    // The colour order, once the site has one of its own.
+    ...(edited.order === undefined ||
+    sameJsonValue(edited.order, defaults?.order)
+      ? {}
+      : { order: edited.order }),
     ...storedSiteText(defaults?.siteText, edited.siteText),
   };
 }
@@ -439,7 +444,28 @@ function mergeByKey<T>(
   return [...byKey.values()];
 }
 
-/** Token sets merged by token identity; `prefix`/`darkMode` from the override. */
+/** The set's site-wide settings, each the stored tier's over the code's. */
+const SITE_WIDE_SETTINGS = [
+  "prefix",
+  "darkMode",
+  "fluidRange",
+  "order",
+] as const satisfies readonly (keyof SiteTokenSet)[];
+
+/** Each site-wide setting the stored tier or the code sets, the stored first. */
+function siteWideSettings(
+  defaults: SiteTokenSet | undefined,
+  stored: SiteTokenSet | undefined
+): Pick<SiteTokenSet, (typeof SITE_WIDE_SETTINGS)[number]> {
+  const settings: Partial<SiteTokenSet> = {};
+  for (const key of SITE_WIDE_SETTINGS) {
+    const value = stored?.[key] ?? defaults?.[key];
+    if (value !== undefined) Object.assign(settings, { [key]: value });
+  }
+  return settings;
+}
+
+/** Token sets merged by token identity; the site-wide settings from the override. */
 function mergeTokens(
   defaults: SiteTokenSet | undefined,
   stored: SiteTokenSet | undefined
@@ -463,24 +489,8 @@ function mergeTokens(
   );
   return {
     tokens: tokens === undefined ? [] : [...tokens],
-    ...mergedSettings(defaults, stored),
-  };
-}
-
-/** The set-wide settings of two tiers: each the stored one where it states it. */
-function mergedSettings(
-  defaults: SiteTokenSet | undefined,
-  stored: SiteTokenSet | undefined
-): Omit<SiteTokenSet, "tokens"> {
-  const prefix = stored?.prefix ?? defaults?.prefix;
-  const darkMode = stored?.darkMode ?? defaults?.darkMode;
-  const fluidRange = stored?.fluidRange ?? defaults?.fluidRange;
-  const siteText = mergedSiteText(defaults?.siteText, stored?.siteText);
-  return {
-    ...(prefix === undefined ? {} : { prefix }),
-    ...(darkMode === undefined ? {} : { darkMode }),
-    ...(fluidRange === undefined ? {} : { fluidRange }),
-    ...(siteText === undefined ? {} : { siteText }),
+    ...siteWideSettings(defaults, stored),
+    ...mergedSiteText(defaults?.siteText, stored?.siteText),
   };
 }
 
@@ -493,10 +503,9 @@ function mergedSettings(
 function mergedSiteText(
   defaults: SiteTextMap | undefined,
   stored: SiteTextMap | undefined
-): SiteTextMap | undefined {
-  if (defaults === undefined) return stored;
-  if (stored === undefined) return defaults;
-  return { ...defaults, ...stored };
+): Pick<SiteTokenSet, "siteText"> {
+  if (defaults === undefined && stored === undefined) return {};
+  return { siteText: { ...defaults, ...stored } };
 }
 
 /**

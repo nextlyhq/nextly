@@ -23,6 +23,9 @@ export function sameSiteToken(a: SiteToken, b: SiteToken): boolean {
     a.id === b.id &&
     a.name === b.name &&
     a.label === b.label &&
+    // Display-only, as the label is: moving a supplied colour to another
+    // group is a change the site keeps.
+    a.group === b.group &&
     a.kind === b.kind &&
     a.description === b.description &&
     a.values.light === b.values.light &&

@@ -89,6 +89,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { toHex } from "@nextlyhq/ui/color";
 
+import { colourOrder } from "./colour-groups";
 import { CSS_NUMBER } from "./style-numeric";
 import { lengthFamilyOf, type LengthFamily } from "./tokens-studio";
 
@@ -384,12 +385,35 @@ function offeredTokens(
   const hit = byMode.get(mode);
   if (hit !== undefined) return hit;
   const resolved = resolveSiteTokens(tokens);
-  const built = emittableTokens(resolved, mode).map(token =>
-    siteVariableOf(token, mode)
+  const built = inColourOrder(
+    emittableTokens(resolved, mode).map(token => siteVariableOf(token, mode)),
+    colourOrder(resolved)
   );
   byMode.set(mode, built);
   cache.set(tokens, byMode);
   return built;
+}
+
+/**
+ * The variables with their colours in the site's colour order, the one the
+ * Design panel lists them in; every other variable keeps its place.
+ */
+function inColourOrder(
+  variables: readonly SiteVariable[],
+  order: readonly string[]
+): SiteVariable[] {
+  const rank = new Map(order.map((identity, at) => [identity, at]));
+  const colours = variables
+    .filter(variable => variable.kind === "color")
+    .sort(
+      (a, b) =>
+        (rank.get(a.identity) ?? order.length) -
+        (rank.get(b.identity) ?? order.length)
+    );
+  let next = 0;
+  return variables.map(variable =>
+    variable.kind === "color" ? (colours[next++] ?? variable) : variable
+  );
 }
 
 /**
