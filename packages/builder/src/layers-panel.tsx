@@ -98,8 +98,9 @@ import {
 import * as React from "react";
 
 import { BlockIconMark } from "./block-icon";
-import { deviceLabel } from "./breakpoint-switcher";
-import { DRAG_SOURCE_ATTRIBUTE } from "./canvas";
+import { DRAG_SOURCE_ATTRIBUTE } from "./canvas/canvas";
+import { useHoveredBlockSetter } from "./canvas/hovered-block";
+import { revealNode } from "./canvas/reveal-node";
 import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
@@ -108,7 +109,6 @@ import {
   useEntryContentRows,
   type EntryContentRowFacts,
 } from "./entry-content-layers";
-import { useHoveredBlockSetter } from "./hovered-block";
 import {
   layersLockChangeable,
   lockOp,
@@ -147,7 +147,7 @@ import {
 import { lockRefusalWording } from "./lock-refusal";
 import { refusalAnnouncement } from "./move-refusal";
 import type { BuilderOp } from "./op-vocabulary";
-import { revealNode } from "./reveal-node";
+import { deviceLabel } from "./shell/breakpoint-switcher";
 
 export interface LayersPanelProps {
   /** The editor whose document this shows and whose selection it drives. */

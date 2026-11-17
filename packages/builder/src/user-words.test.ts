@@ -109,7 +109,7 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   // The Style tab's Layout section.
   "inspector-sections.ts": ["Layout"],
   // A header or footer the site's own code draws around the canvas.
-  "site-chrome-cues.tsx": [
+  "canvas/site-chrome-cues.tsx": [
     "Part of your site’s layout",
     "Part of your site’s layout. It comes from your site’s code and can’t be edited here.",
   ],
@@ -136,8 +136,8 @@ describe("the editor's words", () => {
     expect(files.map(file => relative(SRC_DIR, file))).toEqual(
       expect.arrayContaining([
         "editor-words.ts",
-        "builder-commands.ts",
-        "toolbar-actions.ts",
+        "shell/builder-commands.ts",
+        "canvas/toolbar-actions.ts",
         "insert-panel.tsx",
       ])
     );

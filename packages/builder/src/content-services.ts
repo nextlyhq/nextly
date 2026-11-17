@@ -15,12 +15,12 @@ import type {
 import * as React from "react";
 
 import type { BindingServices } from "./binding-services";
+import type { InlineRichTextEditorLoader } from "./canvas/use-inline-rich-text";
 import type { EditableProp } from "./inspector";
 import type { QueryField } from "./list-query-model";
 import type { CustomSource } from "./named-query-model";
 import type { OpenPassages } from "./open-passages";
 import type { PreferenceStore } from "./shell-state";
-import type { InlineRichTextEditorLoader } from "./use-inline-rich-text";
 
 /** One item the host's media picker returned. Only its id is ever stored. */
 export interface PickedMedia {
