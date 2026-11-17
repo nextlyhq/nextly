@@ -79,7 +79,7 @@ const ACROSS: Readonly<Record<LogicalSide, LogicalSide>> = {
 };
 
 /** The paths a value chosen at this side is written to. */
-export function appliedPaths(
+function appliedPaths(
   box: SideBox | undefined,
   control: StyleControl,
   applyTo: ApplyTo
@@ -98,7 +98,7 @@ export function appliedPaths(
  * the block sides are top and bottom where lines run across, and left and
  * right where they run down.
  */
-export function pairLabel(
+function pairLabel(
   box: SideBox | undefined,
   control: StyleControl
 ): "Top & bottom" | "Left & right" {

@@ -235,11 +235,12 @@ export function StyleControlField({
 
   // A spacing-box side resets by key: see `sideKeysFor`.
   const inBox = React.useContext(CompactSides);
-  // Drawn in the spacing box as a button that opens the side's popover,
-  // which edits a variable it holds as readily as a number.
-  const asSide =
-    inBox && side !== undefined && drawnAsSide(control, stored, clearOnly);
-  const readOnly = asSide ? false : showsNoField(control, stored, clearOnly);
+  const { asSide, readOnly } = fieldSurface(
+    inBox && side !== undefined,
+    control,
+    stored,
+    clearOnly
+  );
   const sideKeys = sideKeysFor(side, inBox, stored, readOnly, id, commit);
   const labelId = `${id}-label`;
   // Computed once and used by both the control and its message: two spellings
@@ -299,35 +300,23 @@ export function StyleControlField({
                 descendant={control.leaf.descendant}
               />
               <InheritedValue.Provider value={inherited}>
-                {asSide ? (
-                  <SpacingSide
-                    id={id}
-                    labelledBy={labelId}
-                    name={actionName}
-                    control={control}
-                    stored={stored}
-                    inherited={inherited}
-                    tokens={tokens}
-                    describedBy={fieldDescribedBy(describedBy, true, id)}
-                    onCommit={commit}
-                    onCommitSides={writes.commitSides}
-                  />
-                ) : (
-                  <ControlOrFont
-                    id={id}
-                    labelledBy={labelId}
-                    control={control}
-                    stored={stored}
-                    actionName={actionName}
-                    clearOnly={clearOnly}
-                    tokens={tokens}
-                    prefersDark={prefersDark}
-                    pairedColour={pairedColour}
-                    obscuredBy={obscuredBy}
-                    describedBy={describedBy}
-                    onCommit={commit}
-                  />
-                )}
+                <FieldValue
+                  asSide={asSide}
+                  id={id}
+                  labelledBy={labelId}
+                  control={control}
+                  stored={stored}
+                  inherited={inherited}
+                  actionName={actionName}
+                  clearOnly={clearOnly}
+                  tokens={tokens}
+                  prefersDark={prefersDark}
+                  pairedColour={pairedColour}
+                  obscuredBy={obscuredBy}
+                  describedBy={describedBy}
+                  onCommit={commit}
+                  onCommitSides={writes.commitSides}
+                />
               </InheritedValue.Provider>
             </LabelScrubRow>
             <CssNamesLine id={namesId} names={[control.leaf.cssProperty]} />
@@ -357,6 +346,55 @@ export function StyleControlField({
       </FieldNamesId.Provider>
     </OptionWrites.Provider>
   );
+}
+
+/**
+ * A field's value: a spacing-box side's button, or the control its leaf
+ * resolves to.
+ */
+function FieldValue({
+  asSide,
+  inherited,
+  onCommitSides,
+  ...control
+}: Parameters<typeof ControlOrFont>[0] & {
+  /** Drawn as a side of the spacing box: see {@link drawnAsSide}. */
+  asSide: boolean;
+  inherited: string | undefined;
+  onCommitSides: React.ComponentProps<typeof SpacingSide>["onCommitSides"];
+}): React.JSX.Element {
+  if (!asSide) return <ControlOrFont {...control} />;
+  return (
+    <SpacingSide
+      id={control.id}
+      labelledBy={control.labelledBy}
+      name={control.actionName}
+      control={control.control}
+      stored={control.stored}
+      inherited={inherited}
+      tokens={control.tokens}
+      describedBy={fieldDescribedBy(control.describedBy, true, control.id)}
+      onCommit={control.onCommit}
+      onCommitSides={onCommitSides}
+    />
+  );
+}
+
+/**
+ * How a field is drawn: in the spacing box, a side whose value it can show is
+ * a button that opens the side's popover, which edits a variable it holds as
+ * readily as a number; otherwise read-only where no field can show its value.
+ */
+function fieldSurface(
+  inSpacingBox: boolean,
+  control: StyleControl,
+  stored: StyleValue | undefined,
+  clearOnly: boolean
+): { asSide: boolean; readOnly: boolean } {
+  if (inSpacingBox && drawnAsSide(control, stored, clearOnly)) {
+    return { asSide: true, readOnly: false };
+  }
+  return { asSide: false, readOnly: showsNoField(control, stored, clearOnly) };
 }
 
 /**

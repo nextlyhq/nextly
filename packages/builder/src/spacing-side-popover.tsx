@@ -53,7 +53,7 @@ const ZERO = /^[+-]?0*(?:\.0*)?(?:[a-z%]+)?$/i;
  * The site's spacing variables, smallest first, the order a scale is read
  * in. One with no single size (fluid, or through a function) goes last.
  */
-export function spacingPresets(
+function spacingPresets(
   control: StyleControl,
   tokens: SiteTokenSet | undefined,
   mode: ReturnType<typeof useCanvasTokenMode>
@@ -294,12 +294,31 @@ function popoverKeys(
   // After the number's own Enter has committed it.
   if (event.key === "Enter" && inNumber) return close("side");
   if (event.key !== "Tab") return;
-  if (quick && inNumber) return close(event.shiftKey ? "previous" : "next");
-  const stops = tabStops(event.currentTarget);
-  if (!event.shiftKey && target === stops[stops.length - 1]) {
-    return close("next");
-  }
-  if (event.shiftKey && target === stops[0]) close("side");
+  const to =
+    quick && inNumber
+      ? quickTab(event.shiftKey)
+      : tabPastEnd(event.currentTarget, target, event.shiftKey);
+  if (to !== undefined) close(to);
+}
+
+/** Tab in quick entry: on to the next side, or back to the one before. */
+function quickTab(back: boolean): SideClose {
+  return back ? "previous" : "next";
+}
+
+/**
+ * Tab past the popover's last control goes on to the next side, and Shift+Tab
+ * before its first goes back to its own; anywhere else Tab moves as usual.
+ */
+function tabPastEnd(
+  root: HTMLElement,
+  target: HTMLElement,
+  back: boolean
+): SideClose | undefined {
+  const stops = tabStops(root);
+  if (!back && target === stops[stops.length - 1]) return "next";
+  if (back && target === stops[0]) return "side";
+  return undefined;
 }
 
 /** The popover's Tab stops, in order. */

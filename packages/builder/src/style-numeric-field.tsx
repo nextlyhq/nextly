@@ -247,65 +247,143 @@ export function NumericField({
           return String(next);
         }}
       />
-      {showUnits ? (
-        <Select
-          // The empty string, never `undefined`. Radix reads `""` as "no
-          // selection" and shows the placeholder, while `undefined` switches it
-          // from controlled to UNCONTROLLED — where it keeps whatever was last
-          // picked, so a unit added and then undone leaves the trigger still
-          // displaying it while the draft has none. The draft is the only unit
-          // state, and passing `undefined` would give it a second one.
-          value={suffix.value}
-          onValueChange={hold.choosing(unitMenu.choose)}
-          onOpenChange={hold.onOpenChange}
-        >
-          <SelectTrigger
-            ref={hold.trigger}
-            onBlur={hold.onTriggerBlur}
-            className="nx-style-inspector__unit"
-            aria-label={`Unit for ${actionName}`}
-            // A unit change can be refused — a document at its byte limit, a
-            // value the validator rejects — and the message that explains it is
-            // rendered once for the field. Pointed at from HERE as well as from
-            // the text input, because a screen-reader user who returns to the
-            // menu is otherwise on the control that failed with nothing saying
-            // so and no way to reach the reason.
-            aria-describedby={described}
-            aria-invalid={describedBy === undefined ? undefined : true}
-          >
-            <SelectValue placeholder={suffix.placeholder} />
-          </SelectTrigger>
-          <SelectContent ref={hold.content}>
-            {extraUnit === null ? null : (
-              <SelectItem value={extraUnit}>{extraUnit}</SelectItem>
-            )}
-            {units.map(choice => (
-              <SelectItem key={choice} value={choice}>
-                {choice}
-              </SelectItem>
-            ))}
-            <KeywordItems
-              cssProperty={control.leaf.cssProperty}
-              keywords={keywords}
-              draft={draft}
-            />
-          </SelectContent>
-        </Select>
-      ) : null}
+      <UnitMenu
+        shown={showUnits}
+        value={suffix.value}
+        placeholder={suffix.placeholder}
+        hold={hold}
+        choose={unitMenu.choose}
+        actionName={actionName}
+        described={described}
+        invalid={describedBy !== undefined}
+        extraUnit={extraUnit}
+        units={units}
+        cssProperty={control.leaf.cssProperty}
+        keywords={keywords}
+        draft={draft}
+      />
       {/* The site's variables for this field, after its unit; nothing where
           the site has none the property takes. */}
-      {offerVariables ? (
-        <VariableChoice
-          leaf={control.leaf}
-          tokens={tokens}
-          bound={false}
-          empty={stored === undefined}
-          current={undefined}
-          label={actionName}
-          onPick={identity => onCommit({ $token: identity })}
-        />
-      ) : null}
+      <OfferedVariables
+        offered={offerVariables}
+        control={control}
+        stored={stored}
+        tokens={tokens}
+        actionName={actionName}
+        onCommit={onCommit}
+      />
     </div>
+  );
+}
+
+/**
+ * A length field's unit menu: its units, a stored unit it doesn't list, and
+ * its keywords after a line. Nothing where no choice in it could act.
+ */
+function UnitMenu({
+  shown,
+  value,
+  placeholder,
+  hold,
+  choose,
+  actionName,
+  described,
+  invalid,
+  extraUnit,
+  units,
+  cssProperty,
+  keywords,
+  draft,
+}: {
+  shown: boolean;
+  value: string;
+  placeholder: string;
+  hold: ReturnType<typeof useHeldBlur>;
+  choose: (choice: string) => void;
+  actionName: string;
+  described: string | undefined;
+  invalid: boolean;
+  extraUnit: string | null;
+  units: readonly string[];
+  cssProperty: string;
+  keywords: readonly string[];
+  draft: string;
+}): React.JSX.Element | null {
+  if (!shown) return null;
+  return (
+    <Select
+      // The empty string, never `undefined`. Radix reads `""` as "no
+      // selection" and shows the placeholder, while `undefined` switches it
+      // from controlled to UNCONTROLLED — where it keeps whatever was last
+      // picked, so a unit added and then undone leaves the trigger still
+      // displaying it while the draft has none. The draft is the only unit
+      // state, and passing `undefined` would give it a second one.
+      value={value}
+      onValueChange={hold.choosing(choose)}
+      onOpenChange={hold.onOpenChange}
+    >
+      <SelectTrigger
+        ref={hold.trigger}
+        onBlur={hold.onTriggerBlur}
+        className="nx-style-inspector__unit"
+        aria-label={`Unit for ${actionName}`}
+        // A unit change can be refused — a document at its byte limit, a
+        // value the validator rejects — and the message that explains it is
+        // rendered once for the field. Pointed at from HERE as well as from
+        // the text input, because a screen-reader user who returns to the
+        // menu is otherwise on the control that failed with nothing saying
+        // so and no way to reach the reason.
+        aria-describedby={described}
+        aria-invalid={invalid ? true : undefined}
+      >
+        <SelectValue placeholder={placeholder} />
+      </SelectTrigger>
+      <SelectContent ref={hold.content}>
+        {extraUnit === null ? null : (
+          <SelectItem value={extraUnit}>{extraUnit}</SelectItem>
+        )}
+        {units.map(choice => (
+          <SelectItem key={choice} value={choice}>
+            {choice}
+          </SelectItem>
+        ))}
+        <KeywordItems
+          cssProperty={cssProperty}
+          keywords={keywords}
+          draft={draft}
+        />
+      </SelectContent>
+    </Select>
+  );
+}
+
+/** The ◇ for the site's variables beside a field, where it offers them. */
+function OfferedVariables({
+  offered,
+  control,
+  stored,
+  tokens,
+  actionName,
+  onCommit,
+}: {
+  offered: boolean;
+  control: StyleControl;
+  stored: StyleValue | undefined;
+  tokens: SiteTokenSet | undefined;
+  actionName: string;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element | null {
+  if (!offered) return null;
+  return (
+    <VariableChoice
+      leaf={control.leaf}
+      tokens={tokens}
+      bound={false}
+      empty={stored === undefined}
+      current={undefined}
+      label={actionName}
+      onPick={identity => onCommit({ $token: identity })}
+    />
   );
 }
 
