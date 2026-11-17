@@ -29,13 +29,17 @@ interface OwnFieldProps {
  */
 const NO_PICTURE = {};
 
-/** Where the background image sits: the nine points, or Custom. */
+/**
+ * Where the background image sits: the nine points, or Custom. CSS places a
+ * background at its top left when nothing is set, so that is the default
+ * the picker reads and focuses.
+ */
 export function BackgroundPositionField(
   props: OwnFieldProps
 ): React.JSX.Element {
   return (
     <FocalFrame.Provider value={NO_PICTURE}>
-      <FocalPointField {...props} />
+      <FocalPointField {...props} fallback="left top" />
     </FocalFrame.Provider>
   );
 }

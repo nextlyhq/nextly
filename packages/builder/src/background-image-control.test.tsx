@@ -17,6 +17,7 @@ import type {
   PickedMedia,
 } from "./content-services";
 import { ContentServicesContext } from "./content-services";
+import { InheritedValue } from "./inherited-value";
 
 afterEach(cleanup);
 
@@ -150,11 +151,104 @@ describe("a set background image", () => {
     expect(onCommit).toHaveBeenCalledTimes(1);
   });
 
-  it("treats the `none` keyword as no image", () => {
-    renderField({ stored: "none" });
-    expect(screen.getByRole("textbox", { name: "Image link" })).toBeDefined();
+  it("says a keyword set here names no image, and offers to remove it", () => {
+    const onCommit = renderField({ stored: "none" });
+    expect(screen.getByText("No image here (none).")).toBeDefined();
+    expect(screen.queryByRole("img")).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove background image" })
+    );
+    expect(onCommit).toHaveBeenCalledWith(null);
+  });
+
+  it.each(["None", "inherit", "revert-layer"])(
+    "draws no thumbnail for the keyword %j",
+    keyword => {
+      renderField({ stored: keyword });
+      expect(document.querySelector("img")).toBeNull();
+    }
+  );
+
+  it("names a file whose address holds a bare %, rather than failing", () => {
+    renderField({ stored: "/img/100%.jpg" });
+    expect(screen.getByText("100%.jpg")).toBeDefined();
+  });
+});
+
+describe("an image reaching the field from elsewhere", () => {
+  it("says which image is inherited when none is set here", () => {
+    render(
+      <InheritedValue.Provider value="https://cdn.example.com/hero.jpg">
+        <BackgroundImageField
+          id="bg-image"
+          labelledBy="label"
+          stored={undefined}
+          actionName="Set Image"
+          describedBy={undefined}
+          onCommit={() => "applied"}
+        />
+      </InheritedValue.Provider>
+    );
+    expect(screen.getByText("Inherits hero.jpg")).toBeDefined();
+  });
+});
+
+describe("uploading", () => {
+  it("refuses a file that isn't an image, as the canvas's Image does", async () => {
+    const uploadMedia = vi.fn(async () => PICKED);
+    const onCommit = renderField({ services: { uploadMedia } });
+    const input =
+      document.querySelector<HTMLInputElement>('input[type="file"]');
+    const file = new File(["%PDF"], "brief.pdf", { type: "application/pdf" });
+    fireEvent.change(input as HTMLInputElement, { target: { files: [file] } });
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "That file isn't an image."
+    );
+    expect(uploadMedia).not.toHaveBeenCalled();
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("says why an upload failed, in the library's words, and can be tried again", async () => {
+    const uploadMedia = vi.fn(async () => {
+      throw new Error("The file is too large");
+    });
+    renderField({ services: { uploadMedia } });
+    const input =
+      document.querySelector<HTMLInputElement>('input[type="file"]');
+    const file = new File(["x"], "big.jpg", { type: "image/jpeg" });
+    fireEvent.change(input as HTMLInputElement, { target: { files: [file] } });
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "The upload didn't finish: The file is too large"
+    );
+    // Not left "Uploading…": the button is offered again.
     expect(
-      screen.queryByRole("button", { name: "Remove background image" })
-    ).toBeNull();
+      (screen.getByRole("button", { name: "Upload" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(false);
+  });
+
+  it("holds the link field while an upload runs, then writes the upload", async () => {
+    let finish: (media: PickedMedia) => void = () => {};
+    const uploadMedia = vi.fn(
+      () =>
+        new Promise<PickedMedia>(resolve => {
+          finish = resolve;
+        })
+    );
+    const onCommit = renderField({ services: { uploadMedia } });
+    const input =
+      document.querySelector<HTMLInputElement>('input[type="file"]');
+    fireEvent.change(input as HTMLInputElement, {
+      target: { files: [new File(["x"], "a.jpg", { type: "image/jpeg" })] },
+    });
+    // The link field is held while the upload runs.
+    const link = screen.getByRole("textbox", {
+      name: "Image link",
+    }) as HTMLInputElement;
+    expect(link.disabled).toBe(true);
+    finish(PICKED);
+    await vi.waitFor(() =>
+      expect(onCommit).toHaveBeenCalledWith("https://cdn.example.com/hero.jpg")
+    );
   });
 });

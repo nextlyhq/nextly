@@ -99,12 +99,19 @@ function readoutOf(
   chosen: (typeof POINTS)[number] | undefined,
   text: string | undefined,
   inheritedPoint: (typeof POINTS)[number] | undefined,
-  inherited: string | undefined
+  inherited: string | undefined,
+  fallback: (typeof POINTS)[number]
 ): string {
   if (chosen !== undefined) return chosen.label;
   if (text !== undefined) return `Custom: ${text}`;
-  return inheritedPoint?.label ?? inherited ?? "Center by default";
+  return inheritedPoint?.label ?? inherited ?? `${fallback.label} by default`;
 }
+
+/**
+ * The point CSS places at when nothing is set: the middle for an image's
+ * object position, the top left for a background's position.
+ */
+export type FocalFallback = "center" | "left top";
 
 /** What the point does for a fit: kept in view as it crops, or where it sits. */
 function hintFor(fit: string | undefined): string {
@@ -135,6 +142,7 @@ export function FocalPointField({
   actionName,
   describedBy,
   onCommit,
+  fallback = "center",
 }: {
   id: string;
   labelledBy: string;
@@ -142,7 +150,11 @@ export function FocalPointField({
   actionName: string;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
+  /** Where CSS places it when nothing is set; the middle unless said. */
+  fallback?: FocalFallback;
 }): React.JSX.Element {
+  const fallbackPoint =
+    POINTS.find(point => point.value === fallback) ?? POINTS[4];
   // The refusal, and the CSS names while they are shown.
   const described = useFieldDescription(describedBy);
   // What each point writes, from the field it is drawn in: its tooltip.
@@ -161,7 +173,7 @@ export function FocalPointField({
   const [writing, setWriting] = React.useState(false);
   const grid = React.useRef<HTMLDivElement>(null);
   // One tab stop: the chosen point, else the one shown, else the middle.
-  const focusable = chosen ?? inheritedPoint ?? POINTS[4];
+  const focusable = chosen ?? inheritedPoint ?? fallbackPoint;
   const invalid = refusedBy(describedBy);
 
   const choose = (point: (typeof POINTS)[number]) =>
@@ -177,7 +189,13 @@ export function FocalPointField({
       ?.focus();
   };
 
-  const readout = readoutOf(chosen, text, inheritedPoint, inherited);
+  const readout = readoutOf(
+    chosen,
+    text,
+    inheritedPoint,
+    inherited,
+    fallbackPoint
+  );
 
   return (
     <div className="nx-focal">

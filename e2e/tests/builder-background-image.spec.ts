@@ -60,10 +60,10 @@ async function openBackground(page: Page, id: string): Promise<void> {
   await sectionOnCanvas(page).click({ position: { x: 6, y: 6 } });
   await expect(page.locator("[data-block-card]")).toBeVisible();
   await page.getByRole("tab", { name: "Style" }).click();
-  // The section's heading is the button that folds; a control inside may be
-  // named after the section too.
-  // The heading comes first; the position picker's "as CSS" button also
-  // folds, but holds no words.
+  // The section's heading: a folding button in the Style panel whose words
+  // start with its name. The page's own title, in the top bar, folds too, so
+  // the search stays in the panel; the position picker's "as CSS" button
+  // folds as well but holds no words.
   const heading = page
     .locator('[role="tabpanel"]:not([hidden]) button[aria-expanded]', {
       hasText: /^Background/,
