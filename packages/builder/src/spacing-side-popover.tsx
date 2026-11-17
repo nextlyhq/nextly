@@ -96,8 +96,6 @@ export interface SpacingSidePopoverProps {
   ) => CommitOutcome;
   readonly onReset: () => void;
   readonly onClose: (to: SideClose) => void;
-  /** The side it opened from, which focus returns to. */
-  readonly side: React.RefObject<HTMLButtonElement | null>;
 }
 
 export function SpacingSidePopover(
@@ -106,17 +104,13 @@ export function SpacingSidePopover(
   const { name, control, stored, seed, applyTo } = props;
   const id = React.useId();
   const content = React.useRef<HTMLDivElement>(null);
-  // Set by the ways of closing that hand focus back to the side; a click
-  // elsewhere leaves focus where it went.
-  const returning = React.useRef(false);
   const mode = useCanvasTokenMode();
   const presets = spacingPresets(control, props.tokens, mode);
   const write = (value: StyleValue): CommitOutcome =>
     props.onCommitSides(props.pathsFor(applyTo), value);
-  const close = (to: SideClose): void => {
-    returning.current = false;
-    props.onClose(to);
-  };
+  // Every way of closing moves focus itself, before the popover goes, so
+  // nothing is left to put it back afterwards.
+  const close = (to: SideClose): void => props.onClose(to);
   return (
     <PopoverContent
       ref={content}
@@ -129,13 +123,12 @@ export function SpacingSidePopover(
         event.preventDefault();
         focusStart(content.current, seed);
       }}
-      onEscapeKeyDown={() => {
-        returning.current = true;
-      }}
-      onCloseAutoFocus={event => {
+      onEscapeKeyDown={event => {
         event.preventDefault();
-        if (returning.current) props.side.current?.focus();
+        close("side");
       }}
+      // A click elsewhere leaves focus where it went.
+      onCloseAutoFocus={event => event.preventDefault()}
       onKeyDown={event =>
         popoverKeys(event, seed !== undefined, to => {
           event.preventDefault();

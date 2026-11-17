@@ -345,13 +345,6 @@
   max-inline-size: 3.5rem;
 }
 
-.nx-spacing-box .nx-inspector__field input {
-  block-size: 1.75rem;
-  padding-inline: 0.25rem;
-  font-size: var(--text-xs);
-  text-align: center;
-}
-
 /* As specific as a style row's reset, which is drawn at the row's end. */
 .nx-spacing-box .nx-inspector__field > .nx-style-inspector__breakpoint-action {
   display: none;

@@ -245,9 +245,6 @@ export function SpacingSide(props: SpacingSideProps): React.JSX.Element {
                   }}
                 >
                   <span className="nx-spacing-side__text">{shown.text}</span>
-                  <span id={valueId} hidden>
-                    {shown.spoken}
-                  </span>
                 </button>
               </ContextMenuTrigger>
             </PopoverAnchor>
@@ -259,6 +256,10 @@ export function SpacingSide(props: SpacingSideProps): React.JSX.Element {
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
+      {/* The whole value, which the side's name ends with. */}
+      <span id={valueId} hidden>
+        {shown.spoken}
+      </span>
       {opened === false ? null : (
         <SpacingSidePopover
           name={name}
@@ -274,7 +275,6 @@ export function SpacingSide(props: SpacingSideProps): React.JSX.Element {
           onCommitSides={props.onCommitSides}
           onReset={reset}
           onClose={close}
-          side={button}
         />
       )}
     </Popover>
