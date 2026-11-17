@@ -34,12 +34,15 @@ interface Receiver {
 /**
  * Every block in this library that draws a button or a caption. A Gallery's
  * captions are its Images' own, and a caption in rich text is a
- * `figcaption`, which the element tier reaches.
+ * `figcaption`, which the element tier reaches. A Quote's attribution is a
+ * `figcaption` too, but its part's own size comes after the element tier,
+ * so the row is laid over the part as it is over an Image's caption.
  */
 const RECEIVERS: readonly Receiver[] = [
   { type: "core/button", role: "button" },
   { type: "core/form", part: "submit", role: "button" },
   { type: "core/image", part: "caption", role: "caption" },
+  { type: "core/quote", part: "attribution", role: "caption" },
 ];
 
 /** What each receiving row writes, where the site set it. */

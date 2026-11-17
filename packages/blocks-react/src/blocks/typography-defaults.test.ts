@@ -225,6 +225,24 @@ describe("buttons and captions", () => {
     expect(css).toMatch(/:where\(figcaption\) \{ font-size: 13px \}/);
   });
 
+  it("lays the Captions row over a Quote's attribution, its figcaption", () => {
+    const { css } = compiled(
+      page([
+        {
+          id: "q",
+          type: "core/quote",
+          version: 1,
+          props: { text: "Less is more.", attribution: "A designer" },
+        },
+      ]),
+      { breakpoints, siteText: { caption: { fontSize: "13px" } } }
+    );
+    const attribution = css.match(
+      /:where\(\.nx-bp-core--quote--attribution\) \{[^}]*\}/
+    )?.[0];
+    expect(attribution).toContain("font-size: 13px");
+  });
+
   it("leaves the blocks as their code draws them while the rows are empty", () => {
     const { css } = compiled(
       page([
