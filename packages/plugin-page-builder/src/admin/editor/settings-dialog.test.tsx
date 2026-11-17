@@ -594,6 +594,47 @@ describe("the Settings dialog", () => {
     expect(openSets).toHaveBeenCalledTimes(1);
   });
 
+  it("asks before leaving a breakpoint edit for the Pages panel, and leaves only on discard", async () => {
+    const openSets = vi.fn();
+    const onOpenChange = vi.fn();
+    render(
+      <ManageSetsContext.Provider value={openSets}>
+        <SettingsDialog
+          open
+          onOpenChange={onOpenChange}
+          returnFocus={() => null}
+          pageFields={<input aria-label="Title" defaultValue="About us" />}
+          place={null}
+          share={{ title: "Who we are", description: "We build tools." }}
+          seoFields
+          address={null}
+          breakpoints={{
+            value: { viewport: [], container: [] },
+            onSave: vi.fn(),
+            status: "ready",
+            refresh: vi.fn(),
+          }}
+        />
+      </ManageSetsContext.Provider>
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Edit breakpoints" })
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Change in Pages ▸ Header & footer" })
+    );
+    const ask = await screen.findByRole("alertdialog");
+    expect(ask.textContent).toContain("Discard your breakpoint changes?");
+    expect(openSets).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalled();
+    await userEvent.click(
+      within(ask).getByRole("button", { name: /^Discard/ })
+    );
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(openSets).toHaveBeenCalledTimes(1);
+  });
+
   it("says when the site has no default", async () => {
     siteRead = { ...MANAGER, defaultLayout: null, layouts: [] };
     show();

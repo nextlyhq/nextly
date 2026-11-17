@@ -148,11 +148,12 @@ export function editorSettings(
   // first tab, whichever tab it was left on.
   return dialog => (
     <RemountOnStyleReplay>
-      {/* The page's header & footer menu's "Manage headers & footers":
-          Settings closes, and the Pages panel opens on its sets. */}
+      {/* The page's header & footer menu's "Manage headers & footers", and
+          the site default line: the Pages panel opens on its sets. */}
       <ManageSetsContext.Provider
         value={() => {
-          dialog.onOpenChange(false);
+          // Settings closes itself first, as it may be left (it asks over
+          // an unsaved draft); then the panel opens on its sets.
           view.requestPanel("pages");
           view.pages.revealSets();
         }}

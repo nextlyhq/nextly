@@ -257,9 +257,10 @@ test("offers one menu with pictures, the same on the entry page and in Settings,
   await expect(
     option(page, UNFINISHED).locator('.nx-picture[data-state="empty"]')
   ).toHaveCount(1);
-  // After a separator, the way to the list of sets, as a new tab.
+  // After a separator, the way to the list of sets: in the editor, the
+  // Pages panel in this window, so no new tab is named.
   await expect(
-    page.getByRole("option", { name: /Manage headers & footers ↗/ })
+    page.getByRole("option", { name: "Manage headers & footers", exact: true })
   ).toBeVisible();
   await page.keyboard.press("Escape");
 

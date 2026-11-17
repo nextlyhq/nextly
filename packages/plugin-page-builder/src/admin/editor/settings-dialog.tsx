@@ -175,6 +175,13 @@ export function SettingsDialog({
     enabled: open,
   });
   const leave = useLeaveGuard(onOpenChange, open);
+  // The editor's way to its list of sets, taken only as the dialog may be
+  // left: a breakpoint or code draft asks first, and a save running keeps it.
+  const openSets = useContext(ManageSetsContext);
+  const leaveToSets =
+    openSets === null
+      ? null
+      : () => leave.request({ kind: "close", then: openSets });
   // The Site tab is offered to a manager, and also when the read failed: a
   // failure must not look like a missing permission.
   const siteTab = site.data?.mayManageSite === true || site.error !== null;
@@ -185,7 +192,7 @@ export function SettingsDialog({
   }, [siteTab, leave]);
 
   return (
-    <>
+    <ManageSetsContext.Provider value={leaveToSets}>
       <Dialog
         open={open}
         onOpenChange={next =>
@@ -288,7 +295,7 @@ export function SettingsDialog({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </>
+    </ManageSetsContext.Provider>
   );
 }
 
@@ -341,7 +348,11 @@ const DISCARD_WORDS = {
 } as const;
 
 /** A way out of the breakpoint editor: closing Settings, or another tab. */
-type Leave = { kind: "close" } | { kind: "tab"; to: string };
+/**
+ * Where leaving goes: closing (and then, where asked, somewhere else in the
+ * editor, such as the Pages panel's sets), or another tab.
+ */
+type Leave = { kind: "close"; then?: () => void } | { kind: "tab"; to: string };
 
 /** Which drafts leaving would discard. */
 function discardingOf(
@@ -377,8 +388,12 @@ function useLeaveGuard(onOpenChange: (open: boolean) => void, open: boolean) {
     setPending(null);
   }, [open]);
   const go = (leave: Leave): void => {
-    if (leave.kind === "close") onOpenChange(false);
-    else setTab(leave.to);
+    if (leave.kind === "tab") {
+      setTab(leave.to);
+      return;
+    }
+    onOpenChange(false);
+    leave.then?.();
   };
   return {
     tab,
