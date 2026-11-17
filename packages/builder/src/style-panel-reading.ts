@@ -74,6 +74,32 @@ export function appliedAtReader({
 }
 
 /**
+ * What the cascade applies to the block at a tier beneath its own
+ * declarations: a shared style it wears, its block's defaults. What would stay
+ * in force were the block's own values gone, which a control clearing one
+ * must spell out to undo.
+ */
+export function beneathAtReader(args: {
+  cascade: PageStyleCascade | undefined;
+  subject: StyleSubject | undefined;
+  state: StyleState;
+  breakpoints: BreakpointSet | undefined;
+  nodeId: string;
+}): CascadeAt | undefined {
+  const { cascade, nodeId } = args;
+  if (cascade === undefined) return undefined;
+  return appliedAtReader({
+    ...args,
+    cascade: {
+      ...cascade,
+      entries: cascade.entries.filter(
+        entry => !(entry.origin.kind === "node" && entry.origin.id === nodeId)
+      ),
+    },
+  });
+}
+
+/**
  * The node the declarations describe, or `undefined` with nothing selected.
  *
  * Read from the CASCADE's own tree where there is one. Asking the raw document

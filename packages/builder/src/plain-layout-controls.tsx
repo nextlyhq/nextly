@@ -40,6 +40,7 @@ import {
   planWrap,
   readArrange,
   readSpace,
+  spreadAxis,
   unusedSettings,
   type AlignPoint,
   type AlignX,
@@ -48,16 +49,19 @@ import {
   type LayoutTiers,
   type LayoutValues,
   type LayoutWrite,
+  type PlainFlow,
   type PlainArrange,
   type Spread,
 } from "./plain-layout";
 import { SegmentChoices } from "./segment-choices";
+import type { SideOrientation } from "./side-orientation";
 import {
   sharedStyleChange,
   type SharedStyleChange,
 } from "./shared-style-target";
 import {
   AppliedAtTier,
+  BeneathAtTier,
   StyleTargetContext,
   type CascadeAt,
   type StyleFieldSurroundings,
@@ -140,16 +144,33 @@ function appliedInForce(applied: CascadeAt): (device: string) => LayoutValues {
 function layoutTiers(
   surroundings: StyleFieldSurroundings,
   target: StyleTarget,
-  applied: CascadeAt | undefined
+  cascade: { applied: CascadeAt | undefined; beneath: CascadeAt | undefined }
 ): LayoutTiers {
   const order = deviceOrder(surroundings.breakpoints);
   const styles = stylesOf(target, surroundings);
   const own = (device: string) => ownAt(styles, surroundings.state, device);
+  const block = target.kind === "block";
   const inForce =
-    target.kind === "block" && applied !== undefined
-      ? appliedInForce(applied)
+    block && cascade.applied !== undefined
+      ? appliedInForce(cascade.applied)
       : ownInForce(order, own);
-  return { order, own, inForce };
+  return {
+    order,
+    own,
+    inForce,
+    ...(block && cascade.beneath !== undefined
+      ? { beneath: appliedInForce(cascade.beneath) }
+      : {}),
+    flow: flowOf(surroundings.orientation),
+  };
+}
+
+/** The container's flow, as the canvas measured it; left to right if not. */
+function flowOf(orientation: SideOrientation | undefined): PlainFlow {
+  return {
+    writingMode: orientation?.writingMode ?? "horizontal-tb",
+    rtl: orientation?.direction === "rtl",
+  };
 }
 
 /** The properties Arrange draws in plain words, out of the raw rows. */
@@ -289,10 +310,11 @@ export function useArrangeReading(
 ): ArrangeReading | undefined {
   const target = React.useContext(StyleTargetContext);
   const applied = React.useContext(AppliedAtTier);
+  const beneath = React.useContext(BeneathAtTier);
   if (!offersDisplay || !arrangesLayout(surroundings.editing.blockType)) {
     return undefined;
   }
-  const tiers = layoutTiers(surroundings, target, applied);
+  const tiers = layoutTiers(surroundings, target, { applied, beneath });
   const editing = surroundings.breakpoint;
   return { tiers, editing, arrange: readArrange(tiers, editing) };
 }
@@ -402,9 +424,7 @@ function ModeRows({
       onChoose={point => apply(planAlign(tiers, editing, point))}
       held={
         arrange.mode === "row" && arrange.spread !== "packed"
-          ? arrange.stacked
-            ? "y"
-            : "x"
+          ? spreadAxis(arrange.stacked, tiers.flow)
           : undefined
       }
     />
@@ -1019,7 +1039,9 @@ function SpaceBetween({
   const space = readSpace(reading.tiers, reading.editing);
   const setApart = space.rowGap !== undefined || space.columnGap !== undefined;
   const [apartAsked, setApartAsked] = React.useState(false);
-  const apart = apartOffered && (setApart || apartAsked);
+  // Rows and columns set apart stay drawn wherever they apply, a Row's
+  // included; only a Grid offers to set them apart.
+  const apart = setApart || (apartOffered && apartAsked);
   const { editor, written } = spaceWriters(surroundings, reading, target);
   const drawn = properties.filter(property =>
     apart ? property.property !== "gap" : property.property === "gap"

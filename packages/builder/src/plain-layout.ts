@@ -61,7 +61,24 @@ export interface LayoutTiers {
   readonly inForce: (device: string) => LayoutValues;
   /** The values the edited target stores at a device itself. */
   readonly own: (device: string) => LayoutValues;
+  /**
+   * What is in force at a device beneath the target's own values there: a
+   * shared style it wears, its block's defaults. Absent where nothing but the
+   * target is read, as for a shared style edited on its own.
+   */
+  readonly beneath?: (device: string) => LayoutValues;
+  /** Which way the container's lines run, so a point is placed on screen. */
+  readonly flow?: PlainFlow;
 }
+
+/** A container's writing mode and inline direction. */
+export interface PlainFlow {
+  readonly writingMode: string;
+  readonly rtl: boolean;
+}
+
+/** Horizontal lines, left to right: what is assumed where nothing is measured. */
+const LTR: PlainFlow = { writingMode: "horizontal-tb", rtl: false };
 
 /** One point of the 3×3 Align. */
 export type AlignX = "left" | "center" | "right";
@@ -155,23 +172,87 @@ const X_POINTS: readonly AlignX[] = ["left", "center", "right"];
 const Y_POINTS: readonly AlignY[] = ["top", "middle", "bottom"];
 const PLACE_KEYWORDS = ["start", "center", "end"] as const;
 
-/** The keyword one axis of a point writes. */
-function placeKeyword(point: AlignX | AlignY): string {
-  const index = Math.max(
-    X_POINTS.indexOf(point as AlignX),
-    Y_POINTS.indexOf(point as AlignY)
-  );
-  return PLACE_KEYWORDS[index] ?? "start";
-}
-
 /** The properties a point's x and y are written to, by arrangement. */
 function alignAxes(kind: "row" | "column" | "grid"): {
-  readonly x: LayoutProperty;
-  readonly y: LayoutProperty;
+  readonly inline: LayoutProperty;
+  readonly block: LayoutProperty;
 } {
-  if (kind === "row") return { x: "justifyContent", y: "alignItems" };
-  if (kind === "column") return { x: "alignItems", y: "justifyContent" };
-  return { x: "justifyItems", y: "alignItems" };
+  // A row's main axis runs along the lines, a column's across them.
+  if (kind === "row") return { inline: "justifyContent", block: "alignItems" };
+  if (kind === "column") {
+    return { inline: "alignItems", block: "justifyContent" };
+  }
+  return { inline: "justifyItems", block: "alignItems" };
+}
+
+/** Whether the lines run down the screen rather than across it. */
+function vertical(flow: PlainFlow): boolean {
+  return (
+    flow.writingMode.startsWith("vertical") ||
+    flow.writingMode.startsWith("sideways")
+  );
+}
+
+/** Whether a vertical flow's lines stack from the right. */
+function blockFromRight(flow: PlainFlow): boolean {
+  return flow.writingMode.endsWith("-rl");
+}
+
+/** Whether a flow's inline axis runs up or leftward rather than its default. */
+function inlineReversed(flow: PlainFlow): boolean {
+  // sideways-lr runs its lines bottom to top; direction rtl flips any.
+  return flow.rtl !== (flow.writingMode === "sideways-lr");
+}
+
+/** A place 0, 1 or 2, counted from the other end. */
+function flipped(place: 0 | 1 | 2, flip: boolean): 0 | 1 | 2 {
+  return flip ? ((2 - place) as 0 | 1 | 2) : place;
+}
+
+/**
+ * A point on screen as places along the inline and block axes, which are
+ * what `start`, `center` and `end` are measured on.
+ */
+function logicalPlaces(
+  point: AlignPoint,
+  flow: PlainFlow
+): { inline: 0 | 1 | 2; block: 0 | 1 | 2 } {
+  const x = X_POINTS.indexOf(point.x) as 0 | 1 | 2;
+  const y = Y_POINTS.indexOf(point.y) as 0 | 1 | 2;
+  if (!vertical(flow)) {
+    return { inline: flipped(x, flow.rtl), block: y };
+  }
+  return {
+    inline: flipped(y, inlineReversed(flow)),
+    block: flipped(x, blockFromRight(flow)),
+  };
+}
+
+/** Places along the inline and block axes as the point on screen. */
+function physicalPoint(
+  inline: 0 | 1 | 2,
+  block: 0 | 1 | 2,
+  flow: PlainFlow
+): AlignPoint {
+  if (!vertical(flow)) {
+    return {
+      x: X_POINTS[flipped(inline, flow.rtl)] ?? "left",
+      y: Y_POINTS[block] ?? "top",
+    };
+  }
+  return {
+    x: X_POINTS[flipped(block, blockFromRight(flow))] ?? "left",
+    y: Y_POINTS[flipped(inline, inlineReversed(flow))] ?? "top",
+  };
+}
+
+/**
+ * The screen axis Spread takes while it is on: the main axis, along the lines
+ * for a Row and across them for a stacked one.
+ */
+export function spreadAxis(stacked: boolean, flow: PlainFlow = LTR): "x" | "y" {
+  const alongLines = !stacked;
+  return alongLines === vertical(flow) ? "y" : "x";
 }
 
 /**
@@ -182,7 +263,9 @@ function axisRead(
   value: string | undefined,
   spreadHere: boolean
 ): 0 | 1 | 2 | "custom" {
-  if (value === undefined) return 0;
+  if (value === undefined || value === "normal" || value === "stretch") {
+    return 0;
+  }
   const place = axisPlace(value);
   if (place !== undefined) return place;
   return spreadHere && SPREADS.has(value) ? 0 : "custom";
@@ -194,17 +277,27 @@ function axisRead(
  */
 function readAlign(
   values: LayoutValues,
-  kind: "row" | "column" | "grid"
+  kind: "row" | "column" | "grid",
+  flow: PlainFlow = LTR
 ): AlignPoint | undefined | "custom" {
   const axes = alignAxes(kind);
-  const xValue = values[axes.x];
-  const yValue = values[axes.y];
-  if (xValue === undefined && yValue === undefined) return undefined;
+  const inlineValue = values[axes.inline];
+  const blockValue = values[axes.block];
+  // Nothing chosen, or only the reset a narrower device writes: the default
+  // stretch.
+  if (isDefaultPlace(inlineValue) && isDefaultPlace(blockValue)) {
+    return undefined;
+  }
   // A spread on the main axis is Spread's, not Align's.
-  const x = axisRead(xValue, kind === "row");
-  const y = axisRead(yValue, kind === "column");
-  if (x === "custom" || y === "custom") return "custom";
-  return { x: X_POINTS[x] ?? "left", y: Y_POINTS[y] ?? "top" };
+  const inline = axisRead(inlineValue, kind === "row");
+  const block = axisRead(blockValue, kind === "column");
+  if (inline === "custom" || block === "custom") return "custom";
+  return physicalPoint(inline, block, flow);
+}
+
+/** Whether a value leaves an axis at its default stretch. */
+function isDefaultPlace(value: string | undefined): boolean {
+  return value === undefined || value === "normal" || value === "stretch";
 }
 
 const SPREAD_OF: Readonly<Record<string, Spread>> = {
@@ -230,7 +323,7 @@ const ROWS_TEMPLATE = /^repeat\((\d+),\s*auto\)$/;
 function readColumns(
   template: string | undefined
 ): GridColumns | undefined | "custom" {
-  if (template === undefined) return undefined;
+  if (template === undefined || template === "none") return undefined;
   const count = COUNT_TEMPLATE.exec(template);
   if (count !== null) return { kind: "count", count: Number(count[1]) };
   const fit = FIT_TEMPLATE.exec(template);
@@ -240,7 +333,7 @@ function readColumns(
 
 /** A Grid's rows read from its template, or `"custom"` for another. */
 function readRows(template: string | undefined): number | undefined | "custom" {
-  if (template === undefined) return undefined;
+  if (template === undefined || template === "none") return undefined;
   const rows = ROWS_TEMPLATE.exec(template);
   return rows === null ? "custom" : Number(rows[1]);
 }
@@ -266,7 +359,7 @@ export function readArrange(tiers: LayoutTiers, editing: string): PlainArrange {
   if (display === undefined || display === "block") {
     return { mode: "stack", flex: false, align: undefined, reverse: false };
   }
-  if (display === "grid") return readGrid(values);
+  if (display === "grid") return readGrid(values, tiers.flow);
   if (display !== "flex") return { mode: "custom" };
   const stackOn = stackDevice(tiers);
   const column = isColumn(values);
@@ -274,8 +367,8 @@ export function readArrange(tiers: LayoutTiers, editing: string): PlainArrange {
   const stackIndex = stackOn === undefined ? -1 : tiers.order.indexOf(stackOn);
   // A column below a Row is that Row stacked; any other column is a Stack.
   const stacked = column && stackIndex !== -1 && index >= stackIndex;
-  if (column && !stacked) return readStack(values);
-  const align = readAlign(values, column ? "column" : "row");
+  if (column && !stacked) return readStack(values, tiers.flow);
+  const align = readAlign(values, column ? "column" : "row", tiers.flow);
   if (align === "custom") return { mode: "custom" };
   const main = values.justifyContent;
   return {
@@ -292,8 +385,8 @@ export function readArrange(tiers: LayoutTiers, editing: string): PlainArrange {
 }
 
 /** A flex column that is a Stack, with its own settings. */
-function readStack(values: LayoutValues): PlainArrange {
-  const align = readAlign(values, "column");
+function readStack(values: LayoutValues, flow?: PlainFlow): PlainArrange {
+  const align = readAlign(values, "column", flow);
   if (align === "custom") return { mode: "custom" };
   return {
     mode: "stack",
@@ -304,10 +397,10 @@ function readStack(values: LayoutValues): PlainArrange {
 }
 
 /** A Grid, with its columns, rows and Align. */
-function readGrid(values: LayoutValues): PlainArrange {
+function readGrid(values: LayoutValues, flow?: PlainFlow): PlainArrange {
   const columns = readColumns(values.gridTemplateColumns);
   const rows = readRows(values.gridTemplateRows);
-  const align = readAlign(values, "grid");
+  const align = readAlign(values, "grid", flow);
   if (columns === "custom" || rows === "custom" || align === "custom") {
     return { mode: "custom" };
   }
@@ -328,9 +421,10 @@ function rowsTemplate(rows: number | undefined): string | null {
 
 /**
  * The value to write at the edited device so a property reads `value` there:
- * nothing stored where nothing reaches from a wider device and the value is
- * the default, else the value itself, so a wider device's value cannot stay
- * in force under the one shown.
+ * nothing stored where nothing else would be in force (no wider device's
+ * value, nothing beneath the target's own) and the value is the default, else
+ * the value itself or the default spelled out, so what lies beneath cannot
+ * stay in force under the one shown.
  */
 function settled(
   tiers: LayoutTiers,
@@ -341,8 +435,11 @@ function settled(
   if (value !== null) return { device, property, value };
   const index = tiers.order.indexOf(device);
   const wider = index > 0 ? tiers.order[index - 1] : undefined;
+  // What would stay in force with the target's own value gone: a wider
+  // device's, or what lies beneath it here (a shared style it wears).
   const reaching =
-    wider === undefined ? undefined : tiers.inForce(wider)[property];
+    (wider === undefined ? undefined : tiers.inForce(wider)[property]) ??
+    tiers.beneath?.(device)[property];
   return {
     device,
     property,
@@ -435,6 +532,8 @@ export function planAlign(
         ? "row"
         : "column";
   const axes = alignAxes(kind);
+  const places =
+    point === null ? undefined : logicalPlaces(point, tiers.flow ?? LTR);
   const writes: LayoutWrite[] = [];
   // A Stack in block flow becomes a flex column to align.
   if (current.mode === "stack" && !current.flex && point !== null) {
@@ -447,14 +546,14 @@ export function planAlign(
     settled(
       tiers,
       editing,
-      axes.x,
-      point === null ? null : placeKeyword(point.x)
+      axes.inline,
+      places === undefined ? null : (PLACE_KEYWORDS[places.inline] ?? "start")
     ),
     settled(
       tiers,
       editing,
-      axes.y,
-      point === null ? null : placeKeyword(point.y)
+      axes.block,
+      places === undefined ? null : (PLACE_KEYWORDS[places.block] ?? "start")
     )
   );
   return writes;
@@ -488,17 +587,19 @@ export function planReverse(
     ];
   }
   const writes: LayoutWrite[] = [
-    {
-      device: editing,
-      property: "flexDirection",
-      value: column
-        ? reverse
-          ? "column-reverse"
-          : "column"
-        : reverse
-          ? "row-reverse"
-          : null,
-    },
+    column
+      ? {
+          device: editing,
+          property: "flexDirection",
+          value: reverse ? "column-reverse" : "column",
+        }
+      : // Off, a reverse reaching from a wider device is undone here.
+        settled(
+          tiers,
+          editing,
+          "flexDirection",
+          reverse ? "row-reverse" : null
+        ),
   ];
   // Turned on at a wider device, it holds at the stacked one too.
   const stackOn = current.mode === "row" ? current.stackOn : undefined;
@@ -597,7 +698,7 @@ function unplainAlign(
   kind: "row" | "column" | "grid"
 ): LayoutProperty[] {
   const axes = alignAxes(kind);
-  return [axes.x, axes.y].filter(property => {
+  return [axes.inline, axes.block].filter(property => {
     const spreadHere = property === "justifyContent" && kind !== "grid";
     return axisRead(values[property], spreadHere) === "custom";
   });

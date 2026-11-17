@@ -246,7 +246,11 @@ function SectionBody({
   const reading = useArrangeReading(
     surroundings,
     section.key === "layout" &&
-      section.properties.some(property => property.property === "display")
+      section.properties.some(
+        // Offered, not only kept: a block that no longer has layout keeps a
+        // stored Display clear-only, as a raw row.
+        property => property.property === "display" && property.offered
+      )
   );
   const { listed, arrange } = arrangedSection(section.properties, reading);
   const shown = listed.filter(

@@ -62,23 +62,26 @@ const BREAKPOINTS: BreakpointSet = {
   container: [],
 } as BreakpointSet;
 
-function nodeOf(styles?: BlockNode["styles"]): BlockNode {
-  const block = coreBlocks.find(each => each.name === "core/box");
-  if (block === undefined) throw new Error("core/box is not a core block");
+function nodeOf(
+  styles?: BlockNode["styles"],
+  type: string = "core/box"
+): BlockNode {
+  const block = coreBlocks.find(each => each.name === type);
+  if (block === undefined) throw new Error(`${type} is not a core block`);
   return {
     id: "box",
-    type: "core/box",
+    type,
     version: block.version,
     props: {},
     ...(styles === undefined ? {} : { styles }),
   } as BlockNode;
 }
 
-function pageOf(styles?: BlockNode["styles"]): BlockDocument {
+function pageOf(styles?: BlockNode["styles"], type?: string): BlockDocument {
   return {
     formatVersion: DOCUMENT_FORMAT_VERSION,
     kind: "page",
-    nodes: [nodeOf(styles)],
+    nodes: [nodeOf(styles, type)],
   } as BlockDocument;
 }
 
@@ -106,9 +109,10 @@ function Host({
 /** The Box selected, its Style tab open on Layout, at a device. */
 function mount(
   styles?: BlockNode["styles"],
-  device: string = BASE_BREAKPOINT
+  device: string = BASE_BREAKPOINT,
+  type?: string
 ): { at: (device: string) => void } {
-  const page = pageOf(styles);
+  const page = pageOf(styles, type);
   const { rerender } = render(<Host page={page} device={device} />);
   act(() => editor().select("box"));
   fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
@@ -355,5 +359,32 @@ describe("a combination with no plain words", () => {
     );
     expect(stored().display).toBe("flex");
     expect(marked("Arrange", "Row")).toBe("true");
+  });
+});
+
+describe("a block whose layout isn't offered", () => {
+  it("keeps a stored Display as its clear-only raw row, with no Arrange", () => {
+    // A Heading has no layout of its own; a Display stored on it still shows,
+    // to be cleared.
+    mount(
+      { base: { base: { display: "flex" } } },
+      BASE_BREAKPOINT,
+      "core/heading"
+    );
+    expect(document.querySelector('[data-control="arrange"]')).toBeNull();
+    expect(document.querySelector('[data-property="display"]')).not.toBeNull();
+  });
+});
+
+describe("rows and columns set apart", () => {
+  it("stay drawn in a Row, where they still apply", () => {
+    mount({
+      base: {
+        base: { display: "flex", rowGap: "8px", columnGap: "4px" },
+      },
+    });
+    expect(marked("Arrange", "Row")).toBe("true");
+    expect(rowNames()).toContain("Between rows");
+    expect(rowNames()).toContain("Between columns");
   });
 });

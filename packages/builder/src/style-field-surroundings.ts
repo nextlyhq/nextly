@@ -129,6 +129,14 @@ export const AppliedAtTier: React.Context<CascadeAt | undefined> =
   React.createContext<CascadeAt | undefined>(undefined);
 
 /**
+ * What the cascade applies to the edited block at a tier beneath its own
+ * values, for a control that clears one and must undo what lies beneath.
+ * Absent where the host compiles no cascade.
+ */
+export const BeneathAtTier: React.Context<CascadeAt | undefined> =
+  React.createContext<CascadeAt | undefined>(undefined);
+
+/**
  * What the cascade applies to the edited block at a tier, for any CSS
  * property: the value, the tier that sets it, and whether the block itself
  * stores it. `undefined` where nothing sets it.

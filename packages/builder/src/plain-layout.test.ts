@@ -19,6 +19,7 @@ import {
   type LayoutTiers,
   type LayoutValues,
   type LayoutWrite,
+  type PlainFlow,
 } from "./plain-layout";
 
 const ORDER = ["base", "md", "sm"] as const;
@@ -27,23 +28,34 @@ type Device = (typeof ORDER)[number];
 /** A block's own layout values by device, cascading widest first. */
 class Block {
   own: Record<Device, Record<string, string>> = { base: {}, md: {}, sm: {} };
+  /** A shared style's values the block wears, beneath its own. */
+  shared: Record<Device, Record<string, string>> = { base: {}, md: {}, sm: {} };
+  flow: PlainFlow | undefined;
 
   constructor(base: LayoutValues = {}) {
     this.own.base = { ...base } as Record<string, string>;
+  }
+
+  /** Values cascading widest first, a layer's own over those beneath it. */
+  private merged(
+    device: string,
+    layers: readonly Record<Device, Record<string, string>>[]
+  ): LayoutValues {
+    const merged: Record<string, string> = {};
+    for (const each of ORDER) {
+      for (const layer of layers) Object.assign(merged, layer[each]);
+      if (each === device) break;
+    }
+    return merged as LayoutValues;
   }
 
   tiers(): LayoutTiers {
     return {
       order: ORDER,
       own: device => this.own[device as Device] as LayoutValues,
-      inForce: device => {
-        const merged: Record<string, string> = {};
-        for (const each of ORDER) {
-          Object.assign(merged, this.own[each]);
-          if (each === device) break;
-        }
-        return merged as LayoutValues;
-      },
+      inForce: device => this.merged(device, [this.shared, this.own]),
+      beneath: device => this.merged(device, [this.shared]),
+      ...(this.flow === undefined ? {} : { flow: this.flow }),
     };
   }
 
@@ -252,5 +264,78 @@ describe("values a change stops using", () => {
     block.apply(planArrange(block.tiers(), "base", "grid"));
     expect(block.own.base.flexWrap).toBe("wrap");
     expect(unusedSettings(block.tiers(), "base")).toEqual(["flexWrap"]);
+  });
+});
+
+describe("clearing a value a wider device or a shared style sets", () => {
+  it("reads a narrower device's reset rows as Auto, not Custom", () => {
+    const block = new Block({ display: "grid" }).apply(
+      planRows(new Block().tiers(), "base", 2)
+    );
+    block.apply(planRows(block.tiers(), "sm", undefined));
+    expect(block.own.sm.gridTemplateRows).toBe("none");
+    expect(block.read("sm")).toMatchObject({ mode: "grid", rows: undefined });
+  });
+
+  it("reads a narrower device's reset Align as the default stretch", () => {
+    const block = new Block({ display: "flex" });
+    block.apply(planAlign(block.tiers(), "base", { x: "center", y: "top" }));
+    block.apply(planAlign(block.tiers(), "sm", null));
+    expect(block.own.sm).toMatchObject({
+      justifyContent: "normal",
+      alignItems: "normal",
+    });
+    expect(block.read("sm")).toMatchObject({ mode: "row", align: undefined });
+  });
+
+  it("turns a wider device's Reverse order off at a narrower one", () => {
+    const block = new Block({ display: "flex", flexDirection: "row-reverse" });
+    block.apply(planReverse(block.tiers(), "sm", false));
+    expect(block.own.sm.flexDirection).toBe("row");
+    expect(block.read("sm")).toMatchObject({ mode: "row", reverse: false });
+    expect(block.read("base")).toMatchObject({ mode: "row", reverse: true });
+  });
+
+  it("makes a block wearing a flex shared style a Stack when asked", () => {
+    const block = new Block();
+    block.shared.base = { display: "flex" };
+    expect(block.read()).toMatchObject({ mode: "row" });
+    block.apply(planArrange(block.tiers(), "base", "stack"));
+    expect(block.own.base.display).toBe("block");
+    expect(block.read()).toMatchObject({ mode: "stack", flex: false });
+  });
+});
+
+describe("a point on screen in another writing direction", () => {
+  it("puts a right-to-left Row's Top left at the inline end", () => {
+    const block = new Block({ display: "flex" });
+    block.flow = { writingMode: "horizontal-tb", rtl: true };
+    block.apply(planAlign(block.tiers(), "base", { x: "left", y: "top" }));
+    expect(block.own.base).toMatchObject({
+      justifyContent: "end",
+      alignItems: "start",
+    });
+    expect(block.read()).toMatchObject({ align: { x: "left", y: "top" } });
+  });
+
+  it("places every point of a vertical Row where it is drawn, and reads it back", () => {
+    for (const writingMode of ["vertical-rl", "vertical-lr"]) {
+      for (const point of POINTS) {
+        const block = new Block({ display: "flex" });
+        block.flow = { writingMode, rtl: false };
+        block.apply(planAlign(block.tiers(), "base", point));
+        expect(block.read()).toMatchObject({ align: point });
+      }
+    }
+  });
+
+  it("puts a vertical-rl Row's Top right at the start of both axes", () => {
+    const block = new Block({ display: "flex" });
+    block.flow = { writingMode: "vertical-rl", rtl: false };
+    block.apply(planAlign(block.tiers(), "base", { x: "right", y: "top" }));
+    expect(block.own.base).toMatchObject({
+      justifyContent: "start",
+      alignItems: "start",
+    });
   });
 });
