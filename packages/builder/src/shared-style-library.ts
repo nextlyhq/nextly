@@ -669,7 +669,9 @@ export function sharedStyleReachSentence(
   if (reach === undefined) {
     return blocks === undefined ? "" : SHARED_STYLE_COUNTING;
   }
-  if (reach.blocks !== undefined) return siteWideSentence(blocks, reach);
+  if (reach.blocks !== undefined) {
+    return siteWideSentence(blocks, reach, reach.blocks);
+  }
   const parts: string[] = [];
   if (blocks !== undefined && blocks.count > 0) {
     const count = counted(blocks.count, ["block", "blocks"]);
@@ -700,7 +702,9 @@ export function sharedStyleReachSentence(
  */
 function siteWideSentence(
   live: BlocksOnThisPage | undefined,
-  reach: SharedStyleReach & { readonly blocks: number }
+  reach: SharedStyleReach,
+  /** The blocks the site's saved documents hold: `reach.blocks`, present. */
+  saved: number
 ): string {
   // Without the open page's live count (a caller that has none), the saved
   // counts stand as they are.
@@ -710,7 +714,7 @@ function siteWideSentence(
   // counted once.
   const liveCount = live?.count ?? 0;
   const savedHere = here?.blocks ?? 0;
-  const blocks = reach.blocks - savedHere + liveCount;
+  const blocks = saved - savedHere + liveCount;
   const byKind = { ...reach.byKind };
   const kind = here?.kind ?? "pages";
   byKind[kind] += (liveCount > 0 ? 1 : 0) - (savedHere > 0 ? 1 : 0);

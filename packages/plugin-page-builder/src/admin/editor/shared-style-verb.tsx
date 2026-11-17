@@ -26,7 +26,7 @@ import { useCan } from "@nextlyhq/plugin-sdk/client";
 import { toast } from "@nextlyhq/ui";
 import { useMemo, useState, type JSX } from "react";
 
-import type { SharedStyleUsageHere } from "../library-contract";
+import type { SharedStyleUsageHere } from "../../library-contract";
 import { useSharedStylesClient } from "../shared-styles-client";
 
 import type { ClassSurface } from "./site-style-studios";

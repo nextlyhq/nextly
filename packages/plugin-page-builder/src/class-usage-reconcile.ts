@@ -73,7 +73,7 @@ export const UNDETERMINED_CLASS_ID: string = `undetermined:${"-".repeat(
  * the day it is written: a column added to the row would silently not be part
  * of a subject, so derivation would go on producing rows missing it.
  */
-export type ClassUsageSubject = Omit<ClassUsageRow, "classId">;
+export type ClassUsageSubject = Omit<ClassUsageRow, "classId" | "blocks">;
 
 /**
  * The columns that identify a subject, as values rather than as types.
