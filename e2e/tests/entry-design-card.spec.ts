@@ -100,22 +100,22 @@ async function publishedPost(api: APIRequestContext): Promise<string> {
 test("a post's Design card names its template, and its Preview opens beside the form", async ({
   page,
 }, testInfo) => {
+  // The dev server compiles the entry screen and the preview on first use.
+  test.setTimeout(120_000);
   await page.setViewportSize({ width: 1280, height: 900 });
   await useThisSite(page, testInfo.project.use.baseURL!);
   const { title, restore } = await publishedPostsTemplate(page.request);
   try {
     const postId = await publishedPost(page.request);
     await gotoAdmin(page, `/collections/posts/${postId}`);
-    // The author's choice is kept between visits; start from the panel shown.
-    await page.evaluate(() =>
-      window.localStorage.setItem("nextly:admin:entry-rail-collapsed", "0")
-    );
-    await page.reload();
 
+    // At 1280px beside the admin's navigation the editor is under the width
+    // the panel docks at, so it floats over the fields, shown when asked for.
     const panel = page.getByRole("complementary", { name: "Document panel" });
-    await expect(panel).toHaveAttribute("data-document-panel", "docked", {
-      timeout: 30_000,
-    });
+    const show = page.getByRole("button", { name: "Show document panel" });
+    await expect(show.or(panel)).toBeVisible({ timeout: 30_000 });
+    if (await show.isVisible()) await show.click();
+    await expect(panel).toBeVisible();
     const card = panel.getByRole("region", { name: "Design", exact: true });
     await expect(card).toContainText(`Design: ${title}`);
     await expect(card).toContainText(
