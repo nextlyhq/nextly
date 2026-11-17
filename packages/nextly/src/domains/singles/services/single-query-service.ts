@@ -163,6 +163,7 @@ import {
   narrowToRowFields,
   publishedInLanguageCondition,
   valuesBesideRow,
+  withholdLanguages,
 } from "../../i18n/read-in-language";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
@@ -1057,6 +1058,11 @@ export class SingleQueryService extends BaseService {
      * translations fall back past as its own translated fields do. Absent where nothing is skipped.
      */
     componentSkipLanguages?: ReadonlySet<string>;
+    /**
+     * The languages the Single's read gate refuses (`languagesTheGateRefuses`), decided before
+     * this assembly: no field group is read in them beside the document.
+     */
+    refusedLanguages?: ReadonlySet<string>;
   }): Promise<SingleDocument> {
     const {
       slug,
@@ -1172,13 +1178,18 @@ export class SingleQueryService extends BaseService {
         // beside it, as its own translated fields are, before its gate and field rules judge each
         // language.
         if (options.translations === "all") {
-          const skipLanguages = params.componentSkipLanguages;
+          // The languages not read beside it: those it is not published in, and those its gate
+          // refuses.
+          const skipLanguages = new Set([
+            ...(params.componentSkipLanguages ?? []),
+            ...(params.refusedLanguages ?? []),
+          ]);
           await this.fieldGroupDataService.populateComponentDataBesideEntries({
             entries: [doc],
             parentTable: singleMeta.tableName,
             fields: singleMeta.fields,
             depth: options.depth,
-            skipLanguagesOf: skipLanguages && (() => skipLanguages),
+            skipLanguagesOf: () => skipLanguages,
             accessIn: locale => componentAccess([locale]),
           });
         }
@@ -1260,52 +1271,41 @@ export class SingleQueryService extends BaseService {
   }
 
   /**
-   * Keep beside the Single only the languages its read gate admits in that
-   * language. A read carrying every language's values (`translations: "all"`)
-   * is admitted once for the language it reads; here the gate is asked again
-   * with each other language alone, and a language it refuses is withheld
-   * from `_allLocales`. A trusted read asks no gate, so it keeps every
-   * language.
+   * The languages the Single's read gate refuses, for a read carrying every language's values
+   * (`translations: "all"`). Such a read is admitted once for the language it reads; here the
+   * gate is asked again with each configured language alone. Asked before anything is read in
+   * those languages beyond the document's own values, so no field group is read in a refused
+   * language (`assembleStoredDocument`), and the language is then withheld from every value
+   * beside the document (`withholdLanguages`). A trusted read asks no gate and nothing is
+   * refused.
    */
-  private async withholdLanguagesTheGateRefuses(
-    doc: Record<string, unknown>,
+  private async languagesTheGateRefuses(
     slug: string,
     options: GetSingleOptions
-  ): Promise<void> {
-    if (options.overrideAccess === true) return;
-    const every = valuesBesideRow(doc);
-    if (!every) return;
-    const languages = new Set<string>();
-    for (const values of Object.values(every)) {
-      if (values !== null && typeof values === "object") {
-        for (const code of Object.keys(values)) languages.add(code);
-      }
+  ): Promise<ReadonlySet<string>> {
+    const refused = new Set<string>();
+    if (options.overrideAccess === true || options.translations !== "all") {
+      return refused;
     }
-    for (const locale of languages) {
-      const refused = await withRuleLanguage(
-        { locale, locales: [locale] },
-        () =>
-          checkSingleAccess({
-            slug,
-            operation: "read",
-            user: options.user,
-            overrideAccess: options.overrideAccess,
-            // Never attested by the route here: a route admits the read for the
-            // language it asked, and each other language's rule is asked anew.
-            routeAuthorized: false,
-            rbacAccessControlService: this.rbacAccessControlService,
-            authenticatedScope: options.authenticatedScope,
-            visitor: this.fieldRuleVisitor,
-            logger: this.logger,
-          })
+    for (const { code: locale } of this.localization?.locales ?? []) {
+      const denied = await withRuleLanguage({ locale, locales: [locale] }, () =>
+        checkSingleAccess({
+          slug,
+          operation: "read",
+          user: options.user,
+          overrideAccess: options.overrideAccess,
+          // Never attested by the route here: a route admits the read for the
+          // language it asked, and each other language's rule is asked anew.
+          routeAuthorized: false,
+          rbacAccessControlService: this.rbacAccessControlService,
+          authenticatedScope: options.authenticatedScope,
+          visitor: this.fieldRuleVisitor,
+          logger: this.logger,
+        })
       );
-      if (!refused) continue;
-      for (const values of Object.values(every)) {
-        if (values !== null && typeof values === "object") {
-          delete (values as Record<string, unknown>)[locale];
-        }
-      }
+      if (denied) refused.add(locale);
     }
+    return refused;
   }
 
   /**
@@ -1620,6 +1620,12 @@ export class SingleQueryService extends BaseService {
 
       // Read once for both uses below.
       const revealed = await this.revealedBy(slug, statusFilter, readNow);
+      // The languages the read gate refuses, decided before any field group is read in them: none
+      // is read beside the document, and each is withheld from every value beside it below.
+      const refusedLanguages = await this.languagesTheGateRefuses(
+        slug,
+        options
+      );
       doc = await this.assembleStoredDocument({
         slug,
         singleMeta: readMeta,
@@ -1640,6 +1646,7 @@ export class SingleQueryService extends BaseService {
           statusFilter,
           revealed
         ),
+        refusedLanguages,
       });
 
       // On a trusted draft-view read, surface this Single's pending change in
@@ -1704,8 +1711,9 @@ export class SingleQueryService extends BaseService {
       stripServerOnlyColumns(doc, singleMeta.tableName);
 
       // Each language beside the Single only where its read gate admits it
-      // in that language.
-      await this.withholdLanguagesTheGateRefuses(doc, slug, options);
+      // in that language: after its field groups are put beside it, so a
+      // refused language is withheld from them too.
+      withholdLanguages(doc, refusedLanguages);
       // Every language's values beside the Single are kept off it while its
       // hooks and its own field rules run, and put back only to be judged
       // language by language: no hook is handed a value before it is judged,
