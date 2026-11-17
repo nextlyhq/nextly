@@ -55,6 +55,7 @@ import {
   CONTAINER_CHILD_GAP,
   CONTAINER_SUPPORTS,
   CONTENT_WIDTH_PROPS,
+  containerLinkProps,
   linkableContentModel,
   renderLinkableContainer,
 } from "./container";
@@ -143,7 +144,7 @@ export const card: BlockDefinition<ContainerProps, PageContext> = defineBlock({
     as: htmlTagProp(["div", "article", "section", "aside"]),
     ...CONTENT_WIDTH_PROPS,
     // A whole-card link, as on `core/box`.
-    link: { label: "Whole card links to", role: "content", type: "url" },
+    ...containerLinkProps("The whole card becomes the link"),
   },
   defaultProps: { as: "div", contained: false },
   example: { props: { as: "div" } },

@@ -35,16 +35,18 @@ function inspect(
   {
     editor = {},
     values = {},
+    name = "acme/block",
   }: {
     editor?: Record<string, unknown>;
     values?: Record<string, unknown>;
+    name?: string;
   } = {}
 ): BlockInspection {
   registerBlocks(
     [
       {
         ...base,
-        name: "acme/block",
+        name,
         editor: { label: "Block", ...editor },
         ...(props === undefined ? {} : { props }),
       },
@@ -58,7 +60,7 @@ function inspect(
       nodes: [
         {
           id: "a",
-          type: "acme/block",
+          type: name,
           version: 1,
           props: values,
         } as BlockNode,
@@ -101,6 +103,17 @@ describe("the tabs a block has", () => {
     expect(
       inspectorTabsOf(
         inspect(undefined, { editor: { component: "acme/inspector" } })
+      )
+    ).toEqual(["content", "style", "advanced"]);
+  });
+
+  it("keep Content for a Columns row, whose layout the builder draws there, with every setting elsewhere", () => {
+    expect(
+      inspectorTabsOf(
+        inspect(
+          { as: { type: "select", group: "advanced", options: ["div"] } },
+          { name: "core/columns" }
+        )
       )
     ).toEqual(["content", "style", "advanced"]);
   });

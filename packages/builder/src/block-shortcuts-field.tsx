@@ -40,8 +40,9 @@ import type { EditorState } from "./editor-state";
 import type { BuilderOp } from "./op-vocabulary";
 import { SegmentChoices } from "./segment-choices";
 
+/** A Section's height, in the words of what it does: fit, or fill the screen. */
 const HEIGHT_LABELS: Readonly<Record<HeightChoice, string>> = {
-  auto: "Auto",
+  auto: "Fit content",
   screen: "Full screen",
 };
 
@@ -119,9 +120,10 @@ interface ShortcutProps {
 /**
  * The Section whose presets held focus when a choice moved them, if any.
  * Choosing Full screen draws the Min height field and the presets move over
- * it, and Auto moves them back: two places in the panel, so the focused radio
- * is unmounted with the old row. The row drawn in the new place takes the
- * focus back, read once by whichever row draws next and cleared.
+ * it, and Fit content moves them back: two places in the panel, so the
+ * focused radio is unmounted with the old row. The row drawn in the new
+ * place takes the focus back, read once by whichever row draws next and
+ * cleared.
  */
 let focusMovesWith: string | undefined;
 
@@ -136,9 +138,10 @@ function takeMovedFocus(group: HTMLElement | null, nodeId: string): void {
 }
 
 /**
- * A Section's Min height presets, Auto and Full screen: on the Min height
- * row, as a row over its input where that field is drawn (`over`), else as
- * the row itself, named Min height, until a value draws the field.
+ * A Section's Height, Fit content and Full screen, which presets its min
+ * height: a row over the Min height input where that field is drawn
+ * (`over`), named for screen readers only, else a row of its own, named
+ * Height, until a value draws the field.
  */
 export function MinHeightPresets({
   editor,
@@ -162,7 +165,7 @@ export function MinHeightPresets({
   return (
     <div ref={row} className="nx-block-shortcuts" data-control="section-height">
       <ChoiceRow
-        label={over ? "Min height presets" : "Min height"}
+        label="Height"
         shownLabel={!over}
         options={["auto", "screen"] as const}
         on={heightOf(node, at, reaching)}

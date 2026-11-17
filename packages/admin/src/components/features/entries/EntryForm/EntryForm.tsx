@@ -115,7 +115,7 @@ import {
   previewLinkLocale,
   useHasPublicAddress,
 } from "./entry-address";
-import { useEntryDetails } from "./entry-details-read";
+import type { EntryDetailsTarget } from "./entry-details-read";
 import {
   fieldsBesidePanel,
   type EntryFieldsPresentation,
@@ -786,12 +786,13 @@ export function EntryForm({
   // reachable, since the control that would call it is not rendered.
   const savedEntryId = entry?.id === undefined ? "" : String(entry.id);
   // Where the site serves the entry, and who made and changed it, once it
-  // exists: the address chip and the panel's Details read them.
-  const entryDetails = useEntryDetails({
+  // exists. Named here and read by what draws them, the address chip and the
+  // panel's Details, so a document view covering the form reads nothing.
+  const detailsOf: EntryDetailsTarget = {
     collectionSlug: collection.name,
     entryId: mode === "edit" && savedEntryId !== "" ? savedEntryId : undefined,
     locale,
-  });
+  };
 
   // Recovery points for this author, recorded while they type. Addressed only
   // once the entry has an id: a document that has never been saved has nothing
@@ -1739,7 +1740,7 @@ export function EntryForm({
                                               }
                                             : undefined
                                         }
-                                        address={entryDetails?.address}
+                                        detailsOf={detailsOf}
                                         status={
                                           hasStatus ? editedStatus : undefined
                                         }
@@ -1879,9 +1880,7 @@ export function EntryForm({
                                                 entryId: savedEntryId,
                                               }),
                                             })}
-                                        {...(entryDetails === undefined
-                                          ? {}
-                                          : { details: entryDetails })}
+                                        detailsOf={detailsOf}
                                         hasStatus={hasStatus}
                                         // The pill's status, read from the
                                         // language being edited.
