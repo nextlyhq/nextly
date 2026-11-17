@@ -175,13 +175,7 @@ export function SettingsDialog({
     enabled: open,
   });
   const leave = useLeaveGuard(onOpenChange, open);
-  // The editor's way to its list of sets, taken only as the dialog may be
-  // left: a breakpoint or code draft asks first, and a save running keeps it.
-  const openSets = useContext(ManageSetsContext);
-  const leaveToSets =
-    openSets === null
-      ? null
-      : () => leave.request({ kind: "close", then: openSets });
+  const leaveToSets = useLeaveToSets(leave.request);
   // The Site tab is offered to a manager, and also when the read failed: a
   // failure must not look like a missing permission.
   const siteTab = site.data?.mayManageSite === true || site.error !== null;
@@ -353,6 +347,18 @@ const DISCARD_WORDS = {
  * editor, such as the Pages panel's sets), or another tab.
  */
 type Leave = { kind: "close"; then?: () => void } | { kind: "tab"; to: string };
+
+/**
+ * The editor's way to its list of sets, taken only as the dialog may be
+ * left: a breakpoint or code draft asks first, and a save running keeps it.
+ * Null where the editor offers none.
+ */
+function useLeaveToSets(request: (leave: Leave) => void): (() => void) | null {
+  const openSets = useContext(ManageSetsContext);
+  return openSets === null
+    ? null
+    : () => request({ kind: "close", then: openSets });
+}
 
 /** Which drafts leaving would discard. */
 function discardingOf(
