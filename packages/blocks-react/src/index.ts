@@ -21,6 +21,7 @@ export type {
   BlocksFieldShapeRef,
   BlocksFieldShapes,
   BlocksSiteSettings,
+  BlocksSiteValues,
   BlocksDataProvider,
   BlocksDataProviderFactory,
   BlocksFilter,

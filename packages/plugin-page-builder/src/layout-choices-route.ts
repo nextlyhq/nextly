@@ -38,6 +38,11 @@ import { TEMPLATES_SLUG } from "./collections/templates";
 import { publishedStoreSource } from "./component-store-source";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
 import {
+  starterRecordStore,
+  untouchedStarterArea,
+  type StarterRecord,
+} from "./default-layout/starter-record";
+import {
   readLayoutSettings,
   type DefaultLayoutDirectApi,
 } from "./default-layout/store";
@@ -108,6 +113,11 @@ export interface LayoutChoicesRequest {
   readonly locale?: string | undefined;
   /** Text Layout titles must contain, to reach those past the list's bound. */
   readonly search?: string | undefined;
+  /**
+   * The starter header and footer the site was seeded with, as recorded.
+   * Absent, no region is told it shows the starter.
+   */
+  readonly starter?: () => Promise<StarterRecord | "made" | null>;
 }
 
 type Row = Record<string, unknown>;
@@ -257,6 +267,10 @@ export async function readLayoutChoices(
   const fenced =
     (await request.fence?.removalStates(items.map(item => item.id))) ??
     new Map<string, FencedLayoutState>();
+  const starter =
+    focusedComponents.length === 0
+      ? null
+      : ((await request.starter?.()) ?? null);
 
   return {
     items: items.map(item => {
@@ -290,12 +304,27 @@ export async function readLayoutChoices(
             draftChangesNotLive: (reachable.get(id) ?? []).some(reached =>
               componentDrafts.has(reached)
             ),
+            ...untouchedStarterFact(starter, id, regionDefinitions),
           },
         ])
       ),
       regionDefinitions,
     },
   };
+}
+
+/**
+ * Whether component `id` is the site's untouched starter, judged by its
+ * PUBLISHED definition as read for the canvas: what a visitor sees.
+ */
+function untouchedStarterFact(
+  starter: StarterRecord | "made" | null,
+  id: string,
+  definitions: Readonly<Record<string, BlockDocument>>
+): Pick<RegionComponentFacts, "untouchedStarter"> {
+  if (starter === null || starter === "made") return {};
+  const area = untouchedStarterArea(starter, id, definitions[id]);
+  return area === null ? {} : { untouchedStarter: area };
 }
 
 /**
@@ -570,6 +599,7 @@ export function layoutChoicesRoute(
         await readLayoutChoices(ctx, await getCachedNextly(), {
           ...query,
           fence: fenceStates(layoutRemovalStore(ctx.db, ctx.dialect)),
+          starter: () => starterRecordStore(ctx.db, ctx.dialect).read(),
           store,
           // Asked per request, as the renderer asks, so both read one answer.
           limits: limits(),
