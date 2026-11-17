@@ -22,6 +22,7 @@ import { ChromeTooltip } from "./chrome-tooltip";
 import { controlWrites } from "./code-hints";
 import { CssHint, CssNamesLine, OptionWrites, FieldNamesId } from "./css-hint";
 import type { EditorState } from "./editor-state";
+import { FieldPathWrites } from "./field-path-writes";
 import { InheritedValue } from "./inherited-value";
 import { LabelScrubRow, useLabelScrubProps } from "./label-scrub";
 import { CompactSides, fieldDescribedBy, sideKeysFor } from "./spacing-box";
@@ -300,24 +301,27 @@ export function StyleControlField({
                 descendant={control.leaf.descendant}
               />
               <InheritedValue.Provider value={inherited}>
-                <FieldValue
-                  asSide={asSide}
-                  id={id}
-                  labelledBy={labelId}
-                  control={control}
-                  stored={stored}
-                  inherited={inherited}
-                  actionName={actionName}
-                  clearOnly={clearOnly}
-                  tokens={tokens}
-                  prefersDark={prefersDark}
-                  pairedColour={pairedColour}
-                  obscuredBy={obscuredBy}
-                  describedBy={describedBy}
-                  onCommit={commit}
-                  onCommitSides={writes.commitSides}
-                  refusal={issue}
-                />
+                {/* Several paths in one edit, for a control that sets more than its own. */}
+                <FieldPathWrites.Provider value={writes.commitPaths}>
+                  <FieldValue
+                    asSide={asSide}
+                    id={id}
+                    labelledBy={labelId}
+                    control={control}
+                    stored={stored}
+                    inherited={inherited}
+                    actionName={actionName}
+                    clearOnly={clearOnly}
+                    tokens={tokens}
+                    prefersDark={prefersDark}
+                    pairedColour={pairedColour}
+                    obscuredBy={obscuredBy}
+                    describedBy={describedBy}
+                    onCommit={commit}
+                    onCommitSides={writes.commitSides}
+                    refusal={issue}
+                  />
+                </FieldPathWrites.Provider>
               </InheritedValue.Provider>
             </LabelScrubRow>
             <CssNamesLine id={namesId} names={[control.leaf.cssProperty]} />

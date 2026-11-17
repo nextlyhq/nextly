@@ -2172,6 +2172,82 @@ describe("the background image in the Inspector's Style tab", () => {
   });
 });
 
+describe("the background size choices", () => {
+  const withImage = {
+    base: { [BASE_BREAKPOINT]: { background: { url: "/a.png" } } },
+  } as NodeStyles;
+
+  it("writes Fit's size and repeat on the block as ONE edit", () => {
+    // One applied group is one entry in the history, so one undo takes both
+    // back; a size written alone would leave the image tiling.
+    const editor = mount({ background: { image: true } }, withImage);
+    fireEvent.click(fieldsOf("background").getByRole("radio", { name: "Fit" }));
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    const ops = editor.applyAll.mock.calls[0]?.[0] as BuilderOp[];
+    expect(ops).toHaveLength(1);
+    expect(ops[0]).toEqual({
+      kind: "update",
+      id: "a",
+      patch: {
+        styles: {
+          base: {
+            [BASE_BREAKPOINT]: {
+              background: {
+                url: "/a.png",
+                size: "contain",
+                repeat: "no-repeat",
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("sends Cover's size and repeat to a shared style as ONE change", () => {
+    register({ background: { image: true } });
+    const editor = editorFor(documentOf());
+    const write = vi.fn(async (_change: unknown) => undefined);
+    const target = {
+      kind: "shared" as const,
+      worn: [],
+      style: {
+        id: "c-card",
+        name: "Card",
+        slug: "card",
+        className: ".nx-c-card",
+        locked: false,
+        inCode: false,
+        styles: withImage,
+      } as never,
+      readOnly: undefined,
+      write,
+    };
+    render(<StyleInspectorPanel editor={editor} target={target} />);
+    fireEvent.click(
+      fieldsOf("background").getByRole("radio", { name: "Cover" })
+    );
+    expect(editor.applyAll).not.toHaveBeenCalled();
+    expect(write).toHaveBeenCalledTimes(1);
+    const change = write.mock.calls[0]?.[0];
+    if (typeof change !== "function") throw new Error("no change");
+    expect((change as (styles: NodeStyles) => unknown)(withImage)).toEqual({
+      kind: "write",
+      styles: {
+        base: {
+          [BASE_BREAKPOINT]: {
+            background: {
+              url: "/a.png",
+              size: "cover",
+              repeat: "no-repeat",
+            },
+          },
+        },
+      },
+    });
+  });
+});
+
 describe("a value the panel shows and could not remove", () => {
   /*
    * One shape at several sites: the panel renders a value that IS emitted on
@@ -5441,7 +5517,6 @@ describe("a per-side property is drawn as a box", () => {
     );
   });
 
-
   it("marks each side with WHICH side it is, not with its position", () => {
     /*
      * The property the stylesheet places on. The heading, a form selector and
@@ -5566,7 +5641,6 @@ describe("a per-side property is drawn as a box", () => {
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
-
   it("goes round the box mirrored on a right-to-left element", () => {
     // The order is the sides' logical one: top, inline end, bottom, inline
     // start, which on a right-to-left element is top, left, bottom, right.
@@ -5679,7 +5753,6 @@ describe("a per-side property is drawn as a box", () => {
       within(box as HTMLElement).getByLabelText("Inline start")
     ).toBeDefined();
   });
-
 
   it("resolves the axes from the CANVAS, through the panel that owns it", () => {
     /*
