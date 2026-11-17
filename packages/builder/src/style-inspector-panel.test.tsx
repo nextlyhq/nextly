@@ -417,26 +417,41 @@ describe("the shared style target", () => {
   }
 
   const bar = () => screen.getByRole("region", { name: "What you're editing" });
-  const chip = (name: string) =>
-    within(bar()).getByRole("button", { name, pressed: undefined });
+  /** The target chip: the one menu button that says what an edit changes. */
+  const targetChip = () =>
+    within(bar()).getByRole("button", { name: /^Editing: / });
+  /** Open the target chip's menu, as a pointer press does. */
+  const openTargetMenu = (): HTMLElement => {
+    fireEvent.pointerDown(targetChip(), { button: 0, ctrlKey: false });
+    return screen.getByRole("menu");
+  };
+  /** A target in the open menu; jsdom joins its words with no space. */
+  const targetItem = (name: string) =>
+    within(screen.getByRole("menu")).getByRole("menuitemradio", {
+      name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+    });
+  /** Make a target of a worn style (or "This block") from the chip's menu. */
+  const chooseTarget = (name: string): void => {
+    openTargetMenu();
+    fireEvent.click(targetItem(name));
+  };
 
   it("lists every shared style a block wears, in library order, after This block", () => {
     mountTarget({ classes: ["c-promo", "c-card", "c-hero"] });
-    const chips = within(bar())
-      .getAllByRole("button")
-      .filter(button => button.hasAttribute("aria-pressed"));
-    expect(chips.map(button => button.textContent)).toEqual([
-      "This block",
-      "hero",
-      "Card",
-      "promo",
-    ]);
-    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
-    // Each chip's tooltip names the class the page carries.
-    expect(chip("Card").title).toBe("Edit shared style Card, .nx-c-card");
+    const menu = openTargetMenu();
+    const targets = within(menu).getAllByRole("menuitemradio");
+    expect(
+      targets.map(
+        item =>
+          item.querySelector(".nx-editing-bar__item-words > span")?.textContent
+      )
+    ).toEqual(["● This block", "◆ hero", "◆ Card", "◆ promo"]);
+    expect(targetItem("This block").getAttribute("aria-checked")).toBe("true");
+    // Each style says the class the page carries.
+    expect(targetItem("Card").textContent).toContain(".nx-c-card");
   });
 
-  it("makes a chip the target: pressed, named with its reach, and announced", async () => {
+  it("makes a worn style the target: named green, with its reach, and announced", async () => {
     const usage = vi.fn(async () => ({
       whole: false,
       mayLock: false,
@@ -453,16 +468,16 @@ describe("the shared style target", () => {
     }));
     mountTarget({ classes: ["c-card"], usage });
     const device = bar().querySelector("[data-edit-device]")?.textContent;
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
 
-    expect(chip("Card").getAttribute("aria-pressed")).toBe("true");
-    expect(chip("This block").getAttribute("aria-pressed")).toBe("false");
-    expect(bar().textContent).toContain(
-      "Editing shared style Card · .nx-c-card"
+    expect(targetChip().getAttribute("aria-label")).toBe(
+      "Editing: shared style Card"
     );
+    expect(targetChip().dataset.tone).toBe("shared");
+    expect(targetChip().title).toBe("Shared style Card, .nx-c-card");
     expect(
       await within(bar()).findByText(
-        "3 blocks on this page · on at least 4 pages and 1 component"
+        "Shared style · 3 blocks on this page · on at least 4 pages and 1 component. Changes here change all of them."
       )
     ).toBeDefined();
     expect(within(bar()).getByRole("status").textContent).toBe(
@@ -475,108 +490,91 @@ describe("the shared style target", () => {
     );
   });
 
-  it("holds the shared style chips while the block's design is held, and every field with them", async () => {
+  it("holds the worn styles while the block's design is held, and every field with them", () => {
     // A locked or contentOnly block's design is fixed on this page. Editing
     // the shared style it wears from here would change that design all the
-    // same, so the chip says why it is held and the target stays the block.
+    // same, so the menu says why it is held and the target stays the block.
     mountTarget({ classes: ["c-card"], locked: true });
-    const card = chip("Card");
+    openTargetMenu();
+    const card = targetItem("Card");
     expect(card.getAttribute("aria-disabled")).toBe("true");
-    // Why, as its description, heard without opening anything.
-    const why = document.getElementById(
-      card.getAttribute("aria-describedby") ?? ""
-    );
-    expect(why?.textContent).toMatch(
+    // Why, under its name, heard as part of it.
+    expect(card.textContent).toMatch(
       /Locked: it can't be moved, deleted or edited/
     );
-    // And shown: the editor's tooltip on focus, as on hover, not a native
-    // title, which focus never shows.
-    expect(card.getAttribute("title")).toBeNull();
-    fireEvent.focus(card);
-    expect((await screen.findByRole("tooltip")).textContent).toMatch(
-      /Locked: it can't be moved, deleted or edited/
-    );
-    fireEvent.blur(card);
+
+    // No write the menu offers: Save as and Apply held.
+    const menu = within(screen.getByRole("menu"));
+    expect(
+      menu
+        .getByRole("menuitem", { name: /^Save as shared style…/ })
+        .getAttribute("aria-disabled")
+    ).toBe("true");
+    expect(
+      menu
+        .getByRole("menuitem", { name: /^Apply a shared style…/ })
+        .getAttribute("aria-disabled")
+    ).toBe("true");
 
     fireEvent.click(card);
-    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
-    expect(card.getAttribute("aria-pressed")).toBe("false");
-    expect(bar().textContent).not.toContain("Editing shared style");
+    expect(targetChip().dataset.editTarget).toBe("block");
+    expect(bar().textContent).not.toContain("Shared style ·");
     expect(
       (screen.getByLabelText("Opacity") as HTMLInputElement).matches(
         ":disabled"
       )
     ).toBe(true);
-    // No write the bar offers: no Save as, no Move to.
-    expect(screen.queryByText(/Save as shared style/)).toBeNull();
     expect(screen.queryByText(/Move to/)).toBeNull();
   });
 
-  it("lets the shared style chip be chosen on a block nothing holds", () => {
+  it("lets a worn style be chosen on a block nothing holds", () => {
     // The positive control for the hold above.
     mountTarget({ classes: ["c-card"] });
-    expect(chip("Card").getAttribute("aria-disabled")).toBeNull();
-    fireEvent.click(chip("Card"));
-    expect(chip("Card").getAttribute("aria-pressed")).toBe("true");
+    openTargetMenu();
+    expect(targetItem("Card").getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(targetItem("Card"));
+    expect(targetChip().dataset.editTarget).toBe("shared");
   });
 
-  it("returns to This block on Escape, and with Edit this block only", () => {
+  it("returns to This block on Escape, and from the menu", () => {
     mountTarget({ classes: ["c-card"] });
-    fireEvent.click(chip("Card"));
-    fireEvent.keyDown(chip("Card"), { key: "Escape" });
-    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
+    chooseTarget("Card");
+    fireEvent.keyDown(targetChip(), { key: "Escape" });
+    expect(targetChip().dataset.editTarget).toBe("block");
     expect(within(bar()).getByRole("status").textContent).toBe(
       "Now editing this block"
     );
 
-    fireEvent.click(chip("Card"));
-    fireEvent.click(
-      within(bar()).getByRole("button", { name: "Edit this block only" })
-    );
-    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
+    chooseTarget("Card");
+    chooseTarget("This block");
+    expect(targetChip().dataset.editTarget).toBe("block");
   });
 
   it("takes Escape only when it switches back, so the editor's own Escape stands down", () => {
     // The editor's Escape (select the parent block) skips a key already
     // answered, so the bar marks the one it answers and leaves the rest.
     mountTarget({ classes: ["c-card"] });
-    fireEvent.click(chip("Card"));
-    expect(fireEvent.keyDown(chip("Card"), { key: "Escape" })).toBe(false);
-    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
+    chooseTarget("Card");
+    expect(fireEvent.keyDown(targetChip(), { key: "Escape" })).toBe(false);
+    expect(targetChip().dataset.editTarget).toBe("block");
     // Already on this block: nothing to answer, so the editor's Escape runs.
-    expect(fireEvent.keyDown(chip("This block"), { key: "Escape" })).toBe(true);
+    expect(fireEvent.keyDown(targetChip(), { key: "Escape" })).toBe(true);
   });
 
-  it("lets the chip's menu take Escape without leaving the shared target", async () => {
+  it("lets the target menu take Escape without leaving the shared target", async () => {
     mountTarget({ classes: ["c-card"] });
-    fireEvent.click(chip("Card"));
-    const menu = within(bar()).getByRole("button", {
-      name: "Actions for shared style Card",
-    });
-    fireEvent.pointerDown(menu, { button: 0, ctrlKey: false });
+    chooseTarget("Card");
+    openTargetMenu();
     const item = await screen.findByRole("menuitem", { name: /^Detach/ });
     fireEvent.keyDown(item, { key: "Escape" });
     await vi.waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
     // The menu closed; the target is still the shared style.
-    expect(chip("Card").getAttribute("aria-pressed")).toBe("true");
-  });
-
-  it("moves between the chips with the arrow keys, one tab stop for the group", () => {
-    mountTarget({ classes: ["c-card", "c-hero"] });
-    expect(chip("This block").tabIndex).toBe(0);
-    expect(chip("Card").tabIndex).toBe(-1);
-    chip("This block").focus();
-    fireEvent.keyDown(chip("This block"), { key: "ArrowRight" });
-    expect(document.activeElement).toBe(chip("hero"));
-    fireEvent.keyDown(chip("hero"), { key: "End" });
-    expect(document.activeElement).toBe(chip("Card"));
-    fireEvent.keyDown(chip("Card"), { key: "ArrowRight" });
-    expect(document.activeElement).toBe(chip("This block"));
+    expect(targetChip().dataset.editTarget).toBe("shared");
   });
 
   it("shows the style's value and writes the style, never the block", async () => {
     const { editor, writeStyles } = mountTarget({ classes: ["c-card"] });
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     const field = screen.getByRole("textbox", {
       name: "Opacity",
     }) as HTMLInputElement;
@@ -598,7 +596,7 @@ describe("the shared style target", () => {
       supports: { effects: true, spacing: true },
       writeStyles: host.writeStyles as never,
     });
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     const side = fieldsOf("padding").getByLabelText("Block start");
     fireEvent.change(side, { target: { value: "12px" } });
     fireEvent.blur(side);
@@ -623,7 +621,7 @@ describe("the shared style target", () => {
       classes: ["c-card"],
       writeStyles: host.writeStyles as never,
     });
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     const field = screen.getByRole("textbox", { name: "Opacity" });
     fireEvent.change(field, { target: { value: "80" } });
     fireEvent.blur(field);
@@ -649,7 +647,7 @@ describe("the shared style target", () => {
           store = resolve;
         }),
     });
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     openSection(/^Effects/);
     fireEvent.click(
       screen.getByRole("button", { name: "Move Opacity to Card" })
@@ -688,7 +686,7 @@ describe("the shared style target", () => {
           store = resolve;
         }),
     });
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     fireEvent.click(
       screen.getByRole("button", { name: "Move Opacity to Card" })
     );
@@ -707,15 +705,8 @@ describe("the shared style target", () => {
     const raise = vi.fn();
     const { editor } = mountTarget({ classes: ["c-card"], raise });
     editor.applyAll.mockReturnValue(null);
-    fireEvent.pointerDown(
-      within(bar()).getByRole("button", {
-        name: "Actions for shared style Card",
-      }),
-      { button: 0, ctrlKey: false }
-    );
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: /^Detach: keep the look/ })
-    );
+    openTargetMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Detach\s*Card/ }));
     expect(raise).toHaveBeenCalledWith(
       "Card could not be detached from this block: the page could not take the change."
     );
@@ -745,15 +736,8 @@ describe("the shared style target", () => {
         container: [{ id: "cq-sm", label: "Small", maxWidth: 400 }],
       } as BreakpointSet,
     });
-    fireEvent.pointerDown(
-      within(bar()).getByRole("button", {
-        name: "Actions for shared style Card",
-      }),
-      { button: 0, ctrlKey: false }
-    );
-    const item = screen.getByRole("menuitem", {
-      name: /^Detach: keep the look/,
-    });
+    openTargetMenu();
+    const item = screen.getByRole("menuitem", { name: /^Detach\s*Card/ });
     expect(item.getAttribute("aria-disabled")).toBe("true");
     expect(item.textContent).toContain(
       "This look depends on screen and container width together, so it can't be detached yet."
@@ -783,6 +767,25 @@ describe("the shared style target", () => {
         )
       ).toEqual(["Default", "Outline"]);
       expect(radios[0]?.getAttribute("aria-checked")).toBe("true");
+    });
+
+    it("leaves a hidden look out of the tiles", () => {
+      const hidden = { ...outline, hidden: true as const };
+      mountTarget({ library: [card, hidden, { ...outline, id: "look:acme/box:soft", slug: "box-soft", label: "Soft" }] });
+      expect(
+        within(looks())
+          .getAllByRole("radio")
+          .map(radio => radio.querySelector(".nx-look-tile__name")?.textContent)
+      ).toEqual(["Default", "Soft"]);
+    });
+
+    it("keeps a hidden look on the block already wearing it, saying Hidden", () => {
+      const hidden = { ...outline, hidden: true as const };
+      mountTarget({ classes: [hidden.id], library: [card, hidden] });
+      const worn = within(looks()).getByRole("radio", { checked: true });
+      expect(worn.querySelector(".nx-look-tile__name")?.textContent).toBe(
+        "OutlineHidden"
+      );
     });
 
     it("wears the chosen look and keeps the block's shared style", () => {
@@ -818,18 +821,20 @@ describe("the shared style target", () => {
       orderIndex: 1,
     };
 
-    it("names the look the canvas applies when the block lists two", () => {
-      // Written in library order, Filled is the one drawn, so the bar's line
-      // and its action are about Filled, whatever order the block lists them.
+    it("says in the target menu what choosing each worn look edits", () => {
+      // Each look is a style shared by every block of the type wearing it,
+      // so choosing one as the target says so before the author edits it.
       mountTarget({
         classes: [filled.id, outline.id],
         library: [card, outline, filled],
       });
-      expect(
-        within(bar()).getByRole("button", {
-          name: "Edit Filled for every box that uses it",
-        })
-      ).toBeDefined();
+      openTargetMenu();
+      expect(targetItem("Filled").textContent).toContain(
+        "Edit Filled for every box that uses it"
+      );
+      expect(targetItem("Outline").textContent).toContain(
+        "Edit Outline for every box that uses it"
+      );
     });
 
     it("takes a look the library hides off when another is chosen", () => {
@@ -879,9 +884,10 @@ describe("the shared style target", () => {
 
     it("keeps Apply on offer while the block wears only a look", () => {
       mountTarget({ classes: [outline.id], library: [card, outline] });
-      expect(
-        within(bar()).getByRole("button", { name: "Apply shared style" })
-      ).toBeDefined();
+      const apply = within(openTargetMenu()).getByRole("menuitem", {
+        name: /^Apply a shared style…/,
+      });
+      expect(apply.getAttribute("aria-disabled")).toBeNull();
     });
 
     it("marks the chosen tile with a check, not by its ring alone", () => {
@@ -896,15 +902,14 @@ describe("the shared style target", () => {
       ).toHaveLength(1);
     });
 
-    it("says an edit changes this block only, and switches to the look everywhere", () => {
+    it("keeps the bar to one line with a look on, and switches to the look from the menu", () => {
       mountTarget({ classes: [outline.id], library: [card, outline] });
-      expect(bar().textContent).toContain("Changes this box only");
-      fireEvent.click(
-        within(bar()).getByRole("button", {
-          name: "Edit Outline for every box that uses it",
-        })
+      // Wearing a look adds no line: the bar says only what an edit changes.
+      expect(bar().querySelectorAll("p:not(.nx-sr-only)")).toHaveLength(0);
+      chooseTarget("Outline");
+      expect(targetChip().getAttribute("aria-label")).toBe(
+        "Editing: shared style Outline"
       );
-      expect(bar().textContent).toMatch(/Editing shared style Outline/);
     });
 
     it("draws no row for a type with no looks", () => {
@@ -924,12 +929,12 @@ describe("the shared style target", () => {
           refuse = resolve;
         }),
     });
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     const field = screen.getByRole("textbox", { name: "Opacity" });
     fireEvent.change(field, { target: { value: "0.8" } });
     fireEvent.blur(field);
     // The author goes back to this block while Card's write is on its way.
-    fireEvent.click(chip("This block"));
+    chooseTarget("This block");
 
     await act(async () => {
       refuse("Card is locked.");
@@ -943,7 +948,7 @@ describe("the shared style target", () => {
   it("says a later refusal of the style's write beside the field", async () => {
     const writeStyles = vi.fn(async () => "Card is locked.");
     mountTarget({ classes: ["c-card"], writeStyles });
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     const field = screen.getByRole("textbox", { name: "Opacity" });
     fireEvent.change(field, { target: { value: "0.8" } });
     fireEvent.blur(field);
@@ -957,8 +962,13 @@ describe("the shared style target", () => {
       classes: ["c-card"],
       library: [{ ...card, locked: true } as typeof card],
     });
-    // The chip carries a lock, named in words.
-    fireEvent.click(chip("Card, locked"));
+    // The style carries a lock, named in words, in the menu and on the chip.
+    openTargetMenu();
+    expect(targetItem("Card").textContent).toContain(", locked");
+    fireEvent.click(targetItem("Card"));
+    expect(targetChip().getAttribute("aria-label")).toBe(
+      "Editing: shared style Card, locked"
+    );
     expect(bar().textContent).toContain(
       "Card is locked. Its properties can't be changed."
     );
@@ -986,7 +996,7 @@ describe("the shared style target", () => {
       classes: ["c-card"],
       mayChange: false,
     });
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     expect(bar().textContent).toContain("You can't change this site's design.");
     expect(
       screen.getAllByText("You can't change this site's design.")
@@ -1036,7 +1046,7 @@ describe("the shared style target", () => {
     });
     expect(words?.contains(reset)).toBe(false);
 
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     const move = document.querySelector('[data-shared-line="move"]');
     expect(move?.querySelector("[data-shared-line-text]")?.textContent).toBe(
       "Set on this block"
@@ -1067,7 +1077,7 @@ describe("the shared style target", () => {
       classes: ["c-card"],
       styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.2 } } },
     });
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     fireEvent.click(
       screen.getByRole("button", { name: "Move Opacity to Card" })
     );
@@ -1090,7 +1100,7 @@ describe("the shared style target", () => {
       styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.2 } } },
       writeStyles,
     });
-    fireEvent.click(chip("Card"));
+    chooseTarget("Card");
     fireEvent.click(
       screen.getByRole("button", { name: "Move Opacity to Card" })
     );
@@ -1098,12 +1108,15 @@ describe("the shared style target", () => {
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
-  it("applies an existing style to a block that wears none, and offers no new empty one", () => {
+  it("applies an existing style to a block that wears none, and offers no new empty one", async () => {
     const { editor } = mountTarget({});
     fireEvent.click(
-      within(bar()).getByRole("button", { name: "Apply shared style" })
+      within(openTargetMenu()).getByRole("menuitem", {
+        name: /^Apply a shared style…/,
+      })
     );
-    const search = screen.getByRole("combobox", {
+    // Opened once the menu has handed focus back, under the target chip.
+    const search = await screen.findByRole("combobox", {
       name: "Search shared styles",
     });
     fireEvent.change(search, { target: { value: "brand-new" } });
@@ -1117,22 +1130,21 @@ describe("the shared style target", () => {
     });
   });
 
-  it("offers no second style while the block wears one", () => {
+  it("holds Apply, saying why, while the block wears a shared style", () => {
     mountTarget({ classes: ["c-card"] });
-    expect(
-      within(bar()).queryByRole("button", { name: "Apply shared style" })
-    ).toBeNull();
+    const apply = within(openTargetMenu()).getByRole("menuitem", {
+      name: /^Apply a shared style…/,
+    });
+    expect(apply.getAttribute("aria-disabled")).toBe("true");
+    expect(apply.textContent).toContain("This block already uses Card.");
   });
 
-  it("takes a style off the block, or detaches it, from the chip's menu", () => {
+  it("detaches a style from the block from the target menu", () => {
     const { editor } = mountTarget({ classes: ["c-card"] });
-    const menu = within(bar()).getByRole("button", {
-      name: "Actions for shared style Card",
-    });
-    fireEvent.pointerDown(menu, { button: 0, ctrlKey: false });
+    openTargetMenu();
     fireEvent.click(
       screen.getByRole("menuitem", {
-        name: /Detach: keep the look on this block only/,
+        name: /^Detach\s*Card.*Keep the look on this block only/,
       })
     );
     expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({

@@ -398,6 +398,9 @@ export function EntryForm({
    * have to be threaded back down through props that exist for nothing else.
    */
   const [previewOpen, setPreviewOpen] = useState(false);
+  // Opens the pane and never closes it: a control inside the document that
+  // offers the preview beside the form, as the bar's press opens it.
+  const openPreviewBeside = useCallback(() => setPreviewOpen(true), []);
 
   /*
    * Where the past version's comparison bar is drawn: a place among the
@@ -778,6 +781,8 @@ export function EntryForm({
     slugFieldName: slugField?.name ?? "slug",
     enabled: !!titleField && !!slugField,
     frozen: hasPublicAddress,
+    // A restore that puts back the title leaves an unchosen slug as it is.
+    restore: formRestore,
   });
 
   // A link names one saved document, so there is nothing to mint against until
@@ -1525,6 +1530,14 @@ export function EntryForm({
                   // and only where the header would.
                   {...(canPreview
                     ? { openPreview: entryPreview.openPreview }
+                    : {})}
+                  // Beside the form only where the pane can show: as the
+                  // bar's pane toggle, and not under a document view, which
+                  // takes the window alone.
+                  {...(canPreview &&
+                  translationMode.source === undefined &&
+                  !documentView
+                    ? { openPreviewBeside }
                     : {})}
                 >
                   {/* A document view replaces the form body and nothing around

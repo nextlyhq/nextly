@@ -10,10 +10,10 @@
  * and write the target's values. One holder, so the bar and the controls can
  * never disagree about what an edit changes.
  *
- * The bar's own actions live here too: applying an existing shared style to a
- * block that wears none, "Save as shared style…" (the block verb every menu
- * offers), and each chip's Detach and Remove, all page edits through the
- * editor.
+ * The bar's target menu's actions live here too: applying an existing shared
+ * style to a block that wears none, "Save as shared style…" (the block verb
+ * every menu offers), and each worn style's Detach and Remove, all page edits
+ * through the editor.
  *
  * @module style-target
  */
@@ -27,15 +27,20 @@ import type {
   TokenMode,
 } from "@nextlyhq/blocks-engine";
 import { findNode, getBlock } from "@nextlyhq/blocks-engine";
-import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
 import type { CardVerbs } from "./block-card";
 import { ClassSelector } from "./class-selector";
-import { EditingBar, type EditTarget } from "./editing-bar";
+import {
+  type ApplyOffer,
+  type BarOffer,
+  EditingBar,
+  type EditingBarChip,
+  type EditTarget,
+} from "./editing-bar";
 import type { EditorState } from "./editor-state";
 import { designReadOnlyReason, lockViewOf } from "./inspector";
-import { lookLineWords, looksOfType, wornLook } from "./look-tiles";
+import { lookLineWords } from "./look-tiles";
 import { LookTiles } from "./look-tiles-view";
 import type { BuilderOp } from "./op-vocabulary";
 import {
@@ -334,7 +339,12 @@ export interface StyleTargetBarProps {
   readonly host: SharedStylesHost | undefined;
   /** The shared block verbs, for "Save as shared style…". */
   readonly verbs: CardVerbs | undefined;
+  /** The device the canvas shows: "Desktop". */
   readonly device: string;
+  /** The devices an edit reaches, in words: "All devices". */
+  readonly deviceReach?: string;
+  /** The device's glyph, as the top bar draws it. */
+  readonly deviceIcon?: React.ComponentType<{ className?: string }>;
   /** The site's breakpoints, so Detach weighs a later style's narrower values. */
   readonly breakpoints?: BreakpointSet;
   readonly state: StyleState;
@@ -429,22 +439,19 @@ export function StyleTargetBar({
   libraryAbsence,
   host,
   verbs,
-  device,
   breakpoints,
-  state,
-  stateControl,
   tokens,
   tokenMode,
+  // The device and the state, the canvas's own, handed to the bar whole.
+  ...context
 }: StyleTargetBarProps): React.JSX.Element {
   const nodeId = editor.selectedId;
   // The bar has no line of its own for a refusal, so it speaks through the
   // shell's notices, which outlive the menu that asked.
   const survive = useSurvivingReport();
   const report = (reason: string): void => survive(reason, () => false);
-  const reach = useReachSentence(
-    target.kind === "shared" ? target.style.id : undefined,
-    host
-  );
+  const shared = target.kind === "shared" ? target : undefined;
+  const reach = useReachSentence(shared?.style.id, host);
   const worn = target.worn;
   return (
     <>
@@ -457,76 +464,85 @@ export function StyleTargetBar({
         onRefused={report}
       />
       <EditingBar
+        {...context}
         target={editTargetOf(target, reach)}
-        chips={worn.map(row => ({
-          id: row.id,
-          name: row.name,
-          className: row.className,
-          locked: row.locked,
-        }))}
-        onTargetChange={host === undefined ? undefined : onChoose}
+        chips={barChips(editor, nodeId, worn)}
+        // Without a host there is nowhere to write a shared style's values.
+        {...(host === undefined ? {} : { onTargetChange: onChoose })}
         {...chipActions(editor, nodeId, worn, report, breakpoints)}
-        {...wornLookLine(editor, nodeId, worn, library)}
         chipActionsHeld={held}
-        // The shared chips too: choosing one would edit the held design.
+        // The shared styles too: choosing one would edit the held design.
         targetHeld={held}
-        sharedReadOnly={target.kind === "shared" ? target.readOnly : undefined}
-        actions={offeredActions({
+        sharedReadOnly={shared?.readOnly}
+        apply={applyOffer({
           editor,
           nodeId,
           worn,
           held,
           library,
           libraryAbsence,
-          verbs,
         })}
-        device={device}
-        state={state}
-        stateControl={stateControl}
+        save={saveOffer(verbs)}
       />
     </>
   );
 }
 
 /**
- * The bar's line about the look the block wears, if it wears one: that an
- * edit here changes this block only, and how to change the look everywhere.
+ * The worn styles as the target menu lists them. A block style says what
+ * choosing it does ("Edit Outline for every button that uses it"), since an
+ * edit to it reaches every block of the type that wears it.
  */
-function wornLookLine(
+function barChips(
   editor: EditorState,
   nodeId: string | null,
-  worn: readonly SharedStyleRow[],
-  library: readonly NamedClass[] | undefined
-): { wornLook?: { id: string; here: string; everywhere: string } } {
+  worn: readonly SharedStyleRow[]
+): EditingBarChip[] {
   const node =
     nodeId === null ? undefined : findNode(editor.document.nodes, nodeId);
-  if (node === undefined || library === undefined) return {};
-  // The look the canvas applies, as the tiles read it: one answer for both.
-  const id = wornLook(node.classes, looksOfType(library, node.type));
-  const look = worn.find(row => row.id === id);
-  if (look === undefined) return {};
-  const label = getBlock(node.type)?.editor?.label ?? "block";
-  return {
-    wornLook: {
-      id: look.id,
-      ...lookLineWords(look.name, label),
-    },
-  };
+  const label =
+    node === undefined
+      ? "block"
+      : (getBlock(node.type)?.editor?.label ?? "block");
+  return worn.map(row => ({
+    id: row.id,
+    name: row.name,
+    className: row.className,
+    locked: row.locked,
+    ...(row.look === true
+      ? { hint: lookLineWords(row.name, label).everywhere }
+      : {}),
+  }));
+}
+
+/** Why "Save as shared style…" is held where the host offers no save. */
+const NO_SAVE = "Shared styles can't be saved here.";
+
+/**
+ * "Save as shared style…": the block verb every menu runs, held with the
+ * reason its rule gives, so the bar and the block's ⋯ menu agree.
+ */
+function saveOffer(verbs: CardVerbs | undefined): BarOffer {
+  const save = verbs?.actions.find(
+    action => action.id === "save-as-shared-style"
+  );
+  if (verbs === undefined || save === undefined) return { held: NO_SAVE };
+  if (!save.enabled) return { held: save.reason ?? NO_SAVE };
+  return { run: () => verbs.run("save-as-shared-style") };
 }
 
 /**
- * Line one's actions, or none: only for a block that wears no shared style
- * and whose design isn't held. A look is worn beside a shared style, so
- * "Apply" and "Save as" stay on offer while the block wears only a look.
+ * "Apply a shared style…": the site's styles to choose from, for a block that
+ * wears no shared style and whose design isn't held. One per block in the
+ * first release; a block style is worn beside one, so it holds nothing.
  */
-function offeredActions({
+function applyOffer({
   editor,
   nodeId,
   worn,
   held,
   library,
   libraryAbsence,
-  verbs,
 }: {
   editor: EditorState;
   nodeId: string | null;
@@ -534,99 +550,43 @@ function offeredActions({
   held: string | undefined;
   library: readonly NamedClass[] | undefined;
   libraryAbsence: "pending" | "failed" | undefined;
-  verbs: CardVerbs | undefined;
-}): React.JSX.Element | null {
-  const wearsSharedStyle = worn.some(row => row.look !== true);
-  if (nodeId === null || wearsSharedStyle || held !== undefined) return null;
-  return (
-    <BarActions
-      editor={editor}
-      nodeId={nodeId}
-      library={library}
-      libraryAbsence={libraryAbsence}
-      verbs={verbs}
-    />
-  );
-}
-
-/**
- * What line one offers a block that wears no shared style: apply one the
- * site has, or save this block's look as a new one. One per block in the
- * first release, so neither shows once the block wears one.
- */
-function BarActions({
-  editor,
-  nodeId,
-  library,
-  libraryAbsence,
-  verbs,
-}: {
-  editor: EditorState;
-  nodeId: string;
-  library: readonly NamedClass[] | undefined;
-  libraryAbsence: "pending" | "failed" | undefined;
-  verbs: CardVerbs | undefined;
-}): React.JSX.Element {
-  const [open, setOpen] = React.useState(false);
-  // The verb every menu runs, offered here only while it may run: a held
-  // one says why in the block's ⋯ menu.
-  const save = verbs?.actions.find(
-    action => action.id === "save-as-shared-style" && action.enabled
-  );
+}): ApplyOffer {
+  const wearing = worn.find(row => row.look !== true);
+  if (nodeId === null) return { held: "Select a block first." };
+  if (held !== undefined) return { held };
+  if (wearing !== undefined) {
+    return { held: `This block already uses ${wearing.name}.` };
+  }
   const nodeClassIds = findNode(editor.document.nodes, nodeId)?.classes ?? [];
-  return (
-    <>
-      <Popover open={open} onOpenChange={setOpen} modal>
-        <PopoverTrigger asChild>
-          <button type="button" className="nx-editing-bar__action">
-            Apply shared style
-          </button>
-        </PopoverTrigger>
-        <PopoverContent
-          side="bottom"
-          align="start"
-          // Kept clear of the window's edge.
-          collisionPadding={8}
-          className="nx-vars-editor nx-shared-style-picker"
-          aria-label="Apply shared style"
-        >
-          <ClassSelector
-            key={nodeId}
-            nodeId={nodeId}
-            library={library}
-            libraryAbsence={libraryAbsence}
-            nodeClassIds={nodeClassIds}
-            autoFocus
-            onNodeClassesChange={classIds => {
-              // Asked of the live document at the moment of the write.
-              if (
-                designReadOnlyReason(
-                  editor.document,
-                  nodeId,
-                  lockViewOf(editor)
-                ) !== undefined
-              ) {
-                return "refused";
-              }
-              const applied = editor.applyAll([
-                { kind: "update", id: nodeId, patch: { classes: classIds } },
-              ]);
-              if (applied === null) return "refused";
-              setOpen(false);
-              return "applied";
-            }}
-          />
-        </PopoverContent>
-      </Popover>
-      {save === undefined ? null : (
-        <button
-          type="button"
-          className="nx-editing-bar__action"
-          onClick={() => verbs?.run("save-as-shared-style")}
-        >
-          Save as shared style…
-        </button>
-      )}
-    </>
-  );
+  return {
+    // Opened from the chip itself, once the menu has closed.
+    picker: close => (
+      <ClassSelector
+        key={nodeId}
+        nodeId={nodeId}
+        library={library}
+        libraryAbsence={libraryAbsence}
+        nodeClassIds={nodeClassIds}
+        autoFocus
+        onNodeClassesChange={classIds => {
+          // Asked of the live document at the moment of the write.
+          if (
+            designReadOnlyReason(
+              editor.document,
+              nodeId,
+              lockViewOf(editor)
+            ) !== undefined
+          ) {
+            return "refused";
+          }
+          const applied = editor.applyAll([
+            { kind: "update", id: nodeId, patch: { classes: classIds } },
+          ]);
+          if (applied === null) return "refused";
+          close();
+          return "applied";
+        }}
+      />
+    ),
+  };
 }

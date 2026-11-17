@@ -20,8 +20,10 @@ import { NewEntityDialog } from "@admin/components/features/schema-builder/new-e
 import { PageContainer } from "@admin/components/layout/page-container";
 import { toast } from "@admin/components/ui";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
-import { toSnakeName } from "@admin/lib/builder";
-import { addUnsavedEntity } from "@admin/lib/builder/unsaved-entities";
+import {
+  addUnsavedEntity,
+  unsavedFieldGroupFrom,
+} from "@admin/lib/builder/unsaved-entities";
 import { navigateTo } from "@admin/lib/navigation";
 
 import { FIELD_GROUP_BUILDER_CONFIG } from "./builder-config";
@@ -36,15 +38,10 @@ export default function FieldGroupBuilderPage(): React.ReactElement | null {
   }, [open]);
 
   const handleSubmit = (values: BuilderSettingsValues) => {
-    const singular = values.singularName.trim();
-    const slug = values.slug?.trim() || toSnakeName(singular);
-    const added = addUnsavedEntity({
-      kind: "field-group",
-      address: slug,
-      settings: { ...values, singularName: singular, slug },
-      // A field group starts with no fields; they are added in its editor.
-      fields: [],
-    });
+    // Made here, it has no owner: its own editor's first save creates it.
+    const entity = unsavedFieldGroupFrom(values);
+    const slug = entity.address;
+    const added = addUnsavedEntity(entity);
     // The dialog's check counts an unsaved entity's address as used, so this
     // is reached only if another unsaved field group took it meanwhile.
     if (!added) {

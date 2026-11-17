@@ -1,6 +1,7 @@
 /**
- * The editor shows what a page costs to read against its allowance, warns
- * from 80% of it, and names the blocks that went unread past it.
+ * The editor's page data meter: the top bar shows it from 80% of the limit
+ * and names the blocks that come up empty past it; Page settings shows the
+ * count at every level.
  *
  * Each page is a list of 10 posts whose template holds lists of its own, one
  * read per entry each: forty of them make 401 reads, past the 400 the editor
@@ -8,8 +9,8 @@
  * are refused and their lists named.
  *
  * A page made published a moment before it is opened, and opened at one of
- * its blocks, is counted too: the meter says what it reads, never "Counting
- * reads" for good.
+ * its blocks, is counted too: Page settings says what it reads, never
+ * "counting" for good.
  *
  * @module tests/builder-read-budget.spec
  */
@@ -133,17 +134,23 @@ async function openBuilder(page: Page, id: string, at?: string): Promise<void> {
   });
 }
 
-/** The meter in the top bar, once it has counted. */
+/** The page data meter in the top bar, shown from 80% of the limit. */
 function meter(page: Page) {
-  return page.getByRole("button", {
-    name: /^(\d+ of 500 reads|Over the limit of 500 reads)/,
-  });
+  return page.locator('.nx-read-meter[data-place="bar"]');
 }
 
-test.describe("the page reads meter", () => {
+/** The page data line in Page settings, shown at every level. */
+function settingsLine(page: Page) {
+  return page
+    .getByRole("complementary", { name: "Inspector" })
+    .getByRole("region", { name: "Page settings" })
+    .getByRole("button", { name: /^Page data:/ });
+}
+
+test.describe("the page data meter", () => {
   test.describe.configure({ timeout: 300_000 });
 
-  test("counts a page's reads, and warns from 80% of the allowance", async ({
+  test("shows in the top bar from 80% of the limit, and explains itself", async ({
     page,
   }) => {
     await signIn(page);
@@ -153,27 +160,28 @@ test.describe("the page reads meter", () => {
     // One read for the posts, and one for each of the forty inner lists of
     // each of the 10 posts.
     await expect(meter(page)).toHaveAccessibleName(
-      "401 of 500 reads, near the limit",
+      "Page data: 401 of 500, near the limit. What's this?",
       { timeout: 60_000 }
     );
-    // Its tooltip says the same, for the short form a crowded bar draws.
+    // Its tooltip says the same, for the shorter form a crowded bar draws.
     await expect(meter(page)).toHaveAttribute(
       "title",
-      "401 of 500 reads, near the limit"
+      "Page data: 401 of 500, near the limit. What's this?"
     );
+    await expect(meter(page)).toHaveAttribute("data-standing", "near");
     await meter(page).click();
-    const panel = page.getByRole("dialog", { name: "Page reads" });
+    const panel = page.getByRole("dialog", { name: "Page data" });
     await expect(panel).toBeVisible();
     await expect(panel.getByText("Near the limit")).toBeVisible();
-    await expect(panel.getByText("Warns from 400")).toBeVisible();
-    // The editor counts against the default limit, and says so.
+    await expect(panel.getByText("Warning from 400")).toBeVisible();
+    // The site sets no limit of its own, so it is the default, said so.
     await expect(panel.getByText("Limit 500 (the default)")).toBeVisible();
     await expect(panel.getByText("List entries")).toBeVisible();
-    // CONTROL: within the limit, nothing is named as unread.
-    await expect(panel.getByText(/not read/)).toHaveCount(0);
+    // CONTROL: within the limit, no block is named as coming up empty.
+    await expect(panel.getByText(/come(s)? up empty$/)).toHaveCount(0);
   });
 
-  test("over the allowance, names each block that went unread, and selects it", async ({
+  test("over the limit, names each block that comes up empty, and selects it", async ({
     page,
   }) => {
     await signIn(page);
@@ -181,18 +189,20 @@ test.describe("the page reads meter", () => {
     await ensurePosts(page.request, mark);
     await openBuilder(page, await seed(page.request, mark, 50));
     await expect(meter(page)).toHaveAccessibleName(
-      /^Over the limit of 500 reads, \d+ blocks? not read$/,
+      "Page data: 500 of 500, over the limit. What's this?",
       { timeout: 60_000 }
     );
+    await expect(meter(page)).toHaveAttribute("data-standing", "over");
     await meter(page).click();
-    const panel = page.getByRole("dialog", { name: "Page reads" });
+    const panel = page.getByRole("dialog", { name: "Page data" });
     await expect(panel.getByText("Over the limit")).toBeVisible();
     await expect(
-      panel.getByText(/^500 of 500 reads used · \d+ blocks? not read$/)
+      panel.getByText(/^500 of 500 · (1 block comes|\d+ blocks come) up empty$/)
     ).toBeVisible();
-    // The last of each entry's lists is the one past the allowance.
+    // The last of each entry's lists is the one past the limit.
     const unread = panel.getByRole("button", { name: /^Inner list \d/ });
     await expect(unread.first()).toBeVisible();
+    await expect(unread.first()).toContainText("Its entries don't load");
     const name = (await unread.first().textContent()) ?? "";
     const list = /Inner list \d/.exec(name)?.[0];
     expect(list).toBeDefined();
@@ -218,14 +228,37 @@ test.describe("the page reads meter", () => {
         .getByRole("list", { name: "Current location" })
         .getByRole("button", { name: "Published heading" })
     ).toHaveAttribute("aria-current", "true", { timeout: 30_000 });
+    // Leaving the heading shows Page settings, where the count always is.
+    await page.keyboard.press("Escape");
     // Counted a moment after the canvas drew it: a heading and a text read
     // nothing.
-    await expect(meter(page)).toHaveAccessibleName("0 of 500 reads", {
-      timeout: 20_000,
-    });
+    await expect(settingsLine(page)).toHaveAccessibleName(
+      "Page data: 0 of 500, within the limit. What's this?",
+      { timeout: 20_000 }
+    );
+  });
+
+  test("shows the count in Page settings on a page well under the limit, with the same explanation", async ({
+    page,
+  }) => {
+    await signIn(page);
+    const mark = `R${Date.now().toString(36)}`;
+    await openBuilder(page, await seedPublished(page.request, mark));
+    await expect(settingsLine(page)).toHaveAccessibleName(
+      "Page data: 0 of 500, within the limit. What's this?",
+      { timeout: 30_000 }
+    );
+    await expect(settingsLine(page)).toHaveText("Page data: 0 of 500");
+    // Well under the limit, the top bar shows no meter.
+    await expect(meter(page)).toHaveCount(0);
     // CONTROL: neither still counting nor a count that could not be made.
     await expect(
-      page.getByRole("button", { name: /^(Counting|Couldn't count)/ })
+      page.getByRole("button", { name: /^Page data: (counting|couldn't)/ })
     ).toHaveCount(0);
+    await settingsLine(page).click();
+    const panel = page.getByRole("dialog", { name: "Page data" });
+    await expect(panel).toBeVisible();
+    await expect(panel.getByText("Within the limit")).toBeVisible();
+    await expect(panel.getByText("Limit 500 (the default)")).toBeVisible();
   });
 });

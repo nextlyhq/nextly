@@ -30,7 +30,10 @@ const checked = vi.hoisted(() => [] as unknown[]);
 
 // The change check has its own tests; here it would share the mocked route
 // with the read under test, so only what it is handed is recorded.
-vi.mock("./editor/canvas-source-check", () => ({
+vi.mock("./editor/canvas-source-check", async importOriginal => ({
+  // The rule for when the first reads are in stays real; only the check
+  // itself is watched.
+  ...(await importOriginal<typeof import("./editor/canvas-source-check")>()),
   useCanvasSourceCheck: (asked: unknown) => {
     checked.push(asked);
   },
@@ -105,6 +108,21 @@ describe("the canvas's binding sources", () => {
       lists: [],
       locale: "en",
     });
+  });
+
+  it("asks under what the page has left, `null` where the site sets no limit", () => {
+    const ask = (allowance: number) =>
+      canvasBindingsRequest(
+        [page({ text: { $bind: "title" } })],
+        identity,
+        "en",
+        false,
+        undefined,
+        { allowance }
+      )?.allowance;
+    expect(ask(12.5)).toBe(12);
+    // JSON has no Infinity: it would arrive as a null the route refuses.
+    expect(ask(Number.POSITIVE_INFINITY)).toBeNull();
   });
 
   it("names the collections the page's lists draw", () => {
@@ -791,5 +809,54 @@ describe("the canvas's read, as the template's strip hears it", () => {
     await waitFor(() => expect(writePluginRoute).toHaveBeenCalledTimes(3));
     retries = 0;
     editing.identity = null;
+  });
+});
+
+describe("the page data limit the canvas reads its bindings under", () => {
+  /** The bodies the canvas's binding asks sent, in order. */
+  const askedBodies = (): Record<string, unknown>[] =>
+    writePluginRoute.mock.calls.map(
+      ([write]) => (write as { body: Record<string, unknown> }).body
+    );
+
+  /** The canvas's ask for a bound page under `allowance`, in `locale`. */
+  async function askUnder(
+    locale: string,
+    allowance: number | undefined
+  ): Promise<Record<string, unknown>> {
+    editing.identity = identity;
+    writePluginRoute.mockReset();
+    writePluginRoute.mockResolvedValue(answer("A title"));
+    const drawn = [page({ text: { $bind: "title" } })];
+    const { result, unmount } = renderHook(() =>
+      useCanvasBindings(drawn, locale, false, undefined, undefined, allowance)
+    );
+    try {
+      await waitFor(() =>
+        expect(result.current.entry).toEqual({ id: "p1", title: "A title" })
+      );
+      const [body] = askedBodies();
+      if (body === undefined) throw new Error("nothing asked");
+      return body;
+    } finally {
+      unmount();
+      editing.identity = null;
+    }
+  }
+
+  it("asks under the site's limit, as the published page reads its bindings", async () => {
+    expect((await askUnder("la-1", 20)).allowance).toBe(20);
+    expect((await askUnder("la-2", 1500)).allowance).toBe(1500);
+  });
+
+  it("asks with no limit, sent as null, for a site that sets none", async () => {
+    const body = await askUnder("la-3", Number.POSITIVE_INFINITY);
+    expect(body).toHaveProperty("allowance", null);
+  });
+
+  it("asks under the route's default where the site sets no limit", async () => {
+    // Absent rather than 500: the same ask as before, which the route reads
+    // as its default.
+    expect(await askUnder("la-4", undefined)).not.toHaveProperty("allowance");
   });
 });

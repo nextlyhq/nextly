@@ -23,6 +23,7 @@ import { LOCALE_PARAM } from "@admin/constants/search-params";
 import {
   scopeKey,
   useBaselineDiff,
+  useVersion,
   useVersions,
 } from "@admin/hooks/queries/useVersions";
 import { useCan } from "@admin/hooks/useCan";
@@ -41,7 +42,11 @@ import {
   HISTORY_TITLES,
 } from "./history-layout";
 import { useMarkVersionSeen } from "./useMarkVersionSeen";
-import { predecessorOf, type PairResolution } from "./version-pairing";
+import {
+  baselineLabel,
+  predecessorOf,
+  type PairResolution,
+} from "./version-pairing";
 import {
   namesServerBaseline,
   resolvePair,
@@ -108,7 +113,10 @@ function BaselineNote({
 }: {
   baseline: { name: string; versionNo: number; replaces?: number };
 }) {
-  const phrase = BASELINE_PHRASE[baseline.name] ?? baseline.name;
+  // A baseline another feature registered is said by its name in words.
+  const phrase =
+    BASELINE_PHRASE[baseline.name] ??
+    baselineLabel(baseline.name).toLowerCase();
   return (
     <p className="border-b border-border px-4 py-2 text-xs text-muted-foreground">
       {baseline.replaces !== undefined
@@ -148,11 +156,30 @@ const NO_PAIR_MESSAGE: Record<
     "The version before this one has not been loaded yet. Choose Load more in the list to fetch it.",
 };
 
+/** A comparison the diff view reports drawn, with the language it is in. */
+interface DrawnComparison {
+  from: number;
+  to: number;
+  locale: string | null;
+}
+
+/**
+ * Why the server refused a baseline, in its words: nothing to compare with
+ * (no current draft, nothing published, no earlier visit), or a name it does
+ * not know, which it answers with the ones it does. Undefined for any other
+ * failure, which is a comparison that did not load.
+ */
+function baselineRefusalOf(error: unknown): string | undefined {
+  return validationIssues(error).find(issue => issue.path === "baseline")
+    ?.message;
+}
+
 /** What fills the comparison side: a failure, a reason there is no pair, or one. */
 function ComparisonPane({
   scope,
   pair,
   baselineDiff,
+  refusal,
   view,
   onViewChange,
   onShown,
@@ -164,10 +191,12 @@ function ComparisonPane({
   pair: PairResolution;
   /** The server's answer for a baseline it resolves. */
   baselineDiff: ReturnType<typeof useBaselineDiff>;
+  /** Why the server refused that baseline, in its words, when it did. */
+  refusal: string | undefined;
   view?: "inline" | "side";
   onViewChange: (layout: ChangesLayout) => void;
   /** Hears the diff view report the comparison it has drawn. */
-  onShown: (pair: { from: number; to: number } | null) => void;
+  onShown: (shown: DrawnComparison | null) => void;
   isError: boolean;
   isLoading: boolean;
   onRetry: () => void;
@@ -189,19 +218,34 @@ function ComparisonPane({
 
   if (pair.kind === "baseline") {
     if (baselineDiff.isError) {
-      // A baseline with nothing to compare with (no current draft, nothing
-      // published, no earlier visit) is refused with the reason in the
-      // server's words; any other failure is a comparison that did not load.
-      const reason = validationIssues(baselineDiff.error).find(
-        issue => issue.code === "NO_BASELINE"
-      )?.message;
+      // A refusal is the server's answer about the document, and asking again
+      // gets the same one, so it is said without a retry. Any other failure
+      // is a comparison that did not load, which can be asked for again: this
+      // answer is not asked again on a return to the tab for every baseline,
+      // so without the control a reload would be the only way back.
+      if (refusal !== undefined) {
+        return (
+          <div className="p-4">
+            <Alert variant="info">
+              <AlertDescription>{refusal}</AlertDescription>
+            </Alert>
+          </div>
+        );
+      }
       return (
-        <div className="p-4">
-          <Alert variant={reason ? "info" : "destructive"}>
+        <div className="flex flex-col gap-3 p-4">
+          <Alert variant="destructive">
             <AlertDescription>
-              {reason ?? "This comparison could not be loaded."}
+              This comparison could not be loaded.
             </AlertDescription>
           </Alert>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void baselineDiff.refetch()}
+          >
+            Try again
+          </Button>
         </div>
       );
     }
@@ -221,6 +265,10 @@ function ComparisonPane({
           scope={scope}
           from={data.from}
           to={data.to}
+          // The baseline's answer is this pair's whole comparison, and has
+          // already filled the pair's own, so it is drawn without asking the
+          // server to compute it again.
+          seededBy={pair.baseline}
           {...(view ? { view } : {})}
           onViewChange={onViewChange}
           onShown={onShown}
@@ -309,7 +357,14 @@ export function VersionComparePage({
     ...(pair.kind === "baseline" && pair.to !== undefined
       ? { to: pair.to }
       : {}),
+    // The language to pair in when the address names no version; with one,
+    // the server takes that version's own.
+    ...(locale !== undefined ? { locale } : {}),
   });
+  const refusal =
+    pair.kind === "baseline" && baselineDiff.isError
+      ? baselineRefusalOf(baselineDiff.error)
+      : undefined;
   const pairFrom = pair.kind === "pair" ? pair.from : baselineDiff.data?.from;
   const pairTo = pair.kind === "pair" ? pair.to : baselineDiff.data?.to;
   const shown = useMemo(
@@ -325,14 +380,12 @@ export function VersionComparePage({
   // line, a failure, or another pair's answer instead. So the page marks only
   // from the view's own report, tagged with the document it was made for.
   const scopeId = scopeKey(scope).join(":");
-  const [reported, setReported] = useState<{
-    scopeId: string;
-    from: number;
-    to: number;
-  } | null>(null);
+  const [reported, setReported] = useState<
+    (DrawnComparison & { scopeId: string }) | null
+  >(null);
   const onShown = useCallback(
-    (drawnPair: { from: number; to: number } | null) =>
-      setReported(drawnPair ? { scopeId, ...drawnPair } : null),
+    (drawn: DrawnComparison | null) =>
+      setReported(drawn ? { scopeId, ...drawn } : null),
     [scopeId]
   );
   // A report counts only for the document and pair now on screen, so one left
@@ -352,6 +405,31 @@ export function VersionComparePage({
     scopeId,
     seen ? Math.max(seen.from, seen.to) : null
   );
+
+  // What "Restore…" hands the editor: the version on screen, in the language
+  // its loaded comparison names, which is the comparison's own and holds
+  // where the address names none; or, while the server says there is nothing
+  // to compare with, the version the address named. A version's restore list
+  // compares it with the editor, not with a baseline, so having nothing to
+  // compare it with is no reason to withhold it.
+  //
+  // That version's language comes from its own record. The refusal names
+  // none, the address's `locale` is not that version's (the server takes a
+  // named version's part from the version), and the list is paged, so the
+  // version may sit beyond what is loaded. The record is the one the editor
+  // reads for the hand-off anyway, so reading it here asks nothing twice.
+  // Nothing is offered until it arrives: the editor offers a restore only
+  // while open in the version's language.
+  const refusedTo =
+    refusal !== undefined && pair.kind === "baseline" && pair.to !== undefined
+      ? pair.to
+      : null;
+  const refusedVersion = useVersion({ scope, versionNo: refusedTo });
+  const restoreTarget = seen
+    ? { versionNo: seen.to, locale: seen.locale }
+    : refusedTo !== null && refusedVersion.data?.versionNo === refusedTo
+      ? { versionNo: refusedTo, locale: refusedVersion.data.locale }
+      : null;
 
   /** The same comparison, at another baseline or in another view. */
   const rewrite = useCallback(
@@ -467,7 +545,7 @@ export function VersionComparePage({
           <VersionTimelineRail
             scope={scope}
             versions={versions}
-            selected={pair.kind === "pair" ? pair.to : null}
+            compared={shown}
             onSelect={selectPair}
             isLoading={list.isLoading}
             isError={historyUnavailable}
@@ -497,13 +575,19 @@ export function VersionComparePage({
                 value={typeof from === "string" ? from : "chosen"}
                 onChange={event => {
                   const value = event.target.value;
-                  if (value !== "chosen")
-                    rewrite({ from: value as ComparisonFrom });
+                  if (value !== "chosen") rewrite({ from: value });
                 }}
               >
                 {typeof from === "string" ? null : (
                   <option value="chosen">The version chosen in the list</option>
                 )}
+                {/* A baseline another feature registered, named by the
+                    address, is offered as itself, so the control says what
+                    is compared rather than showing another choice. */}
+                {typeof from === "string" &&
+                !COMPARE_WITH.some(option => option.value === from) ? (
+                  <option value={from}>{baselineLabel(from)}</option>
+                ) : null}
                 {COMPARE_WITH.map(option => (
                   <option key={option.value} value={option.value}>
                     {option.label}
@@ -511,26 +595,26 @@ export function VersionComparePage({
                 ))}
               </select>
             </label>
-            {canEditDocument && shown ? (
+            {canEditDocument && restoreTarget ? (
               <Button
                 variant="outline"
                 size="sm"
                 className="ml-auto"
                 // The editor restores it: the values go back as unsaved
                 // edits through its list, and nothing is saved from here.
-                // The comparison's language goes with it, under the key the
+                // The version's language goes with it, under the key the
                 // editor reads its language from: the editor offers a
                 // version's restore only while open in that version's
                 // language, so one opened in its default language would take
                 // the hand-off and never show the restore list. Absent for a
-                // comparison that names no language, as the editor expects.
+                // version in no language, as the editor expects.
                 onClick={() =>
                   navigateTo(
                     withQuery(documentHref, {
                       [HISTORY_PARAM]: 1,
-                      [VERSION_PARAM]: shown.to,
+                      [VERSION_PARAM]: restoreTarget.versionNo,
                       [RESTORE_PARAM]: 1,
-                      [LOCALE_PARAM]: locale,
+                      [LOCALE_PARAM]: restoreTarget.locale ?? undefined,
                     })
                   )
                 }
@@ -543,6 +627,7 @@ export function VersionComparePage({
             scope={scope}
             pair={pair}
             baselineDiff={baselineDiff}
+            refusal={refusal}
             {...(view ? { view } : {})}
             onViewChange={onViewChange}
             onShown={onShown}

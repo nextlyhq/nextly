@@ -9,7 +9,19 @@
  *
  * @module canvas-page-context.test
  */
+import {
+  DOCUMENT_FORMAT_VERSION,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
+import {
+  createBlockResolver,
+  PageRenderer,
+  type PageContext,
+} from "@nextlyhq/blocks-react";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { createElement } from "react";
+import { renderToReadableStream } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 const readMedia = vi.fn<(id: string) => Promise<unknown>>();
@@ -426,5 +438,164 @@ describe("the context saved section pictures draw with", () => {
     const first = result.current;
     rerender();
     expect(result.current).toBe(first);
+  });
+});
+
+describe("the page data limit the canvas draws under", () => {
+  /** A page of `count` lists, each reading one entry. */
+  const pageOfLists = (count: number): BlockDocument => ({
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: Array.from({ length: count }, (_, index) => ({
+      id: `list-${String(index + 1)}`,
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "posts", limit: 1 },
+      slots: {
+        children: [
+          {
+            id: `t-${String(index + 1)}`,
+            type: "core/text",
+            version: 1,
+            props: { text: "Post" },
+          },
+        ],
+      },
+    })),
+  });
+
+  /**
+   * How many entries each list drew, by its id, when the canvas draws `page`
+   * under its own page context. Only the rows are stood in for, read here
+   * rather than from the admin; the budget each list claims its read from is
+   * the canvas's own.
+   */
+  async function drawnOnCanvas(
+    context: PageContext,
+    page: BlockDocument
+  ): Promise<ReadonlyMap<string, number>> {
+    const shown = new Map<string, number>();
+    const stream = await renderToReadableStream(
+      createElement(PageRenderer, {
+        document: page,
+        blocks: createBlockResolver(coreBlocks),
+        siteStyles: false,
+        context: {
+          ...context,
+          data: {
+            find: () => Promise.resolve({ items: [{ id: "a" }], total: 1 }),
+          },
+          listShown: (id, count) => {
+            shown.set(id, count);
+          },
+        },
+      })
+    );
+    await stream.allReady;
+    await new Response(stream).text();
+    return shown;
+  }
+
+  /** The lists that drew no entry, by id. */
+  const empty = (shown: ReadonlyMap<string, number>): string[] =>
+    [...shown].filter(([, count]) => count === 0).map(([id]) => id);
+
+  it("draws a list past 500 for a site whose limit is above 500, as its published page does", async () => {
+    const { result } = renderHook(() =>
+      useCanvasPageContext(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        600
+      )
+    );
+    const shown = await drawnOnCanvas(result.current, pageOfLists(520));
+    expect(shown.size).toBe(520);
+    // The 501st list and every one after it drew its entry.
+    expect(shown.get("list-501")).toBe(1);
+    expect(empty(shown)).toEqual([]);
+  });
+
+  it("leaves a list past a lower limit empty, as the published page leaves it", async () => {
+    const { result } = renderHook(() =>
+      useCanvasPageContext(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        20
+      )
+    );
+    const shown = await drawnOnCanvas(result.current, pageOfLists(25));
+    expect(shown.get("list-20")).toBe(1);
+    expect(empty(shown)).toEqual([
+      "list-21",
+      "list-22",
+      "list-23",
+      "list-24",
+      "list-25",
+    ]);
+  });
+
+  it("refuses no read for a site that sets no limit", async () => {
+    const { result } = renderHook(() =>
+      useCanvasPageContext(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        Number.POSITIVE_INFINITY
+      )
+    );
+    const shown = await drawnOnCanvas(result.current, pageOfLists(520));
+    expect(empty(shown)).toEqual([]);
+    let taken = 0;
+    while (result.current.queries?.take() === true && taken < 20_000) {
+      taken += 1;
+    }
+    expect(taken).toBe(20_000);
+  });
+
+  it("draws under the default 500 where the site sets no limit of its own", async () => {
+    // CONTROL: the same page as the raised limit's case, drawn under the
+    // default, leaves its lists past 500 empty.
+    const { result } = renderHook(() => useCanvasPageContext());
+    const shown = await drawnOnCanvas(result.current, pageOfLists(520));
+    expect(shown.get("list-500")).toBe(1);
+    expect(empty(shown)).toHaveLength(20);
+    expect(empty(shown)[0]).toBe("list-501");
+  });
+
+  it("begins each draw afresh under the site's limit", () => {
+    const { result, rerender } = renderHook(() =>
+      useCanvasPageContext(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        3
+      )
+    );
+    const first = result.current;
+    const takeAll = (): number => {
+      let taken = 0;
+      while (result.current.queries?.take() === true && taken <= 1000) {
+        taken += 1;
+      }
+      return taken;
+    };
+    expect(takeAll()).toBe(3);
+    rerender();
+    expect(result.current).toBe(first);
+    expect(takeAll()).toBe(3);
   });
 });

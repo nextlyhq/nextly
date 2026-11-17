@@ -99,6 +99,7 @@ import {
   TouchGestureHint,
 } from "./insert-panel-tiles";
 import type { InsertPanelProps } from "./insert-panel-types";
+import { recordInsert, useInsertUsage } from "./insert-usage";
 import {
   categoryHeading,
   filterEntries,
@@ -192,6 +193,8 @@ export function InsertPanel({
   ...offerInputs
 }: InsertPanelProps): React.JSX.Element {
   const { editor, nesting, onInsert } = offerInputs;
+  // Where a dragged block's insert is counted, as a clicked one's is.
+  const usage = useInsertUsage();
   const summons = { summoned, onSummoned };
   const [query, setQuery] = React.useState("");
   // Blocks first: what an author adds most. Sections holds the patterns.
@@ -441,7 +444,13 @@ export function InsertPanel({
                       begin: beginInsertDrag,
                       definitions: blockSource,
                       nesting,
-                      onInserted: onInsert,
+                      // Counted toward the most used, as a click's is.
+                      onInserted: node => {
+                        if (entry.kind === "block") {
+                          recordInsert(usage, entry.blockName);
+                        }
+                        onInsert?.(node);
+                      },
                       entryField: firstBlocksField,
                       refusedEverywhere:
                         entry.kind === "block" &&

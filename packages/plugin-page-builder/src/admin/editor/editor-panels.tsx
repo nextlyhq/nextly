@@ -21,10 +21,15 @@ import {
   ComponentsPanel,
   EDITOR_WORDS,
   InsertPanel,
+  InsertPicker,
   LayersPanel,
+  useInsertPicker,
   useBuilderChecklist,
   type BuilderShell,
   type CanvasRegion,
+  type InsertPickerState,
+  type InsertPickerTarget,
+  type InsertPlace,
   type LayersRegionRow,
   type LibraryTierState,
   type MiniatureSession,
@@ -35,7 +40,13 @@ import {
   useDocumentIdentity,
   useEntryFieldsPanel,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
 import type { ComponentLibraryRead } from "../component-library-client";
@@ -157,6 +168,8 @@ function InsertPanelWithLibrary({
   inside?: string;
   /** The block to add right after, when the "+" in the gap below it asked. */
   after?: string;
+  /** Any other place chosen by position, carried from the in-place picker. */
+  at?: React.ComponentProps<typeof InsertPanel>["at"];
   /** A canvas press still to answer, and where to say it was answered. */
   summoned: React.ComponentProps<typeof InsertPanel>["summoned"];
   onSummoned: React.ComponentProps<typeof InsertPanel>["onSummoned"];
@@ -319,6 +332,8 @@ type PanelRequests = {
   insertInside: string | undefined;
   /** The block the last gap's "+" chose to add right after, if any. */
   insertAfter: string | undefined;
+  /** The position the in-place picker carried into Add, if any. */
+  insertAt: InsertPosition | undefined;
   /**
    * The count of canvas add presses Add has yet to answer, or `undefined`
    * when it has answered them all: each new one has the panel focus its
@@ -341,14 +356,39 @@ interface RequestPanel {
   (panel: Exclude<LeftPanel, "design">, view?: string): void;
 }
 
-/** A place a canvas "+" chose: inside a container, or right after a block. */
+/** A position in the page, as the in-place picker names one. */
+type InsertPosition = Extract<InsertPlace, { at: unknown }>["at"];
+
+/**
+ * A place a canvas "+" or the in-place picker chose: inside a container,
+ * right after a block, or any other position, with the selection it was
+ * chosen under.
+ */
 type InsertPlaceRequest =
   | { readonly inside: string }
-  | { readonly after: string };
+  | { readonly after: string }
+  | { readonly at: InsertPosition; readonly selected: string | null };
 
-/** The block a place request is about, which it lasts while it is selected. */
-function requestedBlock(place: InsertPlaceRequest): string {
-  return "inside" in place ? place.inside : place.after;
+/**
+ * The selection a place request lasts while: the block it is about, or, for
+ * a position, the selection it was chosen under. Selecting anything else
+ * drops it.
+ */
+function requestedBlock(place: InsertPlaceRequest): string | null {
+  if ("inside" in place) return place.inside;
+  return "after" in place ? place.after : place.selected;
+}
+
+/** The place a held request names, as the Add panel is handed it. */
+function heldPlaces(
+  held: InsertPlaceRequest | undefined
+): Pick<PanelRequests, "insertInside" | "insertAfter" | "insertAt"> {
+  return {
+    insertInside:
+      held !== undefined && "inside" in held ? held.inside : undefined,
+    insertAfter: held !== undefined && "after" in held ? held.after : undefined,
+    insertAt: held !== undefined && "at" in held ? held.at : undefined,
+  };
 }
 
 /** Requests to open a panel from the canvas. */
@@ -411,17 +451,12 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
   if (placeRequest !== undefined && held === undefined) {
     setPlaceRequest(undefined);
   }
-  const insertInside =
-    held !== undefined && "inside" in held ? held.inside : undefined;
-  const insertAfter =
-    held !== undefined && "after" in held ? held.after : undefined;
 
   return {
     openPanelRequest,
     requestPanel,
     openInsertPanel,
-    insertInside,
-    insertAfter,
+    ...heldPlaces(held),
     addSummon: addPresses > answeredPress ? addPresses : undefined,
     onAddSummoned: setAnsweredPress,
   };
@@ -508,7 +543,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   });
 
   const library = useOfferedLibrary(mount);
-  const requests = usePanelRequests(editor.selectedId);
+  const requests = useEditorRequests(editor);
   // Whether the editor's search is open: ⌘K opens it, and so does the top
   // bar's button, so the state sits above both.
   const [searchOpen, setSearchOpen] = useState(false);
@@ -539,6 +574,131 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
 }
 
 /**
+ * The requests that open a panel from the canvas, and the in-place picker,
+ * opened by "/" and by the canvas's add controls, with its way on to Add.
+ */
+function useEditorRequests(
+  editor: EditorMount["editor"]
+): PanelRequests & Pick<EditorPanels, "insertPicker" | "browseAll"> {
+  const requests = usePanelRequests(editor.selectedId);
+  const picker = usePickerPanel(editor, requests.openInsertPanel);
+  return { ...requests, ...picker };
+}
+
+/** The in-place picker's state, and "Browse all" carrying its target on. */
+function usePickerPanel(
+  editor: EditorMount["editor"],
+  openInsertPanel: PanelRequests["openInsertPanel"]
+): Pick<EditorPanels, "insertPicker" | "browseAll"> {
+  const insertPicker = useInsertPicker();
+  const browseAll = useBrowseAll(editor, openInsertPanel);
+  return { insertPicker, browseAll };
+}
+
+/**
+ * "Browse all blocks and sections →": the Add panel opened with the picker's
+ * target, so a block clicked there lands where it would have in the picker.
+ *
+ * - By the rule ("/"), nothing is carried: the panel places each block from
+ *   the selection, as the picker did.
+ * - A container's inside, or the gap after a block: that block is selected
+ *   and the place carried, as the canvas's "+" does, so the place holds
+ *   until another block is selected or a block is added.
+ * - Any other position: carried while the selection stays as it is.
+ */
+function useBrowseAll(
+  editor: EditorMount["editor"],
+  openInsertPanel: PanelRequests["openInsertPanel"]
+): (target: InsertPickerTarget) => void {
+  return useCallback(
+    (target: InsertPickerTarget): void => {
+      if (target.kind === "rule") {
+        openInsertPanel();
+        return;
+      }
+      const { place } = target;
+      if ("at" in place) {
+        openInsertPanel({ at: place.at, selected: editor.selectedId });
+        return;
+      }
+      editor.select("inside" in place ? place.inside : place.after);
+      openInsertPanel(place);
+    },
+    [editor, openInsertPanel]
+  );
+}
+
+/** No saved sections, while the library is not being read. */
+const NO_PATTERNS: readonly SavedPattern[] = [];
+
+/**
+ * The in-place picker, with the Add panel's own sources: the registry's
+ * blocks, the offered components, and the saved sections, which are read
+ * only while the picker is open, as the Add panel reads them only while it
+ * is.
+ */
+export function EditorInsertPicker({
+  panels,
+  editor,
+  onEditText,
+}: {
+  panels: Pick<
+    EditorPanels,
+    "insertPicker" | "browseAll" | "offered" | "offerablePatterns"
+  >;
+  editor: EditorMount["editor"];
+  /** Opens a new block's text for typing, as Enter does. */
+  onEditText: ((nodeId: string) => boolean) | undefined;
+}): React.JSX.Element {
+  const [patterns, setPatterns] =
+    useState<readonly SavedPattern[]>(NO_PATTERNS);
+  const { request, close } = panels.insertPicker;
+  return (
+    <>
+      {request === null ? null : (
+        <PickerPatternRead
+          offerablePatterns={panels.offerablePatterns}
+          onRead={setPatterns}
+        />
+      )}
+      <InsertPicker
+        request={request}
+        onClose={close}
+        editor={editor}
+        categoryOrder={CORE_CATEGORIES}
+        blockOrder={CORE_PALETTE_ORDER}
+        patterns={patterns}
+        components={panels.offered.components}
+        componentDefinitions={panels.offered.definitions}
+        onBrowseAll={panels.browseAll}
+        {...(onEditText === undefined ? {} : { onEditText })}
+      />
+    </>
+  );
+}
+
+/**
+ * The saved sections the picker may offer, read while it is mounted and
+ * handed up: the picker itself stays mounted after it closes, so the sentence
+ * announcing an insert outlives it.
+ */
+function PickerPatternRead({
+  offerablePatterns,
+  onRead,
+}: {
+  offerablePatterns: OfferedLibrary["offerablePatterns"];
+  onRead: (patterns: readonly SavedPattern[]) => void;
+}): null {
+  const library = usePatternLibrary();
+  const patterns = useMemo(
+    () => offerablePatterns(library.patterns),
+    [offerablePatterns, library.patterns]
+  );
+  useEffect(() => onRead(patterns), [onRead, patterns]);
+  return null;
+}
+
+/**
  * The panels' side of the editor, as `useEditorPanels` reads it: the offered
  * library's and the panel requests' own results, so a value either adds
  * reaches this type without being listed again, beside the members this hook
@@ -561,6 +721,10 @@ export type EditorPanels = OfferedLibrary &
     pages: PagesPanelMount;
     /** The look edited on its own from the Design panel, with no block. */
     lookEditing: LookEditingState;
+    /** The in-place picker's state, opened by "/" and the canvas's controls. */
+    insertPicker: InsertPickerState;
+    /** "Browse all" from the picker: Add, with the picker's target carried. */
+    browseAll: (target: InsertPickerTarget) => void;
     /**
      * The site mode the author picked to preview the canvas in, for this
      * editing session only: the Design panel's switch picks it, the frame is
@@ -598,6 +762,7 @@ export function editorPanelRenderer({
   classSummaryContext,
   insertInside,
   insertAfter,
+  insertAt,
   addSummon,
   onAddSummoned,
   pages,
@@ -655,6 +820,7 @@ export function editorPanelRenderer({
     | "offerablePatterns"
     | "insertInside"
     | "insertAfter"
+    | "insertAt"
     | "addSummon"
     | "onAddSummoned"
     | "pages"
@@ -683,6 +849,8 @@ export function editorPanelRenderer({
           {...(insertInside === undefined ? {} : { inside: insertInside })}
           // In the gap a "+" chose, while the block above it is selected.
           {...(insertAfter === undefined ? {} : { after: insertAfter })}
+          // At the position the in-place picker carried, while it holds.
+          {...(insertAt === undefined ? {} : { at: insertAt })}
           // A canvas press still to answer, whether Add opened for it or
           // was already open.
           summoned={addSummon}
@@ -719,6 +887,7 @@ export function editorPanelRenderer({
           beginInsertDrag={drag.beginInsertDrag}
           {...(insertInside === undefined ? {} : { inside: insertInside })}
           {...(insertAfter === undefined ? {} : { after: insertAfter })}
+          {...(insertAt === undefined ? {} : { at: insertAt })}
           // From the panel there is no placement, so Back returns to the
           // editor as the author left it.
           {...(componentView.onEditComponent === undefined

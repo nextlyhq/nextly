@@ -179,7 +179,7 @@ for (const theme of ["light", "dark"] as const) {
       });
     }
 
-    test("opens its page menu and reads popover on the panel surface, legibly", async ({
+    test("opens its page menu and page data popover on the panel surface, legibly", async ({
       page,
     }) => {
       await openBuilder(page, theme);
@@ -193,7 +193,9 @@ for (const theme of ["light", "dark"] as const) {
       await page.keyboard.press("Escape");
       await expect(menu).toBeHidden();
 
-      await page.locator(".nx-read-meter").first().click();
+      // Page settings' line, there at every level, as the top bar's meter
+      // is only near the limit.
+      await page.locator('.nx-read-meter[data-place="settings"]').click();
       const reads = page.locator(".nx-read-panel");
       await expect(reads).toBeVisible();
       expect(await toRgb(page, await groundBehind(reads))).toEqual(panel);
