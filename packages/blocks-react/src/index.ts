@@ -271,6 +271,7 @@ export {
   SITE_BLOCKS_SERVICE,
   SITE_COPY,
   SITE_NAMED_QUERIES_SERVICE,
+  SITE_PAGE_DATA_LIMIT_SERVICE,
   siteCopyOf,
 } from "./resolver";
 export type { BlockResolver, SiteCopyMark } from "./resolver";

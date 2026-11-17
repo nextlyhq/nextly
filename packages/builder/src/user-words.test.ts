@@ -99,17 +99,17 @@ function brokenRules(texts: readonly string[]): string[] {
  * Texts that match a rule but name something else, by file. Each says why.
  */
 const ALLOWED: Readonly<Record<string, readonly string[]>> = {
-  // A Columns block's arrangement of its columns.
-  "columns-layout-field.tsx": ["A layout of its own, written as CSS below."],
+  // A Columns block's arrangement of its columns, its Layout in Content.
+  "columns-layout-field.tsx": ["Layout", "A layout of its own, set in Style."],
   "columns-layout.ts": ["Not a layout."],
   // The Style tab's Layout section, where a container's Content width is.
   "core-block-placement.fixture.ts": ["Layout"],
   // The Add panel's group of layout blocks (Section, Columns, Grid).
-  "inserter-palette.ts": ["Layout"],
+  "panels/add/inserter-palette.ts": ["Layout"],
   // The Style tab's Layout section.
   "inspector-sections.ts": ["Layout"],
   // A header or footer the site's own code draws around the canvas.
-  "site-chrome-cues.tsx": [
+  "canvas/site-chrome-cues.tsx": [
     "Part of your site’s layout",
     "Part of your site’s layout. It comes from your site’s code and can’t be edited here.",
   ],
@@ -136,9 +136,9 @@ describe("the editor's words", () => {
     expect(files.map(file => relative(SRC_DIR, file))).toEqual(
       expect.arrayContaining([
         "editor-words.ts",
-        "builder-commands.ts",
-        "toolbar-actions.ts",
-        "insert-panel.tsx",
+        "shell/builder-commands.ts",
+        "canvas/toolbar-actions.ts",
+        "panels/add/insert-panel.tsx",
       ])
     );
   });

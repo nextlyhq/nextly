@@ -42,7 +42,17 @@ export interface RestoreFieldsDialogProps {
 
 /** The fields chosen when the dialog opens: every one that may be restored. */
 function initiallyChosen(rows: RestoreRow[]): Set<string> {
-  return new Set(rows.filter(row => row.chosen).map(row => row.name));
+  return initiallyChosenOrKept(rows, () => true);
+}
+
+/** The fields that may be restored and that `keep` keeps chosen. */
+function initiallyChosenOrKept(
+  rows: RestoreRow[],
+  keep: (name: string) => boolean
+): Set<string> {
+  return new Set(
+    rows.filter(row => row.chosen && keep(row.name)).map(row => row.name)
+  );
 }
 
 export function RestoreFieldsDialog({
@@ -54,6 +64,12 @@ export function RestoreFieldsDialog({
   onConfirm,
 }: RestoreFieldsDialogProps): JSX.Element {
   const [chosen, setChosen] = useState(() => initiallyChosen(rows));
+  // The fields the list held when last read, so a refresh tells a field it adds from one the
+  // person has already chosen or unchosen.
+  const listed = useRef<ReadonlySet<string>>(
+    new Set(rows.map(row => row.name))
+  );
+  const wasOpen = useRef(false);
   // What had focus when the dialog opened: the control that opened it. Read in a layout effect,
   // before the dialog moves focus into itself. The dialog is opened from state, so it has no
   // trigger of its own to hand focus back to.
@@ -63,9 +79,23 @@ export function RestoreFieldsDialog({
       opener.current = document.activeElement;
     }
   }, [open]);
-  // Each opening starts from the version's own list, not the last choice.
   useEffect(() => {
-    if (open) setChosen(initiallyChosen(rows));
+    if (open && !wasOpen.current) {
+      // Each opening starts from the version's own list, not the last choice.
+      setChosen(initiallyChosen(rows));
+    } else if (open) {
+      // The list read again while open: the person's choices stand, a field it adds comes in
+      // chosen as any field does, and one it no longer offers goes.
+      const seen = listed.current;
+      setChosen(previous =>
+        initiallyChosenOrKept(
+          rows,
+          name => !seen.has(name) || previous.has(name)
+        )
+      );
+    }
+    listed.current = new Set(rows.map(row => row.name));
+    wasOpen.current = open;
   }, [open, rows]);
 
   const toggle = (name: string, on: boolean) =>

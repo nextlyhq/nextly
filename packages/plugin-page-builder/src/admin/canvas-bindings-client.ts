@@ -57,6 +57,7 @@ import {
   type CanvasSourcesChangedRequest,
 } from "../canvas-bindings-contract";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
+import { allowanceToWire } from "../page-allowance";
 
 import { onCanvasSourcesChanged } from "./canvas-sources";
 import {
@@ -275,10 +276,11 @@ export function canvasBindingsRequest(
     ...(conditions === undefined
       ? {}
       : { conditions: conditionsToWire(conditions) }),
-    // A whole number of reads the route can be asked for; none past it.
-    ...(reads.allowance === undefined || !Number.isFinite(reads.allowance)
+    // A whole number of reads the route can be asked for, none past it, or
+    // `null` for a site that sets no limit.
+    ...(reads.allowance === undefined
       ? {}
-      : { allowance: Math.max(0, Math.floor(reads.allowance)) }),
+      : { allowance: allowanceToWire(reads.allowance) }),
   };
 }
 

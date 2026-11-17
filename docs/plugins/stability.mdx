@@ -27,6 +27,10 @@ than landing as silent breaks — but **pin your versions** while we're pre-`1.0
 ## Stable (`@public`)
 
 - `definePlugin`, `PluginDefinition`, `PluginContributions`, `PluginContext`
+- History: `ctx.services.versions` (`PluginVersionsService`) and its version pins
+  (`PluginVersionPins`, `PluginVersionPinHolder`, `PluginVersionPin`,
+  `PluginPinOptions`, `PluginPinTransaction`, `VersionPinHolderDefinition`,
+  `VersionRef`), which `plugin-page-builder` depends on
 - Lifecycle: `setup` / `init` / `destroy`
 - Schema: `contributes.collections` / `extend` (+ singles/components)
 - Permissions: `PluginPermission`, `PermissionSlug`, `AuthUser`
@@ -59,15 +63,10 @@ These ship today but carry no guarantee yet — use them, but expect change:
   place of definitions; `FrozenCopy` and `FrozenValue`, which type it readonly
   all the way down
 - The service facade types `PluginUserService`, `PluginMediaService`,
-  `PluginEmailService`, `PluginVersionsService` and
-  `PluginCollectionTransaction`
+  `PluginEmailService` and `PluginCollectionTransaction`
 - `PluginTransaction` (the handle `ctx.db.transaction` passes its work),
   `PluginInsert` (what `ctx.db.insert` takes for a table) and
   `PluginRawDatabase` (`ctx.db.raw`)
-- Version pins on the plugin's own transaction, `ctx.services.versions.pins`,
-  and their types `PluginVersionPins`, `PluginVersionPinHolder`,
-  `PluginVersionPin`, `PluginPinOptions`, `PluginPinTransaction`,
-  `VersionPinHolderDefinition` and `VersionRef`
 - `PluginMigration.transaction` — `false` runs a migration module outside a
   transaction, statement by statement
 - `onReady`, run once per boot after every plugin has initialised and routes

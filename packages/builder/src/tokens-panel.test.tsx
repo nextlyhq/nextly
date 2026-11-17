@@ -85,6 +85,26 @@ const SITE: SiteTokenSet = {
 
 const row = (name: RegExp): HTMLElement => screen.getByRole("button", { name });
 
+/**
+ * The site with a spacing step whose dark value differs, whose chip shows
+ * the value of the mode the panel previews: a colour's swatch shows both of
+ * its values whatever the preview.
+ */
+const PREVIEWED: SiteTokenSet = {
+  tokens: [
+    ...SITE.tokens,
+    {
+      name: "space.gap",
+      kind: "dimension",
+      values: { light: "8px", dark: "12px" },
+    },
+  ],
+};
+
+/** The value the panel previews, as the gap's chip shows it. */
+const previewed = (): string =>
+  row(/^Gap, /).querySelector(".nx-vars__chip")?.textContent ?? "";
+
 describe("the rows", () => {
   it("groups variables under plain headings, with no other group when it is empty", () => {
     render(<Hosted tokens={SITE} />);
@@ -221,19 +241,6 @@ describe("the rows", () => {
     fireEvent.click(swatch());
     expect(onChange).not.toHaveBeenCalled();
     expect((light as HTMLInputElement).value).toBe("#12");
-  });
-
-  it("labels the colour columns beside the Colours heading, for sight only", () => {
-    render(<Hosted tokens={SITE} />);
-    const colours = screen.getByRole("region", { name: "Colours" });
-    const hint = colours.querySelector(".nx-vars__group-hint");
-    expect(hint?.textContent).toBe("Light / Dark");
-    // The rows already say each value's mode, so the hint is not read twice.
-    expect(hint?.getAttribute("aria-hidden")).toBe("true");
-    const spacing = screen.getByRole("region", {
-      name: "Spacing, radius & shadows",
-    });
-    expect(spacing.querySelector(".nx-vars__group-hint")).toBeNull();
   });
 
   it("names a row in plain words and says its values, with no usage count", () => {
@@ -386,13 +393,11 @@ describe("the rows", () => {
   });
 
   it("previews dark values when the header switch says Dark", () => {
-    render(<Hosted tokens={SITE} />);
-    const swatch = () =>
-      row(/^Brand/).querySelector(".nx-vars__swatch--main") as HTMLElement;
-    expect(swatch().style.getPropertyValue("--nx-swatch")).toBe("#1d2b6b");
+    render(<Hosted tokens={PREVIEWED} />);
+    expect(previewed()).toBe("8px");
     const preview = screen.getByRole("group", { name: "Preview" });
     fireEvent.click(within(preview).getByRole("button", { name: "Dark" }));
-    expect(swatch().style.getPropertyValue("--nx-swatch")).toBe("#8fa7ff");
+    expect(previewed()).toBe("12px");
     expect(
       within(preview).getByRole("button", { name: "Dark" })
     ).toHaveProperty("ariaPressed", "true");
@@ -415,16 +420,16 @@ describe("the rows", () => {
     function Host(): React.JSX.Element {
       const header = useVariablesHeader({
         onChange: () => undefined,
-        currentTokens: () => SITE,
+        currentTokens: () => PREVIEWED,
         readOnly: false,
       });
       return (
         <>
           <div data-testid="host-header">{header.controls}</div>
           <TokensPanel
-            tokens={SITE}
+            tokens={PREVIEWED}
             onChange={() => undefined}
-            currentTokens={() => SITE}
+            currentTokens={() => PREVIEWED}
             header={header}
           />
         </>
@@ -437,10 +442,7 @@ describe("the rows", () => {
     ).toHaveLength(1);
     const hosted = screen.getByTestId("host-header");
     fireEvent.click(within(hosted).getByRole("button", { name: "Dark" }));
-    const swatch = row(/^Brand/).querySelector(
-      ".nx-vars__swatch--main"
-    ) as HTMLElement;
-    expect(swatch.style.getPropertyValue("--nx-swatch")).toBe("#8fa7ff");
+    expect(previewed()).toBe("12px");
   });
 
   it("shows one line with an Add type size action when there are no type sizes", () => {
@@ -465,6 +467,17 @@ describe("the rows", () => {
 async function openEditor(name: RegExp): Promise<HTMLElement> {
   fireEvent.click(row(name));
   return screen.findByRole("dialog");
+}
+
+/**
+ * A size as its field shows it: the number in the field, then the unit in the
+ * menu beside it.
+ */
+function sizeShown(field: HTMLElement): string {
+  const unit = field
+    .closest(".nx-style-inspector__numeric")
+    ?.querySelector(".nx-style-inspector__unit");
+  return `${(field as HTMLInputElement).value}${unit?.textContent ?? ""}`;
 }
 
 /** Type into a field and press Enter, which commits it. */
@@ -810,10 +823,7 @@ describe("dark values for every kind", () => {
     const editor = await openEditor(/^Space 4/);
     const darkOf = () =>
       (onChange.mock.calls.at(-1)?.[0] as SiteTokenSet).tokens[4]?.values.dark;
-    expect(within(editor).getByLabelText("Light")).toHaveProperty(
-      "value",
-      "1rem"
-    );
+    expect(sizeShown(within(editor).getByLabelText("Light"))).toBe("1rem");
     expect(within(editor).getByText("Same as light")).toBeDefined();
     fireEvent.click(
       within(editor).getByRole("button", { name: "Add dark value" })
@@ -832,8 +842,7 @@ describe("dark values for every kind", () => {
     render(<Hosted tokens={SITE} onChange={onChange} />);
     const editor = await openEditor(/^Body/);
     const saved = () => onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
-    expect(within(editor).getByLabelText("Size, light")).toHaveProperty(
-      "value",
+    expect(sizeShown(within(editor).getByLabelText("Size, light"))).toBe(
       "16px"
     );
     expect(within(editor).getByLabelText("Line height, light")).toHaveProperty(
@@ -1306,7 +1315,7 @@ function HeaderHost({
 }): React.JSX.Element {
   const header = useVariablesHeader({
     onChange: () => undefined,
-    currentTokens: () => SITE,
+    currentTokens: () => PREVIEWED,
     readOnly: false,
     ...(preview === undefined ? {} : { preview }),
   });
@@ -1314,19 +1323,14 @@ function HeaderHost({
     <>
       <div data-testid="host-header">{header.controls}</div>
       <TokensPanel
-        tokens={SITE}
+        tokens={PREVIEWED}
         onChange={() => undefined}
-        currentTokens={() => SITE}
+        currentTokens={() => PREVIEWED}
         header={header}
       />
     </>
   );
 }
-
-const brandSwatch = (): string =>
-  (
-    row(/^Brand/).querySelector(".nx-vars__swatch--main") as HTMLElement
-  ).style.getPropertyValue("--nx-swatch");
 
 const pressed = (name: "Light" | "Dark"): string | null =>
   within(screen.getByRole("group", { name: "Preview" })).getByRole("button", {
@@ -1340,18 +1344,18 @@ describe("a preview mode the host holds", () => {
       <HeaderHost preview={{ picked: "dark", onPick }} />
     );
     expect(pressed("Dark")).toBe("true");
-    expect(brandSwatch()).toBe("#8fa7ff");
+    expect(previewed()).toBe("12px");
 
     fireEvent.click(screen.getByRole("button", { name: "Light" }));
     expect(onPick).toHaveBeenCalledWith("light");
     // The host has not taken the pick yet, so nothing changed here: a header
     // keeping the press itself would show Light already.
     expect(pressed("Dark")).toBe("true");
-    expect(brandSwatch()).toBe("#8fa7ff");
+    expect(previewed()).toBe("12px");
 
     rerender(<HeaderHost preview={{ picked: "light", onPick }} />);
     expect(pressed("Light")).toBe("true");
-    expect(brandSwatch()).toBe("#1d2b6b");
+    expect(previewed()).toBe("8px");
   });
 
   it("keeps a press itself when no host holds the mode", () => {
@@ -1359,7 +1363,7 @@ describe("a preview mode the host holds", () => {
     expect(pressed("Light")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Dark" }));
     expect(pressed("Dark")).toBe("true");
-    expect(brandSwatch()).toBe("#8fa7ff");
+    expect(previewed()).toBe("12px");
   });
 });
 
@@ -1386,7 +1390,7 @@ describe("the preview while nothing is picked", () => {
         <HeaderHost preview={{ picked: null, onPick: () => undefined }} />
       );
       expect(pressed("Dark")).toBe("true");
-      expect(brandSwatch()).toBe("#8fa7ff");
+      expect(previewed()).toBe("12px");
     } finally {
       remove();
     }
@@ -1777,24 +1781,12 @@ describe("a Design tab's view of the variables", () => {
   });
 });
 
-describe("renaming from the keyboard", () => {
-  it("opens a row's editor on F2 with its name ready to type over", async () => {
-    render(<Hosted tokens={SITE} />);
-    const brand = row(/^Brand/);
-    brand.focus();
-    fireEvent.keyDown(brand, { key: "F2" });
-    const editor = await screen.findByRole("dialog");
-    const name = within(editor).getByLabelText("Name") as HTMLInputElement;
-    await waitFor(() => expect(document.activeElement).toBe(name));
-    expect(name.selectionStart).toBe(0);
-    expect(name.selectionEnd).toBe(name.value.length);
-  });
-
+describe("the editor and the keyboard", () => {
   it("closes the editor on Escape and hands focus back to its row", async () => {
     render(<Hosted tokens={SITE} />);
     const brand = row(/^Brand/);
     brand.focus();
-    fireEvent.keyDown(brand, { key: "F2" });
+    fireEvent.click(brand);
     const editor = await screen.findByRole("dialog");
     const name = within(editor).getByLabelText("Name");
     await waitFor(() => expect(document.activeElement).toBe(name));

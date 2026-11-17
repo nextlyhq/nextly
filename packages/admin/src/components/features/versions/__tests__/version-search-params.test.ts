@@ -7,6 +7,7 @@
  * request as a version number, and that arriving without a pair still shows
  * something useful rather than an error.
  */
+import { isComparisonBaselineName } from "nextly/comparison-baseline-name";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -53,10 +54,51 @@ describe("readFromParam", () => {
     expect(readFromParam("last-viewed")).toBe("last-viewed");
   });
 
-  it("rejects anything else", () => {
-    expect(readFromParam("prev")).toBeUndefined();
-    expect(readFromParam("looked")).toBeUndefined();
-    expect(readFromParam("0")).toBeUndefined();
+  it("reads a baseline another feature registers, such as the workflow ones", () => {
+    // The server's registry is the one list of baselines: a name it knows
+    // reaches it, whichever feature registered it.
+    expect(readFromParam("since-submitted")).toBe("since-submitted");
+    expect(readFromParam("since-approved")).toBe("since-approved");
+  });
+
+  it("leaves a well-formed name it does not know for the server to refuse", () => {
+    // The server answers an unknown name with the baselines it does know,
+    // which says more than quietly drawing another comparison.
+    expect(readFromParam("prev")).toBe("prev");
+  });
+
+  it("reads as a baseline exactly the names the server's grammar admits", () => {
+    // One grammar, the server's: a name it would register reaches it, and
+    // one it never could is not sent.
+    for (const value of [
+      "since-approved",
+      "prev",
+      "a1-b2",
+      "Draft",
+      "since_approved",
+      "a--b",
+      "x-",
+      "-x",
+      "0",
+    ]) {
+      expect(typeof readFromParam(value) === "string").toBe(
+        isComparisonBaselineName(value)
+      );
+    }
+  });
+
+  it("rejects anything that cannot name a baseline", () => {
+    for (const value of [
+      "0",
+      "-1",
+      "Draft",
+      "since_approved",
+      "a--b",
+      "",
+      " ",
+    ]) {
+      expect(readFromParam(value)).toBeUndefined();
+    }
     expect(readFromParam(undefined)).toBeUndefined();
   });
 });

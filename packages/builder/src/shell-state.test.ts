@@ -186,6 +186,11 @@ describe("preferences round-trip", () => {
     editingBreakpoint: "tablet",
     // Off, the non-default: a read that dropped it would answer on.
     panelKeys: false,
+    // A section closed and a tab expanded, which a read that dropped them
+    // would answer as none remembered.
+    sectionFolds: { "style:Spacing": false, "advanced:*": true },
+    // On, the non-default: a read that dropped it would answer off.
+    showCssNames: true,
   };
 
   it("restores what was written", () => {
@@ -294,6 +299,8 @@ describe("preferences round-trip", () => {
       // Absent as well, as in every record written before the keys could be
       // turned off: on.
       panelKeys: true,
+      sectionFolds: {},
+      showCssNames: false,
     });
   });
 
@@ -362,6 +369,8 @@ describe("preferences saved before panels had parts", () => {
         "canvas,inspector,left": { left: 22, canvas: 54, inspector: 24 },
       },
       panelKeys: true,
+      sectionFolds: {},
+      showCssNames: false,
     });
   });
 });

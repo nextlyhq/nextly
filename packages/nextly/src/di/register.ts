@@ -49,6 +49,7 @@ import type {
   SanitizedApiKeysConfig,
   SecurityConfig,
 } from "../collections/config/define-config";
+import { assertCollectionOpensIn } from "../collections/config/opens-in";
 import type { FieldConfig } from "../collections/fields/types";
 import { loadDialectTables } from "../database/dialect-tables";
 import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
@@ -1764,6 +1765,11 @@ function validateBootContributions(
   // plugin's types reach it without passing through `defineCollection` or
   // `defineSingle`, and a plugin must not take a page the site declares.
   assertConfiguredPublicAddresses(transformedConfig);
+
+  // Fail fast on a collection that opens its entries in a view it does not
+  // have: every link to them would lead nowhere. Asked of the merged
+  // configuration against every plugin's views, disabled ones included.
+  assertCollectionOpensIn(transformedConfig.collections, transformedPlugins);
 
   // Fail fast on role-bundle collisions. Validation only here; roles are
   // re-derived + seeded (resolving permission slugs→ids) in runPostInitTasks.
@@ -5545,6 +5551,18 @@ async function sealEveryPlugin(
 }
 
 /**
+ * What a plugin's failed start tells the operator: a boot failure reaches them
+ * through the log, and a NextlyError keeps what to change in `logMessage`,
+ * behind its generic public text.
+ */
+function operatorMessageOf(error: unknown): string {
+  if (NextlyError.is(error) && error.logMessage !== undefined) {
+    return error.logMessage;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
  * Initializes plugins that provide an `init()` method. Runs after all
  * services are registered so plugins can access the full service graph
  * via the PluginContext. Calls are awaited sequentially to preserve
@@ -5891,7 +5909,7 @@ async function initializePlugins(
         );
         logger.info?.(`Plugin "${plugin.name}" initialized`);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = operatorMessageOf(error);
         // A plugin that cannot finish starting has not started — and nothing
         // that DID start may survive the boot that is now failing. See
         // `destroyInitializedPlugins` for why this loop runs here rather than

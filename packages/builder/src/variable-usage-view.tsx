@@ -14,7 +14,7 @@ import { TooltipProvider } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { ChromeTooltip } from "./chrome-tooltip";
-import { blockLabel } from "./inserter";
+import { blockLabel } from "./panels/add/inserter";
 import { UsesTail, UsesUnread } from "./shared-style-details";
 import { sharedStyleKindName } from "./shared-style-library";
 import {
@@ -26,7 +26,7 @@ import {
 import { useUses, type UsesRead } from "./uses-read";
 import {
   sharedStyleSets,
-  variableCount,
+  variableCountWords,
   variableLossSentence,
   variableRemoval,
   type VariableReach,
@@ -79,35 +79,10 @@ export interface VariableUsageHere {
 }
 
 /**
- * The count at the end of a variable's row: a bare number of places, muted
- * when nothing uses it, "2+" while it is a floor; nothing until it is read.
- * Said in words by the row's tooltip ({@link CountTip}), and by the row's own
- * name to a screen reader.
- */
-export function VariableRowCount({
-  reach,
-}: {
-  reach: VariableReach | undefined;
-}): React.JSX.Element | null {
-  if (reach === undefined) return null;
-  const count = variableCount(reach);
-  return (
-    <span
-      className="nx-vars__count"
-      aria-hidden="true"
-      data-zero={count.zero ? "" : undefined}
-      data-floor={count.floor ? "" : undefined}
-    >
-      {count.text}
-    </span>
-  );
-}
-
-/**
- * The row's count in words, as the editor's tooltip: shown when the row is
- * pointed at or takes focus, so keyboard and touch users meet it too, not a
- * title on the hidden count. Above the row and at its end, over the count.
- * Closed until its usage is read, and while the row's editor is open: opened
+ * How widely the row's variable is used, as its tooltip: shown when the row
+ * is pointed at or takes focus, so keyboard and touch users meet it too.
+ * Above the row and at its end. Closed until its usage is read, and while
+ * the row's editor or menu is open: opened
  * by the row's focus, it stayed up over the editor in a browser and took the
  * first Escape meant for the editor.
  */
@@ -129,7 +104,7 @@ export function CountTip({
       <ChromeTooltip
         side="top"
         align="end"
-        content={reach === undefined ? null : variableCount(reach).words}
+        content={reach === undefined ? null : variableCountWords(reach)}
         disabled={reach === undefined || quiet}
       >
         {children}
