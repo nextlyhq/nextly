@@ -709,6 +709,28 @@ describe.each(getConfiguredTestDialects())(
       expect(await repo.findAutosave(ref, "editor")).toBeDefined();
     }, 90_000);
 
+    // A publish naming languages but not the shared part changes no published shared value: the
+    // language's own change goes live, and the shared edit saved beside it stays pending.
+    it("publishes a language alone and leaves the shared edit saved beside it pending", async () => {
+      const entries = await boot(dialect);
+      const id = await publishedInBoth(entries, TRANSLATED);
+      await save(entries, TRANSLATED, id, "es", { title: "es 2", views: 40 });
+      expect(Object.keys(await drafts(id)).sort()).toEqual(["es", "shared"]);
+
+      await handle!.nextly.publish({
+        collection: TRANSLATED,
+        id,
+        locales: ["es"],
+        shared: false,
+        data: { _overwrite: true },
+      } as never);
+
+      expect((await read(entries, TRANSLATED, id, "es")).title).toBe("es 2");
+      expect((await read(entries, TRANSLATED, id, "en")).views).toBe(10);
+      expect((await read(entries, TRANSLATED, id, "es")).views).toBe(10);
+      expect((await drafts(id)).shared?.views).toBe(40);
+    }, 90_000);
+
     // While the entry is live, a shared edit is pending until the shared part is published,
     // whichever language it is saved from: a save in a language not yet live joins the shared
     // draft rather than writing the shared value live beside it.

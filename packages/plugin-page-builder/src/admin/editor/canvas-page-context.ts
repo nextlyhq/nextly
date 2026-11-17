@@ -84,24 +84,51 @@ function drawnMedia(item: MediaItem | null): ResolvedMedia | null {
   };
 }
 
+/** Resolve a media id as the canvas draws it, through the admin's read. */
+function canvasMediaResolver(
+  readMedia: (id: string) => Promise<MediaItem | null>
+): (id: string) => Promise<ResolvedMedia | null> {
+  return async id => drawnMedia(await readMedia(id));
+}
+
+/**
+ * The context saved section pictures draw with: media and icons resolved as
+ * the canvas resolves them, read-only, and nothing listed or queried. One
+ * object for as long as the admin's media read is the same.
+ */
+export function usePictureContext(): PageContext {
+  const readMedia = useMediaResolver();
+  return useMemo(
+    () =>
+      createStandaloneContext({
+        resolveMedia: canvasMediaResolver(readMedia),
+        resolveIcon: resolveCanvasIcon,
+      }),
+    [readMedia]
+  );
+}
+
 /**
  * A read budget the canvas renews for each draw: one object, so the context
  * holding it stays the editor's one object, whose allowance is a published
- * page's (`createQueryBudget`) and is begun afresh by `renew`.
+ * page's (`createQueryBudget`) and is begun afresh by `renew`. That is the
+ * site's page data limit where it sets one (`Infinity` for none), the one
+ * its page routes render under, so a block past the limit comes up empty on
+ * the canvas as on the live page; the default otherwise.
  */
 interface CanvasQueryBudget extends QueryBudget {
   renew(): void;
 }
 
-function canvasQueryBudget(): CanvasQueryBudget {
-  let current = createQueryBudget();
+function canvasQueryBudget(limit: number | undefined): CanvasQueryBudget {
+  let current = createQueryBudget(limit);
   return {
     take: () => current.take(),
     remaining: () => current.remaining?.() ?? 0,
     // Each draw's own, so a named query's run is kept for one draw only.
     generation: () => current,
     renew: () => {
-      current = createQueryBudget();
+      current = createQueryBudget(limit);
     },
   };
 }
@@ -150,11 +177,21 @@ export function useCanvasPageContext(
    * conditions are judged as the published page judges them; and a list a
    * visitor sees fewer entries of says so.
    */
-  asVisitor?: VisitorLists
+  asVisitor?: VisitorLists,
+  /**
+   * The site's page data limit (`readPageDataLimit`): `Infinity` for none,
+   * the default when absent. Each draw's reads are bounded by it.
+   */
+  pageDataLimit?: number
 ): PageContext {
   const visitor = asVisitor?.visitor;
   const readMedia = useMediaResolver();
-  const budget = useMemo(canvasQueryBudget, []);
+  // The site's limit is the client config's, so it holds for the editor's
+  // life, and the context stays its one object.
+  const budget = useMemo(
+    () => canvasQueryBudget(pageDataLimit),
+    [pageDataLimit]
+  );
   // Renewed once each draw has been committed, so the next draw has the
   // whole allowance and one draw's reads stay within it.
   useEffect(() => {
@@ -190,7 +227,7 @@ export function useCanvasPageContext(
   const base = useMemo(
     () =>
       createStandaloneContext({
-        resolveMedia: async id => drawnMedia(await readMedia(id)),
+        resolveMedia: canvasMediaResolver(readMedia),
         resolveIcon: resolveCanvasIcon,
         ...lists.terms,
         data: lists.data,

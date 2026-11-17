@@ -618,7 +618,10 @@ describe("a command run with no terminal", () => {
   it(
     "migrate:fresh does not ask to drop every table, and names --accept-data-loss",
     async () => {
-      writeFileSync(join(project, "nextly.config.ts"), CONFIG_WITH(POSTS));
+      // A configuration with nothing a migration could record: migrate:fresh drops every table
+      // whatever the configuration declares, and refuses one ahead of its migrations before it
+      // reaches the consent this run is about.
+      writeFileSync(join(project, "nextly.config.ts"), CONFIG_WITH(""));
       seedDatabase();
       await expectRefusal(["migrate:fresh"], "--accept-data-loss");
     },

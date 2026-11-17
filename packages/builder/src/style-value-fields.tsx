@@ -7,6 +7,8 @@
  * @module style-value-fields
  */
 import {
+  APPEAR_DELAY_PROPERTY,
+  APPEAR_DURATION_PROPERTY,
   isStyleLeaf,
   OVERLAY_STRENGTH,
   STYLE_CATALOG,
@@ -602,6 +604,19 @@ export function ValueField({
       />
     );
   }
+  if (MILLISECOND_PROPERTIES.has(control.leaf.cssProperty)) {
+    return (
+      <MillisecondsField
+        id={id}
+        control={control}
+        stored={stored}
+        actionName={actionName}
+        tokens={tokens}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
   const scale = PERCENT_SCALES[control.leaf.cssProperty];
   if (scale !== undefined) {
     return (
@@ -685,6 +700,36 @@ function fromPercent(
         : undefined;
   if (number === undefined) return value;
   return scale.fraction ? fractionOf(number) : number;
+}
+
+/** The values stored as whole milliseconds, by CSS property. */
+const MILLISECOND_PROPERTIES: ReadonlySet<string> = new Set([
+  APPEAR_DURATION_PROPERTY,
+  APPEAR_DELAY_PROPERTY,
+]);
+
+/**
+ * A time stored as a number of milliseconds: the ordinary number field, with
+ * its unit beside it, since the number alone does not say what it counts.
+ */
+function MillisecondsField(
+  props: React.ComponentProps<typeof NumericField>
+): React.JSX.Element {
+  const unitId = React.useId();
+  return (
+    <div className="nx-style-inspector__unit-field">
+      <UnitWords.Provider value={unitId}>
+        <NumericField {...props} />
+      </UnitWords.Provider>
+      <span className="nx-style-inspector__unit" aria-hidden="true">
+        ms
+      </span>
+      {/* The sign is not read; these words are, as the field's description. */}
+      <span id={unitId} className="sr-only">
+        milliseconds
+      </span>
+    </div>
+  );
 }
 
 /**
