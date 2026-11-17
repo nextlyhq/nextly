@@ -804,6 +804,32 @@ Verify each delivery's signature as the Webhooks page describes, before reading 
 
 A form has no webhook settings of its own, and the submissions collection's default `entry.*` events are switched off, so an endpoint subscribed to `entry.created` or `*` does not receive the answers either.
 
+## Forms on Page Builder Pages
+
+With the page builder installed, its Form block can place any of these forms on a page. The
+block lists the forms (drafts and closed ones marked, each with a link to edit it), draws
+the picked one on the server, and visitors send it as an ordinary HTML form post, with no
+JavaScript. A post arrives at the page builder's form route and is handed to this plugin,
+which runs the same `submitForm` its JSON address runs, with the visitor's request: the
+same validation, storage, emails, honeypot, rate limit, bot check and one-response rules.
+
+- The form's own **confirmation** applies: its message in the form's place, or its
+  redirect (a page of this site). The block may choose its own instead.
+- A **closed** form shows its closed message on the page; a deleted one shows nothing.
+- A second answer to a **one-response** form is answered as "This form isn't taking answers
+  right now."
+- **Conditional fields** all show on the page, and the plugin ignores the answers to any
+  whose condition does not hold, as it does for every submission.
+- A form with a **bot check** loads one small script of this plugin's own on pages that
+  draw it, which renders the Turnstile or reCAPTCHA widget. Without JavaScript no token is
+  sent, and the submission is kept as spam, as at the JSON address.
+- **File** fields are drawn, but a plain form post cannot upload the file through the page
+  builder yet; use the JSON address for forms that take files.
+
+The JSON address, `POST /api/forms/:slug/submit`, is unchanged. The two plugins reach each
+other only through the page builder's `forms` service and the plugin SDK's form provider
+contract, which is experimental.
+
 ## Exporting Submissions
 
 Export submissions to CSV or JSON from code or the admin UI. The examples below assume you already have `form` (a `FormDocument`) and `submissions` (a `SubmissionDocument[]`) -- for example, from `ctx.services.collections` in a plugin route or hook.
