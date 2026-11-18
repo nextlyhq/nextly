@@ -174,6 +174,10 @@ export function editorTopBar(
             {...(canvasRender.definitions === undefined
               ? {}
               : { definitions: canvasRender.definitions })}
+            // The site's variables, light and dark, for the contrast check.
+            {...(view.siteTokens === undefined
+              ? {}
+              : { tokens: view.siteTokens })}
           />
         ) : null}
         {/* Last, at the bar's far end where the header kept them: Save and

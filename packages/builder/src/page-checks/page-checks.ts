@@ -23,6 +23,7 @@ import {
   type BlockNode,
   type DefinitionsById,
   type RegionArea,
+  type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 
 import type { AskedSetting } from "../editor-asks";
@@ -95,6 +96,12 @@ export interface CheckedPage {
    * a check that reads what the page draws can read inside them.
    */
   readonly definitions?: DefinitionsById;
+  /**
+   * The site's variables, light and dark, which a colour written as one is
+   * read through; absent where the caller has none, and a colour that needs
+   * them is then not judged.
+   */
+  readonly tokens?: SiteTokenSet;
 }
 
 /** The page as every check is handed it, its definitions resolved. */
@@ -105,6 +112,8 @@ export interface ResolvedPage {
   readonly regions: readonly PageRegionDocument[];
   /** The page's component definitions, where the caller knows them. */
   readonly definitions?: DefinitionsById;
+  /** The site's variables, where the caller knows them. */
+  readonly tokens?: SiteTokenSet;
 }
 
 /** What one check reports about one problem. */
@@ -197,6 +206,7 @@ export function runPageChecks(
     ...(page.definitions === undefined
       ? {}
       : { definitions: page.definitions }),
+    ...(page.tokens === undefined ? {} : { tokens: page.tokens }),
   };
   const order = pageOrder(page.document);
   const taken = new Set<string>();
