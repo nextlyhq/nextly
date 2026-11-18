@@ -161,6 +161,47 @@ describe.each(getConfiguredTestDialects())(
       expect(second[0]?.issuer).toBe("https://issuer-two.example");
     });
 
+    it("holds subjects that differ only by case as two identities", async () => {
+      current = await createTestNextly({ dialect });
+      const handle = current;
+
+      await handle.adapter.insert("users", {
+        id: "staff-one",
+        email: "one@test.local",
+      });
+      await handle.adapter.insert("users", {
+        id: "staff-two",
+        email: "two@test.local",
+      });
+
+      // The same key and the same issuer, subjects differing only by case:
+      // two rows, because a subject is compared exactly — an install's
+      // MySQL defaults to a collation that folds case, and a provider's
+      // subject is case-sensitive (PostgreSQL and SQLite compare text
+      // exactly already, so this is the dialect that would break the
+      // promise).
+      await insertIdentity(handle, {
+        providerKey: "sso/oidc",
+        issuer: "https://issuer.example",
+        subject: "Alice",
+        userId: "staff-one",
+      });
+      await insertIdentity(handle, {
+        providerKey: "sso/oidc",
+        issuer: "https://issuer.example",
+        subject: "alice",
+        userId: "staff-two",
+      });
+
+      const first = await identitiesOf(handle, "staff-one");
+      const second = await identitiesOf(handle, "staff-two");
+      // Both identities stand, each spelled as its provider spelled it.
+      expect(first).toHaveLength(1);
+      expect(second).toHaveLength(1);
+      expect(first[0]?.subject).toBe("Alice");
+      expect(second[0]?.subject).toBe("alice");
+    });
+
     it("refuses a second identity for the same issuerless key and subject", async () => {
       current = await createTestNextly({ dialect });
       const handle = current;

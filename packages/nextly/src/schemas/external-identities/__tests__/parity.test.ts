@@ -130,6 +130,58 @@ describe("the external identities' table is identical across dialects", () => {
       });
     }
   );
+
+  /**
+   * The MySQL bounds, read structurally because the shared `MySqlColumn`
+   * type declares neither a length nor a collation: only the varchar
+   * subclass carries them. A structural read of the two properties this
+   * test pins, not an escape from typing.
+   */
+  function mysqlVarcharShape(name: string): {
+    length: number | undefined;
+    collation: string | undefined;
+  } {
+    const column = getMyTableConfig(
+      idsMy.nextlyExternalIdentitiesMysql
+    ).columns.find(column => column.name === name);
+    expect(column, `${name} is declared`).toBeDefined();
+    const shape = column as unknown as {
+      length?: unknown;
+      collation?: unknown;
+    };
+    return {
+      length: typeof shape.length === "number" ? shape.length : undefined,
+      collation:
+        typeof shape.collation === "string" ? shape.collation : undefined,
+    };
+  }
+
+  it("widens the issuer and subject on MySQL to what OIDC permits", () => {
+    // OIDC permits a `sub` of up to 255 ASCII characters and an issuer is a
+    // URL of the provider's choosing; PostgreSQL and SQLite hold both as
+    // unbounded text, so a narrower MySQL bound would refuse valid
+    // identities on one dialect alone.
+    expect(mysqlVarcharShape("issuer").length).toBe(255);
+    expect(mysqlVarcharShape("subject").length).toBe(255);
+    // The provider key keeps the 191 the codebase gives a provider, and the
+    // unique index stays inside MySQL's 3072-byte key limit:
+    // 191*4 + 255*4 + 255*4 = 2804.
+    expect(mysqlVarcharShape("provider_key").length).toBe(191);
+  });
+
+  it("compares the key columns exactly on MySQL, byte for byte", () => {
+    // Each of the three columns the unique index reads carries a binary
+    // collation, overriding the case-insensitive one an install's MySQL
+    // otherwise defaults to: without it, `Alice` and `alice` collide and a
+    // distinct, valid subject is refused on MySQL alone, where the other
+    // dialects compare text exactly.
+    for (const name of ["provider_key", "issuer", "subject"]) {
+      expect(mysqlVarcharShape(name).collation).toBe("utf8mb4_bin");
+    }
+    // The control: the address names no key, and keeps the table's default
+    // collation like every other non-indexed text column in the codebase.
+    expect(mysqlVarcharShape("address").collation).toBeUndefined();
+  });
 });
 
 describe("the external identities' table is registered as a core table", () => {
