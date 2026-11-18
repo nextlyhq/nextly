@@ -124,7 +124,10 @@ function headingFindings(page: ResolvedPage): PageCheckResult[] {
   const part = (area: "header" | "footer"): OutlinePart[] =>
     page.regions
       .filter(region => region.area === area)
-      .map(region => ({ area, nodes: region.document.nodes }));
+      .map(region => ({
+        area,
+        nodes: withBoundHeadings(region.document.nodes),
+      }));
   const { headings } = pageOutline([
     ...part("header"),
     { area: "content", nodes: drawn },

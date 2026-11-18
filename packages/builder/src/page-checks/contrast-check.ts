@@ -18,6 +18,7 @@
  */
 import {
   type BlockNode,
+  type ContrastResult,
   type NodeStyles,
   type SiteTokenSet,
   type StyleValue,
@@ -131,6 +132,9 @@ function obscuringOf(
 function drawsWords(node: BlockNode): boolean {
   if (Object.keys(node.bindings ?? {}).length > 0) return true;
   if (WORD_PROPS.some(prop => hasText(node.props[prop]))) return true;
+  // A List's items, each its own words.
+  const items = node.props.items;
+  if (Array.isArray(items) && items.some(hasText)) return true;
   let words = false;
   eachRichTextNode(node, part => {
     if (hasText(part.text)) words = true;
@@ -150,6 +154,10 @@ const WORD_PROPS: readonly string[] = ["text", "label"];
 function unreadable(node: BlockNode): boolean {
   const look = node.props.look;
   if ((node.classes?.length ?? 0) > 0) return true;
+  // Classes the site's own CSS styles, which this check can't read.
+  if (typeof node.cssClasses === "string" && node.cssClasses.trim() !== "") {
+    return true;
+  }
   if (typeof look === "string" && look !== "") return true;
   return colouredInline(node);
 }
@@ -270,22 +278,13 @@ function contrastFinding(
   if (!painted.chosen) return undefined;
   const color = painted.color ?? SITE_TEXT;
   const background = painted.background ?? SITE_BACKGROUND;
-  const light = contrastOf(color, background, tokens, "light");
-  if (light === undefined) return undefined;
-  const dark = contrastOf(color, background, tokens, "dark");
   const needs = threshold(node);
-  const lightFails = light.ratio < needs;
-  // Dark mode is its own answer only where the colours differ there.
-  const darkFails =
-    dark !== undefined && dark.ratio !== light.ratio && dark.ratio < needs;
-  if (!lightFails && !darkFails) return undefined;
-  const what = lightFails
-    ? `Text contrast is too low: ${contrastRatioText(light)}${
-        darkFails && dark !== undefined
-          ? ` (${contrastRatioText(dark)} in dark mode)`
-          : ""
-      }`
-    : `Text contrast is too low in dark mode: ${contrastRatioText(dark ?? light)}`;
+  const what = tooLowWords(
+    contrastOf(color, background, tokens, "light"),
+    contrastOf(color, background, tokens, "dark"),
+    needs
+  );
+  if (what === undefined) return undefined;
   return {
     nodeId: node.id,
     what,
@@ -295,7 +294,30 @@ function contrastFinding(
   };
 }
 
-/** Every text block whose contrast is too low, or which couldn't be judged. */
+/**
+ * What a failing pair says, in light mode and in dark, or nothing where it
+ * reads. Each mode is its own answer where it can be measured, so a pair
+ * only dark mode resolves is still judged there; dark mode is reported only
+ * where its colours differ from light's.
+ */
+function tooLowWords(
+  light: ContrastResult | undefined,
+  dark: ContrastResult | undefined,
+  needs: number
+): string | undefined {
+  const darkOwn = dark !== undefined && dark.ratio !== light?.ratio;
+  const darkFails = darkOwn && dark.ratio < needs;
+  if (light !== undefined && light.ratio < needs) {
+    const inDark = darkFails
+      ? ` (${contrastRatioText(dark)} in dark mode)`
+      : "";
+    return `Text contrast is too low: ${contrastRatioText(light)}${inDark}`;
+  }
+  return darkFails
+    ? `Text contrast is too low in dark mode: ${contrastRatioText(dark)}`
+    : undefined;
+}
+
 /** A stored entry read as a block, or none where it can't be. */
 function asBlock(entry: unknown): BlockNode | undefined {
   if (typeof entry !== "object" || entry === null) return undefined;
@@ -322,6 +344,7 @@ function judged(
   return contrastFinding(block, painted, page.tokens);
 }
 
+/** Every text block whose contrast is too low, or which couldn't be judged. */
 function contrastFindings(page: ResolvedPage): PageCheckResult[] {
   const found: PageCheckResult[] = [];
   const start: Painted = {

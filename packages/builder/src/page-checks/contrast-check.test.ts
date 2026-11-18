@@ -367,6 +367,48 @@ describe("the contrast check", () => {
     ]);
   });
 
+  it("judges a List by its items, and no block styled by the site's own CSS classes", () => {
+    const list = {
+      ...block("l", "core/list", { color: "#e5e7eb" }),
+      props: { kind: "unordered", items: ["First", "Second"] },
+    };
+    expect(findings([list])).toHaveLength(1);
+    expect(findings([{ ...list, props: { items: [] } }])).toEqual([]);
+    expect(
+      findings([
+        { ...text("a", { color: "#ffffff" }), cssClasses: "dark-surface" },
+      ])
+    ).toEqual([]);
+  });
+
+  it("judges a pair in dark mode where only dark mode can measure it", () => {
+    // A variable with a dark value only resolves in dark mode here.
+    const darkOnly = {
+      tokens: [
+        ...LIGHT_ONLY.tokens,
+        {
+          name: "color.night",
+          kind: "color",
+          values: { light: "var(--brand-night)", dark: "#1f2937" },
+        },
+      ],
+    } as SiteTokenSet;
+    const found = findings(
+      [
+        text("a", {
+          color: "#374151",
+          backgroundColor: { $token: "color.night" },
+        }),
+      ],
+      darkOnly
+    );
+    expect(found).toEqual([
+      expect.objectContaining({
+        what: expect.stringMatching(/in dark mode/) as unknown,
+      }),
+    ]);
+  });
+
   it("judges nothing whose colours come from a shared style", () => {
     expect(
       findings([text("a", { color: "#e5e7eb" }, { classes: ["c-1"] })])
@@ -379,8 +421,23 @@ describe("the contrast check", () => {
     ).toEqual([]);
   });
 
-  it("reads the engine's own text and background where the site sets none", () => {
-    expect(findings([text("a", { color: "#e5e7eb" })], undefined)).toHaveLength(
+  it("judges only pairs it can read where the caller gives no site variables", () => {
+    // No tokens at all, not the helper's default site.
+    const run = (base: Record<string, unknown>) =>
+      runPageChecks(
+        {
+          document: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [text("a", base)],
+          },
+        },
+        [CONTRAST_CHECK]
+      ).findings;
+    // Grey on the site's background: the background isn't known, so not judged.
+    expect(run({ color: "#e5e7eb" })).toEqual([]);
+    // Both colours the block's own: judged.
+    expect(run({ color: "#e5e7eb", backgroundColor: "#ffffff" })).toHaveLength(
       1
     );
   });

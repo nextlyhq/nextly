@@ -314,6 +314,23 @@ describe("the headings check", () => {
     expect(findings(page(list))).toEqual([]);
   });
 
+  it("reads a list in the site header by its entries too, not its empty state", () => {
+    const list: BlockNode = {
+      id: "nav",
+      type: "core/collection-loop",
+      version: 1,
+      props: {},
+      slots: {
+        children: [heading("entry", "h2")],
+        empty: [heading("none", "h1")],
+      },
+    };
+    // The header's empty state would be a second Heading 1 beside the page's.
+    expect(
+      findings(page(heading("a", "h1")), [region("header", list)])
+    ).toEqual([]);
+  });
+
   it("counts a Heading 1 whose words come from a field", () => {
     const bound: BlockNode = {
       id: "title",
