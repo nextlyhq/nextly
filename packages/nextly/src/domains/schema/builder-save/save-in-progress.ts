@@ -54,6 +54,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { AddressKind } from "../../../shared/address-rule";
 import { consoleLogger } from "../../../shared/types";
 import { MetaService } from "../../meta/services/meta-service";
+import { readSchemaVersion } from "../schema-version";
 
 import { databaseIdentity, UNKNOWN_DATABASE } from "./saved-database";
 
@@ -114,6 +115,11 @@ interface MadeRecord {
   projectRoot: string;
   record: SaveInProgress;
   ending: "open" | "withdrawn" | "left";
+  /**
+   * The stored schema version's count of registry writes when the record was made (`seq`),
+   * undefined where none was stored: a save whose registry write committed moved it since.
+   */
+  registryWritesBefore: number | undefined;
 }
 
 /** What a writer tells its record of how the save ended. */
@@ -132,11 +138,64 @@ const NO_RECORD: StartedSave = {
 
 const scopes = new AsyncLocalStorage<MadeRecord[]>();
 
-/** The records of `made` an ending clears: a save that ended, or one that withdrew everything. */
-function clearedBy(made: readonly MadeRecord[], ended: boolean): MadeRecord[] {
-  return made.filter(({ ending }) =>
-    ended ? ending !== "left" : ending === "withdrawn"
+/**
+ * The records of `made` an ending clears: one whose save withdrew everything it wrote, and, where
+ * the work ended without throwing, one whose save's registry write committed, which moves the
+ * stored schema version (`registryWritten`). A resolved scope alone says nothing: a service can
+ * answer a failed registry write as a result, after the definition, files and statements were
+ * written. A record left part-way never clears.
+ */
+async function clearedBy(
+  made: readonly MadeRecord[],
+  ended: boolean,
+  logger: { warn(message: string): void }
+): Promise<MadeRecord[]> {
+  const cleared: MadeRecord[] = [];
+  for (const entry of made) {
+    if (entry.ending === "withdrawn") cleared.push(entry);
+    else if (
+      ended &&
+      entry.ending === "open" &&
+      (await registryWritten(entry, logger))
+    ) {
+      cleared.push(entry);
+    }
+  }
+  return cleared;
+}
+
+/** The stored schema version's count of registry writes, or undefined where none is stored. */
+async function registryWrites(
+  adapter: DrizzleAdapter
+): Promise<number | undefined> {
+  const stored = await readSchemaVersion(
+    adapter.getDrizzle(),
+    adapter.getCapabilities().dialect
   );
+  return stored.present ? stored.version?.seq : undefined;
+}
+
+/**
+ * Whether the save's registry write committed since its record was made: the count of registry
+ * writes moved. A count that cannot be read keeps the record, which the next start settles.
+ */
+async function registryWritten(
+  entry: MadeRecord,
+  logger: { warn(message: string): void }
+): Promise<boolean> {
+  try {
+    const now = await registryWrites(entry.adapter);
+    if (now === undefined) return false;
+    return (
+      entry.registryWritesBefore === undefined ||
+      now > entry.registryWritesBefore
+    );
+  } catch (error) {
+    logger.warn(
+      `Whether the save of ${entry.record.kind} "${entry.record.slug}" recorded its registry row could not be read (${error instanceof Error ? error.message : String(error)}); its record that it was in progress stays for the next development start to settle.`
+    );
+    return false;
+  }
 }
 
 /**
@@ -159,7 +218,7 @@ export async function withSaveRecords<T>(
     ended = true;
     return result;
   } finally {
-    await clearRecords(clearedBy(made, ended), logger);
+    await clearRecords(await clearedBy(made, ended, logger), logger);
   }
 }
 
@@ -180,7 +239,8 @@ export function openSaveRecords(
   const made: MadeRecord[] = [];
   return {
     run: work => scopes.run(made, work),
-    end: ended => clearRecords(clearedBy(made, ended), logger),
+    end: async ended =>
+      clearRecords(await clearedBy(made, ended, logger), logger),
   };
 }
 
@@ -225,6 +285,8 @@ export async function recordSaveStarted(args: {
   };
   const meta = new MetaService(args.adapter, consoleLogger);
   const key = saveInProgressKey(args.kind, args.slug);
+  // Read before anything of the save: its registry write, once it commits, moves the count.
+  const registryWritesBefore = await registryWrites(args.adapter);
   await meta.insertIfAbsent(key, record);
   // Read back, since the insert does not say whether it wrote: a record that stood already is kept.
   const standing = await meta.get<unknown>(key);
@@ -253,6 +315,7 @@ export async function recordSaveStarted(args: {
     projectRoot: args.projectRoot,
     record,
     ending: "open",
+    registryWritesBefore,
   };
   made.push(entry);
   try {
