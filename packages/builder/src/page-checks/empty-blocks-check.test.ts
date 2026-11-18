@@ -62,6 +62,15 @@ describe("an Image with no picture", () => {
     ]);
   });
 
+  it("is found with an address the page would never fetch", () => {
+    expect(
+      foundOn([
+        node("i1", "acme/picture", { src: "javascript:alert(1)" }),
+        node("i2", "acme/picture", { src: "blob:https://example.com/1" }),
+      ]).map(each => each.nodeId)
+    ).toEqual(["i1", "i2"]);
+  });
+
   it("is not found with a file, an address, or a field supplying either", () => {
     expect(
       foundOn([

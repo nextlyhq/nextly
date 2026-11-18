@@ -16,6 +16,7 @@ import {
   walkNodes,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
+import { fetchableUrl } from "@nextlyhq/blocks-react";
 
 import { imageGroupOf } from "../image-group";
 
@@ -38,9 +39,15 @@ function emptyImage(
     )
   )?.source;
   if (source === undefined) return undefined;
-  const supplied = [source.media, source.address].some(
-    prop => holds(node.props[prop]) || bound(node, prop)
-  );
+  // A library file or a field supplies the picture; a stored address does
+  // only where the renderer would fetch it (`fetchableUrl`), so a
+  // `javascript:` or `blob:` address draws nothing here as on the page. The
+  // site's own allowed hosts aren't known to the check, so any host passes.
+  const supplied =
+    holds(node.props[source.media]) ||
+    bound(node, source.media) ||
+    fetchableUrl(node.props[source.address], undefined) !== undefined ||
+    bound(node, source.address);
   if (supplied) return undefined;
   return {
     nodeId: node.id,

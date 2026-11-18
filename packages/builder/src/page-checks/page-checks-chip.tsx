@@ -16,7 +16,13 @@
  * @module page-checks/page-checks-chip
  */
 import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
-import { Check, ChevronLeft, ChevronRight, X } from "lucide-react";
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  X,
+} from "lucide-react";
 import * as React from "react";
 
 import { revealNode } from "../canvas/reveal-node";
@@ -153,6 +159,20 @@ function FixBar({
         ) : null}
         {fixStepWords(step)}
       </span>
+      {/* A check whose fix is in another editor (a header's block): the
+          way there, beside where the author is, as the list offers it. */}
+      {step.kind === "at" && step.finding.opens !== undefined ? (
+        <a
+          className="nx-page-checks-bar__open"
+          href={step.finding.opens.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={`${step.finding.what}. ${step.finding.opens.name}`}
+        >
+          {step.finding.opens.text}
+          <ExternalLink aria-hidden="true" />
+        </a>
+      ) : null}
       {clear ? null : (
         <>
           <span className="nx-page-checks-bar__steps">
@@ -260,8 +280,11 @@ export function PageChecksChip({
   const fixing = React.useRef(false);
   const fix = (finding: PageFinding): void => {
     const { nodeId, fix: setting, settingsTab } = finding;
+    // A fix in another editor selects nothing here: the bar offers the way
+    // there, and no block of the page is left looking like the problem.
+    if (finding.opens !== undefined) editor.select(null);
     // A fix in the document's settings opens them at its tab.
-    if (settingsTab !== undefined) onOpenSettingsTab?.(settingsTab);
+    else if (settingsTab !== undefined) onOpenSettingsTab?.(settingsTab);
     else if (nodeId !== undefined) {
       if (setting === undefined) editor.select(nodeId);
       else {
