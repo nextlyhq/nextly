@@ -19,6 +19,7 @@ import { planDetach } from "./composition-planners";
 import { COLLECTION_LIST_TYPE, LIST_ENTRY_SLOT } from "./list-query";
 import { applyOps } from "./ops";
 import {
+  instanceExposure,
   resolveComponentInstances,
   type ResolvedBlockNode,
 } from "./resolve-instances";
@@ -347,5 +348,35 @@ describe("a placement's setting bound to data", () => {
       entry => entry.props.text === "title"
     );
     expect(title?.bindings).toEqual({ text: byItemTitle });
+  });
+
+  describe("two settings aimed at one prop, one bound", () => {
+    const twice = component(
+      [heading("title")],
+      [exposure("first", "title", "text"), exposure("second", "title", "text")]
+    );
+    const placed = placement(
+      "p1",
+      "card",
+      { overrides: { second: "Typed" } },
+      { "overrides.first": byItemTitle }
+    );
+
+    it("says the bound one is what the page shows, and the typed one is shadowed by it", () => {
+      const rows = instanceExposure(twice, placed).properties;
+      expect(rows.map(row => [row.property.id, row.shadowedBy])).toEqual([
+        ["first", undefined],
+        ["second", "first"],
+      ]);
+    });
+
+    it("maps the prop to the bound one, so an edit on the canvas reaches what is shown", () => {
+      const nodes = resolveComponentInstances(
+        page([list("posts", [placed])]),
+        new Map([["card", twice]]),
+        { exposures: true }
+      ).document.nodes as ResolvedBlockNode[];
+      expect(composedOf(nodes, "Typed")?.exposedProps?.text?.id).toBe("first");
+    });
   });
 });

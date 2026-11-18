@@ -106,10 +106,7 @@ export function planExposedProps(
   const set = effectiveOverrides(definition, instance);
   const chosen = new Map<string, { fed: PropExposure; set: boolean }>();
   for (const property of usableExposures(definition.exposed)) {
-    const fed: PropExposure | undefined =
-      relay === undefined
-        ? { id: property.id, type: property.type }
-        : relay.get(property.id);
+    const fed = fedBy(property, relay);
     if (fed === undefined) continue;
     // A visibility exposure drives the node, not a prop, so it is keyed by
     // the node's own `visibility` whatever its stored path says.
@@ -122,10 +119,40 @@ export function planExposedProps(
     if (held !== undefined && held.set && !isSet) continue;
     chosen.set(key, { fed, set: isSet });
   }
+  takeBoundTargets(chosen, boundWinnersOf(definition, instance), relay);
   for (const [key, { fed }] of chosen) {
     const [nodeId = "", path = ""] = key.split("\u0000");
     const plan = planFor(plans, nodeId);
     plan.exposedProps = { ...plan.exposedProps, [path]: fed };
+  }
+}
+
+/**
+ * The exposure that feeds an edit of `property`: its own, or for a nested
+ * instance the host's that drives it, or none where no host exposure does.
+ */
+function fedBy(
+  property: ExposedProperty,
+  relay: ReadonlyMap<string, PropExposure> | undefined
+): PropExposure | undefined {
+  return relay === undefined
+    ? { id: property.id, type: property.type }
+    : relay.get(property.id);
+}
+
+/**
+ * Give each target a bound setting fills to that setting: it fills its prop
+ * whatever another setting holds, so an edit there is an edit of the bound
+ * one.
+ */
+function takeBoundTargets(
+  chosen: Map<string, { fed: PropExposure; set: boolean }>,
+  bound: ReadonlyMap<string, BoundWinner>,
+  relay: ReadonlyMap<string, PropExposure> | undefined
+): void {
+  for (const [key, { property }] of bound) {
+    const fed = fedBy(property, relay);
+    if (fed !== undefined) chosen.set(key, { fed, set: true });
   }
 }
 
@@ -251,12 +278,16 @@ export function instanceExposure(
   const props = finalProps(nodes, applied);
   const byNode = writesByNode(applied);
 
+  const bound = boundWinnersOf(definition, instance);
   const properties = declared.map(property =>
-    exposedState(
-      property,
-      lastWriteOver(property, byNode.get(property.nodeId) ?? []),
-      props,
-      nodes
+    withBoundWinner(
+      exposedState(
+        property,
+        lastWriteOver(property, byNode.get(property.nodeId) ?? []),
+        props,
+        nodes
+      ),
+      bound
     )
   );
 
@@ -267,6 +298,22 @@ export function instanceExposure(
   );
 
   return { properties, orphanedOverrideIds };
+}
+
+/**
+ * A row as a binding decides it: a setting whose binding fills its target
+ * is what the page shows there, and every other setting aimed at that
+ * target is shadowed by it, whatever either holds.
+ */
+function withBoundWinner(
+  state: ExposedPropertyState,
+  bound: ReadonlyMap<string, BoundWinner>
+): ExposedPropertyState {
+  if (state.property.type === "visibility") return state;
+  const winner = bound.get(targetKey(state.property))?.property.id;
+  if (winner === undefined) return state;
+  const { shadowedBy: _literal, ...rest } = state;
+  return winner === state.property.id ? rest : { ...rest, shadowedBy: winner };
 }
 
 /**
@@ -822,14 +869,50 @@ function planBoundSettings(
   plans: Map<string, NodePlan>
 ): void {
   const bound = boundSettings(bindings);
-  if (bound.size === 0) return;
-  for (const property of usableExposures(exposed)) {
-    const binding = bound.get(property.id);
-    if (binding === undefined || !isBindableSetting(property)) continue;
+  for (const { property } of boundWinners(exposed, bound).values()) {
     const plan = planFor(plans, property.nodeId);
     plan.bindings = { ...plan.bindings };
-    defineEntry(plan.bindings, property.propPath, binding);
+    defineEntry(plan.bindings, property.propPath, bound.get(property.id));
   }
+}
+
+/** A bound setting, and the target it fills. */
+interface BoundWinner {
+  readonly property: ExposedProperty;
+}
+
+/**
+ * Each target a placement's binding fills, by node and prop path, with the
+ * setting whose binding fills it: the last declared where two bound settings
+ * aim at one prop, as composing writes them in that order. A bound setting
+ * fills its prop whatever another setting aimed there holds, so this is what
+ * the page shows there, for the composed binding, the editor's exposure map
+ * and the inspector's rows alike.
+ */
+function boundWinners(
+  exposed: unknown,
+  bound: ReadonlyMap<string, unknown>
+): ReadonlyMap<string, BoundWinner> {
+  const winners = new Map<string, BoundWinner>();
+  if (bound.size === 0) return winners;
+  for (const property of usableExposures(exposed)) {
+    if (!bound.has(property.id) || !isBindableSetting(property)) continue;
+    winners.set(targetKey(property), { property });
+  }
+  return winners;
+}
+
+/** A setting's target, as one key: its node and its prop path. */
+function targetKey(property: ExposedProperty): string {
+  return `${property.nodeId}\u0000${property.propPath}`;
+}
+
+/** The targets a placement's own bindings fill, with what fills each. */
+function boundWinnersOf(
+  definition: ComponentDocument,
+  instance: BlockNode
+): ReadonlyMap<string, BoundWinner> {
+  return boundWinners(definition.exposed, boundSettings(instance.bindings));
 }
 
 /**
