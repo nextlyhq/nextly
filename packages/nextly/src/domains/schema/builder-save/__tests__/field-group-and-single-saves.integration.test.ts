@@ -650,12 +650,16 @@ describe.each(getConfiguredTestDialects())(
       const applied = await appliedFiles(t);
       const live = await liveColumns();
 
-      const refused: unknown = await save().catch((error: unknown) => error);
+      // The dispatcher answers a refusal as a response, or throws it: read as one text either way.
+      const refused = await save().then(
+        async answer =>
+          `${(answer as Response).status} ${await (answer as Response).text()}`,
+        (error: unknown) =>
+          `${String((error as { code?: unknown }).code)} ${String((error as { publicMessage?: unknown }).publicMessage)}`
+      );
 
-      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
-      expect(
-        String((refused as { publicMessage?: unknown }).publicMessage)
-      ).toContain("single_notice.extra present in DB");
+      expect(refused).toContain("NEXTLY_MIGRATION_DRIFT");
+      expect(refused).toContain("single_notice.extra present in DB");
       expect(migrationFiles(t)).toEqual(files);
       expect(await appliedFiles(t)).toEqual(applied);
       expect(await liveColumns()).toEqual(live);
