@@ -483,6 +483,8 @@ export interface UpgradeCommandOptions {
   forceUnlock?: boolean;
   /** Show what the upgrade would change, and change nothing. */
   dryRun?: boolean;
+  /** With `--dry-run`: print the plan as one JSON document, for scripts and CI. */
+  json?: boolean;
   /** The data-loss consent for what `--reconcile-core` deletes. */
   acceptDataLoss?: AcceptDataLossOption;
 }
@@ -712,18 +714,21 @@ async function reportUpgradeDryRun(
             config: await siteOf(globalOpts),
           }
         );
-    reportDryRun(
-      context.logger,
-      cmdOptions.forceUnlock
-        ? {
-            ...plan,
-            changes: [
-              { action: "remove", target: "any migrate lock held" },
-              ...plan.changes,
-            ],
-          }
-        : plan
-    );
+    const reported = cmdOptions.forceUnlock
+      ? {
+          ...plan,
+          changes: [
+            { action: "remove", target: "any migrate lock held" },
+            ...plan.changes,
+          ],
+        }
+      : plan;
+    // The same plan either way: as one JSON document for a script, or as lines for a person.
+    if (cmdOptions.json === true) {
+      console.log(JSON.stringify(reported, null, 2));
+    } else {
+      reportDryRun(context.logger, reported);
+    }
   } catch (error) {
     // Set rather than exited, so the disconnect below still runs.
     failWithError(context.logger, error);

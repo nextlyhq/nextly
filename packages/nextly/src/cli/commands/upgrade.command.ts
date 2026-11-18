@@ -43,5 +43,8 @@ export function registerUpgradeCommand(program: Command): void {
       "Clear a stale migrate lock before running",
       false
     )
+    // What a dry run reports, for a script: the changes, refusals, notes and the lists of what
+    // moves, conflicts and should be checked, as one JSON document.
+    .option("--json", "With --dry-run: print the plan as JSON", false)
     .action(lazyAction(async () => (await import("./upgrade")).upgradeAction));
 }

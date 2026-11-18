@@ -113,11 +113,12 @@ export async function readLayoutScanEntities(
     const { failures } = await loadDynamicTables(
       adapter,
       registryTable,
-      (tableName, fields, status, localized, builderOwned) => {
+      (tableName, fields, status, localized, builderOwned, slug) => {
         if (declared.has(tableName)) return Promise.resolve();
         entities.push({
           kind,
-          slug: tableName,
+          // The slug the registry records, which content and history are addressed by.
+          slug,
           tableName,
           fields: fields as LaidOutEntity["fields"],
           localized,
