@@ -52,8 +52,10 @@ as you type, and they're saved with the page when you save. **All page settingsâ
 opens **Settings** on the page's own tab, for every other field. The inspector keeps
 its width, so the canvas doesn't move as you select and deselect.
 
-The search result is built from the page's title and address. Where the SEO plugin
-sets search and sharing for the page's type, the result is left to it.
+Without the [SEO plugin](/docs/plugins/seo#in-the-page-builder), the search result is built
+from the page's title and address. Where the SEO plugin edits SEO for the page's type, it
+draws the result from its own answer, the one its SEO tab shows, so the two always match.
+Where it is installed but SEO is turned off for the page's type, the row says so.
 
 **Page data** says how much data the page loads each time someone opens it, against
 the site's limit: "Page data: 12 of 500". A list's entries, an image, a link to an
@@ -936,16 +938,21 @@ tabs with the arrow keys.
 - **General** holds the page's **Title**; its **Address**, the site's address and the page's
   part, with buttons to copy it and to edit it in place (Enter keeps the edit, Escape puts it
   back, and on a published page it says that changing it retires the old address); and its
-  **Header & footer**. Below them, a preview shows roughly how a link to the page looks when it
-  is shared. It uses the SEO fields where the page has them, then the page's first text and
-  image, and the page's title. A heading never sets the title. Your site's own metadata may
-  differ.
+  **Header & footer**. Below them is the page's search and sharing. Where the
+  [SEO plugin](/docs/plugins/seo#in-the-page-builder) edits SEO for the page's type, that is
+  its **SEO** tab, and General shows no other preview. Where the plugin is installed but SEO
+  is turned off for the type, General says "SEO is turned off for" the type's pages, with a
+  link to the SEO settings for people who may change them. Without the SEO plugin, a read-only
+  **Search and sharing** preview shows roughly how a link to the page looks when it is
+  shared, built from the page's title, first heading and first image. Your site's own
+  metadata may differ.
 - **Fields** holds every other field of the page, drawn as the entry's form draws them, with
   the same rules: a field you add to the collection appears here with no change to the
   builder. Another field the builder edits is a line with **Open in builder** for it. Where
   nothing is left, there is no Fields tab.
 - Tabs other plugins add, such as the [SEO plugin](/docs/plugins/seo#in-the-page-builder)'s,
-  follow, in the order the plugins declare them.
+  follow, in the order the plugins declare them. A tab shows only on the pages it applies
+  to: the SEO tab is there exactly where the page's own edit page shows its SEO tab.
 
 If a **Save** or **Publish** is refused for a field shown in Page settings, the message names
 the field with **Show me**, which opens Page settings on that field's tab with the field
@@ -973,7 +980,7 @@ any other way, through the API or the site style's own form, is refused.
 ### A plugin's tab in Settings
 
 A plugin adds a tab to Page settings, in the same row as General and Fields, at the Page Builder's admin place
-`nextlyhq-plugin-page-builder.settings`, which takes tabs (`@experimental`). Name the Page
+`nextlyhq-plugin-page-builder.settings`, which takes tabs and blocks (`@experimental`). Name the Page
 Builder in your plugin's `dependsOn`, or in `optionalDependsOn` so a site without it still
 starts, with your tab left out:
 
@@ -1003,6 +1010,17 @@ The tab is drawn for a page or a design, never for a header & footer set or a co
   writes it whole, or removes it with `null`, as one edit the editor's Undo takes back.
 - `design`, the document as it is being edited; `control`, the entry's form; and
   `writable`.
+
+A tab that applies to some pages only calls `setLeftOut(true)` to leave the row, and
+`setLeftOut(false)` to come back; its panel stays mounted meanwhile. The SEO plugin's tab
+asks `useContributionApplies` whether the page's edit page draws its SEO tab, and leaves the
+row where it does not.
+
+A block at the same place is drawn where the builder shows the page's search result: on
+General and in the right panel's page settings. While a plugin adds one, the builder draws
+no preview of its own there. Besides `context`, a block receives `at` (`"general"` or
+`"panel"`), `typePlural` (the page's type, named for its pages, where known), `control`,
+`design` and `designField`.
 
 ## Moving blocks in Layers
 

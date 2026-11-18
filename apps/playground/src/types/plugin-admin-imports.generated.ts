@@ -48,6 +48,7 @@ const registered = {
   "@nextlyhq/plugin-page-builder/admin#TemplateDesignDetails": _p5.TemplateDesignDetails,
   "@nextlyhq/plugin-page-builder/admin#TemplateOwnDesigns": _p5.TemplateOwnDesigns,
   "@nextlyhq/plugin-page-builder/admin#TransferImport": _p5.TransferImport,
+  "@nextlyhq/plugin-seo/admin#PageBuilderSearchResult": _p6.PageBuilderSearchResult,
   "@nextlyhq/plugin-seo/admin#PageBuilderSeoTab": _p6.PageBuilderSeoTab,
   "@nextlyhq/plugin-seo/admin#SeoBulkMoved": _p6.SeoBulkMoved,
   "@nextlyhq/plugin-seo/admin#SeoDisplaySection": _p6.SeoDisplaySection,

@@ -8,6 +8,10 @@ export {
   type UsePlaceTabsOptions,
 } from "./PlaceTabs";
 export {
+  useContributionApplies,
+  type ContributionDocument,
+} from "./useContributionApplies";
+export {
   TargetSlot,
   type PlaceContributionProps,
   type PlaceProps,
