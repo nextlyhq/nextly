@@ -6,7 +6,7 @@
  * place of its saved ones. Both reads name it: the inspector's, and the
  * Design panel's Shared styles tab.
  */
-import { cleanup, render, renderHook } from "@testing-library/react";
+import { cleanup, render, renderHook, waitFor } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -32,16 +32,20 @@ vi.mock("@nextlyhq/plugin-sdk/client", () => ({
   useCan: () => true,
 }));
 
-// The shared-style routes, recording what each read is told is open.
+// The shared-style routes, recording what each read is told is open, and
+// how often the usage is read.
 const asked = vi.hoisted(() => [] as unknown[]);
+const usageReads = vi.hoisted(() => ({
+  access: undefined as undefined | { usage: (...args: never[]) => unknown },
+}));
 vi.mock("../shared-styles-client", () => {
   const access = {
-    usage: async () => ({
+    usage: vi.fn(async () => ({
       whole: true,
       counting: false,
       mayLock: false,
       styles: new Map(),
-    }),
+    })),
     uses: async () => ({
       items: [],
       total: 0,
@@ -52,6 +56,7 @@ vi.mock("../shared-styles-client", () => {
     lock: async () => undefined,
     remove: async () => undefined,
   };
+  usageReads.access = access;
   return {
     useSharedStylesClient: (here: unknown) => {
       asked.push(here);
@@ -135,6 +140,50 @@ describe("what the editor has open", () => {
 });
 
 describe("the Design panel's Shared styles tab", () => {
+  const surfaceOf = (library: ClassSurface["library"]): ClassSurface => ({
+    library,
+    absence: "pending",
+    add: async () => undefined,
+    writeStyles: async () => undefined,
+    pendingNames: {},
+    currentRenameAttempt: () => 0,
+    rename: async () => ({ ok: true }),
+    edit: async () => undefined,
+  });
+  const studio = (surface: ClassSurface) => (
+    <UsageHereField.Provider value="content">
+      <SharedStylesStudio
+        classes={surface}
+        pageBlocks={{ counts: new Map(), complete: true }}
+        styleContext={{ breakpoints: { viewport: [], container: [] } }}
+        suppliedClassIds={undefined}
+        tokens={undefined}
+      />
+    </UsageHereField.Provider>
+  );
+
+  it("reads every row's usage again once what is open changes", async () => {
+    // A draft, then published with no pending draft: the rows' counts were
+    // read with the draft's parts, which no longer describe the open page.
+    document.identity = { kind: "collection", slug: "pages", documentId: "p1" };
+    document.status = { status: "draft", hasWorkingDraft: false };
+    const surface = surfaceOf([
+      {
+        id: "c-card",
+        slug: "card",
+        label: "Card",
+        orderIndex: 0,
+        styles: { base: { base: { color: "#111111" } } },
+      },
+    ]);
+    const view = render(studio(surface));
+    const usage = vi.mocked(usageReads.access?.usage);
+    await waitFor(() => expect(usage).toHaveBeenCalledTimes(1));
+    document.status = { status: "published", hasWorkingDraft: false };
+    view.rerender(studio(surface));
+    await waitFor(() => expect(usage).toHaveBeenCalledTimes(2));
+  });
+
   it("names what the editor has open in its usage read", () => {
     document.identity = { kind: "collection", slug: "pages", documentId: "p1" };
     const surface: ClassSurface = {

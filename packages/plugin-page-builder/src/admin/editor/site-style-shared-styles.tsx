@@ -55,7 +55,8 @@ export function SharedStylesStudio({
   const mayChange = useCan("update-site-style");
   // Named with what the editor has open, as the inspector's read is: the
   // rows count the open page from `pageBlocks`, in place of its saved share.
-  const access = useSharedStylesClient(useUsageHere());
+  const here = useUsageHere();
+  const access = useSharedStylesClient(here);
   const initialOpenId = useStyleToOpen();
   const { search, setSearch, searchRef, folds } = useDesignBrowse();
   // The Design panel's one search, across its tabs, and its box, where focus
@@ -67,6 +68,11 @@ export function SharedStylesStudio({
   return (
     <SharedStylesHostSearch.Provider value={hostSearch}>
       <SharedStylesPanel
+        // Drawn again when what the editor has open changes (a publish, a
+        // first draft, another language): the rows keep each style's usage
+        // once read, and the open document's parts in it are then another
+        // document's, which would count a still-live page as gone.
+        key={here === undefined ? "" : JSON.stringify(here)}
         library={classes.library}
         absence={classes.absence}
         suppliedClassIds={suppliedClassIds}
