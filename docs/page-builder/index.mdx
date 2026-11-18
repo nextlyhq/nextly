@@ -922,11 +922,19 @@ entry gets contents drawn from its own body:
 - **Can be folded**: on by default, so the list starts open under its title and a
   reader can close it, with no script.
 
-Every heading a Rich text block draws carries an id, made from its words: lower-cased,
-punctuation dropped, spaces as hyphens (`Getting started` is `#getting-started`), with a
-repeated heading numbered (`#notes`, `#notes-2`). The ids are unique within one passage.
-Two Rich text blocks on one page that share a heading give it the same id, and a link to
-it reaches the first.
+Every heading on a page carries an id, so a link can reach its section: each Heading
+block, and each heading inside a Rich text block, in the header and footer too. The id is
+the heading's own **Anchor (ID)** when you set one in Advanced; otherwise it is made from
+its words: lower-cased, punctuation dropped, spaces as hyphens, letters in any script kept
+(`Getting started` is `#getting-started`, `Über uns` is `#über-uns`). Ids are unique on
+the whole page: a repeated heading is numbered in page order (`#notes`, `#notes-2`,
+`#notes-3`), whichever blocks it is in, and a made id never takes one you gave any block.
+A heading inside a Collection list is drawn once per entry, so each copy adds its entry's
+place (`#title--0`, `#title--1`).
+
+Any heading can be left out of a table of contents: select it, and in **Advanced ›
+Visibility** turn on **Leave out of table of contents**. It keeps its id, so a link
+written by hand still reaches it.
 
 A visitor sees nothing when there are no headings to list, so an entry without any shows
 no empty box. On the canvas the block keeps its frame and says why it is empty.
