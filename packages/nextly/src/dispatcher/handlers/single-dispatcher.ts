@@ -525,6 +525,42 @@ async function requireLiveSingleId(slug: string): Promise<string> {
   return id;
 }
 
+/** A review whose companion rename is still to be answered, judged as the push road. */
+const PUSH_JUDGED = Symbol("push road");
+
+/**
+ * Whether a Single's dialog save takes the push road (`pushCarriesValues`) rather than its own
+ * migration file: asked by the save (its `pushWhen`) and by its review, which on that road still
+ * asks about what the push leaves to the person (`dialogRowAnswers`' `settledOnPush`). No
+ * `singleRow`: the file fills the Single's row, so no fill keeps the push.
+ */
+async function singleSaveTakesPush(args: {
+  oldFields: readonly FieldDefinition[];
+  newFields: readonly FieldDefinition[];
+  layout: ReturnType<typeof translationLayoutChange>;
+  companionRename: Parameters<typeof pushCarriesValues>[0]["renamed"];
+  renameResolutions: readonly BrowserRenameResolution[] | undefined;
+  db: Parameters<typeof introspectLiveSnapshot>[0];
+  dialect: Parameters<typeof introspectLiveSnapshot>[1];
+  tableName: string;
+}): Promise<boolean> {
+  return pushCarriesValues({
+    oldFields: args.oldFields,
+    newFields: args.newFields,
+    wasStored: args.layout.wasStored,
+    isStored: args.layout.isStored,
+    wasStatus: args.layout.wasPublishedPerLanguage,
+    status: args.layout.isPublishedPerLanguage,
+    renamed: args.companionRename,
+    liveTable: async () =>
+      (await introspectLiveSnapshot(args.db, args.dialect, [args.tableName]))
+        .tables[0],
+    columnOf: field =>
+      getSingleRowColumnDescriptor(field, args.dialect, "collection"),
+    renames: renamedFieldsOf(args.renameResolutions ?? []),
+  });
+}
+
 /**
  * Publishing or unpublishing the parts of a Single the body chooses (@experimental): the Single's
  * counterpart of a collection entry's, read from the same body and forwarded the same way, with
@@ -1354,20 +1390,49 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // stated default (`dialogRowAnswers`): the dialog then asks nothing the default answers.
       const wasLocalized =
         (single as { localized?: boolean }).localized === true;
-      const { fileAnswers } = dialogRowAnswers({
+      const layout = translationLayoutChange({
+        wasLocalized,
+        isLocalized: readRequestLocalized(body) ?? wasLocalized,
+        wasStatus: single.status === true,
+        hasStatus: single.status === true,
+      });
+      const { fileAnswers, settledOnPush } = dialogRowAnswers({
         single: { tableName, fields: currentFields },
         fields: fields as FieldDefinition[],
         renameResolutions: answers.renameResolutions,
         resolutions: answers.resolutions,
         eventResolutions: answers.eventResolutions,
         dialect,
-        translatedAfter: translationLayoutChange({
-          wasLocalized,
-          isLocalized: readRequestLocalized(body) ?? wasLocalized,
-          wasStatus: single.status === true,
-          hasStatus: single.status === true,
-        }).isStored,
+        translatedAfter: layout.isStored,
       });
+      // On the push road the review settles only what the push answers for itself; a companion
+      // rename still to be answered is judged as that road, which asks the most.
+      const companionRename = await resolveCompanionRename(
+        answers.renameResolutions,
+        {
+          tableName,
+          oldFields: currentFields,
+          newFields: fields as FieldDefinition[],
+          wasLocalized: layout.wasStored,
+          isLocalized: layout.isStored,
+          dialect,
+          builtBy: "collection",
+        }
+      ).catch(() => PUSH_JUDGED);
+      const settled =
+        companionRename === PUSH_JUDGED ||
+        (await singleSaveTakesPush({
+          oldFields: currentFields,
+          newFields: fields as FieldDefinition[],
+          layout,
+          companionRename,
+          renameResolutions: answers.renameResolutions,
+          db,
+          dialect,
+          tableName,
+        }))
+          ? settledOnPush
+          : new Set((fileAnswers.rowFills ?? []).map(fill => fill.field));
       const reviewDeps = builderSaveDeps();
       const review = await reviewBuilderSchemaChange(reviewDeps, {
         kind: "single",
@@ -1401,10 +1466,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             )),
       });
       return respondData({
-        ...reviewWithRowFillsSettled(
-          preview,
-          new Set((fileAnswers.rowFills ?? []).map(fill => fill.field))
-        ),
+        ...reviewWithRowFillsSettled(preview, settled),
         ...review,
       });
     },
@@ -1744,23 +1806,17 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             landing.landed,
             {
               // The push where the save carries values across its change; its own migration file,
-              // run in tries as `nextly migrate` runs it, where it carries none. No `singleRow`: the
-              // file fills the Single's row (`dialogRowAnswers`), so no fill keeps the push.
+              // run in tries as `nextly migrate` runs it, where it carries none.
               pushWhen: () =>
-                pushCarriesValues({
+                singleSaveTakesPush({
                   oldFields: single.fields as unknown as FieldDefinition[],
                   newFields: fields as unknown as FieldDefinition[],
-                  wasStored: layout.wasStored,
-                  isStored: layout.isStored,
-                  wasStatus: layout.wasPublishedPerLanguage,
-                  status: layout.isPublishedPerLanguage,
-                  renamed: companionRename,
-                  liveTable: async () =>
-                    (await introspectLiveSnapshot(db, dialect, [tableName]))
-                      .tables[0],
-                  columnOf: field =>
-                    getSingleRowColumnDescriptor(field, dialect, "collection"),
-                  renames: renamedFieldsOf(renameResolutions ?? []),
+                  layout,
+                  companionRename,
+                  renameResolutions,
+                  db,
+                  dialect,
+                  tableName,
                 }),
               afterFile: () => reconcileBuilderCompanion("single", companion),
             }

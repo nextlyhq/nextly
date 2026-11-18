@@ -106,6 +106,8 @@ export function dialogRowAnswers(args: {
 }): {
   fileAnswers: { rowFills?: { field: string; value: unknown }[] };
   legacyBundle: LegacyResolutionsBundle | undefined;
+  /** The fields the push road answers for itself, which its review therefore does not ask about. */
+  settledOnPush: ReadonlySet<string>;
 } {
   const answered = args.resolutions ?? {};
   // The columns the person answered with a typed answer, each named by its event on this table.
@@ -147,9 +149,15 @@ export function dialogRowAnswers(args: {
       .filter(field => field.required === true)
       .map(field => field.name)
   );
+  // The push offers no default for a unique column (the classifier's rule for a table of many
+  // rows), so it leaves a unique field to the person, as before the row was filled; the file
+  // fills it, since one row cannot repeat a value.
+  const onPush = rowFills.filter(
+    fill => byName.get(fill.field)?.unique !== true
+  );
   const pushAnswers: Record<string, LegacyFieldResolution> = {
     ...Object.fromEntries(
-      rowFills
+      onPush
         .filter(fill => required.has(fill.field))
         .map(fill => [
           fill.field,
@@ -167,6 +175,7 @@ export function dialogRowAnswers(args: {
       Object.keys(pushAnswers).length > 0
         ? { tableName: args.single.tableName, byFieldName: pushAnswers }
         : undefined,
+    settledOnPush: new Set(onPush.map(fill => fill.field)),
   };
 }
 
