@@ -168,6 +168,22 @@ describe("a review settled by a Single's row fills", () => {
     expect(settled.hasDestructiveChanges).toBe(false);
   });
 
+  it("is safe for a snake-case field with nothing else changing", () => {
+    const settled = reviewWithRowFillsSettled(
+      {
+        ...review,
+        changes: {
+          ...review.changes,
+          added: [{ name: "tag_line", classification: "interactive" }],
+        },
+      },
+      new Set(["tag_line"])
+    );
+    expect(settled.interactiveFields).toEqual([]);
+    expect(settled.classification).toBe("safe");
+    expect(settled.hasDestructiveChanges).toBe(false);
+  });
+
   it("stays destructive for another change that is", () => {
     const settled = reviewWithRowFillsSettled(
       {

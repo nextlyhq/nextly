@@ -189,11 +189,15 @@ describeEachDialect(
       const body = (preview.data ?? preview) as {
         interactiveFields?: { name: string }[];
         classification?: string;
+        hasDestructiveChanges?: boolean;
       };
       expect(
         (body.interactiveFields ?? []).map(field => field.name)
       ).not.toContain("tagline");
-      expect(body.classification).not.toBe("interactive");
+      // Nothing else changes, so the review is safe and flags no data loss: the dialog shows it
+      // as the harmless addition it is.
+      expect(body.classification).toBe("safe");
+      expect(body.hasDestructiveChanges).toBe(false);
     });
 
     it("does not ask about a camelCase required field stating a default, and calls the review safe", async () => {
