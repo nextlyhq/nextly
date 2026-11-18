@@ -43,21 +43,20 @@ export function usePaint(tokens: SiteTokenSet | undefined): TilePaint {
   return { tokens, mode: activeTokenMode(usePrefersDark()) };
 }
 
-/** A row's accessible name: its name, class name, marks and reach in words. */
-function rowLabel(
+/** What a screen reader hears after the row's name and class: its marks and reach. */
+function rowDetails(
   row: SharedStyleRow,
-  name: string,
   sentence: string,
   tile: SharedStyleTile
 ): string {
   return [
-    name,
-    row.className,
     ...(row.locked ? ["locked"] : []),
     ...(row.inCode ? ["set in your site’s code"] : []),
     ...(tile.darkUnreadable ? [SHARED_STYLE_DARK_UNREADABLE] : []),
     ...(sentence === "" ? [] : [sentence]),
-  ].join(", ");
+  ]
+    .map(part => `, ${part}`)
+    .join("");
 }
 
 /** What a row's details are handed beside the row and its name. */
@@ -101,7 +100,6 @@ export function StyleRow({
             <button
               type="button"
               className="nx-vars__row nx-shared-styles__row"
-              aria-label={rowLabel(row, name, sentence, tile)}
               title={sentence === "" ? undefined : sentence}
               data-shared-style={row.id}
             >
@@ -111,6 +109,13 @@ export function StyleRow({
                 reach={details.reach}
                 tile={tile}
               />
+              {/* Named by what it shows, then these words, which say what
+                  the hidden lock, chips and tile show. Not an aria-label over
+                  the row: its visible name must stay part of its accessible
+                  one. */}
+              <span className="nx-sr-only">
+                {rowDetails(row, sentence, tile)}
+              </span>
             </button>
           </PopoverTrigger>
         </DarkModeTip>
@@ -209,7 +214,11 @@ function RowContent({
         <span className="nx-vars__name" title={name}>
           {name}
         </span>
-        <span className="nx-shared-styles__class">{row.className}</span>
+        <span className="nx-shared-styles__class">
+          {/* Heard between the name and the class, which the eye reads
+              apart; the space after the comma is in the class's own text, so it stays. */}
+          <span className="nx-sr-only">,</span> {row.className}
+        </span>
       </span>
       {row.locked ? (
         <Lock className="nx-shared-styles__lock" aria-hidden="true" size={12} />

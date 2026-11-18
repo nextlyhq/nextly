@@ -251,15 +251,6 @@ function RowTrigger({
           type="button"
           className="nx-vars__row"
           data-variable-key={entry.row.key}
-          aria-label={rowLabel({
-            entry,
-            token,
-            tokens,
-            mode,
-            reach,
-            marked,
-            builtIn,
-          })}
           data-kind={entry.row.kind}
           // Drawn as chosen while its editor is open. Its own mark: the
           // row's tooltip sets `data-state` too, over the popover's.
@@ -274,6 +265,20 @@ function RowTrigger({
             marked={marked}
             builtIn={builtIn}
           />
+          {/* Named by what it shows, then these words, which say what the
+              hidden swatch and chips show. Not an aria-label over the row:
+              its visible name must stay part of its accessible one. */}
+          <span className="nx-sr-only">
+            {rowDetails({
+              entry,
+              token,
+              tokens,
+              mode,
+              reach,
+              marked,
+              builtIn,
+            })}
+          </span>
         </button>
       </PopoverTrigger>
     </CountTip>
@@ -351,10 +356,10 @@ function moveBy(event: React.KeyboardEvent): -1 | 1 | undefined {
 }
 
 /**
- * The row's name as a screen reader hears it: the visible name, "new" while
- * it is marked so, the values the swatch shows, and how widely it is used.
+ * What a screen reader hears after the row's visible name: "new" while it is
+ * marked so, the values the swatch shows, and how widely it is used.
  */
-function rowLabel({
+function rowDetails({
   entry,
   token,
   tokens,
@@ -373,7 +378,7 @@ function rowLabel({
 }): string {
   const fresh = marked ? ", new" : "";
   const supplied = builtIn ? ", built-in" : "";
-  return `${shownName(entry)}${fresh}${supplied}${describe(entry, token, tokens, mode)}${countWords(reach)}`;
+  return `${fresh}${supplied}${describe(entry, token, tokens, mode)}${countWords(reach)}`;
 }
 
 /**
@@ -420,8 +425,13 @@ function RowName({ entry }: { entry: VariableEntry }): React.JSX.Element {
   return (
     <span className="nx-vars__name">
       {entry.label}
+      {/* The space outside the kind's own element: the row is named by this
+          text, and a name drops the spaces at an element's edges. */}
       {entry.kindWord === undefined ? null : (
-        <span className="nx-vars__name-kind">{` · ${entry.kindWord}`}</span>
+        <>
+          {" "}
+          <span className="nx-vars__name-kind">{`· ${entry.kindWord}`}</span>
+        </>
       )}
     </span>
   );

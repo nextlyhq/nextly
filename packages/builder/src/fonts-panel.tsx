@@ -1054,8 +1054,11 @@ function VariableRow({
       <span className="nx-vars__name" title={label}>
         {label}
       </span>
-      <span className="nx-vars__chip" aria-hidden="true">
-        {first}
+      {/* The row is named by what it shows: the name, then the family the
+          chip draws, heard apart as the eye reads them apart. The comma and the
+          space after it sit inside the chip, so the space stays. */}
+      <span className="nx-vars__chip">
+        <span className="nx-sr-only">,</span> {first}
       </span>
     </>
   );
@@ -1064,12 +1067,7 @@ function VariableRow({
       {onOpenTokens === undefined ? (
         <div className="nx-vars__row nx-fonts__static-row">{content}</div>
       ) : (
-        <button
-          type="button"
-          className="nx-vars__row"
-          aria-label={`${label}, ${row.token.values.light}`}
-          onClick={onOpenTokens}
-        >
+        <button type="button" className="nx-vars__row" onClick={onOpenTokens}>
           {content}
         </button>
       )}
