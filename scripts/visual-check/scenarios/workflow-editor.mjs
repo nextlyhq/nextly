@@ -48,6 +48,11 @@ async function submitted(page, id) {
     "reading the review state"
   );
   const part = state.parts.find(each => each.part === null);
+  if (part === undefined) {
+    throw new Error(
+      `no shared part in the review state: ${JSON.stringify(state).slice(0, 300)}`
+    );
+  }
   await sent(
     await page.request.post(`${API}/workflows/steps`, {
       data: {
