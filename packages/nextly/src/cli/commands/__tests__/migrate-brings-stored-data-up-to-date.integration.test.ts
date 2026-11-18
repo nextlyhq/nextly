@@ -271,7 +271,9 @@ describe.each(getConfiguredTestDialects())(
       );
 
       expect(NextlyError.is(refusal)).toBe(true);
-      expect(messageOf(refusal)).toContain("`nextly migrate --backup-confirmed`");
+      expect(messageOf(refusal)).toContain(
+        "`nextly migrate --backup-confirmed`"
+      );
       expect(messageOf(refusal)).toContain(STEP);
       expect(await storedPin()).toBe("plain-pin");
       expect(await summaryColumnExists()).toBe(false);

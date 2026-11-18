@@ -667,7 +667,10 @@ describe("a command run with no terminal", () => {
       await appliedPosts();
       giveARoleARetiredManagePermission();
       await expectRefusal(["upgrade"], "(UPGRADE_WORK_MOVED)");
-      await expectRefusal(["upgrade", "--confirm-backed-up"], "`nextly migrate`");
+      await expectRefusal(
+        ["upgrade", "--confirm-backed-up"],
+        "`nextly migrate`"
+      );
     },
     NEXTLY_RUN_TIMEOUT
   );

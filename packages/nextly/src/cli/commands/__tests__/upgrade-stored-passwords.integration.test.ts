@@ -345,16 +345,15 @@ describe.each(getConfiguredTestDialects())(
       const output = lines.join("\n");
       expect(output).toMatch(/hash passwords stored before this release: 7\b/);
       for (const [, original] of plain) expect(output).not.toContain(original);
-      expect(output).not.toContain("Nothing to do");
     });
 
     it("finds nothing to do on a second run, and changes nothing", async () => {
       const before = await t.adapter.select<Doc>("dc_upentries", {});
 
       lines.length = 0;
-      await upgrade();
-
-      expect(lines.join("\n")).toContain("Already upgraded. Nothing to do.");
+      // No step runs, and none is reported.
+      expect(await upgrade()).toEqual([]);
+      expect(lines).toEqual([]);
       expect(await t.adapter.select<Doc>("dc_upentries", {})).toEqual(before);
     });
   }

@@ -596,7 +596,6 @@ describe("a cancelled prompt exits 130 and changes nothing", () => {
   });
 
   describe("upgrade", () => {
-
     it("a cancel at the --reconcile-core question exits 130 and reconciles nothing", async () => {
       seen.confirm.mockResolvedValue(CANCEL);
       await run(() =>

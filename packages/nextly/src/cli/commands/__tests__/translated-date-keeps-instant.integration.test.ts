@@ -410,7 +410,8 @@ describe.runIf(PG).each(["Asia/Karachi", "America/Los_Angeles"])(
       expect(
         warnings.filter(
           w =>
-            w.includes(`${COMPANION}.published`) && w.includes("nextly i18n:convert-zoned-dates")
+            w.includes(`${COMPANION}.published`) &&
+            w.includes("nextly i18n:convert-zoned-dates")
         )
       ).toHaveLength(1);
     });

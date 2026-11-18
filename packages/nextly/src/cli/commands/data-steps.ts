@@ -97,7 +97,10 @@ export async function firstDataStepWithWork(
 }
 
 /** The refusal of steps with work whose backup nobody confirmed, and nobody can be asked about. */
-function backupNotConfirmed(command: string, first: PendingDataStep): NextlyError {
+function backupNotConfirmed(
+  command: string,
+  first: PendingDataStep
+): NextlyError {
   return new NextlyError({
     code: "NEXTLY_UPGRADE_IN_PROGRESS",
     publicMessage:

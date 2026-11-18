@@ -4,10 +4,7 @@
  * (`runDataSteps`), with the backup confirmed: for a test of a step's own
  * work, which has no need of a migration folder.
  */
-import {
-  runDataSteps,
-  type DataStepsDeps,
-} from "../../data-steps";
+import { runDataSteps, type DataStepsDeps } from "../../data-steps";
 import { MIGRATE_DATA_STEPS } from "../../upgrade-steps";
 
 export function runMigrateDataSteps(
