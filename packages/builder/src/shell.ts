@@ -1012,3 +1012,13 @@ export { PageChecksChip } from "./page-checks/page-checks-chip";
 export type { PageChecksChipProps } from "./page-checks/page-checks-chip";
 export { PageChecksList } from "./page-checks/page-checks-list";
 export type { PageChecksListProps } from "./page-checks/page-checks-list";
+
+/**
+ * Ending every run of typing at once, for a host's save: a field still being
+ * typed in when the page is stored keeps writing into a new step, so undo
+ * after the save takes back only what came after it. `typingEpoch` says which
+ * stretch of typing the editor is in.
+ *
+ * @experimental
+ */
+export { endTypingRuns, typingEpoch } from "./typing-run";

@@ -142,9 +142,7 @@ describe("a list of text", () => {
     });
     fireEvent.change(first, { target: { value: "Uno" } });
     fireEvent.blur(first);
-    fireEvent.click(
-      screen.getByRole("button", { name: "Move Item 1 down" })
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Move Item 1 down" }));
     expect(written(editor).items).toEqual(["Two", "Uno"]);
   });
 
@@ -162,6 +160,23 @@ describe("a list of text", () => {
     );
     // Not ["Two", ""]: the refused blank item is not written with the removal.
     expect(written(editor).items).toEqual(["Two"]);
+  });
+
+  it("follows the stored list after a keystroke the document refused", () => {
+    // A refused keystroke is not the field's own write, so the next value the
+    // document holds replaces the refused text rather than passing as its echo.
+    register();
+    const editor = editorFor({ items: ["One", "Two"] });
+    const { rerender } = render(<InspectorPanel editor={editor} />);
+    const second = () =>
+      group("Items").getByRole("textbox", {
+        name: "Item 2",
+      }) as HTMLInputElement;
+    editor.apply.mockReturnValueOnce(null);
+    fireEvent.change(second(), { target: { value: "Deux" } });
+    expect(second().value).toBe("Deux");
+    rerender(<InspectorPanel editor={editorFor({ items: ["One", "Zwei"] })} />);
+    expect(second().value).toBe("Zwei");
   });
 
   it("adds, removes and moves items, one write each", () => {
