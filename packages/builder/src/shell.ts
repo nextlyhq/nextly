@@ -518,6 +518,8 @@ export type { EmptyContainerAppendersProps } from "./canvas/empty-container-appe
  */
 export { ImageStates } from "./canvas/image-states";
 export type { ImageStatesProps } from "./canvas/image-states";
+export { EmbedStates } from "./canvas/embed-states";
+export type { EmbedStatesProps } from "./canvas/embed-states";
 /**
  * The chooser a block just added asks for, drawn over it on the canvas while
  * the editor's first-add step holds: the Columns layouts with Skip. A canvas
@@ -549,6 +551,12 @@ export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
  * a colour variable's, reads and adds to the one list.
  */
 export { RecentColoursStore } from "./recent-colours";
+/**
+ * @experimental The colours every colour picker in the builder leaves out
+ * while the site hides its unused built-in colours, provided once around
+ * the shell, and the read a host provides it from.
+ */
+export { HiddenColours, useHiddenColoursRead } from "./built-in-colours";
 /**
  * @experimental A template's document with an entry's own blocks composed
  * into its Entry content block, as the canvas draws it, for a host asking

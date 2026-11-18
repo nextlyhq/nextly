@@ -677,6 +677,27 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   },
   {
     block: "core/embed",
+    setting: "load",
+    tab: "content",
+    section: "Embed",
+    label: "Load",
+  },
+  {
+    block: "core/embed",
+    setting: "privacy",
+    tab: "content",
+    section: "Embed",
+    label: "Privacy mode",
+  },
+  {
+    block: "core/embed",
+    setting: "poster",
+    tab: "content",
+    section: "Embed",
+    label: "Poster",
+  },
+  {
+    block: "core/embed",
     setting: "allowFullscreen",
     tab: "advanced",
     section: "HTML",

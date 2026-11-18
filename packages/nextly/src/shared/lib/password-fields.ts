@@ -342,12 +342,23 @@ function keepsInstance(
  * The fields one instance is judged by: its field group's, or for a dynamic
  * zone's row the field group its type names. `undefined` when they are not
  * known. Exported so every walk reads an inline instance by the same fields.
+ *
+ * Generic in the field shape `reach` holds, so a walk whose fields are richer
+ * than `NamedField` (the relationship walk's) is handed back its own shape
+ * rather than having to cast the answer up again.
  */
-export function instanceFields(
+export function instanceFields<F extends NamedField = NamedField>(
   instance: Record<string, unknown>,
   { single, many }: { single?: string; many?: string[] },
-  { reach, untypedZoneRows }: Pick<PasswordWalk, "reach" | "untypedZoneRows">
-): readonly NamedField[] | undefined {
+  {
+    reach,
+    untypedZoneRows,
+  }: Pick<PasswordWalk, "untypedZoneRows"> & {
+    reach: Pick<FieldGroupReach, "direct"> & {
+      fieldsOf(slug: string): readonly F[] | undefined;
+    };
+  }
+): readonly F[] | undefined {
   const typed = readFieldGroupType(instance);
   // A snapshot (`direct`) is the server's own record of an instance, and
   // tags it with the field group it held when captured, which the field
@@ -363,7 +374,8 @@ export function instanceFields(
     return candidates.includes(typed) ? reach.fieldsOf(typed) : undefined;
   }
   if (untypedZoneRows === "unknown") return undefined;
-  const union: NamedField[] = [];
+  // In the caller's field shape, so the generic answer above holds here too.
+  const union: F[] = [];
   for (const slug of candidates) {
     const found = reach.fieldsOf(slug);
     if (found === undefined) return undefined;

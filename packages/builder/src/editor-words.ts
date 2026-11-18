@@ -32,6 +32,8 @@ export const EDITOR_WORDS = {
   fonts: "Fonts",
   // The Type tab's section setting every page's text.
   siteText: "Site text",
+  // The Type tab's named looks of text, which any block can wear.
+  textStyles: "Text styles",
   sections: "Saved sections",
   content: "Content",
   style: "Style",

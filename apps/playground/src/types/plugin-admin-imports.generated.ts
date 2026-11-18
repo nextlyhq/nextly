@@ -7,6 +7,7 @@ import { registerComponentMap } from "@nextlyhq/admin";
 import * as _p0 from "../../src/dashboard/site-notes";
 import * as _p1 from "@nextlyhq/plugin-form-builder/admin";
 import * as _p2 from "@nextlyhq/plugin-page-builder/admin";
+import * as _p3 from "@nextlyhq/plugin-seo/admin";
 import { registeredComponentPaths as listed } from "./plugin-admin-components.generated";
 import type { DeclaredComponentMap } from "nextly";
 import type * as siteConfig from "../../nextly.config";
@@ -32,6 +33,20 @@ const registered = {
   "@nextlyhq/plugin-page-builder/admin#TemplateDesignDetails": _p2.TemplateDesignDetails,
   "@nextlyhq/plugin-page-builder/admin#TemplateOwnDesigns": _p2.TemplateOwnDesigns,
   "@nextlyhq/plugin-page-builder/admin#TransferImport": _p2.TransferImport,
+  "@nextlyhq/plugin-seo/admin#PageBuilderSearchResult": _p3.PageBuilderSearchResult,
+  "@nextlyhq/plugin-seo/admin#PageBuilderSeoTab": _p3.PageBuilderSeoTab,
+  "@nextlyhq/plugin-seo/admin#SeoBulkMoved": _p3.SeoBulkMoved,
+  "@nextlyhq/plugin-seo/admin#SeoDisplaySection": _p3.SeoDisplaySection,
+  "@nextlyhq/plugin-seo/admin#SeoImportPage": _p3.SeoImportPage,
+  "@nextlyhq/plugin-seo/admin#SeoInspectPage": _p3.SeoInspectPage,
+  "@nextlyhq/plugin-seo/admin#SeoOverviewPage": _p3.SeoOverviewPage,
+  "@nextlyhq/plugin-seo/admin#SeoPagesPage": _p3.SeoPagesPage,
+  "@nextlyhq/plugin-seo/admin#SeoProblemsPage": _p3.SeoProblemsPage,
+  "@nextlyhq/plugin-seo/admin#SeoReceivedMoved": _p3.SeoReceivedMoved,
+  "@nextlyhq/plugin-seo/admin#SeoRedirectsPage": _p3.SeoRedirectsPage,
+  "@nextlyhq/plugin-seo/admin#SeoSettingsPage": _p3.SeoSettingsPage,
+  "@nextlyhq/plugin-seo/admin#SeoStatusSection": _p3.SeoStatusSection,
+  "@nextlyhq/plugin-seo/admin#SeoTab": _p3.SeoTab,
 } satisfies DeclaredComponentMap<typeof siteConfig>;
 
 type Registered = keyof typeof registered;

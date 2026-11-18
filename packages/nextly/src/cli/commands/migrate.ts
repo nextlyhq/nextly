@@ -91,9 +91,12 @@ import {
   type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
 import {
+  appliedPluginSnapshots,
   appliedSnapshotsOf,
   databaseBehindError,
   missingFromDatabase,
+  type AppliedSnapshot,
+  type MissingFromDatabase,
 } from "../../domains/schema/migrate/database-behind-migrations";
 import {
   deployStepDeps,
@@ -171,6 +174,7 @@ import {
 import {
   readRegistryRecord,
   storeRegistryRecord,
+  takeOwnedPermissions,
   takeRegistryBaseline,
   type RegistryRecord,
 } from "../../domains/schema/migrate/registry-record";
@@ -2838,7 +2842,12 @@ export async function migrateCore(
       await new SchemaEventsRepository(db, deps.dialect).listFileApplies()
     );
     const record: RegistryRecord = pointCarriesMetadata(standings, point)
-      ? { point }
+      ? // No rows to keep, and the owned permissions all the same: that
+        // point's snapshot may predate recording them.
+        {
+          point,
+          ownedPermissions: await takeOwnedPermissions(db, deps.dialect),
+        }
       : {
           point,
           baseline: await takeRegistryBaseline({
@@ -3276,20 +3285,54 @@ function firstRunSteps(
 }
 
 /**
- * Each app migration in run order, with whether the ledger records it applied
- * and what its snapshot says of the registry (`snapshotMetadataOf`).
- */
-/**
  * Refuses, reading only, where the database lacks a table or column the newest
- * applied app snapshot records (`MigrateCoreDeps.refuseDatabaseBehind`).
- * Nextly's own tables are left to the core reconcile, which brings them to
- * this release whatever a snapshot froze of them; the columns the app's
- * migrations added to one are the app's, and are checked.
+ * applied snapshot of the app's stream, or of a declared plugin's, records
+ * (`MigrateCoreDeps.refuseDatabaseBehind`). Every stream is read before the
+ * refusal, so one run names everything missing.
  */
 async function refuseDatabaseBehindLedger(
   deps: MigrateCoreDeps
 ): Promise<void> {
   if (deps.refuseDatabaseBehind !== true) return;
+  const refusal = databaseBehindError([
+    ...(await missingFromAppStream(deps)),
+    ...(await missingFromPluginStreams(deps)),
+  ]);
+  if (refusal !== undefined) throw refusal;
+}
+
+/**
+ * What `snapshots`, one stream's applied snapshots in run order, record that
+ * the database lacks. A core table the reconcile makes again bare is marked
+ * (`remade`), so the stream's columns on it are named even where the whole
+ * table is gone.
+ */
+async function missingFromStream(
+  deps: Pick<MigrateCoreDeps, "db" | "dialect">,
+  snapshots: readonly AppliedSnapshot[]
+): Promise<MissingFromDatabase[]> {
+  const newest = snapshots.at(-1);
+  if (newest === undefined || newest.snapshot.tables.length === 0) return [];
+  const remade = coreTableNames(deps.dialect);
+  const live = await liveColumnNames(
+    deps.db,
+    deps.dialect,
+    newest.snapshot.tables.map(table => table.name)
+  );
+  return missingFromDatabase(
+    snapshots.map(entry => ({ ...entry, remade })),
+    live
+  );
+}
+
+/**
+ * The app's stream. Nextly's own tables are left to the core reconcile, which
+ * brings them to this release whatever a snapshot froze of them; the columns
+ * the app's migrations added to one are the app's, and are checked.
+ */
+async function missingFromAppStream(
+  deps: MigrateCoreDeps
+): Promise<MissingFromDatabase[]> {
   // The applied app migrations in run order, as the files are discovered.
   const appliedInOrder = (
     await listMigrationFiles(
@@ -3303,7 +3346,7 @@ async function refuseDatabaseBehindLedger(
   )
     .filter(entry => entry.applied)
     .map(entry => entry.file.name);
-  if (appliedInOrder.length === 0) return;
+  if (appliedInOrder.length === 0) return [];
   const applied = new Set(appliedInOrder);
   const core = coreTableNames(deps.dialect);
   const snapshots = (
@@ -3312,9 +3355,6 @@ async function refuseDatabaseBehindLedger(
     )
   ).map(entry => ({
     ...entry,
-    // The core reconcile makes a missing core table again without the app's
-    // columns, so those are named even where the whole table is gone.
-    remade: core,
     snapshot: {
       ...entry.snapshot,
       // A core table the app contributed to stays: `appOwnedTables` has
@@ -3326,22 +3366,52 @@ async function refuseDatabaseBehindLedger(
       ),
     },
   }));
-  const newest = snapshots.at(-1);
-  if (newest === undefined || newest.snapshot.tables.length === 0) return;
   // An applied migration with no snapshot of its own (`migrate:create --blank`, a translations
   // file) ordered after the newest applied snapshot may have dropped or renamed what that snapshot
   // records, and no snapshot says what it left. The database's end state cannot be read from the
   // files then, so nothing is named rather than a table or column it removed on purpose.
-  if (appliedInOrder.at(-1) !== newest.migration) return;
-  const live = await liveColumnNames(
-    deps.db,
-    deps.dialect,
-    newest.snapshot.tables.map(table => table.name)
-  );
-  const refusal = databaseBehindError(missingFromDatabase(snapshots, live));
-  if (refusal !== undefined) throw refusal;
+  if (appliedInOrder.at(-1) !== snapshots.at(-1)?.migration) return [];
+  return missingFromStream(deps, snapshots);
 }
 
+/**
+ * Each declared plugin's stream: what its newest applied module records. A
+ * plugin's modules all carry their snapshot, so the newest applied one is the
+ * stream's end state. Reads the ledger only when a plugin ships modules.
+ */
+async function missingFromPluginStreams(
+  deps: MigrateCoreDeps
+): Promise<MissingFromDatabase[]> {
+  const sets = deps.pluginMigrationSets ?? [];
+  if (sets.length === 0) return [];
+  // A module rewritten since it ran is refused as a changed history before
+  // its snapshot is read: what it now says it made is not what ran.
+  await assertPluginHistoriesHold(deps);
+  const applied = await (
+    deps.appliedPluginModulesFn ?? (() => appliedPluginModules(deps))
+  )();
+  if (applied.size === 0) return [];
+  const missing: MissingFromDatabase[] = [];
+  for (const set of sets) {
+    missing.push(
+      ...(await missingFromStream(
+        deps,
+        appliedPluginSnapshots({
+          pluginName: set.pluginName,
+          migrations: set.migrations,
+          isApplied: key => applied.has(key),
+          dialect: deps.dialect,
+        })
+      ))
+    );
+  }
+  return missing;
+}
+
+/**
+ * Each app migration in run order, with whether the ledger records it applied
+ * and what its snapshot says of the registry (`snapshotMetadataOf`).
+ */
 async function appMigrationStandings(
   deps: MigrateCoreDeps
 ): Promise<AppMigrationStanding[]> {
