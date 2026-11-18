@@ -231,12 +231,15 @@ function configuredTableOf({ fromConfig, row }: EntitySources) {
  * the column types it recorded, which carry the storage its migration gave each overridden column
  * whatever the configuration declares since; a change to an override is then a change still
  * pending, as a field's is. Where a registry row does, the configuration's overrides: only a
- * development push writes such a row, and it applies the configuration as it stands.
+ * development push writes such a row, and it applies the configuration as it stands. Where nothing
+ * configures the entity any more, the overrides went with its declaration, so which storage was
+ * applied is unknown rather than the fields' own.
  */
 function withAppliedStorage(
   applied: AppliedDefinition | null,
   sources: EntitySources,
-  configured: readonly ColumnOverride[]
+  configured: readonly ColumnOverride[],
+  isConfigured: boolean
 ): AppliedDefinition | null {
   if (applied === null) return null;
   if (applied.source === "snapshot") {
@@ -245,6 +248,7 @@ function withAppliedStorage(
       ? applied
       : { ...applied, recordedTypes: recorded };
   }
+  if (!isConfigured) return { ...applied, storageUnknown: true };
   return withOverrides(applied, configured);
 }
 
@@ -284,7 +288,12 @@ function resolveEntity(
 
   // The app declares an override by the table it configures, which a rename has already moved.
   const declared = overrides?.byTable.get(configuredTable ?? table) ?? [];
-  const applied = withAppliedStorage(appliedSide, sources, declared);
+  const applied = withAppliedStorage(
+    appliedSide,
+    sources,
+    declared,
+    configuredSide !== null
+  );
   const configured = withOverrides(configuredSide, declared);
   const plugin = owningPlugin(sources);
   return {

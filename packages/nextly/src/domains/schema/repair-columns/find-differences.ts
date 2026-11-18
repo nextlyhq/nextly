@@ -725,6 +725,16 @@ function judgeAppliedColumn(
   const state = stateOf(found);
   const aspects = compareColumn(state, column.expected);
   if (aspects === null) return null;
+  // An override reaches only the entity's own table. Where no record says which were applied, a
+  // column there of another type may be as its override made it: judging it against the field's
+  // own storage would report, and convert, a column that is as applied.
+  if (
+    aspects.type &&
+    entity.applied?.storageUnknown === true &&
+    !column.location.translation
+  ) {
+    return null;
+  }
   return {
     kind: "differs",
     location: column.location,
@@ -769,15 +779,17 @@ function pairColumns(
   return [...byKey.values()];
 }
 
-/** The table the configured side moves a paired column from, where it names another. */
+/**
+ * The table the configured side moves a paired column from, where it names another. Names are
+ * compared as written, as the schema diff compares them: a name that differs only by case is
+ * another table to it, and its migration renames the table.
+ */
 function movedFrom(pair: ColumnPair): string | undefined {
   if (pair.applied === undefined || pair.configured === undefined) {
     return undefined;
   }
   const from = pair.applied.location.table;
-  return from.toLowerCase() === pair.configured.location.table.toLowerCase()
-    ? undefined
-    : from;
+  return from === pair.configured.location.table ? undefined : from;
 }
 
 /**

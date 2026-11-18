@@ -80,6 +80,13 @@ export interface EntityDefinition {
    * the configuration says now.
    */
   recordedTypes?: Readonly<Record<string, string>>;
+  /**
+   * No record says which storage the app's overrides gave this definition's columns when it was
+   * applied: only a registry row says what was applied, and the configuration that declared the
+   * overrides no longer declares the entity. A column of the entity's own table that holds another
+   * type than its field's own may then be an override as applied, so its type is not judged.
+   */
+  storageUnknown?: boolean;
 }
 
 /**

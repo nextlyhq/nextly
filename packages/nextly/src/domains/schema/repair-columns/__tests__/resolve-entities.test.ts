@@ -340,6 +340,49 @@ describe("resolveRepairEntities: the app's column overrides", () => {
   });
 });
 
+describe("resolveRepairEntities: the applied storage of a removed entity", () => {
+  it("is unknown where only a registry row says what was applied: the overrides went with the configuration", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [],
+        registry: [registry()],
+        snapshots: [],
+      })
+    );
+    expect(entity?.configured).toBeNull();
+    expect(entity?.applied?.storageUnknown).toBe(true);
+  });
+
+  it("is known from the snapshot's recorded types", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [],
+        registry: [registry()],
+        snapshots: [
+          snapshot({
+            table: "dc_posts",
+            columnTypes: { title: "varchar(20)" },
+          }),
+        ],
+      })
+    );
+    expect(entity?.configured).toBeNull();
+    expect(entity?.applied?.storageUnknown).toBeUndefined();
+    expect(entity?.applied?.recordedTypes).toEqual({ title: "varchar(20)" });
+  });
+
+  it("is the configuration's where the entity is still configured", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [configured()],
+        registry: [registry()],
+        snapshots: [],
+      })
+    );
+    expect(entity?.applied?.storageUnknown).toBeUndefined();
+  });
+});
+
 describe("resolveRepairEntities: which registry rows say what was applied", () => {
   // With no snapshot, only a row a sync or a migration finished stands for the database.
   it.each(["applied", "synced"])(

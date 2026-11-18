@@ -196,6 +196,8 @@ const cards = () =>
  */
 const MX_OLD = "dc_rc_mx_old";
 const MX_NEW = "dc_rc_mx_new";
+/** The applied table's name in another case: a distinct table name, as a quoted name is. */
+const MX_RECASED = "dc_rc_MX_old";
 const MX_FIELDS: FieldDefinition[] = [
   f({ name: "body", type: "textarea" }),
   f({ name: "score", type: "number" }),
@@ -446,6 +448,21 @@ const MATRIX: MatrixCell[] = [
     hasManifest: true,
     liveTable: true,
     expected: moves(true),
+  },
+  {
+    name: "renamed by case alone, applied snapshot, live table present: every column moves",
+    configured: [mxConfigured(MX_RECASED)],
+    registry: [mxRow({ tableName: MX_RECASED })],
+    snapshots: [mxSnapshot()],
+    hasManifest: true,
+    liveTable: true,
+    expected: MX_COLUMNS.map(c => [
+      "pending-migration",
+      col(MX_RECASED, c),
+      "change",
+      MX_OLD,
+      "live",
+    ]),
   },
   {
     name: "no manifest, a pending Builder row stands in as configured, live table present: adds",
@@ -1168,6 +1185,33 @@ describe.each(getConfiguredTestDialects())(
         hasManifest: cell.hasManifest,
       });
       expect((await find(entities)).map(matrixRow)).toEqual(expected);
+    });
+
+    it("does not judge a column's type on a removed entity whose applied storage no record keeps", async () => {
+      // `score` is held as text where its field's own storage is a number: an override of the
+      // app's would explain it, and with the entity gone from the configuration and no snapshot,
+      // nothing says whether one was applied.
+      await createBuilderTable(MX_OLD, MX_RETYPED);
+      const removed = resolveRepairEntities({
+        configured: [],
+        registry: [mxRow()],
+        snapshots: [],
+        hasManifest: true,
+      });
+      expect((await find(removed)).map(matrixRow)).toEqual(removals(true));
+
+      // The same column is judged where the applied storage is known, so the table does differ.
+      const known = removed.map(
+        ({ applied, ...entity }): RepairEntity => ({
+          ...entity,
+          applied:
+            applied === null ? null : { ...applied, storageUnknown: false },
+        })
+      );
+      expect((await find(known)).map(matrixRow)).toEqual([
+        ["differs", col(MX_OLD, "score"), "", "", ""],
+        ...removals(true),
+      ]);
     });
 
     it("reports a plugin's legacy column and names the plugin", async () => {
