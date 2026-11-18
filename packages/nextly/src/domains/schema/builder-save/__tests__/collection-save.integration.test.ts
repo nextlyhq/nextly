@@ -204,6 +204,31 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("previews a change after the first migration from that migration's snapshot", async () => {
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("body")]),
+        change: "create",
+      });
+
+      const preview = await previewCollectionSave(deps(), {
+        slug: "posts",
+        previous: posts([text("body")]),
+        entity: posts([text("body"), text("subtitle")]),
+        change: "update",
+      });
+
+      // The column added to the table that exists, not the table made again.
+      expect(preview.files).toHaveLength(1);
+      const { sql } = preview.files[0]!;
+      const up = sql.split(/^-- DOWN/m)[0]!;
+      expect(up, sql).toMatch(/ADD (COLUMN )?[`"]?subtitle/);
+      expect(up, sql).not.toMatch(/CREATE TABLE/);
+      // And nothing written where the app reads.
+      expect(migrationFiles()).toHaveLength(1);
+    });
+
     it("writes each later change as its own applied file, and renames what the person renamed", async () => {
       await writeCollectionSave(deps(), {
         slug: "posts",

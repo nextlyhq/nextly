@@ -10,6 +10,7 @@
 import type { RegionArea } from "@nextlyhq/blocks-engine";
 import { blockNameOf } from "@nextlyhq/builder";
 import {
+  AccordionAddQuestion,
   BlockContextMenu,
   BlockToolbar,
   Canvas,
@@ -462,6 +463,14 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                       view.userId
                     ).sources,
                   }}
+                />
+                {/* "+ Add a question" under a selected Accordion: it adds the
+                    next question, opens it and puts the cursor in its title.
+                    Hidden mid-drag, as the other controls are. */}
+                <AccordionAddQuestion
+                  editor={editor}
+                  hidden={dragging}
+                  onEditText={view.preview.onEditText}
                 />
               </>
             }

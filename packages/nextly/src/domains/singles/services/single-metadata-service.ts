@@ -447,6 +447,7 @@ export class SingleMetadataService {
         adapter: this.adapter,
         logger: this.logger,
         label: `create single "${input.slug}"`,
+        migrationsDir: this.builderSave?.migrationsDir,
         issuesDdl: true,
       },
       () => this.createSingleExcluded(input)
@@ -621,6 +622,7 @@ export class SingleMetadataService {
         adapter: this.adapter,
         logger: this.logger,
         label: `delete single "${slug}"`,
+        migrationsDir: this.builderSave?.migrationsDir,
         issuesDdl: true,
       },
       () => this.deleteSingleExcluded(slug, tableName)
@@ -811,6 +813,7 @@ export class SingleMetadataService {
         adapter: this.adapter,
         logger: this.logger,
         label: `update single schema "${input.slug}"`,
+        migrationsDir: this.builderSave?.migrationsDir,
         // A save that changes only labels, admin options, versioning, revalidation or webhooks
         // writes a registry row and nothing else. Claiming DDL rights for it would make a
         // deployment whose role has DML but not DDL start refusing metadata edits that worked

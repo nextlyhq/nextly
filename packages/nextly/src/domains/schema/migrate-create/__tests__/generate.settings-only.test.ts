@@ -34,7 +34,7 @@ import { resolveSingleTableName } from "../../../singles/services/resolve-single
 import { parseSqlSections } from "../../migrate/sql-sections";
 import { toMinimalEntities } from "../config-entities";
 import { generateMigration } from "../generate";
-import { writeSnapshot } from "../snapshot-io";
+import { recordedSnapshot } from "./helpers/recorded-snapshot";
 
 type Declared = {
   collections?: unknown[];
@@ -396,7 +396,7 @@ describe("every snapshot records every entity's full settings", () => {
       await generate({ collections: [posts()] }, "create")
     );
     await rm(join(migrationsDir, "meta"), { recursive: true, force: true });
-    await writeSnapshot(
+    await recordedSnapshot(
       join(migrationsDir, "meta"),
       "20260101_000000_000_create",
       first.snapshot.snapshot,
