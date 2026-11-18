@@ -2022,11 +2022,26 @@ exports[`each code, as a command ends with it > UPGRADE_CANCELLED 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/upgrade-cancelled  (UPGRADE_CANCELLED)"
 `;
 
+exports[`each code, as a command ends with it > UPGRADE_CANNOT_START 1`] = `
+"✗ No \`package.json\` could be read in /srv/app.
+  Why:  \`nextly upgrade\` moves the Nextly packages a project's \`package.json\` declares, with the project's own package manager. Nothing was changed.
+  Next: Run \`nextly upgrade\` in the project's folder, or name it with \`--cwd\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-cannot-start  (UPGRADE_CANNOT_START)"
+`;
+
 exports[`each code, as a command ends with it > UPGRADE_EVENTS_TABLE_TAKEN 1`] = `
 "✗ A table named "nextly_schema_events" already exists with an unexpected shape.
   Why:  \`nextly upgrade\` moves the migration records into "nextly_schema_events", and the table there does not have the columns it writes. Nothing was changed.
   Next: Rename it, or re-run with \`--target-table-name <name>\`.
   Docs: https://nextlyhq.com/docs/cli/errors/upgrade-events-table-taken  (UPGRADE_EVENTS_TABLE_TAKEN)"
+`;
+
+exports[`each code, as a command ends with it > UPGRADE_INSTALL_FAILED 1`] = `
+"✗ \`pnpm install\` failed while moving the Nextly packages to 0.0.2-alpha.79.
+  Why:  \`package.json\` and the lockfile were put back as they were, the packages were installed again from them, and every Nextly package is at the version it had. The package manager said:
+          ERR_PNPM_FETCH_500 GET https://registry.npmjs.org/@nextlyhq/admin: Internal Server Error
+  Next: Fix what the package manager reported, then run \`nextly upgrade\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-install-failed  (UPGRADE_INSTALL_FAILED)"
 `;
 
 exports[`each code, as a command ends with it > UPGRADE_LEDGER_UNREADABLE 1`] = `
@@ -2036,10 +2051,35 @@ exports[`each code, as a command ends with it > UPGRADE_LEDGER_UNREADABLE 1`] = 
   Docs: https://nextlyhq.com/docs/cli/errors/upgrade-ledger-unreadable  (UPGRADE_LEDGER_UNREADABLE)"
 `;
 
+exports[`each code, as a command ends with it > UPGRADE_NOT_RESTORED 1`] = `
+"✗ \`pnpm install\` failed while moving the Nextly packages to 0.0.2-alpha.79, and the installed packages could not be put back.
+  Why:  \`package.json\` and the lockfile were put back as they were, but installing from them again left these at another version than they had:
+          nextly: 0.0.2-alpha.78 → 0.0.2-alpha.79
+        The package manager said:
+          ERR_PNPM_META_FETCH_FAIL GET https://registry.npmjs.org/nextly: getaddrinfo ENOTFOUND
+  Next: Run \`pnpm install\` once the cause is fixed: it installs what the restored files record. Until then the installed packages do not match them.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-not-restored  (UPGRADE_NOT_RESTORED)"
+`;
+
+exports[`each code, as a command ends with it > UPGRADE_PACKAGE_CANNOT_MOVE 1`] = `
+"✗ Not every Nextly package of this project can move to 0.0.2-alpha.79.
+  Why:  Nextly's packages version together, so \`nextly upgrade\` moves all of them or none. Nothing was changed. These cannot move:
+          @nextlyhq/plugin-seo is declared as \`workspace:*\`, which is not a version of the registry.
+  Next: Name a release every package has (\`nextly upgrade <version>\`), or declare the package by a version in \`package.json\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-package-cannot-move  (UPGRADE_PACKAGE_CANNOT_MOVE)"
+`;
+
+exports[`each code, as a command ends with it > UPGRADE_RELEASE_UNKNOWN 1`] = `
+"✗ \`0.0.2-beta.9\` is not a published release of Nextly.
+  Why:  With no version given, \`nextly upgrade\` follows the channel of the installed release: the tag its prerelease identifier names, or \`latest\`. Nothing was changed.
+  Next: Run \`nextly upgrade 0.0.2-alpha.79\`, the release \`nextly upgrade\` moves to with no version given.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-release-unknown  (UPGRADE_RELEASE_UNKNOWN)"
+`;
+
 exports[`each code, as a command ends with it > UPGRADE_WORK_MOVED 1`] = `
 "✗ \`nextly upgrade\` no longer changes the database, and changed nothing.
-  Why:  \`nextly migrate\` now hashes passwords stored before this release, removes passwords kept in version history and converts roles holding a retired manage permission, once its migrations have applied. \`nextly i18n:convert-zoned-dates\` converts translated date columns kept with a time zone.
-  Next: Run \`nextly migrate\` (\`nextly migrate --backup-confirmed\` where no terminal is attached). Once the release serves every instance, run \`nextly i18n:convert-zoned-dates\` if a start or \`nextly migrate\` named such a column.
+  Why:  \`nextly migrate\` now moves the migration records of an earlier release, brings Nextly's own tables up to date, hashes passwords stored before this release, removes passwords kept in version history and converts roles holding a retired manage permission. \`nextly i18n:convert-zoned-dates\` converts translated date columns kept with a time zone. \`nextly upgrade\` moves the project's Nextly packages to a release, and takes none of the flags that work had.
+  Next: Run \`nextly migrate\` (\`nextly migrate --backup-confirmed\` where no terminal is attached). Once the release serves every instance, run \`nextly i18n:convert-zoned-dates\` if a start or \`nextly migrate\` named such a column. To move the packages, run \`nextly upgrade\` without the flag.
   Docs: https://nextlyhq.com/docs/cli/errors/upgrade-work-moved  (UPGRADE_WORK_MOVED)"
 `;
 

@@ -1,0 +1,28 @@
+---
+title: UPGRADE_NOT_RESTORED
+description: "The package manager failed while `nextly upgrade` was moving the packages, and the installed packages could not be put back."
+---
+
+## Cause
+
+The package manager failed while `nextly upgrade` was moving the packages, and the installed packages could not be put back.
+
+The package manager's install failed while `nextly upgrade` was moving the packages. The command put `package.json` and the lockfile back as they were and installed from them again, but that second install did not bring every Nextly package back to the version it had, usually because the registry is still unreachable. The two files are restored; the installed packages are not, and the message names each one with the version it had and the version it has. Until they match, Nextly's packages in `node_modules` are of mixed releases.
+
+## Fix
+
+- Fix the cause the package manager reported.
+- Run the project's package manager's install (`npm install`, `pnpm install`, `yarn install`, `bun install`): it installs what the restored files record.
+- Then run `nextly upgrade` again.
+
+## Example
+
+```text
+✗ `pnpm install` failed while moving the Nextly packages to 0.0.2-alpha.79, and the installed packages could not be put back.
+  Why:  `package.json` and the lockfile were put back as they were, but installing from them again left these at another version than they had:
+          nextly: 0.0.2-alpha.78 → 0.0.2-alpha.79
+        The package manager said:
+          ERR_PNPM_META_FETCH_FAIL GET https://registry.npmjs.org/nextly: getaddrinfo ENOTFOUND
+  Next: Run `pnpm install` once the cause is fixed: it installs what the restored files record. Until then the installed packages do not match them.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-not-restored  (UPGRADE_NOT_RESTORED)
+```

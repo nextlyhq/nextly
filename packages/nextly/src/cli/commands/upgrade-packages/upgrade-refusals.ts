@@ -60,15 +60,19 @@ export function packagesCannotMove(
   reasons: readonly string[]
 ): CliError {
   return new CliError("UPGRADE_PACKAGE_CANNOT_MOVE", {
-    what: `Not every Nextly package of this project can move to ${version}:\n${reasons.map(reason => `  ${reason}`).join("\n")}`,
-    why: `Nextly's packages version together, so \`nextly upgrade\` moves all of them or none. ${UNCHANGED}`,
+    what: `Not every Nextly package of this project can move to ${version}.`,
+    why: `Nextly's packages version together, so \`nextly upgrade\` moves all of them or none. ${UNCHANGED} These cannot move:\n${indented(reasons)}`,
     next: "Name a release every package has (`nextly upgrade <version>`), or declare the package by a version in `package.json`.",
   });
 }
 
+/** Lines set in from the sentence they follow. */
+const indented = (lines: readonly string[]) =>
+  lines.map(line => `  ${line}`).join("\n");
+
 /** The last lines a package manager printed, for a failure's report. */
 const lastLines = (output: string) =>
-  output.trim().split(/\r?\n/).slice(-15).join("\n");
+  indented(output.trim().split(/\r?\n/).slice(-15));
 
 /** The install failed, and the project is as it was before it. */
 export function installFailed(args: {
@@ -77,8 +81,8 @@ export function installFailed(args: {
   output: string;
 }): CliError {
   return new CliError("UPGRADE_INSTALL_FAILED", {
-    what: `\`${args.manager} install\` failed while moving the Nextly packages to ${args.version}:\n${lastLines(args.output)}`,
-    why: "`package.json` and the lockfile were put back as they were, the packages were installed again from them, and every Nextly package is at the version it had.",
+    what: `\`${args.manager} install\` failed while moving the Nextly packages to ${args.version}.`,
+    why: `\`package.json\` and the lockfile were put back as they were, the packages were installed again from them, and every Nextly package is at the version it had. The package manager said:\n${lastLines(args.output)}`,
     next: "Fix what the package manager reported, then run `nextly upgrade` again.",
   });
 }
@@ -92,8 +96,8 @@ export function notRestored(args: {
   differing: readonly string[];
 }): CliError {
   return new CliError("UPGRADE_NOT_RESTORED", {
-    what: `\`${args.manager} install\` failed while moving the Nextly packages to ${args.version}, and the installed packages could not be put back:\n${args.differing.map(line => `  ${line}`).join("\n")}`,
-    why: `\`package.json\` and the lockfile were put back as they were. Installing from them again did not bring every Nextly package back to the version it had:\n${lastLines(args.output)}`,
+    what: `\`${args.manager} install\` failed while moving the Nextly packages to ${args.version}, and the installed packages could not be put back.`,
+    why: `\`package.json\` and the lockfile were put back as they were, but installing from them again left these at another version than they had:\n${indented(args.differing)}\nThe package manager said:\n${lastLines(args.output)}`,
     next: `Run \`${args.manager} install\` once the cause is fixed: it installs what the restored files record. Until then the installed packages do not match them.`,
   });
 }
