@@ -920,6 +920,87 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("creating as published in a batch or on a caller's transaction", () => {
+      /** Every Page stored, whatever its status. */
+      async function storedPages(): Promise<Doc[]> {
+        const listed = await app().nextly.find({
+          collection: PAGES as never,
+          status: "all",
+        } as never);
+        return (listed as { items: Doc[] }).items;
+      }
+
+      /** A create on a transaction the caller holds, as a plugin makes one; its answer or throw. */
+      async function createdOnCallersTransaction(data: Doc): Promise<unknown> {
+        const entries = handlerOf(app()).getEntryService() as unknown as {
+          createEntryInTransaction(
+            tx: unknown,
+            params: { collectionName: string; overrideAccess: boolean },
+            body: Doc
+          ): Promise<unknown>;
+        };
+        return app()
+          .adapter.transaction(tx =>
+            entries.createEntryInTransaction(
+              tx,
+              { collectionName: PAGES, overrideAccess: true },
+              data
+            )
+          )
+          .then(
+            answer => answer,
+            (reason: unknown) => reason
+          );
+      }
+
+      it("is refused in a plugin's batch create, trusted, where nothing was approved", async () => {
+        await boot(dialect);
+
+        const result = await pluginService().createMany(PAGES, [
+          { title: "Straight out", status: "published" },
+        ]);
+
+        expect(result.failed, JSON.stringify(result)).toBe(1);
+        // A batch names each refused row by its message: the gate's, for the stage holding it.
+        expect(JSON.stringify(result)).toContain("does not allow publishing");
+        expect(await storedPages()).toEqual([]);
+      });
+
+      it("is refused on a caller's transaction, trusted, where nothing was approved", async () => {
+        await boot(dialect);
+
+        const answer = await createdOnCallersTransaction({
+          title: "Straight out",
+          status: "published",
+        });
+
+        expect(JSON.stringify(answer)).toContain("NOT_APPROVED");
+        expect(await storedPages()).toEqual([]);
+      });
+
+      it("creates as published for trusted code that names a reason, which is the control", async () => {
+        await boot(dialect);
+        const reason = { [WITHOUT_REVIEW_KEY]: { reason: "Nightly import" } };
+
+        const batch = await pluginService().createMany(PAGES, [
+          { title: "In a batch", status: "published", ...reason },
+        ]);
+        const single = await createdOnCallersTransaction({
+          title: "On a transaction",
+          status: "published",
+          ...reason,
+        });
+
+        expect(batch.successful, JSON.stringify(batch)).toBe(1);
+        expect(JSON.stringify(single)).not.toContain("NOT_APPROVED");
+        const live = (await storedPages())
+          .filter(page => page.status === "published")
+          .map(page => page.title)
+          .sort();
+        expect(live).toEqual(["In a batch", "On a transaction"]);
+      });
+    });
+
     describe("creating as published", () => {
       it("is refused through REST, where nothing could have been approved", async () => {
         await boot(dialect);
