@@ -267,6 +267,9 @@ export {
   builderColumnIsUnique,
   siblingNameClash,
   type SiblingClashKind,
+  // The column a field's name becomes (@experimental): the Builder matches a rename it made to the
+  // columns the save's preview pairs by it, rather than by a copy of the spelling.
+  toSnakeCase as fieldColumnName,
 } from "./domains/schema/field-rules";
 // The mount travels with the path builder, so a client that resolves a route
 // names the same union the server declared it with.

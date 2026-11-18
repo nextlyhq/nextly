@@ -254,10 +254,15 @@ newer definition than this build registers is left exactly as found.
 
 - Text is escaped; image/link/video URLs are scheme-validated (rejects `javascript:` /
   `vbscript:` / `data:`, including control-char-obfuscated variants).
-- Author-written CSS never reaches a page. The document format still has a
-  `customCss` string, on the document's settings and on each block, and a stored
-  value is kept, but nothing renders it, sanitizes it or scopes it: the style
-  compiler never reads the key, and no editor control writes it.
+- Custom CSS (a page's `settings.customCss` and a block's `customCss`)
+  reaches a page only through one checker, which the admin and the server share: it
+  refuses `@import`, any `url(…)` that isn't a path on the site, anything that would
+  end the style element and anything that can run script, naming the line. A block's
+  CSS must start every rule from `selector`, which is scoped to the block when the
+  page is compiled. A route draws custom CSS only when it passes
+  `customCss: pageBuilderCustomCss()`; without it none is drawn. A stored value the
+  checker refuses is kept and never drawn. See
+  [Custom CSS](https://nextlyhq.com/docs/page-builder/custom-css).
 - Site code (**Settings → Site → Code**) is the one place code reaches every
   published page: a head and an end-of-body slot for analytics, tag managers and
   verification tags. Saving it needs the site settings permission and a signed-in
