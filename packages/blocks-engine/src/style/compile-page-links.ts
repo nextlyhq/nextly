@@ -43,7 +43,7 @@ export function linksFollowContainers(siteText?: SiteTextMap): boolean {
 }
 
 /** Whether a node holds blocks of its own: only a container declares slots. */
-function holdsBlocks(node: BlockNode): boolean {
+export function holdsBlocks(node: BlockNode): boolean {
   return isPlainRecord(node.slots);
 }
 
@@ -113,45 +113,46 @@ const NO_CONTAINERS: ContainerReading = {
   wearersOf: new Map(),
 };
 
+/** One block as the page compile reads it for its class-reading tiers. */
+export interface NodeReading {
+  readonly id: string;
+  /** The class the compiler styles it by. */
+  readonly className: string;
+  readonly type: string;
+  /** The class references it lists, as far as the compiler reads them. */
+  readonly classes: readonly unknown[];
+  /** Whether it holds blocks of its own, from {@link holdsBlocks}. */
+  readonly holdsBlocks: boolean;
+}
+
 /**
  * The document's containers: their block types and ids, and which of them
  * list each class. Empty when the site's Links row sets a colour, so no tier
  * writes a link-colour rule.
  *
- * @param nodes - each node with the class the compiler styles it by
+ * @param readings - the document's blocks, as the class-reading tiers read them
  * @param follow - whether links follow their containers, from {@link linksFollowContainers}
- * @param classesRead - how many of a node's classes the compiler reads
  */
 export function readContainers(
-  nodes: readonly { node: BlockNode; className: string | undefined }[],
-  follow: boolean,
-  classesRead: number
+  readings: readonly NodeReading[],
+  follow: boolean
 ): ContainerReading {
   if (!follow) return NO_CONTAINERS;
   const types = new Set<string>();
   const ids = new Set<string>();
   const wearersOf = new Map<string, string[]>();
-  for (const { node, className } of nodes) {
-    if (!holdsBlocks(node) || typeof node.type !== "string") continue;
-    types.add(node.type);
-    if (typeof node.id === "string") ids.add(node.id);
-    if (className === undefined) continue;
-    for (const id of classIdsOf(node, classesRead)) {
+  for (const reading of readings) {
+    if (!reading.holdsBlocks) continue;
+    types.add(reading.type);
+    ids.add(reading.id);
+    for (const id of reading.classes) {
+      if (typeof id !== "string") continue;
       const wearers = wearersOf.get(id) ?? [];
-      wearers.push(`.${className}`);
+      wearers.push(`.${reading.className}`);
       wearersOf.set(id, wearers);
     }
   }
   return { types, ids, wearersOf };
-}
-
-/** The class ids a node lists, as far as the compiler reads them. */
-function classIdsOf(node: BlockNode, classesRead: number): string[] {
-  const listed: unknown = node.classes;
-  if (!Array.isArray(listed)) return [];
-  return listed
-    .slice(0, classesRead)
-    .filter((id): id is string => typeof id === "string");
 }
 
 /**

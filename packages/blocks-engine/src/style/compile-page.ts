@@ -58,7 +58,9 @@ import {
 import {
   classLinksNarrowing,
   type ContainerReading,
+  holdsBlocks,
   linksFollowContainers,
+  type NodeReading,
   nodeLinksNarrowing,
   readContainers,
   typeLinksNarrowing,
@@ -227,13 +229,10 @@ export function compilePageCss(
 
   // The containers whose links take their text colour, read once: none while
   // the site's Links row sets a colour.
+  const readings = nodeReadings(nodes, classes, duplicateIds);
   const containers = readContainers(
-    nodes.map(({ node }) => ({
-      node,
-      className: duplicateIds.has(node.id) ? undefined : classes.get(node.id),
-    })),
-    linksFollowContainers(ctx.siteText),
-    MAX_CLASSES_PER_NODE
+    readings,
+    linksFollowContainers(ctx.siteText)
   );
 
   const rules: CssRule[] = [];
@@ -686,7 +685,7 @@ export function compilePageCss(
       trace,
       mayFetchUrl,
       routing,
-      wearers: starredWearers(nodes, classes, duplicateIds),
+      wearers: readings,
       containers,
       flowGaps,
       defaultsAnchor,
@@ -1068,7 +1067,7 @@ interface StarredLookCompile {
   readonly mayFetchUrl: StyleCompileContext["mayFetchUrl"];
   readonly routing: ReturnType<typeof partRouting>;
   /** Each block's own class, type and the classes it lists, in document order. */
-  readonly wearers: readonly StarredWearer[];
+  readonly wearers: readonly NodeReading[];
   /** The document's containers, for the links inside the ones a ★ look colours. */
   readonly containers: ContainerReading;
   /** The flow margins each container type in the document writes, by type. */
@@ -1077,37 +1076,34 @@ interface StarredLookCompile {
   readonly stateSelectors: Parameters<typeof layoutModeRules>[6];
 }
 
-/** One block the ★ tier may reach: its own class, its type and what it lists. */
-interface StarredWearer {
-  readonly className: string;
-  readonly type: string;
-  readonly classes: readonly unknown[];
-}
-
 /**
- * The document's blocks as the ★ tier reads them: each with the class the
- * compiler gave it, and the class references the engine reads per node. A
- * block sharing its id with another is left out, as its own rules are.
+ * The document's blocks as the class-reading tiers read them: each with the
+ * class the compiler gave it, the class references the engine reads per node,
+ * and whether it holds blocks. A block sharing its id with another is left
+ * out, as its own rules are. The ★ tier and the containers' link rules read
+ * this one list.
  */
-function starredWearers(
+function nodeReadings(
   nodes: ReturnType<typeof documentNodes>,
   classes: ReadonlyMap<string, string>,
   duplicateIds: ReadonlySet<string>
-): StarredWearer[] {
-  const wearers: StarredWearer[] = [];
+): NodeReading[] {
+  const readings: NodeReading[] = [];
   for (const { node } of nodes) {
     const className = classes.get(node.id);
     if (className === undefined || duplicateIds.has(node.id)) continue;
     if (typeof node.type !== "string") continue;
-    wearers.push({
+    readings.push({
+      id: node.id,
       className,
       type: node.type,
       classes: Array.isArray(node.classes)
         ? node.classes.slice(0, MAX_CLASSES_PER_NODE)
         : [],
+      holdsBlocks: holdsBlocks(node),
     });
   }
-  return wearers;
+  return readings;
 }
 
 /**
