@@ -196,30 +196,75 @@ function storedForm(
 /**
  * The review of a Single's dialog save as the save will apply it: a field its row is filled for
  * with the field's stated default (`dialogRowAnswers`) asks nothing, so the dialog does not hold
- * Save for an answer the default already gives. The review's verdict is `interactive` only while a
- * field is still asked about.
+ * Save for an answer the default already gives. The review names fields by their column (snake
+ * case) where the save names them by field name, so both are compared as columns. Once nothing is
+ * asked, the verdict and the destructive flag are rolled up again from the changes that remain, most
+ * severe first, as the translator rolls them: an added field the row is filled for is safe.
  */
 export function reviewWithRowFillsSettled<P extends Record<string, unknown>>(
   preview: P,
   filled: ReadonlySet<string>
 ): P {
+  const columns = new Set([...filled].map(toSnakeCase));
+  const isFilled = (name: unknown): boolean =>
+    typeof name === "string" && columns.has(toSnakeCase(name));
   const asked = Array.isArray(preview.interactiveFields)
     ? (preview.interactiveFields as readonly { name?: unknown }[])
     : [];
-  const interactiveFields = asked.filter(
-    field => typeof field.name !== "string" || !filled.has(field.name)
-  );
+  const interactiveFields = asked.filter(field => !isFilled(field.name));
   if (interactiveFields.length === asked.length) return preview;
-  const settled =
-    preview.classification === "interactive" && interactiveFields.length === 0;
+  const changes = settledChanges(preview.changes, isFilled);
+  if (
+    preview.classification !== "interactive" ||
+    interactiveFields.length > 0
+  ) {
+    return { ...preview, interactiveFields, ...(changes ? { changes } : {}) };
+  }
+  const classification = rolledUpVerdict(changes);
   return {
     ...preview,
     interactiveFields,
-    ...(settled
-      ? {
-          classification:
-            preview.hasDestructiveChanges === true ? "destructive" : "safe",
-        }
-      : {}),
+    ...(changes ? { changes } : {}),
+    classification,
+    hasDestructiveChanges: classification !== "safe",
   };
+}
+
+/** The review's field changes, by group (`added`, `removed`, `changed`, `unchanged`). */
+type ReviewChanges = Record<string, unknown>;
+/** One field change of the review, as far as its settling reads it. */
+type ReviewChange = { name?: unknown; classification?: unknown };
+/** The groups of the review's changes that carry a classification; `unchanged` carries none. */
+const CLASSIFIED_GROUPS = ["added", "removed", "changed"] as const;
+
+/** The review's changes with each added field the row is filled for no longer asking. */
+function settledChanges(
+  changes: unknown,
+  isFilled: (name: unknown) => boolean
+): ReviewChanges | undefined {
+  if (typeof changes !== "object" || changes === null) return undefined;
+  const groups = changes as ReviewChanges;
+  if (!Array.isArray(groups.added)) return groups;
+  return {
+    ...groups,
+    added: (groups.added as readonly ReviewChange[]).map(change =>
+      change.classification === "interactive" && isFilled(change.name)
+        ? { ...change, classification: "safe" }
+        : change
+    ),
+  };
+}
+
+/** The most severe classification among the changes: interactive, then destructive, then safe. */
+function rolledUpVerdict(
+  changes: ReviewChanges | undefined
+): "safe" | "destructive" | "interactive" {
+  const verdicts = CLASSIFIED_GROUPS.flatMap(group => {
+    const list = changes?.[group];
+    return Array.isArray(list)
+      ? (list as readonly ReviewChange[]).map(change => change.classification)
+      : [];
+  });
+  if (verdicts.includes("interactive")) return "interactive";
+  return verdicts.includes("destructive") ? "destructive" : "safe";
 }
