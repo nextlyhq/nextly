@@ -25,6 +25,7 @@ import {
 } from "./component-fields-panel";
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
+import { embedSectionBodies } from "./embed-sections";
 import { formSectionBodies } from "./form-sections";
 import { galleryContentSections } from "./gallery-fields";
 import {
@@ -307,6 +308,26 @@ function ContentSurface({
             />
           ),
   });
+  // The Embed's section: its Link, which writes the provider's shape with
+  // the link, and the settings that apply to what the link is.
+  const embedBodies = embedSectionBodies({
+    inspection,
+    stored: findNode(editor.document.nodes, inspection.nodeId)?.props ?? {},
+    services,
+    writable: name =>
+      propIsWritable(
+        editor.document,
+        inspection.nodeId,
+        name,
+        lockViewOf(editor)
+      ),
+    onCommit: (name, value) => {
+      onCommit(name, value);
+    },
+    onApply: op => editor.apply(op) !== null,
+    document: editor.document,
+    rowsOf: fieldsFor,
+  });
   // Each section the block places in Content, folding on its own, after
   // the ones the builder draws for a core block (Columns' layout, a
   // Gallery's Pictures and Layout); a block
@@ -317,7 +338,10 @@ function ContentSurface({
       key: section.label,
       label: section.label,
       holdsValue: rowsHoldValue(section.rows),
-      body: formBodies?.get(section.label) ?? fieldsFor(section.rows),
+      body:
+        formBodies?.get(section.label) ??
+        embedBodies?.get(section.label) ??
+        fieldsFor(section.rows),
     }))
   );
   const generated =

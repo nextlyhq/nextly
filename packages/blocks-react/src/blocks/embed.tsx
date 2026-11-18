@@ -472,7 +472,6 @@ export const embed: BlockDefinition<EmbedProps, PageContext> = defineBlock({
       role: "content",
       type: "media",
       accept: "image/*",
-      section: "Poster",
     },
     // A permission the frame is given: an HTML-level detail.
     allowFullscreen: {

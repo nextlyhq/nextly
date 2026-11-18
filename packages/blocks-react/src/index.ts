@@ -173,6 +173,28 @@ export { withTypographyDefaults } from "./blocks/typography-defaults";
  */
 export { fetchableUrl } from "./blocks/props";
 /**
+ * Which provider an Embed's link is from, by the block's own table: exported
+ * so the editor, which says what it found as a link is pasted and sizes the
+ * block from it, and the thumbnail copy, which fetches only from the
+ * provider's fixed host, answer from the table the block renders by.
+ *
+ * @experimental
+ */
+export {
+  detectEmbed,
+  type EmbedMatch,
+  type EmbedProviderId,
+  type EmbedShape,
+  type ThumbnailSource,
+} from "./blocks/embed-providers";
+/**
+ * The attribute on the box an Embed with no link draws on the editor's
+ * canvas, which the editor draws its link field over.
+ *
+ * @experimental
+ */
+export { EMBED_EMPTY_ATTRIBUTE } from "./blocks/embed";
+/**
  * What a click on a picture does, by the Image's one reading of its props:
  * exported so the editor's panel shows the choice the render follows.
  *
