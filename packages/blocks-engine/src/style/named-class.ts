@@ -149,34 +149,52 @@ export const TEXT_STYLE_PROPERTIES: ReadonlySet<string> = new Set([
 
 /**
  * The properties in a style envelope that a text style may not hold, each
- * named once, in the order first met. Read across every state and every
- * breakpoint, since a colour on hover or a margin on mobile is as far outside
- * typography as one at rest on the widest screen. Empty for typography only.
+ * named once, in the order first met, and at most `limit` of them. Read
+ * across every state and every breakpoint, since a colour on hover or a
+ * margin on mobile is as far outside typography as one at rest on the widest
+ * screen. Empty for typography only.
+ *
+ * Bounded, because stored data reaches here on every compile: the walk is
+ * lazy (`for...in` with an own-key guard, as the validator walks its own
+ * maps), so asking whether there is ANY such property stops at the first,
+ * however many keys a stored envelope carries.
  *
  * @experimental
  */
-export function nonTypographyProperties(styles: unknown): string[] {
-  const found: string[] = [];
+export function nonTypographyProperties(
+  styles: unknown,
+  limit: number = Number.POSITIVE_INFINITY
+): string[] {
+  const found = new Set<string>();
   for (const values of styleMapsOf(styles)) {
-    for (const property of Object.keys(values)) {
-      if (!TEXT_STYLE_PROPERTIES.has(property) && !found.includes(property)) {
-        found.push(property);
-      }
+    for (const property in values) {
+      if (!Object.hasOwn(values, property)) continue;
+      if (TEXT_STYLE_PROPERTIES.has(property)) continue;
+      found.add(property);
+      if (found.size >= limit) return [...found];
     }
   }
-  return found;
+  return [...found];
 }
 
 /**
  * Each map of values in a style envelope, state by state and breakpoint by
  * breakpoint, skipping any level that is not a record: stored data is read
- * here whether or not anything validated it.
+ * here whether or not anything validated it. A generator, so a caller that
+ * has seen enough stops the walk.
  */
-function styleMapsOf(styles: unknown): Record<string, unknown>[] {
-  if (!isPlainRecord(styles)) return [];
-  return Object.values(styles)
-    .filter(isPlainRecord)
-    .flatMap(byBreakpoint => Object.values(byBreakpoint).filter(isPlainRecord));
+function* styleMapsOf(styles: unknown): Generator<Record<string, unknown>> {
+  if (!isPlainRecord(styles)) return;
+  for (const state in styles) {
+    if (!Object.hasOwn(styles, state)) continue;
+    const byBreakpoint = styles[state];
+    if (!isPlainRecord(byBreakpoint)) continue;
+    for (const breakpoint in byBreakpoint) {
+      if (!Object.hasOwn(byBreakpoint, breakpoint)) continue;
+      const values = byBreakpoint[breakpoint];
+      if (isPlainRecord(values)) yield values;
+    }
+  }
 }
 
 /**
@@ -315,7 +333,7 @@ export function isUsableNamedClass(value: unknown): value is NamedClass {
     (candidate.role === undefined ||
       (candidate.role === "text" &&
         candidate.blockType === undefined &&
-        nonTypographyProperties(candidate.styles).length === 0))
+        nonTypographyProperties(candidate.styles, 1).length === 0))
   );
 }
 

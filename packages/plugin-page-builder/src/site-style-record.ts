@@ -1053,9 +1053,11 @@ function roleIssue(entry: unknown, index: number): string | undefined {
   if (entry.blockType !== undefined) {
     return `${at} is a text style, which no block type owns: any block may wear one.`;
   }
-  const others = nonTypographyProperties(entry.styles);
+  // Five named at most, so a stored entry with thousands of bad keys costs
+  // five reads past the first, not one per key.
+  const others = nonTypographyProperties(entry.styles, 5);
   if (others.length === 0) return undefined;
-  const named = others.slice(0, 5).map(property => `"${property}"`);
+  const named = others.map(property => `"${property}"`);
   const list =
     named.length === 1
       ? named[0]

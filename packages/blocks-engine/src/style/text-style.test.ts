@@ -192,3 +192,40 @@ describe("a text style built on a variable", () => {
     expect(bodyOn("14px")).toMatch(/--site-font-size-small:\s*14px/);
   });
 });
+
+describe("the typography check is bounded", () => {
+  /** A map of `count` distinct properties that counts how many it is asked about. */
+  const counted = (count: number) => {
+    const values: Record<string, string> = {};
+    for (let index = 0; index < count; index += 1) {
+      values[`notTypography${index}`] = "1px";
+    }
+    let reads = 0;
+    const proxy = new Proxy(values, {
+      getOwnPropertyDescriptor(target, key) {
+        reads += 1;
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+    });
+    return { proxy, reads: () => reads };
+  };
+
+  it("stops at the first property beyond typography when asked whether there is one", () => {
+    const map = counted(10_000);
+    const found = nonTypographyProperties({ base: { base: map.proxy } }, 1);
+    expect(found).toEqual(["notTypography0"]);
+    // A walk that read every key first would ask about all 10,000.
+    expect(map.reads()).toBeLessThan(10);
+  });
+
+  it("decides a text style unusable without reading every bad property", () => {
+    const map = counted(10_000);
+    expect(
+      isUsableNamedClass({
+        ...eyebrow,
+        styles: { base: { base: map.proxy } } as unknown as NodeStyles,
+      })
+    ).toBe(false);
+    expect(map.reads()).toBeLessThan(10);
+  });
+});
