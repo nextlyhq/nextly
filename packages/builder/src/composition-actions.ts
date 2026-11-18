@@ -345,6 +345,9 @@ const bindingSchema: z.ZodType<Binding> = z.union([
         ]
       )
       .optional(),
+    // The enclosing list an item binding reads; the write judges that it
+    // is one, around the block.
+    list: id.optional(),
   }),
   z.strictObject({
     ...bindingShape,
