@@ -200,6 +200,22 @@ describe("before a publish", () => {
     expect(routes).toHaveBeenCalledTimes(1);
   });
 
+  it("says a live component's new setting isn't published, and what publishing it takes", async () => {
+    server({ dependencies: [{ ...card, newSettings: true }], missing: 0 });
+    render(<Harness />);
+    const running = publish();
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog.textContent).toContain(
+      "This page uses 1 component with a new setting that isn't published"
+    );
+    expect(dialog.textContent).toContain(
+      "Visitors see a component without its new setting until it's published, and publishing it publishes its other unpublished changes too."
+    );
+    expect(dialog.textContent).not.toContain("Visitors see nothing");
+    fireEvent.click(screen.getByRole("button", { name: "Publish page only" }));
+    await expect(running).resolves.toBeUndefined();
+  });
+
   it("cancels the publish when the author says no", async () => {
     server({ dependencies: [card], missing: 0 });
     render(<Harness />);
