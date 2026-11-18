@@ -1,13 +1,14 @@
 /**
  * `ctx.services.workflows`: what a plugin acting for a person or an API key may do with review
- * state. It reads a document's review state and a workflow's definition; it takes no step,
- * assigns nothing and changes no setting.
+ * state. It reads a document's review state, what waits for its caller and a workflow's
+ * definition, and submits for review; it takes no other step, assigns nothing and changes no
+ * setting.
  *
  * Every call is made for the caller the plugin names (`{ as: "user", user }`), judged by the one
  * gate the REST routes and the Direct API use (`workflowOperations`): the person, or the API key
  * the plugin route's request authenticated with, by its own scope and named by its own id, which
  * core takes from the request and never from the plugin. The plugin acting as itself, a visitor
- * and a plugin-defined person are refused: review state is told for someone.
+ * and a plugin-defined person are refused: review state is told and moved for someone.
  *
  * @module plugins/plugin-workflows
  * @experimental
@@ -15,12 +16,17 @@
 
 import { z } from "zod";
 
+import type { PaginationMeta } from "../api/response-shapes";
 import type { WorkflowAsker } from "../api/workflows";
 import { nextlyValidationFromZod } from "../api/zod-to-nextly-error";
 import { runWithCallerScope } from "../auth/caller-scope";
 import { runAsPrincipal } from "../auth/principal-scope";
 import { checkedCaller } from "../direct-api/namespaces/helpers";
-import type { DocumentReview } from "../domains/workflows/review-api";
+import type {
+  DocumentReview,
+  WaitingPart,
+} from "../domains/workflows/review-api";
+import type { TakeStepResult } from "../domains/workflows/steps";
 import type { WorkflowDefinition } from "../domains/workflows/workflow-settings-api";
 import { NextlyError } from "../errors/nextly-error";
 
@@ -36,6 +42,33 @@ type PluginWorkflowDocumentRef =
 
 /** @experimental A collection or a Single, by its slug. */
 type PluginWorkflowEntityRef = { collection: string } | { single: string };
+
+/** @experimental A part as the caller saw it: its review-state revision and the document's version. */
+interface PluginWorkflowSeenPart {
+  /** A language, or null for the shared part. */
+  part: string | null;
+  revision: number;
+  version: string;
+}
+
+/**
+ * @experimental A submit for review: the parts named one by one, each as the caller saw it, and
+ * the comment the caller leaves. `step` names the submit step; left out, it is the submit step
+ * out of the parts' stage.
+ */
+interface PluginWorkflowSubmitInput {
+  document: PluginWorkflowDocumentRef;
+  parts: (string | null)[];
+  seen: PluginWorkflowSeenPart[];
+  comment: string;
+  step?: string;
+}
+
+/** @experimental A page of what waits for the caller: page 1 and 20 items unless named. */
+interface PluginWorkflowWaitingQuery {
+  page?: number;
+  limit?: number;
+}
 
 /** @experimental A document's review state, part by part. */
 type PluginWorkflowReview = DocumentReview;
@@ -67,10 +100,57 @@ export interface PluginWorkflowsService {
     input: { document: PluginWorkflowDocumentRef },
     opts?: ServiceOpts
   ): Promise<PluginWorkflowReview>;
+  /**
+   * What waits for the caller, a page at a time: parts assigned to them in a stage whose step
+   * they may take, in documents they may read.
+   */
+  waiting(
+    query?: PluginWorkflowWaitingQuery,
+    opts?: ServiceOpts
+  ): Promise<{ items: WaitingPart[]; meta: PaginationMeta }>;
+  /**
+   * Submit parts of a document for review, with a comment a reviewer reads. Only a step of kind
+   * `submit`: any other is refused with `WORKFLOW_STEP_NOT_SUBMIT`, and with no step named, a
+   * stage no submit step leaves with `WORKFLOW_NO_SUBMIT_STEP`. Not found unless the caller may
+   * read the document in each part named; then held to the step's own rules.
+   */
+  submit(
+    input: PluginWorkflowSubmitInput,
+    opts?: ServiceOpts
+  ): Promise<TakeStepResult>;
 }
 
 /** The operations, loaded when first used, as the Direct API loads them. */
 const operations = () => import("../api/workflows");
+
+/** The shapes the operations name their input in. */
+type WorkflowInputShapes = Awaited<
+  ReturnType<typeof operations>
+>["workflowInputShapes"];
+
+/** A page of what waits, strictly: no other key, and the bounds the operation keeps. */
+const WaitingInput = z
+  .object({
+    page: z.number().int().min(1).optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+  })
+  .strict();
+
+/**
+ * A submit as a plugin makes it, stricter than the operation's own body and built from its
+ * shapes: each part named (never every part at once), what was seen of each, and a comment that
+ * is more than blanks. The operation keeps the comment to its own length limit.
+ */
+const submitInputOf = (shapes: WorkflowInputShapes) =>
+  z
+    .object({
+      document: shapes.DocumentRef,
+      parts: z.array(shapes.Part).min(1).max(500),
+      seen: z.array(shapes.Seen).min(1).max(500),
+      comment: z.string().trim().min(1),
+      step: z.string().min(1).optional(),
+    })
+    .strict();
 
 /** Parsed at the boundary: an input that does not fit is the plugin's mistake. */
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
@@ -143,6 +223,16 @@ export function pluginWorkflowsService(): PluginWorkflowsService {
       return asAsker(opts, asker =>
         workflowOperations.reviewState(asker, document)
       );
+    },
+    async waiting(query, opts) {
+      const page = parse(WaitingInput, query ?? {});
+      const { workflowOperations } = await operations();
+      return asAsker(opts, asker => workflowOperations.waiting(asker, page));
+    },
+    async submit(input, opts) {
+      const { workflowOperations, workflowInputShapes } = await operations();
+      const body = parse(submitInputOf(workflowInputShapes), input);
+      return asAsker(opts, asker => workflowOperations.submit(asker, body));
     },
   } satisfies PluginWorkflowsService);
 }

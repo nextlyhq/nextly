@@ -224,6 +224,17 @@ export type VersionRequiredPublicData = {
   revsKey?: string;
 };
 
+/**
+ * What a submit for review refused over its step tells its caller: the step it named, which is
+ * not a submit, or the part named and the stage it stands in, which no submit step leaves. Each
+ * is the caller's own word or what a read of the part already tells them.
+ *
+ * @experimental
+ */
+export type WorkflowSubmitPublicData =
+  | { step: string }
+  | { part: string | null; stage: string };
+
 export type PublicData =
   | ValidationPublicData
   | StaleVersionPublicData
@@ -238,4 +249,5 @@ export type PublicData =
   | ReleaseProblemsPublicData
   | SharedFieldsConflictPublicData
   | WorkflowRefusalPublicData
+  | WorkflowSubmitPublicData
   | undefined;

@@ -50,6 +50,7 @@ import type { ReviewDocument } from "../domains/workflows/review-state-repositor
 import {
   assignWorkflowParts,
   namedParts,
+  submitForReview,
   takeWorkflowStep,
   type Assignment,
   type WorkflowCaller,
@@ -148,6 +149,11 @@ const StepBody = z
     comment: z.string().nullable().optional(),
   })
   .strict();
+
+/** A submit for review: a step's body whose step may be left out, to be found from the stage. */
+const SubmitBody = StepBody.extend({
+  step: z.string().min(1).optional(),
+}).strict();
 
 const Assignee = z
   .object({ kind: z.enum(["user", "role"]), id: z.string().min(1) })
@@ -524,6 +530,25 @@ export const workflowOperations = {
     return takeWorkflowStep(adapter(), {
       document,
       step: body.step,
+      parts: body.parts,
+      seen: body.seen,
+      comment: body.comment ?? null,
+      caller: callerOf(asker),
+    });
+  },
+
+  /**
+   * A submit for review on one document: only a step of kind `submit`, named or found from the
+   * stage the parts stand in. The read check runs first, so a document the caller may not read is
+   * not found whatever step is named, never refused for the kind of step it names.
+   */
+  async submit(asker: WorkflowAsker, input: unknown) {
+    const body = parse(SubmitBody, input);
+    const document = await documentOf(body.document);
+    await assertReadable(asker, document, body.parts);
+    return submitForReview(adapter(), {
+      document,
+      ...(body.step === undefined ? {} : { step: body.step }),
       parts: body.parts,
       seen: body.seen,
       comment: body.comment ?? null,

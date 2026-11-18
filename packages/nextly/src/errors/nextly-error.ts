@@ -518,6 +518,44 @@ export class NextlyError extends Error {
   }
 
   /**
+   * A submit for review naming a step that does not submit: an approval, a
+   * request for changes or a move. Its own code, so a caller that may only
+   * submit is told this is not a step it can take this way, never the refusal
+   * the step itself would meet. Names the step, the caller's own word.
+   */
+  static stepNotSubmit(opts: {
+    step: string;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "WORKFLOW_STEP_NOT_SUBMIT",
+      publicMessage: "That step does not submit for review.",
+      publicData: { step: opts.step },
+      logContext: opts.logContext,
+    });
+  }
+
+  /**
+   * A submit for review naming no step, of a part whose stage no submit step
+   * leaves: content already in review, or a workflow that enters review by
+   * another kind of step. Names the part and its stage, which a read of the
+   * document tells the caller anyway.
+   */
+  static noSubmitStep(opts: {
+    part: string | null;
+    stage: string;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "WORKFLOW_NO_SUBMIT_STEP",
+      publicMessage:
+        "No step submits this content for review from the stage it is in.",
+      publicData: { part: opts.part, stage: opts.stage },
+      logContext: opts.logContext,
+    });
+  }
+
+  /**
    * An API key refused because its role allows more than the person creating
    * it may do. The sentence is FORBIDDEN's and names no permission; which one
    * exceeded goes to the log through `logContext`. The code is its own, so a

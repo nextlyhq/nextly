@@ -24,6 +24,9 @@
  * an untranslated collection's shared part alone: its content and versions belong to no language.
  *
  * Refusals, and what each carries in `publicData`:
+ * - a submit (`submitForReview`) naming a step of another kind: `WORKFLOW_STEP_NOT_SUBMIT`,
+ *   `{ step }`; naming none, of a part whose stage no submit step leaves:
+ *   `WORKFLOW_NO_SUBMIT_STEP`, `{ part, stage }`;
  * - an unknown step, a document with no workflow, a missing or too long comment:
  *   `VALIDATION_ERROR`, with `errors` naming the field (`step`, `document`, `comment`) and a
  *   `WORKFLOW_*` code;
@@ -231,6 +234,8 @@ const WORKFLOW_STEP_ERROR_CODES = {
   // A part the document cannot have: a language the site does not configure, or any language of
   // a document kept in none.
   unknownPart: "WORKFLOW_UNKNOWN_PART",
+  // A submit naming no step, where more than one submit step could be meant.
+  stepRequired: "WORKFLOW_STEP_REQUIRED",
 } as const;
 
 /** @experimental */
@@ -1057,17 +1062,34 @@ async function readParts(
   tx: TransactionContext,
   c: StepContext
 ): Promise<PartRead[]> {
-  const pending = await pendingPartsOn(tx, c.input.document);
-  const parts: PartRead[] = [];
-  for (const part of namedParts(c.input.parts, c.table.localized)) {
-    const state = await readReviewState(tx, partOf(c.input.document, part));
-    const content = {
-      live: c.liveOn.get(part) === true,
-      pending: pending(part),
-    };
-    parts.push({ part, state, stage: partStage(c.workflow, state, content) });
+  return readPartsOn(
+    tx,
+    c.input.document,
+    c.workflow,
+    namedParts(c.input.parts, c.table.localized),
+    c.liveOn
+  );
+}
+
+/**
+ * Each of `parts`' review state on `tx`, and the stage it puts the part in: the one reading by
+ * which a step judges its parts, and by which a submit naming no step finds its step.
+ */
+async function readPartsOn(
+  tx: TransactionContext,
+  document: ReviewDocument,
+  workflow: Workflow,
+  parts: readonly (string | null)[],
+  liveOn: ReadonlyMap<string | null, boolean>
+): Promise<PartRead[]> {
+  const pending = await pendingPartsOn(tx, document);
+  const read: PartRead[] = [];
+  for (const part of parts) {
+    const state = await readReviewState(tx, partOf(document, part));
+    const content = { live: liveOn.get(part) === true, pending: pending(part) };
+    read.push({ part, state, stage: partStage(workflow, state, content) });
   }
-  return parts;
+  return read;
 }
 
 /** The refusal of a step or an assignment on parts with nothing unpublished to review. */
@@ -1763,6 +1785,106 @@ export async function takeWorkflowStep(
   const outcome = await adapter.transaction(tx => runStep(tx, context));
   if ("taken" in outcome) return outcome.taken;
   throw await hiddenFieldsForbidden(adapter, context, outcome.hidden);
+}
+
+/**
+ * A submit for review: a step's input whose step, when named, must be of kind `submit`, and when
+ * left out is the submit step out of the named parts' stage.
+ *
+ * @experimental
+ */
+export type SubmitInput = Omit<TakeStepInput, "step"> & { step?: string };
+
+/** The step `name` of `workflow`, refused unless it is of kind `submit`. */
+function namedSubmitStep(
+  workflow: Workflow,
+  name: string
+): ResolvedWorkflowStep {
+  const step = findStep(workflow, name);
+  if (step.kind !== "submit") {
+    throw NextlyError.stepNotSubmit({
+      step: name,
+      logContext: { refusal: "workflow-step-not-submit", kind: step.kind },
+    });
+  }
+  return step;
+}
+
+/**
+ * The one submit step out of the stage each named part stands in, read as a review state read
+ * reads them: the step itself reads them again under its lock, and refuses a part that moved
+ * since. A part with nothing unpublished is refused as a named step refuses it, a stage no submit
+ * step leaves with `WORKFLOW_NO_SUBMIT_STEP`, and more than one candidate (several out of one
+ * stage, or parts in stages left by different ones) asks the caller to name the step.
+ */
+async function submitStepOut(
+  adapter: DrizzleAdapter,
+  workflow: Workflow,
+  input: SubmitInput
+): Promise<ResolvedWorkflowStep> {
+  const table = await documentTableOf(input.document);
+  const parts = namedParts(input.parts, table.localized);
+  refuseUnknownParts(table, parts, () => "parts");
+  const liveOn = await livePartsOf(adapter, input.document, parts);
+  const read = await adapter.transaction(tx =>
+    readPartsOn(tx, input.document, workflow, parts, liveOn)
+  );
+  const idle = read.filter(entry => !staged(entry));
+  if (idle.length > 0) {
+    throw nothingToReviewRefusal(
+      idle.map(entry => entry.part),
+      () => "parts"
+    );
+  }
+  const candidates = new Set<string>();
+  for (const entry of read.filter(staged)) {
+    const out = workflow.steps.filter(
+      step => step.kind === "submit" && step.from.includes(entry.stage)
+    );
+    if (out.length === 0) {
+      throw NextlyError.noSubmitStep({
+        part: entry.part,
+        stage: entry.stage,
+        logContext: { refusal: "workflow-no-submit-step" },
+      });
+    }
+    for (const step of out) candidates.add(step.name);
+  }
+  const [only, ...others] = [...candidates];
+  if (only === undefined || others.length > 0) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "step",
+          code: WORKFLOW_STEP_ERROR_CODES.stepRequired,
+          message:
+            "More than one submit step leaves where these parts stand: name the step.",
+        },
+      ],
+    });
+  }
+  return findStep(workflow, only);
+}
+
+/**
+ * Submits the named parts of a document for review: takes the submit step `input.step` names, or
+ * with none named the submit step out of the parts' stage, exactly as {@link takeWorkflowStep}
+ * takes any step, with every precondition it checks. A step of any other kind is refused with
+ * `WORKFLOW_STEP_NOT_SUBMIT` before anything is read, so a caller held to submitting cannot
+ * approve, request changes or move a part through it.
+ *
+ * @experimental
+ */
+export async function submitForReview(
+  adapter: DrizzleAdapter,
+  input: SubmitInput
+): Promise<TakeStepResult> {
+  const { workflow } = attachedWorkflow(input.document);
+  const step =
+    input.step === undefined
+      ? await submitStepOut(adapter, workflow, input)
+      : namedSubmitStep(workflow, input.step);
+  return takeWorkflowStep(adapter, { ...input, step: step.name });
 }
 
 /** One assignment, with the workflow of its document. */

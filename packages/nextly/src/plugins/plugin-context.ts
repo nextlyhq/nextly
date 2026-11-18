@@ -907,8 +907,9 @@ export interface PluginContext {
     versions: PluginVersionsService;
     /**
      * @experimental Review state for the person or API key the plugin acts
-     * for: a document's review state and a workflow's definition, judged as
-     * the REST routes judge that caller. Never as the plugin itself.
+     * for: a document's review state, what waits for them and a workflow's
+     * definition, and a submit for review, judged as the REST routes judge
+     * that caller. Never as the plugin itself, and no step but a submit.
      */
     workflows: PluginWorkflowsService;
     /**

@@ -825,9 +825,11 @@ export type {
 /**
  * @experimental Review state for the person or API key a plugin acts for:
  * `ctx.services.workflows` (`PluginWorkflowsService`), reading a document's review state
- * (`PluginWorkflowReview`) and the definition of the workflow attached to a collection or Single
- * (`PluginWorkflowDefinition`), each document or entity named as `PluginWorkflowDocumentRef` or
- * `PluginWorkflowEntityRef` names it. Each is read off the service's own signature, so the names
+ * (`PluginWorkflowReview`), what waits for the caller (`PluginWorkflowWaitingQuery`,
+ * `PluginWorkflowWaitingPart`) and the definition of the workflow attached to a collection or
+ * Single (`PluginWorkflowDefinition`), and submitting for review (`PluginWorkflowSubmitInput`,
+ * `PluginWorkflowSeenPart`, `PluginWorkflowSubmitResult`), each document or entity named as
+ * `PluginWorkflowDocumentRef` or `PluginWorkflowEntityRef` names it. Each is read off the service's own signature, so the names
  * here cannot drift from what the service takes and returns. Experimental until review through
  * plugins is finished: its shape may still change.
  */
@@ -847,6 +849,24 @@ export type PluginWorkflowDefinition = NonNullable<
 /** @experimental A document's review state, part by part, as `reviewState` tells it. */
 export type PluginWorkflowReview = Awaited<
   ReturnType<PluginWorkflowsService["reviewState"]>
+>;
+/** @experimental A page of what waits for the caller, as `waiting` takes it. */
+export type PluginWorkflowWaitingQuery = NonNullable<
+  Parameters<PluginWorkflowsService["waiting"]>[0]
+>;
+/** @experimental A part waiting for the caller, as `waiting` lists it. */
+export type PluginWorkflowWaitingPart = Awaited<
+  ReturnType<PluginWorkflowsService["waiting"]>
+>["items"][number];
+/** @experimental A submit for review, as `submit` takes it. */
+export type PluginWorkflowSubmitInput = Parameters<
+  PluginWorkflowsService["submit"]
+>[0];
+/** @experimental A part as the caller saw it, as a submit names it. */
+export type PluginWorkflowSeenPart = PluginWorkflowSubmitInput["seen"][number];
+/** @experimental What a submit moved and left, as `submit` tells it. */
+export type PluginWorkflowSubmitResult = Awaited<
+  ReturnType<PluginWorkflowsService["submit"]>
 >;
 
 /**
