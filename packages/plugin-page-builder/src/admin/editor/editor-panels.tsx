@@ -20,7 +20,6 @@ import type {
 import {
   type UseBuilderChecklistResult,
   ComponentsPanel,
-  EDITOR_WORDS,
   InsertPanel,
   InsertPicker,
   LayersPanel,
@@ -63,11 +62,10 @@ import {
 } from "./canvas-preview-mode";
 import {
   DesignFonts,
-  DesignGroup,
   DesignPanel,
   DesignReveal,
+  FONTS_SCREEN_VIEW,
   ReportStylesMatches,
-  SITE_FONTS_GROUP,
   type DesignRevealRequest,
   type DesignView,
 } from "./design-panel";
@@ -88,7 +86,7 @@ import {
 } from "./section-pictures";
 import { usePageRegions, type SelectedRegion } from "./selected-region";
 import type { FontRolesTab as FontRolesTabPart } from "./site-font-roles-tab";
-import type { FontsPanelWithUpload as FontsPanelWithUploadPart } from "./site-style-fonts";
+import type { SiteFontsScreen as SiteFontsScreenPart } from "./site-style-fonts";
 import {
   offerableFaces,
   ColoursTab,
@@ -104,12 +102,12 @@ import type { EditorMount } from "./use-editor-mount";
 import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
 
 /**
- * The site's fonts panel, fetched when the Design panel's Fonts tab first
- * draws it rather than with the editor: the upload and the font catalogue
- * are of no use to an author who never opens the tab.
+ * The Fonts screen, fetched when it first opens over the Design panel rather
+ * than with the editor: the upload and the font catalogue are of no use to an
+ * author who never opens it.
  */
-const FontsPanelWithUpload: typeof FontsPanelWithUploadPart = lazyPart(() =>
-  import("./site-style-fonts").then(m => m.FontsPanelWithUpload)
+const SiteFontsScreen: typeof SiteFontsScreenPart = lazyPart(() =>
+  import("./site-style-fonts").then(m => m.SiteFontsScreen)
 );
 
 /**
@@ -388,7 +386,8 @@ type PanelRequests = {
  */
 interface RequestPanel {
   (panel: LeftPanel): void;
-  (panel: "design", view?: DesignView): void;
+  // A tab, or the Fonts screen opened over the panel.
+  (panel: "design", view?: DesignView | typeof FONTS_SCREEN_VIEW): void;
   (panel: Exclude<LeftPanel, "design">, view?: string): void;
 }
 
@@ -1093,7 +1092,8 @@ export function editorPanelRenderer({
                   siteStyleError
                 )}
                 fromCode={configSiteStyle?.fonts ?? []}
-                onManageFonts={() => view.choose("type")}
+                // Every Font control's "Manage fonts…" opens the Fonts screen.
+                onManageFonts={() => view.choose(FONTS_SCREEN_VIEW)}
               >
                 <TokensStudio
                   merged={offerableTokens(
@@ -1127,6 +1127,38 @@ export function editorPanelRenderer({
               </DesignFonts>
             </>
           )}
+          // The one Fonts screen, over the panel: the site's fonts with the
+          // same writers the admin's Fonts page has.
+          fonts={close => (
+            <DesignReveal>
+              {reveal => (
+                <SiteFontsScreen
+                  faces={offerableFaces(
+                    canvasSiteStyle,
+                    siteStylePending,
+                    siteStyleError
+                  )}
+                  codeFaces={configSiteStyle?.fonts}
+                  tokens={renderedTokens(
+                    canvasSiteStyle,
+                    siteStylePending,
+                    siteStyleError
+                  )}
+                  absence={siteStyleError !== null ? "failed" : "pending"}
+                  onClose={close}
+                  // A font variable is changed in the Type tab's variables:
+                  // the screen closes onto it, its group opened and in view.
+                  onOpenTokens={() => {
+                    view.choose("type");
+                    reveal("fonts");
+                  }}
+                  storedFaces={storedSiteStyle?.fonts}
+                  storedPending={siteStylePending}
+                  unreadableFonts={unreadableStoredFonts}
+                />
+              )}
+            </DesignReveal>
+          )}
           tabs={{
             colours: () => (
               <ColoursTab
@@ -1136,55 +1168,20 @@ export function editorPanelRenderer({
                 limits={documentLimits}
               />
             ),
-            // Type: the Body and Headings fonts, the site's fonts, then the
-            // type sizes and the font and weight variables.
+            // Type: the Body and Headings fonts, the way to the Fonts screen,
+            // then the type sizes and the font and weight variables.
             type: () => (
               <>
                 <FontRolesTab />
-                <DesignGroup
-                  id={SITE_FONTS_GROUP}
-                  heading={EDITOR_WORDS.fonts}
-                  count={
-                    offerableFaces(
-                      canvasSiteStyle,
-                      siteStylePending,
-                      siteStyleError
-                    )?.length
-                  }
+                <button
+                  type="button"
+                  className="nx-vars__link nx-fonts-manage"
+                  onClick={() => view.choose(FONTS_SCREEN_VIEW)}
+                  // Where focus returns when the screen closes.
+                  data-fonts-manage=""
                 >
-                  <DesignReveal>
-                    {reveal => (
-                      <FontsPanelWithUpload
-                        faces={offerableFaces(
-                          canvasSiteStyle,
-                          siteStylePending,
-                          siteStyleError
-                        )}
-                        codeFaces={configSiteStyle?.fonts}
-                        tokens={renderedTokens(
-                          canvasSiteStyle,
-                          siteStylePending,
-                          siteStyleError
-                        )}
-                        absence={siteStyleError !== null ? "failed" : "pending"}
-                        /*
-                          The fix for a token naming a family this site does not provide
-                          is to edit that token, and editing belongs to the studio. This
-                          shell offers one, so the jump is wired: without the callback
-                          the panel suppresses the action and an author is left to find
-                          the right panel and the right row themselves.
-                        */
-                        // The font variables are in this same tab: their group
-                        // is opened and brought into view, rather than the tab
-                        // asked for again.
-                        onOpenTokens={() => reveal("fonts")}
-                        storedFaces={storedSiteStyle?.fonts}
-                        storedPending={siteStylePending}
-                        unreadableFonts={unreadableStoredFonts}
-                      />
-                    )}
-                  </DesignReveal>
-                </DesignGroup>
+                  Manage fonts…
+                </button>
                 <VariablesTab tab="type" />
                 {/* After the type sizes they are built on. */}
                 <TextStylesTab

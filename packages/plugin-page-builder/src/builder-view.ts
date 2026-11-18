@@ -44,6 +44,10 @@ export const BINDINGS_TO_FIX_PAGE_COMPONENT =
 export const OVERVIEW_PAGE_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#PageBuilderOverview";
 
+/** The Fonts page, the admin's way into the site's fonts. */
+export const FONTS_PAGE_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#FontsPage";
+
 /** The "Bindings to fix" dashboard card. */
 export const BINDINGS_TO_FIX_CARD_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#BindingsToFixCard";

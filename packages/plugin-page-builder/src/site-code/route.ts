@@ -54,7 +54,9 @@ import {
   type CspCheck,
   type SiteCodeFacts,
 } from "./csp";
+import { siteCssRoutes, type SiteCssRouteDeps } from "./css-route";
 import { describeSiteCode } from "./describe";
+import { requestBodyOf } from "./request-body";
 import {
   SITE_CODE_LIMITS,
   siteCodeScriptKind,
@@ -126,6 +128,11 @@ export interface SiteCodeRouteDeps {
    * it can't be read. Absent, no name is given.
    */
   readonly personName?: (id: string) => Promise<string | null>;
+  /**
+   * Whether a caller may read the site's CSS to draw it on the canvas: who
+   * may read the site style. Absent, nobody may.
+   */
+  readonly mayDrawCss?: SiteCssRouteDeps["mayDraw"];
 }
 
 /** The audit kind a save writes. */
@@ -581,21 +588,6 @@ async function versionedWrite(
     : withVersionFrom(data, current);
 }
 
-/** Parse a request's body, refusing one that is not a site code request. */
-async function bodyOf(req: Request): Promise<SiteCodeBodyValue> {
-  const parsed = SiteCodeBody.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) {
-    throw NextlyError.validation({
-      errors: parsed.error.issues.map(issue => ({
-        path: issue.path.join(".") || "body",
-        code: "INVALID_VALUE",
-        message: issue.message,
-      })),
-    });
-  }
-  return parsed.data;
-}
-
 /**
  * Check the site's code, or save it. The preconditions run first, before
  * anything is read or written: a person, not a key, and a valid request.
@@ -612,7 +604,7 @@ async function changeSiteCode(
     });
   }
   const userId = ctx.user.id;
-  const body = await bodyOf(req);
+  const body = await requestBodyOf(req, SiteCodeBody);
   const judged = await judge(body, req, deps.options);
   if (body.dryRun === true) {
     return respondMutation<SiteCodeChecked>(
@@ -655,7 +647,10 @@ async function changeSiteCode(
   );
 }
 
-/** The site code routes: read, and check or save. */
+/**
+ * The site code routes: read, and check or save; and the site's CSS, read
+ * and saved under the same permission (`css-route`), its only writer.
+ */
 export function siteCodeRoutes(deps: SiteCodeRouteDeps): PluginRoute[] {
   return [
     {
@@ -670,5 +665,10 @@ export function siteCodeRoutes(deps: SiteCodeRouteDeps): PluginRoute[] {
       requiredPermission: deps.permission,
       handler: (req, ctx) => changeSiteCode(req, ctx, deps),
     },
+    ...siteCssRoutes({
+      permission: deps.permission,
+      mayDraw: deps.mayDrawCss ?? (() => Promise.resolve(false)),
+      ...(deps.personName === undefined ? {} : { personName: deps.personName }),
+    }),
   ];
 }
