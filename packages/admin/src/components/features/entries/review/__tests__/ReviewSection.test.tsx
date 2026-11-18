@@ -10,9 +10,10 @@ import type { PartReview } from "@admin/types/workflows";
 
 import { ReviewSection } from "../ReviewSection";
 
-const { fetchSpy, assignSpy, held } = vi.hoisted(() => ({
+const { fetchSpy, assignSpy, stepSpy, held } = vi.hoisted(() => ({
   fetchSpy: vi.fn(),
   assignSpy: vi.fn(),
+  stepSpy: vi.fn(),
   held: { slugs: new Set<string>() },
 }));
 
@@ -20,6 +21,7 @@ vi.mock("@admin/services/workflowApi", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/services/workflowApi")>()),
   fetchReviewState: fetchSpy,
   assignWorkflowParts: assignSpy,
+  takeWorkflowStep: stepSpy,
 }));
 vi.mock("@admin/hooks/useHasPermission", () => ({
   useHasPermission: () => (slug: string) => held.slugs.has(slug),
@@ -60,6 +62,7 @@ function part(over: Partial<PartReview> = {}): PartReview {
         to: "approved",
         mayTake: true,
         primary: true,
+        commentRequired: false,
       },
     ],
     waitingFor: { kind: "roles", roles: [{ id: "r-ed", name: "Editors" }] },
@@ -78,7 +81,11 @@ function part(over: Partial<PartReview> = {}): PartReview {
 function answer(...parts: PartReview[]) {
   return {
     attached: true,
-    review: { workflow: { slug: "review", label: "Review" }, parts },
+    review: {
+      workflow: { slug: "review", label: "Review" },
+      parts,
+      mayPublishWithoutReview: false,
+    },
   };
 }
 
@@ -193,6 +200,7 @@ describe("ReviewSection", () => {
               to: "approved",
               mayTake: false,
               primary: true,
+              commentRequired: false,
             },
           ],
         })
@@ -216,5 +224,61 @@ describe("ReviewSection", () => {
     expect(section).toHaveTextContent("Shared fields");
     expect(section).toHaveTextContent("Approved");
     expect(section).not.toHaveTextContent("Legal check");
+  });
+
+  it("offers each part's own steps, so the shared fields waiting in another stage can be moved", async () => {
+    stepSpy.mockResolvedValue({ message: "Step taken.", item: {} });
+    fetchSpy.mockResolvedValue(
+      answer(
+        part({
+          part: "de",
+          steps: [
+            {
+              name: "approve",
+              label: "Approve",
+              kind: "approve",
+              to: "approved",
+              mayTake: false,
+              primary: true,
+              commentRequired: false,
+            },
+          ],
+        }),
+        part({
+          part: null,
+          stage: "drafting",
+          stageLabel: "Drafting",
+          revision: 2,
+          version: "v2",
+          steps: [
+            {
+              name: "submit",
+              label: "Submit for review",
+              kind: "submit",
+              to: "inReview",
+              mayTake: true,
+              primary: true,
+              commentRequired: false,
+            },
+          ],
+        })
+      )
+    );
+    render(<ReviewSection document={post} locale="de" />);
+    const section = await screen.findByRole("region", { name: "Review" });
+    expect(
+      within(section).queryByRole("button", { name: "Approve" })
+    ).toBeNull();
+    await userEvent.click(
+      within(section).getByRole("button", { name: "Submit for review" })
+    );
+    await waitFor(() =>
+      expect(stepSpy).toHaveBeenCalledWith({
+        document: { collection: "posts", id: "e1" },
+        step: "submit",
+        parts: [null],
+        seen: [{ part: null, revision: 2, version: "v2" }],
+      })
+    );
   });
 });

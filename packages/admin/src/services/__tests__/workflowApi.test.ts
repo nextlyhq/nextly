@@ -35,6 +35,7 @@ function refusal(code: string, status = 400) {
 const review = {
   workflow: { slug: "review", label: "Review" },
   parts: [],
+  mayPublishWithoutReview: false,
 };
 
 describe("workflowApi", () => {
@@ -80,7 +81,11 @@ describe("workflowApi", () => {
 
   it("answers a document with no workflow attached as not attached", async () => {
     // The route answers 200 with no workflow, so no failed request is shown.
-    fetcherSpy.mockResolvedValue({ workflow: null, parts: [] });
+    fetcherSpy.mockResolvedValue({
+      workflow: null,
+      parts: [],
+      mayPublishWithoutReview: false,
+    });
     await expect(
       fetchReviewState({ collection: "posts", id: "e1" })
     ).resolves.toEqual({ attached: false });

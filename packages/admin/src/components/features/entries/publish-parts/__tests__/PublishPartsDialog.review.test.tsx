@@ -78,6 +78,7 @@ function part(over: Partial<PartReview>): PartReview {
         to: "inReview",
         mayTake: true,
         primary: true,
+        commentRequired: false,
       },
     ],
     waitingFor: null,
@@ -105,6 +106,7 @@ const IN_REVIEW_ES = part({
       to: "approved",
       mayTake: false,
       primary: true,
+      commentRequired: false,
     },
   ],
   waitingFor: { kind: "roles", roles: [{ id: "r1", name: "Editors" }] },
@@ -277,6 +279,36 @@ describe("Publish without review", () => {
         }),
       ])
     );
+  });
+
+  it("publishes as usual, with no reason, once the parts chosen no longer need it", async () => {
+    const user = userEvent.setup();
+    const english = part({
+      part: "en",
+      stage: "approved",
+      stageLabel: "Approved",
+      publishable: true,
+      steps: [],
+    });
+    open(review([IN_REVIEW_ES, english], true));
+    await screen.findByText("Goes live for the first time.");
+    await user.click(
+      screen.getByRole("button", { name: "Publish without review…" })
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "Reason" }),
+      "Legal deadline today."
+    );
+    // The part that needed it is no longer chosen: an approved one is.
+    await user.click(screen.getByRole("checkbox", { name: "Spanish" }));
+    await user.click(screen.getByRole("checkbox", { name: "English" }));
+    await user.click(
+      screen.getByRole("button", { name: "Publish without review" })
+    );
+
+    await waitFor(() => expect(moves()).toHaveLength(1));
+    expect(moves()[0]).toMatchObject({ locales: ["en"] });
+    expect(moves()[0]).not.toHaveProperty("withoutReview");
   });
 
   it("does not offer it to a person who does not hold it", async () => {

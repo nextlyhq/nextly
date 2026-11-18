@@ -62,6 +62,7 @@ function part(over: Partial<PartReview> = {}): PartReview {
         to: "inReview",
         mayTake: true,
         primary: true,
+        commentRequired: false,
       },
     ],
     waitingFor: null,
@@ -83,6 +84,7 @@ function inReview(mayTake: boolean): Partial<PartReview> {
         to: "approved",
         mayTake,
         primary: true,
+        commentRequired: false,
       },
       {
         name: "requestChanges",
@@ -91,6 +93,7 @@ function inReview(mayTake: boolean): Partial<PartReview> {
         to: "drafting",
         mayTake,
         primary: false,
+        commentRequired: false,
       },
     ],
     waitingFor: { kind: "roles", roles: [{ id: "r1", name: "Editors" }] },
@@ -103,7 +106,11 @@ function attached(...parts: PartReview[]): {
 } {
   return {
     attached: true,
-    review: { workflow: { slug: "review", label: "Review" }, parts },
+    review: {
+      workflow: { slug: "review", label: "Review" },
+      parts,
+      mayPublishWithoutReview: false,
+    },
   };
 }
 
@@ -111,15 +118,17 @@ function Editor({
   withReview = true,
   isDirty = false,
   canEdit = true,
+  locale,
 }: {
   withReview?: boolean;
   isDirty?: boolean;
   canEdit?: boolean;
+  locale?: string;
 }): ReactElement {
   const methods = useForm({ defaultValues: { title: "Hello" } });
   const review = useEditorReview({
     document: post,
-    locale: undefined,
+    locale,
     isDirty,
   });
   return (
@@ -275,6 +284,7 @@ describe("the editor's next step under a workflow", () => {
               to: "approved",
               mayTake: true,
               primary: false,
+              commentRequired: false,
             },
             {
               name: "legal",
@@ -283,6 +293,7 @@ describe("the editor's next step under a workflow", () => {
               to: "legal",
               mayTake: true,
               primary: true,
+              commentRequired: false,
             },
           ],
         })
@@ -295,6 +306,97 @@ describe("the editor's next step under a workflow", () => {
     expect(screen.getByRole("button", { name: "Approve" })).not.toHaveAttribute(
       "data-primary"
     );
+  });
+
+  it("asks a comment before any step whose definition requires one, not only a request for changes", async () => {
+    fetchSpy.mockResolvedValue(
+      attached(
+        part({
+          steps: [
+            {
+              name: "submit",
+              label: "Submit for review",
+              kind: "submit",
+              to: "inReview",
+              mayTake: true,
+              primary: true,
+              commentRequired: true,
+            },
+          ],
+        })
+      )
+    );
+    render(<Editor />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Submit for review" })
+    );
+    const dialog = await screen.findByRole("dialog");
+    const send = within(dialog).getByRole("button", {
+      name: "Submit for review",
+    });
+    expect(send).toBeDisabled();
+    expect(stepSpy).not.toHaveBeenCalled();
+    const comment = within(dialog).getByRole("textbox");
+    // The server's limit on a step's comment.
+    expect(comment).toHaveAttribute("maxLength", "4000");
+    await userEvent.type(comment, "Ready for the desk.");
+    await userEvent.click(send);
+    await waitFor(() =>
+      expect(stepSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          step: "submit",
+          comment: "Ready for the desk.",
+        })
+      )
+    );
+  });
+
+  it("acts on the shared fields where the language on screen is live and they wait", async () => {
+    fetchSpy.mockResolvedValue(
+      attached(
+        part({ part: "es", stage: null, stageLabel: null, steps: [] }),
+        part({ part: null, revision: 5, version: "v9" })
+      )
+    );
+    render(<Editor locale="es" />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Submit for review" })
+    );
+    await waitFor(() =>
+      expect(stepSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          step: "submit",
+          parts: [null],
+          seen: [{ part: null, revision: 5, version: "v9" }],
+        })
+      )
+    );
+  });
+
+  it("offers a step on the parts it moves together only where every one of them may take it", async () => {
+    held.slugs = new Set(["publish-posts"]);
+    const review = inReview(true);
+    const refusedOnShared = {
+      ...review,
+      steps: (review.steps ?? []).map(step =>
+        step.name === "approve" ? { ...step, mayTake: false } : step
+      ),
+    };
+    fetchSpy.mockResolvedValue(
+      attached(
+        part({ ...review, part: "es" }),
+        part({ ...refusedOnShared, part: null })
+      )
+    );
+    render(<Editor canEdit={false} locale="es" />);
+    const publish = await screen.findByRole("button", { name: /^publish$/i });
+    await waitFor(() =>
+      expect(publish).toHaveAttribute(
+        "title",
+        "Needs approval: In review, waiting for Editors"
+      )
+    );
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
   });
 
   it("works for a Single from its review state alone", async () => {

@@ -72,10 +72,7 @@ export function usePublishPartsAction({
 }: PublishPartsActionProps): PublishPartsAction {
   const canPublish = useCan(`publish-${target?.slug ?? ""}`);
   // The workflow's say, read from the same review state the header reads: what holds each part,
-  // and whether this person may publish past it with a reason.
-  const mayPublishWithoutReview = useCan(
-    `publish-without-review-${target?.slug ?? ""}`
-  );
+  // and whether this person may publish past it with a reason, as the server judges it.
   const reviewDocument =
     target === undefined
       ? undefined
@@ -132,7 +129,7 @@ export function usePublishPartsAction({
       ? {
           document: reviewDocument,
           parts: reviewAnswer.review.parts,
-          mayPublishWithoutReview,
+          mayPublishWithoutReview: reviewAnswer.review.mayPublishWithoutReview,
         }
       : undefined;
 

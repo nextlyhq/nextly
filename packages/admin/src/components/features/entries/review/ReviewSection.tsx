@@ -3,9 +3,11 @@
 /**
  * The side panel's Review section: for the part on screen (and, on a
  * translated document, its shared fields), the stage it stands in, who it is
- * assigned to or waits for, when it is due, and its last move. A person who
- * may assign it is offered to: to themselves, to a role it waits for, or to
- * no one.
+ * assigned to or waits for, when it is due, and its last move. Each part's
+ * own steps are offered on it, so a part the header does not speak for (the
+ * shared fields waiting in another stage than the language) can still be
+ * moved. A person who may assign it is offered to: to themselves, to a role it
+ * waits for, or to no one.
  *
  * Reads the same review state the header does, under the same key, so the
  * two never disagree and the panel costs no request of its own. Draws nothing
@@ -29,12 +31,17 @@ import { useHasPermission } from "@admin/hooks/useHasPermission";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
-import type { PartReview, ReviewAssignee } from "@admin/types/workflows";
+import type {
+  PartReview,
+  ReviewAssignee,
+  ReviewStep,
+} from "@admin/types/workflows";
 
 import { leadingReviewStep } from "../EntryForm/document-actions";
 import { PanelSection } from "../EntryForm/panels/PanelSection";
 
 import { waitingForWords } from "./review-words";
+import { useStepTaker, type StepTaker } from "./useStepTaker";
 
 export interface ReviewSectionProps {
   document: ReleaseDocumentRef;
@@ -48,6 +55,7 @@ export function ReviewSection({
 }: ReviewSectionProps): JSX.Element | null {
   const { data } = useReviewState(document);
   const { defaultLocale, getLocale } = useLocalization();
+  const taker = useStepTaker(document);
   const language = locale ?? defaultLocale;
   if (data === undefined || !data.attached) return null;
   const own = data.review.parts.find(part => part.part === language);
@@ -68,6 +76,7 @@ export function ReviewSection({
             key={part.part ?? ""}
             document={document}
             part={part}
+            taker={taker}
             title={
               !titled
                 ? null
@@ -78,6 +87,7 @@ export function ReviewSection({
           />
         ))}
       </div>
+      {taker.dialog}
     </PanelSection>
   );
 }
@@ -85,10 +95,12 @@ export function ReviewSection({
 function PartBlock({
   document,
   part,
+  taker,
   title,
 }: {
   document: ReleaseDocumentRef;
   part: PartReview;
+  taker: StepTaker;
   title: string | null;
 }): JSX.Element {
   const { formatDate } = useAdminDateFormatter();
@@ -112,10 +124,45 @@ function PartBlock({
               Due {formatDate(part.dueAt, { dateStyle: "medium" }, part.dueAt)}
             </p>
           )}
+          <PartSteps part={part} taker={taker} />
           <AssignControls document={document} part={part} />
         </>
       )}
       <LastMove part={part} />
+    </div>
+  );
+}
+
+/** The steps this person may take on the part alone, primary first. */
+function PartSteps({
+  part,
+  taker,
+}: {
+  part: PartReview;
+  taker: StepTaker;
+}): JSX.Element | null {
+  const steps = part.steps
+    .filter(step => step.mayTake)
+    .sort((a, b) => Number(b.primary) - Number(a.primary));
+  if (steps.length === 0) return null;
+  const take = (step: ReviewStep) => {
+    void taker.take(step, [part]);
+  };
+  return (
+    <div className="flex flex-wrap gap-1.5 pt-1">
+      {steps.map(step => (
+        <Button
+          key={step.name}
+          type="button"
+          size="sm"
+          variant={step.primary ? "default" : "outline"}
+          className="h-7 px-2 text-xs"
+          disabled={taker.pending || part.version === null}
+          onClick={() => take(step)}
+        >
+          {step.label}
+        </Button>
+      ))}
     </div>
   );
 }

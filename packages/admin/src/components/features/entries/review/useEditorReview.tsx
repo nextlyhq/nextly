@@ -13,24 +13,23 @@
  *
  * Whether the person may take a step, and which step leads, are the review
  * state's own answers (`mayTake`, `primary`), judged on the server by the
- * step's own checks. What a step checks of the content (the version seen, a
- * comment) is asked when it is taken; a refusal is said where it happens.
+ * step's own checks, and a step moving several parts together is offered
+ * only where each may take it. A step that needs a comment asks for one
+ * first (`commentRequired`); what it checks of the content (the version seen)
+ * is asked when it is taken, and a refusal is said where it happens.
  *
  * @module components/features/entries/review/useEditorReview
  * @experimental
  */
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
-import { toast } from "@admin/components/ui";
 import {
   reviewKeys,
   useReviewState,
-  useTakeStep,
 } from "@admin/hooks/queries/useReviewState";
 import { useLocalization } from "@admin/hooks/useLocalization";
-import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
 import type { PartReview, ReviewStep } from "@admin/types/workflows";
 
@@ -40,8 +39,12 @@ import type {
   DocumentReviewBinding,
 } from "../EntryForm/useDocumentActionBindings";
 
-import { RequestChangesDialog } from "./RequestChangesDialog";
-import { partsOnScreen, waitingForWords } from "./review-words";
+import {
+  partsOnScreen,
+  takeableOnEvery,
+  waitingForWords,
+} from "./review-words";
+import { STEP_NOT_OFFERED, useStepTaker } from "./useStepTaker";
 
 export interface EditorReviewInput {
   /** The document, once it exists; nothing is asked before. */
@@ -67,25 +70,6 @@ export interface EditorReview {
   dialog: ReactNode;
 }
 
-/** What a step resolves with where it cannot be sent at all. */
-const NOT_OFFERED: DocumentActionOutcome = {
-  ok: false,
-  reason: "refused",
-  message: "This step isn't offered for this document.",
-};
-
-const CANCELLED: DocumentActionOutcome = {
-  ok: false,
-  reason: "cancelled",
-  message: "Cancelled.",
-};
-
-/** A comment being asked for, and who waits for the answer. */
-interface Asking {
-  step: ReviewStep;
-  resolve: (outcome: DocumentActionOutcome) => void;
-}
-
 export function useEditorReview({
   document,
   locale,
@@ -94,9 +78,8 @@ export function useEditorReview({
 }: EditorReviewInput): EditorReview {
   const query = useReviewState(document);
   const { defaultLocale } = useLocalization();
-  const mutation = useTakeStep(document);
+  const taker = useStepTaker(document);
   const queryClient = useQueryClient();
-  const [asking, setAsking] = useState<Asking | null>(null);
 
   // A store moves the review (an edit to approved content returns it to
   // review), so a new stamp asks again; the first render asks anyway.
@@ -109,49 +92,24 @@ export function useEditorReview({
     });
   }, [storedStamp, document, queryClient]);
 
+  // The parts one step moves together, the first of them the one the header
+  // speaks for.
   const onScreen = partsOnScreen(query.data, locale ?? defaultLocale);
-  const part = onScreen[0]?.stage === null ? undefined : onScreen[0];
+  const part = onScreen[0];
 
   if (document === undefined || part === undefined) {
     return { binding: undefined, part: undefined, dialog: null };
   }
 
-  const holds = (step: ReviewStep): boolean => step.mayTake;
-
-  const send = async (
-    step: ReviewStep,
-    comment?: string
-  ): Promise<DocumentActionOutcome> => {
-    const seen = onScreen.flatMap(each =>
-      each.version === null
-        ? []
-        : [{ part: each.part, revision: each.revision, version: each.version }]
-    );
-    if (seen.length !== onScreen.length) return NOT_OFFERED;
-    try {
-      await mutation.mutateAsync({
-        step: step.name,
-        parts: onScreen.map(each => each.part),
-        seen,
-        ...(comment === undefined ? {} : { comment }),
-      });
-      toast.success(`${step.label}: done.`);
-      return { ok: true };
-    } catch (reason) {
-      const message = apiErrorMessage(
-        reason,
-        `${step.label} didn't go through.`
-      );
-      toast.error(message);
-      return { ok: false, reason: "failed", message, reported: true };
-    }
-  };
+  // Offered only where every part it moves may take it.
+  const holds = (step: ReviewStep): boolean => takeableOnEvery(step, onScreen);
 
   const takeStep = (name: string): Promise<DocumentActionOutcome> => {
     const step = part.steps.find(candidate => candidate.name === name);
-    if (step === undefined || !holds(step)) return Promise.resolve(NOT_OFFERED);
-    if (step.kind !== "request-changes") return send(step);
-    return new Promise(resolve => setAsking({ step, resolve }));
+    if (step === undefined || !holds(step)) {
+      return Promise.resolve(STEP_NOT_OFFERED);
+    }
+    return taker.take(step, onScreen);
   };
 
   const state: ReviewActionState = {
@@ -168,29 +126,7 @@ export function useEditorReview({
     ...stepHold(isDirty, onScreen),
   };
 
-  const dialog = (
-    <RequestChangesDialog
-      key={asking?.step.name ?? "closed"}
-      open={asking !== null}
-      label={asking?.step.label ?? ""}
-      pending={mutation.isPending}
-      onCancel={() => {
-        asking?.resolve(CANCELLED);
-        setAsking(null);
-      }}
-      onSend={comment => {
-        if (asking === null) return;
-        void send(asking.step, comment).then(outcome => {
-          // A refused step keeps the dialog, and the comment, for a retry.
-          if (!outcome.ok) return;
-          asking.resolve(outcome);
-          setAsking(null);
-        });
-      }}
-    />
-  );
-
-  return { binding: { state, takeStep }, part, dialog };
+  return { binding: { state, takeStep }, part, dialog: taker.dialog };
 }
 
 /** Why no step can be taken at this moment, where something holds them. */

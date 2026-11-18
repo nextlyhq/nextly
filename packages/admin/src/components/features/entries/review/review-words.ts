@@ -13,10 +13,13 @@ import type {
 } from "@admin/types/workflows";
 
 /**
- * The parts the editor on screen acts for: the language being edited, and
- * the shared part where it stands in the same stage, since the same edit
- * moves both. A document that is not translated has only the shared part.
- * Empty where no workflow is attached.
+ * The parts the editor's header acts for, moved together by one step: the
+ * language being edited while it waits in a stage, with the shared part where
+ * it waits in the same stage, since the same edit moves both. Where the
+ * language is live with nothing waiting (or the document is not translated),
+ * the shared part, while it waits. Empty where no workflow is attached or
+ * nothing waits. A shared part waiting in another stage than the language is
+ * moved from the side panel's Review section, which offers each part's steps.
  */
 export function partsOnScreen(
   answer: ReviewStateAnswer | undefined,
@@ -24,15 +27,31 @@ export function partsOnScreen(
 ): PartReview[] {
   if (answer === undefined || !answer.attached) return [];
   const { parts } = answer.review;
+  const waiting = (part: PartReview | undefined): part is PartReview =>
+    part !== undefined && part.stage !== null;
   const shared = parts.find(part => part.part === null);
   const own =
     language === undefined
       ? undefined
       : parts.find(part => part.part === language);
-  if (own === undefined) return shared === undefined ? [] : [shared];
-  return shared !== undefined && shared.stage === own.stage
-    ? [own, shared]
-    : [own];
+  if (!waiting(own)) return waiting(shared) ? [shared] : [];
+  return waiting(shared) && shared.stage === own.stage ? [own, shared] : [own];
+}
+
+/**
+ * Whether `step` may be taken on every one of `parts`: a step moving them
+ * together is offered only where each of them may take it.
+ */
+export function takeableOnEvery(
+  step: { name: string },
+  parts: readonly PartReview[]
+): boolean {
+  return (
+    parts.length > 0 &&
+    parts.every(part =>
+      part.steps.some(each => each.name === step.name && each.mayTake)
+    )
+  );
 }
 
 /** Who a part waits for, as words; null where it waits for no one. */

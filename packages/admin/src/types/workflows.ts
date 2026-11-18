@@ -26,6 +26,8 @@ export interface ReviewStep {
   mayTake: boolean;
   /** Whether it is its stage's primary step: the editor's main action there. */
   primary: boolean;
+  /** Whether it is taken only with a comment, as its definition says. */
+  commentRequired: boolean;
 }
 
 /** Whom a part is assigned to: one person, or anyone holding one role. */
@@ -76,6 +78,8 @@ export interface DocumentReview {
   /** Null where no workflow is attached; there are then no parts. */
   workflow: { slug: string; label: string } | null;
   parts: PartReview[];
+  /** Whether the caller may publish the document without review, as the server judges it. */
+  mayPublishWithoutReview: boolean;
 }
 
 /**

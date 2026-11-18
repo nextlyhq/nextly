@@ -65,7 +65,7 @@ import { ReadyToPublish, WithoutReviewReason } from "./ReadyToPublish";
 export interface PublishReview {
   document: ReleaseDocumentRef;
   parts: readonly PartReview[];
-  /** Whether the person holds `publish-without-review-<slug>`. */
+  /** Whether the person may publish past the workflow, as the server judges it. */
   mayPublishWithoutReview: boolean;
 }
 
@@ -189,6 +189,18 @@ export function PublishPartsDialog({
     }
   };
 
+  // Asked again of the parts chosen now: a selection changed while the reason was written may no
+  // longer need the bypass, and then it is left and the publish made as usual, never sent past a
+  // review it does not need. Anything else still holding Publish keeps it held.
+  const confirmWithoutReview = async (why: string): Promise<void> => {
+    if (offersWithoutReview) {
+      await confirm(why);
+      return;
+    }
+    setReason(null);
+    if (problems.length === 0) await confirm();
+  };
+
   const changedSince = refusal !== null && refusedAsChangedSince(refusal);
   const otherRefusal =
     refusal !== null && refused.size === 0 && !changedSince
@@ -302,7 +314,7 @@ export function PublishPartsDialog({
                 move.isPending ||
                 reason.trim() === ""
               }
-              onClick={() => void confirm(reason.trim())}
+              onClick={() => void confirmWithoutReview(reason.trim())}
             >
               {move.isPending ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />

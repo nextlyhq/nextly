@@ -107,6 +107,7 @@ describe("a document with no workflow attached", () => {
       review: {
         workflow: { slug: "review", label: "Review" },
         parts: [inReview],
+        mayPublishWithoutReview: false,
       },
     });
     renderPanel();
