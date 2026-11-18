@@ -62,6 +62,9 @@ names only.
 - With no terminal (CI, `--non-interactive`), it writes nothing and exits 1 unless
   `--accept-data-loss` (or `NEXTLY_ACCEPT_DATA_LOSS`) covers every deletion. Give it alone to
   cover them all, or name tables and columns: `--accept-data-loss=dc_posts,dc_pages.summary`.
+  A table or column whose name holds a space, a comma or a dot cannot be named in the list, nor
+  can a table named `1`, `true`, `0` or `false`, which the consent reads as a yes or a no: only
+  the consent given alone covers it, and a refusal asks for that.
 
 The file it writes is marked in its header, so the deletion is visible in review:
 
@@ -1582,7 +1585,7 @@ limits are accepted:
 
 | Code                            | Meaning                                                                                                                                                                                                                                                                                                    |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PLUGIN_SCHEMA_BEHIND`          | The plugin expects a newer schema than the database has. Run `nextly migrate`.                                                                                                                                                                                                                             |
+| `PLUGIN_SCHEMA_BEHIND`          | The plugin expects a newer schema than the database has. Run `nextly migrate`. Where migrations at start were refused for the data-loss consent, the error lists each deletion and the consent to give.                                                                                                    |
 | `PLUGIN_NOT_INSTALLED`          | An enabled plugin in your config has not been installed on this database. Run `nextly plugins install <name>` for each one it names, or `nextly plugins install --all`. A disabled plugin is not required to be installed: its tables exist, but its `onInstall` runs only when you enable and install it. |
 | `PLUGIN_SCHEMA_UNINSTALLED`     | The plugin was uninstalled, with or without `--keep-data`, but is still in your config. Reinstall it or remove the line.                                                                                                                                                                                   |
 | `PLUGIN_UNINSTALL_UNFINISHED`   | An uninstall of the plugin began and did not finish. Run it again, the way it began, to finish it, or reinstall the plugin.                                                                                                                                                                                |

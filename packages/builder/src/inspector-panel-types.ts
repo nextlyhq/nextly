@@ -23,6 +23,7 @@ import type { CanvasPassage } from "./canvas/canvas-passage";
 import type { ComponentFieldsHost } from "./component-fields";
 import type { ComponentVariantsHost } from "./component-variants";
 import type { ContentServices } from "./content-controls";
+import type { BlockCustomCssAccess } from "./custom-css";
 import type { EditorState } from "./editor-state";
 import type { BreakpointsStatus } from "./hide-on";
 import type { LookEditing } from "./look-inspector";
@@ -114,6 +115,16 @@ export interface InspectorPanelProps {
    * @experimental Settles with the Design panel's Block styles.
    */
   onEditBlockStyles?: (blockType: string) => void;
+  /**
+   * A block's own custom CSS, given only where the person may change the
+   * site's settings, the permission site code is held to: Advanced then ends
+   * with a Custom CSS section, checked by `check` before anything is stored.
+   * Absent, there is no such section, the Style tab only says a block has
+   * custom CSS, and the CSS itself is never shown.
+   *
+   * @experimental Settles with custom CSS.
+   */
+  customCss?: BlockCustomCssAccess;
   /**
    * The editor whose selected block this edits.
    *

@@ -457,6 +457,7 @@ export class CollectionMetadataService extends BaseService {
         adapter: this.adapter,
         logger: this.logger,
         label: `create collection "${data.name}"`,
+        migrationsDir: this.builderSave?.migrationsDir,
         // The DDL runs here only in development; elsewhere this writes a migration file and a
         // registry row, and must not create the lock table on a role without DDL rights.
         issuesDdl: this.isDevelopment(),
@@ -1196,6 +1197,7 @@ export class CollectionMetadataService extends BaseService {
         adapter: this.adapter,
         logger: this.logger,
         label: `update collection "${params.collectionName}"`,
+        migrationsDir: this.builderSave?.migrationsDir,
         // Only a save that reshapes the table, in development, issues DDL here; a label or admin
         // option change writes the registry row alone.
         issuesDdl: collectionSaveIssuesDdl(body, this.isDevelopment()),
@@ -1480,6 +1482,7 @@ export class CollectionMetadataService extends BaseService {
         adapter: this.adapter,
         logger: this.logger,
         label: `delete collection "${params.collectionName}"`,
+        migrationsDir: this.builderSave?.migrationsDir,
         // The table drop runs here only in development; elsewhere the delete writes a drop
         // migration and removes rows. Its one DDL outside development, dropping a localized
         // collection's translations table, still runs under the lock wherever the lock table
