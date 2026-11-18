@@ -595,6 +595,36 @@ describe("the Style tab's drags", () => {
     expect(styleOf("opacity")).toBeUndefined();
   });
 
+  it("moves the canvas as the colour picker is moved, and the gesture is one undo step", () => {
+    mount();
+    openStyle();
+    row("color");
+    fireEvent.click(screen.getByRole("button", { name: /^Colour for / }));
+    const custom = screen.queryByRole("button", { name: "Custom colour" });
+    if (custom?.getAttribute("aria-expanded") === "false") {
+      fireEvent.click(custom);
+    }
+    // The surface's arrow keys move it as a drag does, one report a move.
+    const surface = screen.getByRole("application", {
+      name: /Saturation and brightness/,
+    });
+    fireEvent.keyDown(surface, { key: "ArrowLeft" });
+    frame();
+    const first = styleOf("color");
+    expect(first).not.toBe("#0000ff");
+    fireEvent.keyDown(surface, { key: "ArrowLeft" });
+    frame();
+    expect(styleOf("color")).not.toBe(first);
+
+    // Closing the picker ends the gesture: one step, undone whole.
+    fireEvent.keyDown(surface, { key: "Escape" });
+    expect(editor().undoDepth).toBe(1);
+    act(() => {
+      void editor().undo();
+    });
+    expect(styleOf("color")).toBe("#0000ff");
+  });
+
   it("puts the canvas back on Escape mid-drag, and records nothing", () => {
     const field = pressAndMove(10);
     frame();
