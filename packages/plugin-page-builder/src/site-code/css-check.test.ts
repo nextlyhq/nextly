@@ -131,10 +131,20 @@ describe.each(LEVELS)("custom CSS at the %s level", level => {
     );
   });
 
-  it("refuses a pasted <style> wrapper, with what to do", () => {
-    expect(reasons(`<style>${at(level, "color: red;")}</style>`)).toContain(
-      "Paste the CSS without the <style> tags."
-    );
+  it("refuses a pasted <style> wrapper with what to do, and nothing the tags themselves break", () => {
+    expect(reasons(`<style>${at(level, "color: red;")}</style>`)).toEqual([
+      "Leave out the <style> tags.",
+    ]);
+    // On lines of their own, the closing tag isn't refused a second time.
+    expect(reasons(`<style>\n${at(level, "color: red;")}\n</style>`)).toEqual([
+      "Leave out the <style> tags.",
+    ]);
+  });
+
+  it("still names what else it refuses inside a pasted <style> wrapper", () => {
+    expect(
+      reasons(`<style>\n@import "/a.css";\n${at(level, "color: red;")}</style>`)
+    ).toEqual(["Leave out the <style> tags.", "@import isn't allowed."]);
   });
 
   it("refuses CSS longer than a box may hold", () => {

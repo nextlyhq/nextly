@@ -2,7 +2,13 @@
 
 /**
  * Settings → Site → Code: the code every published page carries, in its head
- * and at the end of its body.
+ * and at the end of its body, and the site's own CSS, in a box above them.
+ *
+ * The CSS is plain CSS, checked on a save by the one checker the server runs
+ * too: what it refuses is named by line under the box and nothing is saved,
+ * the code beside it included. It is saved before the code, so CSS someone
+ * else saved since it was read stops the save before anything is stored, and
+ * the draft is kept to save over theirs.
  *
  * What is saved is described in plain words until Edit code opens the code
  * itself. A save checks the code on the server first: what can't be stored is
@@ -15,7 +21,11 @@
  * @experimental
  */
 import { SITE_CODE_POLICY_DOCS_HREF } from "@nextlyhq/builder/shell";
-import { usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import {
+  isApiError,
+  usePluginRoute,
+  validationIssues,
+} from "@nextlyhq/plugin-sdk/admin";
 import {
   Alert,
   AlertDescription,
@@ -25,6 +35,7 @@ import {
 } from "@nextlyhq/ui";
 import { Check, Copy, Info, Loader2, TriangleAlert } from "lucide-react";
 import {
+  useCallback,
   useEffect,
   useId,
   useRef,
@@ -39,13 +50,17 @@ import {
   SITE_CODE_ROUTE_PATH,
   type SiteCodeChecked,
   type SiteCodeRead,
+  type SiteCodeSaved,
 } from "../../library-contract";
 import type { CspAddition, CspFinding } from "../../site-code/csp";
 import { SITE_CODE_LIMITS } from "../../site-code/limits";
+import type { SiteCssRead } from "../../site-css-contract";
 import {
   checkSiteCode,
   readLivePolicy,
+  readSiteCss,
   saveSiteCode,
+  saveSiteCss,
   type SiteCodeDraft,
 } from "../site-code-client";
 
@@ -148,46 +163,218 @@ function useTellTheTab(
   );
 }
 
-/** The section's read, its step, the code as typed, and what can be done. */
+/** The site's CSS as last read: still being read, unreadable, or read. */
+type SiteCssLoad =
+  | { readonly kind: "loading" }
+  | { readonly kind: "failed" }
+  | { readonly kind: "read"; readonly read: SiteCssRead };
+
+/**
+ * The site's CSS, read apart from the code since it is stored apart: a
+ * failure to read it leaves the code as editable as ever, and is said beside
+ * it with a way to read it again.
+ */
+function useSiteCssRead() {
+  const [load, setLoad] = useState<SiteCssLoad>({ kind: "loading" });
+  const [asked, setAsked] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    readSiteCss(controller.signal).then(
+      read => {
+        if (!controller.signal.aborted) setLoad({ kind: "read", read });
+      },
+      () => {
+        if (!controller.signal.aborted) setLoad({ kind: "failed" });
+      }
+    );
+    return () => controller.abort();
+  }, [asked]);
+  return {
+    load,
+    /** Read it again; one that failed shows as being read meanwhile. */
+    reread: (): void => {
+      setLoad(current =>
+        current.kind === "failed" ? { kind: "loading" } : current
+      );
+      setAsked(count => count + 1);
+    },
+    /** What a save stored, shown until the read again answers. */
+    saved: (read: SiteCssRead): void => setLoad({ kind: "read", read }),
+  };
+}
+
+/**
+ * What a save made from CSS someone else has replaced since is told. Nothing
+ * was saved, the draft stays, and the next save is made over theirs.
+ */
+const CSS_SAVED_BY_SOMEONE_ELSE =
+  "Someone else saved the site CSS while you were editing, so nothing was saved. Your CSS is still here: save again to replace theirs, or cancel to see what they saved.";
+
+/**
+ * What the one checker refuses in the site's CSS, each naming its line: the
+ * browser's early word, which the server's own check on the save repeats.
+ * Loaded when a save asks, as its CSS parser is large, and the page's Code
+ * tab, which shares this module, has no use for it.
+ */
+async function cssRefusalsIn(css: string): Promise<string[]> {
+  const { checkCustomCss, customCssProblemText } = await import(
+    "../../site-code/css-check"
+  );
+  return checkCustomCss(css, "site").map(customCssProblemText);
+}
+
+/** The lines the server's checker refused, each as it names them. */
+function cssRefusalsOf(reason: unknown): string[] {
+  return validationIssues(reason)
+    .filter(issue => issue.code === "SITE_CSS_REFUSED")
+    .flatMap(issue => (issue.message === undefined ? [] : [issue.message]));
+}
+
+/**
+ * The CSS as opened to edit: the read it was made from, by whose hash it is
+ * saved; what the checker refused in it; and whether a save stored it.
+ */
+function useCssDraft(
+  css: ReturnType<typeof useSiteCssRead>,
+  editing: boolean,
+  typed: string,
+  fill: (css: string) => void
+) {
+  // None while the CSS isn't open, or couldn't be read.
+  const [base, setBase] = useState<SiteCssRead | null>(null);
+  const [refused, setRefused] = useState<readonly string[]>([]);
+  const [saved, setSaved] = useState(false);
+  // CSS read only after the code was opened fills its box when it answers:
+  // the box isn't drawn before, so nothing typed is replaced.
+  const lateRead =
+    editing && base === null && css.load.kind === "read"
+      ? css.load.read
+      : undefined;
+  useEffect(() => {
+    if (lateRead === undefined) return;
+    setBase(lateRead);
+    fill(lateRead.css);
+  }, [lateRead, fill]);
+
+  /** Save what is typed over `from`: "refused" where the server's checker refused it. */
+  const save = async (from: SiteCssRead): Promise<"saved" | "refused"> => {
+    try {
+      const answer = await saveSiteCss(typed, from.sha256);
+      const now = { ...from, css: typed, sha256: answer.sha256 };
+      setBase(now);
+      css.saved(now);
+      setSaved(true);
+      return "saved";
+    } catch (reason) {
+      const refusals = cssRefusalsOf(reason);
+      if (refusals.length > 0) {
+        setRefused(refusals);
+        return "refused";
+      }
+      if (!isApiError(reason) || reason.status !== 409) throw reason;
+      // Theirs is what the draft is saved over if the person saves again.
+      const theirs = await readSiteCss().catch(() => undefined);
+      if (theirs !== undefined) setBase(theirs);
+      css.reread();
+      throw new Error(CSS_SAVED_BY_SOMEONE_ELSE);
+    }
+  };
+  return {
+    base,
+    changed: base !== null && typed !== base.css,
+    refused,
+    setRefused,
+    saved,
+    save,
+    /** Open it from the read in hand, if any; answers the CSS it holds. */
+    open: (): string => {
+      const now = css.load.kind === "read" ? css.load.read : null;
+      setBase(now);
+      setRefused([]);
+      setSaved(false);
+      return now?.css ?? "";
+    },
+    close: (): void => setBase(null),
+  };
+}
+
+/** The section's reads, its step, the code and CSS as typed, and what can be done. */
 function useSiteCodeFlow(props: SiteCodeSectionProps) {
   const read = usePluginRoute<SiteCodeRead>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: SITE_CODE_ROUTE_PATH,
     staleTime: 0,
   });
+  const css = useSiteCssRead();
   const [step, setStep] = useState<Step>({ kind: "view" });
-  const [text, setText] = useState({ head: "", body: "" });
+  const [text, setText] = useState({ head: "", body: "", css: "" });
+  const fillCss = useCallback(
+    (value: string) => setText(current => ({ ...current, css: value })),
+    []
+  );
+  const cssDraft = useCssDraft(css, step.kind !== "view", text.css, fillCss);
   // The version the open code was read at; a save made since refuses it.
   const [version, setVersion] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const stored = read.data;
-  const unchanged =
-    text.head === (stored?.head ?? "") && text.body === (stored?.body ?? "");
+  const codeChanged =
+    text.head !== (stored?.head ?? "") || text.body !== (stored?.body ?? "");
   useTellTheTab(props, {
     open: step.kind !== "view",
-    changed: step.kind !== "view" && (step.kind !== "edit" || !unchanged),
+    changed:
+      step.kind !== "view" &&
+      (step.kind !== "edit" || codeChanged || cssDraft.changed),
     working,
   });
 
+  // The CSS is saved first: refused, or replaced since it was read, it
+  // stops the save before the code is saved, so nothing is.
   const save = async (
-    draft: SiteCodeDraft,
+    draft: SiteCodeDraft | undefined,
     acknowledgeCsp: string | null
   ): Promise<void> => {
-    const saved = await saveSiteCode(draft, version, acknowledgeCsp);
-    read.refetch();
-    setStep({ kind: "view", saved });
+    const from = cssDraft.changed ? cssDraft.base : null;
+    if (from !== null && (await cssDraft.save(from)) === "refused") {
+      setStep({ kind: "edit" });
+      return;
+    }
+    let saved: SiteCodeSaved | undefined;
+    if (draft !== undefined) {
+      saved = await saveSiteCode(draft, version, acknowledgeCsp).catch(
+        (reason: unknown) => {
+          if (from === null) throw reason;
+          throw new Error(
+            `The site CSS was saved, but the code wasn't. ${failureOf(reason)}`
+          );
+        }
+      );
+      read.refetch();
+    }
+    if (from !== null) css.reread();
+    cssDraft.close();
+    setStep(saved === undefined ? { kind: "view" } : { kind: "view", saved });
   };
-  // Every save is checked first, with the policy the site sends read now.
+  // Every save is checked first: the code with the policy the site sends
+  // read now, the CSS by the one checker the server also runs. The code is
+  // checked and saved when it changed, and when nothing did, as Save code
+  // always has; the CSS only when it changed.
   const check = async (): Promise<void> => {
-    const livePolicy = await readLivePolicy();
-    const draft: SiteCodeDraft = {
-      head: text.head,
-      body: text.body,
-      ...(livePolicy === undefined ? {} : { livePolicy }),
-    };
-    const next = stepAfter(await checkSiteCode(draft), draft);
-    if (next === "save") await save(draft, null);
+    const refusedCss = cssDraft.changed ? await cssRefusalsIn(text.css) : [];
+    cssDraft.setRefused(refusedCss);
+    const draft =
+      codeChanged || !cssDraft.changed ? await codeDraftOf(text) : undefined;
+    const next =
+      draft === undefined
+        ? "save"
+        : stepAfter(await checkSiteCode(draft), draft);
+    if (refusedCss.length > 0) {
+      // Refused CSS saves nothing, the code beside it included, and what
+      // the code's check refused is named with it.
+      setStep(
+        next !== "save" && next.kind === "edit" ? next : { kind: "edit" }
+      );
+    } else if (next === "save") await save(draft, null);
     else setStep(next);
   };
   const run = (work: () => Promise<void>): void => {
@@ -203,6 +390,11 @@ function useSiteCodeFlow(props: SiteCodeSectionProps) {
   };
   return {
     read,
+    css: css.load,
+    rereadCss: css.reread,
+    cssOpen: cssDraft.base !== null,
+    cssRefused: cssDraft.refused,
+    cssSaved: cssDraft.saved,
     step,
     text,
     setText,
@@ -212,16 +404,32 @@ function useSiteCodeFlow(props: SiteCodeSectionProps) {
       // Never from a read being refreshed: it may predate a save.
       // Nor from one whose refresh failed: what it holds may be stale.
       if (stored === undefined || read.fetching || read.error !== null) return;
-      setText({ head: stored.head, body: stored.body });
+      setText({ head: stored.head, body: stored.body, css: cssDraft.open() });
       setVersion(stored.version);
       setProblem(null);
       setStep({ kind: "edit" });
     },
     back: (): void => setStep({ kind: "edit" }),
-    cancel: (): void => setStep({ kind: "view" }),
+    cancel: (): void => {
+      cssDraft.close();
+      setStep({ kind: "view" });
+    },
     check: (): void => run(check),
     save: (draft: SiteCodeDraft, acknowledgeCsp: string | null): void =>
       run(() => save(draft, acknowledgeCsp)),
+  };
+}
+
+/** The code as typed, with the policy the site sends read now, to check. */
+async function codeDraftOf(text: {
+  head: string;
+  body: string;
+}): Promise<SiteCodeDraft> {
+  const livePolicy = await readLivePolicy();
+  return {
+    head: text.head,
+    body: text.body,
+    ...(livePolicy === undefined ? {} : { livePolicy }),
   };
 }
 
@@ -276,6 +484,9 @@ function StepView({
         <Summary
           stored={stored}
           saved={step.saved}
+          css={flow.css}
+          cssSaved={flow.cssSaved}
+          onRereadCss={flow.rereadCss}
           refresh={flow.read}
           onEdit={flow.edit}
         />
@@ -285,6 +496,12 @@ function StepView({
         <Editor
           text={flow.text}
           onText={flow.setText}
+          css={{
+            load: flow.css,
+            open: flow.cssOpen,
+            refused: flow.cssRefused,
+            onReread: flow.rereadCss,
+          }}
           refused={step.refused}
           policyDeclared={stored.policyDeclared}
           working={working}
@@ -338,15 +555,62 @@ function elements(count: number): string {
   return `${count} ${count === 1 ? "element" : "elements"}`;
 }
 
+/** The site's CSS in plain words: how long it is, never the CSS itself. */
+function cssInWords(css: string): string {
+  if (css.trim() === "") return "Nothing yet";
+  const lines = css.replace(/\n+$/, "").split("\n").length;
+  return `${lines} ${lines === 1 ? "line" : "lines"} of CSS`;
+}
+
+/** The CSS row of the summary: what is saved, or why it can't be said. */
+function CssSummary({
+  css,
+  onReread,
+}: {
+  css: SiteCssLoad;
+  onReread: () => void;
+}): JSX.Element {
+  return (
+    <div className="flex gap-3 px-3 py-2.5">
+      <dt className="w-24 shrink-0 font-medium">CSS</dt>
+      <dd className="flex flex-wrap items-center gap-3 text-muted-foreground">
+        {css.kind === "read" ? cssInWords(css.read.css) : null}
+        {css.kind === "loading" ? "Reading…" : null}
+        {css.kind === "failed" ? <CssUnread onReread={onReread} /> : null}
+      </dd>
+    </div>
+  );
+}
+
+/** That the site's CSS could not be read, with Retry. */
+function CssUnread({ onReread }: { onReread: () => void }): JSX.Element {
+  return (
+    <>
+      <span>{"The site's CSS could not be loaded."}</span>
+      <Button type="button" variant="outline" size="sm" onClick={onReread}>
+        Retry
+      </Button>
+    </>
+  );
+}
+
 /** What is saved, in plain words, with the way into the code. */
 function Summary({
   stored,
   saved,
+  css,
+  cssSaved,
+  onRereadCss,
   refresh,
   onEdit,
 }: {
   stored: SiteCodeRead;
   saved: SiteCodeChecked | undefined;
+  /** The site's CSS, read apart from the code. */
+  css: SiteCssLoad;
+  /** The CSS was saved by the save that closed the code. */
+  cssSaved: boolean;
+  onRereadCss: () => void;
   /**
    * The read, refreshed: the code opens only once it has answered, so never
    * from what may predate a save; a failed refresh offers Retry.
@@ -358,7 +622,9 @@ function Summary({
   onEdit: () => void;
 }): JSX.Element {
   const empty =
-    stored.described.head.length === 0 && stored.described.body.length === 0;
+    stored.described.head.length === 0 &&
+    stored.described.body.length === 0 &&
+    (css.kind !== "read" || css.read.css.trim() === "");
   return (
     <div className="space-y-3">
       {refresh.error === null ? null : (
@@ -389,7 +655,17 @@ function Summary({
           the end of the body.
         </StatusRow>
       )}
+      {cssSaved ? (
+        <StatusRow
+          icon={<Check className="size-4 text-success" aria-hidden="true" />}
+          title="Site CSS saved"
+          role="status"
+        >
+          It applies to every published page at once.
+        </StatusRow>
+      ) : null}
       <dl className="divide-y rounded-md border text-sm">
+        <CssSummary css={css} onReread={onRereadCss} />
         {PLACES.map(place => (
           <div key={place.slot} className="flex gap-3 px-3 py-2.5">
             <dt className="w-24 shrink-0 font-medium">{place.label}</dt>
@@ -435,10 +711,75 @@ function LastChanged({ stored }: { stored: SiteCodeRead }): JSX.Element | null {
   );
 }
 
-/** The two places' code, the warning above them, and Save. */
+/** The CSS box's line, under its label. */
+const CSS_LINE = (
+  <>
+    CSS for every page of the site. Write plain CSS; no <code>{"<style>"}</code>{" "}
+    tags needed.
+  </>
+);
+
+/** The CSS box, the editor's first, as the site's CSS is read. */
+interface CssBox {
+  readonly load: SiteCssLoad;
+  /** The CSS is open to edit: it was read when the code was opened, or since. */
+  readonly open: boolean;
+  /** What the checker refused in it, each naming its line. */
+  readonly refused: readonly string[];
+  readonly onReread: () => void;
+}
+
+/** The code and CSS as typed. */
+interface Typed {
+  readonly head: string;
+  readonly body: string;
+  readonly css: string;
+}
+
+/** The CSS box, or why it isn't there: not read yet, or not readable. */
+function CssEditor({
+  css,
+  value,
+  onChange,
+  firstRefusal,
+  working,
+}: {
+  css: CssBox;
+  value: string;
+  onChange: (value: string) => void;
+  firstRefusal: RefObject<HTMLLIElement | null> | undefined;
+  working: boolean;
+}): JSX.Element {
+  if (css.open) {
+    return (
+      <PlaceEditor
+        place="css"
+        label="CSS"
+        hint={CSS_LINE}
+        value={value}
+        onChange={onChange}
+        refusals={css.refused}
+        firstRefusal={firstRefusal}
+        working={working}
+      />
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+      {css.load.kind === "failed" ? (
+        <CssUnread onReread={css.onReread} />
+      ) : (
+        "Reading the site's CSS…"
+      )}
+    </div>
+  );
+}
+
+/** The CSS and the two places' code, the warning above them, and Save. */
 function Editor({
   text,
   onText,
+  css,
   refused,
   policyDeclared,
   working,
@@ -446,8 +787,9 @@ function Editor({
   onCancel,
   onSave,
 }: {
-  text: { head: string; body: string };
-  onText: (text: { head: string; body: string }) => void;
+  text: Typed;
+  onText: (text: Typed) => void;
+  css: CssBox;
   refused: SiteCodeChecked | undefined;
   policyDeclared: boolean;
   working: boolean;
@@ -458,12 +800,17 @@ function Editor({
   const firstRefusal = useRef<HTMLLIElement>(null);
   // Each check that refuses moves focus to the first thing it refused, so a
   // keyboard or screen reader user hears why nothing was saved.
+  // The CSS box comes first, so its refusals are the first thing refused.
+  const cssRefused = css.refused.length > 0;
   useEffect(() => {
-    if (refused !== undefined) firstRefusal.current?.focus();
-  }, [refused]);
-  const firstPlace = PLACES.find(
-    place => (refused?.[place.slot].refusals.length ?? 0) > 0
-  )?.slot;
+    if (refused !== undefined || css.refused.length > 0) {
+      firstRefusal.current?.focus();
+    }
+  }, [refused, css.refused]);
+  const firstPlace = cssRefused
+    ? undefined
+    : PLACES.find(place => (refused?.[place.slot].refusals.length ?? 0) > 0)
+        ?.slot;
   return (
     <div className="space-y-4">
       <Alert variant="warning">
@@ -475,6 +822,13 @@ function Editor({
           Only add code from sources you trust.
         </AlertDescription>
       </Alert>
+      <CssEditor
+        css={css}
+        value={text.css}
+        onChange={value => onText({ ...text, css: value })}
+        firstRefusal={cssRefused ? firstRefusal : undefined}
+        working={working}
+      />
       {PLACES.map(place => (
         <PlaceEditor
           key={place.slot}
@@ -498,7 +852,7 @@ function Editor({
       </p>
       <Actions
         hint={
-          refused === undefined
+          refused === undefined && !cssRefused
             ? "Saving checks the code first. Nothing runs inside the admin or in previews."
             : "Nothing was saved."
         }
@@ -525,14 +879,18 @@ function Editor({
 export function PlaceEditor({
   place,
   label,
+  hint,
   value,
   onChange,
   refusals,
   firstRefusal,
   working,
 }: {
-  place: Place;
+  /** Where it goes on a page; `css` is the site's CSS box. */
+  place: Place | "css";
   label: string;
+  /** A line under the label saying what the box is for. */
+  hint?: ReactNode;
   value: string;
   onChange: (value: string) => void;
   refusals: readonly string[];
@@ -543,7 +901,14 @@ export function PlaceEditor({
   const id = useId();
   const refusedId = `${id}-refused`;
   const countId = `${id}-count`;
+  const hintId = `${id}-hint`;
   const over = value.length > SITE_CODE_LIMITS.slotChars;
+  // The line first, then the length, then what was refused, as read aloud.
+  const describedBy = [
+    ...(hint === undefined ? [] : [hintId]),
+    countId,
+    ...(refusals.length > 0 ? [refusedId] : []),
+  ].join(" ");
   return (
     <div className="space-y-1.5">
       <div className="flex items-baseline justify-between gap-3">
@@ -558,6 +923,11 @@ export function PlaceEditor({
           {SITE_CODE_LIMITS.slotChars.toLocaleString()} characters
         </span>
       </div>
+      {hint === undefined ? null : (
+        <p id={hintId} className="text-xs text-muted-foreground">
+          {hint}
+        </p>
+      )}
       <Textarea
         id={id}
         value={value}
@@ -567,11 +937,9 @@ export function PlaceEditor({
         autoCapitalize="off"
         autoCorrect="off"
         wrap="off"
-        rows={place === "head" ? 8 : 4}
+        rows={place === "body" ? 4 : 8}
         aria-invalid={refusals.length > 0 || over}
-        aria-describedby={
-          refusals.length > 0 ? `${countId} ${refusedId}` : countId
-        }
+        aria-describedby={describedBy}
         // Red-edged while it holds what can't be stored, as its list below.
         className={`resize-y bg-muted/40 font-mono text-xs leading-relaxed ${refusals.length > 0 || over ? "border-destructive" : ""}`}
       />

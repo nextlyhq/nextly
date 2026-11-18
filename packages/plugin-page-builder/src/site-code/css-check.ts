@@ -66,11 +66,14 @@ export function checkCustomCss(
   }
   const problems = new Problems();
   textProblems(css, problems);
-  parsedProblems(css, problems);
-  fetchProblems(css, problems);
+  // What is inside pasted `<style>` tags is read as the CSS it would be once
+  // they are left out, so its own refusals are named with theirs.
+  const read = withoutStyleTags(css);
+  parsedProblems(read, problems);
+  fetchProblems(read, problems);
   if (level === "block") {
     // A placeholder selector: only whether each rule CAN be scoped is asked.
-    const scoped = scopeBlockCss(css, ".block");
+    const scoped = scopeBlockCss(read, ".block");
     if (!scoped.ok) {
       // Only for lines nothing else refused: an `@import` is refused as an
       // import, not a second time as an at-rule a block cannot scope.
@@ -131,6 +134,18 @@ function lineAt(text: string, offset: number): number {
   return line;
 }
 
+/** A `<style>` or `</style>` tag, with whatever its opening tag carries. */
+const STYLE_TAG = /<\s*\/?\s*style\b[^>]*>/gi;
+
+/**
+ * The CSS with any `<style>` tags blanked to spaces, so every line and
+ * offset stays where it is. Only for reading: what is stored is what the
+ * author wrote, and a wrapper is refused.
+ */
+function withoutStyleTags(css: string): string {
+  return css.replace(STYLE_TAG, tag => tag.replace(/[^\n]/g, " "));
+}
+
 /**
  * What is refused by its text, wherever it is, comments included: the parser
  * does not see inside a comment, and the HTML parser that ends a style element
@@ -139,10 +154,7 @@ function lineAt(text: string, offset: number): number {
 function textProblems(css: string, problems: Problems): void {
   const wrapper = /<\s*style[\s>]/i.exec(css);
   if (wrapper !== null) {
-    problems.add(
-      lineAt(css, wrapper.index),
-      "Paste the CSS without the <style> tags."
-    );
+    problems.add(lineAt(css, wrapper.index), "Leave out the <style> tags.");
   }
   const end = STYLE_ELEMENT_END.exec(css);
   if (end !== null && wrapper === null) {
