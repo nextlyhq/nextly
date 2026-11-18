@@ -46,6 +46,7 @@ import {
   sqlFiles,
 } from "../../../domains/schema/migrate-create/__tests__/helpers/history-one-line";
 import { writeCollectionSave } from "../../../domains/schema/builder-save/collection-save";
+import { isWriterOvertaken } from "../../../domains/schema/migrate-create/writer-hold";
 import { withSchemaChangeExcluded } from "../../../domains/schema/services/schema-change-exclusion";
 import { compileAppStreamTables } from "../../../domains/schema/migrate-create/app-stream";
 import { clearActiveExtensionSchema } from "../../../domains/schema/extension/active-schema";
@@ -1622,7 +1623,13 @@ function runSuite(dialect: SupportedDialect): void {
 
       const [adopted, created] = await Promise.all([
         baseline(h),
-        runMigrateCreate(h, configV1, "create"),
+        // The generator alone, with no command's hold: it takes the folder
+        // as it writes, and one that read the folder before the baseline
+        // went in writes nothing and says so.
+        runMigrateCreate(h, configV1, "create").catch((error: unknown) => {
+          if (isWriterOvertaken(error)) return null;
+          throw error;
+        }),
       ]);
 
       // Whichever wrote first, the other read its file: a baseline second

@@ -497,64 +497,90 @@ async function placeHold(path: string, text: string): Promise<void> {
 }
 
 /**
- * Take the hold on `migrationsDir` for `command`, waiting for a held folder or
- * refusing at once as `whenHeld` says. The folder is created where there is
- * none, since the hold's file lives in it.
+ * One try at putting this taking's hold at `path`: `"own"` where the path
+ * then names it, `"no-folder"` where the folder is not there to put it in,
+ * and `"taken"` where another's is at the path, or took it before this
+ * one's was seen there (a writer stopped between placing its file and
+ * looking may find another's in its place).
  */
-export async function acquireWriterHold(args: {
+async function tryTake(
+  path: string,
+  text: string,
+  token: string
+): Promise<"own" | "no-folder" | "taken"> {
+  try {
+    await placeHold(path, text);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "no-folder";
+    if (alreadyThere(error)) return "taken";
+    throw error;
+  }
+  return (await readHold(path))?.record?.token === token ? "own" : "taken";
+}
+
+/**
+ * The hold standing in a taker's way at `path`, or undefined where there is
+ * none to wait for: it has gone, or it had lapsed and is now set aside.
+ */
+async function holdInTheWay(path: string): Promise<HoldReading | undefined> {
+  const standing = await readHold(path);
+  if (standing === undefined) return undefined;
+  if (!(await hasLapsed(path, standing))) return standing;
+  await setLapsedAside(path, standing);
+  return undefined;
+}
+
+/**
+ * Takes `path` for `record`, trying until it is this taking's or the wait
+ * `whenHeld` allows is over, and answers whether the folder had to be made
+ * again on the way (it goes with a holder that had made it only to hold it).
+ */
+async function takePath(args: {
+  path: string;
   migrationsDir: string;
-  command: string;
+  record: HoldRecord;
   whenHeld: WhenHeld;
-}): Promise<WriterHold> {
-  const migrationsDir = resolve(args.migrationsDir);
-  const path = lockPathOf(migrationsDir);
-  let createdFolder =
-    (await mkdir(migrationsDir, { recursive: true })) !== undefined;
-  const record: HoldRecord = {
-    token: randomUUID(),
-    command: args.command,
-    owner: `${hostname()}:${String(process.pid)}`,
-    startedAt: new Date().toISOString(),
-    leaseSeconds: bounds.leaseSeconds,
-  };
+}): Promise<{ madeFolder: boolean }> {
+  const { path, record } = args;
   const started = Date.now();
   const deadline = started + (args.whenHeld === "wait" ? bounds.waitMs : 0);
   const text = JSON.stringify(record, null, 2) + "\n";
+  let madeFolder = false;
   for (;;) {
-    try {
-      await placeHold(path, text);
-      // Its own only once the path is seen to name it: a writer stopped
-      // between placing the file and here may find another's in its place.
-      if ((await readHold(path))?.record?.token === record.token) break;
-      continue;
-    } catch (error) {
-      // The folder went with the holder that had made it: made again here.
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        await mkdir(migrationsDir, { recursive: true });
-        createdFolder = true;
-        continue;
-      }
-      if (!alreadyThere(error)) throw error;
-    }
-    const reading = await readHold(path);
-    if (reading === undefined) continue;
-    if (await hasLapsed(path, reading)) {
-      await setLapsedAside(path, reading);
+    const taken = await tryTake(path, text, record.token);
+    if (taken === "own") return { madeFolder };
+    if (taken === "no-folder") {
+      await mkdir(args.migrationsDir, { recursive: true });
+      madeFolder = true;
       continue;
     }
+    const standing = await holdInTheWay(path);
+    if (standing === undefined) continue;
     if (Date.now() >= deadline) {
-      if (createdFolder) await rmdir(migrationsDir).catch(() => undefined);
       throw await heldError(
         path,
-        args.command,
+        record.command,
         args.whenHeld,
-        reading,
+        standing,
         Date.now() - started
       );
     }
     await new Promise(done => setTimeout(done, WRITER_POLL_MS));
   }
+}
 
+/**
+ * The hold a taking has, once its file is at `path`: renewed while its
+ * holder runs, checked before each write, and given up as the holder ends.
+ */
+function holdTaken(args: {
+  path: string;
+  migrationsDir: string;
+  record: HoldRecord;
+  /** Whether the folder was made only to hold the file. */
+  madeFolder: boolean;
+}): WriterHold {
+  const { path, migrationsDir, record } = args;
   const key = `${path}#${record.token}`;
   held.set(key, { path, token: record.token });
   releaseOnExit();
@@ -573,12 +599,12 @@ export async function acquireWriterHold(args: {
 
   return {
     migrationsDir,
-    command: args.command,
+    command: record.command,
     assertHeld: async () => {
       const own = lost ? undefined : await stillOwn();
       if (own === true) return;
       lost = true;
-      throw writerLostError(args.command, own?.command);
+      throw writerLostError(record.command, own?.command);
     },
     release: async () => {
       clearInterval(renewal);
@@ -586,9 +612,50 @@ export async function acquireWriterHold(args: {
       // Only this taking's file: after a stall, the path may name another's.
       await takeFromPath(path, moved => moved.record?.token === record.token);
       // A folder made only to hold the file goes with it, where nothing was written.
-      if (createdFolder) await rmdir(migrationsDir).catch(() => undefined);
+      if (args.madeFolder) await rmdir(migrationsDir).catch(() => undefined);
     },
   };
+}
+
+/**
+ * Take the hold on `migrationsDir` for `command`, waiting for a held folder or
+ * refusing at once as `whenHeld` says. The folder is created where there is
+ * none, since the hold's file lives in it.
+ */
+export async function acquireWriterHold(args: {
+  migrationsDir: string;
+  command: string;
+  whenHeld: WhenHeld;
+}): Promise<WriterHold> {
+  const migrationsDir = resolve(args.migrationsDir);
+  const path = lockPathOf(migrationsDir);
+  const madeAtStart =
+    (await mkdir(migrationsDir, { recursive: true })) !== undefined;
+  const record: HoldRecord = {
+    token: randomUUID(),
+    command: args.command,
+    owner: `${hostname()}:${String(process.pid)}`,
+    startedAt: new Date().toISOString(),
+    leaseSeconds: bounds.leaseSeconds,
+  };
+  try {
+    const { madeFolder } = await takePath({
+      path,
+      migrationsDir,
+      record,
+      whenHeld: args.whenHeld,
+    });
+    return holdTaken({
+      path,
+      migrationsDir,
+      record,
+      madeFolder: madeAtStart || madeFolder,
+    });
+  } catch (error) {
+    // Refused: a folder made only to hold the file is not left behind.
+    if (madeAtStart) await rmdir(migrationsDir).catch(() => undefined);
+    throw error;
+  }
 }
 
 /** The holds the running writer has, and how it takes one it does not have yet. */
@@ -618,6 +685,31 @@ export async function withMigrationWriterHold<T>(
   } finally {
     await releaseAll(holds);
   }
+}
+
+/**
+ * The hold a command takes for the rest of its run, as
+ * `withMigrationWriterHold` takes it, for a command whose run is one long
+ * function rather than a step that can be handed over: `enter` is called
+ * from that function itself, so what it goes on to do runs under the hold,
+ * and `release` as it ends. A dry run, which writes nothing, gets a hold
+ * that holds nothing.
+ */
+export async function commandWriterHold(args: {
+  migrationsDir: string;
+  command: string;
+  dryRun: boolean;
+}): Promise<{ enter(): void; release(): Promise<void> }> {
+  if (args.dryRun) {
+    return { enter: () => undefined, release: () => Promise.resolve() };
+  }
+  const hold = await acquireWriterHold({ ...args, whenHeld: "wait" });
+  const holds = new Map([[hold.migrationsDir, hold]]);
+  return {
+    enter: () =>
+      scope.enterWith({ command: args.command, whenHeld: "wait", holds }),
+    release: () => releaseAll(holds),
+  };
 }
 
 /** Gives up every hold a writer took, as it ends. */

@@ -186,6 +186,7 @@ import {
 } from "./snapshot-io";
 import {
   assertWriterHold,
+  holdInBuilderChange,
   prepareWhole,
   publishHeld,
   startMovedError,
@@ -826,59 +827,8 @@ async function renameDecisions(
 export async function generateMigration(
   requested: GenerateArgs
 ): Promise<GenerateResult | null> {
-  // A dry run writes nothing, so it holds nothing.
-  if (requested.dryRun === true) return generateHeld(requested);
-  // One writer of the folder at a time, from the newest snapshot's read to
-  // the files' write: under the hold the caller already has, or one taken here.
-  return underWriterHold(
-    requested.migrationsDir,
-    "migrate:create",
-    async () => {
-      // A run that stalled while another took the folder stops here, before it plans.
-      await assertWriterHold(requested.migrationsDir);
-      // A starting point the caller read before it held the folder; one read
-      // below, under the hold, is the newest by its reading.
-      if (requested.previous !== undefined) {
-        await refuseMovedFrom(
-          requested.migrationsDir,
-          startOf(requested.previous)
-        );
-      }
-      return generateHeld(requested);
-    }
-  );
-}
-
-/**
- * The snapshot file a run starts from, as the checks of it read it: its name,
- * undefined where it starts from none, and null where the caller gave a
- * starting point without saying which file it is, which cannot be checked.
- */
-function startOf(
-  previous: NonNullable<GenerateArgs["previous"]> | null
-): string | undefined | null {
-  return previous === null ? undefined : (previous.filename ?? null);
-}
-
-/**
- * Refuses where the newest snapshot in the folder is no longer `startedFrom`,
- * the one this run reads as its starting point: another writer has written a
- * migration since, and this run's would be a second from the snapshot it
- * read. Asked under the hold, when the run begins and again as it writes.
- */
-async function refuseMovedFrom(
-  migrationsDir: string,
-  startedFrom: string | undefined | null
-): Promise<void> {
-  if (startedFrom === null) return;
-  const newest = await newestSnapshotName(resolve(migrationsDir, "meta"));
-  if (newest !== startedFrom) throw startMovedError(newest);
-}
-
-/** `generateMigration`, with the folder held where the run writes. */
-async function generateHeld(
-  requested: GenerateArgs
-): Promise<GenerateResult | null> {
+  // Before anything is planned: a writer another has overtaken stops here.
+  await refuseStaleStart(requested);
   // Scoped, every planner below sees the scoped entity alone.
   const scoped = withScopedEntities(requested);
   const metaDir = resolve(scoped.migrationsDir, "meta");
@@ -1550,6 +1500,49 @@ async function generateHeld(
 }
 
 /**
+ * Stops a run that has no business planning, before it plans: one that
+ * stalled while another writer took the folder, or whose starting snapshot,
+ * read by its caller before it held the folder, is no longer the newest. A
+ * Builder save takes its hold here where it has none yet. A dry run, which
+ * writes nothing, is not asked; a run with no writer's hold is asked again,
+ * under one, as it writes (`writeMigrationPair`).
+ */
+async function refuseStaleStart(requested: GenerateArgs): Promise<void> {
+  if (requested.dryRun === true) return;
+  await holdInBuilderChange(requested.migrationsDir);
+  await assertWriterHold(requested.migrationsDir);
+  // One the generator reads itself, below, is the newest by its reading.
+  if (requested.previous === undefined) return;
+  await refuseMovedFrom(requested.migrationsDir, startOf(requested.previous));
+}
+
+/**
+ * The snapshot file a run starts from, as the checks of it read it: its name,
+ * undefined where it starts from none, and null where the caller gave a
+ * starting point without saying which file it is, which cannot be checked.
+ */
+function startOf(
+  previous: NonNullable<GenerateArgs["previous"]> | null
+): string | undefined | null {
+  return previous === null ? undefined : (previous.filename ?? null);
+}
+
+/**
+ * Refuses where the newest snapshot in the folder is no longer `startedFrom`,
+ * the one this run reads as its starting point: another writer has written a
+ * migration since, and this run's would be a second from the snapshot it
+ * read. Asked under the hold, when the run begins and again as it writes.
+ */
+async function refuseMovedFrom(
+  migrationsDir: string,
+  startedFrom: string | undefined | null
+): Promise<void> {
+  if (startedFrom === null) return;
+  const newest = await newestSnapshotName(resolve(migrationsDir, "meta"));
+  if (newest !== startedFrom) throw startMovedError(newest);
+}
+
+/**
  * What says how each entity's companion stood before this run (`TranslationRecords`), and whether
  * the previous snapshot says so itself (`snapshotSays`, `recordsTranslatedFields`). A project that
  * shows no sign of translation was never translated through its migrations, so its snapshot has
@@ -1844,30 +1837,37 @@ async function writeMigrationPair(
   // after it, since a reader counts a migration from its `.sql` and so never
   // finds one whose snapshot is still to come. The companions follow in the
   // same step, so an overtaken writer adds none after its successor.
-  await publishHeld(
-    args.migrationsDir,
-    async () => {
-      await mkdir(args.migrationsDir, { recursive: true });
-      return [
-        await prepareSnapshot(
-          pair.metaDir,
-          baseName,
-          pair.written,
-          pair.sqlContent,
-          pair.contributions,
-          pair.entities,
-          pair.permissions
-        ),
-        await prepareWhole(sqlPath, pair.sqlContent),
-      ];
-    },
-    {
-      // Still from the newest snapshot: one written since would make this a
-      // second migration from the one it started at.
-      stillCurrent: () => refuseMovedFrom(args.migrationsDir, pair.startedFrom),
-      ...(pair.companions === undefined ? {} : { alongside: pair.companions }),
-    }
-  );
+  const publish = () =>
+    publishHeld(
+      args.migrationsDir,
+      async () => {
+        await mkdir(args.migrationsDir, { recursive: true });
+        return [
+          await prepareSnapshot(
+            pair.metaDir,
+            baseName,
+            pair.written,
+            pair.sqlContent,
+            pair.contributions,
+            pair.entities,
+            pair.permissions
+          ),
+          await prepareWhole(sqlPath, pair.sqlContent),
+        ];
+      },
+      {
+        // Still from the newest snapshot: one written since would make this a
+        // second migration from the one it started at.
+        stillCurrent: () =>
+          refuseMovedFrom(args.migrationsDir, pair.startedFrom),
+        ...(pair.companions === undefined
+          ? {}
+          : { alongside: pair.companions }),
+      }
+    );
+  // Under the hold the running writer has, or one taken here for a caller
+  // with none, whose starting snapshot the last check then judges.
+  await underWriterHold(args.migrationsDir, "migrate:create", publish);
   return { sqlPath, snapshotPath };
 }
 
