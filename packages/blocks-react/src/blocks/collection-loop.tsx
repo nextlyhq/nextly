@@ -532,7 +532,7 @@ export async function renderCollectionLoop({
   // item is drawn with sample entries instead, read ahead as entries are so
   // its bindings fill from them. A failed read keeps its empty state.
   const samples =
-    outcome.items.length === 0 && !outcome.failed
+    outcome.items.length === 0 && !outcome.failed && readsEveryEntry(props, paging)
       ? sampleItems(ctx, collection)
       : undefined;
   const read = await withReadAhead(
@@ -563,6 +563,25 @@ export async function renderCollectionLoop({
       sampled: samples !== undefined,
     },
     pages
+  );
+}
+
+/**
+ * Whether a list's read asks for the collection's entries from the first,
+ * unnarrowed: no filters, no related source, none skipped, its first page.
+ * Only then does an empty read mean the collection has nothing visitors can
+ * read, which is when samples stand in; a narrowed read that matched nothing
+ * shows its empty state, so the author sees that nothing matched.
+ */
+function readsEveryEntry(
+  props: CollectionLoopProps,
+  paging: { readonly page?: number | undefined } | undefined
+): boolean {
+  return (
+    (props.filters ?? []).length === 0 &&
+    props.relation === undefined &&
+    (props.offset ?? 0) === 0 &&
+    (paging?.page ?? 1) <= 1
   );
 }
 
