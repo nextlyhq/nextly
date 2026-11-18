@@ -29,4 +29,10 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A Form block's "+ Add field" and "+ Add option" in the builder now read in the editor's own text colour, at a medium weight, rather than its accent. The accent is the brand's primary colour, which a site can set to a shade too light to read as small text on the panel: an indigo such as `#6366f1` falls under the 4.5:1 small text needs.
+Small text in the builder now reads in the editor's own text colour rather than its accent:
+
+- a Form block's "+ Add field" and "+ Add option", now at a medium weight;
+- the Add panel's underlined "Retry";
+- the inspector's line saying a value is set or cleared on this page, now at a medium weight.
+
+The accent is the brand's primary colour. A site can set it to a shade too light to read as small text on the panel: an indigo such as `#6366f1` falls under the 4.5:1 small text needs. Icons beside text keep the accent.
