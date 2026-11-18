@@ -118,7 +118,7 @@ export async function emptyThePoint(
  * of the same author recorded, is left alone, and a read that fails answers
  * no.
  */
-async function holdsOwnRecording(
+export async function holdsOwnRecording(
   scope: VersionScope,
   own: Record<string, unknown> | null
 ): Promise<boolean> {

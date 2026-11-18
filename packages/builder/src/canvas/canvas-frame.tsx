@@ -66,6 +66,10 @@ import {
   SITE_CHROME_ATTRIBUTE,
 } from "./canvas-frame-sheet";
 import {
+  PreviewWidthEdges,
+  type PreviewWidthControl,
+} from "./canvas-preview-width-edges";
+import {
   frameFillingRegion,
   frameFitScale,
   type FrameSize,
@@ -262,6 +266,15 @@ export interface CanvasFrameProps {
    * @experimental Settles with the canvas's preview tags.
    */
   pinned?: React.ReactNode;
+  /**
+   * Previewing the page at a width other than the device's own: the frame
+   * draws a handle at each edge, the ruler and the line saying which device
+   * is still edited, and tells the host the width settled on. The host lays
+   * the frame out at that width through `width`. Left out, no handles.
+   *
+   * @experimental Settles with the canvas's preview width.
+   */
+  previewWidth?: PreviewWidthControl;
   /** The canvas, rendered inside the frame. */
   children?: React.ReactNode;
   /** Where the frame's page comes from. The editor's blank page by default. */
@@ -327,7 +340,8 @@ function FramedCanvas({
 }: CanvasFrameProps): React.JSX.Element {
   // The chrome drawn over the frame, apart from the markers the page's own
   // document is given.
-  const { overlay, pinned, ...markers } = rest;
+  // The preview width control is the frame's own, never a page marker.
+  const { overlay, pinned, previewWidth, ...markers } = rest;
   const stage = React.useRef<HTMLDivElement | null>(null);
   const layer = React.useRef<HTMLDivElement | null>(null);
   const layerContent = React.useRef<HTMLDivElement | null>(null);
@@ -344,7 +358,20 @@ function FramedCanvas({
   const { height, scale } = frameLayout(width, statedHeight, region, zoom);
   useReportedScale(scale, onScale);
 
-  const viewport = useFrameViewport(frame, page, width, height);
+  /*
+   * Set while the preview width's handles are dragged: the drag resizes the
+   * page's frame each animation frame, and its viewport is read again once
+   * the width settles rather than at every step, so nothing that reads the
+   * frame renders per pixel.
+   */
+  const resizing = React.useRef(false);
+  // Counted at each drag's end, so the viewport is read again then, even
+  // where the drag settles on the width it started at.
+  const [settled, setSettled] = React.useState(0);
+  const viewport = useFrameViewport(frame, page, width, height, {
+    held: resizing,
+    settled,
+  });
   useRegistered(frame, scale, viewport);
 
   usePageMarkers(frame, page, mountPoint, markers);
@@ -386,6 +413,17 @@ function FramedCanvas({
           }
           overlay={overlay}
           pinned={pinned}
+        />
+        {/* At the box's edges, over the layer, so the handles sit at the
+            page's edges and beside it in the well. */}
+        <PreviewWidthEdges
+          control={previewWidth}
+          width={width}
+          scale={scale}
+          onDragging={active => {
+            resizing.current = active;
+            if (!active) setSettled(count => count + 1);
+          }}
         />
       </div>
       <FramePage mountPoint={mountPoint}>{children}</FramePage>
@@ -887,13 +925,16 @@ function useReportedScale(
 
 /**
  * The frame's viewport in its own pixels, read again when the page, the
- * frame's size or the window's resize changes it.
+ * frame's size or the window's resize changes it; not while `held`, as while
+ * the preview width is dragged, and again each time `settled` counts a drag's
+ * end.
  */
 function useFrameViewport(
   frame: HTMLIFrameElement | null,
   page: Document | null,
   width: number,
-  height: number
+  height: number,
+  { held, settled }: { held: React.RefObject<boolean>; settled: number }
 ): FrameSize | null {
   const [viewport, setViewport] = React.useState<FrameSize | null>(null);
   useIsomorphicLayoutEffect(() => {
@@ -902,6 +943,7 @@ function useFrameViewport(
       return;
     }
     const read = (): void => {
+      if (held.current) return;
       const next = frameViewportOf(frame);
       setViewport(current =>
         current !== null &&
@@ -916,7 +958,7 @@ function useFrameViewport(
     const view = page.defaultView;
     view?.addEventListener("resize", read);
     return () => view?.removeEventListener("resize", read);
-  }, [frame, page, width, height]);
+  }, [frame, page, width, height, held, settled]);
   return viewport;
 }
 
