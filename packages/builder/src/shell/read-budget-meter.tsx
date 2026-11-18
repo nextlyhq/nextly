@@ -60,6 +60,7 @@ import {
   type ReadBudgetStanding,
   type ReadKind,
 } from "./read-budget";
+import { regionHolding } from "./unread-places";
 
 export interface ReadBudgetMeterProps {
   /** The latest draw's count, or `undefined` while the canvas is counting. */
@@ -500,19 +501,6 @@ function UnreadBlocks({
   );
 }
 
-/** The Layout region whose document holds a block, when one does. */
-function regionHolding(
-  regions: readonly CanvasRegion[],
-  nodeId: string,
-  componentTitle: ComponentTitleOf | undefined
-): { region: CanvasRegion; name: string } | undefined {
-  for (const region of regions) {
-    const name = blockNameOf(region.document, nodeId, componentTitle);
-    if (name !== undefined) return { region, name };
-  }
-  return undefined;
-}
-
 /**
  * One unread block: a page's selects it; a Layout region's is named with
  * the Layout it comes from and offers that Layout's editor, since the page's
@@ -539,7 +527,12 @@ function UnreadRow({
   const name = blockNameOf(editor.document, nodeId, componentTitle);
   const held =
     name === undefined
-      ? regionHolding(regions, nodeId, componentTitle)
+      ? regionHolding(
+          regions,
+          nodeId,
+          region => region.document,
+          componentTitle
+        )
       : undefined;
   if (held !== undefined) {
     const { region } = held;
