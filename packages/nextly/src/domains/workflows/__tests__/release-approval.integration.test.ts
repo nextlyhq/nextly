@@ -23,6 +23,7 @@ import type { CollectionRegistryService } from "../../collections/services/colle
 import { seedPlainAuthor } from "../../releases/__tests__/helpers/live-author";
 import { lockServerOf } from "../../releases/__tests__/helpers/release-writes";
 import { applyDueReleases } from "../../releases/apply-due-releases";
+import { planReleaseMaterialisation } from "../../releases/plan-release-materialisation";
 import type {
   ReleaseCheckContext,
   ReleaseCheckReads,
@@ -46,6 +47,7 @@ import {
   LATER,
   PAST,
   publishPage,
+  recordBannerVersionIn,
   releaseState,
   saveBanner,
   storedPageStatus,
@@ -71,9 +73,42 @@ afterEach(async () => {
   current = undefined;
 });
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
-  current = await bootApprovals(dialect);
+async function boot(
+  dialect: TestDialect,
+  options: { perLanguageStorage?: boolean } = {}
+): Promise<TestNextly> {
+  current = await bootApprovals(dialect, options);
   return current;
+}
+
+/** The documents a due pass would reach, in the order it reaches them, planned as the pass plans. */
+async function plannedOrder(t: TestNextly): Promise<string[]> {
+  const repository = new ReleasesRepository(t.adapter);
+  const at = new Date();
+  const releases = await repository.findDueReleases(at);
+  const plan = planReleaseMaterialisation({
+    releases: releases.map(release => ({
+      id: release.id,
+      scheduledAt: release.scheduledAt ?? at,
+      revision: release.revision,
+    })),
+    members: await repository.listMembersOf(
+      releases.map(release => release.id)
+    ),
+    now: at,
+  });
+  return plan.actions.map(action => action.ref.entryId);
+}
+
+/** The parts each "Not approved" finding of the release names, as its readiness answers them. */
+async function notApprovedParts(
+  t: TestNextly,
+  releaseId: string
+): Promise<unknown[]> {
+  const readiness = await t.nextly.releases.readiness({ releaseId });
+  return readiness.hard
+    .filter(finding => finding.source === "workflows.approval")
+    .map(finding => (finding.detail as { parts?: unknown }).parts);
 }
 
 /** The drain's pass, run once, as the runner's sweep runs it. */
@@ -231,6 +266,83 @@ describe.each(getConfiguredTestDialects())(
       ]);
     });
 
+    it("holds a live translated document by its pending language alone where drafts are kept by part", async () => {
+      // Kept by part, a language's draft holds that language only, so the shared part has nothing
+      // pending and goes live unchanged: the publish gate asks it nothing, and nor may the release.
+      const t = await boot(dialect, { perLanguageStorage: true });
+      const post = await doc(t, "posts", "published");
+      await saveIn(t, "posts", post, "es", { title: "Hola" });
+      const { releaseId } = await arrange(
+        t,
+        [
+          {
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            entryId: post,
+            action: "publish",
+          },
+        ],
+        null
+      );
+
+      expect(await notApprovedParts(t, releaseId)).toEqual([["es"]]);
+      await approve(t, "posts", post, "es");
+      expect(await notApprovedParts(t, releaseId)).toEqual([]);
+    });
+
+    it("compares a Single with its newest version, even one recorded in a language the site no longer offers", async () => {
+      const t = await boot(dialect);
+      const banner = await saveBanner(t, "Approved");
+      await approveBanner(t, banner);
+      const arranged = await arrange(
+        t,
+        [
+          {
+            scopeKind: "single",
+            scopeSlug: "banner",
+            entryId: banner,
+            action: "publish",
+          },
+        ],
+        LATER
+      );
+      expect(await hardCodes(t, arranged.releaseId)).toEqual([]);
+
+      await recordBannerVersionIn(t, banner, "fr", "Changed in French");
+
+      // The publish it leads to compares the newest version of any language, so this one does.
+      expect(await hardCodes(t, arranged.releaseId)).toEqual(["NOT_APPROVED"]);
+    });
+
+    it("refuses a whole release up front when one member it would publish is held, so none of it goes live", async () => {
+      const t = await boot(dialect);
+      const pages = [
+        await doc(t, "pages"),
+        await doc(t, "pages"),
+        await doc(t, "pages"),
+      ];
+      for (const page of pages) await approve(t, "pages", page);
+      const arranged = await arrange(t, pages.map(publishPage), PAST);
+      expect(await hardCodes(t, arranged.releaseId)).toEqual([]);
+      // The member the run reaches last, so a run asking member by member writes the others first.
+      const order = await plannedOrder(t);
+      expect([...order].sort()).toEqual([...pages].sort());
+      await withdrawSilently(t, "pages", order[order.length - 1]);
+
+      const pass = await runDuePass(t);
+
+      expect(pass.outcomes.map(outcome => outcome.failure)).toEqual([
+        "NOT_APPROVED",
+        "NOT_APPROVED",
+        "NOT_APPROVED",
+      ]);
+      expect(pass).toMatchObject({ applied: 0, blocked: 1, published: 0 });
+      expect(await releaseState(t, arranged.releaseId)).toBe("blocked");
+      for (const page of pages) {
+        expect(await storedPageStatus(t, page)).toBe("draft");
+      }
+    });
+
     describe("stops the release before its moment when approval is withdrawn", () => {
       it("by an edit to an approved page", async () => {
         const t = await boot(dialect);
@@ -288,10 +400,15 @@ describe.each(getConfiguredTestDialects())(
         );
         expect(await hardCodes(t, arranged.releaseId)).toEqual([]);
 
+        const approval = (await stateOf(t, bannerPart(banner)))?.approval;
+        expect(approval).toEqual(expect.objectContaining({ by: "bob" }));
+
         await saveBanner(t, "Changed after approval");
 
         // The save withdrew nothing: the stop comes from the content moving off the approval.
-        expect((await stateOf(t, bannerPart(banner)))?.approval).not.toBeNull();
+        expect((await stateOf(t, bannerPart(banner)))?.approval).toEqual(
+          approval
+        );
         expect(await releaseState(t, arranged.releaseId)).toBe("blocked");
         expect(await stoppedNotices(t, arranged)).toBe(1);
         expect(await visibleBannerTitle(t)).toBeNull();
@@ -409,8 +526,8 @@ describe.each(getConfiguredTestDialects())(
       const source = releaseCheckSources().find(
         candidate => candidate.key === "workflows.approval"
       );
-      expect(source).toBeDefined();
-      if (!source || !release) return;
+      if (!source) throw new Error("no workflows.approval check source");
+      if (!release) throw new Error("the arranged release was not found");
       const pagesTable = (
         await (
           t.getService("collectionRegistryService") as CollectionRegistryService
@@ -434,6 +551,21 @@ describe.each(getConfiguredTestDialects())(
       expect(count(REVIEW_STATES_TABLE)).toBe(20);
       expect(count(VERSIONS_TABLE)).toBe(1);
       expect(count(pagesTable)).toBe(1);
+      // Each member's review state read once, and the batch reads naming every member.
+      const readsOf = (table: string | undefined) =>
+        select.mock.calls
+          .filter(([name]) => name === table)
+          .map(([, options]) => JSON.stringify(options ?? {}));
+      const reviewReads = readsOf(REVIEW_STATES_TABLE);
+      expect(
+        pages.map(
+          page => reviewReads.filter(read => read.includes(`"${page}"`)).length
+        )
+      ).toEqual(pages.map(() => 1));
+      for (const page of pages) {
+        expect(readsOf(VERSIONS_TABLE)[0]).toContain(`"${page}"`);
+        expect(readsOf(pagesTable)[0]).toContain(`"${page}"`);
+      }
     });
   }
 );

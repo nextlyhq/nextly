@@ -127,7 +127,22 @@ export async function pendingPartsOn(
     document.scopeSlug,
     [document.entryId]
   );
-  const pending = byEntry.get(document.entryId) ?? new Set<string | null>();
-  const sharedPending = [...pending].some(slot => draftSlotParts(slot).shared);
-  return part => (part === null ? sharedPending : pending.has(part));
+  return pendingPartsOf(
+    byEntry.get(document.entryId) ?? new Set<string | null>()
+  );
+}
+
+/**
+ * Which parts hold changes not yet published, from the slots of a document's working drafts:
+ * a language whose own draft is pending, and the shared part where a draft's slot holds it
+ * (`draftSlotParts`). The one reading of a pending set, so the publish gate and a release's
+ * check of the same drafts never disagree about the shared part.
+ *
+ * @experimental
+ */
+export function pendingPartsOf(
+  slots: ReadonlySet<string | null>
+): (part: string | null) => boolean {
+  const sharedPending = [...slots].some(slot => draftSlotParts(slot).shared);
+  return part => (part === null ? sharedPending : slots.has(part));
 }

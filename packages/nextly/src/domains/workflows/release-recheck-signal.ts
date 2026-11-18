@@ -15,6 +15,8 @@
  *
  * @module domains/workflows/release-recheck-signal
  */
+import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
+
 import type { ReleaseRecheckTarget } from "../releases/release-recheck";
 
 import { registeredWorkflows } from "./registry";
@@ -51,6 +53,9 @@ export async function recheckReleasesHolding(
  * once is no longer scheduled, so a later start stops and tells nothing twice.
  */
 export async function recheckReleasesInWorkflowScopes(): Promise<void> {
+  // Not in `next build`, which writes nothing to the database it reads: a stop is a write, and
+  // the server the build is for checks the same releases when it starts.
+  if (isNextBuildPhase()) return;
   const scopes = registeredWorkflows().flatMap(entry => [
     ...entry.collections.map(slug => ({
       scopeKind: "collection" as const,

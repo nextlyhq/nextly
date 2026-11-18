@@ -79,8 +79,16 @@ export async function bootApprovals(
     workflow?: Workflow | null;
     adapter?: TestNextly["adapter"];
     seedPublic?: boolean;
+    /** Drafts kept by part, the site's per-language storage; off, the site default, otherwise. */
+    perLanguageStorage?: boolean;
+    /**
+     * The prefix of the tables this boot's collections and Single own, one per suite so no two
+     * suites name the same table: short, since the schema derives longer names from it.
+     */
+    tablePrefix?: string;
   } = {}
 ): Promise<TestNextly> {
+  const prefix = options.tablePrefix ?? "rap_";
   const attached =
     options.workflow === null
       ? {}
@@ -90,11 +98,12 @@ export async function bootApprovals(
     // A visitor's read is judged by the Public role a real boot makes, which reads everything
     // here by its rule.
     seedPublic: options.seedPublic ?? true,
+    perLanguageStorage: options.perLanguageStorage === true,
     localization: { locales: ["en", "es"], defaultLocale: "en" },
     collections: [
       defineCollection({
         slug: "pages",
-        dbName: "rap_pages",
+        dbName: `${prefix}pages`,
         ...drafts,
         access: OPEN,
         ...attached,
@@ -102,7 +111,7 @@ export async function bootApprovals(
       }),
       defineCollection({
         slug: "posts",
-        dbName: "rap_posts",
+        dbName: `${prefix}posts`,
         localized: true,
         ...drafts,
         access: OPEN,
@@ -116,7 +125,7 @@ export async function bootApprovals(
     singles: [
       defineSingle({
         slug: "banner",
-        dbName: "rap_banner",
+        dbName: `${prefix}banner`,
         ...drafts,
         access: SINGLE_OPEN,
         ...attached,
@@ -273,6 +282,32 @@ export async function approveBanner(
       by: "bob",
       at: AT,
     },
+  });
+}
+
+/**
+ * Records a version of the Banner newer than any it has, in `locale`, with `title` over the
+ * newest one's snapshot: the history a language keeps after the site stops offering it, which
+ * no save made now could write.
+ */
+export async function recordBannerVersionIn(
+  t: TestNextly,
+  entryId: string,
+  locale: string,
+  title: string
+): Promise<void> {
+  const ref = { scopeKind: "single" as const, scopeSlug: "banner", entryId };
+  const repo = new VersionsRepository(t.adapter as unknown as VersionsDbApi);
+  const newest = await repo.getMaxVersionNo(ref);
+  const shown = await repo.findByVersionNo(ref, newest);
+  if (!shown) throw new Error("the banner has no recorded version");
+  await repo.insertVersion({
+    ref,
+    versionNo: newest + 1,
+    status: shown.status,
+    isAutosave: false,
+    snapshot: { ...(shown.snapshot as Record<string, unknown>), title },
+    locale,
   });
 }
 

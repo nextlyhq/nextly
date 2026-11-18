@@ -42,7 +42,7 @@ import {
 } from "../releases/readiness/check-sources";
 import { VersionsRepository } from "../versions/versions-repository";
 
-import { entityOf, partStage } from "./implicit-stage";
+import { entityOf, partStage, pendingPartsOf } from "./implicit-stage";
 import { partApproved } from "./part-approval";
 import { documentTableOn, type DocumentTable } from "./part-versions";
 import { partsWaitingFor, type PartWaitingFor } from "./part-waits-for";
@@ -155,6 +155,7 @@ async function scopeContent(
       : [],
     of(entryId, part) {
       const pending = pendingByEntry.get(entryId) ?? new Set<string | null>();
+      const pendingOn = pendingPartsOf(pending);
       const own = ownStatuses.get(entryId);
       if (part !== null && own?.has(part) !== true && !pending.has(part)) {
         return null;
@@ -169,12 +170,9 @@ async function scopeContent(
           defaultLocale: localization?.defaultLocale ?? null,
           perLanguageStatus: perLanguage,
         });
-      // A draft carries the shared values it changes, so the shared part is pending while any
-      // part is, as `pendingPartsOn` reads it.
-      return {
-        live,
-        pending: part === null ? pending.size > 0 : pending.has(part),
-      };
+      // Pending as the publish gate reads the same drafts (`pendingPartsOf`): the shared part
+      // only where a draft's slot holds it, which a language's draft kept by part does not.
+      return { live, pending: pendingOn(part) };
     },
   };
 }

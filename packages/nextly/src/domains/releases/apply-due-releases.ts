@@ -615,47 +615,81 @@ async function applyOne(
   const refused = await scheduleRefusal(deps, action, base);
   if (refused !== null) return refused;
 
-  const held = await approvalRefusal(deps, action, base);
-  if (held !== null) return held;
-
   return writeAndConfirm(deps, action, identity.user, base);
 }
 
 /**
- * Why this document may not go live now, or null when it may: held back by
- * what governs publishing beyond the release's own checks (`notApproved`).
- * Only a publish is asked; a document coming down is never held.
- *
- * Never a rejection, for the reason {@link scheduleRefusal} gives: a read
- * that fails here is recorded and retried rather than ending the pass.
+ * Why a component may not go live now: some of the documents it would publish are held back by
+ * what governs publishing beyond the release's own checks (`notApproved`), or asking failed.
  */
-async function approvalRefusal(
+type ComponentHold =
+  | { failure: "NOT_APPROVED"; held: ReadonlySet<string> }
+  | { failure: "APPROVAL_CHECK_FAILED"; detail: string };
+
+/**
+ * Whether a component may go live, asked once for every document it would publish and before
+ * any of it is written; null when none is held. Asked per component rather than per action
+ * because a component is applied whole: a hold found on its third document after the first two
+ * were written would stop the release with those two live and the rest never applied.
+ *
+ * Only a publish not yet applied is asked; a document coming down is never held. Never a
+ * rejection, for the reason {@link scheduleRefusal} gives: a question that fails is recorded on
+ * each action and retried by the next pass rather than ending this one.
+ */
+async function componentHold(
   deps: ApplyDueReleasesDeps,
-  action: MaterialisationAction,
-  base: Omit<MaterialisationOutcome, "failure">
-): Promise<MaterialisationOutcome | null> {
-  if (action.effect !== "publish") return null;
+  actions: readonly MaterialisationAction[]
+): Promise<ComponentHold | null> {
+  const going = actions.filter(
+    action => action.effect === "publish" && !action.applied
+  );
+  if (going.length === 0) return null;
   const ask =
     deps.notApproved ?? (documents => goingLiveHold().held(documents));
   try {
-    const held = await ask([
-      {
+    const answered = await ask(
+      going.map(action => ({
         id: action.memberId,
         scopeKind: action.ref.scopeKind,
         scopeSlug: action.ref.scopeSlug,
         entryId: action.ref.entryId,
-      },
-    ]);
-    return held.has(action.memberId)
-      ? { ...base, failure: "NOT_APPROVED" }
-      : null;
+      }))
+    );
+    const held = new Set(
+      going.map(action => action.memberId).filter(id => answered.has(id))
+    );
+    return held.size === 0 ? null : { failure: "NOT_APPROVED", held };
   } catch (error) {
-    return {
-      ...base,
-      failure: "APPROVAL_CHECK_FAILED",
-      detail: messageOf(error),
-    };
+    return { failure: "APPROVAL_CHECK_FAILED", detail: messageOf(error) };
   }
+}
+
+/**
+ * The outcome of an action its component's hold refuses, written nowhere. The held documents are
+ * reported as held; every other one says which held documents it waits for, so a release stopped
+ * for one document is not read as stopped for each.
+ */
+function heldOutcome(
+  action: MaterialisationAction,
+  hold: ComponentHold
+): MaterialisationOutcome {
+  const base = {
+    ref: action.ref,
+    memberId: action.memberId,
+    releaseId: action.releaseId,
+    effect: action.effect,
+  };
+  if (hold.failure === "APPROVAL_CHECK_FAILED") {
+    return { ...base, failure: hold.failure, detail: hold.detail };
+  }
+  if (hold.held.has(action.memberId)) {
+    return { ...base, failure: "NOT_APPROVED" };
+  }
+  return {
+    ...base,
+    failure: "NOT_APPROVED",
+    detail: `Waits for ${[...hold.held].join(", ")}, held back in a release it goes live with.`,
+  };
 }
 
 /**
@@ -890,6 +924,8 @@ async function applyWithinBudget(
     (a, b) => rank(a.releaseId) - rank(b.releaseId)
   );
   const startedComponents = new Set<number>();
+  // Each started component's hold, asked before its first write (`componentHold`).
+  const holds = new Map<number, ComponentHold | null>();
   const applied = new Set<string>();
   for (const action of ordered) {
     const component = componentOf.get(action.releaseId) ?? -1;
@@ -907,9 +943,27 @@ async function applyWithinBudget(
       unfinished.add(action.releaseId);
       continue;
     }
-    startedComponents.add(component);
+    if (!startedComponents.has(component)) {
+      startedComponents.add(component);
+      holds.set(
+        component,
+        await componentHold(
+          deps,
+          ordered.filter(
+            other => (componentOf.get(other.releaseId) ?? -1) === component
+          )
+        )
+      );
+    }
     applied.add(action.releaseId);
-    outcomes.push(await applyOne(deps, action));
+    // A held component writes nothing more: what an earlier pass applied still goes through
+    // `applyOne`, which writes nothing again, so it is reported as it stands.
+    const hold = holds.get(component) ?? null;
+    outcomes.push(
+      hold !== null && !action.applied
+        ? heldOutcome(action, hold)
+        : await applyOne(deps, action)
+    );
   }
 
   // A release is discharged only when nothing attributed to it failed — AND

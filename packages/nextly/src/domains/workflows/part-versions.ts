@@ -161,21 +161,17 @@ export async function partVersionOn(
  */
 export type HistoryRead = "locked" | "pool";
 
-/** The newest recorded version of any part of `ref`, read as `read` says. */
-async function newestOfAnyPart(
+/**
+ * The newest recorded version of any part of `ref`, read as `read` says. One read either way,
+ * of every stored version whatever its language, so the pool's answer is the locked one's: a
+ * version recorded in a language the site has since stopped offering is still the newest.
+ */
+function newestOfAnyPart(
   repo: VersionsRepository,
   ref: VersionRef,
   read: HistoryRead
 ): Promise<VersionRow | undefined> {
-  if (read === "locked") return repo.findNewest(ref);
-  // Each language's newest and the part with none, of which the newest is the document's.
-  const parts = [
-    null,
-    ...(appLocalization()?.locales.map(locale => locale.code) ?? []),
-  ];
-  const newest = await repo.newestVersionNoByLocale(ref, parts);
-  if (newest.size === 0) return undefined;
-  return repo.findByVersionNo(ref, Math.max(...newest.values()));
+  return repo.findNewest(ref, { lock: read === "locked" });
 }
 
 /**

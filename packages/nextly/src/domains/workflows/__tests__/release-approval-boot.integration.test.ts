@@ -12,7 +12,7 @@
  * keeps one database across the two boots, as in the approval tests' deploy cases. What the start
  * checks, it reads and writes through the adapter, the same on every dialect.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { clearServices } from "../../../di/register";
 import {
@@ -34,11 +34,13 @@ import {
   saveBanner,
   stoppedNotices,
 } from "./helpers/release-approval-harness";
+import { partOf, stateOf } from "./helpers/step-harness";
 import { editorial } from "./helpers/step-workflows";
 
 let current: TestNextly | undefined;
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await current?.destroy();
   current = undefined;
 });
@@ -49,7 +51,12 @@ async function boot(
   options: Parameters<typeof bootApprovals>[1] = {}
 ): Promise<TestNextly> {
   if (current !== undefined) clearServices();
-  current = await bootApprovals(dialect, { seedPublic: false, ...options });
+  // Tables of this suite's own, and the same ones on a redeploy, which reopens them.
+  current = await bootApprovals(dialect, {
+    seedPublic: false,
+    tablePrefix: "rab_",
+    ...options,
+  });
   return current;
 }
 
@@ -82,12 +89,19 @@ describe.each(getConfiguredTestDialects().filter(d => d === "sqlite"))(
       await approve(first, "pages", page);
       const arranged = await arrange(first, [publishPage(page)], LATER);
       expect(await hardCodes(first, arranged.releaseId)).toEqual([]);
+      expect(
+        (await stateOf(first, partOf("pages", page, null)))?.approval
+      ).toEqual(expect.objectContaining({ by: expect.any(String) }));
 
       const t = await boot(dialect, {
         workflow: withIntake,
         adapter: first.adapter,
       });
 
+      // Withdrawn by the definition sweep, not merely stamped with the old definition.
+      expect(
+        (await stateOf(t, partOf("pages", page, null)))?.approval ?? null
+      ).toBeNull();
       expect(await releaseState(t, arranged.releaseId)).toBe("blocked");
       expect(await stoppedNotices(t, arranged)).toBe(1);
       expect(await hardCodes(t, arranged.releaseId)).toEqual(["NOT_APPROVED"]);
@@ -104,6 +118,19 @@ describe.each(getConfiguredTestDialects().filter(d => d === "sqlite"))(
       expect(await releaseState(t, arranged.releaseId)).toBe("blocked");
       expect(await stoppedNotices(t, arranged)).toBe(1);
       expect(await hardCodes(t, arranged.releaseId)).toEqual(["NOT_APPROVED"]);
+    });
+
+    it("but checks nothing in `next build`, which writes nothing to the database it reads", async () => {
+      const first = await boot(dialect, { workflow: null });
+      const page = await doc(first, "pages");
+      const arranged = await arrange(first, [publishPage(page)], LATER);
+
+      vi.stubEnv("NEXT_PHASE", "phase-production-build");
+      const t = await boot(dialect, { adapter: first.adapter });
+      vi.unstubAllEnvs();
+
+      expect(await releaseState(t, arranged.releaseId)).toBe("scheduled");
+      expect(await stoppedNotices(t, arranged)).toBe(0);
     });
 
     it("when a workflow is first attached to the Single it holds", async () => {
