@@ -94,6 +94,7 @@ import {
 
 import { KEPT_CHANGING_WORDS } from "./conflict-words";
 import { useStoredSiteStyle } from "./site-style-read";
+import { changedThrough, type StoredHalves } from "./site-style-route-step";
 
 /** The four sections of the document, each one studio's to own. */
 export type SiteStyleSection = keyof SiteStyleData;
@@ -550,11 +551,7 @@ export interface SiteStyleSlot {
   readonly stored: (before: unknown, after: unknown) => void;
 }
 
-/** A section as a route found it stored and as its write left it. */
-export interface StoredHalves {
-  readonly before: unknown;
-  readonly after: unknown;
-}
+export type { StoredHalves } from "./site-style-route-step";
 
 export interface SiteStyleWrite {
   /** Save ONE section. Every other section is left exactly as it was. */
@@ -1164,74 +1161,6 @@ export function useSaveSiteStyle(): SiteStyleWrite {
     saving: mutation.isPending,
     reread,
   };
-}
-
-/**
- * A turn on a section's chain for a write made elsewhere, a route's: the
- * writes after it wait for it, as for one of this editor's own, and build
- * on what it says the section holds once it has answered.
- */
-function routeTurn(chain: SectionChain): {
-  prior: Promise<unknown>;
-  settle: (holds: unknown) => void;
-} {
-  const prior = chain.tail;
-  chain.pending += 1;
-  let settle: (holds: unknown) => void = () => {};
-  const answered = new Promise<unknown>(resolve => {
-    settle = resolve;
-  });
-  chain.tail = answered.then(holds => {
-    chain.pending -= 1;
-    if (chain.pending === 0) chain.held = holds;
-    return holds;
-  });
-  return { prior, settle };
-}
-
-/**
- * A route's change, run in turn on the section's chain, after the writes
- * before it and before those after it, and filled into the place taken for
- * it with the halves the route answered: given up when it stored nothing or
- * refused. Outside the editor it is no step.
- */
-async function changedThrough(
-  editor: {
-    readonly history: SiteStyleHistory | null;
-    /** Takes a change's place in the history. */
-    readonly reserve: (section: SiteStyleSection) => SiteStyleSlot;
-    /** A section's chain of writes in this editor. */
-    readonly chainOf: (
-      settled: SiteStyleHistory["settled"],
-      section: SiteStyleSection
-    ) => SectionChain;
-  },
-  section: SiteStyleSection,
-  change: () => Promise<StoredHalves | undefined>
-): Promise<void> {
-  const { history } = editor;
-  if (history === null) {
-    await change();
-    return;
-  }
-  const slot = editor.reserve(section);
-  // A turn of its own, so a save made while the route runs waits for it.
-  const turn = routeTurn(editor.chainOf(history.settled, section));
-  let holds: unknown;
-  try {
-    holds = await turn.prior;
-    const halves = await change();
-    if (halves === undefined) slot.cancel();
-    else {
-      slot.stored(halves.before, halves.after);
-      holds = halves.after;
-    }
-  } catch (refused) {
-    slot.cancel();
-    throw refused;
-  } finally {
-    turn.settle(holds);
-  }
 }
 
 /** How one section write is merged onto the newest stored copy. */
