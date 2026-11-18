@@ -331,6 +331,15 @@ before, so a single-site app keeps working. On a process serving several sites t
 another site's settings, so the route warns once per reader, in every environment, naming the
 line to add.
 
+### Hold the body in a boundary
+
+Under Cache Components, wrap your root layout's `<body>` in a `<Suspense>`, as the
+[routing guide](/docs/guides/routing-and-seo) shows. On a fresh deploy the database is
+seeded after `next build`, which expires every page the build kept, and the first visit
+draws each page again. Without a boundary above the body, a read there that isn't cached
+answers 500. React never sends a boundary that holds the body hidden, so a visitor without
+JavaScript still gets the whole page.
+
 ### Pages only some visitors may read
 
 `createPublicBlocksPage` reads trusted and pre-renders, so it reads the database during
