@@ -54,6 +54,12 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { AddressKind } from "../../../shared/address-rule";
 import { consoleLogger } from "../../../shared/types";
 import { MetaService } from "../../meta/services/meta-service";
+import { busyTableBounds } from "../busy-table/bounds";
+import { endedWaiting } from "../busy-table/ended-waiting";
+import { readHolders } from "../busy-table/holder";
+import { tableBusyError, tryNotice } from "../busy-table/report";
+import { withBusyTableTries } from "../busy-table/tries";
+import { assertSchemaLockHeld } from "../pipeline/schema-lock";
 import { readSchemaVersion } from "../schema-version";
 
 import { databaseIdentity, UNKNOWN_DATABASE } from "./saved-database";
@@ -265,6 +271,8 @@ export async function recordSaveStarted(args: {
   definitionBefore: string | undefined;
   /** The database the save writes to (`savedDatabase`); unknown where not given. */
   database: string | undefined;
+  /** The save's log, which a try after the first is noticed in while the database is busy. */
+  notify: (line: string) => void;
 }): Promise<StartedSave> {
   const made = scopes.getStore();
   // Every writer opens a scope before it gets here; without one, nothing would clear the record.
@@ -290,7 +298,7 @@ export async function recordSaveStarted(args: {
   const key = saveInProgressKey(args.kind, args.slug);
   // Read before anything of the save: its registry write, once it commits, moves the count.
   const registryWritesBefore = await registryWrites(args.adapter);
-  await meta.insertIfAbsent(key, record);
+  await insertInTries(meta, key, record, args.adapter, args.notify);
   // Read back, since the insert does not say whether it wrote: a record that stood already is kept.
   const standing = await meta.get<unknown>(key);
   const stood = savedRecord.safeParse(standing);
@@ -343,6 +351,56 @@ export async function recordSaveStarted(args: {
       entry.ending = "left";
     },
   };
+}
+
+/**
+ * Insert `record` under `key` unless one stands, waiting for a busy database as the save's own
+ * statements wait. On SQLite another connection's write transaction holds the whole database, so
+ * the insert, the save's first write, waits in tries within the save's busy bounds, with a notice
+ * at each try after the first, and stops as table busy, nothing changed, where they run out: a
+ * save never goes on without its record. Elsewhere a held table holds no other, and it runs once.
+ */
+async function insertInTries(
+  meta: MetaService,
+  key: string,
+  record: SaveInProgress,
+  adapter: DrizzleAdapter,
+  notify: (line: string) => void
+): Promise<void> {
+  const dialect = adapter.getCapabilities().dialect;
+  if (dialect !== "sqlite") {
+    await meta.insertIfAbsent(key, record);
+    return;
+  }
+  await withBusyTableTries(
+    {
+      bounds: busyTableBounds({ env: process.env }),
+      change: `the record that the save of ${record.kind} "${record.slug}" is in progress`,
+      appliedBefore: [],
+      notify,
+      notice: tryNotice,
+      assertHeld: assertSchemaLockHeld,
+      stopped: tableBusyError,
+    },
+    async () => {
+      try {
+        await meta.insertIfAbsent(key, record);
+        return { kind: "done", value: undefined };
+      } catch (error) {
+        if (!endedWaiting(error, dialect, false)) throw error;
+        // One statement in no transaction, which did not run: nothing of it stays.
+        return {
+          kind: "ended",
+          ended: {
+            table: null,
+            holder: await readHolders(adapter, dialect, undefined),
+          },
+          undone: true,
+          committed: [],
+        };
+      }
+    }
+  );
 }
 
 /**

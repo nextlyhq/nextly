@@ -316,6 +316,7 @@ describe("a save over a standing record that cannot be read", () => {
         definitionFile: join(projectRoot, "schema", "builder.json"),
         definitionBefore: undefined,
         database: undefined,
+        notify: () => undefined,
       })
     );
 

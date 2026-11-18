@@ -65,6 +65,8 @@ const kill = vi.hoisted(() => ({
   failRegistry: false,
   /** Whether a rename that has just been made reports a failure all the same. */
   failAfter: undefined as undefined | ((point: string) => boolean),
+  /** Whether a folder about to be listed is one to refuse, as one the process may not read. */
+  refuseReading: undefined as undefined | ((path: string) => boolean),
 }));
 
 /**
@@ -105,7 +107,27 @@ vi.mock("node:fs/promises", async importOriginal => {
     }
     await real.rm(path, options);
   };
-  return { ...real, rename, rm, default: { ...real, rename, rm } };
+  const readdir = ((
+    path: Parameters<typeof real.readdir>[0],
+    ...rest: unknown[]
+  ) => {
+    if (kill.refuseReading?.(String(path)) === true) {
+      return Promise.reject(
+        Object.assign(new Error("permission denied"), { code: "EACCES" })
+      );
+    }
+    return (real.readdir as (...args: unknown[]) => Promise<unknown>)(
+      path,
+      ...rest
+    );
+  }) as typeof real.readdir;
+  return {
+    ...real,
+    rename,
+    rm,
+    readdir,
+    default: { ...real, rename, rm, readdir },
+  };
 });
 
 // Every registry write of a save goes through these.
@@ -156,6 +178,7 @@ afterEach(async () => {
   kill.refuseRemoving = undefined;
   kill.failRegistry = false;
   kill.failAfter = undefined;
+  kill.refuseReading = undefined;
   await stopped;
   stopped = undefined;
   vi.restoreAllMocks();
@@ -762,6 +785,42 @@ describe.each(getConfiguredTestDialects())(
           "CONFLICT"
         );
         expect(recordMarker(path), "the record's marker").toBeDefined();
+      }, 300_000);
+
+      // The migrations folder is read for what is there before the save, right after its record:
+      // a read that fails then has written nothing, so the definition stays as it was and the
+      // record goes with the save's failure.
+      it("a save whose migrations folder cannot be read leaves the definition as it was", async () => {
+        const t = await boot();
+        await path.create([text("heading")]);
+        const definitionBefore = definitionText();
+        let refused = 0;
+        // Refused once the save has made its record, so the read refused is the save's own.
+        kill.refuseReading = target => {
+          if (
+            target !== join(basePath, HISTORY) ||
+            entityMarkers(path).length === 0
+          )
+            return false;
+          refused += 1;
+          return true;
+        };
+
+        const answer = await path
+          .save(t, [text("heading"), text("alpha")])
+          .catch((error: unknown) => error);
+        kill.refuseReading = undefined;
+        expect(
+          refused,
+          "the folder was never read after the record"
+        ).toBeGreaterThan(0);
+        expect(
+          answer instanceof Response ? answer.ok : !(answer instanceof Error),
+          "the save was not refused"
+        ).toBe(false);
+        expect(definitionText()).toBe(definitionBefore);
+        expect(await recordRow(t, path)).toBeUndefined();
+        expect(entityMarkers(path)).toEqual([]);
       }, 300_000);
 
       // MySQL commits each statement as it runs, so a save refused at its second addition keeps

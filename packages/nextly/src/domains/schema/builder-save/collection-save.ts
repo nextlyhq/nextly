@@ -528,20 +528,23 @@ async function writeSave(
     definitionFile: definitionPath,
     definitionBefore: before,
     database: deps.database,
+    notify: line => deps.logger.warn(line),
   });
+  // The migration files there before the save: one the save left that is not among them, and not
+  // named as written (a file its generation could not take back), keeps the record. Read before
+  // the definition is replaced, so a read that fails has changed nothing.
+  let sqlBefore: string[];
   try {
+    sqlBefore = await sqlFiles(deps.migrationsDir);
     await writeAtomically(definitionPath, serializeUiSchema(plan.next));
   } catch (error) {
-    // A failed replace leaves the definition whole and nothing else of the save is written yet:
-    // there is nothing to settle, so the record clears with the save's failure.
+    // A failed read or replace leaves the definition whole and nothing else of the save is
+    // written yet: there is nothing to settle, so the record clears with the save's failure.
     started.withdrawn();
     throw error;
   }
 
   const names: string[] = [];
-  // The migration files there before the save: one the save left that is not among them, and not
-  // named as written (a file its generation could not take back), keeps the record.
-  const sqlBefore = await sqlFiles(deps.migrationsDir);
   const undo = async (error: unknown) => {
     // Only a save that withdrew everything it wrote has nothing left to settle.
     if (
