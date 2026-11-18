@@ -96,7 +96,8 @@ export interface OutlineHeading {
   /**
    * Whether a table of contents lists it: a heading of the page's own
    * content, not inside a Collection list or an accordion, not left out by
-   * its author, and not hidden on every device. See `listedHere`.
+   * its author, and drawn on at least one device, by itself and every block
+   * around it. See `listedHere`.
    */
   readonly listed: boolean;
 }
@@ -130,34 +131,61 @@ const UNLISTED_WITHIN: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Whether a block is hidden on every device.
- *
- * Given the breakpoints its part is compiled under: at every viewport
- * breakpoint, read through the engine's one statement of the cascade
- * (`deviceVisibility`), as the compiler and the Layers panel read it.
- * Container breakpoints answer about a box, not a device, so they neither
- * hide a block everywhere nor show one again.
- *
- * Given none, from what the block stores: hidden from the widest device
- * down (`base`), with no breakpoint storing a show.
+ * Whether a block is hidden on every device, read from what it stores: hidden
+ * from the widest device down (`base`), with no breakpoint storing a show.
+ * Used only when its part gives no breakpoints, as an outline built from the
+ * trees alone has none to read the cascade with.
  */
-function hiddenOnEveryDevice(
-  node: BlockNode,
-  breakpoints: BreakpointSet | undefined
-): boolean {
+function storedHiddenEverywhere(node: BlockNode): boolean {
   const devices: unknown = node.visibility?.devices;
   if (typeof devices !== "object" || devices === null) return false;
-  if (breakpoints !== undefined) {
-    return deviceVisibility(node.visibility, breakpoints)
-      .filter(device => device.axis === "viewport")
-      .every(device => !device.visible);
-  }
   const stored = devices as Readonly<Record<string, unknown>>;
   return (
     Object.hasOwn(stored, BASE_BREAKPOINT) &&
     stored[BASE_BREAKPOINT] === false &&
     !Object.values(stored).includes(true)
   );
+}
+
+/**
+ * The viewport devices a block is drawn on: those on which it shows, read
+ * through the engine's one statement of the cascade (`deviceVisibility`), as
+ * the compiler and the Layers panel read it, and on which every block around
+ * it shows too (`around`, absent at the top of a part). Container breakpoints
+ * answer about a box, not a device, so they neither hide a block everywhere
+ * nor show one again.
+ */
+function devicesDrawnOn(
+  node: BlockNode,
+  breakpoints: BreakpointSet,
+  around: ReadonlySet<string> | undefined
+): ReadonlySet<string> {
+  const drawn = new Set<string>();
+  for (const device of deviceVisibility(node.visibility, breakpoints)) {
+    if (device.axis !== "viewport" || !device.visible) continue;
+    if (around === undefined || around.has(device.id)) drawn.add(device.id);
+  }
+  return drawn;
+}
+
+/**
+ * Whether a block can be seen on any device, given its parent's place. With
+ * breakpoints, a block hidden on every device its ancestors show on is never
+ * drawn, though neither it nor any one of them hides everywhere alone.
+ */
+function visibilityOf(
+  node: BlockNode,
+  around: NodePlace | undefined,
+  breakpoints: BreakpointSet | undefined
+): Pick<NodePlace, "hidden" | "drawnOn"> {
+  if (breakpoints === undefined) {
+    return {
+      hidden: (around?.hidden ?? false) || storedHiddenEverywhere(node),
+      drawnOn: undefined,
+    };
+  }
+  const drawnOn = devicesDrawnOn(node, breakpoints, around?.drawnOn);
+  return { hidden: drawnOn.size === 0, drawnOn };
 }
 
 /** Whether a heading with these facts is one a table of contents lists. */
@@ -228,8 +256,13 @@ function authorIds(parts: readonly OutlinePart[]): Set<string> {
 interface NodePlace {
   /** The types of the blocks around it, outermost first. */
   readonly within: readonly string[];
-  /** Whether it, or a block around it, is hidden on every device. */
+  /** Whether it is drawn on no device, alone or for a block around it. */
   readonly hidden: boolean;
+  /**
+   * The viewport devices it and every block around it show on, when its part
+   * gives breakpoints.
+   */
+  readonly drawnOn: ReadonlySet<string> | undefined;
   /** The nearest Collection list holding it, if any. */
   readonly list: BlockNode | undefined;
 }
@@ -244,20 +277,14 @@ function placeReader(
   const places = new Map<BlockNode, NodePlace>();
   return (node, parent) => {
     const around = parent === undefined ? undefined : places.get(parent);
-    const place: NodePlace =
-      parent === undefined
-        ? {
-            within: NONE,
-            hidden: hiddenOnEveryDevice(node, breakpoints),
-            list: undefined,
-          }
-        : {
-            within: [...(around?.within ?? NONE), parent.type],
-            hidden:
-              (around?.hidden ?? false) ||
-              hiddenOnEveryDevice(node, breakpoints),
-            list: parent.type === COLLECTION_LIST_BLOCK ? parent : around?.list,
-          };
+    const place: NodePlace = {
+      within:
+        parent === undefined
+          ? NONE
+          : [...(around?.within ?? NONE), parent.type],
+      ...visibilityOf(node, around, breakpoints),
+      list: parent?.type === COLLECTION_LIST_BLOCK ? parent : around?.list,
+    };
     places.set(node, place);
     return place;
   };

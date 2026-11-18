@@ -1051,6 +1051,41 @@ describe("which headings a table of contents lists", () => {
     ]);
   });
 
+  it("leaves out a heading whose devices and its container's never meet", () => {
+    expect(
+      listedOf([
+        "content",
+        [
+          // The box hides it on phones, and it hides itself everywhere else.
+          box(
+            [heading("Never drawn", shownOn({ base: false, mobile: true }))],
+            shownOn({ mobile: false })
+          ),
+          // Both show on tablets, so it is read there.
+          box(
+            [heading("On tablets", shownOn({ base: false, tablet: true }))],
+            shownOn({ mobile: false })
+          ),
+          // Two boxes in turn: the inner one leaves only tablets, which the
+          // heading itself hides.
+          box(
+            [
+              box(
+                [heading("Nowhere", shownOn({ tablet: false, mobile: true }))],
+                shownOn({ base: false, tablet: true })
+              ),
+            ],
+            shownOn({ mobile: false })
+          ),
+        ],
+      ])
+    ).toEqual([
+      ["Never drawn", false],
+      ["On tablets", true],
+      ["Nowhere", false],
+    ]);
+  });
+
   it("reads hiding from what a block stores when no breakpoints are given", () => {
     // Shown again on phones and, with no breakpoints to say otherwise, read
     // as the stored `true` says; a hide with no show anywhere is still read.
