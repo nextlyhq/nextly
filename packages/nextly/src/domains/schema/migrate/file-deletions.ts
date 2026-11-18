@@ -1780,8 +1780,24 @@ class FileWalk {
     // a session's temporary table, never the live one.
     if (temporary) return;
     const table = this.origin(name);
-    if (table !== null) this.emit({ kind: "table", table });
+    if (table !== null) {
+      this.emit({ kind: "table", table, ...this.translationsTableOf(table) });
+    }
     this.origins.set(name, null);
+  }
+
+  /**
+   * `{ translates: X }` where live `table` is the translations table of `X`:
+   * named `<X>_locales` and holding `_parent` and `_locale`, the key only a
+   * translations table has, since a field's column never starts with `_`. A
+   * name alone proves nothing: an entity's own table may be named so.
+   */
+  private translationsTableOf(table: string): { translates?: string } {
+    const suffix = "_locales";
+    if (!table.endsWith(suffix) || table.length <= suffix.length) return {};
+    const live = this.facts.liveColumns(table);
+    if (live?.has("_parent") !== true || !live.has("_locale")) return {};
+    return { translates: table.slice(0, -suffix.length) };
   }
 
   private changeColumn(step: Extract<Step, { kind: "column" }>): void {

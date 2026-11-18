@@ -125,18 +125,27 @@ describe("what a consent covers", () => {
     expect(consentCovers(NO_CONSENT, table("posts"))).toBe(false);
   });
 
-  it("covers a translations table's deletions by the table it translates", () => {
+  it("covers a translations table's drop by the table it translates", () => {
     // `posts_locales` holds the translations of `posts`' entries: naming `posts` loses both.
     const consent = flag("posts");
-    expect(consentCovers(consent, table("posts_locales"))).toBe(true);
-    expect(consentCovers(consent, column("posts_locales", "title"))).toBe(true);
-    expect(consentCovers(consent, rows("posts_locales"))).toBe(true);
-    // Not the other way round, and not another table's.
+    const translations = table("posts_locales", { translates: "posts" });
+    expect(consentCovers(consent, translations)).toBe(true);
+    // Not the other way round, not another table's, and not by a column of it.
     expect(consentCovers(flag("posts_locales"), table("posts"))).toBe(false);
-    expect(consentCovers(consent, table("pages_locales"))).toBe(false);
-    expect(consentCovers(flag("posts.title"), table("posts_locales"))).toBe(
+    expect(
+      consentCovers(consent, table("pages_locales", { translates: "pages" }))
+    ).toBe(false);
+    expect(consentCovers(flag("posts.title"), translations)).toBe(false);
+  });
+
+  it("covers a table named as a translations table by its own name only, unless proven one", () => {
+    // An entity's own table may be named `posts_locales`: the name proves nothing.
+    const consent = flag("posts");
+    expect(consentCovers(consent, table("posts_locales"))).toBe(false);
+    expect(consentCovers(consent, column("posts_locales", "title"))).toBe(
       false
     );
+    expect(consentCovers(consent, rows("posts_locales"))).toBe(false);
   });
 });
 
@@ -367,11 +376,11 @@ describe("judging a run's deletions", () => {
 
   it("lists each translations table right after the table it translates, in the same file", async () => {
     // A file drops every translations table first; the listing reads each beside its table.
-    const notesLocales = table("notes_locales");
-    const pagesLocales = table("pages_locales");
+    const notesLocales = table("notes_locales", { translates: "notes" });
+    const pagesLocales = table("pages_locales", { translates: "pages" });
     const notes = table("notes");
     const pages = table("pages");
-    const otherLocales = table("other_locales");
+    const otherLocales = table("other_locales", { translates: "other" });
     const elsewhere = table("other");
     const sources = new Map<Deletion, string>([
       [notesLocales, "a.sql"],

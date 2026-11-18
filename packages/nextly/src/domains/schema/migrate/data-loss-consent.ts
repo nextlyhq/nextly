@@ -92,6 +92,12 @@ export type Deletion =
       core?: boolean;
       count?: number;
       alongside?: string;
+      /**
+       * The table this one holds the translations of, where the command
+       * proved it that table's translations table (`<table>_locales`, keyed
+       * by `_parent` and `_locale`): naming that table covers this one.
+       */
+      translates?: string;
       reason?: string;
     }
   | {
@@ -343,9 +349,13 @@ export function consentCovers(
   if (deletion.kind === "unnamed" || onlyBlanketCovers(deletion)) return false;
   if (given.targets.tables.has(deletion.table)) return true;
   // A translations table is part of the table whose entries it translates: naming that table
-  // consents to losing both, as deleting a translated entity's table loses both.
-  const translated = translatedTableOf(deletion.table);
-  if (translated !== undefined && given.targets.tables.has(translated)) {
+  // consents to losing both, as deleting a translated entity's table loses both. Only where the
+  // command proved it one (`translates`); a name alone proves nothing.
+  if (
+    deletion.kind === "table" &&
+    deletion.translates !== undefined &&
+    given.targets.tables.has(deletion.translates)
+  ) {
     return true;
   }
   return (
@@ -354,57 +364,33 @@ export function consentCovers(
   );
 }
 
-/** The suffix of a translations table's name, after the name of the table it translates. */
-const TRANSLATIONS_SUFFIX = "_locales";
-
-/** The table `table` holds the translations of, when its name is a translations table's. */
-function translatedTableOf(table: string): string | undefined {
-  return table.endsWith(TRANSLATIONS_SUFFIX) &&
-    table.length > TRANSLATIONS_SUFFIX.length
-    ? table.slice(0, -TRANSLATIONS_SUFFIX.length)
-    : undefined;
-}
-
 /**
  * `deletions` in their order, but with each translations table's drop listed
- * right after the drop of the table it translates, when the same run (and the
- * same file, where `sourceOf` names one) drops both: a file drops every
- * translations table first, and the person asked reads each table's rows and
- * its translations together.
+ * right after the drop of the table it translates (`translates`), when the
+ * same run (and the same file, where `sourceOf` names one) drops both: a file
+ * drops every translations table first, and the person asked reads each
+ * table's rows and its translations together.
  */
 function translationsBesideTheirTables(
   deletions: readonly Deletion[],
   sourceOf: ((deletion: Deletion) => string | undefined) | undefined
 ): Deletion[] {
-  const placeOf = (deletion: Deletion) =>
-    deletion.kind === "table"
-      ? `${sourceOf?.(deletion) ?? ""}\u0000${deletion.table}`
-      : undefined;
+  const place = (deletion: Deletion, table: string) =>
+    `${sourceOf?.(deletion) ?? ""}\u0000${table}`;
   const dropped = new Set(
-    deletions.flatMap(d => {
-      const place = placeOf(d);
-      return place === undefined ? [] : [place];
-    })
+    deletions.flatMap(d => (d.kind === "table" ? [place(d, d.table)] : []))
   );
-  // The translations tables to move: each one whose translated table this list drops too.
-  const moved = new Map<string, Deletion[]>();
-  for (const d of deletions) {
-    if (d.kind !== "table") continue;
-    const translated = translatedTableOf(d.table);
-    if (translated === undefined) continue;
-    const owner = `${sourceOf?.(d) ?? ""}\u0000${translated}`;
-    if (!dropped.has(owner)) continue;
-    moved.set(owner, [...(moved.get(owner) ?? []), d]);
-  }
-  const movedOnes = new Set([...moved.values()].flat());
-  const out: Deletion[] = [];
-  for (const d of deletions) {
-    if (movedOnes.has(d)) continue;
-    out.push(d);
-    const place = placeOf(d);
-    if (place !== undefined) out.push(...(moved.get(place) ?? []));
-  }
-  return out;
+  // Where each translations table goes: after its table, where this list drops that too.
+  const ownerOf = (d: Deletion): string | undefined =>
+    d.kind === "table" && d.translates !== undefined
+      ? [place(d, d.translates)].find(owner => dropped.has(owner))
+      : undefined;
+  const placed = deletions.filter(d => ownerOf(d) === undefined);
+  return placed.flatMap(d =>
+    d.kind === "table"
+      ? [d, ...deletions.filter(m => ownerOf(m) === place(d, d.table))]
+      : [d]
+  );
 }
 
 function plural(count: number, one: string, many: string): string {

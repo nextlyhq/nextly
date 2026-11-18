@@ -17,11 +17,13 @@ import {
   uniqueColumnsWithKind,
 } from "../../i18n/migration/companion-unique-indexes";
 import {
+  companionSpecShell,
   companionTableOf,
   deriveCompanionSpec,
 } from "../../i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import type { I18nTransitionKind } from "../../i18n/migration/transition-state";
+import type { CompanionMigrationSpec } from "../../i18n/migration/types";
 import { publishesPerLanguage } from "../../i18n/per-language-storage";
 import { DEFAULT_TABLE_NAME_RESOLVERS } from "../migrate/resolved-schema";
 import type {
@@ -171,7 +173,7 @@ function emptyTranslationsTable(
   const fields = (
     Array.isArray(settings.fields) ? settings.fields : []
   ).flatMap((field: unknown) => (isRecordedField(field) ? [field] : []));
-  const derived = deriveCompanionSpec({
+  const derive = {
     builtBy: builtByFor(entity.kind, entity.entry.source === "builder"),
     slug: entity.slug,
     kind: entity.kind,
@@ -184,18 +186,22 @@ function emptyTranslationsTable(
       localized: settings.localized,
       status: settings.status,
     }),
-  });
-  if (derived === null) return [];
-  // The recorded columns, where the snapshot kept them, are what the table held.
+  };
+  const derived = deriveCompanionSpec(derive);
+  // The recorded columns, where the snapshot kept them, are what the table held: none at all
+  // where its last translated field became shared and it was kept (`localizedColumns: []`),
+  // which is made again with no columns of its own.
   const recorded = main.localizedColumns;
-  const spec =
-    recorded === undefined
-      ? derived
-      : {
-          ...derived,
-          columns: derived.columns.filter(c => recorded.includes(c.name)),
-        };
-  if (spec.columns.length === 0) return [];
+  let spec: CompanionMigrationSpec;
+  if (recorded === undefined) {
+    if (derived === null) return [];
+    spec = derived;
+  } else {
+    spec = {
+      ...(derived ?? companionSpecShell(derive)),
+      columns: (derived?.columns ?? []).filter(c => recorded.includes(c.name)),
+    };
+  }
   // A file's statements carry no terminator: the file puts its breakpoints between them.
   const create = buildCompanionCreateOnlySql(spec, {
     emittedToFile: true,
