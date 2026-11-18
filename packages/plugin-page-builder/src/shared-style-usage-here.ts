@@ -97,13 +97,20 @@ export interface ResolvedHere {
   readonly variant: SharedStyleUsageHere["variant"];
   /** Whether the open copy stays live as saved; see `SharedStyleUsageHere`. */
   readonly keepsSaved?: true;
+  /**
+   * Whether the caller may read the document. When not, or when that could
+   * not be read, its parts are answered unknown: nothing of the document is
+   * told, and the editor keeps the saved counts as a floor rather than
+   * counting a saved page a second time as one saved nowhere.
+   */
+  readonly readable: boolean;
 }
 
 /**
- * What the editor has open, when the read names it and the caller may read
- * that document; `undefined` otherwise. Checked before anything about the
- * document is read from the index, which is read as the system: a style
- * reader who may not read a page learns nothing of that page from its name.
+ * What the editor has open, when the read names it; `undefined` otherwise.
+ * Whether the caller may read that document is asked before anything about
+ * it is read from the index, which is read as the system: a style reader who
+ * may not read a page learns nothing of that page from its name.
  */
 export async function readableHere(
   url: string,
@@ -111,8 +118,9 @@ export async function readableHere(
 ): Promise<ResolvedHere | undefined> {
   const here = usageHereOf(url);
   if (here === undefined) return undefined;
-  if (!(await mayRead(here.document, readers))) return undefined;
+  const readable = await mayRead(here.document, readers);
   return {
+    readable,
     document: here.document,
     field: here.field,
     locale: here.locale ?? readers.defaultLocale(),
@@ -124,7 +132,8 @@ export async function readableHere(
 /**
  * Whether the caller may read a named document. A read that fails (an id the
  * database cannot take, say: it is the caller's own input) says no, so a bad
- * name drops the open document's share rather than the whole usage read.
+ * name leaves the open document's parts unknown rather than failing the whole
+ * usage read.
  */
 async function mayRead(
   document: SharedStyleUsageHere["document"],
@@ -172,7 +181,10 @@ export function usageOf(
   };
 }
 
-/** The open document's saved parts: all 0 when it holds none. */
+/**
+ * The open document's saved parts: all 0 when it holds none, all unknown
+ * when the caller may not read it.
+ */
 function hereShare(
   found: DocumentsUsing,
   kindOf: (collection: string) => SharedStyleUsageKind,
@@ -180,11 +192,11 @@ function hereShare(
 ): SharedStyleUsageHereParts {
   const { document } = here;
   const single = "single" in document;
-  const collection = single ? document.single : document.collection;
-  return {
-    ...hereParts(sharesOf(found, document) ?? [], here),
-    kind: kindOf(collection),
-  };
+  const kind = kindOf(single ? document.single : document.collection);
+  if (!here.readable) {
+    return { saved: null, alongside: null, elsewhere: null, kind };
+  }
+  return { ...hereParts(sharesOf(found, document) ?? [], here), kind };
 }
 
 /** The open document's rows in a listing, or `undefined` when it is not listed. */

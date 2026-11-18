@@ -9,6 +9,7 @@
  * @module @nextlyhq/plugin-page-builder/admin/editor/usage-here
  */
 import {
+  useDocumentActions,
   useDocumentIdentity,
   useDocumentLocale,
   useDocumentStatus,
@@ -53,4 +54,18 @@ export function useUsageHere(): SharedStyleUsageHere | undefined {
     variant: drafting ? "draft" : "published",
     ...(keepsSaved ? { keepsSaved: true as const } : {}),
   };
+}
+
+/**
+ * What a usage read naming the open document is held by: what is open, and
+ * when the document was last stored. A save can change the open document's
+ * saved parts while nothing else about what is open changes (a published
+ * page saved again where the collection keeps no drafts), so a read made
+ * before it would go on counting blocks the save removed.
+ */
+export function useUsageReadKey(
+  here: SharedStyleUsageHere | undefined
+): string {
+  const storedAt = useDocumentActions()?.storedAt ?? null;
+  return JSON.stringify([here ?? null, storedAt?.getTime() ?? null]);
 }

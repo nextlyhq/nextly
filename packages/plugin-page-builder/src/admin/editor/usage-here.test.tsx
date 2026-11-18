@@ -18,6 +18,7 @@ const document = vi.hoisted(() => ({
   },
   locale: null as null | { code: string | null },
   status: null as null | { status: string; hasWorkingDraft: boolean },
+  storedAt: null as null | Date,
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
@@ -25,6 +26,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   useDocumentIdentity: () => document.identity,
   useDocumentLocale: () => document.locale,
   useDocumentStatus: () => document.status,
+  useDocumentActions: () => ({ storedAt: document.storedAt }),
   usePluginClientConfig: () => undefined,
 }));
 
@@ -71,10 +73,12 @@ import { UsageHereField, useUsageHere } from "./usage-here";
 
 afterEach(() => {
   cleanup();
+  vi.clearAllMocks();
   asked.length = 0;
   document.identity = null;
   document.locale = null;
   document.status = null;
+  document.storedAt = null;
 });
 
 /** The editor bound to `field`, around whatever reads what is open. */
@@ -180,6 +184,28 @@ describe("the Design panel's Shared styles tab", () => {
     const usage = vi.mocked(usageReads.access?.usage);
     await waitFor(() => expect(usage).toHaveBeenCalledTimes(1));
     document.status = { status: "published", hasWorkingDraft: false };
+    view.rerender(studio(surface));
+    await waitFor(() => expect(usage).toHaveBeenCalledTimes(2));
+  });
+
+  it("reads every row's usage again once the page is stored", async () => {
+    // A published page saved again where the collection keeps no drafts:
+    // nothing about what is open changes, but its saved parts do.
+    document.identity = { kind: "collection", slug: "pages", documentId: "p1" };
+    document.status = { status: "published", hasWorkingDraft: false };
+    const surface = surfaceOf([
+      {
+        id: "c-card",
+        slug: "card",
+        label: "Card",
+        orderIndex: 0,
+        styles: { base: { base: { color: "#111111" } } },
+      },
+    ]);
+    const view = render(studio(surface));
+    const usage = vi.mocked(usageReads.access?.usage);
+    await waitFor(() => expect(usage).toHaveBeenCalledTimes(1));
+    document.storedAt = new Date(1_000);
     view.rerender(studio(surface));
     await waitFor(() => expect(usage).toHaveBeenCalledTimes(2));
   });

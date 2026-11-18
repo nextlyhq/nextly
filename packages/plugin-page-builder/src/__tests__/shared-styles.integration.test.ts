@@ -536,13 +536,25 @@ describe.each(getConfiguredTestDialects())(
         field: "content",
         variant: "published",
       });
-      // Site styles alone: the counts, and nothing of the page it named.
+      // Site styles alone: the counts, and nothing of the page it named,
+      // its parts answered as unknown.
       const styleReader = await holding(t, "read-site-style");
       const hidden = await call("GET", path, styleReader);
       expect(hidden.status).toBe(200);
-      const style = (hidden.body.styles as Record<string, object>)["c-hero"];
-      expect(style).toMatchObject({ documents: 1, blocks: 1 });
-      expect(style).not.toHaveProperty("here");
+      expect(hidden.body).toMatchObject({
+        styles: {
+          "c-hero": {
+            documents: 1,
+            blocks: 1,
+            here: {
+              saved: null,
+              alongside: null,
+              elsewhere: null,
+              kind: "pages",
+            },
+          },
+        },
+      });
       const pageReader = await holding(t, "read-site-style", "read-pages");
       const told = await call("GET", path, pageReader);
       expect(told.body).toMatchObject({

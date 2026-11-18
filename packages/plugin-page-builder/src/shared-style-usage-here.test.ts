@@ -63,7 +63,13 @@ const found: DocumentsUsing = {
 const open = (
   document: { collection: string; id: string } | { single: string },
   field = "content"
-) => ({ document, field, locale: "", variant: "published" as const });
+) => ({
+  document,
+  field,
+  locale: "",
+  variant: "published" as const,
+  readable: true,
+});
 
 describe("a style's usage", () => {
   it("counts blocks across its documents, and documents by kind", () => {
@@ -328,6 +334,7 @@ describe("the open document, only as far as the caller may read it", () => {
   it("names a document the caller may read, in the site's default language", async () => {
     const may = readers(true);
     expect(await readableHere(asked("pages/p1"), may)).toEqual({
+      readable: true,
       document: { collection: "pages", id: "p1" },
       field: "content",
       locale: "en",
@@ -339,26 +346,36 @@ describe("the open document, only as far as the caller may read it", () => {
     ).toBe("fr");
   });
 
-  it("names nothing the caller may not read", async () => {
+  it("tells nothing of a document the caller may not read", async () => {
     const mayNot = readers(false);
-    expect(await readableHere(asked("pages/p1"), mayNot)).toBeUndefined();
-    expect(await readableHere(asked("single:home"), mayNot)).toBeUndefined();
-    // A read that fails (an id the database cannot take) names nothing,
-    // rather than failing the whole usage read.
+    const unread = async (here: string, given = mayNot) =>
+      (await readableHere(asked(here), given))?.readable;
+    expect(await unread("pages/p1")).toBe(false);
+    expect(await unread("single:home")).toBe(false);
+    // A read that fails (an id the database cannot take) tells nothing
+    // either, rather than failing the whole usage read.
     expect(
-      await readableHere(asked("pages/not-an-id"), {
+      await unread("pages/not-an-id", {
         ...mayNot,
         named: async () => {
           throw new Error("invalid input syntax for type uuid");
         },
       })
-    ).toBeUndefined();
+    ).toBe(false);
     // Read, but another document answered: not the one named.
     expect(
-      await readableHere(asked("pages/p1"), {
-        ...mayNot,
-        named: async () => [{ id: "p2" }],
-      })
-    ).toBeUndefined();
+      await unread("pages/p1", { ...mayNot, named: async () => [{ id: "p2" }] })
+    ).toBe(false);
+  });
+
+  it("answers an unreadable document's parts as unknown, never as absent", () => {
+    // Absent would read as a page saved nowhere, which the editor adds: a
+    // saved page counted twice. Unknown keeps the saved counts as a floor.
+    expect(
+      usageOf(found, kindOf, {
+        ...open({ collection: "pages", id: "p1" }),
+        readable: false,
+      }).here
+    ).toEqual({ saved: null, alongside: null, elsewhere: null, kind: "pages" });
   });
 });

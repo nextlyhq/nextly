@@ -172,28 +172,30 @@ export function useSharedStylesClient(
    * saved share of each style's usage the route reports apart, so the open
    * field's live copy can be counted instead.
    */
-  here?: SharedStyleUsageHere
+  here?: SharedStyleUsageHere,
+  /**
+   * What the read is held by beyond `here`: a new value (the open document
+   * stored again) asks the usage again, as a new `here` does.
+   */
+  readAgain?: string
 ): SharedStylesAccess {
   const { refetch } = useStoredSiteStyle();
   // Held by its spelling, so a new object naming the same document asks
-  // nothing again.
-  const hereKey = here === undefined ? undefined : JSON.stringify(here);
+  // nothing again, and a new `readAgain` asks again.
+  const heldBy = JSON.stringify([here ?? null, readAgain ?? null]);
 
   const usage = useCallback(
-    async (ids: readonly string[], signal: AbortSignal) =>
-      usageFromResponse(
+    async (ids: readonly string[], signal: AbortSignal) => {
+      const [named] = JSON.parse(heldBy) as [SharedStyleUsageHere | null];
+      return usageFromResponse(
         await readPluginRoute<SharedStylesUsageResponse>({
           plugin: PAGE_BUILDER_PLUGIN_NAME,
-          path: sharedStyleUsagePath(
-            ids,
-            hereKey === undefined
-              ? undefined
-              : (JSON.parse(hereKey) as SharedStyleUsageHere)
-          ),
+          path: sharedStyleUsagePath(ids, named ?? undefined),
           signal,
         })
-      ),
-    [hereKey]
+      );
+    },
+    [heldBy]
   );
 
   const uses = useCallback(
