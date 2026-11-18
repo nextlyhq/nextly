@@ -45,6 +45,14 @@ import {
   type RevealRequest,
   type SheetPanel,
 } from "./WorkbenchLayout";
+import { WrittenBody } from "./written/WrittenBody";
+
+/** The declared variables a list block can repeat over: those typed as a list. */
+function listVariablesOf(variables: TemplateFormValues["variables"]): string[] {
+  return variables
+    .filter(variable => variable.presentation?.type === "list")
+    .map(variable => variable.name);
+}
 
 // ============================================================
 // EmailTemplateForm — the template workbench
@@ -86,11 +94,16 @@ function ContentColumn({
     "control" | "isPending" | "readOnly" | "liquid"
   >;
 }) {
-  const [subject, preheader, fromOverride] = form.watch([
-    "subject",
-    "preheader",
-    "fromOverride",
-  ]);
+  const [subject, preheader, fromOverride, format, blocks, variables] =
+    form.watch([
+      "subject",
+      "preheader",
+      "fromOverride",
+      "format",
+      "blocks",
+      "variables",
+    ]);
+  const written = format === "written";
   return (
     // The column scrolls, so its cards keep their height (a shrunk card clips
     // its own fields); only the body grows into what is left.
@@ -124,14 +137,26 @@ function ContentColumn({
         />
       </div>
       <div className="flex min-h-105 flex-1 flex-col overflow-hidden rounded-lg border border-border">
-        <BodyEditor
-          control={form.control}
-          isPending={isPending}
-          readOnly={!owns}
-          liquid={!keptOnOldEngine}
-          suppliedNames={suppliedNamesFor(isLayoutRow)}
-          {...editor}
-        />
+        {written && blocks ? (
+          // A written email's body is its blocks, in place of the code editor.
+          <WrittenBody
+            value={blocks}
+            readOnly={!owns || isPending}
+            listVariables={listVariablesOf(variables)}
+            onChange={next =>
+              form.setValue("blocks", next, { shouldDirty: true })
+            }
+          />
+        ) : (
+          <BodyEditor
+            control={form.control}
+            isPending={isPending}
+            readOnly={!owns}
+            liquid={!keptOnOldEngine}
+            suppliedNames={suppliedNamesFor(isLayoutRow)}
+            {...editor}
+          />
+        )}
       </div>
     </div>
   );
@@ -210,6 +235,8 @@ export function EmailTemplateForm({
     layoutId,
     fromOverride,
     replyTo,
+    watchedFormat,
+    watchedBlocks,
   ] = form.watch([
     "htmlContent",
     "plainTextContent",
@@ -222,6 +249,8 @@ export function EmailTemplateForm({
     "layoutId",
     "fromOverride",
     "replyTo",
+    "format",
+    "blocks",
   ]);
 
   useEffect(() => {
@@ -262,6 +291,7 @@ export function EmailTemplateForm({
     kind: currentKind,
     fromOverride,
     templateId: template?.id,
+    written: watchedFormat === "written" ? watchedBlocks : null,
   });
 
   // What the template uses but doesn't declare, and what would show blank.
