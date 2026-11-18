@@ -294,6 +294,30 @@ describe("PermissionLevelRow", () => {
     ).toBeChecked();
   });
 
+  it("turns View on with Edit, and Edit off with View, so a role never edits what it cannot see", async () => {
+    const user = userEvent.setup();
+    render(<Harness row={POSTS} initial={[]} />);
+    await user.click(
+      screen.getByRole("switch", { name: "Post (posts): each action" })
+    );
+
+    await user.click(
+      screen.getByRole("switch", { name: "Post (posts): Edit" })
+    );
+    expect([...saved].sort()).toEqual(["posts-read", "posts-update"]);
+    expect(
+      screen.getByRole("switch", { name: "Post (posts): View" })
+    ).toBeChecked();
+
+    await user.click(
+      screen.getByRole("switch", { name: "Post (posts): View" })
+    );
+    expect(saved).toEqual([]);
+    expect(
+      screen.getByRole("switch", { name: "Post (posts): Edit" })
+    ).not.toBeChecked();
+  });
+
   it("names an action outside the levels by its permission", async () => {
     const user = userEvent.setup();
     render(<Harness row={POSTS} initial={[]} />);
