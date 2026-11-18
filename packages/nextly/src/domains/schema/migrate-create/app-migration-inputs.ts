@@ -267,7 +267,9 @@ export async function appMigrationInputs(
               columns: table.columns.map(column => column.name),
             })),
             components.map(component => component.tableName),
-            identifierCaseRules({ dialect })
+            dialect === "mysql"
+              ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
+              : identifierCaseRules({ dialect })
           ),
         }),
   });

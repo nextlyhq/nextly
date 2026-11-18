@@ -21,6 +21,7 @@ import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { pluginAdminSlug } from "../../../plugins/plugin-slug";
 import { renamePluginContributes } from "../../../plugins/schema/apply-contributions";
 import { CORE_TABLE_NAMES } from "../../../schemas/core-schema";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
 import type { DeclaredIndex } from "../pipeline/diff/build-from-fields";
 import {
