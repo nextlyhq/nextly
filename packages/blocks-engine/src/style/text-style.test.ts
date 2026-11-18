@@ -158,6 +158,46 @@ describe("the text style tier sits between block styles and shared styles", () =
   });
 });
 
+describe("the trace says a value came from a text style", () => {
+  const traced = (namedClasses: NamedClass[], classes: string[]) =>
+    compilePageCss(doc({ classes }), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      namedClasses,
+      blockBases: {},
+      trace: true,
+    } as never).trace ?? [];
+
+  it("marks a text style's declarations with the text role", () => {
+    const trace = traced([eyebrow, card], [eyebrow.id, card.id]);
+    const fromEyebrow = trace.filter(
+      entry => entry.origin.kind === "class" && entry.origin.id === eyebrow.id
+    );
+    expect(fromEyebrow.map(entry => entry.property)).toContain(
+      "text-transform"
+    );
+    for (const entry of fromEyebrow) {
+      expect(entry.origin).toEqual({
+        kind: "class",
+        id: eyebrow.id,
+        slug: eyebrow.slug,
+        role: "text",
+      });
+    }
+  });
+
+  it("leaves a shared style's and a block style's origins without a role", () => {
+    const trace = traced(
+      [eyebrow, card, outline],
+      [outline.id, eyebrow.id, card.id]
+    );
+    const others = trace.filter(
+      entry => entry.origin.kind === "class" && entry.origin.id !== eyebrow.id
+    );
+    expect(others.length).toBeGreaterThan(0);
+    for (const entry of others) expect(entry.origin).not.toHaveProperty("role");
+  });
+});
+
 describe("a text style built on a variable", () => {
   const bodyOn = (size: string): string =>
     compileSiteSheet(

@@ -511,15 +511,19 @@ function barChips(
     node === undefined
       ? "block"
       : (getBlock(node.type)?.editor?.label ?? "block");
-  return worn.map(row => ({
-    id: row.id,
-    name: row.name,
-    className: row.className,
-    locked: row.locked,
-    ...(row.look === true
-      ? { hint: lookLineWords(row.name, label).everywhere }
-      : {}),
-  }));
+  // A text style is chosen and changed from the Text section's picker, so
+  // it is no target here: its values are typography alone.
+  return worn
+    .filter(row => row.text !== true)
+    .map(row => ({
+      id: row.id,
+      name: row.name,
+      className: row.className,
+      locked: row.locked,
+      ...(row.look === true
+        ? { hint: lookLineWords(row.name, label).everywhere }
+        : {}),
+    }));
 }
 
 /** Why "Save as shared style…" is held where the host offers no save. */
@@ -558,7 +562,8 @@ function applyOffer({
   library: readonly NamedClass[] | undefined;
   libraryAbsence: "pending" | "failed" | undefined;
 }): ApplyOffer {
-  const wearing = worn.find(row => row.look !== true);
+  // A block style and a text style are worn beside a shared style.
+  const wearing = worn.find(row => row.look !== true && row.text !== true);
   if (nodeId === null) return { held: "Select a block first." };
   if (held !== undefined) return { held };
   if (wearing !== undefined) {

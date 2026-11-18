@@ -59,7 +59,9 @@ type Props = {
 /**
  * Whether a preview can be applied without asking the user to resolve
  * anything: additive, with no rename the server wants a decision on, no
- * field leaving or joining translation, and no field removed. The short
+ * field leaving or joining translation, no field removed, and nothing
+ * brought up to date in a table an earlier version made (a conversion the
+ * save writes only once the full dialog has listed it and Save confirmed it). The short
  * confirmation says the change does not affect existing data, which is untrue
  * when a field's other languages move to the archive, when a field's values
  * become the default language's, and when a field is removed:
@@ -72,7 +74,8 @@ export function isSafeChange(preview: SchemaPreviewResponse): boolean {
     preview.changes.removed.length === 0 &&
     !(preview.renamed && preview.renamed.length > 0) &&
     !(preview.leavingTranslation && preview.leavingTranslation.length > 0) &&
-    !(preview.joiningTranslation && preview.joiningTranslation.length > 0)
+    !(preview.joiningTranslation && preview.joiningTranslation.length > 0) &&
+    !(preview.conversions && preview.conversions.length > 0)
   );
 }
 
@@ -159,6 +162,7 @@ export function BuilderSchemaChangeDialogs({
       interactiveFields={preview.interactiveFields}
       leavingTranslation={preview.leavingTranslation}
       joiningTranslation={preview.joiningTranslation}
+      conversions={preview.conversions}
       settingChanges={settingChanges}
       fieldGroupCreates={fieldGroupCreates}
       onConfirm={onConfirm}
