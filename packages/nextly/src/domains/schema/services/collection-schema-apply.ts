@@ -60,7 +60,11 @@ import {
   liveCompanionShape,
 } from "../../i18n/runtime/companion-io";
 import { assertLanguageStatesAgreeWithEntry } from "../../i18n/runtime/language-states-agree";
-import { FirstQuestionWatch, landingPush } from "../builder-save/landing-push";
+import {
+  FirstQuestionWatch,
+  landingPush,
+  type PushWatch,
+} from "../builder-save/landing-push";
 import { runStatement } from "../pipeline/_internal/run-statement";
 import {
   createApplyDesiredSchema,
@@ -609,10 +613,21 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
         .map(resolution => resolution.eventId)
     )
   );
-  // Notes a push refused at its first question, which ran no statement (`landingPush`).
+  // Notes a push refused at its first question, which ran no statement, and one whose pipeline
+  // completed its apply, which a failure after it (the version read below) does not undo
+  // (`landingPush`).
   const firstQuestion = new FirstQuestionWatch();
+  let completed = false;
+  const watch: PushWatch = {
+    starting: () => {
+      firstQuestion.starting();
+      completed = false;
+    },
+    stopped: () => firstQuestion.stopped(),
+    completed: () => completed,
+  };
   const apply = createApplyDesiredSchema({
-    applyPipeline: (desiredArg, sourceArg, channelArg) => {
+    applyPipeline: async (desiredArg, sourceArg, channelArg) => {
       const pipeline = new PushSchemaPipeline({
         executor: new DrizzleStatementExecutor(dialect, db),
         renameDetector: new RegexRenameDetector(),
@@ -624,7 +639,7 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
         migrationJournal: getMigrationJournalFromDI() ?? noopMigrationJournal,
         notifier: getProductionNotifier(),
       });
-      return pipeline.apply({
+      const result = await pipeline.apply({
         desired: desiredArg,
         db,
         dialect,
@@ -638,6 +653,8 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
         // after its prompts and refusals, before it drops the main column.
         defaultLocale,
       });
+      if (result.success) completed = true;
+      return result;
     },
     // Neither caller asks the pipeline for its optimistic check: the dialog checks the version
     // before calling, and the save runs under the schema lock.
@@ -652,7 +669,7 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
       return out;
     },
   });
-  return { apply, promptDispatcher, defaultLocale, firstQuestion };
+  return { apply, promptDispatcher, defaultLocale, watch };
 }
 
 /**
@@ -867,7 +884,7 @@ async function applyHoldingSchemaLock(
   // Every push below, the settings push and the companion's included, tells the caller once it
   // may have changed the database; the checks before them change nothing. A failed one changed
   // nothing where it stopped at its first question, asked before any statement.
-  const landing = landingPush(changed.apply, dialect, changed.firstQuestion);
+  const landing = landingPush(changed.apply, dialect, changed.watch);
   const apply: ApplyDesired = async (...args) => {
     try {
       return await landing.push(...args);

@@ -321,3 +321,36 @@ describe("FirstQuestionWatch", () => {
     expect(watch.stopped()).toBe(false);
   });
 });
+
+// A run whose pipeline completed its apply stands, whatever fails after it in the same run: on
+// PostgreSQL the apply's transaction has committed.
+describe("landingPush, a run whose apply completed", () => {
+  const watch = (completed: boolean) => ({
+    starting: () => {},
+    stopped: () => false,
+    completed: () => completed,
+  });
+
+  it.each(["postgresql", "mysql", "sqlite"] as const)(
+    "counts a run on %s that failed after its apply completed as landed",
+    async dialect => {
+      const tracked = landingPush(
+        () => Promise.reject(new Error("the version read failed")),
+        dialect,
+        watch(true)
+      );
+      await expect(tracked.push()).rejects.toThrow("the version read failed");
+      expect(tracked.landed()).toBe(true);
+    }
+  );
+
+  it("counts a run on PostgreSQL that failed before its apply completed as nothing applied", async () => {
+    const tracked = landingPush(
+      () => Promise.reject(new Error("refused")),
+      "postgresql",
+      watch(false)
+    );
+    await expect(tracked.push()).rejects.toThrow("refused");
+    expect(tracked.landed()).toBe(false);
+  });
+});

@@ -27,15 +27,27 @@ interface PushOutcome {
 }
 
 /**
+ * What a push's own pipeline did during one run, as `landingPush` reads it: whether the run
+ * stopped at its first question, before any statement (`FirstQuestionWatch`), and whether the
+ * pipeline's apply completed, which a failure of the work after it in the same run (a read of
+ * the new schema versions, say) does not undo. `starting` begins each run afresh.
+ */
+export interface PushWatch {
+  starting(): void;
+  stopped(): boolean;
+  completed?(): boolean;
+}
+
+/**
  * `push`, noting once one of its runs may have changed the database: a run
- * that succeeded, and outside PostgreSQL every run that failed but one known
- * to have changed nothing. That is a busy table's stop that says nothing ran
- * (`leftNothing`), or a run that `stoppedBeforeAnyStatement` answers for: one
- * refused at its first question (a rename declined, a question unanswered),
- * which the pipeline asks before it runs any statement. Any other failure
- * counts as landed, data-only statements included, so its files are kept: a
- * push that asks no question, or one refused by a check of its own before any
- * statement, keeps them too.
+ * that succeeded, or whose pipeline completed its apply before the run failed
+ * (`watch.completed`), and outside PostgreSQL every run that failed but one
+ * known to have changed nothing. That is a busy table's stop that says nothing
+ * ran (`leftNothing`), or a run refused at its first question (a rename
+ * declined, a question unanswered), which the pipeline asks before it runs any
+ * statement (`watch.stopped`). Any other failure counts as landed, data-only
+ * statements included, so its files are kept: a push that asks no question, or
+ * one refused by a check of its own before any statement, keeps them too.
  *
  * Only what wraps the push itself is judged: a refusal raised before the push
  * runs is never counted as landed.
@@ -43,23 +55,20 @@ interface PushOutcome {
 export function landingPush<A extends unknown[], R extends PushOutcome>(
   push: (...args: A) => Promise<R>,
   dialect: Dialect,
-  stoppedBeforeAnyStatement?: {
-    /** Called as each run starts, so the answer is about that run alone. */
-    starting: () => void;
-    stopped: () => boolean;
-  }
+  watch?: PushWatch
 ): {
   push: (...args: A) => Promise<R>;
   landed: () => boolean;
 } {
   let landed = false;
   const failureLanded = (stop: unknown): boolean =>
-    !rollsBackWhole(dialect) &&
-    !leftNothing(stop) &&
-    stoppedBeforeAnyStatement?.stopped() !== true;
+    watch?.completed?.() === true ||
+    (!rollsBackWhole(dialect) &&
+      !leftNothing(stop) &&
+      watch?.stopped() !== true);
   return {
     push: async (...args: A) => {
-      stoppedBeforeAnyStatement?.starting();
+      watch?.starting();
       let result: R;
       try {
         result = await push(...args);
