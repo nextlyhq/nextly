@@ -77,10 +77,11 @@ const CHECK_KIND: Record<BuilderKind, AddressCheckKind> = {
 };
 
 /**
- * The collections a link may name though no create could take their
- * addresses, as the link editor offers them: the Users collection.
+ * The built-in collections a link may name though no create could take their
+ * addresses: Users and Media, as core's relationship check takes them
+ * (`CORE_RELATION_TARGETS`, which nextly keeps unexported).
  */
-const SYSTEM_LINK_TARGETS: ReadonlySet<string> = new Set(["users"]);
+const SYSTEM_LINK_TARGETS: ReadonlySet<string> = new Set(["users", "media"]);
 
 /** One target, keyed "kind:address". */
 type Target = { key: string; kind: NeededKind; address: string };

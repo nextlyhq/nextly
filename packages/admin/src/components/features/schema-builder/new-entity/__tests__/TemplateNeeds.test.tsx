@@ -613,4 +613,47 @@ describe("what a template needs", () => {
       removeUnsavedEntity("single", "authors");
     }
   });
+
+  it("takes Media as a link target, as core's relationship check does", async () => {
+    refusals = {
+      "collection:media": { code: "SLUG_RESERVED", message: "Reserved." },
+    };
+    const remove = registerSchemaTemplates("Acme", [
+      {
+        id: "with-media",
+        kind: "collection",
+        category: "Acme",
+        name: "Acme gallery",
+        description: "Links to media.",
+        fields: [
+          {
+            name: "cover",
+            label: "Cover",
+            type: "relationship",
+            relationTo: "media",
+          },
+        ],
+      },
+    ]);
+    try {
+      const { onCreate, user } = renderDialog();
+      await user.type(screen.getByRole("textbox", { name: "Name" }), "Album");
+      await user.click(
+        screen.getByRole("button", { name: "Browse all templates" })
+      );
+      const gallery = await screen.findByRole("dialog", {
+        name: "All templates",
+      });
+      await user.click(
+        within(gallery).getByRole("button", { name: "Use Acme gallery" })
+      );
+      await waitFor(() => expect(createButton()).toBeEnabled());
+      expect(screen.queryByText(/collection media/)).toBeNull();
+      expect(checks.some(each => each.address === "media")).toBe(false);
+      await user.click(createButton());
+      expect(onCreate.mock.calls.at(-1)?.[2]).toEqual([]);
+    } finally {
+      remove();
+    }
+  });
 });
