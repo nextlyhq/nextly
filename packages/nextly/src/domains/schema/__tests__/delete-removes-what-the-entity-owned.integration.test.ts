@@ -608,6 +608,11 @@ describeEachDialect(
           // The delete is one transaction, undone whole.
           expect(after).toEqual(before);
         }
+        if (kind === "collection" && dialect === "mysql") {
+          // The translations table's drop committed before the failure, as
+          // MySQL commits each drop: the case the order above exists for.
+          expect(after.translations).toBe(0);
+        }
       },
       120_000
     );
