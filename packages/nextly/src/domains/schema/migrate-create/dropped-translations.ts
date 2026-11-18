@@ -33,6 +33,7 @@ import type {
 } from "../pipeline/diff/types";
 import { builtByFor } from "../pipeline/registered-collections";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
+import { generateStatements } from "../pipeline/sql-templates/index";
 
 import type {
   EntitySettingsRecord,
@@ -41,8 +42,8 @@ import type {
 
 /** The statements a migration gains for the translations tables of the tables it drops. */
 export interface DroppedTranslations {
-  /** Each translations table's drop, to lead the UP, before its main table's drop. */
-  up: string[];
+  /** Each translations table's drop, with the table it translates, whose drop it goes before. */
+  up: TranslationsDrop[];
   /** Each one made again with no rows, to follow its main table's re-creation in the DOWN. */
   down: string[];
 }
@@ -91,22 +92,57 @@ export function droppedTranslations(args: {
   const dropped = args.operations.flatMap(op =>
     op.type === "drop_table" ? [op.tableName] : []
   );
-  const up: string[] = [];
+  const up: TranslationsDrop[] = [];
   const down: string[] = [];
   for (const table of new Set(dropped)) {
     const main = tables.get(table);
     if (main?.localized !== true) continue;
     const quoted = quoteIdent(companionTableOf(table), dialect);
-    up.push(
-      dialect === "postgresql"
-        ? `DROP TABLE IF EXISTS ${quoted} CASCADE`
-        : `DROP TABLE IF EXISTS ${quoted}`
-    );
+    up.push({
+      table,
+      statement:
+        dialect === "postgresql"
+          ? `DROP TABLE IF EXISTS ${quoted} CASCADE`
+          : `DROP TABLE IF EXISTS ${quoted}`,
+    });
     const entity = recordedEntityOf(table, args.previousEntities);
     if (entity === undefined) continue;
     down.push(...emptyTranslationsTable(entity, main, args));
   }
   return { up, down };
+}
+
+/** One translations table's drop, and the table it translates. */
+export interface TranslationsDrop {
+  table: string;
+  statement: string;
+}
+
+/**
+ * `statements` with each of `drops` placed immediately before the drop of
+ * the table it translates, so nothing references that table when it goes.
+ * Not at the head of the file: the file leads with the guards that refuse a
+ * change before any statement runs (`requireEmpty`), and a translations
+ * table dropped ahead of one that then refuses would be gone, on a database
+ * that commits each statement, though the change was refused. A table whose
+ * drop is not among `statements` has its translations table dropped last.
+ */
+export function translationsDropsPlaced(
+  statements: readonly string[],
+  drops: readonly TranslationsDrop[],
+  dialect: SupportedDialect
+): string[] {
+  const out = [...statements];
+  for (const drop of drops) {
+    const [mainDrop] = generateStatements(
+      [{ type: "drop_table", tableName: drop.table }],
+      dialect,
+      []
+    );
+    const at = mainDrop === undefined ? -1 : out.indexOf(mainDrop);
+    out.splice(at === -1 ? out.length : at, 0, drop.statement);
+  }
+  return out;
 }
 
 /** The entity whose table `table` is, among those the snapshot recorded. */

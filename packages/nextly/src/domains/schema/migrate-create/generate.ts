@@ -147,7 +147,10 @@ import {
   type PermissionRecord,
 } from "./declared-permissions";
 import { buildInverseOperations } from "./down-generator";
-import { droppedTranslations } from "./dropped-translations";
+import {
+  droppedTranslations,
+  translationsDropsPlaced,
+} from "./dropped-translations";
 import {
   describeSettingsChange,
   settingsChangesFor,
@@ -1185,7 +1188,11 @@ export async function generateMigration(
     dialect: args.dialect,
     defaultLocale: args.defaultLocale ?? "en",
   });
-  sqlStatements.unshift(...translations.up);
+  sqlStatements.splice(
+    0,
+    sqlStatements.length,
+    ...translationsDropsPlaced(sqlStatements, translations.up, args.dialect)
+  );
   downSqlStatements.push(...translations.down);
   // A renamed field group's rows move once its tables are as the file leaves them, and move back
   // before the DOWN takes those tables back.
