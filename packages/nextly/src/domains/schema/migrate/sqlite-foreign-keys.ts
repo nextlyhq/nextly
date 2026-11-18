@@ -59,35 +59,92 @@ type DanglingCounts = Map<
   { table: string; parent: string; rows: number }
 >;
 
+/** One count of dangling rows through one foreign key, by its number in its table's key list. */
+interface DanglingThroughKey {
+  table: string;
+  parent: string;
+  /** The key's `id` in `PRAGMA foreign_key_list` of `table`. */
+  key: number;
+  rows: number;
+}
+
+/** The rows `PRAGMA foreign_key_check` reports, counted by the key each dangles through. */
+async function danglingThroughKeys(
+  session: Pick<SqliteForeignKeySession, "read">
+): Promise<DanglingThroughKey[]> {
+  const rows = await session.read<{
+    table: string;
+    parent: string;
+    fkid: number;
+  }>("PRAGMA foreign_key_check");
+  const counts = new Map<string, DanglingThroughKey>();
+  for (const row of rows) {
+    const key = Number(row.fkid);
+    const at = `${row.table}\u0000${row.parent}\u0000${key}`;
+    const entry = counts.get(at) ?? {
+      table: row.table,
+      parent: row.parent,
+      key,
+      rows: 0,
+    };
+    entry.rows += 1;
+    counts.set(at, entry);
+  }
+  return [...counts.values()];
+}
+
 /** The rows `PRAGMA foreign_key_check` reports, counted by table pair. */
 async function danglingReferenceCounts(
   session: Pick<SqliteForeignKeySession, "read">
 ): Promise<DanglingCounts> {
-  const rows = await session.read<{ table: string; parent: string }>(
-    "PRAGMA foreign_key_check"
-  );
   const counts: DanglingCounts = new Map();
-  for (const row of rows) {
-    const key = `${row.table}\u0000${row.parent}`;
-    const entry = counts.get(key) ?? {
-      table: row.table,
-      parent: row.parent,
-      rows: 0,
-    };
-    entry.rows += 1;
+  for (const { table, parent, rows } of await danglingThroughKeys(session)) {
+    const key = `${table}\u0000${parent}`;
+    const entry = counts.get(key) ?? { table, parent, rows: 0 };
+    entry.rows += rows;
     counts.set(key, entry);
   }
   return counts;
 }
 
+/** The referencing columns of each foreign key of `table`, by the key's `id`, in key order. */
+async function foreignKeyColumns(
+  session: Pick<SqliteForeignKeySession, "read">,
+  table: string
+): Promise<Map<number, string[]>> {
+  const rows = await session.read<{ id: number; seq: number; from: string }>(
+    `PRAGMA foreign_key_list("${table.replace(/"/g, '""')}")`
+  );
+  const columns = new Map<number, string[]>();
+  for (const row of [...rows].sort((a, b) => Number(a.seq) - Number(b.seq))) {
+    const id = Number(row.id);
+    columns.set(id, [...(columns.get(id) ?? []), row.from]);
+  }
+  return columns;
+}
+
 /**
- * The rows `PRAGMA foreign_key_check` reports, by table and the parent it references: what a
- * check of the database as it stands finds, for a caller judging a change it did not run.
+ * The rows `PRAGMA foreign_key_check` reports, by table, the parent it references and the key the
+ * rows dangle through, named by its referencing columns: what a check of the database as it
+ * stands finds, for a caller judging a change it did not run. Two keys between the same two
+ * tables are counted apart, so rows dangling through one are not laid on the other.
  */
 export async function danglingReferences(
   session: Pick<SqliteForeignKeySession, "read">
-): Promise<Array<{ table: string; parent: string; rows: number }>> {
-  return [...(await danglingReferenceCounts(session)).values()];
+): Promise<
+  Array<{ table: string; parent: string; rows: number; columns: string[] }>
+> {
+  const found = await danglingThroughKeys(session);
+  const keysOf = new Map<string, Map<number, string[]>>();
+  for (const table of new Set(found.map(entry => entry.table))) {
+    keysOf.set(table, await foreignKeyColumns(session, table));
+  }
+  return found.map(({ table, parent, key, rows }) => ({
+    table,
+    parent,
+    rows,
+    columns: keysOf.get(table)?.get(key) ?? [],
+  }));
 }
 
 /**

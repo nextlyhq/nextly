@@ -40,6 +40,7 @@ import {
   introspectTableNames,
 } from "../pipeline/diff/introspect-live";
 
+import { readLiveColumnFacts, type LiveColumnFacts } from "./live-column-facts";
 import { scanSql } from "./sql-scan";
 import { cursorOf, StatementCursor } from "./statement-cursor";
 
@@ -83,6 +84,13 @@ export interface LiveSchema {
     table?: string;
   }): boolean;
 }
+
+/**
+ * The live schema with what a snapshot does not record of a column (`LiveColumnFacts`), which
+ * `readLiveSchema` reads with it. Kept apart from `LiveSchema` because `judgeStatements` asks for
+ * none of it: only the proof that a file may be recorded without running does.
+ */
+export type LiveSchemaWithColumnFacts = LiveSchema & LiveColumnFacts;
 
 /** An object a statement leaves present or absent. Names are lower-cased. */
 type LiveObject =
@@ -748,13 +756,15 @@ const within = (table: string, name: string): string =>
  * constraint names as the catalog holds them. On PostgreSQL and SQLite an
  * index is also looked up by name alone (`introspectIndexTables`), for a
  * `DROP INDEX` that names no table. A constraint is whatever the catalog
- * records as one on the table (`introspectConstraintNames`).
+ * records as one on the table (`introspectConstraintNames`). What a snapshot
+ * does not record of the same tables' columns is read with them
+ * (`readLiveColumnFacts`).
  */
 export async function readLiveSchema(
   db: unknown,
   dialect: SupportedDialect,
   statements: readonly string[]
-): Promise<LiveSchema> {
+): Promise<LiveSchemaWithColumnFacts> {
   const objects = statements.flatMap(statement => {
     const reading = readStatement(statement, dialect);
     return reading.kind === "schema" ? reading.claims.map(c => c.object) : [];
@@ -794,6 +804,12 @@ export async function readLiveSchema(
     dialect,
     liveTables
   );
+  const columnFacts = await readLiveColumnFacts(
+    db,
+    dialect,
+    liveTables,
+    snapshot
+  );
   const constraints = new Set<string>();
   const unvalidated = new Set<string>();
   for (const [on, names] of constraintNames) {
@@ -815,6 +831,7 @@ export async function readLiveSchema(
   }
 
   return {
+    ...columnFacts,
     hasTable: name => tables.has(name.toLowerCase()),
     hasColumn: (on, column) => columns.has(within(on, column)),
     hasIndex: (name, on) =>

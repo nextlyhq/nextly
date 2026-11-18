@@ -18,7 +18,10 @@ import {
   refuseUnlessProven,
   statementsShownBySnapshot,
 } from "./snapshot-proof";
-import type { LiveSchema } from "./statement-judgement";
+import type {
+  LiveSchema,
+  LiveSchemaWithColumnFacts,
+} from "./statement-judgement";
 
 const posts = (
   ...columns: string[]
@@ -657,5 +660,244 @@ describe("constraints a file adds that the database holds but does not enforce",
     expect((error as NextlyError).publicMessage).toContain(
       "the database holds 2 row(s) referencing rows that do not exist through a foreign key it adds (dc_posts → users)"
     );
+  });
+});
+
+/** A live schema holding every object, each usable, with the column facts a case gives. */
+const liveWith = (facts: {
+  settings?: readonly string[];
+  generatesKey?: boolean;
+  /** A column the database no longer has: the earlier name of one a `CHANGE` renamed. */
+  gone?: string;
+}): LiveSchemaWithColumnFacts => ({
+  hasTable: () => true,
+  hasColumn: (_table, column) => column !== facts.gone,
+  hasIndex: () => true,
+  hasConstraint: () => true,
+  usable: () => true,
+  untrackedSettings: () => facts.settings ?? [],
+  generatesKey: () => facts.generatesKey ?? true,
+});
+
+/** The statuses `proveStatements` gives one MySQL or PostgreSQL file against `schema`. */
+async function statusesAgainst(
+  statements: string[],
+  dialect: SupportedDialect,
+  schema: LiveSchemaWithColumnFacts,
+  between: typeof sides = sides
+): Promise<string[]> {
+  const proofs = await proveStatements({
+    statements,
+    dialect,
+    sides: between,
+    live: { schema, nullsIn: () => Promise.resolve(0) },
+  });
+  return proofs.map(proof => proof.status);
+}
+
+describe("a MySQL column restated by MODIFY or CHANGE", () => {
+  const MODIFY = "ALTER TABLE `dc_posts` MODIFY COLUMN `slug` varchar(500)";
+  const CHANGE = "ALTER TABLE `dc_posts` CHANGE COLUMN `title` `slug` text";
+
+  it("is not proven where the live column keeps a setting the statement would reset", async () => {
+    // The column already has the file's type, with a collation and a comment set by hand: a run
+    // of the file would put both back, so a record without running leaves another database.
+    const kept = liveWith({
+      settings: ["COLLATE utf8mb4_bin", "COMMENT"],
+      gone: "title",
+    });
+    expect(await statusesAgainst([MODIFY], "mysql", kept)).toEqual(["keeps"]);
+    expect(await statusesAgainst([CHANGE], "mysql", kept)).toEqual(["keeps"]);
+  });
+
+  it("asks about the column as the statement leaves it named", async () => {
+    const asked: string[] = [];
+    const schema: LiveSchemaWithColumnFacts = {
+      ...liveWith({ gone: "title" }),
+      untrackedSettings: (table, column) => {
+        asked.push(`${table}.${column}`);
+        return [];
+      },
+    };
+    await statusesAgainst([MODIFY], "mysql", schema);
+    await statusesAgainst([CHANGE], "mysql", schema);
+    expect(asked).toEqual(["dc_posts.slug", "dc_posts.slug"]);
+  });
+
+  it("is proven where the live column holds nothing the statement would reset", async () => {
+    expect(await statusesAgainst([MODIFY], "mysql", liveWith({}))).toEqual([
+      "shown",
+    ]);
+  });
+
+  it("is not shown where the clause states what the snapshot does not record", () => {
+    for (const tail of [
+      "varchar(500) AFTER `title`",
+      "varchar(500) FIRST",
+      "varchar(500) COLLATE utf8mb4_bin",
+      "varchar(500) CHARACTER SET latin1",
+      "varchar(500) COMMENT 'by hand'",
+      "varchar(500) INVISIBLE",
+      "timestamp ON UPDATE CURRENT_TIMESTAMP",
+      "int AUTO_INCREMENT",
+      "int GENERATED ALWAYS AS (1) STORED",
+    ]) {
+      const statement = `ALTER TABLE \`dc_posts\` MODIFY COLUMN \`slug\` ${tail}`;
+      expect(shown(statement, "mysql"), statement).toBe(false);
+    }
+    // What the generator writes of a restated column stays shown: type, nullability, default.
+    for (const tail of [
+      "varchar(500)",
+      "varchar(500) NOT NULL DEFAULT 'first'",
+      "text NULL",
+    ]) {
+      const statement = `ALTER TABLE \`dc_posts\` MODIFY COLUMN \`slug\` ${tail}`;
+      expect(shown(statement, "mysql"), statement).toBe(true);
+    }
+  });
+
+  it("names such a statement and its reason in the refusal", async () => {
+    const proofs = await proveStatements({
+      statements: [MODIFY],
+      dialect: "mysql",
+      sides,
+      live: {
+        schema: liveWith({ settings: ["COMMENT"] }),
+        nullsIn: () => Promise.resolve(0),
+      },
+    });
+    let error: unknown;
+    try {
+      refuseUnlessProven({
+        file: { filename: "20261116_widen_slug.sql", sha256: CHECKSUM },
+        proof: { statements: proofs, recordedChecksum: CHECKSUM },
+        attempt: undefined,
+      });
+    } catch (thrown) {
+      error = thrown;
+    }
+    const message = (error as NextlyError).publicMessage;
+    expect(message).toContain(
+      "the database's columns keep settings 1 statement would reset"
+    );
+    expect(message).toContain(
+      "ALTER TABLE `dc_posts` MODIFY COLUMN `slug` varchar (the column keeps settings it would reset)"
+    );
+  });
+});
+
+describe("a key the database assigns, on a table the file creates", () => {
+  const counters = {
+    name: "counters",
+    columns: [
+      { name: "id", type: "int4", nullable: false, autoIncrement: true },
+      { name: "label", type: "text", nullable: true },
+    ],
+  };
+  const creating = {
+    before: { tables: [] },
+    target: { tables: [counters] },
+  };
+  const CREATES: Array<[SupportedDialect, string]> = [
+    [
+      "postgresql",
+      'CREATE TABLE "counters" ("id" serial PRIMARY KEY, "label" text)',
+    ],
+    [
+      "postgresql",
+      'CREATE TABLE "counters" ("id" integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "label" text)',
+    ],
+    [
+      "mysql",
+      "CREATE TABLE `counters` (`id` int NOT NULL AUTO_INCREMENT PRIMARY KEY, `label` text)",
+    ],
+  ];
+
+  it("is not proven where the live table's key is a plain column", async () => {
+    // The table made by hand with an ordinary integer key: every insert leaving the key out
+    // fails there, where the file's own table assigns it.
+    for (const [dialect, create] of CREATES) {
+      expect(
+        await statusesAgainst(
+          [create],
+          dialect,
+          liveWith({ generatesKey: false }),
+          creating
+        ),
+        create
+      ).toEqual(["not-done"]);
+    }
+  });
+
+  it("is proven where the database assigns the key", async () => {
+    for (const [dialect, create] of CREATES) {
+      expect(
+        await statusesAgainst(
+          [create],
+          dialect,
+          liveWith({ generatesKey: true }),
+          creating
+        ),
+        create
+      ).toEqual(["shown"]);
+    }
+  });
+
+  it("asks nothing of a key the file leaves plain, or of SQLite's rowid key", async () => {
+    const never = liveWith({ generatesKey: false });
+    expect(
+      await statusesAgainst(
+        ['CREATE TABLE "counters" ("id" integer PRIMARY KEY, "label" text)'],
+        "postgresql",
+        never,
+        creating
+      )
+    ).toEqual(["shown"]);
+    expect(
+      await statusesAgainst(
+        ['CREATE TABLE "counters" ("id" integer PRIMARY KEY, "label" text)'],
+        "sqlite",
+        never,
+        creating
+      )
+    ).toEqual(["shown"]);
+  });
+});
+
+describe("rows dangling through one of two keys between the same tables", () => {
+  const key = (name: string, column: string) => ({
+    name,
+    columns: [column],
+    referencesTable: "users",
+    referencesColumns: ["id"],
+    onDelete: "no action" as const,
+    onUpdate: "no action" as const,
+  });
+  const author = key("fk_dc_posts_author", "author");
+  const editor = key("fk_dc_posts_editor", "editor");
+  const between = {
+    before: { tables: [{ ...posts("title"), foreignKeys: [author] }] },
+    target: { tables: [{ ...posts("title"), foreignKeys: [author, editor] }] },
+  };
+
+  it("does not blame the added key for rows dangling through the one the database had", () => {
+    const throughAuthor = {
+      table: "dc_posts",
+      parent: "users",
+      rows: 3,
+      columns: ["author"],
+    };
+    const throughEditor = { ...throughAuthor, rows: 1, columns: ["editor"] };
+    expect(danglingOnAddedKeys(between, [throughAuthor])).toEqual([]);
+    expect(
+      danglingOnAddedKeys(between, [throughAuthor, throughEditor])
+    ).toEqual([throughEditor]);
+  });
+
+  it("still reads a count that names no key by its table pair", () => {
+    const unnamed = { table: "dc_posts", parent: "users", rows: 3 };
+    expect(danglingOnAddedKeys(between, [unnamed])).toEqual([unnamed]);
+    const unread = { ...unnamed, columns: [] };
+    expect(danglingOnAddedKeys(between, [unread])).toEqual([unread]);
   });
 });

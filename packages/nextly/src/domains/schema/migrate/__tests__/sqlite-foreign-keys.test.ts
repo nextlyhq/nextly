@@ -13,6 +13,7 @@ import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { executeTransaction } from "../migration-transaction";
+import { danglingReferences } from "../sqlite-foreign-keys";
 
 let adapter: ReturnType<typeof createSqliteAdapter>;
 let sqlite: Database.Database;
@@ -76,5 +77,33 @@ describe("the dangling-reference refusal", () => {
     expect(sqlite.prepare("SELECT count(*) AS n FROM parent").get()).toEqual({
       n: 1,
     });
+  });
+});
+
+describe("danglingReferences", () => {
+  it("names the key each count dangles through, telling two keys between the same tables apart", async () => {
+    sqlite.exec(
+      `CREATE TABLE pair (id TEXT PRIMARY KEY, a TEXT REFERENCES parent (id), b TEXT REFERENCES parent (id))`
+    );
+    sqlite.pragma("foreign_keys = OFF");
+    sqlite.exec(
+      `INSERT INTO pair VALUES ('x', 'gone', 'p1'), ('y', 'gone', 'gone')`
+    );
+    sqlite.pragma("foreign_keys = ON");
+
+    const found = await danglingReferences({
+      read: <T>(statement: string) =>
+        Promise.resolve(sqlite.prepare(statement).all() as T[]),
+    });
+    const byKey = [...found].sort((x, y) =>
+      `${x.table}.${x.columns.join()}`.localeCompare(
+        `${y.table}.${y.columns.join()}`
+      )
+    );
+    expect(byKey).toEqual([
+      { table: "child", parent: "parent", rows: 1, columns: ["parent_id"] },
+      { table: "pair", parent: "parent", rows: 2, columns: ["a"] },
+      { table: "pair", parent: "parent", rows: 1, columns: ["b"] },
+    ]);
   });
 });

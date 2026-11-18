@@ -57,7 +57,7 @@ import {
   judgeStatements,
   labelOf,
   type JudgedStatement,
-  type LiveSchema,
+  type LiveSchemaWithColumnFacts,
 } from "./statement-judgement";
 import { registryRowWrittenBy } from "./statement-targets";
 
@@ -69,9 +69,11 @@ interface StatementProof {
    * `shown`: the snapshot shows what it does, and the database has it. `unshown`: the snapshot
    * cannot show what it does. `not-done`: the snapshot shows its kind, but the live database does
    * not stand as it leaves it (`judgeStatements`): an index left invalid, a constraint not
-   * validated, an object absent.
+   * validated, an object absent, a key the file has the database assign that it does not.
+   * `unfilled`: rows it fills with its default are still NULL. `keeps`: a MySQL column it restates
+   * holds a setting a run of it would put back (`LiveColumnFacts.untrackedSettings`).
    */
-  status: "shown" | "unshown" | "not-done" | "unfilled";
+  status: "shown" | "unshown" | "not-done" | "unfilled" | "keeps";
 }
 
 /** A column a statement fills, in every row the table already holds, with its default. */
@@ -83,7 +85,7 @@ interface FilledColumn {
 /** What the live database says of a pending file's statements, where it stands at the file's end. */
 export interface LiveFacts {
   /** The live schema the statements are judged against (`readLiveSchema`). */
-  schema: LiveSchema;
+  schema: LiveSchemaWithColumnFacts;
   /** How many rows hold NULL in `column` of `table` (`countNulls`). */
   nullsIn: (table: string, column: string) => Promise<number>;
 }
@@ -95,6 +97,11 @@ export interface LiveFacts {
  * there: a database brought to the same schema by adding the column and setting its default
  * afterwards has the default and not the rows it would have filled. One count per such column, and
  * only here.
+ *
+ * Two more things the snapshot comparison cannot see are asked of the live database: that a key a
+ * `CREATE TABLE` has the database assign is assigned there (`generatedKeysAssigned`), and that a
+ * MySQL column a statement restates holds nothing the statement would put back
+ * (`restatedColumnsKeep`).
  */
 export async function proveStatements(args: {
   statements: readonly string[];
@@ -110,11 +117,19 @@ export async function proveStatements(args: {
     judgeStatements(statements, dialect, live.schema)
   );
   for (const [at, proof] of proofs.entries()) {
+    if (proof.status !== "shown") continue;
     if (
-      proof.status === "shown" &&
-      !inlineConstraintsUsable(statements[at], dialect, args.sides, live.schema)
+      !inlineConstraintsUsable(
+        statements[at],
+        dialect,
+        args.sides,
+        live.schema
+      ) ||
+      !generatedKeysAssigned(statements[at], dialect, args.sides, live.schema)
     ) {
       proofs[at] = { ...proof, status: "not-done" };
+    } else if (restatedColumnsKeep(statements[at], dialect, live.schema)) {
+      proofs[at] = { ...proof, status: "keeps" };
     }
   }
   const filled = columnsFilledBy(statements, dialect);
@@ -154,6 +169,97 @@ function inlineConstraintsUsable(
         table: table.name,
         name: constraint.name,
       })
+  );
+}
+
+/** PostgreSQL's types that create a sequence the column owns and default to it. */
+const SERIAL_TYPES = new Set([
+  "SERIAL",
+  "BIGSERIAL",
+  "SMALLSERIAL",
+  "SERIAL2",
+  "SERIAL4",
+  "SERIAL8",
+]);
+
+/**
+ * Whether a column definition's tail has the database assign its value: PostgreSQL's serial types
+ * and identity columns, MySQL's `AUTO_INCREMENT` and its `SERIAL` alias. SQLite declares none: an
+ * `INTEGER PRIMARY KEY` is the rowid whatever else the table says.
+ */
+function declaresGeneratedKey(
+  tail: readonly StatementToken[],
+  dialect: SupportedDialect
+): boolean {
+  if (dialect === "sqlite") return false;
+  const type = tail[0];
+  if (dialect === "mysql") {
+    return type === "SERIAL" || tail.includes("AUTO_INCREMENT");
+  }
+  return (
+    (typeof type === "string" && SERIAL_TYPES.has(type)) ||
+    tail.includes("IDENTITY")
+  );
+}
+
+/**
+ * Whether every key a `CREATE TABLE` of a table the target snapshot holds has the database assign
+ * is one the live table assigns. The snapshot comparison reads such a key as its storage type, so a
+ * table made by hand with a plain integer key stands where the file ends, and every insert that
+ * leaves the key out fails there. True for any other statement.
+ */
+function generatedKeysAssigned(
+  statement: string,
+  dialect: SupportedDialect,
+  sides: { target: NextlySchemaSnapshot },
+  schema: LiveSchemaWithColumnFacts
+): boolean {
+  const name = createdTable(statement, dialect);
+  const table = sides.target.tables.find(
+    each => each.name.toLowerCase() === name
+  );
+  if (table === undefined) return true;
+  return columnDefinitions(statement, dialect)
+    .filter(([, tail]) => declaresGeneratedKey(tail, dialect))
+    .every(([column]) => schema.generatesKey(table.name, column));
+}
+
+/**
+ * The columns a MySQL `ALTER TABLE` restates, each under the name the statement leaves it with:
+ * `MODIFY [COLUMN] c ...` and `CHANGE [COLUMN] a b ...`. None on another dialect.
+ */
+function restatedColumns(
+  statement: string,
+  dialect: SupportedDialect
+): FilledColumn[] {
+  if (dialect !== "mysql") return [];
+  const cursor = cursorOf(statement, dialect, EXACT);
+  if (!cursor.accept("ALTER", "TABLE")) return [];
+  const table = cursor.name();
+  if (table === undefined) return [];
+  return cursor.clauses().flatMap(tokens => {
+    const clause = new StatementCursor(tokens);
+    const renames = clause.accept("CHANGE");
+    if (!renames && !clause.accept("MODIFY")) return [];
+    clause.accept("COLUMN");
+    const named = clause.name();
+    const column = renames ? clause.name() : named;
+    return column === undefined ? [] : [{ table, column }];
+  });
+}
+
+/**
+ * Whether a column the statement restates holds, in the live database, a setting the statement
+ * would put back: the file was not run, so the column still has it, and a database the file did
+ * run on does not.
+ */
+function restatedColumnsKeep(
+  statement: string,
+  dialect: SupportedDialect,
+  schema: LiveSchemaWithColumnFacts
+): boolean {
+  return restatedColumns(statement, dialect).some(
+    ({ table, column }) => schema.untrackedSettings(table, column).length > 0
   );
 }
 
@@ -743,14 +849,73 @@ function columnChangeShown(clause: StatementCursor): boolean {
   return change.at(-1) !== "TYPE" || castsItself(clause.rest(), column);
 }
 
-/** MySQL's `MODIFY [COLUMN] c ...` and `CHANGE [COLUMN] a b ...`: a column's definition restated. */
+/**
+ * Words of a restated MySQL column that say more than the snapshot records of one: its character
+ * set and collation (the attributes and national types that imply one included), comment,
+ * visibility, `ON UPDATE`, generation, storage, a key or check declared with it, and where it
+ * stands among the columns.
+ */
+const RESTATED_BEYOND_SNAPSHOT = new Set([
+  "CHARACTER",
+  "CHARSET",
+  "COLLATE",
+  "ASCII",
+  "UNICODE",
+  "BINARY",
+  "NATIONAL",
+  "NCHAR",
+  "NVARCHAR",
+  "COMMENT",
+  "VISIBLE",
+  "INVISIBLE",
+  "ON",
+  "AUTO_INCREMENT",
+  "SERIAL",
+  "GENERATED",
+  "AS",
+  "VIRTUAL",
+  "STORED",
+  "COLUMN_FORMAT",
+  "STORAGE",
+  "ENGINE_ATTRIBUTE",
+  "SECONDARY_ENGINE_ATTRIBUTE",
+  "SRID",
+  "UNIQUE",
+  "PRIMARY",
+  "KEY",
+  "REFERENCES",
+  "CHECK",
+  "FIRST",
+  "AFTER",
+]);
+
+/** A type name that is also an attribute word: read as the type where it comes first. */
+const TYPES_AMONG_ATTRIBUTES = new Set(["BINARY"]);
+
+/**
+ * MySQL's `MODIFY [COLUMN] c ...` and `CHANGE [COLUMN] a b ...`: a column's definition restated,
+ * naming only what the snapshot records of a column, its type, whether it is nullable and its
+ * default, as `migrate:create` writes one. A clause that states anything else, or a position
+ * (`FIRST`, `AFTER`), changes what no snapshot shows. What it leaves out is asked of the live
+ * column (`restatedColumnsKeep`).
+ */
 function restatedColumnShown(
   clause: StatementCursor,
   file: FileContext
 ): boolean {
   if (file.dialect !== "mysql") return false;
+  const renames = clause.peek(-1) === "CHANGE";
   clause.accept("COLUMN");
-  return clause.name() !== undefined;
+  if (clause.name() === undefined) return false;
+  if (renames && clause.name() === undefined) return false;
+  return clause
+    .rest()
+    .every(
+      (token, at) =>
+        typeof token !== "string" ||
+        !RESTATED_BEYOND_SNAPSHOT.has(token) ||
+        (at === 0 && TYPES_AMONG_ATTRIBUTES.has(token))
+    );
 }
 
 /** `RENAME [COLUMN] a TO b`, or MySQL's `RENAME INDEX|KEY a TO b`, as the whole clause. */
@@ -882,6 +1047,7 @@ const MARKS: Record<StatementProof["status"], string> = {
   unshown: "not shown by its snapshot",
   "not-done": "the database does not stand as it leaves it",
   unfilled: "rows it fills with its default are still NULL",
+  keeps: "the column keeps settings it would reset",
 };
 
 /** `n` statements, in words. */
@@ -940,6 +1106,10 @@ const REASON_LINES: readonly ReasonLine[] = [
       `the database holds rows ${statementCount(n)} would have filled with ${n === 1 ? "its default" : "their defaults"}, still NULL`
   ),
   statusLine(
+    "keeps",
+    n => `the database's columns keep settings ${statementCount(n)} would reset`
+  ),
+  statusLine(
     "not-done",
     n =>
       `the database does not stand as ${statementCount(n)} ${n === 1 ? "leaves" : "leave"} it`
@@ -949,9 +1119,11 @@ const REASON_LINES: readonly ReasonLine[] = [
 /** The line for rows dangling through a foreign key the file adds. */
 function danglingLine(dangling: readonly DanglingReference[]): string {
   const rows = dangling.reduce((sum, entry) => sum + entry.rows, 0);
-  const pairs = dangling
+  // Two added keys between the same two tables are counted apart and named once.
+  const pairs = [
+    ...new Set(dangling.map(entry => `${entry.table} → ${entry.parent}`)),
+  ]
     .slice(0, 5)
-    .map(entry => `${entry.table} → ${entry.parent}`)
     .join(", ");
   return `the database holds ${rows} row(s) referencing rows that do not exist through a foreign key it adds (${pairs}), which a run of it would refuse`;
 }
@@ -1025,6 +1197,11 @@ interface DanglingReference {
   table: string;
   parent: string;
   rows: number;
+  /**
+   * The referencing columns of the key the rows dangle through, where the count names it
+   * (`danglingReferences`): two keys between the same two tables are then told apart.
+   */
+  columns?: readonly string[];
 }
 
 /**
@@ -1041,17 +1218,32 @@ export function danglingOnAddedKeys(
       (table.foreignKeys ?? []).map(key => `${table.name}\u0000${key.name}`)
     )
   );
-  const added = new Set(
-    sides.target.tables.flatMap(table =>
-      (table.foreignKeys ?? [])
-        .filter(key => !earlier.has(`${table.name}\u0000${key.name}`))
-        .map(key => `${table.name}\u0000${key.referencesTable}`.toLowerCase())
-    )
+  const added = sides.target.tables.flatMap(table =>
+    (table.foreignKeys ?? [])
+      .filter(key => !earlier.has(`${table.name}\u0000${key.name}`))
+      .map(key => ({
+        pair: `${table.name}\u0000${key.referencesTable}`.toLowerCase(),
+        columns: columnsKey(key.columns),
+      }))
   );
-  return dangling.filter(entry =>
-    added.has(`${entry.table}\u0000${entry.parent}`.toLowerCase())
-  );
+  // A count that names its key is the file's only where an added key has those columns; one that
+  // names none, or whose key could not be read, is read by its table pair, which a key the
+  // database already had can share: it refuses where it cannot tell.
+  return dangling.filter(entry => {
+    const pair = `${entry.table}\u0000${entry.parent}`.toLowerCase();
+    return added.some(
+      key =>
+        key.pair === pair &&
+        (entry.columns === undefined ||
+          entry.columns.length === 0 ||
+          key.columns === columnsKey(entry.columns))
+    );
+  });
 }
+
+/** A key's referencing columns as one comparable word, lower-cased, in the order declared. */
+const columnsKey = (columns: readonly string[]): string =>
+  columns.map(column => column.toLowerCase()).join("\u0000");
 
 /**
  * Refuses, before anything changes, to record a pending app file applied without running it
