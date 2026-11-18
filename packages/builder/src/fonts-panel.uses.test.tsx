@@ -297,6 +297,31 @@ describe("removing a font in use", () => {
     expect(onRemoveFamily).not.toHaveBeenCalled();
   });
 
+  it("refuses a font the Body font's variable reads through another variable", async () => {
+    const onRemoveFamily = vi.fn(async () => undefined);
+    panel({
+      tokens: {
+        tokens: [
+          ...TOKENS.tokens,
+          {
+            name: "font.body",
+            kind: "fontFamily",
+            values: { light: "var(--site-font-display), serif" },
+          },
+        ],
+        siteText: { body: { fontFamily: { $token: "font.body" } } },
+      },
+      onRemoveFamily,
+    });
+    const open = await details("Lora");
+    fireEvent.click(within(open).getByRole("button", { name: "Remove" }));
+    expect(
+      within(open).getByRole("group", { name: "Lora can’t be removed" })
+        .textContent
+    ).toContain("Lora is your body font. Choose another body font first.");
+    expect(onRemoveFamily).not.toHaveBeenCalled();
+  });
+
   it("refuses a font one heading row draws, though the headings are mixed", async () => {
     const onRemoveFamily = vi.fn(async () => undefined);
     panel({

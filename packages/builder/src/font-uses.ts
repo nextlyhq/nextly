@@ -25,6 +25,7 @@ import {
   firstFamily,
   fontRoleStacks,
   fontRoleVariables,
+  variableStacks,
   type FontRole,
 } from "./site-font-roles-model";
 
@@ -90,8 +91,9 @@ export function familyUses(
   const naming = resolveSiteTokens(tokens)
     .tokens.filter(token => token.kind === "fontFamily")
     .flatMap((token): FontVariableUse[] => {
-      const stack = [token.values.light, token.values.dark].find(
-        each => each !== undefined && firstFamily(each) === key
+      // In either mode, and through a variable it reads, as it is drawn.
+      const stack = variableStacks(tokens, tokenIdentity(token)).find(
+        each => firstFamily(each) === key
       );
       if (stack === undefined) return [];
       return [

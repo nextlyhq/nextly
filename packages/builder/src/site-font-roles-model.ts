@@ -116,15 +116,44 @@ function variableRead(
   return read === undefined ? undefined : tokenIdentity(read);
 }
 
-/** The font a row's value draws in a mode, as a stack. */
+/**
+ * The font a row's value draws in a mode, as a stack. A variable it reads is
+ * followed, and so is one that variable reads through `var()` in turn. A loop
+ * of variables draws no font, as a browser draws none.
+ */
 function drawnStack(
   tokens: SiteTokenSet,
   value: StyleValue,
   mode: FontMode
 ): string | undefined {
-  const identity = variableRead(tokens, value);
-  if (identity !== undefined) return variableValue(tokens, identity, mode);
-  return typeof value === "string" ? value : undefined;
+  const seen = new Set<string>();
+  let current: StyleValue = value;
+  for (
+    let identity = variableRead(tokens, current);
+    identity !== undefined;
+    identity = variableRead(tokens, current)
+  ) {
+    if (seen.has(identity)) return undefined;
+    seen.add(identity);
+    const next = variableValue(tokens, identity, mode);
+    if (next === undefined) return undefined;
+    current = next;
+  }
+  return typeof current === "string" ? current : undefined;
+}
+
+/**
+ * The fonts a site variable draws, in light and dark mode, as stacks: what
+ * it holds, or what a variable it reads through `var()` holds.
+ */
+export function variableStacks(
+  tokens: SiteTokenSet,
+  identity: string
+): readonly string[] {
+  return (["light", "dark"] as const).flatMap(mode => {
+    const stack = drawnStack(tokens, tokenRef(identity), mode);
+    return stack === undefined ? [] : [stack];
+  });
 }
 
 /**

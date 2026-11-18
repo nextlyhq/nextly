@@ -163,6 +163,55 @@ describe("where a font is used", () => {
     expect(familyUses("lora", fallback).roles).toEqual([]);
   });
 
+  it("follows a variable that reads another through var(), and stops at a loop", () => {
+    // Body points at font.body, which reads Display (Lora) as CSS.
+    const aliased: SiteTokenSet = {
+      tokens: [
+        ...BASE.tokens,
+        {
+          name: "font.body",
+          kind: "fontFamily",
+          values: { light: "var(--site-font-display), serif" },
+        },
+        {
+          name: "font.alias",
+          kind: "fontFamily",
+          values: { light: "Inter", dark: "var(--site-font-display)" },
+        },
+      ],
+      siteText: { body: { fontFamily: { $token: "font.body" } } },
+    };
+    const lora = familyUses("lora", aliased);
+    expect(lora.roles).toEqual(["body"]);
+    // A variable reading Lora through another, in dark here, names it too.
+    expect(lora.variables.map(each => each.identity)).toEqual([
+      "font.display",
+      "font.quote",
+      "font.alias",
+    ]);
+    // Two variables reading each other draw no font, and nothing hangs.
+    const loop: SiteTokenSet = {
+      tokens: [
+        {
+          name: "font.a",
+          kind: "fontFamily",
+          values: { light: "var(--site-font-b)" },
+        },
+        {
+          name: "font.b",
+          kind: "fontFamily",
+          values: { light: "var(--site-font-a)" },
+        },
+      ],
+      siteText: { body: { fontFamily: { $token: "font.a" } } },
+    };
+    expect(familyUses("lora", loop)).toEqual({
+      roles: [],
+      variables: [],
+      counted: [],
+    });
+  });
+
   it("counts the places of every variable naming it, a role's own included", () => {
     const body = withFontRole(BASE, "body", '"Lora", serif');
     const uses = familyUses("lora", body);
