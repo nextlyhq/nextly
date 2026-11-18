@@ -367,39 +367,63 @@ for (const entry of DIALECTS) {
       expect(back).toEqual([{ body: "Hello", label: "Hi" }]);
     });
 
-    // A unique index that also covers a field the same change adds cannot be made before the main
-    // file adds that field: it stays the main file's, and the disable makes only what it can.
-    it("leaves to the main file a unique index over a restored field and a field it adds", async () => {
-      await migrateCreate(translated);
-      const turnedOff: MinimalConfigEntity = {
-        ...untranslated,
-        fields: [...untranslated.fields, { name: "code", type: "text" }],
-        indexes: [{ fields: ["label", "code"], unique: true }],
-      };
-      await migrateCreate(turnedOff);
+    // Turning translation off and changing the table otherwise in one run would leave the main file
+    // at neither end once the disable has run: refused before any file is written, with the two
+    // steps that work, each of which applies.
+    /** The turned-off collection with a field added and a unique index over it and `label`. */
+    const withCode = (): MinimalConfigEntity => ({
+      ...untranslated,
+      fields: [...untranslated.fields, { name: "code", type: "text" }],
+      indexes: [{ fields: ["label", "code"], unique: true }],
+    });
 
-      const files = (await readdir(migrationsDir)).filter(n =>
-        n.endsWith(".sql")
+    async function seedOne(): Promise<void> {
+      await adapter.executeQuery(
+        `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('e1', 'One', 'one')`
       );
-      const read = (name: string | undefined) =>
-        name === undefined
-          ? Promise.resolve("")
-          : readFile(join(migrationsDir, name), "utf8");
-      const upOf = (content: string) => content.split("-- DOWN")[0] ?? "";
-      const disable = upOf(
-        await read(files.find(n => n.includes("_disable_localization_")))
+      await adapter.executeQuery(
+        `INSERT INTO ${q(`${table}_locales`)} (${q("_parent")}, ${q("_locale")}, ${q("body")}, ${q("label")}) ` +
+          `VALUES ('e1', 'en', 'Hello', 'Hi'), ('e1', 'es', 'Hola', 'Ola')`
       );
-      const main = upOf(
-        await read(
-          files
-            .filter(n => /_notes_\d+\.sql$/.test(n))
-            .sort()
-            .at(-1)
-        )
+    }
+
+    /** Every file and snapshot the migrations folder holds. */
+    async function written(): Promise<string[]> {
+      const meta = join(migrationsDir, "meta");
+      return [
+        ...(await readdir(migrationsDir)),
+        ...(await readdir(meta).catch(() => [] as string[])).map(
+          n => `meta/${n}`
+        ),
+      ].sort();
+    }
+
+    it("refuses to turn translation off and change the table otherwise in one migration, and writes nothing", async () => {
+      await migrateCreate(translated);
+      await migrate();
+      await seedOne();
+      const before = await written();
+
+      await expect(migrateCreate(withCode())).rejects.toThrow(
+        /turns translation off and changes its table in other ways/
       );
-      const coversCode = /CREATE UNIQUE INDEX[^;]*\([^;]*code[^;]*\)/;
-      expect(disable).not.toMatch(coversCode);
-      expect(main).toMatch(coversCode);
+
+      expect(await written()).toEqual(before);
+      expect(await migrate()).toBe(0);
+    });
+
+    it("turns translation off and then changes the table, in two migrations", async () => {
+      await migrateCreate(translated);
+      await migrate();
+      await seedOne();
+
+      await migrateCreate(untranslated);
+      await migrate();
+      await migrateCreate(withCode());
+      await migrate();
+
+      expect(await mainValues()).toEqual([{ body: "Hello", label: "Hi" }]);
+      await expect(migrate()).resolves.toBe(0);
     });
 
     // An entry whose language the copy keeps has no value: the column cannot be required over it.
