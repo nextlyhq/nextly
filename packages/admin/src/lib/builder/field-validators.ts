@@ -1,9 +1,14 @@
+import { validationRulesForFieldType } from "nextly/field-catalog";
 import {
   extractFieldGroupReferences,
   isFieldGroupFieldType,
 } from "nextly/field-group-type";
 
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
+import {
+  boundProblem,
+  NUMERIC_BOUND_RULES,
+} from "@admin/lib/validation-bounds";
 
 import { brokenConditions } from "./condition-identity";
 
@@ -20,6 +25,7 @@ type FieldErrorKind =
   | "bad-option"
   | "no-target"
   | "empty-container"
+  | "bad-bound"
   | "broken-condition";
 
 /** One field's error: what kind it is, and what to tell the person. */
@@ -36,6 +42,7 @@ const REPORT_ORDER: readonly FieldErrorKind[] = [
   "bad-option",
   "no-target",
   "empty-container",
+  "bad-bound",
   "broken-condition",
 ];
 
@@ -124,12 +131,51 @@ const needsInnerField: FieldCheck = field =>
       }
     : null;
 
+/**
+ * A field's numeric bounds must be keepable as they stand — `boundProblem`,
+ * the rule the settings panel already says under each bound.
+ *
+ * The panel has no Apply — an edit is in the draft as soon as it is made — so
+ * without this the panel's red words were only a warning the Save button
+ * ignored: a max length of 0 was stored and read downstream as "no limit", a
+ * min above its max outlived a refusal core makes only for lengths and
+ * values, not rows. The message after the colon is the panel's own, so a held
+ * row says what its bound already says.
+ *
+ * Asked only of the rules the field's TYPE offers
+ * (`validationRulesForFieldType`, the same answer the Validation tab draws
+ * its controls from): a stored bound the type does not offer — an icon's
+ * length, a text field's rows — is not this save's to judge, and refusing it
+ * would hold the save with a message about a control the panel never shows,
+ * with no way to fix it there. A plugin-contributed type is answered by
+ * core's fallback for a type with no declared primitive (only what every
+ * field has), so this gate never strands one; its panel still says an
+ * unsound bound inline.
+ */
+const needsSoundBounds: FieldCheck = field => {
+  const validation = field.validation;
+  if (validation === undefined) return null;
+  const offered = validationRulesForFieldType(field.type);
+  for (const rule of NUMERIC_BOUND_RULES) {
+    if (!offered.includes(rule)) continue;
+    const problem = boundProblem(rule, validation);
+    if (problem) {
+      return {
+        kind: "bad-bound",
+        message: `Field "${field.name}": ${problem}`,
+      };
+    }
+  }
+  return null;
+};
+
 /** A named field's checks, in the order of `REPORT_ORDER`. */
 const FIELD_CHECKS: readonly FieldCheck[] = [
   needsFieldGroup,
   needsOptions,
   needsTarget,
   needsInnerField,
+  needsSoundBounds,
 ];
 
 /** The one error a field has, or null; a field reports its first. */
@@ -188,7 +234,8 @@ export function builderFieldErrors(
  * Run the schema-save preflight checks against the user-defined fields: every
  * field named, every field-group field pointing at a field group, every select
  * or radio given sound options, every relationship a collection, every group
- * or repeater a field inside it, every condition reading a field it can. The refusal
+ * or repeater a field inside it, every numeric bound keepable as it stands,
+ * every condition reading a field it can. The refusal
  * names the first kind of error found, in that order, and the first field of
  * that kind.
  *
