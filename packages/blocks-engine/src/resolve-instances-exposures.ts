@@ -805,26 +805,41 @@ function planBoundSettings(
   bindings: unknown,
   plans: Map<string, NodePlan>
 ): void {
-  if (!isPlainRecord(bindings)) return;
-  const keys = boundedOwnKeys(bindings, MAX_ENVELOPE_ENTRIES);
-  if (keys === null) return;
+  const bound = boundSettings(bindings);
+  if (bound.size === 0) return;
+  for (const property of usableExposures(exposed)) {
+    const binding = bound.get(property.id);
+    if (binding === undefined || !isBindableSetting(property)) continue;
+    const plan = planFor(plans, property.nodeId);
+    plan.bindings = { ...plan.bindings };
+    defineEntry(plan.bindings, property.propPath, binding);
+  }
+}
+
+/** A placement's stored bindings, by the setting each binds; records only. */
+function boundSettings(bindings: unknown): ReadonlyMap<string, unknown> {
   const bound = new Map<string, unknown>();
+  if (!isPlainRecord(bindings)) return bound;
+  const keys = boundedOwnKeys(bindings, MAX_ENVELOPE_ENTRIES) ?? [];
   for (const key of keys) {
     const id = boundSettingId(key);
     const binding = ownEntry(bindings, key);
     if (id !== undefined && isPlainRecord(binding)) bound.set(id, binding);
   }
-  if (bound.size === 0) return;
-  for (const property of usableExposures(exposed)) {
-    const binding = bound.get(property.id);
-    if (binding === undefined || property.type === "visibility") continue;
-    if (property.nodeId === "" || !isUsablePropPath(property.propPath)) {
-      continue;
-    }
-    const plan = planFor(plans, property.nodeId);
-    plan.bindings = { ...plan.bindings };
-    defineEntry(plan.bindings, property.propPath, binding);
-  }
+  return bound;
+}
+
+/**
+ * Whether a setting's target can carry a binding: a prop of a block, at a
+ * path the writer follows. A visibility setting decides whether the block is
+ * shown, which no field fills.
+ */
+function isBindableSetting(property: ExposedProperty): boolean {
+  return (
+    property.type !== "visibility" &&
+    property.nodeId !== "" &&
+    isUsablePropPath(property.propPath)
+  );
 }
 
 /** Write one exposure's override into the plan for its node. */
