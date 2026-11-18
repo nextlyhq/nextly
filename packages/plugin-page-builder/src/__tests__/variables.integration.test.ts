@@ -1302,10 +1302,13 @@ describe.each(getConfiguredTestDialects())(
       const [run] = (await t.adapter.select(RUNS, { where: usageRun })) as {
         generation: string;
       }[];
-      expect(run?.generation).toMatch(/^3\|/);
+      // Stamped with the walk's current revision, whatever it is now; set
+      // back to 2, the last revision that did not count var().
+      expect(run?.generation).toMatch(/^\d+\|/);
+      expect(run?.generation).not.toMatch(/^[12]\|/);
       await t.adapter.update(
         RUNS,
-        { generation: (run?.generation ?? "").replace(/^3\|/, "2|") },
+        { generation: (run?.generation ?? "").replace(/^\d+\|/, "2|") },
         usageRun
       );
       const reader = await holding(t, "read-site-style");

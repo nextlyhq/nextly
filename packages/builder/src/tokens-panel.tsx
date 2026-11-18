@@ -47,11 +47,6 @@ import { Button } from "@nextlyhq/ui";
 import * as React from "react";
 import { createPortal } from "react-dom";
 
-import {
-  BuiltInColoursSetting,
-  builtInColoursShown,
-  useHiddenReadAgain,
-} from "./built-in-colours";
 import { useCanvasTokenModeAt } from "./canvas/prefers-dark";
 import { ColourCleanUp, type CleanUpColours } from "./colour-cleanup";
 import {
@@ -62,8 +57,7 @@ import {
   useColourGroupHost,
 } from "./colour-group-ui";
 import { colourGroups, inColourGroup } from "./colour-groups";
-import { hiddenColours } from "./colour-usage";
-import { useColourFilter } from "./colour-usage-filter";
+import { ColoursTabEnd, useColoursOfView } from "./colours-of-view";
 import {
   GroupToggle,
   OwnSearch,
@@ -90,7 +84,6 @@ import { ADDS, AddRows, EmptyGroup, type OnAdd } from "./variable-adds";
 import { VariableRow } from "./variable-row";
 import {
   combinedReach,
-  usageState,
   type VariableReach,
   type VariablesAccess,
 } from "./variable-usage";
@@ -353,7 +346,7 @@ function VariablesView({
     groups,
     tokens,
     usage,
-    supplied,
+    builtIn: identity => suppliedFor(supplied, identity) !== undefined,
     usedOnPage: hosted.usedOnPage,
     openKey,
   });
@@ -858,91 +851,6 @@ function useUsageOfRows(
           },
     [access, values, readAgain, classes]
   );
-}
-
-/**
- * The built-in colours the view leaves out while the site hides them, read
- * by the one rule the pickers read too, and whether a listed built-in
- * colour's row says so. Their use is read again a moment after the site's
- * variables change, since a variable naming one makes it used.
- */
-function useHiddenOfView({
-  tokens,
-  groups,
-  usage,
-  supplied,
-  usedOnPage,
-}: {
-  tokens: SiteTokenSet | undefined;
-  groups: Parameters<typeof colourIdentities>[0];
-  usage: VariableUsageHere | undefined;
-  supplied: SiteTokenSet | undefined;
-  usedOnPage: ReadonlySet<string> | undefined;
-}): { hidden: ReadonlySet<string>; marksBuiltIn: boolean } {
-  const shown = builtInColoursShown(tokens);
-  const builtIn = (identity: string): boolean =>
-    suppliedFor(supplied, identity) !== undefined;
-  const colours = colourIdentities(groups);
-  useHiddenReadAgain(shown, tokens, colours.filter(builtIn), usage?.readAgain);
-  return {
-    hidden: hiddenColours(colours, {
-      shown,
-      stateOf: identity => usageState(usage?.reachOf(identity)),
-      builtIn,
-      onPage: usedOnPage,
-    }),
-    marksBuiltIn: !shown,
-  };
-}
-
-/**
- * The Colours tab's usage filter over the listed groups, leaving out the
- * built-in colours the site hides ({@link useHiddenOfView}), and those.
- */
-function useColoursOfView<
-  G extends Parameters<typeof useColourFilter>[0]["shown"][number],
->({
-  groups,
-  supplied,
-  ...filter
-}: Omit<Parameters<typeof useColourFilter<G>>[0], "hidden"> & {
-  groups: Parameters<typeof colourIdentities>[0];
-  supplied: SiteTokenSet | undefined;
-}): ReturnType<typeof useColourFilter<G>> & {
-  hidden: ReadonlySet<string>;
-  marksBuiltIn: boolean;
-} {
-  const { hidden, marksBuiltIn } = useHiddenOfView({
-    tokens: filter.tokens,
-    groups,
-    usage: filter.usage,
-    supplied,
-    usedOnPage: filter.usedOnPage,
-  });
-  return { ...useColourFilter({ ...filter, hidden }), hidden, marksBuiltIn };
-}
-
-/** The site's built-in colours setting, which ends the Colours tab. */
-function ColoursTabEnd({
-  groups,
-  ...setting
-}: React.ComponentProps<typeof BuiltInColoursSetting> & {
-  groups: readonly { readonly group: VariableGroup }[];
-}): React.JSX.Element | null {
-  if (!groups.some(group => group.group === "colours")) return null;
-  return <BuiltInColoursSetting {...setting} />;
-}
-
-/** The identities of the colours the view lists. */
-function colourIdentities(
-  groups: readonly {
-    readonly group: VariableGroup;
-    readonly entries: readonly VariableEntry[];
-  }[]
-): string[] {
-  return groups
-    .filter(group => group.group === "colours")
-    .flatMap(group => group.entries.map(entry => entry.row.identity));
 }
 
 /** The variables a row stands for: its own, and a type size's line height. */
