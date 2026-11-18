@@ -17,9 +17,13 @@
  * @module fields/layers-lock-judgement
  */
 import {
+  DEFAULT_LIMITS,
+  ForestTooLargeError,
   layersLockChanges,
   migrateDocument,
+  treeDepth,
   type BlockDocument,
+  type DocumentLimits,
   type LayersLockChange,
   type MigrationSource,
 } from "@nextlyhq/blocks-engine";
@@ -118,12 +122,13 @@ export async function layersLockIssues(
   onUnjudged?: (found: LayersLockUnjudged) => void,
   openRemoval?: OpenRemovalReader,
   /**
-   * The site's block versions and upgrade steps. The write and the stored
-   * form are compared with every block upgraded, as the editor holds them:
-   * a block stored at an older version reaches the save upgraded by the
-   * editor that opened it, and must not read as a locked block changed.
+   * The site's block versions and upgrade steps, and its document caps. The
+   * write and the stored form are compared with every block upgraded, as the
+   * editor holds them: a block stored at an older version reaches the save
+   * upgraded by the editor that opened it, and must not read as a locked
+   * block changed.
    */
-  migration?: MigrationSource
+  migration?: LockMigration
 ): Promise<PluginFieldIssue[]> {
   if (!judgesLayersLocks(args) || args.write === undefined) return [];
   if (!isTopLevel(args.path)) {
@@ -180,14 +185,38 @@ export async function layersLockIssues(
  * comparison only; never stored. A value that is not a document, and every
  * value when no migration source was given, is compared as it came.
  */
-function upgradedBy(
-  migration: MigrationSource | undefined
-): <T>(value: T) => T {
-  return value =>
-    migration === undefined || !isForest(value)
-      ? value
-      : (migrateDocument(value as BlockDocument, migration)
-          .doc as typeof value);
+function upgradedBy(migration: LockMigration | undefined): <T>(value: T) => T {
+  return value => {
+    if (migration === undefined || !isForest(value)) return value;
+    const document = value as BlockDocument;
+    // Upgrading walks the tree by recursion, which a value nested past the
+    // site's cap could overflow. This judgement runs on a write the field's
+    // own rules already refused, so such a value is compared as it came: the
+    // rules' refusal is what its writer reads.
+    if (!withinDepth(document, migration.limits ?? DEFAULT_LIMITS)) {
+      return value;
+    }
+    return migrateDocument(document, migration.source).doc as typeof value;
+  };
+}
+
+/** What a lock judgement upgrades by: the site's blocks and its caps. */
+export interface LockMigration {
+  readonly source: MigrationSource;
+  readonly limits?: DocumentLimits | undefined;
+}
+
+/**
+ * Whether a document nests no deeper than the caps allow, measured by the
+ * engine's bounded walk. One too large to measure is not.
+ */
+function withinDepth(document: BlockDocument, limits: DocumentLimits): boolean {
+  try {
+    return treeDepth(document.nodes) <= limits.maxDepth;
+  } catch (error) {
+    if (error instanceof ForestTooLargeError) return false;
+    throw error;
+  }
 }
 
 /**
