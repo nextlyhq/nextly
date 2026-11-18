@@ -52,6 +52,7 @@ import {
 import { useUnsavedDiscard } from "@admin/hooks/useUnsavedDiscard";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { singleCreatePayload } from "@admin/lib/builder/create-request";
+import { draftRenamesOf } from "@admin/lib/builder/rename-answers";
 import { singleEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { hasPageBuilderField } from "@admin/lib/builder/starting-field";
 import {
@@ -393,6 +394,8 @@ export default function SingleBuilderEditPage({
     // Judged against the fields as last saved, so a draft that changes a
     // saved field's storage level is refused before it can lose values.
     getValidatedFields: () => getValidatedFields(pending.saved),
+    // Its renames of saved fields are the save's to answer, as renames.
+    pendingChanges: pending.changes,
     preview: fields =>
       unsaved
         ? Promise.resolve(createPreview(fields))
@@ -506,6 +509,7 @@ export default function SingleBuilderEditPage({
       savingLabel="Saving Single changes…"
     >
       <BuilderSchemaChangeDialogs
+        draftRenames={draftRenamesOf(pending.changes)}
         confirmation={confirmation}
         kind={SINGLE_BUILDER_CONFIG.kind}
         entityName={slug}

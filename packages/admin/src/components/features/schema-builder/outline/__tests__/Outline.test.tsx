@@ -45,6 +45,8 @@ function callbacks(entityReadOnly = false) {
     select: vi.fn(),
     addAt: vi.fn(),
     duplicate: vi.fn(),
+    rename: vi.fn(),
+    canRename: vi.fn(() => true),
     remove: vi.fn(),
     setHidden: vi.fn(),
     openFieldGroup: vi.fn(),
@@ -220,6 +222,17 @@ describe("the outline of the nested fixture", () => {
     expect(on.setHidden).toHaveBeenCalledWith("f-internal-note", false);
   });
 
+  // Rename… opens the field's settings with its rename asked for, where the field can be renamed.
+  it("offers Rename… on a row, for the field's own settings to take", async () => {
+    const { on } = renderOutline();
+    (row("internal_note") as HTMLElement).focus();
+    await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Rename…" })
+    );
+    expect(on.rename).toHaveBeenCalledWith("f-internal-note");
+  });
+
   it("shows each accepted field group's own count, on its own row", () => {
     renderOutline({
       nodes: buildOutline(
@@ -336,6 +349,7 @@ describe("a read-only row", () => {
     "Move up",
     "Move down",
     "Duplicate",
+    "Rename…",
     "Hide",
     "Show",
     "Delete",

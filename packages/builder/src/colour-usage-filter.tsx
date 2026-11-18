@@ -42,6 +42,7 @@ export function useColourFilter<G extends Listed>({
   usage,
   usedOnPage,
   openKey,
+  hidden,
 }: {
   shown: readonly G[];
   /** The site's variables, whose change can make a colour used or unused. */
@@ -50,6 +51,8 @@ export function useColourFilter<G extends Listed>({
   usedOnPage: ReadonlySet<string> | undefined;
   /** The row whose editor is open, listed whatever the filter. */
   openKey: string | null;
+  /** The built-in colours the site hides, left out whatever the filter. */
+  hidden?: ReadonlySet<string>;
 }): { shown: readonly G[]; control: React.ReactNode } {
   const [filter, setFilter] = React.useState<ColourFilter>("all");
   const colours = shown.find(group => group.group === "colours");
@@ -59,11 +62,12 @@ export function useColourFilter<G extends Listed>({
     usageState(usage?.reachOf(entry.row.identity));
   const keeps = (entry: VariableEntry): boolean =>
     entry.row.key === openKey ||
-    keepsColour(
-      filter,
-      stateOf(entry),
-      usedOnPage?.has(entry.row.identity) === true
-    );
+    (hidden?.has(entry.row.identity) !== true &&
+      keepsColour(
+        filter,
+        stateOf(entry),
+        usedOnPage?.has(entry.row.identity) === true
+      ));
   const counting =
     filter === "unused" &&
     colours.entries.some(entry => stateOf(entry) === "counting");

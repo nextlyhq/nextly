@@ -1239,6 +1239,23 @@ describe("resolveSiteTokens", () => {
     expect(resolveSiteTokens({ tokens: [] })).not.toHaveProperty("order");
   });
 
+  it("keeps whether the built-in colours are shown, a site-wide setting like the order", () => {
+    const resolved = resolveSiteTokens({
+      tokens: [],
+      builtInColoursShown: false,
+    });
+    expect(resolved.builtInColoursShown).toBe(false);
+    // Hidden, never removed: every built-in colour is still in the set.
+    expect(
+      resolved.tokens.filter(token => token.kind === "color").length
+    ).toBe(
+      resolveSiteTokens().tokens.filter(token => token.kind === "color").length
+    );
+    expect(resolveSiteTokens({ tokens: [] })).not.toHaveProperty(
+      "builtInColoursShown"
+    );
+  });
+
   it("names the built-in colours in words an author reads", () => {
     const labels = resolveSiteTokens()
       .tokens.filter(token => token.kind === "color")

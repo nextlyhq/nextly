@@ -67,6 +67,11 @@ interface SchemaChangeDialogProps {
   // F4 Option E PR 5: rename candidates from the preview endpoint.
   // Empty array (or undefined) = no candidates, no rename UI rendered.
   renamed?: SchemaPreviewRenameCandidate[];
+  /**
+   * Renames the Builder decided itself, from what to what: shown as renames whose values are kept,
+   * not asked.
+   */
+  decidedRenames?: readonly KeptRename[];
   warnings: string[];
   interactiveFields: InteractiveField[];
   // Fields that stop being translated: what moves to the archive, or why the change is refused.
@@ -95,6 +100,7 @@ export function SchemaChangeDialog({
   classification,
   changes,
   renamed,
+  decidedRenames = [],
   warnings,
   interactiveFields,
   leavingTranslation = [],
@@ -310,6 +316,7 @@ export function SchemaChangeDialog({
           </div>
         )}
 
+        <DecidedRenames renames={decidedRenames} />
         <LeavingTranslationNotice fields={leavingTranslation} />
         <JoiningTranslationNotice fields={joiningTranslation} />
         <BroughtUpToDate conversions={conversions} />
@@ -642,6 +649,38 @@ function SchemaChangeDialogFooter({
             : "Save changes"}
       </AlertDialogAction>
     </AlertDialogFooter>
+  );
+}
+
+/** A rename the save keeps: its column's old and new names, or the field's when the column stays. */
+interface KeptRename {
+  from: string;
+  to: string;
+}
+
+/**
+ * The renames the Builder decided, once each: a field renamed on its own table and its
+ * translations table is one rename to the person.
+ */
+function DecidedRenames({
+  renames,
+}: {
+  renames: readonly KeptRename[];
+}): JSX.Element | null {
+  const once = [
+    ...new Map(renames.map(c => [`${c.from}->${c.to}`, c])).values(),
+  ];
+  if (once.length === 0) return null;
+  return (
+    <ul className="space-y-1 rounded-md border border-border bg-primary/5 p-3 text-sm">
+      {once.map(c => (
+        <li key={`${c.from}->${c.to}`}>
+          <code className="font-mono text-xs">{c.from}</code> is renamed to{" "}
+          <code className="font-mono text-xs">{c.to}</code>. Its values are
+          kept.
+        </li>
+      ))}
+    </ul>
   );
 }
 

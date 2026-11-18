@@ -1012,6 +1012,32 @@ describe("the site's fluid range", () => {
   });
 });
 
+describe("whether the built-in colours are shown", () => {
+  it("is kept by a save, off or on", () => {
+    for (const builtInColoursShown of [false, true]) {
+      const checked = checkStoredTokens({ tokens: [], builtInColoursShown });
+      expect(checked.issues).toEqual([]);
+      expect(checked.value?.builtInColoursShown).toBe(builtInColoursShown);
+    }
+    expect(checkStoredTokens({ tokens: [] }).value).not.toHaveProperty(
+      "builtInColoursShown"
+    );
+  });
+
+  it("is refused unless it is true or false", () => {
+    for (const bad of ["false", 0, null, {}]) {
+      const checked = checkStoredTokens({
+        tokens: [],
+        builtInColoursShown: bad,
+      });
+      expect(checked.issues).toEqual([
+        "Whether the built-in colours are shown must be true or false.",
+      ]);
+      expect(checked.value).not.toHaveProperty("builtInColoursShown");
+    }
+  });
+});
+
 describe("the site's text", () => {
   it("is kept by a save, each row as written", () => {
     const siteText = {
