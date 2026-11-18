@@ -98,6 +98,13 @@ export interface ComponentFromSelectionPromptProps {
    * created, so no component is made binding a setting never made.
    */
   readonly beforeCreate?: () => true | Promise<boolean>;
+  /**
+   * The editor's document now. A refused held setting takes its binding off
+   * the editor's document, not off the request, so after a refusal the form
+   * takes this in the request's place, checks it again and creates from it:
+   * the request would make a component binding a setting never made.
+   */
+  readonly currentDocument?: () => BlockDocument;
 }
 
 /** How long a convert waits for the canvas to hold the new definition. */
@@ -285,11 +292,22 @@ function ComponentForm(
   const writer = useComponentFromSelection();
   // Held still for the form's life: the editor behind the modal may re-render,
   // and the subject and the selection sent must stay the ones asked about.
-  const [asked] = React.useState<Asked>(() => ({
+  const [asked, setAsked] = React.useState<Asked>(() => ({
     ...request,
     selectedIds,
     subject: subjectOf(request.document, selectedIds),
   }));
+  // Once a held setting is refused, the document asked about is the editor's,
+  // which the refusal took the binding off, as soon as it has.
+  const [refused, setRefused] = React.useState(false);
+  const { currentDocument } = props;
+  React.useEffect(() => {
+    if (!refused || currentDocument === undefined) return;
+    const live = currentDocument();
+    setAsked(held =>
+      held.document === live ? held : { ...held, document: live }
+    );
+  }, [refused, currentDocument]);
   // The way chosen: replacing the blocks, or keeping them and saving a copy.
   const [action, setAction] = React.useState<ComponentFromSelectionAction>(
     asked.action
@@ -323,6 +341,7 @@ function ComponentForm(
     setFailed(false);
     // A refusal is said where it happened, with the binding taken off.
     if (props.beforeCreate !== undefined && !(await props.beforeCreate())) {
+      setRefused(true);
       setBusy(false);
       return;
     }
