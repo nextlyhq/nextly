@@ -56,6 +56,13 @@ export interface SavePatternPromptProps {
    * the gesture, and whether it is still there is knowable only at the close.
    */
   returnFocusTo?: () => HTMLElement | null;
+  /**
+   * Run before the section is stored: the page's held component settings
+   * written, which the selection may bind and the saved section would keep
+   * binding. `false` when one was refused, and nothing is stored, so no
+   * saved section binds a setting never made.
+   */
+  beforeSave?: () => true | Promise<boolean>;
 }
 
 /**
@@ -74,6 +81,7 @@ export function SavePatternPrompt({
   selectedIds,
   onClose,
   returnFocusTo,
+  beforeSave,
 }: SavePatternPromptProps): React.JSX.Element | null {
   if (document === null) return null;
   return (
@@ -82,6 +90,7 @@ export function SavePatternPrompt({
       selectedIds={selectedIds}
       onClose={onClose}
       returnFocusTo={returnFocusTo}
+      beforeSave={beforeSave}
     />
   );
 }
@@ -92,6 +101,7 @@ function SavePatternForm({
   selectedIds,
   onClose,
   returnFocusTo,
+  beforeSave,
 }: Omit<SavePatternPromptProps, "document"> & {
   document: BlockDocument;
 }): React.JSX.Element {
@@ -126,6 +136,8 @@ function SavePatternForm({
    */
   const storing = React.useCallback(
     async (fields: Parameters<typeof writer.save>[2]) => {
+      // A refusal is said where it happened, with the binding taken off.
+      if (beforeSave !== undefined && !(await beforeSave())) return false;
       const answered = await writer.save(
         saving.document,
         saving.selectedIds,
@@ -138,7 +150,7 @@ function SavePatternForm({
     // `saving` is in here even though it never changes: a snapshot taken once
     // at mount is stable by construction, and stating it is cheaper than a
     // suppression that would also hide the next dependency somebody forgets.
-    [writer, saving]
+    [writer, saving, beforeSave]
   );
 
   return (

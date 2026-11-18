@@ -59,6 +59,10 @@ import type { OpenAt } from "./builder-address";
 import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
 import { useDropKeptReadsOnSave } from "./canvas-source-check";
+import {
+  useHeldComponentSettings,
+  useLeavingWithHeldSettings,
+} from "./component-setting-hold";
 import { useConditionedPage } from "./conditioned-page";
 import { editorCanvasRegion } from "./editor-canvas-region";
 import {
@@ -399,10 +403,15 @@ function EditorBody<TFieldValues extends FieldValues>({
   // holding the same document. Kept as the object the editor already holds,
   // so a read that matches what is shown plans and draws nothing again.
   const readBack = useReadBack(onCommit);
-  const mount = useEditorMount(
-    readBack.kept("opened", initialValue),
-    kinds,
-    readBack.kept("stored", useStoredFieldValue(control, name, place.pathIn))
+  // A component setting made from a placement is held for the page's Save:
+  // the canvas and the inspector draw the planned component while the page
+  // binds it, and the editor's own apply keeps the stored components.
+  const mount = useHeldComponentSettings(
+    useEditorMount(
+      readBack.kept("opened", initialValue),
+      kinds,
+      readBack.kept("stored", useStoredFieldValue(control, name, place.pathIn))
+    )
   );
   // `editor` is the state of what is being edited: a header or footer while
   // one is edited in place, else the page. The page's own state is what is
@@ -699,9 +708,11 @@ function EditorBody<TFieldValues extends FieldValues>({
   });
   // The editor's one way out, for the exit arrow and the palette alike: the
   // list on an entry whose collection opens in the builder, else the form;
-  // while a header is edited, after Done has asked about its changes.
-  const leave = regionLeave(regionEditing, back?.go ?? done);
-  const openAsForm = regionLeave(regionEditing, done);
+  // while a header is edited, after Done has asked about its changes. To the
+  // form, past each held component setting written first.
+  const toForm = useLeavingWithHeldSettings(mount.writeHeldSettings, done);
+  const leave = regionLeave(regionEditing, back?.go ?? toForm);
+  const openAsForm = regionLeave(regionEditing, toForm);
   const {
     notices,
     componentLibrary,
@@ -927,6 +938,9 @@ function EditorBody<TFieldValues extends FieldValues>({
                 selectedIds={editor.selection.ids}
                 onClose={savePattern.close}
                 returnFocusTo={savePattern.returnFocusTo}
+                // As for a new component: the saved section keeps the
+                // selection's bindings, so a held setting is written first.
+                beforeSave={mount.writeHeldSettings}
               />
               <ComponentFromSelectionPrompt
                 request={makeComponent.request}
@@ -934,6 +948,10 @@ function EditorBody<TFieldValues extends FieldValues>({
                 library={componentLibrary}
                 onClose={makeComponent.close}
                 returnFocusTo={makeComponent.returnFocusTo}
+                // A held setting the selection binds is written first: the
+                // new component keeps the binding, and the page, past a
+                // convert, no placement holding the setting.
+                beforeCreate={mount.writeHeldSettings}
               />
               <ComponentActionPrompt
                 request={makeComponent.request}

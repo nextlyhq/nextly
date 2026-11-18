@@ -14,6 +14,7 @@ import type {
 import type { DocumentIdentity } from "@nextlyhq/plugin-sdk/admin";
 import type { ComponentProps } from "react";
 
+import type { useComponentSettingHold } from "./component-setting-hold";
 import type { EditorPanels } from "./editor-panels";
 import type {
   ReadMediaSummary,
@@ -47,6 +48,10 @@ export type EditorView = EditorMount &
     regionEditing: RegionEditingHost;
     /** "Edit component", and the banner over a component's own view. */
     componentView: ComponentView;
+    /** Plan a setting of a placed component, held for the page's Save. */
+    makeComponentSetting: ReturnType<
+      typeof useComponentSettingHold
+    >["makeComponentSetting"];
     /** The block verbs shared for the surfaces drawn outside the provider. */
     layerVerbs: CardVerbs;
     /** What the canvas draws: the document, with selected hidden blocks shown. */

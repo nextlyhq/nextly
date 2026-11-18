@@ -234,8 +234,9 @@ Content-Type: application/json
 { "action": { "kind": "add-variant", "label": "Dark" }, "dryRun": true }
 ```
 
-Where the component store translates its definition field, an edit changes the default
-language's definition.
+Where the component store translates its definition field, **`locale`** names the
+language whose definition the edit reads and changes; without it, the edit changes the
+default language's definition. A store that translates nothing ignores it.
 
 The caller needs **update** on components; where `componentReadiness` names a collection
 of the site's own for them, the route edits that collection's document field and needs

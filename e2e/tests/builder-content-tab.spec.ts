@@ -171,7 +171,7 @@ const CASES: readonly Case[] = [
   },
   {
     type: "core/accordion-item",
-    label: "Accordion item",
+    label: "Question",
     props: { title: "What is included?", open: false },
     slots: true,
     parent: {
@@ -180,7 +180,7 @@ const CASES: readonly Case[] = [
     },
     edit: {
       kind: "type",
-      label: "Title",
+      label: "Question",
       prop: "title",
       value: "What ships?",
       stored: "What ships?",
