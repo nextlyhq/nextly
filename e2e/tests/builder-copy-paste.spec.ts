@@ -35,11 +35,7 @@ import {
   type Page,
 } from "@playwright/test";
 
-import {
-  layerRow,
-  openLayers,
-  pressSave,
-} from "./canvas/editor-driver";
+import { layerRow, openLayers, pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { canvasFrame } from "./support/canvas-frame";
 import { storedPageNodes } from "./support/stored-page";
@@ -133,8 +129,12 @@ async function selection(page: Page): Promise<string[]> {
       const marked = Array.from(body.querySelectorAll("[data-nx-selected]"));
       const id = (each: Element) => each.getAttribute("data-nx-node") ?? "";
       return [
-        ...marked.filter(each => each.getAttribute("data-nx-selected") === "primary"),
-        ...marked.filter(each => each.getAttribute("data-nx-selected") !== "primary"),
+        ...marked.filter(
+          each => each.getAttribute("data-nx-selected") === "primary"
+        ),
+        ...marked.filter(
+          each => each.getAttribute("data-nx-selected") !== "primary"
+        ),
       ].map(id);
     });
 }
@@ -210,8 +210,9 @@ async function pageIds(page: Page, within: string): Promise<string[]> {
     const root = element.parentElement;
     return root === null
       ? []
-      : Array.from(root.querySelectorAll("[data-nx-node]"), each =>
-          each.getAttribute("data-nx-node") ?? ""
+      : Array.from(
+          root.querySelectorAll("[data-nx-node]"),
+          each => each.getAttribute("data-nx-node") ?? ""
         );
   });
 }
@@ -236,12 +237,23 @@ async function savedTopLevel(
   }[];
 }
 
+/**
+ * Why three tests do not run on macOS: they press the browser's own text
+ * copy, paste or undo, which headless Chromium on macOS does not carry out
+ * (macOS sends those keys through the app's Edit menu, which a headless
+ * browser lacks). The block shortcuts the builder handles itself still run
+ * there; Linux, where CI runs these tests, carries out all of them.
+ */
+const NATIVE_EDITING_ON_MACOS =
+  "headless Chromium on macOS does not carry out the browser's own copy, paste or undo keys";
+
 test.describe("copying, cutting and pasting blocks", () => {
   test.describe.configure({ timeout: 240_000 });
 
   test("⌘C then ⌘V pastes inside a selected Section, selected, as one undo step", async ({
     page,
   }) => {
+    test.skip(process.platform === "darwin", NATIVE_EDITING_ON_MACOS);
     await openBuilder(page, await createPage(page.request));
 
     await selectBlock(page, HEADING);
@@ -360,6 +372,7 @@ test.describe("copying, cutting and pasting blocks", () => {
   test("⌘C and ⌘V in a heading's text on the canvas copy and paste the text, not the block", async ({
     page,
   }) => {
+    test.skip(process.platform === "darwin", NATIVE_EDITING_ON_MACOS);
     await openBuilder(page, await createPage(page.request));
     const before = await pageIds(page, HERO);
 
@@ -379,6 +392,7 @@ test.describe("copying, cutting and pasting blocks", () => {
   test("⌘C and ⌘V in the panel's text field copy and paste the text, not the block", async ({
     page,
   }) => {
+    test.skip(process.platform === "darwin", NATIVE_EDITING_ON_MACOS);
     await openBuilder(page, await createPage(page.request));
     await selectBlock(page, HEADING);
     const before = await pageIds(page, HERO);
