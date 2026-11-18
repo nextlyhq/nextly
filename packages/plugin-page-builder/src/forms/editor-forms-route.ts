@@ -59,6 +59,27 @@ export function authorAccess(
   };
 }
 
+/**
+ * One form as a provider must list it. A provider's answer is outside input,
+ * so each entry is parsed here and one that doesn't read as a form is left
+ * out, never handed to the editor to draw.
+ */
+const FORM_LISTING = z.object({
+  ref: z.string().min(1).max(200),
+  title: z.string().max(500),
+  state: z.enum(["draft", "published", "closed"]),
+  editHref: z.string().max(2048).optional(),
+});
+
+/** The entries of `listed` that read as forms, in the provider's order. */
+function parsedListings(listed: unknown): FormListing[] {
+  if (!Array.isArray(listed)) return [];
+  return listed.flatMap(entry => {
+    const read = FORM_LISTING.safeParse(entry);
+    return read.success ? [read.data] : [];
+  });
+}
+
 /** One provider's forms for `access`; none where its listing fails. */
 async function providerForms(
   provider: FormProvider,
@@ -66,7 +87,7 @@ async function providerForms(
 ): Promise<EditorFormProvider> {
   let forms: readonly FormListing[] = [];
   try {
-    forms = await provider.list(access);
+    forms = parsedListings(await provider.list(access));
   } catch {
     // One provider failing leaves the others, and says it is installed.
   }

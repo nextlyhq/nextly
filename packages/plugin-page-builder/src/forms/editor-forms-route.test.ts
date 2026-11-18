@@ -118,6 +118,29 @@ describe("listing the forms an author may pick", () => {
     });
   });
 
+  it("passes on only the listings that read as forms", async () => {
+    const sloppy = provider([], {
+      list: async () =>
+        [
+          null,
+          { ref: "", title: "No reference", state: "draft" },
+          { ref: "8", title: "Contact", state: "deleted" },
+          { ref: "9", title: "Newsletter", state: "published" },
+        ] as never,
+    });
+    // A provider's answer is outside input: parsed here, so the editor is
+    // never handed an entry it cannot draw.
+    expect(await listEditorForms(registered(sloppy), AS_AUTHOR)).toEqual({
+      providers: [
+        {
+          id: "forms",
+          label: "Forms",
+          forms: [{ ref: "9", title: "Newsletter", state: "published" }],
+        },
+      ],
+    });
+  });
+
   it("lists nothing on a site with no provider", async () => {
     expect(await listEditorForms(registered(), AS_AUTHOR)).toEqual({
       providers: [],
