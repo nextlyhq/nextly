@@ -55,7 +55,15 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
     await dispatchSingles(
       "createSingle",
       {},
-      { slug: SLUG, label: "Home", fields: [{ name: "count", type: "text" }] }
+      {
+        slug: SLUG,
+        label: "Home",
+        // `score` holds no value, so a change of its type loses none.
+        fields: [
+          { name: "count", type: "text" },
+          { name: "score", type: "text" },
+        ],
+      }
     );
     // The row the Single holds, which a required field added to it fills.
     await t.nextly.updateSingle({
@@ -180,6 +188,7 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
         {
           fields: [
             { name: "count", type: "text" },
+            { name: "score", type: "text" },
             {
               name: "tagline",
               type: "text",
@@ -224,7 +233,8 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
       const folderBefore = await migrationFiles();
 
       const { thrown, said } = await attempt([
-        { name: "count", type: "number" },
+        { name: "count", type: "text" },
+        { name: "score", type: "number" },
       ]);
 
       expect(
