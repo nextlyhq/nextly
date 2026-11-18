@@ -347,7 +347,81 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
-    it("on a translated Single, a translated field moved into a translated group keeps each language's value", async () => {
+    it("refuses a move in a save that also needs the push, before a field leaving translation is archived", async () => {
+      const t = await boot(dialect);
+      const shared = (name: string): Field => ({
+        name,
+        type: "text",
+        localized: false,
+      });
+      const box = (fields: Field[]) => group("box", fields, { localized: false });
+      const notes = (localized: boolean): Field => ({
+        name: "notes",
+        type: "text",
+        localized,
+      });
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "sgm_doc",
+          label: "Doc",
+          localized: true,
+          fields: [shared("summary"), notes(true), box([shared("note")])],
+        }
+      );
+      for (const [locale, text] of [
+        ["en", "English notes"],
+        ["es", "Notas"],
+      ] as const) {
+        await t.nextly.updateSingle({
+          slug: "sgm_doc" as never,
+          data: { notes: text, summary: "S", _overwrite: true },
+          locale,
+          overrideAccess: true,
+        });
+      }
+      const archived = async (): Promise<number> => {
+        try {
+          const [row] = await run<{ count: number | string }>(
+            t,
+            "SELECT COUNT(*) AS count FROM nextly_i18n_archive"
+          );
+          return Number(row?.count ?? 0);
+        } catch {
+          return 0;
+        }
+      };
+      const before = await archived();
+
+      // `notes` leaves translation, which only the push carries, in the same save as a move.
+      await expect(
+        saveSingle(
+          t,
+          "sgm_doc",
+          [notes(false), box([shared("note"), shared("summary")])],
+          [{ from: ["summary"], to: ["box", "summary"] }]
+        )
+      ).rejects.toThrow(
+        expect.objectContaining({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                code: "FIELD_MOVE_REFUSED",
+                message: expect.stringContaining("Save the move on its own"),
+              }),
+            ],
+          },
+        })
+      );
+      // Nothing archived on the way to the refusal.
+      expect(await archived()).toBe(before);
+      expect((await readSingle(t, "sgm_doc", "es")).notes).toBe("Notas");
+    });
+
+    // Moving a value kept for each language needs the language table's own statements in the
+    // file; until those exist the move is refused, each language's value left where it was.
+    it("on a translated Single, refuses a translated field moved into a translated group, each language's value kept", async () => {
       const t = await boot(dialect);
       // Not `title`, which a row keeps as its own column when no field takes the name.
       const tagline: Field = { name: "tagline", type: "text", localized: true };
@@ -375,11 +449,24 @@ describe.each(getConfiguredTestDialects())(
         });
       }
 
-      await saveSingle(
-        t,
-        "sgm_page",
-        [meta([NOTE, tagline])],
-        [{ from: ["tagline"], to: ["meta", "tagline"] }]
+      await expect(
+        saveSingle(
+          t,
+          "sgm_page",
+          [meta([NOTE, tagline])],
+          [{ from: ["tagline"], to: ["meta", "tagline"] }]
+        )
+      ).rejects.toThrow(
+        expect.objectContaining({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                code: "FIELD_MOVE_REFUSED",
+                message: expect.stringContaining("kept for each language"),
+              }),
+            ],
+          },
+        })
       );
 
       for (const [locale, text] of [
@@ -387,10 +474,7 @@ describe.each(getConfiguredTestDialects())(
         ["es", "Hola"],
       ] as const) {
         const read = await readSingle(t, "sgm_page", locale);
-        expect(
-          (read.meta as Record<string, unknown> | undefined)?.tagline,
-          locale
-        ).toBe(text);
+        expect(read.tagline, locale).toBe(text);
       }
     });
   }

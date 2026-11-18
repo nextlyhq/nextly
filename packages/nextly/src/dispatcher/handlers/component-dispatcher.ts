@@ -45,6 +45,7 @@ import {
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
 import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
+import { refuseMovesOffTheFile } from "../../domains/schema/field-moves/moves-road";
 import {
   renamedFieldsOf,
   type SchemaChangeAnswers,
@@ -828,6 +829,39 @@ export const COMPONENTS_METHODS: Record<
             subject: `Field group '${slug}'`,
             component: true,
           });
+          // Whether the push applies this save rather than its file, asked at most once. A save
+          // whose moves would need the push is refused here, before the preflights below write
+          // anything; the write reuses the answer.
+          let pushAnswer: Promise<boolean> | undefined;
+          const pushes = () =>
+            (pushAnswer ??= pushCarriesValues({
+                  oldFields: (component.fields ??
+                    []) as unknown as FieldDefinition[],
+                  newFields: fields as unknown as FieldDefinition[],
+                  wasStored,
+                  isStored,
+                  renamed: companionRename,
+                  liveTable: async () =>
+                    (
+                await introspectLiveSnapshot(adapter.getDrizzle(), adapter.dialect, [
+                  tableName,
+                ])
+              )
+                      .tables[0],
+                  columnOf: field =>
+                    getComponentRowColumnDescriptor(
+                      field,
+                      adapter.dialect,
+                      "fieldGroup"
+                    ),
+                  renames: renamedFieldsOf(renameResolutions ?? []),
+                  moved: moves,
+                }));
+          await refuseMovesOffTheFile({
+            moves,
+            writes: builderSave !== undefined,
+            pushReason: async () => ((await pushes()) ? "carries-values" : null),
+          });
           // A field leaving translation has preconditions of its own, asked before the apply
           // alters anything.
           await archiveFieldsLeavingTranslation({
@@ -992,26 +1026,7 @@ export const COMPONENTS_METHODS: Record<
             {
               // The push where the save carries values across its change; its own migration file,
               // run in tries as `nextly migrate` runs it, where it carries none.
-              pushWhen: () =>
-                pushCarriesValues({
-                  oldFields: (component.fields ??
-                    []) as unknown as FieldDefinition[],
-                  newFields: fields as unknown as FieldDefinition[],
-                  wasStored,
-                  isStored,
-                  renamed: companionRename,
-                  liveTable: async () =>
-                    (await introspectLiveSnapshot(db, dialect, [tableName]))
-                      .tables[0],
-                  columnOf: field =>
-                    getComponentRowColumnDescriptor(
-                      field,
-                      dialect,
-                      "fieldGroup"
-                    ),
-                  renames: renamedFieldsOf(renameResolutions ?? []),
-                  moved: moves,
-                }),
+              pushWhen: pushes,
               afterFile: () =>
                 reconcileBuilderCompanion("component", companion),
             }

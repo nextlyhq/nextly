@@ -57,6 +57,7 @@ import { translationLayoutChange } from "../../domains/i18n/per-language-storage
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { assertLanguageStatesAgreeWithEntry } from "../../domains/i18n/runtime/language-states-agree";
 import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
+import { refuseMovesOffTheFile } from "../../domains/schema/field-moves/moves-road";
 import {
   renamedFieldsOf,
   type SchemaChangeAnswers,
@@ -1557,6 +1558,36 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             newFields: fields,
             subject: `Single '${slug}'`,
           });
+          // Whether the push applies this save rather than its file, asked at most once. A save
+          // whose moves would need the push is refused here, before the preflights below write
+          // anything; the write reuses the answer.
+          let pushAnswer: Promise<boolean> | undefined;
+          const pushes = () =>
+            (pushAnswer ??= pushCarriesValues({
+                  oldFields: single.fields as unknown as FieldDefinition[],
+                  newFields: fields as unknown as FieldDefinition[],
+                  wasStored: layout.wasStored,
+                  isStored: layout.isStored,
+                  wasStatus: layout.wasPublishedPerLanguage,
+                  status: layout.isPublishedPerLanguage,
+                  renamed: companionRename,
+                  liveTable: async () =>
+                    (
+                await introspectLiveSnapshot(adapter.getDrizzle(), adapter.dialect, [
+                  tableName,
+                ])
+              )
+                      .tables[0],
+                  columnOf: field =>
+                    getSingleRowColumnDescriptor(field, adapter.dialect, "collection"),
+                  renames: renamedFieldsOf(renameResolutions ?? []),
+                  moved: moves,
+                }));
+          await refuseMovesOffTheFile({
+            moves,
+            writes: builderSave !== undefined,
+            pushReason: async () => ((await pushes()) ? "carries-values" : null),
+          });
           // A field leaving translation has preconditions of its own, asked before the push alters
           // anything.
           await archiveFieldsLeavingTranslation({
@@ -1717,23 +1748,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               // this dialog's push does not fill the Single's row for a field it adds either (an
               // optional field's default stays out of it, and a required field is refused unless
               // the dialog answers with a value), so keeping the push for one would fill nothing.
-              pushWhen: () =>
-                pushCarriesValues({
-                  oldFields: single.fields as unknown as FieldDefinition[],
-                  newFields: fields as unknown as FieldDefinition[],
-                  wasStored: layout.wasStored,
-                  isStored: layout.isStored,
-                  wasStatus: layout.wasPublishedPerLanguage,
-                  status: layout.isPublishedPerLanguage,
-                  renamed: companionRename,
-                  liveTable: async () =>
-                    (await introspectLiveSnapshot(db, dialect, [tableName]))
-                      .tables[0],
-                  columnOf: field =>
-                    getSingleRowColumnDescriptor(field, dialect, "collection"),
-                  renames: renamedFieldsOf(renameResolutions ?? []),
-                  moved: moves,
-                }),
+              pushWhen: pushes,
               afterFile: () => reconcileBuilderCompanion("single", companion),
             }
           );

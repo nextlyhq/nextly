@@ -18,7 +18,6 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import { companionTableOf } from "../../i18n/migration/derive-companion-spec";
 import {
   classifyFieldKind,
   fieldProducesColumn,
@@ -183,6 +182,18 @@ function refuseHoldersNotGroups(
   }
 }
 
+/**
+ * Refuses a move whose values are kept for each language: this save's statements carry one value
+ * for every language, so such a move waits for the saves that move each language's row.
+ */
+function refusePerLanguage(request: FieldMoveRequest, move: PlannedMove): void {
+  if (!move.perLanguage) return;
+  throw refused(
+    request,
+    `${request.from.at(-1) ?? "This field"}'s values are kept for each language, and moving it with them is not available yet for this kind of entity.`
+  );
+}
+
 function refuseUnplaceable(
   request: FieldMoveRequest,
   move: PlannedMove,
@@ -343,22 +354,20 @@ export function planEntityMoves(args: {
     });
     if (!checked.ok) throw refused(request, checked.message);
     const { move } = checked;
+    refusePerLanguage(request, move);
     refuseHoldersNotGroups(request, move, args);
     refuseUnplaceable(request, move, columns);
     // A field moving between places on one level (a group with no name) keeps its column.
     if (move.from.kind === "column" && move.to.kind === "column") continue;
-    // A field kept for each language moves in the language table, each language's row its own;
-    // its translation is the same on both sides, as `checkMove` refuses a change of it.
-    const table = move.perLanguage ? companionTableOf(args.table) : args.table;
     const statements = placed(
       move,
-      moveColumn(move, table, args.dialect, args.builtBy ?? "collection")
+      moveColumn(move, args.table, args.dialect, args.builtBy ?? "collection")
     );
     for (const way of ["up", "down"] as const) {
       result[way].first.push(...statements[way].first);
       result[way].last.push(...statements[way].last);
     }
-    recordColumns(result, move, request, table);
+    recordColumns(result, move, request, args.table);
   }
   return result;
 }

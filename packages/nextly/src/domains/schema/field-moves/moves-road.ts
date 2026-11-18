@@ -38,7 +38,13 @@ export async function refuseMovesOffTheFile(args: {
   writes: boolean;
   pushReason: () => Promise<PushReason>;
 }): Promise<void> {
-  const [first] = args.moves;
+  // A field moved into or out of a group with no name keeps its path and its column: nothing of
+  // it travels, so it needs no file.
+  const [first] = args.moves.filter(
+    move =>
+      move.from.length !== move.to.length ||
+      move.from.some((segment, at) => segment !== move.to[at])
+  );
   if (first === undefined) return;
   const reason = args.writes ? await args.pushReason() : "no-writer";
   if (reason === null) return;

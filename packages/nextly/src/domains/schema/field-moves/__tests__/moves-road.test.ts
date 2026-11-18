@@ -24,6 +24,16 @@ describe("refuseMovesOffTheFile", () => {
     expect(pushReason).not.toHaveBeenCalled();
   });
 
+  it("asks nothing of a move that keeps its path, into or out of a group with no name", async () => {
+    const pushReason = reason("carries-values");
+    await refuseMovesOffTheFile({
+      moves: [{ from: ["title"], to: ["title"] }],
+      writes: false,
+      pushReason,
+    });
+    expect(pushReason).not.toHaveBeenCalled();
+  });
+
   it("lets a save whose moves take the file through", async () => {
     await expect(
       refuseMovesOffTheFile({ moves, writes: true, pushReason: reason(null) })
