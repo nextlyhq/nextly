@@ -83,11 +83,14 @@ or changes CSS, whatever the editor checked first:
   change custom CSS."
 - what the checker refuses is refused, naming the line, and nothing is saved.
 
-Anyone who may edit the page may still move, duplicate and delete blocks that have CSS, and
-place a saved section whose blocks carry some: that CSS was written, and checked, by someone
-permitted. Changing its text is a change, and needs the permission. Each change to a
-document's CSS, its own or its blocks', is recorded in the audit log: hashes and sizes of
-both, before and after, and which document and field, never the CSS itself.
+Anyone who may edit the page may still move, duplicate and delete blocks that have CSS,
+place a saved section whose blocks carry some, and detach a component the page places: that
+CSS was written, and checked, by someone permitted. Changing its text is a change, and needs
+the permission. So does anything that makes a new document holding CSS, since the server
+can't tell copied CSS from new there: duplicating a whole page, saving blocks as a section and
+turning them into a component. Each change to a document's CSS, its own or its blocks', is
+recorded in the audit log: hashes and sizes of both, before and after, and which document and
+field, never the CSS itself.
 
 ## A block's CSS starts from `selector`
 
