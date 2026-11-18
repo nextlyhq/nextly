@@ -62,6 +62,8 @@ export interface PageChecksChipProps {
   readonly namedClasses?: CheckedPage["namedClasses"];
   /** Opens the document's settings at a tab, for a fix found there. */
   readonly onOpenSettingsTab?: (tab: string) => void;
+  /** What the editor knows of the page beyond its document (`page-facts`). */
+  readonly facts?: CheckedPage["facts"];
 }
 
 /** Whether the list, the bar, or neither is open. */
@@ -218,6 +220,7 @@ export function PageChecksChip({
   tokens,
   namedClasses,
   onOpenSettingsTab,
+  facts,
 }: PageChecksChipProps): React.JSX.Element {
   const { document } = editor;
   const report = React.useMemo(
@@ -230,10 +233,20 @@ export function PageChecksChip({
           ...(definitions === undefined ? {} : { definitions }),
           ...(tokens === undefined ? {} : { tokens }),
           ...(namedClasses === undefined ? {} : { namedClasses }),
+          ...(facts === undefined ? {} : { facts }),
         },
         checks
       ),
-    [document, blocks, regions, definitions, tokens, namedClasses, checks]
+    [
+      document,
+      blocks,
+      regions,
+      definitions,
+      tokens,
+      namedClasses,
+      facts,
+      checks,
+    ]
   );
   const { findings } = report;
   const [opened, setOpened] = React.useState<Opened>("closed");
@@ -297,7 +310,7 @@ export function PageChecksChip({
           }}
         >
           <PageChecksList
-            groups={pageCheckGroups(findings, checks)}
+            groups={pageCheckGroups(findings, checks, report.notes)}
             notRun={report.notRun}
             onFix={fix}
           />

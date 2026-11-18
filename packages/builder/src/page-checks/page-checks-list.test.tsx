@@ -88,6 +88,21 @@ describe("the list", () => {
     ).toContain("Nothing found.");
   });
 
+  it("shows a group's line under its name, as no item and with its items", () => {
+    const groups = pageCheckGroups([finding("c", "content")], CORE, [
+      { check: "page-data", group: "content", text: "Page data: 12 of 500" },
+    ]);
+    render(<PageChecksList groups={groups} notRun={[]} onFix={vi.fn()} />);
+    const content = screen.getByRole("region", { name: "Content and data" });
+    expect(content.textContent).toContain("Page data: 12 of 500");
+    expect(content.textContent).toContain("Problem c");
+    // Counted as one item, the line not among them.
+    expect(screen.getByText("1 item needs attention")).toBeDefined();
+    expect(
+      screen.getByRole("region", { name: "Accessibility" }).textContent
+    ).not.toContain("Page data");
+  });
+
   it("says, in each item, what is wrong, on which block, why it matters and what to do", () => {
     draw([finding("a")]);
     const item = screen.getByRole("button", { name: "Problem a: Block a" });

@@ -113,6 +113,12 @@ function GroupSection({
           {group.findings.length}
         </span>
       </h3>
+      {/* Its standing lines first, which are read whatever is found. */}
+      {group.notes.map(note => (
+        <p key={note} className="nx-page-checks__note">
+          {note}
+        </p>
+      ))}
       {group.findings.length === 0 ? (
         <p className="nx-page-checks__none">Nothing found.</p>
       ) : (

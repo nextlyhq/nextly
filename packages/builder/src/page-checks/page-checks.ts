@@ -37,6 +37,8 @@ import {
 import type { AskedSetting } from "../editor-asks";
 import { layerLabel } from "../panels/layers/layers";
 
+import type { PageFacts } from "./page-facts";
+
 /** The groups a finding is listed under. */
 export type PageCheckGroup =
   | "accessibility"
@@ -115,6 +117,13 @@ export interface CheckedPage {
    * look, which a block is drawn with under its own values.
    */
   readonly namedClasses?: readonly NamedClass[];
+  /**
+   * What the caller knows of the page beyond its document: its bindings
+   * that no longer fit, its count of data, the parts it uses that aren't
+   * live, a header or footer it shows twice. A check of a fact the caller
+   * leaves out finds nothing.
+   */
+  readonly facts?: PageFacts;
 }
 
 /** The page as every check is handed it, its definitions resolved. */
@@ -136,6 +145,8 @@ export interface ResolvedPage {
   readonly tokens?: SiteTokenSet;
   /** The site's edits to each block type's own look, by type. */
   readonly siteLooks: Readonly<Record<string, NodeStyles>>;
+  /** What the caller knows of the page beyond its document; none given, none. */
+  readonly facts: PageFacts;
 }
 
 /** What one check reports about one problem. */
@@ -169,6 +180,18 @@ export interface PageCheck {
   readonly group: PageCheckGroup;
   /** The problems on the page, in page order. Pure: no DOM, no writes. */
   readonly run: (page: ResolvedPage) => readonly PageCheckResult[];
+  /**
+   * A line the list shows under the group's name whatever is found, such as
+   * how much data the page reads; never counted as an item. Pure, as `run`.
+   */
+  readonly note?: (page: ResolvedPage) => string | undefined;
+}
+
+/** A check's line under its group's name. */
+export interface PageCheckNote {
+  readonly check: string;
+  readonly group: PageCheckGroup;
+  readonly text: string;
 }
 
 /** One problem as the list shows it. */
@@ -188,6 +211,8 @@ export interface PageCheckReport {
   readonly findings: readonly PageFinding[];
   /** The ids of checks that threw, so the list can say they didn't run. */
   readonly notRun: readonly string[];
+  /** The checks' lines under their groups' names, in the checks' order. */
+  readonly notes: readonly PageCheckNote[];
 }
 
 /** One group of the list, with its findings. */
@@ -195,6 +220,8 @@ export interface PageCheckGroupView {
   readonly group: PageCheckGroup;
   readonly label: string;
   readonly findings: readonly PageFinding[];
+  /** The lines under its name, which are not items. */
+  readonly notes: readonly string[];
 }
 
 /**
@@ -286,6 +313,7 @@ function resolvedPageOf(page: CheckedPage): ResolvedPage {
       : { definitions: page.definitions }),
     ...(page.tokens === undefined ? {} : { tokens: page.tokens }),
     siteLooks: blockDefaultsOf(page.namedClasses ?? []),
+    facts: page.facts ?? {},
   };
 }
 
@@ -304,13 +332,19 @@ export function runPageChecks(
   const taken = new Set<string>();
   const found: PageFinding[] = [];
   const notRun: string[] = [];
+  const notes: PageCheckNote[] = [];
   for (const check of checks) {
     let results: readonly PageCheckResult[];
+    let note: string | undefined;
     try {
       results = check.run(resolved);
+      note = check.note?.(resolved);
     } catch {
       notRun.push(check.id);
       continue;
+    }
+    if (note !== undefined) {
+      notes.push({ check: check.id, group: check.group, text: note });
     }
     for (const drawnResult of results) {
       const result = onThePage(drawnResult, placementOf);
@@ -340,7 +374,7 @@ export function runPageChecks(
         a.index - b.index
     )
     .map(each => each.finding);
-  return { findings, notRun };
+  return { findings, notRun, notes };
 }
 
 /**
@@ -350,7 +384,8 @@ export function runPageChecks(
  */
 export function pageCheckGroups(
   findings: readonly PageFinding[],
-  checks: readonly Pick<PageCheck, "group">[]
+  checks: readonly Pick<PageCheck, "group">[],
+  notes: readonly PageCheckNote[] = []
 ): PageCheckGroupView[] {
   const offered = new Set(checks.map(check => check.group));
   return GROUP_ORDER.filter(
@@ -359,5 +394,6 @@ export function pageCheckGroups(
     group,
     label: GROUP_LABELS[group],
     findings: findings.filter(finding => finding.group === group),
+    notes: notes.filter(note => note.group === group).map(note => note.text),
   }));
 }

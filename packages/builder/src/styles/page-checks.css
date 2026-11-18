@@ -137,6 +137,16 @@
   color: var(--nx-builder-text-muted);
 }
 
+/* A group's line that is not an item, such as the page's data count: read
+   before its items, in the text colour rather than muted, since it is a
+   standing to read rather than an empty state. */
+.nx-page-checks__note {
+  margin: 0;
+  padding: 0 0.5rem 0.375rem;
+  color: var(--nx-builder-text);
+  font-variant-numeric: tabular-nums;
+}
+
 .nx-page-checks__none {
   margin: 0;
   padding: 0 0.5rem 0.625rem;
