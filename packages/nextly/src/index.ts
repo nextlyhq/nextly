@@ -345,11 +345,13 @@ export type {
   CancelQueuedEmailArgs,
   // The Email hub's Activity reads, `nextly.emailDeliveries.*`
   // (experimental).
+  FindEmailActivityArgs,
   FindEmailDeliveriesArgs,
   FindQueuedEmailsArgs,
   EmailLastSentArgs,
   EmailOverdueArgs,
   FindEmailDeliveryByIDArgs,
+  ActivityEntry,
   ActivityPage,
   DeliveryActivity,
   DeliveryDetail,

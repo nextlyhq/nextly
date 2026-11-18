@@ -30,7 +30,7 @@ import { randomUUID } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, gt, inArray, isNotNull } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNotNull } from "drizzle-orm";
 
 import { loadedDialect } from "../../database/dialect-tables";
 import { getDialectTables } from "../../database/index";
@@ -476,6 +476,7 @@ export async function storeQueuedEmail(
       principalId: erasedAs,
       failure: null,
       templateSlug,
+      ...shapeOf(input.message),
       createdAt: now,
       updatedAt: now,
       settledAt: now,
@@ -502,12 +503,77 @@ export async function storeQueuedEmail(
     principalId: input.person?.id ?? null,
     failure: null,
     templateSlug,
+    ...shapeOf(input.message),
     createdAt: now,
     updatedAt: now,
     settledAt: null,
   });
   await insertRecipientDigests(db, input.dialect, id, input.message);
   return { id, state: "waiting", jobId };
+}
+
+/**
+ * What a queued email is, in clear for the Activity: a message or a template,
+ * and the kinds of recipient it goes to, `to` first, never an address.
+ */
+function shapeOf(message: QueuedMessage): {
+  messageKind: QueuedMessage["kind"];
+  recipientKinds: string;
+} {
+  const kinds = new Set(queuedRecipients(message).map(entry => entry.kind));
+  return {
+    messageKind: message.kind,
+    recipientKinds: (["to", "cc", "bcc"] as const)
+      .filter(kind => kinds.has(kind))
+      .join(","),
+  };
+}
+
+/**
+ * Note on a queued email the provider its latest attempt went through, as
+ * that attempt's delivery records name it, so the Activity shows and filters
+ * by it. Best effort: the attempt's own outcome is what matters.
+ */
+async function noteAttemptProvider(
+  adapter: DrizzleAdapter,
+  queuedId: string
+): Promise<void> {
+  const tables = loadedDialect(adapter.getCapabilities().dialect).tables;
+  const deliveries = tables.emailDeliveries;
+  const queue = tables.emailQueue;
+  const db = adapter.getDrizzle<NoteDb>();
+  const [latest] = (await db
+    .select({
+      providerType: deliveries.providerType,
+      providerId: deliveries.providerId,
+      providerOrigin: deliveries.providerOrigin,
+    })
+    .from(deliveries)
+    .where(eq(deliveries.queuedId, queuedId))
+    .orderBy(desc(deliveries.createdAt), desc(deliveries.id))
+    .limit(1)) as Array<{
+    providerType: string;
+    providerId: string | null;
+    providerOrigin: string | null;
+  }>;
+  if (!latest) return;
+  await db.update(queue).set(latest).where(eq(queue.id, queuedId));
+}
+
+/** The Drizzle surface noting an attempt's provider needs. */
+interface NoteDb {
+  select(fields: Record<string, unknown>): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        orderBy(...columns: unknown[]): {
+          limit(count: number): PromiseLike<unknown[]>;
+        };
+      };
+    };
+  };
+  update(table: unknown): {
+    set(values: unknown): { where(condition: unknown): PromiseLike<unknown> };
+  };
 }
 
 /**
@@ -997,6 +1063,7 @@ export async function attemptQueuedEmail(
       finals = reported;
     }
   );
+  await noteAttemptProvider(deps.adapter, row.id).catch(() => undefined);
   // Digested before the change's transaction opens: the plugin's digest key
   // is read on a connection of its own the first time.
   const recipients = changesObserved(row.scope)

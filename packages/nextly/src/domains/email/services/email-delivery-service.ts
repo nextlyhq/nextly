@@ -26,7 +26,18 @@ import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { and, desc, eq, gte, inArray, lt, lte, or, sql } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  or,
+  sql,
+} from "drizzle-orm";
 
 import { toDbError } from "../../../database/errors";
 import { getDialectTables } from "../../../database/index";
@@ -67,6 +78,13 @@ import {
   type EmailDeliveryStatus,
 } from "../delivery-record";
 import { eraseRecipientDeliveries } from "../erase-recipient";
+import {
+  originCondition,
+  providerRead,
+  storedProviderIds,
+  type FilterableOrigin,
+  type ProviderRead,
+} from "../provider-origin";
 import { pruneSendClaims } from "../prune";
 import type { ResolvedEmailRetentionConfig } from "../retention-config";
 import {
@@ -138,6 +156,7 @@ interface EmailDeliveryRow {
   templateDigest: string | null;
   failureKind: string | null;
   failureStatus: number | null;
+  providerOrigin: string | null;
   createdAt: Date;
 }
 
@@ -172,6 +191,11 @@ export interface EmailDeliveryRecord {
   templateVersion: DeliveryTemplateVersion | "not-recorded";
   /** The provider's structured answer, for a failed recipient. */
   failure: DeliveryFailure | null;
+  /**
+   * The provider as it reads now: its id only while it exists, its type,
+   * and where it came from (`provider-origin`).
+   */
+  provider: ProviderRead;
   createdAt: Date;
 }
 
@@ -184,8 +208,17 @@ export interface EmailDeliveryRecord {
  * look correct beside a listing that does not — so the translation lives where
  * a new caller gets it by construction instead of by noticing.
  */
-function toDeliveryRecord(row: EmailDeliveryRow): EmailDeliveryRecord {
+function toDeliveryRecord(
+  row: EmailDeliveryRow,
+  stored: ReadonlySet<string>
+): EmailDeliveryRecord {
   return {
+    provider: providerRead(
+      row.providerType,
+      row.providerId,
+      row.providerOrigin,
+      stored
+    ),
     id: row.id,
     providerId: row.providerId,
     providerType: row.providerType,
@@ -239,6 +272,10 @@ function failureOfRow(row: EmailDeliveryRow): DeliveryFailure | null {
 export interface ListDeliveriesOptions {
   /** One record, by its id. */
   id?: string;
+  /** Only records of sends that were not a queued email's attempt. */
+  standalone?: true;
+  /** Only records whose provider reads as this origin now. */
+  providerOrigin?: FilterableOrigin;
   /** The attempts of one queued email. */
   queuedId?: string;
   /** Hash of the address to look for; callers pass an address, not a hash. */
@@ -888,6 +925,7 @@ export class EmailDeliveryService extends BaseService {
       messageId: input.messageId ?? null,
       keyDigest: input.keyDigest ?? null,
       queuedId: input.queuedId ?? null,
+      providerOrigin: input.providerOrigin ?? null,
       ...templateVersionColumns(input.templateVersion),
       failureKind: input.failure?.kind ?? null,
       failureStatus: input.failure?.status ?? null,
@@ -995,6 +1033,10 @@ export class EmailDeliveryService extends BaseService {
         ? sql`CAST(${this.deliveries.providerType} AS BINARY) = CAST(${options.providerType} AS BINARY)`
         : undefined,
       options.id !== undefined ? eq(this.deliveries.id, options.id) : undefined,
+      options.standalone ? isNull(this.deliveries.queuedId) : undefined,
+      options.providerOrigin !== undefined
+        ? originCondition(this.deliveries, options.providerOrigin, this.dialect)
+        : undefined,
       options.queuedId !== undefined
         ? eq(this.deliveries.queuedId, options.queuedId)
         : undefined,
@@ -1046,6 +1088,17 @@ export class EmailDeliveryService extends BaseService {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
-    return (rows as EmailDeliveryRow[]).map(toDeliveryRecord);
+    const found = rows as EmailDeliveryRow[];
+    let stored: Set<string>;
+    try {
+      stored = await storedProviderIds(
+        this.db as never,
+        this.dialect,
+        found.map(row => row.providerId)
+      );
+    } catch (error) {
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+    return found.map(row => toDeliveryRecord(row, stored));
   }
 }

@@ -92,6 +92,7 @@ export const emailDeliveriesMysql = mysqlTable(
     templateDigest: varchar("template_digest", { length: 64 }),
     failureKind: varchar("failure_kind", { length: 16 }),
     failureStatus: int("failure_status"),
+    providerOrigin: varchar("provider_origin", { length: 16 }),
 
     /**
      * `fsp: 3` — milliseconds, not whole seconds.

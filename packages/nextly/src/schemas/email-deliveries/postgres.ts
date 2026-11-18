@@ -230,6 +230,13 @@ export const emailDeliveriesPg = pgTable(
      */
     failureKind: varchar("failure_kind", { length: 16 }),
     failureStatus: integer("failure_status"),
+    /**
+     * Where the provider that carried it came from: `stored` (a provider row,
+     * which `provider_id` names while it exists) or `code` (the site's
+     * configured provider). Read with whether the stored one still exists,
+     * so a deleted provider reads `deleted`; null on a row from before.
+     */
+    providerOrigin: varchar("provider_origin", { length: 16 }),
 
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

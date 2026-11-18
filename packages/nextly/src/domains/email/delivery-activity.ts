@@ -36,6 +36,7 @@ import {
   lte,
   max,
   or,
+  sql,
   type SQL,
 } from "drizzle-orm";
 import { z } from "zod";
@@ -53,6 +54,14 @@ import type {
   EmailDeliveryStatus,
 } from "./delivery-record";
 import type { EmailFailure } from "./failure";
+import {
+  FILTERABLE_ORIGINS,
+  originCondition,
+  providerRead,
+  storedProviderIds,
+  type FilterableOrigin,
+  type ProviderRead,
+} from "./provider-origin";
 import {
   LATE_QUEUED_EMAIL_COUNTED,
   LATE_QUEUED_EMAIL_MS,
@@ -81,10 +90,10 @@ export interface DeliveryActivity {
   /** The template it was sent from, or null for a send without one. */
   templateSlug: string | null;
   /**
-   * The stored provider that carried it, when one still exists, and its
-   * registered type, which outlives it.
+   * The provider that carried it: the stored one's id while it exists, its
+   * registered type, which outlives it, and where it came from.
    */
-  provider: { id: string | null; type: string };
+  provider: ProviderRead;
   recipientKind: EmailDeliveryRecipientKind;
   /** Why it failed, with anything address-shaped removed; null when sent. */
   failureReason: string | null;
@@ -114,7 +123,7 @@ interface DeliveryAttempt {
   createdAt: Date;
   outcome: DeliveryOutcome;
   recipientKind: EmailDeliveryRecipientKind;
-  provider: { id: string | null; type: string };
+  provider: ProviderRead;
   /** The provider's answer, structured: never its own text. */
   failureKind: DeliveryFailureKind | null;
   failureStatus: number | null;
@@ -275,6 +284,15 @@ const QUEUED_FILTER = z.object({
   ...common,
 });
 
+const ACTIVITY_FILTER = z.object({
+  status: z
+    .enum(["waiting", "retrying", "sending", "sent", "failed", "cancelled"])
+    .optional(),
+  providerType: z.string().min(1).max(50).optional(),
+  providerOrigin: z.enum(FILTERABLE_ORIGINS).optional(),
+  ...common,
+});
+
 const SLUGS = z.array(z.string().min(1).max(255)).max(MAX_SLUGS);
 
 /** @experimental How the delivery list is narrowed. */
@@ -288,6 +306,57 @@ export interface DeliveryActivityFilter {
   /** Sent at or after; a `Date` or an ISO 8601 instant. */
   from?: Date | string;
   /** Sent at or before; a `Date` or an ISO 8601 instant. */
+  to?: Date | string;
+  /** The `meta.nextBefore` of the page before. */
+  before?: string;
+  /** At most 100; 50 when not given. */
+  limit?: number | string;
+}
+
+/**
+ * @experimental One row of the merged Activity: a queued email, or a
+ * delivery of a send that was not queued. A queued email's own deliveries
+ * are its timeline, not rows of their own.
+ */
+export interface ActivityEntry {
+  kind: "delivery" | "queued";
+  id: string;
+  createdAt: Date;
+  /** A delivery's outcome, or where a queued email stands. */
+  status: DeliveryOutcome | QueuedEmailStanding;
+  /**
+   * The template it was sent from; `none` for a message without one;
+   * `not-recorded` when that was not recorded.
+   */
+  template: { slug: string } | "none" | "not-recorded";
+  /** Its provider; null for a queued email not yet tried. */
+  provider: ProviderRead | null;
+  /**
+   * The kinds of recipient it went to: a delivery's own, a queued email's
+   * every kind; null when not recorded.
+   */
+  recipientKinds: EmailDeliveryRecipientKind[] | null;
+  /** Why it (last) failed, with nothing address-shaped in it. */
+  failureReason: string | null;
+  /** A queued email's attempts so far; null for a delivery, or when unknown. */
+  attempts: number | null;
+  /** When a queued email's next attempt is due, while one is to follow. */
+  nextAttemptAt: Date | null;
+  /** Whether a delivery's recipient has been erased since. */
+  erased: boolean;
+}
+
+/** @experimental How the merged Activity is narrowed. */
+export interface ActivityFilter {
+  status?: DeliveryOutcome | QueuedEmailStanding;
+  template?: string;
+  /** A provider's registered type. */
+  providerType?: string;
+  /** Where the provider came from; a row not recorded matches none. */
+  providerOrigin?: FilterableOrigin;
+  /** Created at or after; a `Date` or an ISO 8601 instant. */
+  from?: Date | string;
+  /** Created at or before; a `Date` or an ISO 8601 instant. */
   to?: Date | string;
   /** The `meta.nextBefore` of the page before. */
   before?: string;
@@ -417,6 +486,11 @@ interface QueueRow {
   held: unknown;
   failure: string | null;
   templateSlug: string | null;
+  messageKind: string | null;
+  recipientKinds: string | null;
+  providerType: string | null;
+  providerId: string | null;
+  providerOrigin: string | null;
   createdAt: number | string;
   updatedAt: number | string;
   settledAt: number | string | null;
@@ -549,6 +623,11 @@ export class EmailDeliveryActivity {
           held: isNotNull(queue.message),
           failure: queue.failure,
           templateSlug: queue.templateSlug,
+          messageKind: queue.messageKind,
+          recipientKinds: queue.recipientKinds,
+          providerType: queue.providerType,
+          providerId: queue.providerId,
+          providerOrigin: queue.providerOrigin,
           createdAt: queue.createdAt,
           updatedAt: queue.updatedAt,
           settledAt: queue.settledAt,
@@ -706,6 +785,100 @@ export class EmailDeliveryActivity {
   }
 
   /**
+   * The merged Activity, newest first: every queued email, and every
+   * delivery of a send that was not queued, under one cursor and one set of
+   * filters. Each side is filtered, ordered and limited in the database, one
+   * page past the limit, and the two pages are merged by time and id, which
+   * is the order the cursor walks.
+   *
+   * @throws {NextlyError} `VALIDATION_ERROR` for a filter it cannot read.
+   */
+  async listActivity(
+    filter: ActivityFilter = {}
+  ): Promise<ActivityPage<ActivityEntry>> {
+    const options = parsed(ACTIVITY_FILTER, filter);
+    const after = decodeCursor(options.before);
+    const limit = options.limit ?? DEFAULT_LIMIT;
+    const outcome =
+      options.status === "sent" || options.status === "failed"
+        ? options.status
+        : undefined;
+    // A state only a queued email can be in matches no delivery.
+    const deliveries =
+      options.status !== undefined && outcome === undefined
+        ? []
+        : await this.deliveries.list({
+            standalone: true,
+            status: outcome,
+            templateSlug: options.template,
+            providerType: options.providerType,
+            providerOrigin: options.providerOrigin,
+            from: options.from,
+            to: options.to,
+            before: after
+              ? { createdAt: new Date(after.at), id: after.id }
+              : undefined,
+            limit: limit + 1,
+          });
+    const queued = await this.queuedEntries(options, after, limit + 1);
+    const entries = [...deliveries.map(deliveryEntry), ...queued]
+      .sort(newestFirst)
+      .slice(0, limit + 1);
+    return pageOf(
+      entries,
+      limit,
+      after !== undefined,
+      entry => ({ at: entry.createdAt.getTime(), id: entry.id }),
+      entry => entry
+    );
+  }
+
+  /** The queued emails of one merged page, as its rows. */
+  private async queuedEntries(
+    options: z.infer<typeof ACTIVITY_FILTER>,
+    after: Cursor | undefined,
+    limit: number
+  ): Promise<ActivityEntry[]> {
+    const queue = loadedDialect(this.dialect).tables.emailQueue;
+    const conditions = [
+      stateCondition(queue, options.status),
+      options.template ? eq(queue.templateSlug, options.template) : undefined,
+      options.providerType
+        ? eq(queue.providerType, options.providerType)
+        : undefined,
+      // By its exact bytes on MySQL, as the delivery reader compares it.
+      options.providerType && this.dialect === "mysql"
+        ? sql`CAST(${queue.providerType} AS BINARY) = CAST(${options.providerType} AS BINARY)`
+        : undefined,
+      options.providerOrigin
+        ? originCondition(queue, options.providerOrigin, this.dialect)
+        : undefined,
+      options.from ? gte(queue.createdAt, options.from.getTime()) : undefined,
+      options.to ? lte(queue.createdAt, options.to.getTime()) : undefined,
+      after
+        ? or(
+            lt(queue.createdAt, after.at),
+            and(eq(queue.createdAt, after.at), lt(queue.id, after.id))
+          )
+        : undefined,
+    ].filter((condition): condition is SQL => condition !== undefined);
+    const rows = await this.queueRows(conditions, limit);
+    const jobs = await this.jobsOf(
+      rows.flatMap(row => (row.jobId ? [row.jobId] : []))
+    );
+    const stored = await this.run(() =>
+      storedProviderIds(
+        this.db as never,
+        this.dialect,
+        rows.map(row => row.providerId)
+      )
+    );
+    return rows.map(row =>
+      queuedEntry(row, row.jobId ? jobs.get(row.jobId) : undefined, stored)
+    );
+  }
+
+  /**
    * How many queued emails are more than 15 minutes past due, which means
    * the jobs trigger is not running (`queued-email-warning`).
    */
@@ -730,7 +903,7 @@ function deliveryOf(record: EmailDeliveryRecord): DeliveryActivity {
     createdAt: record.createdAt,
     outcome: record.status,
     templateSlug: record.templateSlug,
-    provider: { id: record.providerId, type: record.providerType },
+    provider: record.provider,
     recipientKind: record.recipientKind,
     failureReason: record.status === "sent" ? null : record.error,
     namedPerson: record.namedPerson,
@@ -811,6 +984,79 @@ function attemptsOf(row: QueueRow, job: JobRow | undefined): number | null {
 /** Whether a message is held: a boolean on PostgreSQL, 0 or 1 elsewhere. */
 function isHeld(held: unknown): boolean {
   return held === true || Number(held) === 1;
+}
+
+/** Newest first, then by id, as every list here and its cursor order rows. */
+function newestFirst(a: ActivityEntry, b: ActivityEntry): number {
+  const byTime = b.createdAt.getTime() - a.createdAt.getTime();
+  if (byTime !== 0) return byTime;
+  return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+}
+
+/** A delivery of a send that was not queued, as a merged row. */
+function deliveryEntry(record: EmailDeliveryRecord): ActivityEntry {
+  return {
+    kind: "delivery",
+    id: record.id,
+    createdAt: record.createdAt,
+    status: record.status,
+    // A record from before versions knows its slug, never that it had none.
+    template: record.templateSlug
+      ? { slug: record.templateSlug }
+      : record.templateVersion === "none"
+        ? "none"
+        : "not-recorded",
+    provider: record.provider,
+    recipientKinds: [record.recipientKind],
+    failureReason: record.status === "sent" ? null : record.error,
+    attempts: null,
+    nextAttemptAt: null,
+    erased: record.recipientHash === null,
+  };
+}
+
+const RECIPIENT_KINDS = new Set(["to", "cc", "bcc"]);
+
+/** A queued email as a merged row. */
+function queuedEntry(
+  row: QueueRow,
+  job: JobRow | undefined,
+  stored: ReadonlySet<string>
+): ActivityEntry {
+  const activity = queuedOf(row, job);
+  return {
+    kind: "queued",
+    id: row.id,
+    createdAt: activity.createdAt,
+    status: activity.state,
+    template:
+      row.messageKind === "message"
+        ? "none"
+        : row.templateSlug
+          ? { slug: row.templateSlug }
+          : "not-recorded",
+    provider:
+      row.providerType === null
+        ? null
+        : providerRead(
+            row.providerType,
+            row.providerId,
+            row.providerOrigin,
+            stored
+          ),
+    recipientKinds:
+      row.recipientKinds === null
+        ? null
+        : (row.recipientKinds
+            .split(",")
+            .filter(kind =>
+              RECIPIENT_KINDS.has(kind)
+            ) as EmailDeliveryRecipientKind[]),
+    failureReason: activity.lastFailure?.reason ?? null,
+    attempts: activity.attempts,
+    nextAttemptAt: activity.nextAttemptAt,
+    erased: false,
+  };
 }
 
 type QueueTable = ReturnType<typeof loadedDialect>["tables"]["emailQueue"];

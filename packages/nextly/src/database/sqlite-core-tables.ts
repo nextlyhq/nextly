@@ -979,6 +979,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "template_digest" TEXT,
       "failure_kind" TEXT,
       "failure_status" INTEGER,
+      "provider_origin" TEXT,
       "created_at" INTEGER NOT NULL
     )`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_created_idx"
@@ -1031,6 +1032,11 @@ export function generateSqliteCoreTableStatements(): string[] {
       "principal_id" TEXT,
       "failure" TEXT,
       "template_slug" TEXT,
+      "message_kind" TEXT,
+      "recipient_kinds" TEXT,
+      "provider_type" TEXT,
+      "provider_id" TEXT,
+      "provider_origin" TEXT,
       "created_at" INTEGER NOT NULL,
       "updated_at" INTEGER NOT NULL,
       "settled_at" INTEGER

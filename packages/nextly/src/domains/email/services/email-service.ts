@@ -503,6 +503,10 @@ function rowBase(
     templateSlug: context.templateSlug ?? null,
     keyDigest: context.keyed?.claim.keyDigest ?? null,
     queuedId: context.queuedId ?? null,
+    // A stored provider row carried it, or the site's configured one.
+    providerOrigin: context.resolvedProviderId
+      ? ("stored" as const)
+      : ("code" as const),
     templateVersion: context.templateVersion,
   };
 }

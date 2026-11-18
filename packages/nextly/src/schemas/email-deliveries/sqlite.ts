@@ -66,6 +66,7 @@ export const emailDeliveriesSqlite = sqliteTable(
     templateDigest: text("template_digest"),
     failureKind: text("failure_kind"),
     failureStatus: integer("failure_status"),
+    providerOrigin: text("provider_origin"),
 
     /**
      * `timestamp_ms`, not `timestamp`.

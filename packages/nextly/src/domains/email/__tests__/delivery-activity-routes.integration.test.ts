@@ -343,6 +343,7 @@ for (const dialect of getConfiguredTestDialects()) {
     const READS = [
       "email-deliveries",
       "email-deliveries/queued",
+      "email-deliveries/activity",
       "email-deliveries/last-sent",
       "email-deliveries/overdue",
     ];
@@ -379,6 +380,16 @@ for (const dialect of getConfiguredTestDialects()) {
       }
     });
 
+    it("matches no route with a segment past a queued email's id", async () => {
+      // Refused as a route that does not exist, never read as the detail.
+      const response = await get(
+        `email-deliveries/queued/${failedQueuedId}/anything`,
+        reader
+      );
+      expect(response.status).toBe(400);
+      expect(await response.text()).not.toContain("timeline");
+    });
+
     it("refuses each read to a manager without the read grant, a user with no email grant, and a self-registered account", async () => {
       for (const path of READS) {
         for (const caller of [manager, stranger, selfRegistered]) {
@@ -402,7 +413,7 @@ for (const dialect of getConfiguredTestDialects()) {
           createdAt: "2026-11-04T10:00:00.000Z",
           outcome: "failed",
           templateSlug: "welcome",
-          provider: { id: null, type: "smtp" },
+          provider: { id: null, type: "smtp", origin: "not-recorded" },
           recipientKind: "to",
           failureReason: "The email provider refused the message.",
           namedPerson: false,
@@ -417,7 +428,7 @@ for (const dialect of getConfiguredTestDialects()) {
           createdAt: "2026-11-03T10:00:00.000Z",
           outcome: "sent",
           templateSlug: null,
-          provider: { id: null, type: "smtp" },
+          provider: { id: null, type: "smtp", origin: "not-recorded" },
           recipientKind: "to",
           failureReason: null,
           namedPerson: true,
@@ -432,7 +443,7 @@ for (const dialect of getConfiguredTestDialects()) {
           createdAt: "2026-11-02T10:00:00.000Z",
           outcome: "failed",
           templateSlug: "password-reset",
-          provider: { id: null, type: "smtp" },
+          provider: { id: null, type: "smtp", origin: "not-recorded" },
           recipientKind: "to",
           failureReason: expect.not.stringContaining("carol"),
           namedPerson: false,
@@ -444,11 +455,11 @@ for (const dialect of getConfiguredTestDialects()) {
         },
         expect.objectContaining({
           createdAt: "2026-11-01T10:00:00.000Z",
-          provider: { id: providerId, type: "log" },
+          provider: { id: providerId, type: "log", origin: "stored" },
         }),
         expect.objectContaining({
           createdAt: "2026-11-01T10:00:00.000Z",
-          provider: { id: providerId, type: "log" },
+          provider: { id: providerId, type: "log", origin: "stored" },
         }),
       ]);
       expect(
