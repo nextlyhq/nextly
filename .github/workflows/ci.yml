@@ -1977,6 +1977,15 @@ jobs:
         env:
           E2E_DEV_SPECS_ONLY: "1"
 
+      # The specs of a site that draws its header and footer in code, on a
+      # playground started in that mode, by themselves: the runs above leave
+      # them out (see HEADER_FOOTER_IN_CODE_SPECS in e2e/playwright.config.ts).
+      - name: Run the browser tests of a site drawing its header and footer in code
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @nextlyhq/e2e test:e2e
+        env:
+          E2E_HEADER_FOOTER_IN_CODE_ONLY: "1"
+
       - name: Upload report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

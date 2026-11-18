@@ -48,6 +48,7 @@ import {
 } from "./document";
 import { exposedValueFits } from "./placement-values";
 import { isPlainRecord } from "./plain-record";
+import { choicesFitProp, choicesOfProp } from "./prop-exposure";
 import { isRichTextNode, isRichTextValue } from "./rich-text";
 import { ownEntry } from "./safe-record";
 import {
@@ -69,6 +70,24 @@ const BIND_PATH_RE = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
  */
 export function isBindPath(value: unknown): value is string {
   return typeof value === "string" && BIND_PATH_RE.test(value);
+}
+
+/**
+ * Whether a value is a setting id: what a component may declare a setting
+ * under, and what a binding following one names in `$bind`. Any non-empty
+ * string, matched whole and never read as a field path, so an id minted from
+ * a label (`hero-title`) or one holding a dot (`hero.title`) is taken alike.
+ * The one rule for both, so a follower can name every id a component holds.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function isSettingId(value: unknown): value is string {
+  return typeof value === "string" && value !== "";
+}
+
+/** Whether `$bind` is a path its source can name. */
+export function bindPathFits(source: unknown, path: unknown): path is string {
+  return source === "setting" ? isSettingId(path) : isBindPath(path);
 }
 
 /**
@@ -383,9 +402,9 @@ function storedSource(
 function readStoredBinding(value: unknown): StoredBinding | undefined {
   if (!isPlainRecord(value)) return undefined;
   const path = ownEntry(value, "$bind");
-  if (!isBindPath(path)) return undefined;
   const from = storedSource(value);
   if (from === undefined) return undefined;
+  if (!bindPathFits(from.source, path)) return undefined;
   const hasFallback =
     Object.prototype.hasOwnProperty.call(value, "fallback") &&
     ownEntry(value, "fallback") !== undefined;
@@ -396,20 +415,6 @@ function readStoredBinding(value: unknown): StoredBinding | undefined {
     fallback: ownEntry(value, "fallback"),
     format: ownEntry(value, "format"),
   };
-}
-
-/** The values a select prop declares, as stored strings or `{ value }` records. */
-function choicesOfProp(schema: PropSchema): readonly string[] {
-  const options: unknown = schema.options;
-  if (!Array.isArray(options)) return [];
-  const values: string[] = [];
-  for (const option of options as unknown[]) {
-    if (typeof option === "string") values.push(option);
-    else if (isPlainRecord(option) && typeof option.value === "string") {
-      values.push(option.value);
-    }
-  }
-  return values;
 }
 
 /**
@@ -570,11 +575,7 @@ function fillsUnformatted(
   if (shape === "text") return kind !== "number" && kind !== "date";
   if (shape !== "select") return true;
   if (kind !== "option") return false;
-  const allowed = choicesOfProp(schema);
-  return (
-    allowed.length === 0 ||
-    (field.options ?? []).every(option => allowed.includes(option))
-  );
+  return choicesFitProp(field.options ?? [], schema);
 }
 
 /**

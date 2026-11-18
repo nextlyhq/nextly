@@ -22,6 +22,7 @@ import type {
 } from "./media-summary-reader";
 import type { RegionEditingHost } from "./region-editing";
 import type { Reveal } from "./reveal-hidden";
+import type { SetMode } from "./set-regions";
 import type { ComponentView } from "./use-component-view";
 import type { EditorMount } from "./use-editor-mount";
 import type {
@@ -99,6 +100,11 @@ export type EditorView = EditorMount &
      * settings read says this person may change the site's code.
      */
     blockCustomCss: BlockCustomCssAccess | undefined;
+    /**
+     * The header & footer set whose own screen this is: the canvas draws a
+     * placeholder for the page, and the inspector the set's settings.
+     */
+    set: SetMode | undefined;
   };
 
 /** The block verbs the inspector's card offers, as the verbs provider shares them. */

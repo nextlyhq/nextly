@@ -7,17 +7,18 @@
  * block exposes, in what order, and the patch that changes one all live there,
  * where they can be asserted without a DOM.
  *
- * **Text commits on blur, not on every keystroke.** Undo is built from op
- * inverses, so an op per character would make one undo remove one letter, and
- * a sentence would take a sentence's worth of presses to take back. Committing
- * on blur keeps an edit to a field one entry in the history, which is what an
- * author means by "undo that change". The cost is that the canvas updates when
- * focus leaves the field rather than as you type; live preview needs the store
- * to coalesce consecutive updates to one node and prop, which it does not do
- * yet.
+ * **Text writes as it is typed**, so the canvas follows every keystroke. Undo
+ * is built from op inverses, and an op per character would make one undo
+ * remove one letter, so the writes of one stretch of typing share a run
+ * (`live-draft.ts`, over `typing-run.ts`) that the history keeps as ONE step:
+ * undo takes back the whole edit, which is what an author means by "undo that
+ * change". Blur and Enter end the run. A value that is not one yet (`12p`,
+ * half a hex colour) writes nothing, so the canvas keeps the last valid one.
+ * A shared style is the exception: it is stored on the site at once, so its
+ * fields write when the edit ends.
  *
  * Discrete controls — a checkbox, a select — commit immediately. There is no
- * typing to coalesce, and waiting for blur on a checkbox would leave the canvas
+ * typing to group, and waiting for blur on a checkbox would leave the canvas
  * disagreeing with a control the author has already changed.
  *
  * This module draws the panel, its three tabs and the surface a selection
@@ -70,6 +71,7 @@ import { CssNamesProvider } from "./css-names-context";
 import { CustomCssStyleLine } from "./custom-css-section";
 import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
+import { FieldsOfDocument } from "./field-edit";
 import { galleryPictureOf } from "./gallery-pictures";
 import { HiddenStatus } from "./hide-on";
 import {
@@ -97,6 +99,7 @@ import { openingTabFor, shownTab } from "./inspector-style-state";
 import { StyleTab } from "./inspector-style-tab";
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
+import { TypingCancel } from "./live-draft";
 import { LookInspector } from "./look-inspector";
 import { blockStyleEntries } from "./look-tiles-view";
 import { ManyBlocksPanel } from "./many-blocks-panel";
@@ -359,7 +362,13 @@ export function InspectorPanel({
           <PanelFoldsProvider>
             <CssNamesProvider>
               <SettingsFilterProvider>
-                <SelectionInspector {...panel} />
+                {/* Escape in a field being typed puts its writes back, and
+                    a draft here is the page's until it is written. */}
+                <TypingCancel.Provider value={panel.editor.cancelTyping}>
+                  <FieldsOfDocument.Provider value={true}>
+                    <SelectionInspector {...panel} />
+                  </FieldsOfDocument.Provider>
+                </TypingCancel.Provider>
               </SettingsFilterProvider>
             </CssNamesProvider>
           </PanelFoldsProvider>
@@ -447,19 +456,16 @@ function useInspectorTab(
 /** The tab list: one Tab stop, with arrows, Home and End between the tabs. */
 function InspectorTabList({
   tabs,
-  shown,
 }: {
   tabs: readonly InspectorTab[];
-  /** The tab showing, whose sections the options menu folds. */
-  shown: string;
 }): React.JSX.Element {
   // Compact underlined tabs at the start of the panel; the classes carry the
-  // inspector's own tab rules over the shared tabs'. The options menu sits at
-  // the row's end, outside the tab list, so arrows still move between tabs.
+  // inspector's own tab rules over the shared tabs'. The options menu is at
+  // the end of the search row below, after "Only changed", so the keyboard
+  // meets the panel's head in the order it reads.
   return (
     <div className="nx-inspector__tabrow">
       <InspectorTabs tabs={tabs} />
-      <PanelOptions tab={shown} />
     </div>
   );
 }
@@ -509,7 +515,14 @@ function ContentTabPanel({
 >): React.JSX.Element | null {
   if (!tabs.includes("content")) return null;
   return (
-    <TabsContent value="content" forceMount hidden={shown !== "content"}>
+    <TabsContent
+      value="content"
+      forceMount
+      hidden={shown !== "content"}
+      // No Tab stop of its own: Tab goes from the panel's head to its first
+      // control. Every tab has one, and the head names the tab.
+      tabIndex={-1}
+    >
       {status}
       <FilterNote tab="content" onChoose={onChoose} />
       <ContentTab {...content} onScreen={shown === "content"} />
@@ -756,10 +769,13 @@ function SelectionInspector({
             onValueChange={choose}
             className="nx-inspector__tabs"
           >
-            <InspectorTabList tabs={tabs} shown={shown} />
+            <InspectorTabList tabs={tabs} />
             {/* Under the tabs, on every tab; before the panels in the page's
             order, so a sticky header can hold the two together. */}
-            <SettingsSearchRow field={find.field} />
+            <SettingsSearchRow
+              field={find.field}
+              end={<PanelOptions tab={shown} />}
+            />
 
             {/*
           FORCE-MOUNTED, Content and Advanced both: a field commits on blur
@@ -789,7 +805,7 @@ function SelectionInspector({
               }}
             />
 
-            <TabsContent value="style">
+            <TabsContent value="style" tabIndex={-1}>
               <HiddenStatus {...hidden} onChoose={choose} />
               {/* That the block also has custom CSS, never the CSS: Style
                   draws plain controls only, and links to Advanced for a
@@ -837,6 +853,7 @@ function SelectionInspector({
               value="advanced"
               forceMount
               hidden={shown !== "advanced"}
+              tabIndex={-1}
             >
               {/* No "Change" here: Hide on is on this tab. */}
               <HiddenStatus {...hidden} />

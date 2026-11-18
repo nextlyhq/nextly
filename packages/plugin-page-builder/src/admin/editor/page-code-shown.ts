@@ -23,12 +23,19 @@ export function holdsPageCode(fieldName: string): boolean {
  */
 export type PageCodeShown = "tab" | "line" | "none";
 
-/** What Page settings show of `held`, the page's code, to this person. */
+/**
+ * What Page settings show of `held`, the page's code, and of `css`, its own
+ * CSS, to this person.
+ */
 export function pageCodeShown(args: {
   held: DocumentCode | undefined;
+  css?: string | undefined;
   mayManageSite: boolean;
 }): PageCodeShown {
   if (args.mayManageSite) return "tab";
-  const adds = (args.held?.head ?? "") !== "" || (args.held?.body ?? "") !== "";
+  const adds =
+    (args.held?.head ?? "") !== "" ||
+    (args.held?.body ?? "") !== "" ||
+    (args.css ?? "") !== "";
   return adds ? "line" : "none";
 }
