@@ -291,6 +291,7 @@ export function ColourField({
   obscuredBy,
   describedBy,
   onCommit,
+  onType,
 }: {
   id: string;
   labelledBy: string;
@@ -307,6 +308,13 @@ export function ColourField({
   obscuredBy: string | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
+  /**
+   * The write a keystroke or a picker move makes where the panel writes as
+   * it is typed, where it is not the field's own: a shadow variable's colour
+   * is drawn on the canvas meanwhile and stored once, by the commit, when the
+   * edit ends. `onCommit` when omitted.
+   */
+  onType?: ((value: StyleValue | null) => CommitOutcome) | undefined;
 }): React.JSX.Element {
   const noteId = React.useId();
   // Lifted out of the text field because two controls edit one value: a draft
@@ -325,9 +333,11 @@ export function ColourField({
     React.useContext(HiddenColours),
     reference
   );
+  // A keystroke's and a picker move's write.
+  const typed = typedOrCommitted(onType, onCommit);
   const { commitInstead, closed, onColour } = usePickerWrites({
     commitColour,
-    onCommit,
+    onMove: typed,
     reset,
     setDraft,
   });
@@ -424,7 +434,7 @@ export function ColourField({
             invalid={describedBy !== undefined}
             live={live}
             // Remembered among Recent colours once, when the edit ends.
-            onType={onCommit}
+            onType={typed}
             onCommit={commitColour}
           />
         ) : (
@@ -685,6 +695,14 @@ function contrastReading({
   };
 }
 
+/** The write a field types live through: its own, or else its commit. */
+function typedOrCommitted(
+  onType: ((value: StyleValue | null) => CommitOutcome) | undefined,
+  onCommit: (value: StyleValue | null) => CommitOutcome
+): (value: StyleValue | null) => CommitOutcome {
+  return onType ?? onCommit;
+}
+
 /**
  * What a picker gesture writes, and when: each move shown in the field and,
  * where the panel writes as it is typed, written to the document at most
@@ -694,12 +712,13 @@ function contrastReading({
  */
 function usePickerWrites({
   commitColour,
-  onCommit,
+  onMove,
   reset,
   setDraft,
 }: {
   commitColour: (value: StyleValue | null) => CommitOutcome;
-  onCommit: (value: StyleValue | null) => CommitOutcome;
+  /** A move's write, where the panel writes as it is typed. */
+  onMove: (value: StyleValue | null) => CommitOutcome;
   reset: () => void;
   setDraft: (value: string) => void;
 }): {
@@ -820,7 +839,7 @@ function usePickerWrites({
     pending.current = value;
     setDraft(value);
     // Not remembered among Recent colours until the gesture ends.
-    if (typesLive) gesture.move(() => onCommit(value));
+    if (typesLive) gesture.move(() => onMove(value));
   };
   return { commitInstead, closed, onColour };
 }
