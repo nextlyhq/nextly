@@ -183,18 +183,6 @@ function refuseHoldersNotGroups(
   }
 }
 
-/**
- * Refuses a move whose values are kept for each language: this save's statements carry one value
- * for every language, so such a move waits for the saves that move each language's row.
- */
-function refusePerLanguage(request: FieldMoveRequest, move: PlannedMove): void {
-  if (!move.perLanguage) return;
-  throw refused(
-    request,
-    `${request.from.at(-1) ?? "This field"}'s values are kept for each language, and moving it with them is not available yet for this kind of entity.`
-  );
-}
-
 function refuseUnplaceable(
   request: FieldMoveRequest,
   move: PlannedMove,
@@ -355,7 +343,6 @@ export function planEntityMoves(args: {
     });
     if (!checked.ok) throw refused(request, checked.message);
     const { move } = checked;
-    refusePerLanguage(request, move);
     refuseHoldersNotGroups(request, move, args);
     refuseUnplaceable(request, move, columns);
     // A field moving between places on one level (a group with no name) keeps its column.

@@ -390,34 +390,26 @@ describe("planEntityMoves", () => {
     );
   });
 
-  it("refuses a move whose values are kept for each language, which this kind of save does not carry yet", () => {
-    expect(() =>
-      planEntityMoves({
-        ...base,
-        localized: true,
-        before: [
-          text("tagline", { localized: true }),
-          group("meta", [], { localized: true }),
-        ],
-        after: [
-          group("meta", [text("tagline", { localized: true })], {
-            localized: true,
-          }),
-        ],
-        moves: [{ from: ["tagline"], to: ["meta", "tagline"] }],
-      })
-    ).toThrow(
-      expect.objectContaining({
-        publicData: {
-          errors: [
-            expect.objectContaining({
-              code: "FIELD_MOVE_REFUSED",
-              message: expect.stringContaining("kept for each language"),
-            }),
-          ],
-        },
-      })
-    );
+  it("plans a move whose values are kept for each language in the language table, each language's row", () => {
+    const planned = planEntityMoves({
+      ...base,
+      localized: true,
+      before: [
+        text("tagline", { localized: true }),
+        group("meta", [], { localized: true }),
+      ],
+      after: [
+        group("meta", [text("tagline", { localized: true })], {
+          localized: true,
+        }),
+      ],
+      moves: [{ from: ["tagline"], to: ["meta", "tagline"] }],
+    });
+    expect(planned.up.first.join("\n")).toContain(`"dc_posts_locales"`);
+    expect(planned.up.first.join("\n")).not.toContain(`"dc_posts" `);
+    expect(planned.movedColumns).toEqual([
+      { table: "dc_posts_locales", column: "tagline", into: "meta" },
+    ]);
   });
 
   it("plans nothing for a save that moves nothing", () => {
