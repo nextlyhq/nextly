@@ -23,6 +23,7 @@ import { pageAddressOf, type PageFacts } from "./editor-settings";
 import type { CardVerbs, EditorView } from "./editor-view";
 import { PageReadMeter, type PageDataCount } from "./page-read-meter";
 import { SelectedRegionCard } from "./region-card";
+import { inspectedVariantsOf } from "./region-editing";
 import type { SettingsPlace } from "./settings-place";
 import {
   offerableFaces,
@@ -176,8 +177,12 @@ export function editorInspector<TFieldValues extends FieldValues>(
           : view.regionEditing.componentFacts
       }
       // And how many placements chose a variant, for its delete dialog, and
-      // the open variant, which the canvas previews.
-      componentVariants={previewingHost(componentVariants, view.preview)}
+      // the open variant, which the canvas previews. A header or footer
+      // edited in place keeps its variants to its own view.
+      componentVariants={inspectedVariantsOf(
+        view.regionEditing.area,
+        previewingHost(componentVariants, view.preview)
+      )}
       // A header or footer selected on the canvas: what it is, where it
       // comes from and how to change it, in place of the page's settings.
       {...regionCardOf(view)}

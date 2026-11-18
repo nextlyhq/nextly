@@ -41,6 +41,7 @@ import {
   canvasEditingOf,
   INLINE_EDIT_UNCHANGED,
   type ComponentFieldsHost,
+  type ComponentVariantsHost,
   type EditingTargetState,
   type EditorState,
   type InlineEditOutcome,
@@ -57,6 +58,7 @@ import { toast } from "@nextlyhq/ui";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -373,6 +375,19 @@ export function inspectedBindingsOf<
   };
 }
 
+/**
+ * The inspector's variants host: the page's own, or, while a header or footer
+ * is edited in place, one keeping them to the component's own view. The
+ * canvas previews the page's open variant, never one of the header's, so
+ * a variant opened or added here could never be shown or edited.
+ */
+export function inspectedVariantsOf(
+  area: RegionArea | undefined,
+  page: ComponentVariantsHost
+): ComponentVariantsHost {
+  return area === undefined ? page : { editedInOwnView: true };
+}
+
 /** A refusal of a save or publish, in the author's words. */
 function refusalWords(
   area: RegionArea,
@@ -478,7 +493,10 @@ interface RegionStore {
 }
 
 /**
- * Saving and publishing the region through its session. A failure keeps the
+ * Saving and publishing the region through its session. It waits first for
+ * the writes the page's view tracks (a shared style changed meanwhile), as
+ * the page's own Save does, and stores nothing, asking about no part, while
+ * one failed. A failure keeps the
  * editing and the changes and says why, with "Try again"; a store reads the
  * regions again, so the canvas draws what is published now, and a publish
  * says the fill toast when it filled the site's default.
@@ -520,7 +538,31 @@ function useRegionStore({
       if (area === undefined || field === undefined) return false;
       const finished = finishInlineEdit(inline, active.document);
       if (!finished.mayClose) return false;
+      // Said with "Try again", which stores the header as it is then, only
+      // while the opening it failed in is still the one edited.
+      const refuse = (
+        outcome: Extract<DocumentSessionOutcome, { ok: false }>
+      ): false => {
+        setBusy(false);
+        const origin = removal.opening;
+        toast.error(refusalWords(area, intent, outcome), {
+          action: {
+            label: TRY_AGAIN,
+            onClick: () => {
+              if (origin !== null && editedNow.current === origin) {
+                void latest.current(intent);
+              }
+            },
+          },
+        });
+        return false;
+      };
       setBusy(true);
+      // The header is drawn with the site's shared styles: a change to one
+      // still on its way, or failed, would leave what is stored unlike what
+      // is edited, so it is waited for, before any part is published with it.
+      const blocked = await session.writesSettled();
+      if (blocked !== null) return refuse(blocked);
       const ready =
         intent !== "publish" ||
         (await readyToPublish(removal, finished.document, {
@@ -535,21 +577,8 @@ function useRegionStore({
       const outcome = await (intent === "publish"
         ? session.publish(changes)
         : session.saveDraft(changes));
+      if (!outcome.ok) return refuse(outcome);
       setBusy(false);
-      if (!outcome.ok) {
-        const origin = removal.opening;
-        toast.error(refusalWords(area, intent, outcome), {
-          action: {
-            label: TRY_AGAIN,
-            onClick: () => {
-              if (origin !== null && editedNow.current === origin) {
-                void latest.current(intent);
-              }
-            },
-          },
-        });
-        return false;
-      }
       stored(finished.document);
       toast.success(storedWords(area, intent));
       // The regions are drawn from the published set and components: a
@@ -788,16 +817,28 @@ function RegionQuestions({
 
 /**
  * The header's work, recorded as the component's own recovery point while
- * it is unsaved; the editor reports it to the leave guard with the page's.
+ * it is unsaved, and handed to it as the editor goes away (see
+ * `useRegionHandover`); the editor reports it to the leave guard with the
+ * page's.
  */
-function useRecordedRegion(
-  session: Pick<DocumentSession, "record" | "discard">,
-  field: string | undefined,
-  document: BlockDocument,
-  dirty: boolean,
-  area: RegionArea | undefined
-): void {
+function useRecordedRegion({
+  session,
+  field,
+  active,
+  dirty,
+  area,
+  inline,
+}: {
+  session: Pick<DocumentSession, "record" | "discard">;
+  field: string | undefined;
+  active: Pick<EditorState, "document">;
+  dirty: boolean;
+  area: RegionArea | undefined;
+  inline: InlineTyping;
+}): void {
   const { record, discard } = session;
+  const { document } = active;
+  useRegionHandover({ area, field, dirty, inline, active, record });
   useEffect(() => {
     if (field !== undefined && dirty) record({ [field]: document });
   }, [field, dirty, document, record]);
@@ -808,6 +849,47 @@ function useRecordedRegion(
     if (wasDirty.current && !dirty && area !== undefined) void discard();
     wasDirty.current = dirty;
   }, [dirty, area, discard]);
+}
+
+/**
+ * The header's work handed to its own recovery point when the editor goes
+ * away while it is edited: a colleague taking over the page unmounts the
+ * editor mid-edit, and the recording made as the editing pauses would be
+ * dropped with it. The open passage is finished first, as leaving finishes
+ * it, so the words being typed are in what is recorded; the session records
+ * it as it goes, before it lets the header's lock go. Never into the page,
+ * whose own handover leaves the header's passage alone (`pageInlineOf`).
+ *
+ * A LAYOUT effect's cleanup, as the page's handover is, because it runs while
+ * the canvas is still in the page and the passage can still answer.
+ */
+function useRegionHandover({
+  area,
+  field,
+  dirty,
+  inline,
+  active,
+  record,
+}: {
+  area: RegionArea | undefined;
+  field: string | undefined;
+  dirty: boolean;
+  inline: InlineTyping;
+  active: Pick<EditorState, "document">;
+  record: DocumentSession["record"];
+}): void {
+  const latest = useRef({ area, field, dirty, inline, active, record });
+  latest.current = { area, field, dirty, inline, active, record };
+  useLayoutEffect(
+    () => () => {
+      const held = latest.current;
+      if (held.area === undefined || held.field === undefined) return;
+      if (!held.dirty) return;
+      const { document } = finishInlineEdit(held.inline, held.active.document);
+      held.record({ [held.field]: document });
+    },
+    []
+  );
 }
 
 /**
@@ -956,7 +1038,14 @@ export function useRegionEditing({
     reach,
     onEntered: requestLayers,
   });
-  useRecordedRegion(session, field, active.document, savePoint.dirty, area);
+  useRecordedRegion({
+    session,
+    field,
+    active,
+    dirty: savePoint.dirty,
+    area,
+    inline,
+  });
   const { removal, dialog: removalDialog } = useRegionRemoval(
     active.document,
     componentFacts,

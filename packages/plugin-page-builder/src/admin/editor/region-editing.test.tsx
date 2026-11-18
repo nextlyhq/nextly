@@ -103,6 +103,7 @@ import type { RegionCardFacts } from "../page-layout";
 import { offeredSelfOf } from "./offered-library";
 import {
   inspectedBindingsOf,
+  inspectedVariantsOf,
   pageInlineOf,
   useRegionEditing,
   useRegionsAsEdited,
@@ -192,6 +193,7 @@ function sessionWith(overrides: Partial<DocumentSession>): DocumentSession {
     publish: vi.fn(() => Promise.resolve(STORED)),
     record: vi.fn(),
     discard: vi.fn(() => Promise.resolve()),
+    writesSettled: vi.fn(() => Promise.resolve(null)),
     ...overrides,
   };
 }
@@ -418,6 +420,91 @@ describe("saving the header", () => {
     act(() => options.action.onClick());
     await waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(current().host.dirty).toBe(false));
+  });
+
+  it("waits for a shared style's write on its way before saving the header", async () => {
+    let landed: () => void = () => undefined;
+    const writesSettled = vi.fn(
+      () =>
+        new Promise<null>(resolve => {
+          landed = () => resolve(null);
+        })
+    );
+    const saveDraft = vi.fn(() => Promise.resolve(STORED));
+    hoisted.session = sessionWith({ saveDraft, writesSettled });
+    render(<Host />);
+    await enterHeader();
+    editHeader();
+
+    act(() => current().host.topBar?.save());
+    await waitFor(() => expect(writesSettled).toHaveBeenCalledTimes(1));
+    expect(saveDraft).not.toHaveBeenCalled();
+
+    await act(async () => landed());
+    await waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(1));
+  });
+
+  it("saves nothing while a shared style's write failed, says so, and offers Try again", async () => {
+    const writesSettled = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        reason: "refused",
+        message: "Site colours wasn't saved: The server is down.",
+      })
+      .mockResolvedValue(null);
+    const saveDraft = vi.fn(() => Promise.resolve(STORED));
+    hoisted.session = sessionWith({ saveDraft, writesSettled });
+    render(<Host />);
+    await enterHeader();
+    editHeader();
+
+    act(() => current().host.topBar?.save());
+    await waitFor(() => expect(hoisted.toastError).toHaveBeenCalled());
+
+    const [message, options] = hoisted.toastError.mock.calls[0] as [
+      string,
+      { action: { label: string; onClick: () => void } },
+    ];
+    expect(message).toBe(
+      "The header wasn't saved. Site colours wasn't saved: The server is down."
+    );
+    expect(saveDraft).not.toHaveBeenCalled();
+    expect(current().host.dirty).toBe(true);
+
+    act(() => options.action.onClick());
+    await waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(1));
+  });
+
+  it("asks about no part and publishes nothing while a shared style's write failed", async () => {
+    const publish = vi.fn(() => Promise.resolve(STORED));
+    const writesSettled = vi.fn(() =>
+      Promise.resolve({
+        ok: false as const,
+        reason: "refused" as const,
+        message: "Site colours wasn't saved: The server is down.",
+      })
+    );
+    hoisted.session = sessionWith({ publish, writesSettled });
+    render(<Host />);
+    await enterHeader();
+    editHeader();
+
+    act(() => current().host.topBar?.publish());
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Publish header" })
+    );
+
+    await waitFor(() =>
+      expect(hoisted.toastError).toHaveBeenCalledWith(
+        "The header wasn't published. Site colours wasn't saved: The server is down.",
+        expect.anything()
+      )
+    );
+    expect(hoisted.offer).not.toHaveBeenCalled();
+    expect(hoisted.hold).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(current().host.area).toBe("header");
   });
 
   it("tries again with the header as it is now, not as the failed save sent it", async () => {
@@ -831,6 +918,61 @@ describe("the page while a header is edited", () => {
   });
 });
 
+describe("the header when the editor goes away", () => {
+  // A colleague taking over the page unmounts the editor mid-edit: the
+  // header's work is handed to its own recovery point then, never the page.
+  it("records the header's open passage, finished, as it goes away", async () => {
+    const record = vi.fn();
+    hoisted.session = sessionWith({ record });
+    const typed: BlockDocument = {
+      ...HEADER,
+      nodes: [
+        { id: "menu", type: "acme/nav", version: 1, props: { text: "Typed" } },
+      ],
+    } as BlockDocument;
+    const commit = vi.fn(
+      () => ({ status: "written", document: typed }) as never
+    );
+    hoisted.inline = { ...INLINE, editing: "menu" };
+    const view = render(<Host />);
+    await enterHeader();
+    hoisted.inline = { commit, editing: "menu", editingRich: null };
+    view.rerender(<Host />);
+    record.mockClear();
+
+    view.unmount();
+
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith({ content: typed });
+  });
+
+  it("records the header's unsaved edits as they stand when no passage is open", async () => {
+    const record = vi.fn();
+    hoisted.session = sessionWith({ record });
+    const view = render(<Host />);
+    await enterHeader();
+    editHeader();
+    record.mockClear();
+
+    view.unmount();
+
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(sentIds(record, 0)).toEqual(["menu", "cart"]);
+  });
+
+  it("records nothing when the header holds no unsaved work", async () => {
+    const record = vi.fn();
+    hoisted.session = sessionWith({ record });
+    const view = render(<Host />);
+    await enterHeader();
+
+    view.unmount();
+
+    expect(record).not.toHaveBeenCalled();
+  });
+});
+
 describe("what Add offers while a header is edited", () => {
   it("leaves out the header's own component, judged as that component", () => {
     const page = { document: PAGE, identity: { documentId: "p1" } };
@@ -864,5 +1006,18 @@ describe("the inspector's bindings while a header is edited", () => {
       bindingEntry: null,
       editedDocument: null,
     });
+  });
+});
+
+describe("the inspector's variants while a header is edited", () => {
+  // The canvas previews no variant of a header edited in place, so its
+  // variants are edited in its own view alone.
+  it("are kept to the component's own view, and the page's host is left as it is", () => {
+    const host = { preview: { open: undefined, onOpen: () => undefined } };
+
+    expect(inspectedVariantsOf("header", host)).toEqual({
+      editedInOwnView: true,
+    });
+    expect(inspectedVariantsOf(undefined, host)).toBe(host);
   });
 });

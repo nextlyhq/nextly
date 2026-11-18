@@ -45,7 +45,11 @@ import type {
 } from "./submit-outcome";
 import { useLeaveWithoutWarning } from "./UnsavedChangesGuard";
 import type { EntryData, EntryFormIntent, EntryFormMode } from "./useEntryForm";
-import { useStoringGate, type StoringGate } from "./useStoringGate";
+import {
+  useStoringGate,
+  type StoringGate,
+  type TrackedWritesVerdict,
+} from "./useStoringGate";
 
 /** The actions this editor builds in, which a contribution may still take over. */
 type BuiltInActionId =
@@ -326,6 +330,12 @@ export interface DocumentActionBindings {
    * has failed.
    */
   trackWrite: (label: string, write: Promise<unknown>) => void;
+  /**
+   * Waits for the tracked writes alone, as a store waits for them, and says
+   * what they came to: for a second document stored from inside this editor
+   * (see `useDocumentSession`), which depends on the same writes.
+   */
+  settleWrites: () => Promise<TrackedWritesVerdict>;
   /** Whether a tracked write is still on its way. */
   writesPending: boolean;
   /**
@@ -815,6 +825,7 @@ export function useDocumentActionBindings({
     },
     registerBeforeAction: gate.registerBeforeAction,
     trackWrite: gate.trackWrite,
+    settleWrites: gate.settleWrites,
     writesPending: gate.writesPending,
     saveWithoutPublishing: storingWithoutPublishing(
       hasStatus,

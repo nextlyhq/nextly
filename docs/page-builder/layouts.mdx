@@ -84,6 +84,8 @@ to the header. A click on the dimmed page changes nothing and highlights **Done*
 
 - **Save header** stores your changes as a draft; visitors still see the published header.
 - **Publish header** asks "Publish the header to 11 pages?" first.
+- If you changed a shared style meanwhile, **Save header** and **Publish header** wait for it
+  to be saved first, and save nothing while it couldn't be, as the page's **Save** does.
 - **Undo** and **Redo** step through the header's changes only, starting from when you came
   in. After **Done** they step through the page's again, which are kept as you left them.
 - **Done**, or Escape with nothing selected in the header, goes back to the page. With
@@ -95,7 +97,9 @@ Your page's own unsaved changes stay unsaved and untouched; save them with the p
 after **Done**. If someone else has the header open, it doesn't open, and the editor says who
 has it: "Ana Diaz is editing this header. Try again when they're done." Leaving the editor or
 reloading with unsaved header changes asks first, as it does for the page. If the browser
-closes, the header's changes are kept as its recovery point, offered when it is next opened.
+closes, or someone else takes over the page while you edit its header, the header's changes are
+kept as its recovery point, offered when it is next opened. The header's variants are edited in
+its own view, not here.
 
 Publishing a page that names an unpublished header & footer set asks first: **Publish page only**
 leaves the header & footer set as it is, and the site default shows until it is published;

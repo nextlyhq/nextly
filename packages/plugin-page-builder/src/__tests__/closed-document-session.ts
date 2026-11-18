@@ -20,5 +20,6 @@ export function closedDocumentSession(): DocumentSession {
       Promise.resolve({ ok: false, reason: "unread", message: null }),
     record: () => undefined,
     discard: () => Promise.resolve(),
+    writesSettled: () => Promise.resolve(null),
   };
 }

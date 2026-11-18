@@ -686,8 +686,6 @@ function EditorBody<TFieldValues extends FieldValues>({
     // The limit the canvas draws under, read once for both.
     cap: view.pageDataLimit,
   });
-  // The Layout the page names, which Page checks asks about as Publish does.
-  const pageLayout = usePageLayoutAsk(control);
   useOpenAtSection({
     sectionId: openAt?.sectionId,
     blockId: openAt?.blockId,
@@ -716,38 +714,14 @@ function EditorBody<TFieldValues extends FieldValues>({
   } = view;
   // Page settings opened at a plugin check's tab, and heard closing.
   const settingsTabs = useSettingsTabRequestState(view.pages.openSettings);
-  // The Page checks count's checks: the builder's own and other plugins',
-  // asked again after each save and each time Page settings closes. They
-  // judge the page, so they read its own document even while a header is
-  // edited in place.
-  const pageChecks = useProvidedChecks({
-    page: view.pages.currentPage,
-    document: pageState.document,
-    locale: mount.locale,
-    settingsClosed: settingsTabs.closed,
-  });
-  // A page showing the set's header and a header block of its own, pointed
-  // out above the canvas; the same for footers.
-  const twoRegions = useTwoRegionsNotice({
-    editor: pageState,
-    applied: conditions.applied,
-    regionCards: view.regionCards,
-    areaOf: mount.componentLibrary.areaOf,
-    currentPage: view.pages.currentPage,
-    userId: mount.userId,
-    openSettings: view.pages.openSettings,
-  });
-  // What Page checks reads of the page beyond its document: the bindings,
-  // data count, unpublished parts and doubled header the editor already has.
-  const pageFacts = usePageCheckFacts({
+  const { pageChecks, twoRegions, pageFacts } = usePageChecking({
+    view,
+    mount,
+    control,
     field: place.address,
-    document: editor.document,
     applied: conditions.applied,
-    regionCards: view.regionCards,
-    areaOf: mount.componentLibrary.areaOf,
-    currentPage: view.pages.currentPage,
     pageData,
-    layout: pageLayout,
+    settingsClosed: settingsTabs.closed,
   });
 
   return (
@@ -1011,6 +985,70 @@ function addBlockHere(
       { kind: "rule" },
       selectionAnchor(canvas, editor.document, editor.selectedId)
     );
+}
+
+/**
+ * What Page checks reads, and the notice about a page showing two headers:
+ * each of the page, so of its own state (`mount.page`) even while a header
+ * is edited in place, when `mount.editor` is the header's and Page checks
+ * would otherwise judge the header.
+ */
+function usePageChecking<TFieldValues extends FieldValues>({
+  view,
+  mount,
+  control,
+  field,
+  applied,
+  pageData,
+  settingsClosed,
+}: {
+  view: EditorView;
+  mount: EditorMount;
+  control: Control<TFieldValues>;
+  field: string;
+  applied: Parameters<typeof usePageCheckFacts>[0]["applied"];
+  pageData: Parameters<typeof usePageCheckFacts>[0]["pageData"];
+  settingsClosed: Parameters<typeof useProvidedChecks>[0]["settingsClosed"];
+}): {
+  pageChecks: ReturnType<typeof useProvidedChecks>;
+  twoRegions: ReturnType<typeof useTwoRegionsNotice>;
+  pageFacts: ReturnType<typeof usePageCheckFacts>;
+} {
+  const { page } = mount;
+  // The Page checks count's checks: the builder's own and other plugins',
+  // asked again after each save and each time Page settings closes.
+  const pageChecks = useProvidedChecks({
+    page: view.pages.currentPage,
+    document: page.document,
+    locale: mount.locale,
+    settingsClosed,
+  });
+  // A page showing the set's header and a header block of its own, pointed
+  // out above the canvas; the same for footers.
+  const twoRegions = useTwoRegionsNotice({
+    editor: page,
+    applied,
+    regionCards: view.regionCards,
+    areaOf: mount.componentLibrary.areaOf,
+    currentPage: view.pages.currentPage,
+    userId: mount.userId,
+    openSettings: view.pages.openSettings,
+  });
+  // The Layout the page names, which Page checks asks about as Publish does.
+  const layout = usePageLayoutAsk(control);
+  // What Page checks reads of the page beyond its document: the bindings,
+  // data count, unpublished parts and doubled header the editor already has.
+  const pageFacts = usePageCheckFacts({
+    field,
+    document: page.document,
+    applied,
+    regionCards: view.regionCards,
+    areaOf: mount.componentLibrary.areaOf,
+    currentPage: view.pages.currentPage,
+    pageData,
+    layout,
+  });
+  return { pageChecks, twoRegions, pageFacts };
 }
 
 /**
