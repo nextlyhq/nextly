@@ -530,3 +530,52 @@ describe("a table of contents that highlights the section being read", () => {
     expect(out).toContain("<details open");
   });
 });
+
+describe("an Accordion that opens one question at a time", () => {
+  it("closes the others through the browser's own grouping and adds no script", async () => {
+    const { createElement } = await import("react");
+    const { PageRenderer } = await import("./page-renderer");
+    const { createStandaloneContext } = await import("./context");
+    const question = (n: number, open: boolean) => ({
+      id: `q${n}`,
+      type: "core/accordion-item",
+      version: 1,
+      props: { title: `Question ${n}`, open },
+      slots: { children: [] },
+    });
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "acc",
+          type: "core/accordion",
+          version: 1,
+          props: { openMode: "one", firstOpen: true, titlesAs: "h3" },
+          slots: { children: [question(1, false), question(2, true)] },
+        },
+      ],
+    } as unknown as BlockDocument;
+    const blocks = createBlockResolver(coreBlocks as AnyBlockDefinition[]);
+    // The library declares no island for it, so the page needs none.
+    expect(islandsFor(document, blocks)).toEqual({});
+    const element = createElement(PageRenderer, {
+      document,
+      blocks,
+      context: createStandaloneContext({}),
+    });
+    const { renderToReadableStream } = await import("react-dom/server");
+    const stream = await renderToReadableStream(element);
+    await stream.allReady;
+    const out = await new Response(stream).text();
+    expect(out).not.toContain("<script");
+    expect(out).not.toMatch(/\son[a-z]+=/i);
+    // Must-be-found: two native disclosures sharing one name, the first open.
+    const tags = [...out.matchAll(/<details[^>]*>/g)].map(match => match[0]);
+    expect(tags).toHaveLength(2);
+    const names = tags.map(tag => /\bname="([^"]+)"/.exec(tag)?.[1]);
+    expect(names[0]).toBeTruthy();
+    expect(names[1]).toBe(names[0]);
+    expect(tags.map(tag => /\bopen=""/.test(tag))).toEqual([true, false]);
+  });
+});

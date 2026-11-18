@@ -14,6 +14,12 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import {
+  ACCORDION_BLOCK,
+  ACCORDION_ICON_WORDS,
+  ACCORDION_ICONS,
+  accordionIconHoldsValue,
+} from "./accordion-icon";
+import {
   BUTTON_BLOCK,
   ICON_BLOCK,
   SECTION_BLOCK,
@@ -171,6 +177,17 @@ function builderRows(
   if (node?.type === GALLERY_BLOCK) {
     return galleryRows(node, section, breakpoints);
   }
+  // An Accordion's Icon: the questions' icon, a style value.
+  if (node?.type === ACCORDION_BLOCK) {
+    return [
+      {
+        id: "disclosureIcon",
+        label: "Icon",
+        options: ACCORDION_ICONS.map(each => ACCORDION_ICON_WORDS[each]),
+        set: accordionIconHoldsValue(node),
+      },
+    ];
+  }
   if (node === undefined || node.type !== COLUMNS_ROW) return [];
   const tiers = stackTiers(breakpoints);
   const template = readStyleValue(node.styles, {
@@ -226,16 +243,17 @@ export function contentEntries(
       drawnRows(contentRowsOf(inspection), bound)
     );
   }
-  return [
-    ...builder,
-    ...sections.flatMap(section =>
-      sectionEntries(
-        "content",
-        { key: section.label, label: section.label },
-        drawnRows(section.rows, bound)
-      )
-    ),
-  ];
+  const own = sections.flatMap(section =>
+    sectionEntries(
+      "content",
+      { key: section.label, label: section.label },
+      drawnRows(section.rows, bound)
+    )
+  );
+  // An Accordion's Icon is drawn after its Behaviour, so it is read there.
+  return inspection.blockName === ACCORDION_BLOCK
+    ? [...own, ...builder]
+    : [...builder, ...own];
 }
 
 /** Whether a block is hidden on any device. */

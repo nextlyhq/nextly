@@ -59,7 +59,6 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
-import type { ParentArrangement } from "./plain-layout";
 import { liveBreakpointsFor } from "./breakpoints";
 import { fieldLabel, selectedNode } from "./inspector";
 import {
@@ -69,6 +68,7 @@ import {
   type InspectorSectionKey,
   type TierContext,
 } from "./inspector-sections";
+import type { ParentArrangement } from "./plain-layout";
 import {
   styleControlsFor,
   type StyleControl,
@@ -313,7 +313,7 @@ export function inspectStyle(
     ),
     state,
   };
-  const inspected = [...allowed].map(property => {
+  const inspected = [...allowed].flatMap(property => {
     const entry = getStyleProperty(property);
     const placement = placementOf(property, entry?.group ?? "effects");
     const row = inspectProperty(property, styles, offered.has(property), {
@@ -321,19 +321,33 @@ export function inspectStyle(
       state,
       breakpoint,
     });
+    // Chosen in the Content tab, at the block's base values, so neither drawn
+    // nor added here, but for a value held at another device or state, which
+    // only this tab reaches: drawn so it can be seen and cleared. A shared
+    // style keeps it here at every address, since Content writes only the
+    // block's own styles.
+    if (
+      placement.tier === "content" &&
+      options?.styles === undefined &&
+      !heldAwayFromBase(row.set, at)
+    ) {
+      return [];
+    }
     const has = applies(property, context);
     const shows = tierShows(placement.tier, tiers);
     const fields = fieldAnswers(property, context);
-    return {
-      placement,
-      row: {
-        ...row,
-        applies: has,
-        tierShows: shows,
-        ...(fields === undefined ? {} : { fieldApplies: fields }),
-        common: row.set || (has && shows),
+    return [
+      {
+        placement,
+        row: {
+          ...row,
+          applies: has,
+          tierShows: shows,
+          ...(fields === undefined ? {} : { fieldApplies: fields }),
+          common: row.set || (has && shows),
+        },
       },
-    };
+    ];
   });
   const sections: StyleSection[] = [];
   for (const section of INSPECTOR_SECTIONS) {
@@ -757,6 +771,18 @@ const SHORT_LABELS: Readonly<Record<string, string>> = {
 const SUMMARIES: Readonly<Record<string, string>> = {
   opacity: "How solid the element is, from 0 (clear) to 100 percent.",
 };
+
+/**
+ * Whether a value is held at a device or state other than the base values,
+ * where the Content tab's controls, which write the base values, cannot
+ * reach it.
+ */
+function heldAwayFromBase(
+  set: boolean,
+  at: { readonly state: StyleState; readonly breakpoint: BreakpointId }
+): boolean {
+  return set && (at.state !== "base" || at.breakpoint !== BASE_BREAKPOINT);
+}
 
 /** One property's controls and the value they are showing. */
 function inspectProperty(
