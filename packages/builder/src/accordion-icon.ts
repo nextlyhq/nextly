@@ -87,6 +87,14 @@ export function planAccordionIcon(
   return chainedStyleOp(node, [{ address: ADDRESS, value: icon }]);
 }
 
+/**
+ * Removing the accordion's own icon, as ONE op, so what a shared style or
+ * the block's default sets shows again; `null` where it holds none.
+ */
+export function planAccordionIconReset(node: BlockNode): BuilderOp | null {
+  return chainedStyleOp(node, [{ address: ADDRESS, value: null }]);
+}
+
 /** Whether the accordion stores an icon of its own, for its section's dot. */
 export function accordionIconHoldsValue(node: BlockNode): boolean {
   return readStyleValue(node.styles, ADDRESS) !== undefined;

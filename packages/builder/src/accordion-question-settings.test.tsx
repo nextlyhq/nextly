@@ -224,4 +224,57 @@ describe("an Accordion's Icon", () => {
       '"disclosureIcon":"none"'
     );
   });
+
+  it("resets the accordion's own icon, so a shared style or the default shows again", () => {
+    const document = page(
+      { openMode: "one" },
+      {
+        base: {
+          [BASE_BREAKPOINT]: {
+            disclosureIcon: "chevron",
+            disclosurePosition: "before",
+          },
+        },
+      }
+    );
+    const apply = vi.fn(() => document);
+    render(
+      <AccordionIconField
+        editor={{ document, apply } as unknown as EditorState}
+        nodeId="acc"
+        heldBy={undefined}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Reset Icon" }));
+    const written = JSON.stringify(apply.mock.calls[0]);
+    // The icon is removed, not written as + / −, and the position is kept.
+    expect(written).not.toContain("disclosureIcon");
+    expect(written).toContain('"disclosurePosition":"before"');
+  });
+
+  it("offers no reset while the accordion holds no icon of its own, or a lock holds it", () => {
+    const own = { base: { [BASE_BREAKPOINT]: { disclosureIcon: "none" } } };
+    const draw = (styles: BlockNode["styles"] | undefined, heldBy?: string) =>
+      render(
+        <AccordionIconField
+          editor={
+            {
+              document: page({ openMode: "one" }, styles),
+              apply: vi.fn(),
+            } as unknown as EditorState
+          }
+          nodeId="acc"
+          heldBy={heldBy}
+        />
+      );
+    draw(undefined);
+    expect(screen.queryByRole("button", { name: "Reset Icon" })).toBeNull();
+    cleanup();
+    draw(own, "held");
+    expect(screen.queryByRole("button", { name: "Reset Icon" })).toBeNull();
+    cleanup();
+    // The control: with an icon of its own and no lock, it is offered.
+    draw(own);
+    expect(screen.getByRole("button", { name: "Reset Icon" })).not.toBeNull();
+  });
 });

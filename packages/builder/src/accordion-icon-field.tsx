@@ -8,6 +8,8 @@
  * @module accordion-icon-field
  */
 import { findNode } from "@nextlyhq/blocks-engine";
+import { TooltipProvider } from "@nextlyhq/ui";
+import { RotateCcw } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -17,8 +19,10 @@ import {
   accordionIconHoldsValue,
   accordionIconOf,
   planAccordionIcon,
+  planAccordionIconReset,
   type AccordionIcon,
 } from "./accordion-icon";
+import { ChromeTooltip } from "./chrome-tooltip";
 import { SegmentedChoice } from "./content-controls";
 import type { EditorState } from "./editor-state";
 import { HeldByLock } from "./held-by-lock";
@@ -71,6 +75,28 @@ export function AccordionIconField({
               if (op !== null) editor.apply(op);
             }}
           />
+          {/* The way back to what a shared style or the block's default
+              sets, as the Style tab's rows offer: choosing + / − would
+              write the plus as the accordion's own. Drawn as Style draws
+              its reset, while the accordion holds an icon of its own. */}
+          {held || !accordionIconHoldsValue(node) ? null : (
+            <TooltipProvider delayDuration={300}>
+              <ChromeTooltip content="Reset">
+                <button
+                  type="button"
+                  className="nx-style-inspector__breakpoint-action"
+                  data-action="reset"
+                  aria-label={`Reset ${ICON_WORDS}`}
+                  onClick={() => {
+                    const op = planAccordionIconReset(node);
+                    if (op !== null) editor.apply(op);
+                  }}
+                >
+                  <RotateCcw size={14} aria-hidden="true" />
+                </button>
+              </ChromeTooltip>
+            </TooltipProvider>
+          )}
         </div>
       </HeldByLock>
     </SettingSlot>
