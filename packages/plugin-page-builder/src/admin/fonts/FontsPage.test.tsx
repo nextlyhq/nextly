@@ -74,6 +74,8 @@ vi.mock("../site-style-client", async () => ({
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()),
+  // The author the catalogue keeps the choice to show previews for.
+  useCurrentUserId: () => "u1",
   useUploadMedia: () => ({ mutateAsync: vi.fn(), isPending: false }),
   usePluginClientConfig: () => ({ siteStyle: { fonts: [FROM_CODE] } }),
   navigateTo: () => undefined,

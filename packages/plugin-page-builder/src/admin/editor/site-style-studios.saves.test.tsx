@@ -123,6 +123,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()),
   useUploadMedia: () => ({ mutateAsync: vi.fn(), isPending: false }),
   usePluginClientConfig: () => undefined,
+  // The author the catalogue keeps the choice to show previews for.
+  useCurrentUserId: () => "u1",
 }));
 
 const { TokensStudio, VariablesTab, useClassSurface } = await import(

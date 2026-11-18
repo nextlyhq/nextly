@@ -16,6 +16,7 @@ import {
   type SiteFamily,
 } from "@nextlyhq/builder/shell";
 import {
+  useCurrentUserId,
   usePluginClientConfig,
   useUploadMedia,
   WEB_FONT_FORMATS,
@@ -28,6 +29,7 @@ import { readSiteStyleRecord } from "../../site-style-record";
 import { useFontCatalogueClient, useSaveSiteStyle } from "../site-style-client";
 
 import { toastSaveConflicts } from "./conflict-toast";
+import { fontPreviewsStoreFor } from "./editor-preference-stores";
 import { useVariablesStudio } from "./site-style-tokens-studio";
 import { PLUGIN_SOURCE } from "./stored-document";
 
@@ -332,6 +334,9 @@ export function useFontCatalogue(): FontCatalogue | undefined {
   // exist only once a read has answered, so it is set before it is asked.
   const previewBase = useRef("");
   const off = config?.fontCatalogue === false;
+  // The author's choice to show previews, kept under their own key.
+  const userId = useCurrentUserId();
+  const previewConsent = useMemo(() => fontPreviewsStoreFor(userId), [userId]);
   return useMemo(
     () =>
       off
@@ -351,8 +356,9 @@ export function useFontCatalogue(): FontCatalogue | undefined {
                 style,
               }),
             add: client.add,
+            ...(previewConsent === undefined ? {} : { previewConsent }),
           },
-    [off, client]
+    [off, client, previewConsent]
   );
 }
 
