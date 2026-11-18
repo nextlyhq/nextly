@@ -680,3 +680,95 @@ export interface FormProvider {
 export interface FormProviderService {
   register(provider: FormProvider): void;
 }
+
+/**
+ * The group of the page builder's Page checks list a provider's findings are
+ * listed under: Accessibility, Content and data, Publishing, or Search.
+ *
+ * @experimental The page check provider contract is new; its names and shape
+ * may change before the page builder's checks are marked stable.
+ */
+export type PageCheckGroupName =
+  | "accessibility"
+  | "content"
+  | "publishing"
+  | "search";
+
+/**
+ * The page a provider is asked about: the collection and entry being edited,
+ * its language, and its blocks as the editor holds them, unsaved changes
+ * included. A provider that judges what it stores reads the saved entry, and
+ * its findings then follow the last save.
+ *
+ * @experimental Carried by the page check provider contract.
+ */
+export interface PageCheckRequest {
+  readonly collection: string;
+  /** The entry; null for a page not saved yet. */
+  readonly entryId: string | null;
+  readonly locale?: string;
+  /** The page's blocks as the editor holds them, read as stored data. */
+  readonly document: unknown;
+}
+
+/**
+ * Where a finding is fixed: a block's setting, by the tab it is on and its
+ * id as the inspector names it, or a tab of Page settings, by its id.
+ *
+ * @experimental Carried by the page check provider contract.
+ */
+export type PageCheckFix =
+  | {
+      readonly tab: "content" | "style" | "advanced";
+      readonly id: string;
+    }
+  | { readonly settingsTab: string };
+
+/**
+ * One problem a provider finds, in the plain words an author reads: what is
+ * wrong, why it matters, and what to do.
+ *
+ * @experimental Carried by the page check provider contract.
+ */
+export interface PageCheckFinding {
+  /** The block it is about; absent for the page as a whole. */
+  readonly nodeId?: string;
+  /** Which of several problems on one block this is. */
+  readonly part?: string;
+  readonly what: string;
+  readonly why: string;
+  readonly todo: string;
+  /** Where choosing it takes the author; absent, only its block is selected. */
+  readonly fix?: PageCheckFix;
+}
+
+/**
+ * A plugin's page check: findings about the page being edited, listed in
+ * the page builder's Page checks with the built-in ones, in `group`. It runs
+ * on the server, as the person editing (`access`), and never blocks a save
+ * or a publish.
+ *
+ * @experimental The page check provider contract is new; its names and shape
+ * may change before the page builder's checks are marked stable.
+ */
+export interface PageCheckProvider {
+  /** Lower case letters, digits and `-`, unique among a site's providers. */
+  readonly id: string;
+  readonly group: PageCheckGroupName;
+  check(
+    page: PageCheckRequest,
+    options: { readonly access: Extract<FormAccess, { as: "user" }> }
+  ): Promise<readonly PageCheckFinding[]>;
+}
+
+/**
+ * The page builder's cross-plugin `pageChecks` service, as a provider plugin
+ * reaches it: `ctx.services.plugins["@nextlyhq/plugin-page-builder"].pageChecks`.
+ * Resolve it from `init`, before or after the page builder's own. Registering
+ * an `id` already registered throws.
+ *
+ * @experimental Carried by the page check provider contract.
+ */
+export interface PageCheckProviderService {
+  register(provider: PageCheckProvider): void;
+}

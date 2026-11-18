@@ -19,6 +19,7 @@ import { sql } from "drizzle-orm";
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import {
+  byNamingOrder,
   requiredColumnUncountedError,
   requiredColumnOverNullsError,
   type RequiredColumnBreak,
@@ -55,14 +56,6 @@ interface Owner {
   entity: RequiredColumnEntity;
   fields: readonly { name?: string }[];
 }
-
-/** The order a field group's users are named in: collections, then Singles, then field groups. */
-const KIND_ORDER: Record<RequiredColumnEntityKind, number> = {
-  collection: 0,
-  single: 1,
-  fieldGroup: 2,
-  table: 3,
-};
 
 /** Every entity of the desired schema by its table, lowercased: MySQL may fold a table's name. */
 function ownersByTable(desired: DesiredSchema): Map<string, Owner> {
@@ -241,10 +234,7 @@ function namedUsers(
         registry.get(table.toLowerCase());
       return entity ? [{ ...entity, count }] : [];
     })
-    .sort(
-      (a, b) =>
-        KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || a.slug.localeCompare(b.slug)
-    );
+    .sort(byNamingOrder);
 }
 
 /**

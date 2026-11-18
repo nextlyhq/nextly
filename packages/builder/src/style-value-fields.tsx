@@ -80,6 +80,21 @@ import {
 } from "./variable-choice";
 
 /**
+ * The leaf a catalog property's variables are offered for, outside the style
+ * panel: its own leaf, or, for a union such as line height or weight, the one
+ * folded leaf over its forms the panel's field uses. `undefined` for a
+ * property the catalog does not list, or one with no form a variable fits.
+ */
+export function propertyVariableLeaf(property: string): StyleLeaf | undefined {
+  const shape = STYLE_CATALOG.find(entry => entry.property === property)?.shape;
+  if (shape === undefined) return undefined;
+  if (isStyleLeaf(shape)) return shape;
+  if (shape.kind !== "union") return undefined;
+  const first = shape.of.find(isStyleLeaf);
+  return first === undefined ? undefined : foldedLeafFor(property, first);
+}
+
+/**
  * The leaf a field's variables are offered for: the control's own, or, for a
  * folded union drawn as one field, one leaf over all its forms, which takes
  * every kind any form takes and judges each variable by the form its kind is

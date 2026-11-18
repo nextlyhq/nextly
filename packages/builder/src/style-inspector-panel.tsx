@@ -57,6 +57,7 @@ import {
   walkNodes,
   type BreakpointId,
   type BreakpointSet,
+  type NamedClass,
   type SiteTokenSet,
   type TokenMode,
   type StyleState,
@@ -76,10 +77,10 @@ import type { EditorState } from "./editor-state";
 import { FocalFrame } from "./focal-frame";
 import { FontChoicesContext, type FontChoices } from "./font-family-field";
 import { PanelFoldsProvider } from "./panel-folds-context";
-import { SpacingApplyToProvider } from "./spacing-side";
 import { layerLabel } from "./panels/layers/layers";
 import { ParentArrangementContext } from "./plain-parent-controls";
 import type { SideOrientation } from "./side-orientation";
+import { SpacingApplyToProvider } from "./spacing-side";
 import {
   BLOCK_TARGET,
   StyleTargetContext,
@@ -110,6 +111,7 @@ import { StyleSections, rendersMedia } from "./style-panel-sections";
 import { breakpointLabel } from "./style-provenance-indicators";
 import type { StyleTarget } from "./style-target";
 import type { StylePolicy } from "./style-values";
+import { TextStyleLibrary } from "./text-style-picker";
 
 export { commitsFor, supersedes } from "./style-colour-field";
 export { pickedReference } from "./style-control-value";
@@ -287,6 +289,11 @@ export interface StyleInspectorPanelProps {
    */
   fonts?: FontChoices;
   /**
+   * The site's class library, for the Text section's "Text style" picker,
+   * which lists the text styles in it. Absent: no picker is drawn.
+   */
+  classLibrary?: readonly NamedClass[];
+  /**
    * Whether the tab says above its controls why a held block's design can't
    * be changed. True when omitted. A host that says it already, as the
    * inspector's block card does, turns it off, so the reason is said once.
@@ -391,18 +398,21 @@ export function StyleInspectorPanel(
 ): React.JSX.Element {
   return (
     <FontChoicesContext.Provider value={props.fonts}>
-      {/* The panel's own folds where nothing above lends them. */}
-      <PanelFoldsProvider>
-        <SpacingApplyToProvider>
-        <CssNamesProvider>
-          {props.tokenMode === undefined ? (
-            <StyleInspectorOwnMode {...props} />
-          ) : (
-            <StyleInspectorBody {...props} tokenMode={props.tokenMode} />
-          )}
-        </CssNamesProvider>
-        </SpacingApplyToProvider>
-      </PanelFoldsProvider>
+      {/* The library the Text section's "Text style" picker lists from. */}
+      <TextStyleLibrary.Provider value={props.classLibrary}>
+        {/* The panel's own folds where nothing above lends them. */}
+        <PanelFoldsProvider>
+          <SpacingApplyToProvider>
+            <CssNamesProvider>
+              {props.tokenMode === undefined ? (
+                <StyleInspectorOwnMode {...props} />
+              ) : (
+                <StyleInspectorBody {...props} tokenMode={props.tokenMode} />
+              )}
+            </CssNamesProvider>
+          </SpacingApplyToProvider>
+        </PanelFoldsProvider>
+      </TextStyleLibrary.Provider>
     </FontChoicesContext.Provider>
   );
 }

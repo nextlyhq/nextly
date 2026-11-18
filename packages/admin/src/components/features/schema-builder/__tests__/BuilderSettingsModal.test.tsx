@@ -601,6 +601,7 @@ describe("BuilderSettingsModal — its changes, pending", () => {
         defaultValues: {},
       });
       return useBuilderEntityState({
+        kind: "collection",
         entity,
         builder,
         toFields: () => [],

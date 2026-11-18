@@ -75,6 +75,8 @@ export interface SiteCodeDraft {
   readonly head: string;
   readonly body: string;
   readonly livePolicy?: LivePolicy;
+  /** Checked as one page's own code rather than the site's. */
+  readonly scope?: "page";
 }
 
 /** Check the code, saving nothing: what it would store, and what it blocks. */
