@@ -333,16 +333,27 @@ test("a design token file carries text styles, Site text and the fluid range int
       expect(box.x + box.width).toBeLessThanOrEqual(1280);
       expect(box.y + box.height).toBeLessThanOrEqual(720);
     }
+    // Named rather than counted, so a failure says which element is wider
+    // than the room it is given.
     expect(
-      await preview.evaluate(
-        dialog =>
-          [dialog, ...dialog.querySelectorAll("*")].filter(
+      await preview.evaluate(dialog =>
+        [dialog, ...dialog.querySelectorAll("*")]
+          .filter(
             element =>
+              // Text kept for screen readers only is 1px wide by design.
+              element.clientWidth > 1 &&
               element.scrollWidth > element.clientWidth + 1 &&
               getComputedStyle(element).overflowX !== "visible"
-          ).length
+          )
+          .map(
+            element =>
+              `${element.tagName.toLowerCase()}.${String(element.className)} ` +
+              `${String(element.scrollWidth)}>${String(element.clientWidth)} ` +
+              `${getComputedStyle(element).overflowX} ` +
+              `"${(element.textContent ?? "").trim().slice(0, 40)}"`
+          )
       )
-    ).toBe(0);
+    ).toEqual([]);
 
     for (const scheme of ["light", "dark"] as const) {
       await page.emulateMedia({ colorScheme: scheme });
