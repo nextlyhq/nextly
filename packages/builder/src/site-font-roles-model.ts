@@ -57,7 +57,7 @@ const HEADING_ROWS: readonly SiteTextRole[] = [
 ];
 
 /** The Site text rows a role's font is written on. */
-function rowsOf(role: FontRole): readonly SiteTextRole[] {
+export function fontRoleRows(role: FontRole): readonly SiteTextRole[] {
   return role === "body" ? ["body"] : HEADING_ROWS;
 }
 
@@ -93,22 +93,11 @@ function variableValue(
   return mode === "dark" ? (values?.dark ?? values?.light) : values?.light;
 }
 
-/**
- * The site variable a row's font reads, by identity: a `$token`, or a stack
- * whose first family is a `var()` of one of the site's variables, as
- * `var(--site-font-display), serif` reads `font.display`. A `var()` later in
- * the stack is only a fallback, and one naming no site variable reads none.
- */
-function variableRead(
+/** The site variable a custom property is, by identity, or none. */
+function siteVariableNamed(
   tokens: SiteTokenSet,
-  value: StyleValue
+  property: string
 ): string | undefined {
-  if (isTokenRef(value)) return value.$token;
-  if (typeof value !== "string") return undefined;
-  const first = readFamilyList(value).parts[0];
-  if (first?.kind !== "dynamic") return undefined;
-  const [property] = customPropertiesReferenced(first.part.raw) ?? [];
-  if (property === undefined) return undefined;
   const { prefix } = resolveTokenPrefix(tokens.prefix);
   const read = resolveSiteTokens(tokens).tokens.find(
     token => tokenCustomProperty(tokenIdentity(token), prefix) === property
@@ -117,9 +106,83 @@ function variableRead(
 }
 
 /**
+ * The fallback a family that is one whole `var()` gives, as written, read as
+ * a family list is: `Lora` from `var(--unset, Lora)`. None where the family
+ * is more than one call, or the fallback is empty or not a family list.
+ */
+function varFallback(raw: string): string | undefined {
+  const call = /^var\(([\s\S]*)\)$/i.exec(raw);
+  if (call === null) return undefined;
+  // The call's custom property, then its fallback, split as a stack is.
+  const [, ...fallback] = readFamilyList(call[1] ?? "").parts;
+  const text = fallback.map(each => each.part.raw).join(", ");
+  const { kind } = readFamilyList(text);
+  return kind === "families" || kind === "dynamic" ? text : undefined;
+}
+
+/**
+ * What a stack's first family reads when it is a `var()`: the site variable
+ * it names, or, where it names none, the stack drawn with its fallback in its
+ * place, as `var(--unset, Lora), serif` draws `Lora, serif`. Nothing for a
+ * first family that is no `var()`, or one naming no site variable and giving
+ * no fallback, which a browser drops the whole value for.
+ */
+function firstVarRead(
+  tokens: SiteTokenSet,
+  stack: string
+): { readonly identity: string } | { readonly stack: string } | undefined {
+  const [first, ...rest] = readFamilyList(stack).parts;
+  if (first?.kind !== "dynamic") return undefined;
+  const [property] = customPropertiesReferenced(first.part.raw) ?? [];
+  if (property === undefined) return undefined;
+  const identity = siteVariableNamed(tokens, property);
+  if (identity !== undefined) return { identity };
+  const fallback = varFallback(first.part.raw);
+  if (fallback === undefined) return undefined;
+  return { stack: [fallback, ...rest.map(each => each.part.raw)].join(", ") };
+}
+
+/**
+ * A row's font as the browser takes its first step: the site variable it
+ * reads, a `$token` or a first family that is a `var()` of one, as
+ * `var(--site-font-display), serif` reads `font.display`; else the stack it
+ * draws as written. A leading `var()` naming no site variable is read as its
+ * fallback, each in turn; a `var()` later in the stack is only a fallback.
+ */
+function firstStep(
+  tokens: SiteTokenSet,
+  value: StyleValue
+): { readonly identity: string } | { readonly stack: string } | undefined {
+  if (isTokenRef(value)) return { identity: value.$token };
+  if (typeof value !== "string") return undefined;
+  let stack = value;
+  // Each fallback lies inside the first family before it, so the first
+  // family shrinks at every step and the reading ends.
+  for (
+    let read = firstVarRead(tokens, stack);
+    read !== undefined;
+    read = firstVarRead(tokens, stack)
+  ) {
+    if ("identity" in read) return read;
+    stack = read.stack;
+  }
+  return { stack };
+}
+
+/** The site variable a row's font reads, by identity ({@link firstStep}). */
+function variableRead(
+  tokens: SiteTokenSet,
+  value: StyleValue
+): string | undefined {
+  const step = firstStep(tokens, value);
+  return step !== undefined && "identity" in step ? step.identity : undefined;
+}
+
+/**
  * The font a row's value draws in a mode, as a stack. A variable it reads is
- * followed, and so is one that variable reads through `var()` in turn. A loop
- * of variables draws no font, as a browser draws none.
+ * followed, and so is one that variable reads through `var()` in turn, past
+ * fallbacks as {@link firstStep} reads them. A loop of variables draws no
+ * font, as a browser draws none.
  */
 function drawnStack(
   tokens: SiteTokenSet,
@@ -127,19 +190,15 @@ function drawnStack(
   mode: FontMode
 ): string | undefined {
   const seen = new Set<string>();
-  let current: StyleValue = value;
-  for (
-    let identity = variableRead(tokens, current);
-    identity !== undefined;
-    identity = variableRead(tokens, current)
-  ) {
-    if (seen.has(identity)) return undefined;
-    seen.add(identity);
-    const next = variableValue(tokens, identity, mode);
+  let step = firstStep(tokens, value);
+  while (step !== undefined && "identity" in step) {
+    if (seen.has(step.identity)) return undefined;
+    seen.add(step.identity);
+    const next = variableValue(tokens, step.identity, mode);
     if (next === undefined) return undefined;
-    current = next;
+    step = firstStep(tokens, next);
   }
-  return typeof current === "string" ? current : undefined;
+  return step?.stack;
 }
 
 /**
@@ -165,7 +224,7 @@ export function fontRoleSetting(
   role: FontRole
 ): FontRoleSetting {
   const rows = resolveSiteText(tokens.siteText);
-  const fonts = rowsOf(role).map(row => rows[row]?.fontFamily);
+  const fonts = fontRoleRows(role).map(row => rows[row]?.fontFamily);
   if (fonts.every(font => font === undefined)) {
     return { kind: "unset" };
   }
@@ -204,7 +263,7 @@ function roleFonts(
   classes: readonly NamedClass[] | undefined
 ): StyleValue[] {
   const rows = resolveSiteText(tokens.siteText);
-  return rowsOf(role).flatMap(row => rowFonts(row, rows[row], classes));
+  return fontRoleRows(role).flatMap(row => rowFonts(row, rows[row], classes));
 }
 
 /**
@@ -312,7 +371,7 @@ export function withFontRole(
   const stated: Partial<Record<SiteTextRole, SiteTextEntry>> = {
     ...tokens.siteText,
   };
-  for (const row of rowsOf(role)) {
+  for (const row of fontRoleRows(role)) {
     const { fontFamily: _font, ...rest } = rows[row] ?? {};
     const next: SiteTextEntry =
       stack === undefined ? rest : { ...rest, fontFamily: tokenRef(identity) };
@@ -351,7 +410,7 @@ export function roleSnapshot(
 ): RoleSnapshot {
   const identity = FONT_ROLE_TOKEN[role];
   const rows: Partial<Record<SiteTextRole, SiteTextEntry>> = {};
-  for (const row of rowsOf(role)) {
+  for (const row of fontRoleRows(role)) {
     const stated = tokens.siteText?.[row];
     if (stated !== undefined) rows[row] = stated;
   }
@@ -404,7 +463,7 @@ export function withRoleSnapshot(
   const stated: Partial<Record<SiteTextRole, SiteTextEntry>> = {
     ...tokens.siteText,
   };
-  for (const row of rowsOf(snapshot.role)) {
+  for (const row of fontRoleRows(snapshot.role)) {
     const next = restoredRow(row, snapshot.rows[row], stated[row], supplied);
     if (next === undefined) delete stated[row];
     else stated[row] = next;
@@ -467,7 +526,7 @@ function variableDeclared(
 export function fontRoleWrites(tokens: SiteTokenSet, role: FontRole): string {
   const { prefix } = resolveTokenPrefix(tokens.prefix);
   const rows = resolveSiteText(tokens.siteText);
-  const held = rowsOf(role).flatMap(row => {
+  const held = fontRoleRows(role).flatMap(row => {
     const font = rows[row]?.fontFamily;
     return font === undefined ? [] : [[row, font] as const];
   });
@@ -475,7 +534,7 @@ export function fontRoleWrites(tokens: SiteTokenSet, role: FontRole): string {
   if (first === undefined) return "Nothing";
   // One rule for every row only where each row holds the font the same way.
   const uniform =
-    held.length === rowsOf(role).length &&
+    held.length === fontRoleRows(role).length &&
     held.every(([, font]) => JSON.stringify(font) === JSON.stringify(first[1]));
   if (uniform) {
     return `${variableDeclared(tokens, first[1], prefix)}${ROLE_SELECTOR[role]} { ${writtenFont(first[1], prefix)} }`;

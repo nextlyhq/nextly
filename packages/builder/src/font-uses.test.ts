@@ -9,7 +9,12 @@
 import type { SiteTokenSet } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { familyUses, roleRefusal, nowYourFontWords } from "./font-uses";
+import {
+  familyUses,
+  followedStyleWords,
+  roleRefusal,
+  nowYourFontWords,
+} from "./font-uses";
 import { withFontRole } from "./site-font-roles-model";
 
 const BASE: SiteTokenSet = {
@@ -163,6 +168,55 @@ describe("where a font is used", () => {
     expect(familyUses("lora", fallback).roles).toEqual([]);
   });
 
+  it("reads a var() naming no site variable as its fallback, as the browser draws it", () => {
+    // `--unset` is no site variable, so Body draws Lora; h1's fallbacks end
+    // at Quote, Inter in light and Lora in dark.
+    const unset: SiteTokenSet = {
+      tokens: [
+        ...BASE.tokens,
+        {
+          name: "font.alias",
+          label: "Alias",
+          kind: "fontFamily",
+          values: { light: "var(--nope, Lora)" },
+        },
+      ],
+      siteText: {
+        body: { fontFamily: "var(--unset, Lora), serif" },
+        h1: {
+          fontFamily:
+            "var(--unset, var(--also-unset, var(--site-font-quote))), serif",
+        },
+      },
+    };
+    const lora = familyUses("lora", unset);
+    expect(lora.roles).toEqual(["body", "heading"]);
+    expect(familyUses("inter", unset).roles).toEqual(["heading"]);
+    // Quote, which h1 reads through the fallbacks, is said as Headings; a
+    // variable drawing Lora through a fallback is named with its own.
+    expect(lora.variables).toEqual([
+      {
+        identity: "font.display",
+        label: "Display",
+        fallback: "Georgia, serif",
+      },
+      {
+        identity: "font.alias",
+        label: "Alias",
+        fallback: "the browser’s own font",
+      },
+    ]);
+  });
+
+  it("reads no font from a var() naming no site variable and giving no fallback", () => {
+    // The browser drops the whole value, so the Lora after it is never drawn.
+    const dropped: SiteTokenSet = {
+      ...BASE,
+      siteText: { body: { fontFamily: "var(--unset), Lora" } },
+    };
+    expect(familyUses("lora", dropped).roles).toEqual([]);
+  });
+
   it("follows a variable that reads another through var(), and stops at a loop", () => {
     // Body points at font.body, which reads Display (Lora) as CSS.
     const aliased: SiteTokenSet = {
@@ -250,6 +304,47 @@ describe("where a font is used", () => {
       variables: [],
       counted: [],
     });
+  });
+});
+
+describe("what a role's font leaves as it is", () => {
+  const style = (id: string, label: string) => ({
+    id,
+    slug: id,
+    label,
+    orderIndex: 0,
+    role: "text" as const,
+    styles: { base: { base: { fontFamily: '"Lora", serif' } } },
+  });
+  const classes = [style("lead", "Lead"), style("display", "Display")];
+  const following: SiteTokenSet = {
+    ...BASE,
+    siteText: {
+      body: { textStyle: "lead" },
+      h1: { textStyle: "display" },
+      h3: { textStyle: "lead" },
+      h4: { textStyle: "display" },
+      // A text style the site doesn't have is not followed.
+      h5: { textStyle: "gone" },
+    },
+  };
+
+  it("names the rows following each text style, role by role", () => {
+    expect(followedStyleWords(following, ["body", "heading"], classes)).toEqual(
+      [
+        "Body follows the text style “Lead”, so a body font doesn’t change it.",
+        "Heading 1 and Heading 4 follow the text style “Display”, so a headings font doesn’t change them.",
+        "Heading 3 follows the text style “Lead”, so a headings font doesn’t change it.",
+      ]
+    );
+    expect(followedStyleWords(following, ["body"], classes)).toEqual([
+      "Body follows the text style “Lead”, so a body font doesn’t change it.",
+    ]);
+  });
+
+  it("says nothing where no row follows a text style the site has", () => {
+    expect(followedStyleWords(BASE, ["body", "heading"], classes)).toEqual([]);
+    expect(followedStyleWords(following, ["heading"], undefined)).toEqual([]);
   });
 });
 
