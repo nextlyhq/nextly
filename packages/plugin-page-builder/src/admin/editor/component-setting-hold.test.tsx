@@ -396,6 +396,74 @@ describe("a setting made while the page's Save is writing", () => {
       "/components/badge/definition",
     ]);
   });
+
+  it("keeps a new setting of the same component made while the first is written, and writes it too", async () => {
+    // Each label plans and writes its own id: Title is "title", Summary
+    // "summary".
+    const idOf = (body: Record<string, unknown>): string =>
+      (body.action as { label?: unknown } | undefined)?.label === "Summary"
+        ? "summary"
+        : "title";
+    const item = (body: Record<string, unknown>) => ({
+      message: "ok",
+      item: {
+        dryRun: body.dryRun === true,
+        component: { id: "card" },
+        definition: PLANNED,
+        targetId: idOf(body),
+        warnings: [],
+        refusals: [],
+        fingerprint: "f1",
+        by: {},
+      },
+    });
+    let release: () => void = () => undefined;
+    const slow = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    route.answer = item;
+    const mounted = mount(pageWith());
+    await act(async () => {
+      await mounted.hook.result.current.makeComponentSetting(ASK);
+    });
+    mounted.editor.document = pageWith(BOUND);
+    mounted.hook.rerender({ doc: pageWith(BOUND) });
+    // Title's write is slow; meanwhile its binding is taken off, and the
+    // card gets a Summary setting, bound in its place.
+    route.answer = body =>
+      body.dryRun === true ? item(body) : slow.then(() => item(body));
+    let saving: Promise<unknown> = Promise.resolve();
+    const summary = {
+      "overrides.summary": { $bind: "summary", source: "item", list: "l" },
+    };
+    await act(async () => {
+      saving = Promise.resolve(form.before?.("save", settled));
+      await Promise.resolve();
+    });
+    // Title's write is on its way.
+    expect(route.sent.at(-1)?.body.expect).toBe("f1");
+    mounted.editor.document = pageWith();
+    mounted.hook.rerender({ doc: pageWith() });
+    let made: unknown;
+    await act(async () => {
+      made = await mounted.hook.result.current.makeComponentSetting({
+        ...ASK,
+        label: "Summary",
+      });
+    });
+    expect(made).toEqual({ settingId: "summary" });
+    mounted.editor.document = pageWith(summary);
+    mounted.hook.rerender({ doc: pageWith(summary) });
+    release();
+    await act(async () => {
+      await saving;
+    });
+    const written = route.sent
+      .filter(sent => sent.body.dryRun !== true)
+      .map(sent => (sent.body.action as { label: string }).label);
+    // Title's write ended without taking Summary's hold with it.
+    expect(written).toEqual(["Title", "Summary"]);
+  });
 });
 
 describe("a plan still being made", () => {

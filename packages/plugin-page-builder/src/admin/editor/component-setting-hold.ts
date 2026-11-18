@@ -212,7 +212,7 @@ async function writeEachLive(
       readonly library: ComponentLibraryRead;
     };
   },
-  drop: (componentId: string) => void,
+  drop: (hold: HeldComponentSetting) => void,
   written: Set<string>
 ): Promise<{ readonly words: string; readonly reason: string } | undefined> {
   const next = (): HeldComponentSetting | undefined =>
@@ -228,12 +228,12 @@ async function writeEachLive(
       const refused = await writeHeld(hold);
       if (refused === undefined) {
         written.add(writtenKey(hold.componentId, hold.settingId));
-        drop(hold.componentId);
+        drop(hold);
         continue;
       }
       const title = read.titleOf(hold.componentId) ?? "The component";
       const answer = refusedHold(now.current.editor, hold, title, refused);
-      if (answer.unbound) drop(hold.componentId);
+      if (answer.unbound) drop(hold);
       return answer;
     }
     return undefined;
@@ -516,11 +516,14 @@ export function useComponentSettingHold(
     [library, live]
   );
 
-  const drop = useCallback((componentId: string) => {
+  // Drops the hold written or refused, never one made in its place since:
+  // a setting of the same component, planned while that one was written, is
+  // the next to be written.
+  const drop = useCallback((hold: HeldComponentSetting) => {
     const without = (current: Holds): Holds => {
-      if (!current.has(componentId)) return current;
+      if (current.get(hold.componentId) !== hold) return current;
       const next = new Map(current);
-      next.delete(componentId);
+      next.delete(hold.componentId);
       return next;
     };
     setHeld(without);
