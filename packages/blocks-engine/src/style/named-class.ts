@@ -157,18 +157,26 @@ export const TEXT_STYLE_PROPERTIES: ReadonlySet<string> = new Set([
  */
 export function nonTypographyProperties(styles: unknown): string[] {
   const found: string[] = [];
-  if (!isPlainRecord(styles)) return found;
-  for (const byBreakpoint of Object.values(styles)) {
-    if (!isPlainRecord(byBreakpoint)) continue;
-    for (const values of Object.values(byBreakpoint)) {
-      if (!isPlainRecord(values)) continue;
-      for (const property of Object.keys(values)) {
-        if (TEXT_STYLE_PROPERTIES.has(property)) continue;
-        if (!found.includes(property)) found.push(property);
+  for (const values of styleMapsOf(styles)) {
+    for (const property of Object.keys(values)) {
+      if (!TEXT_STYLE_PROPERTIES.has(property) && !found.includes(property)) {
+        found.push(property);
       }
     }
   }
   return found;
+}
+
+/**
+ * Each map of values in a style envelope, state by state and breakpoint by
+ * breakpoint, skipping any level that is not a record: stored data is read
+ * here whether or not anything validated it.
+ */
+function styleMapsOf(styles: unknown): Record<string, unknown>[] {
+  if (!isPlainRecord(styles)) return [];
+  return Object.values(styles)
+    .filter(isPlainRecord)
+    .flatMap(byBreakpoint => Object.values(byBreakpoint).filter(isPlainRecord));
 }
 
 /**
