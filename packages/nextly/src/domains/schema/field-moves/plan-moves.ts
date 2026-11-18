@@ -16,8 +16,10 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { asRowBackedRelationFields } from "../../field-groups/services/field-group-utils";
 import {
   classifyFieldKind,
   fieldProducesColumn,
@@ -384,7 +386,7 @@ function moveColumn(
  * The statements a save's `moves` need, or the refusal of the first that cannot keep its values,
  * thrown before anything is written.
  */
-export function planEntityMoves(args: {
+export function planEntityMoves(given: {
   before: readonly FieldDefinition[];
   after: readonly FieldDefinition[];
   moves: readonly FieldMoveRequest[];
@@ -397,6 +399,16 @@ export function planEntityMoves(args: {
   /** Which generator made the table: a field group's makes its columns its own way. */
   builtBy?: ColumnOrigin;
 }): EntityMoves {
+  // A field group's row keeps a many-to-many as a list in a column of its own, where a collection
+  // keeps it in a junction table: its fields are judged as its row stores them.
+  const args =
+    given.builtBy === "fieldGroup"
+      ? {
+          ...given,
+          before: asFieldGroupRow(given.before),
+          after: asFieldGroupRow(given.after),
+        }
+      : given;
   const result: EntityMoves = {
     up: { first: [], last: [] },
     down: { first: [], last: [] },
@@ -438,6 +450,27 @@ export function planEntityMoves(args: {
     recordColumns(result, move, request, args.table);
   }
   return result;
+}
+
+/**
+ * A field group's fields as its row stores them, at every level: a many-to-many as the list
+ * relationship it is there (`asRowBackedRelationFields`), every other field as it is.
+ */
+function asFieldGroupRow(
+  fields: readonly FieldDefinition[]
+): FieldDefinition[] {
+  const rowBacked = asRowBackedRelationFields(
+    fields as unknown as FieldConfig[]
+  ) as unknown as FieldDefinition[];
+  return rowBacked.map(field => {
+    const { fields: children } = field as { fields?: unknown };
+    return Array.isArray(children)
+      ? {
+          ...field,
+          fields: asFieldGroupRow(children as FieldDefinition[]),
+        }
+      : field;
+  });
 }
 
 /** The column a move adds and fills from its group, or the one it drops into a group, recorded. */

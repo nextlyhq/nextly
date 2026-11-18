@@ -26,7 +26,10 @@ import {
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
 import type { FieldMoveRequest } from "../../domains/schema/field-moves/check-move";
-import { refuseMovesOffTheFile } from "../../domains/schema/field-moves/moves-road";
+import {
+  type PushReason,
+  refuseMovesOffTheFile,
+} from "../../domains/schema/field-moves/moves-road";
 import type { PipelineResult } from "../../domains/schema/pipeline/pushschema-pipeline";
 import type { DesiredSchema } from "../../domains/schema/pipeline/types";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
@@ -136,7 +139,7 @@ export async function writeBuilderSchemaChange(
   await refuseMovesOffTheFile({
     moves: change.moves ?? [],
     writes: deps !== undefined,
-    pushReason: async () => ((await pushesNow()) ? "carries-values" : null),
+    pushReason: () => entityPushReason(deps, pushesNow),
   });
   if (deps === undefined) {
     await apply();
@@ -179,6 +182,20 @@ export async function writeBuilderSchemaChange(
     }
   });
   if ("error" in failed) throw failed.error;
+}
+
+/**
+ * Why a Single's or a field group's save goes to its push rather than its migration file
+ * (`PushReason`): outside development every one does, as the push applies the change once the file
+ * is written and the deploy finds it done; in development, one whose values only the push carries
+ * (`pushes`, asked only there).
+ */
+export async function entityPushReason(
+  deps: CollectionSaveDeps | undefined,
+  pushes: () => Promise<boolean>
+): Promise<PushReason> {
+  if (deps !== undefined && !deps.applies) return "applied-directly";
+  return (await pushes()) ? "carries-values" : null;
 }
 
 /** The save with the fields it moves, whose statements its file carries; as it was without any. */

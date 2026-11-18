@@ -82,6 +82,7 @@ import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import {
   builderSaveDeps,
   checkBuilderSaveHistory,
+  entityPushReason,
   reviewBuilderSchemaChange,
   landingPush,
   writeBuilderSchemaChange,
@@ -861,8 +862,7 @@ export const COMPONENTS_METHODS: Record<
           await refuseMovesOffTheFile({
             moves,
             writes: builderSave !== undefined,
-            pushReason: async () =>
-              (await pushes()) ? "carries-values" : null,
+            pushReason: () => entityPushReason(builderSave, pushes),
           });
           // A field leaving translation has preconditions of its own, asked before the apply
           // alters anything.

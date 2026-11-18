@@ -7,8 +7,9 @@
  * - A field group's table, which holds the rows of every collection and Single that uses it: each
  *   entry in each keeps its value, and a second database replaying the files with `nextly migrate`
  *   holds what the first held.
- * - A translated Single, a translated field moved into a translated group: each language's value
- *   moves in the language table, its own row.
+ * - The moves refused before anything is written, the values left where they were: one in a save
+ *   that also needs the push, one outside development, and a translated field's, whose values
+ *   kept for each language would need the language table's own statements.
  */
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -308,6 +309,79 @@ describe.each(getConfiguredTestDialects())(
         }
       });
 
+      // A field group keeps a many-to-many's ids in a list column of its own row, where a
+      // collection keeps them in a junction table: that column's values move as any other's.
+      it("a many-to-many keeps its ids, in and back out", async () => {
+        const t = await boot(dialect);
+        await t.getService("collectionService").createCollection(
+          {
+            name: "sgm_tags",
+            label: "Tag",
+            localized: false,
+            fields: [{ name: "label", type: "text" }],
+          } as Parameters<CollectionService["createCollection"]>[0],
+          {}
+        );
+        const related: Field = {
+          name: "related",
+          type: "relationship",
+          options: { relationType: "manyToMany", target: "sgm_tags" },
+        };
+        await dispatchComponents(
+          "createComponent",
+          {},
+          {
+            slug: CARD,
+            label: "Card",
+            fields: [related, group("meta", [NOTE])],
+          }
+        );
+        await dispatchSingles(
+          "createSingle",
+          {},
+          { slug: HERO, label: "Hero", fields: uses }
+        );
+        const ids: string[] = [];
+        for (const label of ["first", "second"]) {
+          const tag = await t.nextly.create({
+            collection: "sgm_tags" as never,
+            data: { label, slug: label } as never,
+          });
+          ids.push(String(tag.item.id));
+        }
+        await t.nextly.updateSingle({
+          slug: HERO as never,
+          data: { card: { related: ids }, _overwrite: true },
+          overrideAccess: true,
+        });
+        const card = async () =>
+          (
+            (await t.nextly.findSingle({
+              slug: HERO as never,
+              depth: 0,
+              overrideAccess: true,
+            })) as { card?: Record<string, unknown> }
+          ).card ?? {};
+
+        await saveFieldGroup(
+          t,
+          CARD,
+          [group("meta", [NOTE, related])],
+          [{ from: ["related"], to: ["meta", "related"] }]
+        );
+        expect((await card()).meta).toEqual(
+          expect.objectContaining({ related: ids })
+        );
+
+        await saveFieldGroup(
+          t,
+          CARD,
+          [related, group("meta", [NOTE])],
+          [{ from: ["meta", "related"], to: ["related"] }]
+        );
+        expect((await card()).related).toEqual(ids);
+      });
+
       it("a second database replaying the files holds what the first held", async () => {
         const first = await boot(dialect);
         await createUsers(first);
@@ -418,6 +492,42 @@ describe.each(getConfiguredTestDialects())(
       // Nothing archived on the way to the refusal.
       expect(await archived()).toBe(before);
       expect((await readSingle(t, "sgm_doc", "es")).notes).toBe("Notas");
+    });
+
+    // Outside development the dialog applies a Single's change with its push once the file is
+    // written, which would drop the moved column with its values: the move is refused first.
+    it("refuses a move outside development, the file unwritten and the values where they were", async () => {
+      const t = await boot(dialect);
+      await dispatchSingles(
+        "createSingle",
+        {},
+        { slug: "sgm_live", label: "Live", fields: OUTSIDE }
+      );
+      await t.nextly.updateSingle({
+        slug: "sgm_live" as never,
+        data: { summary: "Hello", views: 4, _overwrite: true },
+        overrideAccess: true,
+      });
+      const files = await filesWritten();
+      vi.stubEnv("NODE_ENV", "production");
+
+      await expect(saveSingle(t, "sgm_live", INSIDE, INTO)).rejects.toThrow(
+        expect.objectContaining({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                code: "FIELD_MOVE_REFUSED",
+                message: expect.stringContaining("only in development"),
+              }),
+            ],
+          },
+        })
+      );
+      expect(await filesWritten()).toBe(files);
+      expect(values(await readSingle(t, "sgm_live"))).toEqual({
+        summary: "Hello",
+        views: 4,
+      });
     });
 
     // Moving a value kept for each language needs the language table's own statements in the

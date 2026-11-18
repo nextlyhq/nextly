@@ -16,15 +16,22 @@ import type { FieldMoveRequest } from "./check-move";
 
 /**
  * Why a save goes to the push rather than its migration file: a translated entity, every save of
- * which the push applies, or a change whose values only the push carries. Null when it takes the
- * file.
+ * which the push applies; a change whose values only the push carries; or a Single's or a field
+ * group's save outside development, which the push applies at once while the file waits for the
+ * deploy. Null when it takes the file.
  */
-export type PushReason = "translated" | "carries-values" | null;
+export type PushReason =
+  | "translated"
+  | "carries-values"
+  | "applied-directly"
+  | null;
 
 const MESSAGES = {
   translated: "Fields in a translated collection can't be moved yet.",
   "carries-values":
     "Moving a field keeps its values only through the migration file, and this save also makes a change that needs a direct apply. Save the move on its own.",
+  "applied-directly":
+    "Moving a field keeps its values only through its migration file, which the Schema Builder runs only in development. Make the move in development, then deploy its migration.",
   "no-writer":
     "Moving a field keeps its values only through a migration file, and this app writes none for the Schema Builder.",
 } as const;

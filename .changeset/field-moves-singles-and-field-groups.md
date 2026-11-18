@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-A field moved into a group, or out of one, in the Schema Builder now keeps its values on a Single and in a field group, as it already does in a collection. A field group's move reaches every entry of every collection and Single that uses the group. On a translated Single or field group, a translated field moved into a translated group keeps each language's value. A save with moves is refused, with nothing written, when it would also need a direct apply.
+A field moved into a group, or out of one, in the Schema Builder now keeps its values on a Single and in a field group, as it already does in a collection. A field group's move reaches every entry of every collection and Single that uses the group. A save with moves is refused, with nothing written, when it would also need a direct apply, when it is made outside development, or when it moves a field that keeps a value for each language, which is not available yet.

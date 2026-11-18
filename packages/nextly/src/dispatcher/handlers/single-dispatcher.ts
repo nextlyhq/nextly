@@ -113,6 +113,7 @@ import {
 import {
   builderSaveDeps,
   checkBuilderSaveHistory,
+  entityPushReason,
   reviewBuilderSchemaChange,
   landingPush,
   writeBuilderSchemaChange,
@@ -1591,8 +1592,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           await refuseMovesOffTheFile({
             moves,
             writes: builderSave !== undefined,
-            pushReason: async () =>
-              (await pushes()) ? "carries-values" : null,
+            pushReason: () => entityPushReason(builderSave, pushes),
           });
           // A field leaving translation has preconditions of its own, asked before the push alters
           // anything.
