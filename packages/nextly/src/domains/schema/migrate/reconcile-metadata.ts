@@ -51,13 +51,19 @@ import type { Logger } from "../../../shared/types";
 import type { SupportedDialect } from "../../../types/database";
 import { CollectionRegistryService } from "../../collections/services/collection-registry-service";
 import { FieldGroupRegistryService } from "../../field-groups/services/field-group-registry-service";
+import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
+import { ARCHIVE_TABLE } from "../../i18n/migration/entity-translation-rows";
+import { labelLegacyArchiveRows } from "../../i18n/migration/label-legacy-archive-rows";
 import { SingleRegistryService } from "../../singles/services/single-registry-service";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import type {
   EntitySettingsRecord,
   SettingsEntityKind,
 } from "../migrate-create/entity-settings";
-import { isSchemaLockLost } from "../pipeline/schema-lock";
+import {
+  assertSchemaLockHeld,
+  isSchemaLockLost,
+} from "../pipeline/schema-lock";
 import {
   inRegistryStep,
   newestAppliedAppMigration,
@@ -382,6 +388,7 @@ export async function reconcileMigrationMetadata(
    * behind keeps the version where it was, and the next run, which writes it,
    * moves the version too.
    */
+  await labelArchiveWhileRegistered(deps);
   const swept = await writeRegistryRows(
     adapter,
     async tx => {
@@ -455,6 +462,36 @@ export async function reconcileMigrationMetadata(
     ...swept.result,
     leftoversRemoved: await leftoversOfDroppedEntities(deps),
   };
+}
+
+/**
+ * Gives archive rows written before the archive recorded an entity's kind
+ * that kind (`labelLegacyArchiveRows`), before the registry write below
+ * removes the rows of entities this run's migrations dropped: labelling reads
+ * the registries, and a row whose entity is no longer registered can only be
+ * kept, unresolved, so the leftovers removal after the write could never take
+ * it. Not inside a registry write a caller holds open, whose transaction the
+ * archive's DDL would commit on MySQL; nothing when there is no archive. A
+ * failure costs only the labelling, which the next run does.
+ */
+async function labelArchiveWhileRegistered(
+  deps: ReconcileMetadataDeps
+): Promise<void> {
+  if (registryWriteOpen()) return;
+  const { adapter, dialect, logger } = deps;
+  try {
+    if (!(await adapter.tableExists(ARCHIVE_TABLE))) return;
+    await assertSchemaLockHeld();
+    await ensureI18nArchive(adapter, dialect);
+    await labelLegacyArchiveRows(adapter);
+  } catch (error) {
+    if (isSchemaLockLost(error)) throw error;
+    logger.warn(
+      `Could not label the older archived translations with their entity's kind: ${
+        error instanceof Error ? error.message : String(error)
+      }. The next \`nextly migrate\` tries again.`
+    );
+  }
 }
 
 /**

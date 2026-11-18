@@ -64,6 +64,8 @@ export interface RemovedTranslationRows {
    * or for a field group, which keeps none).
    */
   provenanceRowsPurged: number;
+  /** Its translation transition record, removed: 1, or 0 where it had none. */
+  transitionRecordsPurged: number;
 }
 
 /**
@@ -102,14 +104,16 @@ export async function removeEntityTranslationRows(args: {
 
   // The transition record is keyed by kind and slug, both of which a later entity can reuse: left
   // behind, it would hand that entity a predecessor's source locale and refuse its real one.
+  let transitionRecordsPurged = 0;
   if (await adapter.tableExists(META_TABLE)) {
     const { resolveTransitionStore } = await import("./transition-recorder");
     const { forgetI18nTransition } = await import("./transition-state");
-    await forgetI18nTransition(
+    const forgot = await forgetI18nTransition(
       await resolveTransitionStore(adapter),
       kind,
       slug
     );
+    transitionRecordsPurged = forgot ? 1 : 0;
   }
 
   // Where each translated value came from is kept per collection or Single, by kind and slug. Left
@@ -134,5 +138,5 @@ export async function removeEntityTranslationRows(args: {
     provenanceRowsPurged = affectedRowCount(result, adapter.dialect);
   }
 
-  return { archiveRowsPurged, provenanceRowsPurged };
+  return { archiveRowsPurged, provenanceRowsPurged, transitionRecordsPurged };
 }

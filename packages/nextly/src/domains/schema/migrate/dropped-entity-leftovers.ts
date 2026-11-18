@@ -10,13 +10,15 @@
  * file, which drops the tables only, so these stayed, and an entity created
  * later under the same name or table found them as its own.
  *
- * Only an entity an applied migration dropped (`droppedEntities`) whose table
- * and registry row are both gone is touched: an entity whose table stands, or
- * whose row is still registered, is not deleted yet, and its rows are its
- * own. Each entity's rows go in one transaction, so a run stopped part-way
- * through one removes none of its rows, and every later run, finding the
- * entity still gone, removes what is left: deletes made before this existed
- * included. An entity with nothing left is passed over without a word.
+ * Only an entity an applied migration dropped (`droppedEntities`) is touched,
+ * and only once nothing can still own what it left: its registry row is gone,
+ * and every table it was ever recorded with is gone and claimed by no entity
+ * the newest record holds or any registry row names. Rows parented to a table
+ * that stands, or that another entity has taken, may be that entity's. Each
+ * entity's rows go in one transaction, so a run stopped part-way through one
+ * removes none of its rows, and every later run, finding the entity still
+ * gone, removes what is left: deletes made before this existed included. An
+ * entity with nothing left is passed over without a word.
  *
  * @module domains/schema/migrate/dropped-entity-leftovers
  */
@@ -42,11 +44,11 @@ import { assertSchemaLockHeld } from "../pipeline/schema-lock";
 
 import { droppedEntities, RECORDED_KINDS } from "./registry-history";
 
-/** One dropped entity whose leftovers may remain. */
+/** One dropped entity whose leftovers may remain, with every table it was recorded with. */
 interface DroppedEntity {
   kind: SettingsEntityKind;
   slug: string;
-  table: string;
+  tables: readonly string[];
 }
 
 /** The word a run's report names each kind by. */
@@ -56,13 +58,20 @@ const KIND_WORDS: Record<SettingsEntityKind, string> = {
   fieldGroup: "field group",
 };
 
+/** Where a snapshot's entity record keeps each kind. */
+const RECORD_KEYS = Object.fromEntries(RECORDED_KINDS) as Record<
+  SettingsEntityKind,
+  keyof EntitySettingsRecord
+>;
+
 /**
  * Remove the leftovers of every entity `chain`'s applied migrations dropped
- * whose registry row and table are both gone. Runs under the caller's schema
- * lock, once the registry write that removes this run's dropped rows has
- * committed, and on no transaction of the caller's. Answers one line for each entity it removed rows of, naming the
- * entity and what went. A removal that fails is warned of and leaves that
- * entity's rows for the next run; the others still go.
+ * that nothing can still own (above). Runs under the caller's schema lock,
+ * once the registry write that removes this run's dropped rows has committed,
+ * and on no transaction of the caller's. Answers one line for each entity it
+ * removed rows of, naming the entity and what went. A removal that fails is
+ * warned of and leaves that entity's rows for the next run; the others still
+ * go.
  */
 export async function removeDroppedEntityLeftovers(args: {
   adapter: DrizzleAdapter;
@@ -82,8 +91,10 @@ export async function removeDroppedEntityLeftovers(args: {
   await args.prepareTables?.();
   // The archive's rows are removed by entity kind, which an archive from
   // before rows recorded it lacks. Bringing it up to date is DDL, which on
-  // MySQL commits any transaction, so it runs once here, before any entity's.
+  // MySQL commits any transaction, so it runs once here, before any entity's,
+  // and only while this run still holds the schema lock.
   if (await adapter.tableExists(ARCHIVE_TABLE)) {
+    await assertSchemaLockHeld();
     await ensureI18nArchive(adapter, adapter.dialect);
   }
   for (const entity of gone) {
@@ -92,19 +103,26 @@ export async function removeDroppedEntityLeftovers(args: {
     try {
       const removed = await adapter.transaction(async tx => {
         const scoped = teardownAdapterIn(adapter, tx);
-        const values = await teardownEntityComponentData({
-          adapter: scoped,
-          parentTable: entity.table,
-        });
+        let values = 0;
+        for (const table of entity.tables) {
+          values += (
+            await teardownEntityComponentData({
+              adapter: scoped,
+              parentTable: table,
+            })
+          ).instancesDeleted;
+        }
         const translations = await removeEntityTranslationRows({
           adapter: scoped,
           kind: entity.kind,
           slug: entity.slug,
         });
         return {
-          values: values.instancesDeleted,
+          values,
           translations:
-            translations.archiveRowsPurged + translations.provenanceRowsPurged,
+            translations.archiveRowsPurged +
+            translations.provenanceRowsPurged +
+            translations.transitionRecordsPurged,
         };
       });
       if (removed.values + removed.translations === 0) continue;
@@ -123,45 +141,81 @@ export async function removeDroppedEntityLeftovers(args: {
 }
 
 /**
- * The dropped entities whose registry row and table are both gone, each with
- * the table the newest record that held it names. One whose table cannot be
- * asked about is passed over, as standing.
+ * Every table `kind` `slug` was recorded with along `chain`, newest first,
+ * each once: an entity deleted, made again under the same slug with another
+ * table, and deleted again left rows under both.
+ */
+export function recordedTablesOf(
+  chain: readonly EntitySettingsRecord[],
+  kind: SettingsEntityKind,
+  slug: string
+): string[] {
+  const key = RECORD_KEYS[kind];
+  const tables = new Set<string>();
+  for (const record of [...chain].reverse()) {
+    const entry = record[key][slug];
+    if (entry !== undefined) tables.add(recordedEntityTable(kind, slug, entry));
+  }
+  return [...tables];
+}
+
+/**
+ * The tables the entities `record` holds are recorded with: a table one of
+ * them names is that entity's, whatever entity named it before.
+ */
+export function tablesHeldBy(record: EntitySettingsRecord): Set<string> {
+  const tables = new Set<string>();
+  for (const [kind, key] of RECORDED_KINDS) {
+    for (const [slug, entry] of Object.entries(record[key])) {
+      tables.add(recordedEntityTable(kind, slug, entry));
+    }
+  }
+  return tables;
+}
+
+/**
+ * The dropped entities nothing can still own: each whose registry row is
+ * gone and whose every recorded table is gone and claimed by no entity of
+ * the newest record and no registry row. Anything that cannot be read counts
+ * as owned, and its entity is passed over.
  */
 async function goneEntities(args: {
   adapter: DrizzleAdapter;
   chain: readonly EntitySettingsRecord[];
 }): Promise<DroppedEntity[]> {
   const dropped = droppedEntities(args.chain);
+  const newest = args.chain.at(-1);
+  const held = newest === undefined ? new Set<string>() : tablesHeldBy(newest);
   const gone: DroppedEntity[] = [];
   for (const [kind] of RECORDED_KINDS) {
     for (const slug of dropped[kind]) {
-      const table = await goneTableOf(args, kind, slug);
-      if (table !== undefined) gone.push({ kind, slug, table });
+      if (isReservedResourceSlug(slug)) continue;
+      if (await registryHolds(args.adapter, kind, "slug", slug)) continue;
+      const tables = recordedTablesOf(args.chain, kind, slug);
+      if (tables.length === 0) continue;
+      if (await anyTableOwned(args.adapter, tables, held)) continue;
+      gone.push({ kind, slug, tables });
     }
   }
   return gone;
 }
 
 /**
- * The table dropped entity `kind` `slug` was dropped with, where its registry
- * row and that table are both gone; undefined otherwise, for a reserved slug,
- * and where no record names its table.
+ * Whether any of `tables` may still be owned: it stands, the newest record's
+ * entities hold it, or a registry row names it.
  */
-async function goneTableOf(
-  args: { adapter: DrizzleAdapter; chain: readonly EntitySettingsRecord[] },
-  kind: SettingsEntityKind,
-  slug: string
-): Promise<string | undefined> {
-  if (isReservedResourceSlug(slug)) return undefined;
-  if (await registryHolds(args.adapter, kind, slug)) return undefined;
-  // The newest record that held it names the table it was dropped with.
-  const key = RECORD_KEYS[kind];
-  const entry = [...args.chain].reverse().find(record => slug in record[key])?.[
-    key
-  ][slug];
-  if (entry === undefined) return undefined;
-  const table = recordedEntityTable(kind, slug, entry);
-  return (await tableStands(args.adapter, table)) ? undefined : table;
+async function anyTableOwned(
+  adapter: DrizzleAdapter,
+  tables: readonly string[],
+  held: ReadonlySet<string>
+): Promise<boolean> {
+  for (const table of tables) {
+    if (held.has(table) || (await tableStands(adapter, table))) return true;
+    for (const [kind] of RECORDED_KINDS) {
+      if (await registryHolds(adapter, kind, "tableName", table)) return true;
+    }
+  }
+  return false;
 }
 
 /** Whether `table` is there; one that cannot be asked about counts as standing. */
@@ -176,12 +230,6 @@ async function tableStands(
   }
 }
 
-/** Where a snapshot's entity record keeps each kind. */
-const RECORD_KEYS = Object.fromEntries(RECORDED_KINDS) as Record<
-  SettingsEntityKind,
-  keyof EntitySettingsRecord
->;
-
 /** The registry table each kind's rows are kept in; a field group's is resolved, as it has two names. */
 const REGISTRY_TABLES: Record<
   Exclude<SettingsEntityKind, "fieldGroup">,
@@ -192,22 +240,25 @@ const REGISTRY_TABLES: Record<
 };
 
 /**
- * Whether `kind`'s registry holds a row for `slug`. One that cannot be read
- * answers yes, so an entity it may still register is left as it is.
+ * Whether `kind`'s registry holds a row whose `column` is `value`: its slug,
+ * or the table it names. One that cannot be read answers yes, so an entity it
+ * may still register is left as it is.
  */
 async function registryHolds(
   adapter: DrizzleAdapter,
   kind: SettingsEntityKind,
-  slug: string
+  column: "slug" | "tableName",
+  value: string
 ): Promise<boolean> {
   try {
     const table =
       kind === "fieldGroup"
         ? await resolveRegistryTableName(adapter)
         : REGISTRY_TABLES[kind];
+    if (!(await adapter.tableExists(table))) return false;
     const rows = await adapter.select<{ slug: string }>(table, {
       columns: ["slug"],
-      where: { and: [{ column: "slug", op: "=", value: slug }] },
+      where: { and: [{ column, op: "=", value }] },
     });
     return rows.length > 0;
   } catch {
