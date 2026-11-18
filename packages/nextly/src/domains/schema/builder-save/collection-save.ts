@@ -117,6 +117,8 @@ import { loadUiSchema } from "../ui-schema/loader";
 import { uiToMinimal } from "../ui-schema/merge";
 import { mutateManifest, type ManifestKind } from "../ui-schema/mutate";
 
+import { liveTablesOf } from "./landing-push";
+
 /** What the writer works with: the app's database, config and folders. */
 export interface CollectionSaveDeps {
   adapter: DrizzleAdapter;
@@ -1736,21 +1738,7 @@ async function liveTables(
   deps: CollectionSaveDeps,
   names: readonly string[]
 ): Promise<NextlySchemaSnapshot> {
-  const dialect = deps.adapter.getCapabilities().dialect;
-  const unique = [...new Set(names)];
-  const present: string[] = [];
-  for (const name of unique) {
-    if (await deps.adapter.tableExists(name)) present.push(name);
-  }
-  const snapshot = await introspectLiveSnapshot(
-    deps.adapter.getDrizzle(),
-    dialect,
-    present
-  );
-  return {
-    ...snapshot,
-    tables: snapshot.tables.filter(t => unique.includes(t.name)),
-  };
+  return liveTablesOf(deps.adapter, names);
 }
 
 /** The collection's table as the database has it now, alone. */

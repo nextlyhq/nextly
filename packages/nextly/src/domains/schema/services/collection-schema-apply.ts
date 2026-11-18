@@ -97,7 +97,7 @@ import type { DesiredCollection, DesiredSchema } from "../pipeline/types";
 
 import { DrizzleStatementExecutor } from "./drizzle-statement-executor";
 import { withStoredRelationshipOptions } from "./editor-relationship-fields";
-import { toSnakeCase } from "./field-column-descriptor";
+import { collectionOwnTables, toSnakeCase } from "./field-column-descriptor";
 import { withSchemaChangeExcluded } from "./schema-change-exclusion";
 
 /**
@@ -799,8 +799,18 @@ async function applyHoldingSchemaLock(
   const changed = changeApply(change, deps);
   const { promptDispatcher, defaultLocale } = changed;
   // Every push below, the settings push and the companion's included, tells the caller once it
-  // may have changed the database; the checks before them change nothing.
-  const landing = landingPush(changed.apply, dialect);
+  // may have changed the database; the checks before them change nothing. Whether a failed one
+  // did is read from the tables the change can reach: the collection's own, before and after.
+  const landing = landingPush(changed.apply, dialect, {
+    adapter,
+    tables: [
+      ...collectionOwnTables(
+        tableName,
+        (collection.fields ?? []) as unknown as FieldDefinition[]
+      ),
+      ...collectionOwnTables(tableName, fields),
+    ],
+  });
   const apply: ApplyDesired = async (...args) => {
     try {
       return await landing.push(...args);

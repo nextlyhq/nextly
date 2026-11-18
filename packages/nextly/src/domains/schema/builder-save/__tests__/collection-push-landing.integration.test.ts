@@ -2,8 +2,9 @@
  * A collection's Schema Builder save that the development push applies, and that fails: whether
  * its migration files stay depends on whether the push may have changed the database.
  *
- * - A refusal before the push runs, or a busy table's stop that says nothing ran, leaves nothing:
- *   no file, no snapshot, no change to the definition, the table or the registry row.
+ * - A refusal before the push runs, a refusal inside it before any statement ran, or a busy
+ *   table's stop that says nothing ran, leaves nothing: no file, no snapshot, no change to the
+ *   definition, the table or the registry row.
  * - On MySQL, which commits each schema statement as it runs, and on SQLite, whose push keeps the
  *   statements before the one that fails, a push that fails after a statement ran keeps its
  *   files, recorded applied nowhere, and the admin is told the database holds part of the change
@@ -201,6 +202,31 @@ for (const dialect of getConfiguredTestDialects()) {
       60_000
     );
 
+    // A refusal inside the push, before it runs any statement: a column on the table that no field
+    // describes, beside the field the save adds, reads as a rename the save never answered, and the
+    // dialog's prompt refuses the apply rather than drop it. MySQL and SQLite keep what a push ran,
+    // so whether this one changed anything is read from the tables.
+    it("leaves nothing when the push refuses before running any statement", async () => {
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      await exec(
+        `ALTER TABLE ${q("dc_posts")} ADD COLUMN ${q("legacy_notes")} text`
+      );
+      const before = await standing();
+
+      const refused: unknown = await save(SWITCHED).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      // Refused, and told as a refusal: never as a change the database holds part of.
+      expect(refused).toBeInstanceOf(Error);
+      expect(
+        (refused as { publicMessage?: string }).publicMessage
+      ).not.toContain("The database now holds part of this change");
+      // No file kept, no definition or ledger entry written, the table as it was.
+      expect(await standing()).toEqual(before);
+    }, 60_000);
+
     it("leaves nothing when a refusal before the push stops it", async () => {
       // Two posts sharing a code: a code made unique over them is refused before anything runs
       // (`refuseUniqueOverRepeats`), naming the field.
@@ -267,10 +293,11 @@ for (const dialect of getConfiguredTestDialects()) {
       );
 
     // Each road a collection's change is pushed by in development: the schema dialog's apply and
-    // the admin's update.
+    // the admin's update. On MySQL the update's push sends this change as one statement through the
+    // executor, so a second added field gives it the second statement the seam fails.
     for (const [road, change] of [
       ["the schema dialog", save],
-      ["an update", update],
+      ["an update", (fields: Field[]) => update([...fields, text("summary")])],
     ] as const) {
       it.runIf(dialect === "mysql" || dialect === "sqlite")(
         `keeps the files of a push through ${road} whose second statement failed after its first committed, and says so`,

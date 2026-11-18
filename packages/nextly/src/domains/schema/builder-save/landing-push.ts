@@ -7,12 +7,18 @@
  * change the database already holds part of. Only PostgreSQL's push runs in
  * one transaction that a failure rolls back whole: MySQL commits each schema
  * statement as it runs, and SQLite's push keeps the statements that ran before
- * the one that failed, so on either any push that failed may have changed it.
+ * the one that failed, so on either a push that failed may have changed it.
+ * Whether it did is read from the database: the tables the change reaches, as
+ * they stood before the push and as they stand after it.
  *
  * @module domains/schema/builder-save/landing-push
  */
 import { NextlyError } from "../../../errors/nextly-error";
 import { busyTableLeftNothing } from "../busy-table/report";
+import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
+import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
+
+type Dialect = "postgresql" | "mysql" | "sqlite";
 
 /** What a push answers: whether it succeeded, and the failure it stopped on. */
 interface PushOutcome {
@@ -20,42 +26,123 @@ interface PushOutcome {
   error?: { details?: unknown };
 }
 
+/** What reads a table's shape from the database: the adapter a push runs on. */
+export interface TableReader {
+  getDrizzle(): unknown;
+  getCapabilities(): { dialect: Dialect };
+  tableExists(name: string): Promise<boolean>;
+}
+
+/**
+ * `names` as the database holds them now: those that exist, read in one snapshot, and only those
+ * (an introspection can return a table whose name a requested one starts with).
+ */
+export async function liveTablesOf(
+  adapter: TableReader,
+  names: readonly string[]
+): Promise<NextlySchemaSnapshot> {
+  const unique = [...new Set(names)];
+  const present: string[] = [];
+  for (const name of unique) {
+    if (await adapter.tableExists(name)) present.push(name);
+  }
+  const snapshot = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.getCapabilities().dialect,
+    present
+  );
+  return {
+    ...snapshot,
+    tables: snapshot.tables.filter(t => unique.includes(t.name)),
+  };
+}
+
 /**
  * `push`, noting once one of its runs may have changed the database: a run
- * that succeeded, and outside PostgreSQL any run that failed, since a run
- * refused part way may have left some of its statements applied. The one
- * exception is a busy table's stop that says itself nothing ran
- * (`leftNothing`): its files are withdrawn, as a refusal on PostgreSQL's are.
+ * that succeeded, and outside PostgreSQL a run that failed after changing
+ * something. A failure counts as having changed nothing where a busy table's
+ * stop says itself nothing ran (`leftNothing`), or where `reached`, the tables
+ * the change can touch, read the same after the push as before it: a push the
+ * pipeline refused before any statement ran (a question unanswered, a
+ * precondition) withdraws its files, as a refusal on PostgreSQL does. Without
+ * `reached`, any failure outside PostgreSQL counts as landed.
  *
  * Only what wraps the push itself is judged: a refusal raised before the push
  * runs is never counted as landed.
  */
 export function landingPush<A extends unknown[], R extends PushOutcome>(
   push: (...args: A) => Promise<R>,
-  dialect: "postgresql" | "mysql" | "sqlite"
+  dialect: Dialect,
+  reached?: { adapter: TableReader; tables: readonly string[] }
 ): {
   push: (...args: A) => Promise<R>;
   landed: () => boolean;
 } {
   let landed = false;
+  // Read only where a failure can keep part of the push: PostgreSQL's leaves nothing.
+  const read =
+    reached === undefined || rollsBackWhole(dialect)
+      ? undefined
+      : () => liveTablesOf(reached.adapter, reached.tables);
+  const failureLanded = async (
+    stop: unknown,
+    before: NextlySchemaSnapshot | undefined
+  ): Promise<boolean> => {
+    if (rollsBackWhole(dialect) || leftNothing(stop)) return false;
+    return read === undefined || before === undefined
+      ? true
+      : changedSince(before, read);
+  };
   return {
     push: async (...args: A) => {
+      const before = await readOrUndefined(read);
+      let result: R;
       try {
-        const result = await push(...args);
-        if (
-          result.success ||
-          (!rollsBackWhole(dialect) && !leftNothing(result.error?.details))
-        ) {
-          landed = true;
-        }
-        return result;
+        result = await push(...args);
       } catch (error) {
-        if (!rollsBackWhole(dialect) && !leftNothing(error)) landed = true;
+        if (await failureLanded(error, before)) landed = true;
         throw error;
       }
+      if (
+        result.success ||
+        (await failureLanded(result.error?.details, before))
+      ) {
+        landed = true;
+      }
+      return result;
     },
     landed: () => landed,
   };
+}
+
+/**
+ * The tables before a push, or undefined where they could not be read: the push then runs as it
+ * would have, and a failure of it counts as landed, as a change may stand.
+ */
+async function readOrUndefined(
+  read: (() => Promise<NextlySchemaSnapshot>) | undefined
+): Promise<NextlySchemaSnapshot | undefined> {
+  try {
+    return await read?.();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether the tables differ from `before`, by the reconcile's own test (`snapshotsEquivalent`). A
+ * read that fails says nothing either way, so it counts as changed: the files are kept.
+ */
+async function changedSince(
+  before: NextlySchemaSnapshot,
+  read: () => Promise<NextlySchemaSnapshot>
+): Promise<boolean> {
+  const { snapshotsEquivalent } = await import("../migrate/drift-reconcile");
+  try {
+    return !snapshotsEquivalent(before, await read());
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -101,35 +188,12 @@ export function partWayPush(push: (onLanded: () => void) => Promise<void>): {
  * it unchanged; a failure that is not a `NextlyError` is told without its
  * text, which a driver can fill with identifiers and values.
  */
-export function partlyAppliedChange(
+function partlyAppliedChange(
   error: unknown,
   keptFiles: readonly string[]
 ): NextlyError {
-  const files = keptFiles.join(", ");
-  const resolve =
-    keptFiles.length === 1
-      ? `\`nextly migrate:resolve --applied ${files}\``
-      : `\`nextly migrate:resolve --applied <file>\` for each of them`;
-  const kept =
-    keptFiles.length === 0
-      ? "The database now holds part of this change."
-      : `The database now holds part of this change, so its migration ${keptFiles.length === 1 ? "file" : "files"} ${files} ${keptFiles.length === 1 ? "was" : "were"} kept and not recorded as applied. ` +
-        `Finish the change by hand and run ${resolve}, or reverse what of it ran and run \`nextly migrate\`, which runs ${keptFiles.length === 1 ? "it" : "them"} from the start.`;
-  if (NextlyError.is(error)) {
-    return new NextlyError({
-      code: error.code,
-      statusCode: error.statusCode,
-      publicMessage: `${error.publicMessage} ${kept}`,
-      ...(error.publicData === undefined
-        ? {}
-        : { publicData: error.publicData }),
-      ...(error.logMessage === undefined
-        ? {}
-        : { logMessage: error.logMessage }),
-      logContext: { ...error.logContext, keptFiles: [...keptFiles] },
-      cause: error,
-    });
-  }
+  const kept = keptFilesText(keptFiles);
+  if (NextlyError.is(error)) return withKeptFiles(error, kept, keptFiles);
   return new NextlyError({
     code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
     publicMessage: `The schema change failed part way. ${kept}`,
@@ -139,11 +203,62 @@ export function partlyAppliedChange(
   });
 }
 
+/** That the database holds part of the change, the files kept for it, and what to run next. */
+function keptFilesText(keptFiles: readonly string[]): string {
+  if (keptFiles.length === 0)
+    return "The database now holds part of this change.";
+  const one = keptFiles.length === 1;
+  return `The database now holds part of this change, so ${one ? "its migration file" : "its migration files"} ${keptFiles.join(", ")} ${one ? "was" : "were"} kept and not recorded as applied. ${nextSteps(keptFiles)}`;
+}
+
+/**
+ * `error` told with `kept` after its own words: its code, status, public data and log message
+ * unchanged, so a caller reading any of them reads what the failure said.
+ */
+function withKeptFiles(
+  error: NextlyError,
+  kept: string,
+  keptFiles: readonly string[]
+): NextlyError {
+  const { publicData, logMessage } = error;
+  return new NextlyError({
+    code: error.code,
+    statusCode: error.statusCode,
+    publicMessage: `${error.publicMessage} ${kept}`,
+    ...(publicData === undefined ? {} : { publicData }),
+    ...(logMessage === undefined ? {} : { logMessage }),
+    logContext: { ...error.logContext, keptFiles: [...keptFiles] },
+    cause: error,
+  });
+}
+
+/**
+ * What to run once the database holds part of a change `keptFiles` describe, in run order. Each
+ * file's snapshot is the database as that file leaves it, so with several only the last describes
+ * the finished change: the earlier ones are recorded without the comparison, and the last is
+ * compared with the database. Reversed, the files run again from the start.
+ */
+function nextSteps(keptFiles: readonly string[]): string {
+  const last = keptFiles[keptFiles.length - 1];
+  const finish =
+    keptFiles.length === 1
+      ? `Finish the change by hand and run \`nextly migrate:resolve --applied ${last}\``
+      : `Finish the change by hand, then record the files in order: ${keptFiles
+          .slice(0, -1)
+          .map(
+            file => `\`nextly migrate:resolve --applied ${file} --skip-verify\``
+          )
+          .join(
+            ", "
+          )}, then \`nextly migrate:resolve --applied ${last}\`, which checks the database against the last`;
+  return `${finish}${keptFiles.length === 1 ? "," : ";"} or reverse what of it ran and run \`nextly migrate\`, which runs ${keptFiles.length === 1 ? "it" : "them"} from the start.`;
+}
+
 /**
  * Whether a push on `dialect` runs in one transaction that a failure rolls back
  * whole, leaving nothing of it: PostgreSQL's alone.
  */
-function rollsBackWhole(dialect: "postgresql" | "mysql" | "sqlite"): boolean {
+function rollsBackWhole(dialect: Dialect): boolean {
   return dialect === "postgresql";
 }
 
