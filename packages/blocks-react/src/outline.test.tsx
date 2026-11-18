@@ -311,6 +311,38 @@ describe("a host's own class-based context", () => {
     expect(headingIds(html)).toEqual(["notes", "notes-2"]);
     expect(html).toContain("/resolved");
   });
+
+  it("keeps the outline where a block copies the context for what it holds", async () => {
+    // A Collection list draws each entry under a copy of its context, as an
+    // object spread: the view must hand that copy the outline too.
+    class HostContext implements PageContext {
+      entry = null;
+      data = {
+        find: () => Promise.resolve({ items: [{ id: "a" }], total: 1 }),
+      };
+      resolveMedia(): Promise<null> {
+        return Promise.resolve(null);
+      }
+      resolveEntryPath(): Promise<string> {
+        return Promise.resolve("");
+      }
+    }
+    const html = await renderToHtml(
+      <PageRenderer
+        document={page({
+          id: "list",
+          type: "core/collection-loop",
+          version: 1,
+          props: { collection: "posts", limit: 10 },
+          slots: { children: [heading("Title")] },
+        })}
+        blocks={resolver}
+        siteStyles={false}
+        context={new HostContext() as unknown as PageContext}
+      />
+    );
+    expect(headingIds(html)).toEqual(["title--0"]);
+  });
 });
 
 describe("a heading left out of the table of contents", () => {

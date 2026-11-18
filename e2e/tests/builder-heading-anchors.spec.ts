@@ -124,7 +124,12 @@ async function publishedHeadingIds(
 ): Promise<string[]> {
   const response = await page.request.get(`/${slug}`);
   expect(response.ok()).toBe(true);
-  const html = await response.text();
+  // The page's own headings: a Layout's header and footer, which another
+  // spec may have made the site's default, are drawn in their own regions.
+  const html = (await response.text()).replace(
+    /<(header|footer) data-nextly-region="\1">[\s\S]*?<\/\1>/g,
+    ""
+  );
   return [...html.matchAll(/<h[1-6]\b([^>]*)>/g)].map(
     ([, attributes]) => /\sid="([^"]*)"/.exec(attributes ?? "")?.[1] ?? "(none)"
   );
@@ -156,10 +161,10 @@ test("every heading has a page-unique id, and a left-out heading keeps its id", 
     "日本語",
     "leave-me-out",
   ];
-  const published = await publishedHeadingIds(page, slug);
-  // The contents block draws its own title too, as a heading or not; only
-  // the page's own headings are compared, in order.
-  expect(published.filter(each => each !== "(none)")).toEqual(expected);
+  // Every heading element on the page, in order, none without an id. The
+  // contents block lists nothing here (it reads no passage), so a visitor
+  // gets none of it.
+  expect(await publishedHeadingIds(page, slug)).toEqual(expected);
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
@@ -196,7 +201,5 @@ test("every heading has a page-unique id, and a left-out heading keeps its id", 
   // Stored on the heading, and the heading still has its id.
   const stored = await page.request.get(`${ENTRIES}/${id}`);
   expect(JSON.stringify(await stored.json())).toContain('"tocExclude":true');
-  expect(
-    (await publishedHeadingIds(page, slug)).filter(each => each !== "(none)")
-  ).toEqual(expected);
+  expect(await publishedHeadingIds(page, slug)).toEqual(expected);
 });

@@ -253,7 +253,8 @@ export function withOutline(
  * A view of a host's context with `outline` added: every other property is
  * read from the host's object, and a method is called with the host's object
  * as its receiver (bound once per method, so a method read twice is the same
- * function both times).
+ * function both times). The outline is also one of its own properties, so a
+ * copy of the view keeps it.
  */
 function outlineView(ctx: PageContext, outline: PageOutline): PageContext {
   const bound = new Map<unknown, unknown>();
@@ -271,6 +272,29 @@ function outlineView(ctx: PageContext, outline: PageOutline): PageContext {
     },
     has(target, key) {
       return key === "outline" || Reflect.has(target, key);
+    },
+    // Listed among its own properties, so a block that copies the context
+    // for what it holds (`{ ...ctx, item }`) copies the outline with it. Not
+    // for a frozen or sealed host object, where a proxy may not report a
+    // property its target lacks: a copy of that goes without it.
+    ownKeys(target) {
+      const keys = Reflect.ownKeys(target);
+      return keys.includes("outline") || !Object.isExtensible(target)
+        ? keys
+        : [...keys, "outline"];
+    },
+    getOwnPropertyDescriptor(target, key) {
+      const own = Reflect.getOwnPropertyDescriptor(target, key);
+      // The host's own `outline` slot (a field declared and left unset) is
+      // reported as the outline, unless the proxy rules forbid it.
+      if (key !== "outline" || own?.configurable === false) return own;
+      if (own === undefined && !Object.isExtensible(target)) return own;
+      return {
+        value: outline,
+        writable: own?.writable ?? false,
+        enumerable: true,
+        configurable: true,
+      };
     },
   });
 }
