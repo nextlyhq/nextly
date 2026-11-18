@@ -173,7 +173,7 @@ export function NumericField({
   // author who types `20` over `12px` and then picks `rem` had the blur refuse
   // the unitless draft, leaving `12px` stored — and the menu composed from
   // THAT, committing `12rem` and discarding the 20 they were looking at.
-  const { draft, setDraft } = useDraft(stored);
+  const { draft, setDraft, live } = useDraft(stored);
   useSeededDraft(seed, setDraft);
   // Read from the DRAFT, so the menu offers units for the quantity on screen
   // and swaps the unit on that quantity rather than on a superseded one.
@@ -212,7 +212,12 @@ export function NumericField({
     showUnits,
     suffix,
     hold,
-    chooseUnit: unitMenu.choose,
+    // A unit picked straight after typing finishes the same edit: one undo
+    // step takes the number and its unit back together.
+    chooseUnit: choice => {
+      live.join(() => unitMenu.choose(choice));
+      live.end();
+    },
     onCommit,
   });
   // A stored unit the candidate list does not carry — `ch`, or an uppercase
@@ -249,6 +254,7 @@ export function NumericField({
         invalid={describedBy !== undefined}
         // With no menu drawn there is nothing to hold for: its refs are empty.
         editing={{ holdBlur: hold.holdBlur, typing, setTyping }}
+        live={live}
         onCommit={commitText}
         // The unit shown in the suffix is left out of the field.
         {...suffixedText(control, unit, unitMenu.isKeyword, showUnits)}

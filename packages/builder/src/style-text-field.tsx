@@ -2,8 +2,8 @@
 
 /**
  * The text field every typed value is edited in: the draft over the stored
- * value, committing on blur, arrow-key steps, and how a stored value is
- * shown, edited and hinted.
+ * value, written as it is typed and settled on blur, arrow-key steps, and how
+ * a stored value is shown, edited and hinted.
  *
  * @module style-text-field
  */
@@ -23,10 +23,14 @@ import { commitOnEnter } from "./commit-on-enter";
 import { useFieldDescription } from "./css-hint";
 import { isElement } from "./dom-kind";
 import { useUnsetHint } from "./inherited-value";
+import { typedStyleText, useLiveDraft, type LiveDraft } from "./live-draft";
 import { fieldStep, scrubModifiersOf } from "./scrub-gesture";
 import { CompactSides, fieldDescribedBy } from "./spacing-box";
 import type { StyleControl, StyleControlKind } from "./style-controls";
-import type { CommitOutcome } from "./style-field-surroundings";
+import {
+  StyleTargetContext,
+  type CommitOutcome,
+} from "./style-field-surroundings";
 import { CSS_NUMBER } from "./style-numeric";
 import { tokenForTypedName } from "./style-variables";
 
@@ -41,22 +45,24 @@ import { tokenForTypedName } from "./style-variables";
  *
  * `edited` is the same comparison every caller was making to decide whether a
  * commit is worth attempting, so it is answered here rather than at each.
+ * `live` is the same draft written as it is typed (`live-draft.ts`), for the
+ * text field to type through.
  */
 export function useDraft(stored: StyleValue | undefined): {
   draft: string;
   setDraft: (value: string) => void;
   edited: boolean;
   reset: () => void;
+  live: LiveDraft;
 } {
-  const [draft, setDraft] = React.useState(() => storedText(stored));
-  React.useEffect(() => {
-    setDraft(storedText(stored));
-  }, [stored]);
+  const text = storedText(stored);
+  const live = useLiveDraft(text);
   return {
-    draft,
-    setDraft,
-    edited: draft !== storedText(stored),
-    reset: () => setDraft(storedText(stored)),
+    draft: live.draft,
+    setDraft: live.setDraft,
+    edited: live.draft !== text,
+    reset: () => live.setDraft(text),
+    live,
   };
 }
 
@@ -147,6 +153,8 @@ function sideTitle(compact: boolean, draft: string): string | undefined {
 /**
  * A text field's commit: the draft written, a variable's typed name matched
  * in the mode the canvas shows, as the field's variables list offers them.
+ * Written in the edit's run of typing, where it was typed live, which the
+ * commit then ends.
  */
 function useDraftCommit({
   draft,
@@ -156,6 +164,7 @@ function useDraftCommit({
   onCommit,
   setDraft,
   setTyping,
+  live,
 }: {
   draft: string;
   stored: StyleValue | undefined;
@@ -164,22 +173,78 @@ function useDraftCommit({
   onCommit: (value: StyleValue | null) => CommitOutcome;
   setDraft: (value: string) => void;
   setTyping: (typing: boolean) => void;
+  live: LiveDraft | undefined;
 }): () => void {
   const mode = useCanvasTokenMode();
   return () => {
     // Written or not, the text is no longer mid-edit.
     setTyping(false);
-    commitDraft({
-      draft,
-      stored,
-      kind: control.kind,
-      leaf: control.leaf,
-      tokens,
-      mode,
-      onCommit,
-      setDraft,
-    });
+    const commit = () =>
+      commitDraft({
+        draft,
+        stored,
+        kind: control.kind,
+        leaf: control.leaf,
+        tokens,
+        mode,
+        onCommit,
+        setDraft,
+      });
+    if (live === undefined) return commit();
+    live.join(commit);
+    live.end();
   };
+}
+
+/**
+ * A keystroke's write while the field is typed live, answering whether it
+ * moved the document. Nothing is written for an emptied field, which clears
+ * only when it is left, nor for text the field's commit refuses (`12p`, half
+ * a hex colour): the document, and so the canvas, keeps the last valid value,
+ * and the refusal is shown beside the field as it is on blur.
+ */
+function typedWrite({
+  control,
+  tokens,
+  mode,
+  onType,
+}: {
+  control: StyleControl;
+  tokens: SiteTokenSet | undefined;
+  mode: TokenMode;
+  onType: (value: StyleValue | null) => CommitOutcome;
+}): (text: string) => boolean {
+  return text => {
+    const typed = typedStyleText(text);
+    if (typed === undefined) return false;
+    // Asked even where the text reads as what is stored ("24px" after
+    // "24p"), so the refusal of the text before it is cleared.
+    const value = draftValue(control.kind, control.leaf, tokens, mode, typed);
+    return onType(value) === "applied";
+  };
+}
+
+/**
+ * The value a draft writes: `null` to clear an emptied one, a variable for
+ * its typed name, otherwise the text as its kind reads it.
+ */
+function draftValue(
+  kind: StyleControlKind | undefined,
+  leaf: StyleLeaf,
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode,
+  draft: string
+): StyleValue | null {
+  // CSS whitespace here too, not JavaScript's. `String.prototype.trim` also
+  // strips NBSP and the Unicode spaces, so a draft of nothing but a
+  // non-breaking space would read as empty and DELETE the declaration —
+  // where the engine treats it as a value and refuses it.
+  if (trimCssWhitespace(draft) === "") return null;
+  // A variable's name typed in, "Display" or "Text", is that variable, asked
+  // BEFORE the text is read as a value: read first, the word is refused as
+  // "not a length" or stored as a literal no page can use.
+  const named = tokenForTypedName(leaf, tokens, draft, mode);
+  return named === undefined ? committedValue(kind, draft) : { $token: named };
 }
 
 /** Write a text field's draft, when it differs from what is stored. */
@@ -206,24 +271,7 @@ export function commitDraft({
   setDraft: (value: string) => void;
 }): void {
   if (draft === storedText(stored)) return;
-  // CSS whitespace here too, not JavaScript's. `String.prototype.trim` also
-  // strips NBSP and the Unicode spaces, so a draft of nothing but a
-  // non-breaking space would read as empty and DELETE the declaration —
-  // where the engine treats it as a value and refuses it.
-  const emptied = trimCssWhitespace(draft) === "";
-  // A variable's name typed in, "Display" or "Text", is that variable, asked
-  // BEFORE the text is read as a value: read first, the word is refused as
-  // "not a length" or stored as a literal no page can use.
-  const named = emptied
-    ? undefined
-    : tokenForTypedName(leaf, tokens, draft, mode);
-  const outcome = onCommit(
-    emptied
-      ? null
-      : named === undefined
-        ? committedValue(kind, draft)
-        : { $token: named }
-  );
+  const outcome = onCommit(draftValue(kind, leaf, tokens, mode, draft));
   // The document did not move because it already holds this value in another
   // spelling: `01`, `+1` and `1e0` all commit as the `1` that is stored. The
   // effect above cannot cover it — `stored` is identical, so it does not fire
@@ -318,6 +366,8 @@ export function TextField({
   display,
   fallbackHint,
   editing,
+  live,
+  onType,
 }: {
   id: string;
   control: StyleControl;
@@ -367,6 +417,20 @@ export function TextField({
   fallbackHint?: string;
   /** The number field's part in the edit; see {@link FieldEditing}. */
   editing?: FieldEditing | undefined;
+  /**
+   * The caller's draft written as it is typed, from {@link useDraft}, so the
+   * canvas follows the typing. Without it the field writes on blur and Enter
+   * only. A shared style is written on blur and Enter either way: it is
+   * stored on the site at once, so a write per keystroke would put
+   * half-typed values on every page that wears it.
+   */
+  live?: LiveDraft | undefined;
+  /**
+   * The write a keystroke makes, where it differs from the commit: a colour
+   * is remembered among Recent colours once, when the edit ends, not for
+   * every value on the way. `onCommit` when omitted.
+   */
+  onType?: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   // The refusal, and the CSS names while they are shown.
   const described = useFieldDescription(describedBy);
@@ -376,6 +440,7 @@ export function TextField({
   // A side of the spacing box says "–" while unset: a hint would not fit.
   const compact = React.useContext(CompactSides);
   const hint = useUnsetHint(unsetWords(compact, fallbackHint, control));
+  const typedLive = useTypedLive(live);
   const commit = useDraftCommit({
     draft,
     stored,
@@ -384,6 +449,14 @@ export function TextField({
     onCommit,
     setDraft,
     setTyping,
+    live: typedLive,
+  });
+  const mode = useCanvasTokenMode();
+  const write = typedWrite({
+    control,
+    tokens,
+    mode,
+    onType: onType ?? onCommit,
   });
 
   return (
@@ -397,11 +470,12 @@ export function TextField({
       autoComplete="off"
       aria-describedby={fieldDescribedBy(described, compact, id)}
       aria-invalid={invalid ? true : undefined}
-      // Committed on blur and on Enter, matching the content tab: an op per
-      // keystroke would make one undo remove one character.
+      // Written as it is typed, so the canvas follows; the stretch of typing
+      // is one undo step, which blur and Enter end.
       onChange={event => {
         setTyping(true);
-        setDraft(event.target.value);
+        if (typedLive === undefined) setDraft(event.target.value);
+        else typedLive.type(event.target.value, write);
       }}
       {...focusHandlers(editing?.holdBlur, setTyping, commit)}
       onKeyDown={event => {
@@ -415,6 +489,15 @@ export function TextField({
       }}
     />
   );
+}
+
+/**
+ * The live draft a field types through: none for a shared style, which is
+ * written when the edit ends (see the `live` prop of {@link TextField}).
+ */
+function useTypedLive(live: LiveDraft | undefined): LiveDraft | undefined {
+  const target = React.useContext(StyleTargetContext);
+  return target.kind === "shared" ? undefined : live;
 }
 
 /**

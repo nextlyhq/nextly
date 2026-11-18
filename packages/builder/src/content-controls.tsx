@@ -14,10 +14,11 @@
  * label pointing at an element that is not there is announced as a field
  * nobody can reach, so the label and its control are one unit here.
  *
- * **Text commits on blur, not on every keystroke.** Undo is built from op
- * inverses, so an op per character would make one undo remove one letter.
+ * **Text writes as it is typed**, so the canvas follows each keystroke. The
+ * writes of one stretch of typing are one undo step (`live-draft.ts`), which
+ * ends on blur or Enter, so one undo takes back one edit, not one letter.
  * Discrete controls (a checkbox, a select) commit at once: there is no typing
- * to coalesce.
+ * to group.
  *
  * This module holds the text, checkbox, select, list, icon and unsupported
  * controls and the lookup, and is the entry for the rest: the host's services
@@ -65,9 +66,9 @@ import { loadLucideIcons } from "./lucide-icon-source";
 import { MediaControl } from "./media-controls";
 import { useRecentIcons } from "./recent-icons";
 import { RelationControl } from "./relation-control";
+import { typedNumber, useLiveDraft } from "./live-draft";
 import { RichTextControl } from "./rich-text-control";
 import { radioGroupStep } from "./roving-radios";
-import { useStoredDraft } from "./stored-draft";
 import { fitsSideBySide, type SideBySideRoom } from "./style-numeric";
 
 // The host's services and what every control takes, the media controls and
@@ -126,10 +127,11 @@ function storedText(value: unknown): string {
 /**
  * A field the author types into: text, textarea, url, number.
  *
- * Holds its own value while focused so typing is responsive, and reports it on
- * blur. Reading straight from the node would make every keystroke a document
- * edit; reporting only on blur without local state would make the field refuse
- * to show what was typed.
+ * Holds its own text while focused, and writes each keystroke as it goes in,
+ * so the canvas follows the typing; the stretch is one undo step, ended by
+ * blur or Enter. A number that is not one yet (emptied, a lone sign) writes
+ * nothing, so the canvas keeps the last one, and the field shows that last
+ * number again when it is left.
  */
 function TextishControl({
   id,
@@ -139,39 +141,46 @@ function TextishControl({
   label,
 }: ContentControlProps): React.JSX.Element {
   // Only a primitive becomes text. `String({})` is "[object Object]", and a
-  // field showing that would COMMIT it on blur — turning a prop the panel
-  // cannot represent into a string that permanently replaces it. An
-  // unrepresentable value shows empty and, because `send` compares against
-  // this, an untouched field writes nothing.
+  // field showing that would WRITE it, turning a prop the panel cannot
+  // represent into a string that permanently replaces it. An unrepresentable
+  // value shows empty and, because a write compares against this, an
+  // untouched field writes nothing.
   const stored = storedText(prop.value);
-  const [draft, setDraft] = useStoredDraft(stored);
+  const live = useLiveDraft(stored);
+  const number = prop.schema.type === "number";
 
-  const send = () => {
-    if (draft === stored) return;
-    if (prop.schema.type === "number") {
-      const parsed = Number(draft);
-      // A number field that cannot parse reverts rather than writing NaN, which
-      // survives JSON as `null` and reaches the renderer as a missing prop.
-      if (draft.trim() === "" || Number.isNaN(parsed)) {
-        setDraft(stored);
-        return;
-      }
-      onCommit(prop.name, parsed);
-      return;
+  // A keystroke's write, answering whether it moved the document.
+  const write = (text: string): boolean => {
+    if (!number) {
+      return text !== stored && onCommit(prop.name, text) !== null;
     }
-    onCommit(prop.name, draft);
+    // A number field writes only a number: NaN survives JSON as `null` and
+    // reaches the renderer as a missing prop.
+    const parsed = typedNumber(text);
+    if (parsed === undefined) return false;
+    if (stored.trim() !== "" && parsed === Number(stored)) return false;
+    return onCommit(prop.name, parsed) !== null;
+  };
+
+  // The edit ends: a number that is not one yet goes back to the last one
+  // written, and the next keystroke starts a new undo step.
+  const send = () => {
+    if (number && typedNumber(live.draft) === undefined) {
+      live.setDraft(stored);
+    }
+    live.end();
   };
 
   const hint = propHint(prop);
   const shared = {
     id,
     disabled,
-    value: draft,
+    value: live.draft,
     ...(hint === undefined ? {} : { "aria-describedby": `${id}-hint` }),
     onBlur: send,
     onChange: (
       event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
-    ) => setDraft(event.target.value),
+    ) => live.type(event.target.value, write),
   };
 
   return (
@@ -187,9 +196,9 @@ function TextishControl({
           {...shared}
           type={prop.schema.type === "number" ? "number" : "text"}
           inputMode={prop.schema.type === "url" ? "url" : undefined}
-          // Enter commits as well as blur. A single-line field is where an
-          // author expects Enter to mean "done", and waiting for them to click
-          // elsewhere leaves the canvas stale after a deliberate action.
+          // Enter ends the edit as well as blur: a single-line field is
+          // where an author expects Enter to mean "done", so what they type
+          // next is a new undo step.
           onKeyDown={event => {
             if (event.key === "Enter") {
               event.preventDefault();
