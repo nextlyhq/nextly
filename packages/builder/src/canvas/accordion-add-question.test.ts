@@ -14,7 +14,11 @@ import {
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { accordionForSelection, addQuestionOp } from "./accordion-add-question";
+import {
+  accordionForSelection,
+  addQuestionOp,
+  questionRoomRow,
+} from "./accordion-add-question";
 
 beforeEach(() => registerBlocks(coreBlocks as never, { source: "core" }));
 afterEach(() => clearBlocks());
@@ -80,5 +84,48 @@ describe("what '+ Add a question' adds", () => {
     expect(JSON.stringify(answer[0]?.props)).toContain(
       "Write the answer here."
     );
+  });
+});
+
+describe("where '+ Add a question' sits", () => {
+  // An accordion 300px tall at y 100, so its 44px room runs from 356 to 400.
+  const full = { x: 20, y: 100, width: 400, height: 300 };
+
+  it("is the room after the last question, when the whole accordion shows", () => {
+    expect(questionRoomRow(full, full, 1)).toEqual({
+      x: 20,
+      y: 356,
+      width: 400,
+      height: 44,
+    });
+  });
+
+  it("is the room still, when a scrolling container cuts only the accordion's top", () => {
+    const visible = { x: 20, y: 250, width: 400, height: 150 };
+    expect(questionRoomRow(full, visible, 1)?.y).toBe(356);
+  });
+
+  it("is nowhere while a container cuts the room off, never over a question", () => {
+    // The container shows 100 to 300: the room is scrolled out below. The
+    // bottom of what shows, 256 to 300, is a question, which a button
+    // placed there would cover.
+    const above = { x: 20, y: 100, width: 400, height: 200 };
+    expect(questionRoomRow(full, above, 1)).toBeNull();
+    // Half the room shows.
+    const half = { x: 20, y: 100, width: 400, height: 278 };
+    expect(questionRoomRow(full, half, 1)).toBeNull();
+    // Cut on the left, where the button starts.
+    const left = { x: 60, y: 100, width: 360, height: 300 };
+    expect(questionRoomRow(full, left, 1)).toBeNull();
+  });
+
+  it("is the room at the canvas's zoom, which the page draws 44px over the zoom tall", () => {
+    // At half zoom the room is 88 of the page's pixels.
+    expect(questionRoomRow(full, full, 0.5)).toEqual({
+      x: 20,
+      y: 312,
+      width: 400,
+      height: 88,
+    });
   });
 });

@@ -49,6 +49,7 @@ import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
 import {
+  canvasContentRect,
   layoutFragments,
   overlaySpaceOf,
   renderSkips,
@@ -123,7 +124,42 @@ export function addQuestionOp(
   return { kind: "insert", node: numberedForPlace(made, at, document), at };
 }
 
-/** Where the button is drawn: the accordion's shown box, and the zoom. */
+/** How far an edge may sit past another and still count as inside it. */
+const EDGE_SLACK_PX = 0.5;
+
+/** The room's height in the page's pixels: the button's 44px at the zoom. */
+function roomHeight(scale: number): number {
+  return ROOM_PX / (scale > 0 ? scale : 1);
+}
+
+/**
+ * The room after an accordion's last question, where the button sits, in the
+ * canvas's content coordinates: the last row of the accordion's whole box,
+ * as the frame's sheet draws it. `null` while a clipping container leaves
+ * any of it, or the left edge the button starts from, out of view, so the
+ * button is never drawn over a question when the room is scrolled away.
+ */
+export function questionRoomRow(
+  full: Rect,
+  visible: Rect,
+  scale: number
+): Rect | null {
+  const height = roomHeight(scale);
+  const row = {
+    x: full.x,
+    y: full.y + full.height - height,
+    width: full.width,
+    height,
+  };
+  const shows =
+    row.y >= visible.y - EDGE_SLACK_PX &&
+    row.y + row.height <= visible.y + visible.height + EDGE_SLACK_PX &&
+    row.x >= visible.x - EDGE_SLACK_PX &&
+    row.x < visible.x + visible.width;
+  return shows ? row : null;
+}
+
+/** Where the button is drawn: the accordion's room, and the zoom. */
 interface Place {
   readonly rect: Rect;
   readonly scale: number;
@@ -159,7 +195,7 @@ function markRoom(
   // The room as tall as the button at the canvas's zoom: the button keeps
   // its own size over a zoomed page, so the page's pixels are scaled back.
   // A custom property only, which no author value is overridden by.
-  const height = `${String(ROOM_PX / (scale > 0 ? scale : 1))}px`;
+  const height = `${String(roomHeight(scale))}px`;
   if (
     isHTMLElement(element) &&
     element.style.getPropertyValue(QUESTION_ROOM_PROPERTY) !== height
@@ -225,9 +261,18 @@ export function AccordionAddQuestion({
       return;
     }
     markRoom(room, block, space.scale);
+    // Placed from the accordion's whole box, where the room is, and drawn
+    // only while a clipping container leaves the room in view.
     const visible = visiblePartOf(block, space.root);
-    const rect =
-      visible === null || visible === "hidden" ? null : space.place(visible);
+    const row =
+      visible === null || visible === "hidden"
+        ? null
+        : questionRoomRow(
+            canvasContentRect(block, space.root),
+            visible,
+            space.scale
+          );
+    const rect = row === null ? null : space.place(row);
     const next = rect === null ? null : { rect, scale: space.scale };
     setPlace(current =>
       placeKey(current) === placeKey(next) ? current : next
@@ -278,10 +323,7 @@ export function AccordionAddQuestion({
           className="nx-add-question__button"
           data-add-question={accordion.id}
           // In the room at the foot of the accordion, at the canvas's zoom.
-          style={{
-            left: place.rect.x,
-            top: place.rect.y + place.rect.height - ROOM_PX,
-          }}
+          style={{ left: place.rect.x, top: place.rect.y }}
           onClick={event => {
             // Kept off the canvas, which would select what lies under it.
             event.stopPropagation();
