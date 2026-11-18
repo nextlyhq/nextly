@@ -83,15 +83,10 @@ export function useStyleClipboardVerbs({
     const editorNow = latest.current;
     const { document } = editorNow;
     const ids = editorNow.selection.ids;
-    const view = lockViewOf(editorNow);
-    // ONE held block refuses the whole paste, as one lock refuses a delete
-    // of several: the group is applied whole or not at all.
-    for (const id of ids) {
-      const held = designReadOnlyReason(document, id, view);
-      if (held !== undefined) {
-        notify(held);
-        return;
-      }
+    const held = heldReason(editorNow, ids);
+    if (held !== undefined) {
+      notify(held);
+      return;
     }
     const nodes = ids.flatMap(id => {
       const node = findNode(document.nodes, id);
@@ -111,12 +106,7 @@ export function useStyleClipboardVerbs({
     };
     if (plan.ops.length === 0) {
       if (skipped !== undefined) sayExplained(skipped);
-      else
-        announce(
-          nodes.length === 1
-            ? "This block already has this style."
-            : "These blocks already have this style."
-        );
+      else announce(alreadyWords(nodes.length));
       return;
     }
     const locked = lockSentence(editorNow, plan.ops);
@@ -128,17 +118,46 @@ export function useStyleClipboardVerbs({
     // refuses.
     if (editorNow.applyAll(plan.ops) === null) return;
     if (skipped !== undefined) notify(skipped);
-    announce(
-      [
-        `Style pasted on ${subjectOf(document, ids)}.`,
-        ...(skipped === undefined ? [] : [skipped]),
-        `Undo with ${UNDO_KEYS_SPOKEN}.`,
-      ].join(" ")
-    );
+    announce(pastedWords(subjectOf(document, ids), skipped));
   }, [latest, announce, notify, library, definitions]);
 
   return React.useMemo(
     () => ({ copyStyle, pasteStyle }),
     [copyStyle, pasteStyle]
   );
+}
+
+/**
+ * Why the paste is refused, from the first selected block whose design is
+ * held: ONE held block refuses the whole paste, as one lock refuses a
+ * delete of several, since the group is applied whole or not at all. The
+ * Style tab's own reading, so the paste is refused where its fields are
+ * read-only.
+ */
+function heldReason(
+  editor: EditorState,
+  ids: readonly string[]
+): string | undefined {
+  const view = lockViewOf(editor);
+  for (const id of ids) {
+    const held = designReadOnlyReason(editor.document, id, view);
+    if (held !== undefined) return held;
+  }
+  return undefined;
+}
+
+/** Said when every target already looks like the source. */
+function alreadyWords(count: number): string {
+  return count === 1
+    ? "This block already has this style."
+    : "These blocks already have this style.";
+}
+
+/** Said after a paste: what changed, what was skipped, and how to undo. */
+function pastedWords(subject: string, skipped: string | undefined): string {
+  return [
+    `Style pasted on ${subject}.`,
+    ...(skipped === undefined ? [] : [skipped]),
+    `Undo with ${UNDO_KEYS_SPOKEN}.`,
+  ].join(" ");
 }

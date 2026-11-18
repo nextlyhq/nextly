@@ -440,17 +440,31 @@ function keptStyles(
   for (const [state, byDevice] of Object.entries(styles)) {
     const keptDevices: Record<string, Record<string, unknown>> = {};
     for (const [device, values] of Object.entries(byDevice ?? {})) {
-      const keptValues: Record<string, unknown> = {};
-      for (const [property, value] of Object.entries(values ?? {})) {
-        if (CATALOG_PROPERTIES.has(property) && !supported.has(property)) {
-          skipped += 1;
-        } else {
-          keptValues[property] = structuredClone(value);
-        }
-      }
-      if (Object.keys(keptValues).length > 0) keptDevices[device] = keptValues;
+      const taken = keptValues(values, supported);
+      skipped += taken.skipped;
+      if (taken.kept !== undefined) keptDevices[device] = taken.kept;
     }
     if (Object.keys(keptDevices).length > 0) kept[state] = keptDevices;
+  }
+  return {
+    kept: Object.keys(kept).length === 0 ? undefined : kept,
+    skipped,
+  };
+}
+
+/** One state and device's values a block can take, copied, and how many it can't. */
+function keptValues(
+  values: Readonly<Record<string, unknown>> | undefined,
+  supported: ReadonlySet<string>
+): { kept: Record<string, unknown> | undefined; skipped: number } {
+  const kept: Record<string, unknown> = {};
+  let skipped = 0;
+  for (const [property, value] of Object.entries(values ?? {})) {
+    if (CATALOG_PROPERTIES.has(property) && !supported.has(property)) {
+      skipped += 1;
+    } else {
+      kept[property] = structuredClone(value);
+    }
   }
   return {
     kept: Object.keys(kept).length === 0 ? undefined : kept,
@@ -504,11 +518,7 @@ function pasteOp(
     if (styles === undefined) unset.push("styles");
     else patch.styles = styles;
   }
-  const worn = node.classes ?? [];
-  const sameClasses =
-    worn.length === classes.length &&
-    worn.every((id, index) => id === classes[index]);
-  if (!sameClasses) {
+  if (!sameIds(node.classes ?? [], classes)) {
     if (classes.length === 0) unset.push("classes");
     else patch.classes = [...classes];
   }
@@ -519,4 +529,9 @@ function pasteOp(
     patch,
     ...(unset.length === 0 ? {} : { unset }),
   };
+}
+
+/** Two class lists by value, in order: the order is what a block stores. */
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id, index) => id === b[index]);
 }
