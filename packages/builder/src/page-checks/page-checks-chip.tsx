@@ -60,6 +60,8 @@ export interface PageChecksChipProps {
   readonly tokens?: CheckedPage["tokens"];
   /** The site's shared styles, its edits to block types' looks among them. */
   readonly namedClasses?: CheckedPage["namedClasses"];
+  /** Opens the document's settings at a tab, for a fix found there. */
+  readonly onOpenSettingsTab?: (tab: string) => void;
 }
 
 /** Whether the list, the bar, or neither is open. */
@@ -215,6 +217,7 @@ export function PageChecksChip({
   definitions,
   tokens,
   namedClasses,
+  onOpenSettingsTab,
 }: PageChecksChipProps): React.JSX.Element {
   const { document } = editor;
   const report = React.useMemo(
@@ -243,8 +246,10 @@ export function PageChecksChip({
   // list, so Previous and Next leave no stale mark for its next close.
   const fixing = React.useRef(false);
   const fix = (finding: PageFinding): void => {
-    const { nodeId, fix: setting } = finding;
-    if (nodeId !== undefined) {
+    const { nodeId, fix: setting, settingsTab } = finding;
+    // A fix in the document's settings opens them at its tab.
+    if (settingsTab !== undefined) onOpenSettingsTab?.(settingsTab);
+    else if (nodeId !== undefined) {
       if (setting === undefined) editor.select(nodeId);
       else {
         showInspector?.();
