@@ -327,7 +327,10 @@ describe("the keyboard", () => {
 
 /** The page a "Turn into" is judged on, and the one the finished edit leaves. */
 const TYPED = { formatVersion: 1, kind: "page", nodes: [] } as BlockDocument;
-const WRITTEN = { ...TYPED, nodes: [] } as BlockDocument;
+const WRITTEN = {
+  ...TYPED,
+  nodes: [{ id: "t1", type: "core/text", version: 2, props: {} }],
+} as BlockDocument;
 
 /**
  * A passage's "Turn into" and the editor's verbs for it: Rich text open,
@@ -358,7 +361,7 @@ function turning(heading: Partial<TurnIntoOffer> = {}) {
     typedPage: () => TYPED,
     finish,
   };
-  const choices = vi.fn(() => offers);
+  const choices = vi.fn((_page: BlockDocument, _id: string) => offers);
   const run = vi.fn();
   return { turnInto, finish, verbs: { choices, run }, choices, run };
 }
@@ -380,7 +383,8 @@ describe("Turn into, in the bar", () => {
       item => item.textContent
     );
     expect(items).toEqual(["Rich text", "HeadingBold and links are removed"]);
-    expect(choices).toHaveBeenCalledWith(TYPED, "t1");
+    expect(choices.mock.calls[0]?.[0]).toBe(TYPED);
+    expect(choices.mock.calls[0]?.[1]).toBe("t1");
   });
 
   it("finishes the edit, then turns the block in the page it left", () => {
@@ -390,7 +394,8 @@ describe("Turn into, in the bar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Turn into" }));
     fireEvent.click(screen.getByRole("menuitem", { name: /^Heading/ }));
     expect(finish).toHaveBeenCalled();
-    expect(run).toHaveBeenCalledWith(WRITTEN, "t1", "core/heading");
+    expect(run.mock.calls[0]?.[0]).toBe(WRITTEN);
+    expect(run.mock.calls[0]?.slice(1)).toEqual(["t1", "core/heading"]);
     expect(formatBar.get().turning).toBe(false);
   });
 
@@ -486,7 +491,8 @@ describe("the notice a paste leaves", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Turn into Rich text" })
     );
-    expect(run).toHaveBeenCalledWith(WRITTEN, "t1", "core/rich-text");
+    expect(run.mock.calls[0]?.[0]).toBe(WRITTEN);
+    expect(run.mock.calls[0]?.slice(1)).toEqual(["t1", "core/rich-text"]);
   });
 });
 

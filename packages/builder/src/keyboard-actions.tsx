@@ -980,15 +980,22 @@ function useTurnIntoVerbs(
   library: readonly NamedClass[] | undefined,
   announce: (words: string) => void
 ): Pick<BlockActions, "turnInto" | "turnIntoIn"> {
-  const { document, selectedId, selection, apply, lockRefusalFor } = editor;
-  const turnIntoIn = React.useMemo(
-    () => ({
+  const { document, selectedId, selection, apply, lockRefusalFor, limits } =
+    editor;
+  const turnIntoIn = React.useMemo(() => {
+    // Judged as the editor's own apply judges: its placement rules, its size
+    // limits, and the site's styles for a block style that cannot come along.
+    const judging = {
+      nesting,
+      limits,
+      ...(library === undefined ? {} : { library }),
+    };
+    return {
       choices: (page: BlockDocument, id: string) =>
         turnIntoOffers(page, id, {
+          ...judging,
           ask: lockRefusalFor,
           planned: true,
-          nesting,
-          ...(library === undefined ? {} : { library }),
         }),
       run: (page: BlockDocument, id: string, to: string) => {
         runTurnInto(
@@ -996,15 +1003,11 @@ function useTurnIntoVerbs(
           id,
           to,
           announce,
-          {
-            nesting,
-            ...(library === undefined ? {} : { library }),
-          }
+          judging
         );
       },
-    }),
-    [apply, lockRefusalFor, nesting, library, announce]
-  );
+    };
+  }, [apply, lockRefusalFor, nesting, limits, library, announce]);
   const turnInto = React.useCallback(
     (to: string) => {
       if (selectedId === null || selection.ids.length !== 1) return;

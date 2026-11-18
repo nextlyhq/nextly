@@ -45,6 +45,7 @@ import {
   type BlockDocument,
   type BlockNode,
   type DefinitionsById,
+  type NamedClass,
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
 
@@ -181,7 +182,8 @@ function turnIntoActions(
   selectedId: string,
   nesting: NestingSource,
   ask: LockQuestion | undefined,
-  planned: boolean
+  planned: boolean,
+  library: readonly NamedClass[] | undefined
 ): ToolbarAction[] {
   // Judged by the placement rules the rest of the menu is, which are the
   // ones the verb runs by.
@@ -189,6 +191,8 @@ function turnIntoActions(
     ...(ask === undefined ? {} : { ask }),
     planned,
     nesting,
+    // The site's styles, so a block style that gives way is said here too.
+    ...(library === undefined ? {} : { library }),
   }).map(offer => ({
     id: offer.id,
     label: offer.label,
@@ -962,7 +966,14 @@ export function toolbarActions(
       lockRefusalFor,
       duplication?.ops
     ),
-    ...turnIntoActions(document, selectedId, rules, lockRefusalFor, planned),
+    ...turnIntoActions(
+      document,
+      selectedId,
+      rules,
+      lockRefusalFor,
+      planned,
+      sharedStyles?.library
+    ),
     saveAction(document, ids, rules, mayCreatePattern, planned),
     ...sharedStyleActions(document, ids, sharedStyles),
     ...editComponentAction(document, selectedId, offersEditComponent),

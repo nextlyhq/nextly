@@ -27,6 +27,7 @@ import {
   turnIntoTargets,
   type BlockDocument,
   type BuilderOp,
+  type DocumentLimits,
   type NamedClass,
   type NestingSource,
   type TurnIntoDefinitions,
@@ -109,6 +110,12 @@ export interface TurnIntoJudging {
    * its own styles (`planTurnInto`). Absent, its id is carried as is.
    */
   readonly library?: readonly NamedClass[];
+  /**
+   * The editor's size limits, which the trial edit the placement rule is
+   * asked of is judged by, as the editor's own apply is. Absent, the
+   * defaults.
+   */
+  readonly limits?: DocumentLimits;
 }
 
 /** What a turn removes, as one line: the converter's words, then a binding. */
@@ -131,13 +138,16 @@ interface Judged {
 function placementReason(
   document: BlockDocument,
   plan: TurnIntoPlan,
-  nesting: NestingSource
+  nesting: NestingSource,
+  limits: DocumentLimits | undefined
 ): string | undefined {
   let after: BlockDocument;
   try {
-    after = applyOp(document, plan.op).document;
+    after = applyOp(document, plan.op, limits).document;
   } catch {
-    return TURN_INTO_WORDS.refused;
+    // Not one this rule can judge (the trial was refused, a cap say): the
+    // editor's own apply, with the host's limits, decides when it runs.
+    return undefined;
   }
   const found = placementRefusal(document, after, {
     nesting,
@@ -167,7 +177,8 @@ function judgedReason(
   return placementReason(
     document,
     plan,
-    judging.nesting ?? registryNestingSource()
+    judging.nesting ?? registryNestingSource(),
+    judging.limits
   );
 }
 

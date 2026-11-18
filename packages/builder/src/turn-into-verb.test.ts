@@ -9,6 +9,7 @@
 import {
   applyOp,
   clearBlocks,
+  DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   registerBlocks,
   TEXT_FORMAT,
@@ -169,6 +170,31 @@ describe("turnIntoOffers", () => {
     );
   });
 
+  it("judges the placement rule on a page the editor's own size limits allow", () => {
+    // A page past the default cap, which this host's limits allow, with the
+    // Text in a region that holds Text only.
+    const big = text({ id: "big", props: { text: "x".repeat(2_200_000) } });
+    const notes: BlockNode = {
+      id: "n1",
+      type: "acme/notes",
+      version: 1,
+      props: {},
+      slots: { children: [text()] },
+    };
+    const document = page(notes, big);
+    const host = { ...DEFAULT_LIMITS, maxBytes: 8 * 1024 * 1024 };
+    const [judged] = turnIntoOffers(document, "t1", {
+      planned: true,
+      limits: host,
+    });
+    expect(judged?.enabled).toBe(false);
+    expect(judged?.reason).toMatch(/Rich text/);
+    // Past the limits it is given, the trial cannot be judged here, so the
+    // choice is left to the editor's own apply rather than dimmed wrongly.
+    const [unjudged] = turnIntoOffers(document, "t1", { planned: true });
+    expect(unjudged?.enabled).toBe(true);
+  });
+
   it("dims every turn of a locked block, with the lock's words", () => {
     const offers = turnIntoOffers(
       page(text({ locked: true, name: "Intro" })),
@@ -300,6 +326,42 @@ describe("the block menu", () => {
       enabled: true,
       note: "Bold and links are removed",
     });
+  });
+
+  it("says in the menu what a block style gives way to, from the site's styles", () => {
+    const library = [
+      {
+        id: "look-lead",
+        slug: "lead",
+        orderIndex: 0,
+        blockType: "core/text",
+        styles: { base: { desktop: { color: "#0a0" } } },
+      },
+      {
+        id: "brand",
+        slug: "brand",
+        orderIndex: 1,
+        styles: { base: { mobile: { color: "#00a" } } },
+      },
+    ];
+    const worn = text({
+      classes: ["look-lead", "brand"],
+      props: { text: rich(paragraph(words("Plain"))) },
+    });
+    const actions = toolbarActions(
+      page(worn),
+      "t1",
+      ["t1"],
+      undefined,
+      true,
+      undefined,
+      undefined,
+      false,
+      { library, mayChange: true }
+    );
+    expect(
+      actions.find(action => action.id === "turn-into-rich-text")?.note
+    ).toBe("Part of its block style gives way to its shared style");
   });
 
   it("judges the turns by the placement rules the menu is given", () => {

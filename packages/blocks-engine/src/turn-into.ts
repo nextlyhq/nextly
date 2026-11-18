@@ -22,6 +22,7 @@
  * @module turn-into
  */
 import { bindablePropKind } from "./binding-rules";
+import { BINDABLE_KINDS, bindablePropTypeOf } from "./binding-vocabulary";
 import type { AnyBlockDefinition, PropSchema } from "./block";
 import {
   isComponentDocument,
@@ -309,8 +310,11 @@ function carriedBindings(
   const unbound: string[] = [];
   for (const [prop, binding] of Object.entries(node.bindings ?? {})) {
     const into = Object.hasOwn(carries, prop) ? carries[prop] : undefined;
+    // One binding per target prop: a second carried onto the same one would
+    // replace the first, so it is removed and named instead.
     if (
       into !== undefined &&
+      !Object.hasOwn(bindings, into) &&
       showsTheSame(from.props?.[prop], target.props?.[into])
     ) {
       bindings[into] = structuredClone(binding);
@@ -332,7 +336,15 @@ function showsTheSame(
   to: PropSchema | undefined
 ): boolean {
   const kind = bindablePropKind(from);
-  return kind !== undefined && kind === bindablePropKind(to);
+  if (kind === undefined || kind !== bindablePropKind(to)) return false;
+  // And every kind of field the old prop could be filled from fills the new
+  // one too: a text prop fills from a number field, an email prop does not.
+  const fills = (schema: PropSchema | undefined) => {
+    const type = schema === undefined ? undefined : bindablePropTypeOf(schema);
+    return type === undefined ? [] : BINDABLE_KINDS[type];
+  };
+  const taken = fills(to);
+  return fills(from).every(each => taken.includes(each));
 }
 
 /** Whether the target block may carry a style property. */

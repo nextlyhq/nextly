@@ -167,6 +167,29 @@ describe("Rich text → Heading", () => {
     expect(plan.dropped).toBeUndefined();
   });
 
+  it("says formatting is removed when there is no bold or link to name", () => {
+    const content = root(para(words("Soft", TEXT_FORMAT.ITALIC)));
+    const plan = turn(block(RICH_TEXT_BLOCK, { content }), HEADING_BLOCK);
+    expect(plan.op.node.props).toEqual({ text: "Soft", level: "h2" });
+    expect(plan.dropped).toBe("Formatting is removed");
+  });
+
+  it("is not offered for a paragraph holding a button, and says why", () => {
+    const content = root(
+      para(words("Join "), {
+        type: "button-link",
+        text: "Sign up",
+        url: "https://example.com/join",
+      })
+    );
+    expect(refusal(block(RICH_TEXT_BLOCK, { content }), HEADING_BLOCK)).toBe(
+      "It holds a button or something else a Heading can't hold."
+    );
+    expect(refusal(block(RICH_TEXT_BLOCK, { content }), TEXT_BLOCK)).toBe(
+      "It holds a button or something else a Text can't hold."
+    );
+  });
+
   it("is not offered for two paragraphs, and says why", () => {
     const content = root(para(words("One")), para(words("Two")));
     expect(refusal(block(RICH_TEXT_BLOCK, { content }), HEADING_BLOCK)).toBe(

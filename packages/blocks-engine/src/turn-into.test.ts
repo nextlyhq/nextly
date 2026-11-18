@@ -71,7 +71,31 @@ const DEFINITIONS: ReadonlyMap<string, AnyBlockDefinition> = new Map(
         "test/words": {
           convert: () => ({ refused: "Titles stay titles." }),
         },
+        // Two props onto one: only one binding can land there.
+        "test/contact": {
+          carries: { title: "line", note: "line" },
+          convert: (props: Record<string, unknown>) => ({
+            props: { line: props.title },
+          }),
+        },
+        // Words onto an address, which takes text and nothing else.
+        "test/mail": {
+          carries: { title: "address" },
+          convert: (props: Record<string, unknown>) => ({
+            props: { address: props.title },
+          }),
+        },
       },
+    }),
+    definition({
+      name: "test/contact",
+      editor: { label: "Contact" },
+      props: { line: { type: "text" } },
+    }),
+    definition({
+      name: "test/mail",
+      editor: { label: "Mail" },
+      props: { address: { type: "email" } },
     }),
     definition({
       name: "test/passage",
@@ -191,6 +215,35 @@ describe("planTurnInto", () => {
     );
     expect(plan.op.node.bindings).toBeUndefined();
     expect(plan.unbound).toEqual(["note"]);
+  });
+
+  it("keeps one binding where two would land on the same prop, and names the other", () => {
+    const title: BlockNode = {
+      id: "t1",
+      type: "test/title",
+      version: 3,
+      props: { title: "Hi" },
+      bindings: { title: { $bind: "name" }, note: { $bind: "role" } },
+    };
+    const plan = planTurnInto(page(title), "t1", "test/contact", lookup);
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.op.node.bindings).toEqual({ line: { $bind: "name" } });
+    expect(plan.unbound).toEqual(["note"]);
+  });
+
+  it("removes a binding the new prop takes fewer kinds of value for", () => {
+    // A text prop fills from a number field; an email prop does not.
+    const title: BlockNode = {
+      id: "t1",
+      type: "test/title",
+      version: 3,
+      props: { title: "Hi" },
+      bindings: { title: { $bind: "count" } },
+    };
+    const plan = planTurnInto(page(title), "t1", "test/mail", lookup);
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.op.node.bindings).toBeUndefined();
+    expect(plan.unbound).toEqual(["title"]);
   });
 
   it("passes on what the converter says is lost", () => {

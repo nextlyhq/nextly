@@ -11,7 +11,8 @@
  *
  * - Text → Rich text keeps the words, bold, italic and links.
  * - Text or Rich text → Heading keeps the words; their formatting is removed,
- *   and said ("Bold and links are removed").
+ *   and said ("Bold and links are removed", or "Formatting is removed" when
+ *   there is no bold or link to name).
  * - Rich text → Text or Heading only when it is one paragraph or one heading,
  *   and otherwise says why. A heading's level is kept.
  * - Heading → Text or Rich text keeps the words, and a link to an address
@@ -23,11 +24,13 @@
 import {
   type BlockConversion,
   type BlockConverter,
+  hasFormat,
   isRichTextNode,
   isRichTextValue,
   richTextToPlainText,
   type RichTextNode,
   type RichTextValue,
+  TEXT_FORMAT,
   toOneParagraph,
 } from "@nextlyhq/blocks-engine";
 
@@ -44,6 +47,7 @@ export const HEADING_BLOCK = "core/heading";
 /** What a turn says it loses, or why it refuses. */
 export const TURN_INTO_WORDS = {
   marksRemoved: "Bold and links are removed",
+  formattingRemoved: "Formatting is removed",
   onlyLightMarks: "Only bold, italic and links are kept",
   linkRemoved: "The link is removed",
   relRemoved: "The link's relationship is removed",
@@ -51,7 +55,19 @@ export const TURN_INTO_WORDS = {
     "Only a Rich text with one paragraph or one heading can become Text.",
   notOneBlockToHeading:
     "Only a Rich text with one paragraph or one heading can become a Heading.",
+  notWordsToText: "It holds a button or something else a Text can't hold.",
+  notWordsToHeading:
+    "It holds a button or something else a Heading can't hold.",
 } as const;
+
+/** The inline nodes a Text or a Heading can take the words of. */
+const WORD_NODES: ReadonlySet<string> = new Set([
+  "text",
+  "linebreak",
+  "tab",
+  "link",
+  "autolink",
+]);
 
 /** The level a heading is given when nothing says which. */
 const DEFAULT_LEVEL = "h2";
@@ -65,26 +81,49 @@ function rooted(children: RichTextNode[]): RichTextValue {
 }
 
 /**
- * Whether inline nodes carry anything beyond words and line breaks: a mark, an
- * inline style, a link. Walked with a stack, as every reader of stored rich
+ * Every node under these, walked with a stack, as every reader of stored rich
  * text is, since a value can nest deep.
  */
-function hasFormatting(nodes: readonly unknown[]): boolean {
+function everyNode(nodes: readonly unknown[]): RichTextNode[] {
+  const out: RichTextNode[] = [];
   const stack = [...nodes];
   while (stack.length > 0) {
     const node = stack.pop();
     if (!isRichTextNode(node)) continue;
-    if (isFormatted(node)) return true;
+    out.push(node);
     if (Array.isArray(node.children)) stack.push(...node.children);
   }
-  return false;
+  return out;
 }
 
-/** Whether one node is itself formatting: a link, a mark, an inline style. */
-function isFormatted(node: RichTextNode): boolean {
+/** Whether a node is a link, or words in bold. */
+function isLinkOrBold(node: RichTextNode): boolean {
   if (node.type === "link" || node.type === "autolink") return true;
+  return hasFormat(node.format, TEXT_FORMAT.BOLD);
+}
+
+/** Whether a node carries any other mark, or an inline style. */
+function isMarked(node: RichTextNode): boolean {
   if (typeof node.format === "number" && node.format !== 0) return true;
   return typeof node.style === "string" && node.style.trim() !== "";
+}
+
+/**
+ * What a heading removes from these inline nodes, said as plainly as it can
+ * be: bold and links by name, anything else as formatting; nothing for
+ * plain words.
+ */
+function formattingLost(nodes: readonly unknown[]): string | undefined {
+  const all = everyNode(nodes);
+  if (all.some(isLinkOrBold)) return TURN_INTO_WORDS.marksRemoved;
+  return all.some(isMarked) ? TURN_INTO_WORDS.formattingRemoved : undefined;
+}
+
+/** Whether a block holds only words, line breaks and links. */
+function holdsOnlyWords(block: RichTextNode): boolean {
+  return everyNode(block.children ?? []).every(node =>
+    WORD_NODES.has(node.type)
+  );
 }
 
 /** A paragraph's inline nodes, as a one-paragraph value holds them. */
@@ -98,9 +137,10 @@ function asHeading(
   words: string,
   level: string
 ): BlockConversion {
+  const dropped = formattingLost(inline);
   return {
     props: { text: words, level },
-    ...(hasFormatting(inline) ? { dropped: TURN_INTO_WORDS.marksRemoved } : {}),
+    ...(dropped === undefined ? {} : { dropped }),
   };
 }
 
@@ -161,6 +201,9 @@ const richTextToText: BlockConverter<RichTextBlockProps> = {
   convert: props => {
     const block = oneBlockOf(props.content);
     if (block === null) return { refused: TURN_INTO_WORDS.notOneBlockToText };
+    if (!holdsOnlyWords(block)) {
+      return { refused: TURN_INTO_WORDS.notWordsToText };
+    }
     const kept = toOneParagraph(rooted([{ ...block, type: "paragraph" }]));
     return {
       props: { text: kept.value },
@@ -176,6 +219,9 @@ const richTextToHeading: BlockConverter<RichTextBlockProps> = {
     const block = oneBlockOf(props.content);
     if (block === null) {
       return { refused: TURN_INTO_WORDS.notOneBlockToHeading };
+    }
+    if (!holdsOnlyWords(block)) {
+      return { refused: TURN_INTO_WORDS.notWordsToHeading };
     }
     const tag = block.type === "heading" ? block.tag : undefined;
     return asHeading(
