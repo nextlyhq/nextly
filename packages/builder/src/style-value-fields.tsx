@@ -10,6 +10,7 @@ import {
   APPEAR_DELAY_PROPERTY,
   APPEAR_DURATION_PROPERTY,
   isStyleLeaf,
+  isTokenRef,
   OVERLAY_STRENGTH,
   STYLE_CATALOG,
   trimCssWhitespace,
@@ -397,9 +398,14 @@ function LengthOrNumberField({
     live.end();
   };
   // A keystroke writes nothing while emptied or refused, so the canvas keeps
-  // the last valid value.
-  const write = (text: string): boolean =>
-    typedStyleText(text) !== undefined && onCommit(valueOf(text)) === "applied";
+  // the last valid value. Nor while it names a variable: a whole name can be
+  // on its way to a longer one, and storing it would swap the field for the
+  // variable mid-word. The name is matched when the field is left.
+  const write = (text: string): boolean => {
+    if (typedStyleText(text) === undefined) return false;
+    const value = valueOf(text);
+    return !isTokenRef(value) && onCommit(value) === "applied";
+  };
   const owning = useLineHeightLabelScrub({ draft, setDraft, stored, onCommit });
   return (
     <Input
