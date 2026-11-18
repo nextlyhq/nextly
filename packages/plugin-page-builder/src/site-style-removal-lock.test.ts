@@ -652,3 +652,63 @@ describe("a site style write dropping a variable named through var()", () => {
     );
   });
 });
+
+describe("a site style write dropping a text style a Site text row follows", () => {
+  const eyebrow = {
+    id: "t-eyebrow",
+    slug: "eyebrow",
+    label: "Eyebrow",
+    orderIndex: 0,
+    role: "text",
+    styles: { base: { base: { fontSize: "12px" } } },
+  };
+  const rows = { tokens: [], siteText: { h1: { textStyle: "t-eyebrow" } } };
+
+  it("refuses before the lock, naming the row, as the remove route does", async () => {
+    const { setup, sharedStyleUses } = setupUsing();
+    await expect(
+      refuseRemovalsInUse(
+        update(
+          { classes: [eyebrow], tokens: rows },
+          { classes: [], tokens: rows },
+          AUTHOR
+        ),
+        setup,
+        "postgresql"
+      )
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          {
+            path: "",
+            code: "IN_USE",
+            message:
+              "Nothing was removed. Eyebrow is used by Site text: Heading 1.",
+          },
+        ],
+      },
+    });
+    // Judged from the Single as the write leaves it: no page is asked.
+    expect(sharedStyleUses).not.toHaveBeenCalled();
+    expect(order).not.toContain("lock");
+  });
+
+  it("passes when the same write points the row elsewhere", async () => {
+    const { setup } = setupUsing();
+    await expect(
+      refuseRemovalsInUse(
+        update(
+          { classes: [eyebrow], tokens: rows },
+          {
+            classes: [],
+            tokens: { tokens: [], siteText: { h1: { fontSize: "40px" } } },
+          },
+          AUTHOR
+        ),
+        setup,
+        "postgresql"
+      )
+    ).resolves.toBeUndefined();
+  });
+});

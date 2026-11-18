@@ -217,6 +217,8 @@ export function StyleTab({
               tokens={tokens}
               target={target}
               fonts={fonts}
+              // The Text section's "Text style" picker lists from it.
+              classLibrary={shared.classLibrary}
             />
           </FocalFrame.Provider>
         </StateTinted>

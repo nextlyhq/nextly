@@ -65,6 +65,11 @@ export interface LocalizedFieldRef {
    * `false` would read as blank), so it is non-blank when not null.
    */
   nonText?: boolean;
+  /**
+   * The field's storage is JSON (a structure, a JSON value, a list kept as one), which some
+   * databases hand back as text: only such a field's text is read back to the value it encodes.
+   */
+  json?: boolean;
 }
 
 /** Blank = "not translated": null, undefined, or empty string fall back. 0/false are real values. */

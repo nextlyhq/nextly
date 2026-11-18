@@ -114,8 +114,11 @@ export function typeSizeChoices(
     }));
 }
 
-/** A row's value as text: a variable's value in this mode, or the value. */
-function valueText(
+/**
+ * A row's value as text: a variable's value in this mode, or the value.
+ * Shared with the text styles, whose parts are read the same way.
+ */
+export function valueText(
   value: StyleValue | undefined,
   tokens: SiteTokenSet,
   mode: TokenMode

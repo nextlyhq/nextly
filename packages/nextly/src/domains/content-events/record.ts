@@ -15,6 +15,7 @@ import {
   SHARED_PART,
   type ContentEventSubjectKind,
 } from "../../schemas/content-events";
+import { CONTENT_EVENT_ACTOR_PRINCIPAL_KIND_LENGTH } from "../../schemas/content-events/widths";
 import { toJsonColumnValue } from "../../shared/lib/json-column-value";
 import { isJsonValue } from "../../shared/lib/json-value";
 import { uuidV7 } from "../../utils/uuid-v7";
@@ -106,7 +107,7 @@ const FIELD_LIMITS = {
   subjectId: 255,
   actorId: 255,
   actorName: 255,
-  actorPrincipalKind: 64,
+  actorPrincipalKind: CONTENT_EVENT_ACTOR_PRINCIPAL_KIND_LENGTH,
   fromState: 64,
   toState: 64,
   definitionHash: 64,

@@ -639,6 +639,7 @@ export {
   type PageCheckReport,
   type PageCheckResult,
   type PageFinding,
+  type PageRegionDocument,
   type ResolvedPage,
 } from "./page-checks/page-checks";
 export { CORE_PAGE_CHECKS } from "./page-checks/core-checks";

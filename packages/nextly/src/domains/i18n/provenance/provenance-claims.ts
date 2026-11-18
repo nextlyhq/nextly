@@ -14,6 +14,7 @@ import { nextlyValidationFromZod } from "../../../api/zod-to-nextly-error";
 import type { RequestActor } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors/nextly-error";
 import { DOCUMENT_PROVENANCE_KEY } from "../../../lib/system-columns";
+import { languageCounterInVersion } from "../../versions/stale-version";
 
 /**
  * For a field with a structure per language (a translated repeater or blocks field): which row of
@@ -39,6 +40,9 @@ const ProvenanceClaimSchema = z.discriminatedUnion("origin", [
     .object({
       origin: z.literal("copy"),
       sourceLocale: z.string().min(1).max(35),
+      // The document's `_rev` as the copy read its source: which version of the source language
+      // the value was copied from. Checked as a version below.
+      sourceRevision: z.string().min(1).max(4096).optional(),
       rows: RowOriginsSchema.optional(),
     })
     .strict(),
@@ -67,7 +71,40 @@ export function provenanceClaimsOf(
   if (!Object.hasOwn(body, DOCUMENT_PROVENANCE_KEY)) return undefined;
   const parsed = ProvenanceInput.safeParse(body[DOCUMENT_PROVENANCE_KEY]);
   if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+  // A copy's version is read as every version is (`languageCounterInVersion`); one that is not a
+  // version is the writer's mistake, refused here, before anything is written.
+  for (const [field, claim] of Object.entries(parsed.data)) {
+    if (claim.origin !== "copy" || claim.sourceRevision === undefined) continue;
+    try {
+      languageCounterInVersion(claim.sourceRevision, claim.sourceLocale);
+    } catch {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `${DOCUMENT_PROVENANCE_KEY}.${field}.sourceRevision`,
+            code: "INVALID_VALUE",
+            message:
+              "A copy's sourceRevision must be a document version (`_rev`) as read.",
+          },
+        ],
+      });
+    }
+  }
   return parsed.data;
+}
+
+/**
+ * The value `claims` names under `key`, read from its own keys only. Claims and their row maps are
+ * plain objects, so an inherited member such as `constructor` would otherwise answer for a field or
+ * row of that name that the write never claimed.
+ */
+export function ownEntry<T>(
+  claims: Readonly<Record<string, T>> | undefined,
+  key: string
+): T | undefined {
+  return claims !== undefined && Object.hasOwn(claims, key)
+    ? claims[key]
+    : undefined;
 }
 
 /**
@@ -92,4 +129,35 @@ export function assertClaimsAllowed(
         "Only an API key or a plugin-defined person may say a value was written by an agent.",
     })),
   });
+}
+
+/**
+ * Refuses a copy whose source is no language a value can be out of date against: one the site
+ * does not configure, or the language the write is in. `target` is null for a write of every
+ * language at once, which names no one language to compare with.
+ */
+export function assertCopySources(
+  claims: ProvenanceClaims | undefined,
+  languages: { configured: readonly string[]; target: string | null }
+): void {
+  if (claims === undefined) return;
+  const errors: { path: string; code: string; message: string }[] = [];
+  for (const [field, claim] of Object.entries(claims)) {
+    if (claim.origin !== "copy") continue;
+    const path = `${DOCUMENT_PROVENANCE_KEY}.${field}.sourceLocale`;
+    if (!languages.configured.includes(claim.sourceLocale)) {
+      errors.push({
+        path,
+        code: "PROVENANCE_COPY_SOURCE_UNKNOWN",
+        message: "A copy must name one of the site's languages as its source.",
+      });
+    } else if (claim.sourceLocale === languages.target) {
+      errors.push({
+        path,
+        code: "PROVENANCE_COPY_SOURCE_IS_TARGET",
+        message: "A value can't be a copy from the language it is written in.",
+      });
+    }
+  }
+  if (errors.length > 0) throw NextlyError.validation({ errors });
 }
