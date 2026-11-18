@@ -159,7 +159,7 @@ describe("the starter's card", () => {
     render(
       <SelectedRegionCard
         facts={{ ...header, starter: true, componentId: "starter-h" }}
-        onEditComponent={vi.fn()}
+        onEdit={vi.fn()}
         onOpenSettings={vi.fn()}
       />
     );
@@ -174,7 +174,7 @@ describe("the starter's card", () => {
     render(
       <SelectedRegionCard
         facts={header}
-        onEditComponent={vi.fn()}
+        onEdit={vi.fn()}
         onOpenSettings={vi.fn()}
       />
     );

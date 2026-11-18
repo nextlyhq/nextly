@@ -1279,3 +1279,52 @@
 .nx-inside-parent__axis > .nx-inspector__note {
   margin: 0;
 }
+
+/*
+ * Advanced › Custom CSS: the hint, a monospace box as wide as the panel at
+ * its narrowest, Apply under it, and each refused line under that in the
+ * destructive tone, at the panel's own text sizes.
+ */
+.nx-custom-css {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nx-custom-css__hint {
+  margin: 0;
+  color: var(--nx-muted-foreground);
+  font-size: var(--nx-builder-font-size);
+  line-height: 1.4;
+}
+
+.nx-custom-css__hint code,
+.nx-custom-css__box {
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.nx-custom-css__box {
+  inline-size: 100%;
+  min-inline-size: 0;
+  font-size: var(--nx-builder-font-size);
+  line-height: 1.5;
+  resize: vertical;
+  tab-size: 2;
+}
+
+.nx-custom-css__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.nx-custom-css__problems ul {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--nx-destructive);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
