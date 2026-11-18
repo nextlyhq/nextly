@@ -5210,6 +5210,9 @@ export class CollectionRelationshipService extends BaseService {
    * @param field - Field definition
    * @returns Array of related entries
    */
+  // Public: reached from outside through `CollectionsHandler.getRelationshipService()`, which the
+  // package's root entry exports. Its own reads go through `fetchManyToManyRelationsFrom`.
+  // fallow-ignore-next-line unused-class-member
   async fetchManyToManyRelations(
     sourceCollectionName: string,
     sourceEntryId: string,
@@ -5534,6 +5537,9 @@ export class CollectionRelationshipService extends BaseService {
    * @param field - Field definition
    * @returns Junction table name
    */
+  // Public: reached from outside through `CollectionsHandler.getRelationshipService()`, which the
+  // package's root entry exports. Its own reads and writes name junctions through `junctionFrom`.
+  // fallow-ignore-next-line unused-class-member
   getJunctionTableName(
     sourceCollectionName: string,
     targetCollectionName: string,

@@ -3479,14 +3479,15 @@ export class SingleMutationService extends BaseService {
       // them.
       const manyToManyLinks: Record<string, string[]> = {};
       for (const field of fieldConfigs) {
-        if (!usesJunctionTable(field)) continue;
-        const value = currentData[field.name];
+        const name = "name" in field ? field.name : undefined;
+        if (typeof name !== "string" || !usesJunctionTable(field)) continue;
+        const value = currentData[name];
         if (value === undefined) continue;
-        delete currentData[field.name];
+        delete currentData[name];
         if (value) {
-          manyToManyLinks[field.name] = (
-            Array.isArray(value) ? value : [value]
-          ).map(String);
+          manyToManyLinks[name] = (Array.isArray(value) ? value : [value]).map(
+            String
+          );
         }
       }
 
