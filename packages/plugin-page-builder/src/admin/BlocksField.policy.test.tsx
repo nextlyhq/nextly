@@ -331,6 +331,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   DocumentSaveAndPublish: () => null,
   useDocumentLifeStage: () => null,
   useDocumentActions: () => null,
+  // The page menu's New page dialog, which the top bar mounts.
+  useLeaveWithoutWarning: () => () => {},
   // `null` is a real answer the pill handles — "no status has been persisted",
   // which is what a create form and a preview both look like — so this mounts
   // the top bar without putting a second subject in the assertions below.

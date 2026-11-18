@@ -278,6 +278,25 @@ function orderLocalizedMigration(
     .join("\n--> statement-breakpoint\n");
 }
 
+/**
+ * Each built-in field (`RESERVED_FIELD_NAMES`: `title`, `slug` and the rest) the stored row holds,
+ * as `fields` hands it back or, where they leave it out, as stored. A built-in is never defined by
+ * a save, so one a create is sent is dropped; but a row can hold one, a `title` a code-first config
+ * declared and `nextly db:sync --demote` stored (translated, as a text field on a translated
+ * collection is), and an update dropping it, whether it was handed back or left out, would read as
+ * that field leaving, renamed into another or dropped with its translations. Derived from the row,
+ * so every road that updates a collection keeps it: the dispatcher, the root-exported
+ * `CollectionService` and a plugin's `ctx.services.collections`.
+ */
+function builtInsHeldByRow(
+  fields: readonly FieldDefinition[],
+  stored: readonly FieldDefinition[] | null
+): FieldDefinition[] {
+  return (stored ?? [])
+    .filter(field => RESERVED_FIELD_NAMES.includes(field.name.toLowerCase()))
+    .map(held => fields.find(field => field.name === held.name) ?? held);
+}
+
 export class DynamicCollectionService extends BaseService {
   private validationService: DynamicCollectionValidationService;
   private schemaService: DynamicCollectionSchemaService;
@@ -802,7 +821,8 @@ export class DynamicCollectionService extends BaseService {
     this.validationService.validateJunctionOwnership(userDefinedFields, field =>
       this.schemaService.junctionTableNameFor(tableName, field)
     );
-    return userDefinedFields;
+    // A built-in the stored row already holds, handed back as it is, stays (`builtInsHeldByRow`).
+    return [...builtInsHeldByRow(fields, stored), ...userDefinedFields];
   }
 
   private manifestEntityFor(
@@ -1538,8 +1558,12 @@ export class DynamicCollectionService extends BaseService {
         collection.fields || []
       );
 
+      // The stored side as the new one is judged: a stored built-in the save kept is on both sides,
+      // so it reads as unchanged rather than added.
       const oldUserFields = (collection.fields || []).filter(
-        (f: FieldDefinition) => !RESERVED_FIELD_NAMES.includes(f.name)
+        (f: FieldDefinition) =>
+          !RESERVED_FIELD_NAMES.includes(f.name) ||
+          userDefinedFields.some(kept => kept.name === f.name)
       );
 
       // A many-to-many added to a renamed collection would get a junction its reads can't find.

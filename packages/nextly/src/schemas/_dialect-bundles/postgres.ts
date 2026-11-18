@@ -155,6 +155,10 @@ export { nextlyMediaUsagePg as nextlyMediaUsage } from "../media-usage/postgres"
 // note above gives — this map is what the push creates.
 export { nextlyEmailBrandPg as nextlyEmailBrand } from "../email-brand/postgres";
 
+// The external identities a person signed in with; in the bundle for the
+// reason the email brand above gives — this map is what the push creates.
+export { nextlyExternalIdentitiesPg as nextlyExternalIdentities } from "../external-identities/postgres";
+
 // Version view markers; in the bundle so freshPushSchema creates the table on
 // a fresh database, for the reason the release tables above give.
 export { nextlyVersionViewsPg as nextlyVersionViews } from "../version-views/postgres";

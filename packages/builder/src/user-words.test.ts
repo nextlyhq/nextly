@@ -106,6 +106,9 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   "columns-layout.ts": ["Not a layout."],
   // The same arrangement, chosen on the canvas when a Columns row is added.
   "columns-layout-picker.tsx": ["Choose a layout"],
+  // A new Collection list's starting arrangement of its items, as the
+  // Columns picker's is: never a header & footer set.
+  "collection-list-picker.tsx": ["{…} · choose a starting layout"],
   // The Style tab's Layout section, where a container's Content width is.
   "core-block-placement.fixture.ts": ["Layout"],
   // A Gallery's Layout section, the one its block places "When clicked" in,

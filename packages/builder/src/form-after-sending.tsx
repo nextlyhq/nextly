@@ -24,30 +24,13 @@ import * as React from "react";
 
 import { SegmentedChoice } from "./content-controls";
 import type { ContentServices } from "./content-services";
+import { pickedFormOf, type PickedForm } from "./form-picked";
 
 /** The words of each choice. */
 const CHOICE_WORDS = {
   message: "Show a message",
   page: "Go to a page",
 } as const;
-
-/** A picked form, as a block stores it. */
-interface PickedForm {
-  readonly provider: string;
-  readonly ref: string;
-}
-
-/** The picked form `value` names, or `undefined`. */
-function pickedFormOf(value: unknown): PickedForm | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const { provider, ref } = value as Record<string, unknown>;
-  return typeof provider === "string" &&
-    provider !== "" &&
-    provider !== "simple" &&
-    typeof ref === "string"
-    ? { provider, ref }
-    : undefined;
-}
 
 /** What the block shows once sent, with the default for its mode applied. */
 function afterSendingOf(
