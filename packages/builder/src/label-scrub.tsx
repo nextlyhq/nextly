@@ -8,12 +8,15 @@
  * the label carries the pointer handling. Nothing else about either changes,
  * which is what keeps a field that does not scrub exactly as it was.
  *
- * ## One write, on release
+ * ## Live where the field types live, one undo step either way
  *
- * While the pointer is down the field SHOWS each value and the document is not
- * touched; letting go writes the last one through the field's own commit, the
- * same path a typed value takes, so one drag is one undo step. Escape puts the
- * field's text back as it was before the press and writes nothing.
+ * While the pointer is down the field SHOWS each value. A field whose panel
+ * writes as it is typed (`preview`) also writes it, at most once a frame, so
+ * the canvas follows the pointer (`live-gesture.ts`); letting go writes the
+ * last value through the field's own commit in the same run, so one drag is
+ * one undo step. A field that writes when it is left touches the document
+ * only on release. Escape puts the field's text back as it was before the
+ * press, and the document with it, recording nothing.
  *
  * ## A click is still a click
  *
@@ -30,6 +33,7 @@
  */
 import * as React from "react";
 
+import { useLiveGesture } from "./live-gesture";
 import {
   FIELD_SCRUB_START,
   fieldScrubMove,
@@ -59,6 +63,11 @@ export interface LabelScrubField {
   readonly show: (text: string) => void;
   /** Writes the value, once, on release. */
   readonly commit: (value: ScrubbedValue) => void;
+  /**
+   * Writes the value while the pointer moves, where the field's panel writes
+   * as it is typed; absent, the drag writes only on release.
+   */
+  readonly preview?: (value: ScrubbedValue) => void;
   /** Shows the field's stored value, for a drag its subject changed under. */
   readonly reset: () => void;
 }
@@ -135,6 +144,7 @@ function useLabelScrubSlot(subject: string): LabelScrubRowValue {
   const session = React.useRef<ScrubSession | null>(null);
   const swallowClick = React.useRef(false);
   const owning = React.useRef(false);
+  const gesture = useLiveGesture();
   const slot = React.useMemo<LabelScrubSlot>(
     () => ({ field, setEnabled, owning }),
     []
@@ -183,6 +193,11 @@ function useLabelScrubSlot(subject: string): LabelScrubRowValue {
       if (next === undefined) return;
       shown = next;
       live.show(String(next));
+      // Written at the next frame where the field writes as it is typed;
+      // read from the field then, so a field reused meanwhile writes nothing.
+      if (live.preview !== undefined) {
+        gesture.move(() => field.current?.preview?.(next));
+      }
     };
     session.current = followScrub(
       {
@@ -209,11 +224,20 @@ function useLabelScrubSlot(subject: string): LabelScrubRowValue {
           owning.current = false;
           previewing = false;
           const live = field.current;
-          if (live === null) return;
+          if (live === null) {
+            gesture.cancel();
+            return;
+          }
           // Back where it started, the field shows what it did before the
-          // press, and nothing is written.
-          if (shown === origin) live.show(before);
-          else live.commit(shown);
+          // press, and what the drag wrote is put back.
+          if (shown === origin) {
+            gesture.cancel();
+            live.show(before);
+            return;
+          }
+          // The release's value, in the run the drag wrote in: one step.
+          const value = shown;
+          gesture.end(() => live.commit(value));
         },
         // Escape, a cancelled pointer and a row taken away all end here
         // without a release: the field goes back to its text before the press.
@@ -222,6 +246,8 @@ function useLabelScrubSlot(subject: string): LabelScrubRowValue {
           session.current = null;
           setDragging(false);
           if (!previewing) return;
+          // What the drag wrote goes back with the text.
+          gesture.cancel();
           if (superseded.current) field.current?.reset();
           else field.current?.show(before);
         },

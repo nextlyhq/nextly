@@ -269,10 +269,15 @@ export function FontsPanel({
     readOnly,
     onTokensChange,
     suppliedText,
+    classes: studio.classes,
     onChosen: () => setUploading(false),
   });
   const question = (
-    <UseForQuestion asked={useFor.asked} onAnswer={useFor.answer} />
+    <UseForQuestion
+      asked={useFor.asked}
+      kept={useFor.kept}
+      onAnswer={useFor.answer}
+    />
   );
 
   if (faces === undefined) return <Unread absence={absence} />;

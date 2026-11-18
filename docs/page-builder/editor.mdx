@@ -428,6 +428,7 @@ press <kbd>Enter</kbd> or **Undo**, or change something else.
 
 Press <kbd>Escape</kbd> in a field you're editing to put back the value it had before, in
 the field and on the canvas. Nothing is recorded, so there is nothing to undo. Press
+
 <kbd>Escape</kbd> again to leave the field; the block stays selected.
 
 **Style** starts with **Block style** on a block whose type has saved styles: a Section's
@@ -1107,8 +1108,10 @@ family comes as one file covering every weight), italics and languages, and **Ad
 Your server downloads the files into your media library, in a **Fonts** folder, and the
 published page loads them from your site only.
 
-While you browse, the editor's browser loads previews from the catalogue's file host,
-`cdn.jsdelivr.net` by default. Only the editor contacts it. The list of families and
+Previews are off until you ask for them. Above the catalogue, **Show previews** lets the
+editor's browser load each family's preview from the catalogue's file host,
+`cdn.jsdelivr.net` by default, and your choice is kept for you on this browser. Until then
+each family is named in the editor's own font. Only the editor contacts the file host. The list of families and
 every file you add are fetched by your server, from `api.fontsource.org` and
 `cdn.jsdelivr.net`. If your admin sends a Content-Security-Policy, allow
 `font-src https://cdn.jsdelivr.net` for the previews.

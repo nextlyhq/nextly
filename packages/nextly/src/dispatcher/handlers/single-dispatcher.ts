@@ -56,6 +56,10 @@ import { resolveCompanionRename } from "../../domains/i18n/migration/companion-r
 import { translationLayoutChange } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { assertLanguageStatesAgreeWithEntry } from "../../domains/i18n/runtime/language-states-agree";
+import {
+  FirstQuestionWatch,
+  landingPush,
+} from "../../domains/schema/builder-save/landing-push";
 import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
 import {
   renamedFieldsOf,
@@ -117,7 +121,6 @@ import {
   builderSaveDeps,
   checkBuilderSaveHistory,
   reviewBuilderSchemaChange,
-  landingPush,
   writeBuilderSchemaChange,
 } from "../helpers/builder-save-change";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
@@ -1724,6 +1727,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             recordedFields: recordedFieldsOf(single),
           };
 
+          // A failed push changed nothing where it stopped at its first question, asked before
+          // any statement; any other failure on MySQL or SQLite may have changed it.
+          const firstQuestion = new FirstQuestionWatch();
           const landing = landingPush(
             builderSchemaPush({
               dialect,
@@ -1736,8 +1742,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 eventResolutions ?? [],
                 legacyBundle,
               ],
+              firstQuestion,
             }),
-            dialect
+            dialect,
+            firstQuestion
           );
           // Notes once the push may have changed the database, so a failure after it keeps the
           // files that record it.
