@@ -381,7 +381,11 @@ function withProps(node: BlockNode, props: Record<string, unknown>): BlockNode {
  * The panel on the Style tab over a canvas that draws the selected block as
  * `drawn` (its picture, for an Image), as the builder's canvas would.
  */
-function mountOverCanvas(node: BlockNode, drawn: string): HTMLElement {
+function mountOverCanvas(
+  node: BlockNode,
+  drawn: string,
+  library: readonly NamedClass[] = LIBRARY
+): HTMLElement {
   const canvasRoot = document.createElement("div");
   canvasRoot.innerHTML = drawn;
   document.body.append(canvasRoot);
@@ -389,7 +393,7 @@ function mountOverCanvas(node: BlockNode, drawn: string): HTMLElement {
     <NoticeSinkProvider raise={() => {}}>
       <InspectorPanel
         editor={editorFor(node)}
-        classLibrary={LIBRARY}
+        classLibrary={library}
         canvasRoot={canvasRoot}
         onEditBlockStyles={() => {}}
       />
@@ -462,6 +466,29 @@ describe("an Image's block styles, drawn as that Image", () => {
     expect(sampleOf("Circle").style.aspectRatio).toBe("1 / 1");
   });
 
+  it("fits the picture as each style fits it, cropping where none says", () => {
+    // A style of the site's own that fits the whole picture in: the tile's
+    // picture is fitted, not cropped as the others are.
+    const fit = {
+      id: "look:core/image:fit",
+      slug: "image-fit",
+      label: "Fit",
+      orderIndex: 9,
+      blockType: "core/image",
+      styles: { base: { base: { objectFit: "contain" } } },
+    } as unknown as NamedClass;
+    mountOverCanvas(
+      withProps(nodeOf("core/image"), { src: "/media/harbour.jpg" }),
+      '<figure data-nx-node="a"><img src="/media/harbour.jpg" alt=""></figure>',
+      [...LIBRARY, fit]
+    );
+    const fitOf = (name: string) =>
+      sampleOf(name).querySelector("img")?.style.objectFit;
+    expect(fitOf("Fit")).toBe("contain");
+    expect(fitOf("Circle")).toBe("cover");
+    expect(fitOf("Square")).toBe("cover");
+  });
+
   it("draws a picture's outline in each shape while the Image has none", () => {
     mountStyle(nodeOf("core/image"), () => {});
     for (const sample of samples().values()) {
@@ -492,6 +519,18 @@ describe("a Quote's block styles, drawn as that Quote", () => {
     expect(sampleOf("Large").style.borderStyle).toBe("none");
     expect(sampleOf("Large").style.fontSize).toBe("1.5em");
     expect(sampleOf("Large").style.textAlign).toBe("center");
+  });
+
+  it("quotes the words the canvas shows, as a bound Quote's are", () => {
+    // Bound to an entry's field, the Quote's stored words are not what the
+    // page shows: the tiles quote what the canvas draws.
+    mountOverCanvas(
+      withProps(nodeOf("core/quote"), { text: "Stored words." }),
+      '<figure data-nx-node="a"><blockquote>Words from the entry.</blockquote><figcaption>Someone</figcaption></figure>'
+    );
+    for (const sample of samples().values()) {
+      expect(sample.textContent).toBe("Words from the entry.");
+    }
   });
 
   it("quotes the block's own sample words while the Quote has none", () => {

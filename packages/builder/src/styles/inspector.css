@@ -476,11 +476,11 @@
   overflow: hidden;
 }
 
+/* Its fit is set on it inline, as the style fits it. */
 .nx-look-tile__picture {
   display: block;
   inline-size: 100%;
   block-size: 100%;
-  object-fit: cover;
 }
 
 /* No picture yet: a picture's outline in the page's own text colour, faint,

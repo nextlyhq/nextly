@@ -21,6 +21,7 @@ import {
 import * as React from "react";
 
 import { useCanvasTokenModeAt } from "./canvas/prefers-dark";
+import type { CanvasReading } from "./canvas/use-canvas-reading";
 import { stateLookLine } from "./editing-bar";
 import { FocalFrame } from "./focal-frame";
 import type { selectedNode } from "./inspector";
@@ -29,7 +30,11 @@ import type {
   StyleStateBinding,
 } from "./inspector-panel-types";
 import { editedStyleState } from "./inspector-style-state";
-import { blockStyleTilesOf } from "./look-tiles-view";
+import {
+  blockStyleTilesOf,
+  RenderedSample,
+  type BlockSample,
+} from "./look-tiles-view";
 import { FirstSectionAbove } from "./panel-folds-context";
 import { deviceOptions, tierIcon } from "./shell/breakpoint-switcher";
 import { StyleStateField } from "./state-switcher";
@@ -95,8 +100,7 @@ export function StyleTab({
   editor,
   styleNode,
   renderedTag,
-  renderedPicture,
-  renderedPicturePosition,
+  rendered,
   sideOrientation,
   styleState,
   policy,
@@ -131,8 +135,8 @@ export function StyleTab({
 > & {
   styleNode: ReturnType<typeof selectedNode>;
   renderedTag: StyleInspectorPanelProps["renderedTag"];
-  renderedPicture: string | undefined;
-  renderedPicturePosition: string | undefined;
+  /** What the canvas draws of the block: its picture, where it places it, and its quotation. */
+  rendered: Pick<CanvasReading, "picture" | "picturePosition" | "words">;
   sideOrientation: StyleInspectorPanelProps["sideOrientation"];
 }): React.JSX.Element {
   const state = editedStyleState(styleState);
@@ -145,22 +149,24 @@ export function StyleTab({
   // The mode the selected block is drawn in, read once for the look tiles and
   // the controls below, so the canvas is watched by one subscription.
   const tokenMode = useCanvasTokenModeAt(editor.selectedId);
+  // The state switch for what the bar edits: a shared style's own values
+  // while one is edited, the block's otherwise.
+  const stateControl = stateControlFor(
+    state,
+    styleState,
+    target.kind === "shared" ? target.style : styleNode,
+    breakpoints
+  );
   return (
-    // The picture the canvas draws for the block: the Block style tiles in
-    // the bar draw it in each shape, and the focal point is aimed over it.
-    <FocalFrame.Provider
-      value={{
-        picture: renderedPicture,
-        position: renderedPicturePosition,
-      }}
-    >
+    <>
       {/*
       ABOVE the controls, because it decides what every one of them reads
       and writes. Below them it would be a filter applied after the fact,
       and an author would have edited a value before meeting the thing
       that says which state the value belongs to.
     */}
-      <StyleTargetBar
+      <SampledBar
+        rendered={{ picture: rendered.picture, words: rendered.words }}
         editor={editor}
         tokens={tokens}
         tokenMode={tokenMode}
@@ -177,12 +183,7 @@ export function StyleTab({
         {...barPlace(breakpoints, breakpoint)}
         breakpoints={breakpoints}
         state={state}
-        stateControl={stateControlFor(
-          state,
-          styleState,
-          target.kind === "shared" ? target.style : styleNode,
-          breakpoints
-        )}
+        stateControl={stateControl}
       />
       {/* The Block style section above the bar is the tab's first where it
         is drawn, so the first section under the bar does not also open for
@@ -191,28 +192,54 @@ export function StyleTab({
         value={blockStyleTilesOf(editor, shared.classLibrary) !== undefined}
       >
         <StateTinted state={state}>
-          <StyleInspectorPanel
-            editor={editor}
-            tokenMode={tokenMode}
-            // The block card above says why a held block can't be changed.
-            showReadOnlyReason={false}
-            renderedTag={renderedTag}
-            sideOrientation={sideOrientation}
-            policy={policy}
-            state={state}
-            breakpoint={breakpoint}
-            cascade={cascade}
-            breakpoints={breakpoints}
-            previewContainer={previewContainer}
-            liveBreakpoints={liveBreakpoints}
-            onJumpToBreakpoint={onJumpToBreakpoint}
-            tokens={tokens}
-            target={target}
-            fonts={fonts}
-          />
+          {/* The picture the canvas draws, for the focal point aimed over it. */}
+          <FocalFrame.Provider
+            value={{
+              picture: rendered.picture,
+              position: rendered.picturePosition,
+            }}
+          >
+            <StyleInspectorPanel
+              editor={editor}
+              tokenMode={tokenMode}
+              // The block card above says why a held block can't be changed.
+              showReadOnlyReason={false}
+              renderedTag={renderedTag}
+              sideOrientation={sideOrientation}
+              policy={policy}
+              state={state}
+              breakpoint={breakpoint}
+              cascade={cascade}
+              breakpoints={breakpoints}
+              previewContainer={previewContainer}
+              liveBreakpoints={liveBreakpoints}
+              onJumpToBreakpoint={onJumpToBreakpoint}
+              tokens={tokens}
+              target={target}
+              fonts={fonts}
+            />
+          </FocalFrame.Provider>
         </StateTinted>
       </FirstSectionAbove.Provider>
-    </FocalFrame.Provider>
+    </>
+  );
+}
+
+/**
+ * The bar, with what the canvas draws of the block (its picture and its
+ * quotation) handed to the Block style tiles in it, which draw it in each
+ * style.
+ */
+function SampledBar({
+  rendered,
+  ...bar
+}: React.ComponentProps<typeof StyleTargetBar> & {
+  readonly rendered: BlockSample;
+}): React.JSX.Element {
+  return (
+    <RenderedSample.Provider value={rendered}>
+      <StyleTargetBar {...bar} />
+    </RenderedSample.Provider>
   );
 }
 
