@@ -142,6 +142,10 @@ interface Door {
   reviewState(who: Who, document: Doc): Promise<Doc>;
   takeStep(who: Who, input: Doc): Promise<Doc>;
   stepMany(who: Who, input: Doc): Promise<{ moved: string[]; refused: Doc[] }>;
+  assignMany(
+    who: Who,
+    input: Doc
+  ): Promise<{ assigned: string[]; refused: Doc[] }>;
   waiting(
     who: Who,
     query: { page: number; limit: number }
@@ -236,6 +240,18 @@ const REST: Door = {
       refused: answer.errors as Doc[],
     };
   },
+  async assignMany(who, input) {
+    const answer = await rest(
+      "POST",
+      ["workflows", "assignments", "bulk"],
+      who,
+      input
+    );
+    return {
+      assigned: (answer.items as Doc[]).map(item => String(item.id)),
+      refused: answer.errors as Doc[],
+    };
+  },
   async waiting(who, { page, limit }) {
     const answer = await rest(
       "GET",
@@ -308,6 +324,20 @@ const DIRECT: Door = {
     );
     return {
       moved: answer.moved.map(each => each.document.entryId),
+      refused: answer.refused.map(each => ({
+        id: each.document.entryId,
+        code: each.code,
+        message: each.message,
+      })),
+    };
+  },
+  assignMany: async (who, input) => {
+    const answer = await direct(
+      args => app().nextly.workflows.assignMany({ ...args, ...input } as never),
+      who
+    );
+    return {
+      assigned: answer.assigned.map(each => each.entryId),
       refused: answer.refused.map(each => ({
         id: each.document.entryId,
         code: each.code,
@@ -607,6 +637,139 @@ describe.each(getConfiguredTestDialects())(
         expect(missingPlain).toEqual({ status: 404, code: "NOT_FOUND" });
         expect(missingPage).toEqual({ status: 404, code: "NOT_FOUND" });
         expect(unreadable).toEqual({ status: 404, code: "NOT_FOUND" });
+      });
+
+      describe("a move touching a language its caller may not read the document in", () => {
+        const LENA: Who = { kind: "person", id: "lena" };
+
+        /** A Letter whose English, Spanish and shared parts are in Legal check; Lena may not read Spanish. */
+        async function letterInLegal(): Promise<string> {
+          current = await bootSteps(dialect);
+          // Letters are read in every language but Spanish.
+          await person(app(), "lena", [
+            ["read", "letters"],
+            ["update", "letters"],
+            ["sign-off", "letters"],
+          ]);
+          const id = await entry(app(), "letters");
+          for (const part of ["en", "es", null]) {
+            await seedState(app(), partOf("letters", id, part), "legal", {
+              definitionHash: HASH,
+            });
+          }
+          return id;
+        }
+
+        /** Parking `parts` of the Letter, as a caller who read each of `seen` sends it. */
+        async function parking(
+          id: string,
+          parts: "all" | (string | null)[],
+          seen: (string | null)[]
+        ): Promise<Doc> {
+          return {
+            document: { collection: "letters", id },
+            step: "park",
+            parts,
+            comment: "Waiting on the client",
+            seen: await Promise.all(
+              seen.map(async part => ({
+                part,
+                revision: 1,
+                version: await versionOf(app(), "letters", id, part),
+              }))
+            ),
+          };
+        }
+
+        const stageOf = async (id: string, part: string | null) =>
+          (await stateOf(app(), partOf("letters", id, part)))?.stage;
+
+        it("refuses a step on every part, and moves none", async () => {
+          const id = await letterInLegal();
+
+          const input = await parking(id, "all", ["en", "es", null]);
+          const refusal = await refusalOf(() => door.takeStep(LENA, input));
+
+          expect(refusal).toEqual({ status: 404, code: "NOT_FOUND" });
+          expect(await stageOf(id, "es")).toBe("legal");
+          expect(await stageOf(id, "en")).toBe("legal");
+          expect(await stageOf(id, null)).toBe("legal");
+        });
+
+        it("refuses a step naming that language among others, and moves none", async () => {
+          const id = await letterInLegal();
+
+          const input = await parking(id, ["en", "es"], ["en", "es"]);
+          const refusal = await refusalOf(() => door.takeStep(LENA, input));
+
+          expect(refusal).toEqual({ status: 404, code: "NOT_FOUND" });
+          expect(await stageOf(id, "es")).toBe("legal");
+          expect(await stageOf(id, "en")).toBe("legal");
+        });
+
+        it("refuses a step on every part over several documents, naming the document", async () => {
+          const id = await letterInLegal();
+          const one = await parking(id, "all", ["en", "es", null]);
+
+          const answer = await door.stepMany(LENA, {
+            step: one.step,
+            comment: one.comment,
+            documents: [
+              { document: one.document, parts: one.parts, seen: one.seen },
+            ],
+          });
+
+          expect(answer.moved).toEqual([]);
+          expect(answer.refused).toEqual([
+            expect.objectContaining({ id, code: "NOT_FOUND" }),
+          ]);
+          expect(await stageOf(id, "es")).toBe("legal");
+          expect(await stageOf(id, "en")).toBe("legal");
+        });
+
+        it("refuses an assignment of that language's part over several documents", async () => {
+          const id = await letterInLegal();
+
+          const answer = await door.assignMany(LENA, {
+            assignments: [
+              {
+                document: { collection: "letters", id },
+                part: "es",
+                revision: 1,
+                assignee: { kind: "user", id: "lena" },
+              },
+            ],
+          });
+
+          expect(answer.assigned).toEqual([]);
+          expect(answer.refused).toEqual([
+            expect.objectContaining({ id, code: "NOT_FOUND" }),
+          ]);
+          expect(
+            (await stateOf(app(), partOf("letters", id, "es")))?.assignee ??
+              null
+          ).toBeNull();
+        });
+
+        it("still moves and assigns the languages it may read, which is the control", async () => {
+          const id = await letterInLegal();
+
+          await door.takeStep(LENA, await parking(id, ["en"], ["en"]));
+          const assigned = await door.assignMany(LENA, {
+            assignments: [
+              {
+                document: { collection: "letters", id },
+                part: null,
+                revision: 1,
+                assignee: { kind: "user", id: "lena" },
+              },
+            ],
+          });
+
+          expect(await stageOf(id, "en")).toBe("hold");
+          expect(await stageOf(id, "es")).toBe("legal");
+          expect(assigned.assigned).toEqual([id]);
+        });
       });
 
       it("leaves out the parts in a language its reader may not read the document in", async () => {

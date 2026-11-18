@@ -590,8 +590,10 @@ async function defaultReviewer(
  * The parts a step names: each once. For `"all"`, every configured language and the shared part
  * of a collection that keeps translations; the shared part alone of one that does not, whose
  * content and versions belong to no language.
+ *
+ * @experimental
  */
-function namedParts(
+export function namedParts(
   parts: TakeStepInput["parts"],
   localized: boolean
 ): (string | null)[] {

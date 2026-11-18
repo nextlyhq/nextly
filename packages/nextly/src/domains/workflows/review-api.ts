@@ -400,7 +400,11 @@ export async function stepMany(
     step: string;
     comment?: string | null;
     caller: WorkflowCaller;
-    readable: (document: ReviewDocument) => Promise<boolean>;
+    /** Whether the caller may read the document in each of the parts a move names. */
+    readable: (
+      document: ReviewDocument,
+      parts: ManyDocument["parts"]
+    ) => Promise<boolean>;
   }
 ): Promise<{
   moved: { document: ReviewDocument; result: TakeStepResult }[];
@@ -432,15 +436,18 @@ export async function stepMany(
   const moved: { document: ReviewDocument; result: TakeStepResult }[] = [];
   const refused: ManyRefusal[] = [];
   for (const entry of input.documents) {
-    const outcome = await oneOfMany(entry.document, input.readable, () =>
-      takeWorkflowStep(adapter, {
-        document: entry.document,
-        step: input.step,
-        parts: entry.parts,
-        seen: entry.seen,
-        comment: input.comment,
-        caller: input.caller,
-      })
+    const outcome = await oneOfMany(
+      entry.document,
+      () => input.readable(entry.document, entry.parts),
+      () =>
+        takeWorkflowStep(adapter, {
+          document: entry.document,
+          step: input.step,
+          parts: entry.parts,
+          seen: entry.seen,
+          comment: input.comment,
+          caller: input.caller,
+        })
     );
     if ("refused" in outcome) refused.push(outcome.refused);
     else moved.push({ document: entry.document, result: outcome.result });
@@ -460,7 +467,11 @@ export async function assignMany(
   input: {
     assignments: readonly Assignment[];
     caller: WorkflowCaller;
-    readable: (document: ReviewDocument) => Promise<boolean>;
+    /** Whether the caller may read the document in each of the parts its assignments name. */
+    readable: (
+      document: ReviewDocument,
+      parts: readonly (string | null)[]
+    ) => Promise<boolean>;
   }
 ): Promise<{ assigned: ReviewDocument[]; refused: ManyRefusal[] }> {
   const byDocument = new Map<string, Assignment[]>();
@@ -476,8 +487,14 @@ export async function assignMany(
   const refused: ManyRefusal[] = [];
   for (const assignments of byDocument.values()) {
     const document = assignments[0].document;
-    const outcome = await oneOfMany(document, input.readable, () =>
-      assignWorkflowParts(adapter, { assignments, caller: input.caller })
+    const outcome = await oneOfMany(
+      document,
+      () =>
+        input.readable(
+          document,
+          assignments.map(assignment => assignment.part)
+        ),
+      () => assignWorkflowParts(adapter, { assignments, caller: input.caller })
     );
     if ("refused" in outcome) refused.push(outcome.refused);
     else assigned.push(document);
@@ -491,10 +508,10 @@ export async function assignMany(
  */
 async function oneOfMany<T>(
   document: ReviewDocument,
-  readable: (document: ReviewDocument) => Promise<boolean>,
+  readable: () => Promise<boolean>,
   move: () => Promise<T>
 ): Promise<{ result: T } | { refused: ManyRefusal }> {
-  if (!(await readable(document))) {
+  if (!(await readable())) {
     return {
       refused: { document, code: "NOT_FOUND", message: "Not found." },
     };

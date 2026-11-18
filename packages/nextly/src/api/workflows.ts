@@ -37,6 +37,7 @@ import {
 } from "../domains/auth/system-write-policy";
 import { resolveSingleDocumentId } from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
+import { documentTableOf } from "../domains/workflows/part-versions";
 import { registeredWorkflows } from "../domains/workflows/registry";
 import {
   assignMany,
@@ -47,6 +48,7 @@ import {
 import type { ReviewDocument } from "../domains/workflows/review-state-repository";
 import {
   assignWorkflowParts,
+  namedParts,
   takeWorkflowStep,
   type Assignment,
   type WorkflowCaller,
@@ -316,13 +318,16 @@ async function documentOf(
 
 /**
  * Throws not found unless the asker may read `document` in every part named: first the collection
- * or Single at all, as a read route authorizes before it runs, then the document itself. Not found
- * rather than forbidden either way, so a caller who may not read it is not told it exists.
+ * or Single at all, as a read route authorizes before it runs, then the document itself, in each
+ * language named. Not found rather than forbidden either way, so a caller who may not read it is
+ * not told it exists. A move naming `"all"` is asked of each part it can move (`namedParts`),
+ * never of none, so it cannot reach a language its caller may not read. No parts at all is a
+ * read of the document, which any language its caller may read it in allows.
  */
 async function assertReadable(
   asker: WorkflowAsker,
   document: ReviewDocument,
-  parts: readonly (string | null)[] = []
+  parts: "all" | readonly (string | null)[] = []
 ): Promise<void> {
   if (asker === null) return;
   const readsEntity = await canReadEntity(
@@ -341,6 +346,8 @@ async function assertReadable(
       },
     });
   }
+  // Each language named is asked about in its own right: one the caller may not read refuses the
+  // whole move.
   await assertVersionDocumentReadable(
     document.scopeKind,
     document.scopeSlug,
@@ -348,7 +355,9 @@ async function assertReadable(
     asker.user,
     asker.scope,
     {},
-    parts
+    parts === "all"
+      ? namedParts("all", (await documentTableOf(document)).localized)
+      : parts
   );
 }
 
@@ -356,7 +365,7 @@ async function assertReadable(
 async function readableBy(
   asker: WorkflowAsker,
   document: ReviewDocument,
-  parts: readonly (string | null)[] = []
+  parts: "all" | readonly (string | null)[] = []
 ): Promise<boolean> {
   try {
     await assertReadable(asker, document, parts);
@@ -368,10 +377,6 @@ async function readableBy(
 }
 
 const adapter = () => container.get<DrizzleAdapter>("adapter");
-
-/** The parts a request names, for the read check: none for "all", which reads in every one. */
-const namedParts = (parts: "all" | readonly (string | null)[]) =>
-  parts === "all" ? [] : parts;
 
 /** Every assignment a request names, each document resolved and read-checked. */
 async function assignmentsOf(
@@ -433,7 +438,7 @@ export const workflowOperations = {
   async takeStep(asker: WorkflowAsker, input: unknown) {
     const body = parse(StepBody, input);
     const document = await documentOf(body.document);
-    await assertReadable(asker, document, namedParts(body.parts));
+    await assertReadable(asker, document, body.parts);
     return takeWorkflowStep(adapter(), {
       document,
       step: body.step,
@@ -469,7 +474,7 @@ export const workflowOperations = {
       step: body.step,
       comment: body.comment ?? null,
       caller: callerOf(asker),
-      readable: document => readableBy(asker, document),
+      readable: (document, parts) => readableBy(asker, document, parts),
     });
   },
 
@@ -479,7 +484,7 @@ export const workflowOperations = {
     return assignMany(adapter(), {
       assignments: await assignmentsOf(asker, body, false),
       caller: callerOf(asker),
-      readable: document => readableBy(asker, document),
+      readable: (document, parts) => readableBy(asker, document, parts),
     });
   },
 
