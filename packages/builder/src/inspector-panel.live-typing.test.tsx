@@ -554,16 +554,11 @@ describe("the Style tab's drags", () => {
     openStyle();
     row("opacity");
     const thumb = screen.getByRole("slider", { name: "Opacity slider" });
-    // The slider's root: the outermost element with an orientation, since
-    // the thumb and the track carry one too.
-    let track: HTMLElement = thumb;
-    for (
-      let up = thumb.parentElement?.closest<HTMLElement>("[data-orientation]");
-      up !== null && up !== undefined;
-      up = up.parentElement?.closest<HTMLElement>("[data-orientation]")
-    ) {
-      track = up;
-    }
+    // The slider's root: the nearest element with an orientation above the
+    // thumb, which carries one itself (the panel's tabs carry one too).
+    const track =
+      thumb.parentElement?.closest<HTMLElement>("[data-orientation]");
+    if (track === null || track === undefined) throw new Error("no slider");
     // The track is 100px wide from the left edge, so x is the percent; the
     // pointer is captured, as a real press captures it.
     track.getBoundingClientRect = () =>
