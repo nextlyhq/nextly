@@ -647,6 +647,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     layersRegions: layoutRegions.selectedRegion.layers,
     selectedRegion: layoutRegions.selectedRegion,
     regionCards: layoutRegions.cards,
+    rereadRegions: layoutRegions.reread,
     ...library,
     ...requests,
   };
@@ -814,6 +815,8 @@ export type EditorPanels = OfferedLibrary &
     selectedRegion: SelectedRegion;
     /** What each region drawn around the page is, and the set it is from. */
     regionCards: readonly RegionCardFacts[];
+    /** Read the regions again, after the header is published or saved. */
+    rereadRegions: () => void;
     availablePanels: typeof AVAILABLE_PANELS;
     search: { open: boolean; setOpen: (open: boolean) => void };
     pages: PagesPanelMount;

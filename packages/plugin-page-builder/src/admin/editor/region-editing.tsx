@@ -62,11 +62,7 @@ import {
 
 import { FACTS_PENDING, useComponentFacts } from "../component-facts-client";
 import { sayFillNotices, type BuilderSets } from "../filled-default-notice";
-import {
-  siteRegionName,
-  useAskChoicesAgain,
-  type RegionCardFacts,
-} from "../page-layout";
+import { siteRegionName, type RegionCardFacts } from "../page-layout";
 import { useComponentEditing } from "../pattern-capability-client";
 
 import {
@@ -318,6 +314,7 @@ export function useRegionEditing({
   canvas,
   requestLayers,
   sets,
+  rereadRegions,
 }: {
   editing: EditingTargetState;
   inline: InlineTyping;
@@ -333,6 +330,8 @@ export function useRegionEditing({
   requestLayers: () => void;
   /** The builder's way to its sets, for the toast a filling publish says. */
   sets: BuilderSets;
+  /** Read the regions drawn around the page again. */
+  rereadRegions: () => void;
 }): RegionEditingHost {
   const store = useComponentEditing();
   const field = store?.field;
@@ -372,7 +371,6 @@ export function useRegionEditing({
   useReportUnsavedWork("blocks:edited-region", savePoint.dirty);
 
   const [busy, setBusy] = useState(false);
-  const askChoicesAgain = useAskChoicesAgain();
   const { stored } = savePoint;
   const storeRegion = useCallback(
     async (intent: "save" | "publish"): Promise<boolean> => {
@@ -399,7 +397,7 @@ export function useRegionEditing({
       toast.success(storedWords(area, intent));
       // The regions are drawn from the published set and components: a
       // publish changes them, and a draft adds "Draft changes not live".
-      askChoicesAgain();
+      rereadRegions();
       if (intent === "publish") void sayFillNotices(sets);
       return true;
     },
@@ -410,7 +408,7 @@ export function useRegionEditing({
       active.document,
       session,
       stored,
-      askChoicesAgain,
+      rereadRegions,
       sets,
     ]
   );
@@ -421,7 +419,7 @@ export function useRegionEditing({
     if (area === undefined) return;
     leaveTarget();
     setOpening(null);
-    askChoicesAgain();
+    rereadRegions();
     // The region chosen before, chosen again, with focus back on it.
     selection.select(area);
     const next = leaving.current;
@@ -430,7 +428,7 @@ export function useRegionEditing({
       canvas?.querySelector<HTMLElement>(`[data-nx-region="${area}"]`)?.focus();
       next?.();
     });
-  }, [area, leaveTarget, askChoicesAgain, selection, canvas]);
+  }, [area, leaveTarget, rereadRegions, selection, canvas]);
 
   const [asking, setAsking] = useState<"done" | "publish" | null>(null);
   const done = useCallback(() => {

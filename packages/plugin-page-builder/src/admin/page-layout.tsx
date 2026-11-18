@@ -615,9 +615,15 @@ export function siteRegionName(area: RegionArea): string {
 export function usePageLayoutRegions<T extends FieldValues>(
   control: Control<T>,
   canvasRoot: HTMLElement | null
-): PageLayoutRegions {
+): PageLayoutRegions & {
+  /**
+   * Read the regions again: after a header published from the page, the
+   * canvas draws the new published version, and after a draft, its note.
+   */
+  readonly reread: () => void;
+} {
   const stored = useStoredLayout(control);
-  const { state, stale } = useLayoutChoices(
+  const { state, stale, retry } = useLayoutChoices(
     stored !== undefined,
     selectedOf(stored)
   );
@@ -632,7 +638,11 @@ export function usePageLayoutRegions<T extends FieldValues>(
   useEffect(() => {
     if (fresh !== undefined) setShown(fresh);
   }, [fresh]);
-  return fresh ?? shown;
+  const drawn = fresh ?? shown;
+  return useMemo(
+    () => ({ ...drawn, reread: () => void retry() }),
+    [drawn, retry]
+  );
 }
 
 /** What is drawn before any answer has arrived. */

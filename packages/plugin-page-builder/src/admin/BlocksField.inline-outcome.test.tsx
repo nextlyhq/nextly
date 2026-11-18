@@ -36,6 +36,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import type { InlineEditOutcome } from "@nextlyhq/builder/shell";
+import { closedDocumentSession } from "../__tests__/closed-document-session";
 
 /** What the inline surface answers when this test's editor is finished. */
 let outcome: InlineEditOutcome = { status: "unchanged" };
@@ -318,6 +319,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   useReportUnsavedWork: () => {},
   // The form's storing gate, which site style writes are tracked with.
   useTrackedWrite: () => () => {},
+  // The session a header edited in place opens; none is opened here.
+  useDocumentSession: () => closedDocumentSession(),
   useBeforeDocumentAction: (
     handler: (action: string) => void | Promise<void>
   ) => {

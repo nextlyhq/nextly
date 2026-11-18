@@ -42,6 +42,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BlocksFieldConfig } from "../../fields/blocks-options";
+import { closedDocumentSession } from "../../__tests__/closed-document-session";
 
 /** Each document the editor was seeded with, in mount order. */
 const seeded: BlockDocument[] = [];
@@ -275,6 +276,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // The form's storing gate, which site style writes are tracked with.
   useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
+  // The session a header edited in place opens; none is opened here.
+  useDocumentSession: () => closedDocumentSession(),
   // The header's controls the bar places; drawn by the admin, not here.
   DocumentSaveAndPublish: () => null,
   useDocumentLifeStage: () => null,

@@ -622,6 +622,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     canvas: canvas.canvasElement,
     requestLayers: () => panels.requestPanel("layers"),
     sets: panels,
+    rereadRegions: panels.rereadRegions,
   });
   const view: EditorView = {
     ...mount,
