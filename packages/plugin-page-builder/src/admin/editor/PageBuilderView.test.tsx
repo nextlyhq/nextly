@@ -663,7 +663,9 @@ describe("the Previewing strip", () => {
   it("is not drawn for a page (the control)", () => {
     render(<Host />);
     expect(screen.getByRole("banner", { name: "Editor actions" })).toBeTruthy();
-    expect(screen.queryByTestId("canvas-strip")).toBeNull();
+    // The strip holds only the live region that announces editing a header
+    // in place, which says nothing until then: no row is drawn for a page.
+    expect(screen.queryByTestId("canvas-strip")?.textContent ?? "").toBe("");
     expect(screen.queryByText("Previewing")).toBeNull();
   });
 });

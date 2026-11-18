@@ -406,10 +406,7 @@ function EditorBody<TFieldValues extends FieldValues>({
    * work the form's own values do not contain; this composes that half with the
    * form's own dirtiness, which is what a reading of the whole document needs.
    */
-  const savePoint = useSavePoint(pageState);
-  // A store made here drops what the canvas kept at once: the page's own
-  // entry is among what it reads.
-  useDropKeptReadsOnSave();
+  const savePoint = usePageSavePoint(pageState);
   const documentDirty = useDocumentDirty(
     control,
     hasUnsavedWork(pageState, inline, savePoint.savedAt)
@@ -437,6 +434,19 @@ function EditorBody<TFieldValues extends FieldValues>({
     mount.initialDocument.kind,
     name
   );
+  // A header or footer edited in place: the way in, the top bar's Save and
+  // Publish for it, Done and its questions.
+  const regionEditing = useRegionEditing({
+    editing,
+    inline,
+    definitions: mount.componentLibrary.definitions,
+    cards: panels.regionCards,
+    selection: panels.selectedRegion.selection,
+    canvas: canvas.canvasElement,
+    requestLayers: () => panels.requestPanel("layers"),
+    sets: panels,
+    rereadRegions: panels.rereadRegions,
+  });
   const { done, publishOffer, removalHold } = useHostCommit({
     name,
     address: place.address,
@@ -449,6 +459,9 @@ function EditorBody<TFieldValues extends FieldValues>({
     // The count the removal dialog says now; the hold keeps it as it stood
     // when each field was removed.
     removalReach: () => mount.componentFacts?.reach,
+    // A header edited in place holding work not saved: the leave guard asks
+    // about it as it asks about the page's.
+    otherUnsavedWork: regionEditing.dirty,
     // A tab's text still being typed, made before the document is stored.
     ...(settingsPlace === null ? {} : { flushHeld: settingsPlace.flushHeld }),
   });
@@ -611,19 +624,6 @@ function EditorBody<TFieldValues extends FieldValues>({
       timeZone: canvasRender.bindings.timeZone,
     }
   );
-  // A header or footer edited in place: the way in, the top bar's Save and
-  // Publish for it, Done and its questions.
-  const regionEditing = useRegionEditing({
-    editing,
-    inline,
-    definitions: mount.componentLibrary.definitions,
-    cards: panels.regionCards,
-    selection: panels.selectedRegion.selection,
-    canvas: canvas.canvasElement,
-    requestLayers: () => panels.requestPanel("layers"),
-    sets: panels,
-    rereadRegions: panels.rereadRegions,
-  });
   const view: EditorView = {
     ...mount,
     regionEditing,
@@ -755,10 +755,7 @@ function EditorBody<TFieldValues extends FieldValues>({
           canvasStrip={editorStrip(
             templatePreview,
             conditions,
-            <>
-              {regionEditing.area === undefined ? twoRegions : null}
-              <RegionEditingBar editing={editing} onDone={regionEditing.done} />
-            </>
+            regionStrip(regionEditing, editing, twoRegions)
           )}
           openSettingsRequest={view.pages.settingsRequest}
           renderSettings={editorSettings(view, page, settingsPlace, {
@@ -818,17 +815,9 @@ function EditorBody<TFieldValues extends FieldValues>({
             editor={editor}
             // Esc with no block selected clears a selected header or footer,
             // or else leaves a look edited on its own.
-            // Inside a header edited in place, Esc with nothing selected
-            // there is Done.
-            onEscapeWithoutSelection={regionEscape(editing, {
-              done: regionEditing.done,
-              otherwise: escapeWithoutSelection(panels),
-            })}
-            // A selected header or footer: Delete removes nothing, and says
-            // where it is changed. Not while it is edited: its blocks are.
-            {...(regionEditing.area === undefined
-              ? selectedRegionKeys(panels.selectedRegion)
-              : {})}
+            // Esc with nothing selected, and a selected header or footer's
+            // Delete; inside a header edited in place, Esc is Done.
+            {...regionKeys(regionEditing, editing, panels)}
             onEditText={componentView.preview.onEditText}
             onSaveAsPattern={savePattern.open}
             /*
@@ -962,6 +951,64 @@ function addBlockHere(
       { kind: "rule" },
       selectionAnchor(canvas, editor.document, editor.selectedId)
     );
+}
+
+/**
+ * Where the page's history stood at its last store, and, on each store, what
+ * the canvas kept dropped at once: the page's own entry is among what it
+ * reads.
+ */
+function usePageSavePoint(
+  page: EditorMount["page"]
+): ReturnType<typeof useSavePoint> {
+  const savePoint = useSavePoint(page);
+  useDropKeptReadsOnSave();
+  return savePoint;
+}
+
+/**
+ * The strip's notices about the page: the two-headers notice, or, while a
+ * header or footer is edited in place, its bar in that place. The bar's
+ * live region is drawn always, so entering and leaving are announced.
+ */
+function regionStrip(
+  region: Pick<RegionEditingHost, "area" | "done">,
+  editing: EditorMount["editing"],
+  twoRegions: React.JSX.Element | undefined
+): React.JSX.Element {
+  return (
+    <>
+      {region.area === undefined ? twoRegions : null}
+      <RegionEditingBar editing={editing} onDone={region.done} />
+    </>
+  );
+}
+
+/**
+ * What the block keys are told of the regions: Esc with nothing selected
+ * clears a selected header or footer (or leaves a look edited on its own),
+ * and is Done inside one edited in place; Delete on a selected one removes
+ * nothing and says where it is changed, and is not refused while it is
+ * edited, when its own blocks are selected instead.
+ */
+function regionKeys(
+  region: Pick<RegionEditingHost, "area" | "done">,
+  editing: EditorMount["editing"],
+  panels: Pick<EditorPanels, "selectedRegion" | "lookEditing">
+): {
+  onEscapeWithoutSelection: () => void;
+  selectedRegion?: { readonly refusal: string };
+} {
+  const onEscapeWithoutSelection = regionEscape(editing, {
+    done: region.done,
+    otherwise: escapeWithoutSelection(panels),
+  });
+  return region.area === undefined
+    ? {
+        onEscapeWithoutSelection,
+        ...selectedRegionKeys(panels.selectedRegion),
+      }
+    : { onEscapeWithoutSelection };
 }
 
 /**

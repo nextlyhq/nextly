@@ -7,11 +7,13 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-canvas-region
  */
+import type { RegionArea } from "@nextlyhq/blocks-engine";
 import { blockNameOf } from "@nextlyhq/builder";
 import {
   BlockContextMenu,
   BlockToolbar,
   Canvas,
+  type CanvasEditingRegion,
   canvasEditingOf,
   CanvasFrame,
   CanvasMarks,
@@ -130,6 +132,25 @@ const COMPONENT_READ_NOTES: Readonly<
 };
 
 /** The canvas, or what stands in its place while a read it needs is out. */
+/** The region edited in place, or nothing while the page is edited. */
+function editedArea(view: EditorView): RegionArea | undefined {
+  const { target } = view.editing;
+  return target.kind === "region" ? target.area : undefined;
+}
+
+/** The canvas's way into editing a region in place, and the region edited. */
+function regionEditingProps(view: EditorView): {
+  onEditRegion?: (area: RegionArea) => void;
+  editingRegion?: CanvasEditingRegion;
+} {
+  const { requestEdit } = view.regionEditing;
+  const editingRegion = canvasEditingOf(view.editing);
+  return {
+    ...(requestEdit === undefined ? {} : { onEditRegion: requestEdit }),
+    ...(editingRegion === undefined ? {} : { editingRegion }),
+  };
+}
+
 export function editorCanvasRegion(view: EditorView): React.JSX.Element {
   const {
     componentLibrary,
@@ -264,11 +285,7 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                     highlights Done. First, so the header's marks are drawn
                     over it. */}
                 <RegionEditingScrim
-                  area={
-                    view.editing.target.kind === "region"
-                      ? view.editing.target.area
-                      : undefined
-                  }
+                  area={editedArea(view)}
                   onPress={view.editing.pulseDone}
                 />
                 {/* An Image with no picture: "Add an image" with Upload,
@@ -437,15 +454,10 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
               selectedRegion={view.selectedRegion.selection.area}
               onSelectRegion={view.selectedRegion.selection.select}
               // A double-click on a region, or Enter on it while selected,
-              // edits it in place, for someone who may edit components.
-              {...(view.regionEditing.requestEdit === undefined
-                ? {}
-                : { onEditRegion: view.regionEditing.requestEdit })}
-              // The region being edited, drawn from its live document with
-              // its blocks addressed; the page around it inert under the dim.
-              {...(view.editing.target.kind === "region"
-                ? { editingRegion: canvasEditingOf(view.editing) }
-                : {})}
+              // edits it in place, for someone who may edit components; and
+              // the region being edited, drawn from its live document with
+              // its blocks addressed, the page around it inert under the dim.
+              {...regionEditingProps(view)}
               // The conditioned blocks visitors never see, because the page
               // can't check their conditions: badged in red on the canvas.
               conditionsUnchecked={view.conditionsUnchecked}

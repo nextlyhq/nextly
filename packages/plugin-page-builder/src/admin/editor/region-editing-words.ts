@@ -17,7 +17,7 @@ export type RegionReach =
   | undefined;
 
 /** The area as a sentence says it. */
-export function areaWord(area: RegionArea): "header" | "footer" {
+function areaWord(area: RegionArea): "header" | "footer" {
   return area === "header" ? "header" : "footer";
 }
 
@@ -25,7 +25,7 @@ export function areaWord(area: RegionArea): "header" | "footer" {
  * The pages a change reaches, as a phrase: "11 pages", "1 page", "at least
  * 40 pages" while the count is a floor, or `undefined` while none is known.
  */
-export function pagesPhrase(reach: RegionReach): string | undefined {
+function pagesPhrase(reach: RegionReach): string | undefined {
   if (reach === undefined) return undefined;
   const noun = reach.count === 1 ? "page" : "pages";
   return reach.complete
@@ -37,7 +37,7 @@ export function pagesPhrase(reach: RegionReach): string | undefined {
  * When the version edited was last changed, as the bar says it: the time
  * alone for today, else the day and the time.
  */
-export function changedWhen(changedAt: string, now: Date = new Date()): string {
+function changedWhen(changedAt: string, now: Date = new Date()): string {
   const at = new Date(changedAt);
   if (Number.isNaN(at.getTime())) return changedAt;
   const sameDay = at.toDateString() === now.toDateString();

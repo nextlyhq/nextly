@@ -460,7 +460,7 @@ export function useEditorMount(
   // their own document: the site's caps, and the refusals said in words.
   const judged = useJudgedEdits(documentLimits, componentLibrary, notices);
   // With a recovery point's restore as one edit, so the author can undo it.
-  const page = useRestorableEditorState(
+  const { page, editing } = useEditedState(
     {
       initialDocument,
       ...judged,
@@ -472,7 +472,8 @@ export function useEditorMount(
       // what that save would.
       stored,
     },
-    kinds
+    kinds,
+    judged
   );
   /*
    * Which document the editor edits: the page, or a header or footer of its
@@ -481,12 +482,7 @@ export function useEditorMount(
    * typing, the verbs and the style history to the header together, and the
    * page's own state is left exactly as it was.
    */
-  const editing = useEditingTarget(page, judged);
   const editor = editing.active;
-  // A shared style change saved while this editor is open is a step of the
-  // history of what is being edited, so the editor connects that history to
-  // the style writers: the header's while it is edited, the page's otherwise.
-  useConnectStyleHistory(editor.recordStep);
 
   /*
    * Typing a block's text on the canvas. The hook owns the caret; which values
@@ -599,6 +595,23 @@ export type EditorMount = {
   /** Give the "Part of" toast the opener its Edit component action calls. */
   offerEditComponent: (open: OpenComponent | undefined) => void;
 };
+
+/**
+ * The page's state, and the editing target over it, with the style history
+ * joined to the state being edited: a shared style change saved while the
+ * editor is open is a step of the header's history while it is edited in
+ * place, and of the page's otherwise.
+ */
+function useEditedState(
+  args: Parameters<typeof useRestorableEditorState>[0],
+  kinds: readonly DocumentKind[] | undefined,
+  judged: RegionStateArgs
+): { page: EditorState; editing: EditingTargetState } {
+  const page = useRestorableEditorState(args, kinds);
+  const editing = useEditingTarget(page, judged);
+  useConnectStyleHistory(editing.active.recordStep);
+  return { page, editing };
+}
 
 /**
  * What every edit is judged by beside its own document, the page's and a

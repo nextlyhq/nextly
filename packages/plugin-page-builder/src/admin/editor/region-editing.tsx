@@ -46,7 +46,6 @@ import type {
 import {
   useBeforeDocumentAction,
   useDocumentSession,
-  useReportUnsavedWork,
   type DocumentSession,
   type DocumentSessionOutcome,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -133,6 +132,8 @@ export interface RegionEditingHost {
   readonly leaveThen: (next: () => void) => void;
   /** The top bar's Save and Publish while a region is edited. */
   readonly topBar: RegionTopBar | undefined;
+  /** Whether the region edited holds work not saved. */
+  readonly dirty: boolean;
   /** The questions, to be drawn anywhere inside the editor. */
   readonly dialogs: JSX.Element;
 }
@@ -149,6 +150,18 @@ function reachOf(facts: ReturnType<typeof useComponentFacts>): {
     "unavailable" in reserved &&
     reserved.unavailable === FACTS_PENDING;
   return { known: !pending, reach: facts.pages };
+}
+
+/** The region edited in place, or nothing while the page is edited. */
+function editedAreaOf(
+  editing: Pick<EditingTargetState, "target">
+): RegionArea | undefined {
+  return editing.target.kind === "region" ? editing.target.area : undefined;
+}
+
+/** Whether the component read can be saved as a draft without going live. */
+function draftableOf(session: Pick<DocumentSession, "open">): boolean {
+  return session.open.status === "ready" && session.open.draftable;
 }
 
 /** The region's document, read from the component's stored values. */
@@ -301,6 +314,270 @@ function useRegionOpening({
   }, [field, inRegion, cards, setOpening]);
 }
 
+/** A save or publish of the region, carried out and said. */
+interface RegionStore {
+  /** A save or publish is under way. */
+  readonly busy: boolean;
+  /** Store the region's document; answers whether it was stored. */
+  readonly store: (intent: "save" | "publish") => Promise<boolean>;
+}
+
+/**
+ * Saving and publishing the region through its session. A failure keeps the
+ * editing and the changes and says why, with "Try again"; a store reads the
+ * regions again, so the canvas draws what is published now, and a publish
+ * says the fill toast when it filled the site's default.
+ */
+function useRegionStore({
+  area,
+  field,
+  inline,
+  active,
+  session,
+  stored,
+  rereadRegions,
+  sets,
+}: {
+  area: RegionArea | undefined;
+  field: string | undefined;
+  inline: InlineTyping;
+  active: Pick<EditorState, "document">;
+  session: DocumentSession;
+  stored: () => void;
+  rereadRegions: () => void;
+  sets: BuilderSets;
+}): RegionStore {
+  const [busy, setBusy] = useState(false);
+  const store = useCallback(
+    async (intent: "save" | "publish"): Promise<boolean> => {
+      if (area === undefined || field === undefined) return false;
+      const finished = finishInlineEdit(inline, active.document);
+      if (!finished.mayClose) return false;
+      setBusy(true);
+      const changes = { [field]: finished.document };
+      const outcome = await (intent === "publish"
+        ? session.publish(changes)
+        : session.saveDraft(changes));
+      setBusy(false);
+      if (!outcome.ok) {
+        toast.error(refusalWords(area, intent, outcome), {
+          action: { label: TRY_AGAIN, onClick: () => void store(intent) },
+        });
+        return false;
+      }
+      stored();
+      toast.success(storedWords(area, intent));
+      // The regions are drawn from the published set and components: a
+      // publish changes them, and a draft adds "Draft changes not live".
+      rereadRegions();
+      if (intent === "publish") void sayFillNotices(sets);
+      return true;
+    },
+    [area, field, inline, active.document, session, stored, rereadRegions, sets]
+  );
+  return { busy, store };
+}
+
+/** Leaving the region, and the questions Done and Publish ask first. */
+interface RegionLeaving {
+  readonly asking: "done" | "publish" | null;
+  readonly ask: (question: "done" | "publish" | null) => void;
+  readonly done: () => void;
+  readonly leaveThen: (next: () => void) => void;
+  readonly answer: (choice: DoneAnswer) => Promise<void>;
+}
+
+/**
+ * Done, at once when nothing is unsaved, else after its question; leaving
+ * draws the regions again, chooses the region again and gives it focus.
+ */
+function useRegionLeaving({
+  area,
+  dirty,
+  editing,
+  session,
+  store,
+  release,
+  selection,
+  canvas,
+  rereadRegions,
+}: {
+  area: RegionArea | undefined;
+  dirty: boolean;
+  editing: Pick<EditingTargetState, "leave">;
+  session: Pick<DocumentSession, "discard">;
+  store: RegionStore["store"];
+  /** Let the component go: its session ends and its lock is released. */
+  release: () => void;
+  selection: RegionSelection;
+  canvas: HTMLElement | null;
+  rereadRegions: () => void;
+}): RegionLeaving {
+  const [asking, ask] = useState<"done" | "publish" | null>(null);
+  const leaving = useRef<(() => void) | null>(null);
+  const { leave: leaveTarget } = editing;
+  const leave = useCallback(() => {
+    if (area === undefined) return;
+    leaveTarget();
+    release();
+    rereadRegions();
+    // The region chosen before, chosen again, with focus back on it.
+    selection.select(area);
+    const next = leaving.current;
+    leaving.current = null;
+    requestAnimationFrame(() => {
+      canvas?.querySelector<HTMLElement>(`[data-nx-region="${area}"]`)?.focus();
+      next?.();
+    });
+  }, [area, leaveTarget, release, rereadRegions, selection, canvas]);
+  const done = useCallback(() => {
+    if (area === undefined) return;
+    if (dirty) ask("done");
+    else leave();
+  }, [area, dirty, leave]);
+  const leaveThen = useCallback(
+    (next: () => void) => {
+      leaving.current = next;
+      done();
+    },
+    [done]
+  );
+  const answer = useCallback(
+    async (choice: DoneAnswer) => {
+      if (choice === "keep") {
+        leaving.current = null;
+        ask(null);
+        return;
+      }
+      const left =
+        choice === "discard"
+          ? await session.discard().then(() => true)
+          : await store(choice);
+      if (!left) return;
+      ask(null);
+      leave();
+    },
+    [session, store, leave]
+  );
+  return { asking, ask, done, leaveThen, answer };
+}
+
+/** The top bar's Save and Publish for the region, while one is edited. */
+function regionTopBar(
+  area: RegionArea | undefined,
+  facts: {
+    mayPublish: boolean;
+    draftable: boolean;
+    dirty: boolean;
+    busy: boolean;
+  },
+  store: RegionStore["store"],
+  ask: RegionLeaving["ask"]
+): RegionTopBar | undefined {
+  if (area === undefined) return undefined;
+  return {
+    area,
+    saveLabel: saveLabel(area),
+    publishLabel: publishLabel(area),
+    ...facts,
+    save: () => void store("save"),
+    publish: () => ask("publish"),
+  };
+}
+
+/** Done's question and Publish's, for the region being edited. */
+function RegionQuestions({
+  area,
+  reach,
+  store,
+  leaving,
+  mayPublish,
+  draftable,
+}: {
+  area: RegionArea | undefined;
+  reach: RegionReach;
+  store: RegionStore;
+  leaving: RegionLeaving;
+  mayPublish: boolean;
+  draftable: boolean;
+}): JSX.Element {
+  const shown = area ?? "header";
+  const { asking, ask, answer } = leaving;
+  return (
+    <>
+      <RegionDoneDialog
+        open={asking === "done" && area !== undefined}
+        area={shown}
+        reach={reach}
+        busy={store.busy}
+        mayPublish={mayPublish}
+        draftable={draftable}
+        onAnswer={choice => void answer(choice)}
+      />
+      <RegionPublishDialog
+        open={asking === "publish" && area !== undefined}
+        area={shown}
+        reach={reach}
+        busy={store.busy}
+        onCancel={() => ask(null)}
+        onPublish={() => {
+          void store.store("publish").then(ok => {
+            if (ok) ask(null);
+          });
+        }}
+      />
+    </>
+  );
+}
+
+/**
+ * The header's work, recorded as the component's own recovery point while
+ * it is unsaved; the editor reports it to the leave guard with the page's.
+ */
+function useRecordedRegion(
+  session: Pick<DocumentSession, "record">,
+  field: string | undefined,
+  document: BlockDocument,
+  dirty: boolean
+): void {
+  const { record } = session;
+  useEffect(() => {
+    if (field !== undefined && dirty) record({ [field]: document });
+  }, [field, dirty, document, record]);
+}
+
+/**
+ * A store of the page asked while the header is edited (the save shortcut)
+ * saves the header instead: the page's Save waits until Done.
+ */
+function usePageStoreWaits(
+  area: RegionArea | undefined,
+  store: RegionStore["store"]
+): void {
+  useBeforeDocumentAction(() => {
+    if (area === undefined) return;
+    void store("save");
+    throw new DOMException("The page is saved after Done.", "AbortError");
+  });
+}
+
+/** The session on the component a region asked for, and how far it reaches. */
+function useOpenedComponent(opening: Opening | null): {
+  store: ReturnType<typeof useComponentEditing>;
+  session: DocumentSession;
+  reach: { known: boolean; reach: RegionReach };
+} {
+  const store = useComponentEditing();
+  const session = useDocumentSession(
+    opening === null || store === undefined
+      ? null
+      : { collection: store.collection, id: opening.componentId }
+  );
+  const facts = useComponentFacts(opening?.componentId);
+  const reach = useMemo(() => reachOf(facts), [facts]);
+  return { store, session, reach };
+}
+
 /**
  * The editor's side of editing a header or footer in place, for the
  * editor's body to hand to the canvas, the panels, the top bar and the strip.
@@ -333,18 +610,10 @@ export function useRegionEditing({
   /** Read the regions drawn around the page again. */
   rereadRegions: () => void;
 }): RegionEditingHost {
-  const store = useComponentEditing();
-  const field = store?.field;
   const [opening, setOpening] = useState<Opening | null>(null);
-  const session = useDocumentSession(
-    opening === null || store === undefined
-      ? null
-      : { collection: store.collection, id: opening.componentId }
-  );
-  const facts = useComponentFacts(opening?.componentId);
-  const reach = useMemo(() => reachOf(facts), [facts]);
-  const area =
-    editing.target.kind === "region" ? editing.target.area : undefined;
+  const { store: place, session, reach } = useOpenedComponent(opening);
+  const field = place?.field;
+  const area = editedAreaOf(editing);
   const { active } = editing;
   const savePoint = useRegionSavePoint(active, area, inline);
   const requestEdit = useRegionOpening({
@@ -359,158 +628,54 @@ export function useRegionEditing({
     reach,
     onEntered: requestLayers,
   });
-
-  // The header's work, recorded as the component's own recovery point and
-  // reported to the leave guard, as the page's is.
-  const { record } = session;
-  useEffect(() => {
-    if (area !== undefined && field !== undefined && savePoint.dirty) {
-      record({ [field]: active.document });
-    }
-  }, [area, field, savePoint.dirty, active.document, record]);
-  useReportUnsavedWork("blocks:edited-region", savePoint.dirty);
-
-  const [busy, setBusy] = useState(false);
-  const { stored } = savePoint;
-  const storeRegion = useCallback(
-    async (intent: "save" | "publish"): Promise<boolean> => {
-      if (area === undefined || field === undefined) return false;
-      const finished = finishInlineEdit(inline, active.document);
-      if (!finished.mayClose) return false;
-      setBusy(true);
-      const changes = { [field]: finished.document };
-      const outcome =
-        intent === "publish"
-          ? await session.publish(changes)
-          : await session.saveDraft(changes);
-      setBusy(false);
-      if (!outcome.ok) {
-        toast.error(refusalWords(area, intent, outcome), {
-          action: {
-            label: TRY_AGAIN,
-            onClick: () => void storeRegion(intent),
-          },
-        });
-        return false;
-      }
-      stored();
-      toast.success(storedWords(area, intent));
-      // The regions are drawn from the published set and components: a
-      // publish changes them, and a draft adds "Draft changes not live".
-      rereadRegions();
-      if (intent === "publish") void sayFillNotices(sets);
-      return true;
-    },
-    [
-      area,
-      field,
-      inline,
-      active.document,
-      session,
-      stored,
-      rereadRegions,
-      sets,
-    ]
-  );
-
-  const leaving = useRef<(() => void) | null>(null);
-  const { leave: leaveTarget } = editing;
-  const leave = useCallback(() => {
-    if (area === undefined) return;
-    leaveTarget();
-    setOpening(null);
-    rereadRegions();
-    // The region chosen before, chosen again, with focus back on it.
-    selection.select(area);
-    const next = leaving.current;
-    leaving.current = null;
-    requestAnimationFrame(() => {
-      canvas?.querySelector<HTMLElement>(`[data-nx-region="${area}"]`)?.focus();
-      next?.();
-    });
-  }, [area, leaveTarget, rereadRegions, selection, canvas]);
-
-  const [asking, setAsking] = useState<"done" | "publish" | null>(null);
-  const done = useCallback(() => {
-    if (area === undefined) return;
-    if (!savePoint.dirty) leave();
-    else setAsking("done");
-  }, [area, savePoint.dirty, leave]);
-  const leaveThen = useCallback(
-    (next: () => void) => {
-      leaving.current = next;
-      done();
-    },
-    [done]
-  );
-  const answer = useCallback(
-    async (choice: DoneAnswer) => {
-      if (choice === "keep") {
-        leaving.current = null;
-        setAsking(null);
-        return;
-      }
-      if (choice === "discard") {
-        await session.discard();
-      } else if (!(await storeRegion(choice))) {
-        return;
-      }
-      setAsking(null);
-      leave();
-    },
-    [session, storeRegion, leave]
-  );
-
-  // A store of the page asked while the header is edited (the save
-  // shortcut) saves the header instead: the page's Save waits until Done.
-  useBeforeDocumentAction(() => {
-    if (area === undefined) return;
-    void storeRegion("save");
-    throw new DOMException("The page is saved after Done.", "AbortError");
+  useRecordedRegion(session, field, active.document, savePoint.dirty);
+  const store = useRegionStore({
+    area,
+    field,
+    inline,
+    active,
+    session,
+    stored: savePoint.stored,
+    rereadRegions,
+    sets,
   });
+  const release = useCallback(() => setOpening(null), []);
+  const leaving = useRegionLeaving({
+    area,
+    dirty: savePoint.dirty,
+    editing,
+    session,
+    store: store.store,
+    release,
+    selection,
+    canvas,
+    rereadRegions,
+  });
+  usePageStoreWaits(area, store.store);
 
-  const open = session.open;
-  const draftable = open.status === "ready" && open.draftable;
-  const topBar = useMemo((): RegionTopBar | undefined => {
-    if (area === undefined) return undefined;
-    return {
-      area,
-      saveLabel: saveLabel(area),
-      publishLabel: publishLabel(area),
-      mayPublish: session.mayPublish,
-      draftable,
-      dirty: savePoint.dirty,
-      busy,
-      save: () => void storeRegion("save"),
-      publish: () => setAsking("publish"),
-    };
-  }, [area, session.mayPublish, draftable, savePoint.dirty, busy, storeRegion]);
-
-  const dialogs = (
-    <>
-      <RegionDoneDialog
-        open={asking === "done" && area !== undefined}
-        area={area ?? "header"}
+  const draftable = draftableOf(session);
+  const facts = {
+    mayPublish: session.mayPublish,
+    draftable,
+    dirty: savePoint.dirty,
+    busy: store.busy,
+  };
+  return {
+    area,
+    requestEdit,
+    done: leaving.done,
+    leaveThen: leaving.leaveThen,
+    topBar: regionTopBar(area, facts, store.store, leaving.ask),
+    dirty: savePoint.dirty,
+    dialogs: (
+      <RegionQuestions
+        area={area}
         reach={reach.reach}
-        busy={busy}
+        store={store}
+        leaving={leaving}
         mayPublish={session.mayPublish}
         draftable={draftable}
-        onAnswer={choice => void answer(choice)}
       />
-      <RegionPublishDialog
-        open={asking === "publish" && area !== undefined}
-        area={area ?? "header"}
-        reach={reach.reach}
-        busy={busy}
-        onCancel={() => setAsking(null)}
-        onPublish={() => {
-          void storeRegion("publish").then(ok => {
-            if (ok) setAsking(null);
-          });
-        }}
-      />
-    </>
-  );
-
-  return { area, requestEdit, done, leaveThen, topBar, dialogs };
+    ),
+  };
 }

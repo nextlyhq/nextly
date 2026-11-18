@@ -139,7 +139,7 @@ export function usePageRegions<T extends FieldValues>(
   editors: RegionEditors,
   /** The look edited on its own, which a selected region leaves. */
   look: LookEditingState
-): PageLayoutRegions & {
+): ReturnType<typeof usePageLayoutRegions> & {
   readonly selectedRegion: SelectedRegion;
   /** The look edited on its own, leaving the region when one is chosen. */
   readonly lookEditing: LookEditingState;
