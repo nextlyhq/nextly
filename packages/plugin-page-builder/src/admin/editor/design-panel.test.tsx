@@ -26,6 +26,7 @@ import {
   DesignFonts,
   DesignGroup,
   DesignPanel,
+  DesignReveal,
   FONTS_SCREEN_VIEW,
   ReportStylesMatches,
   designViewOf,
@@ -502,6 +503,46 @@ describe("Manage fonts… from a Font control in Design", () => {
     await waitFor(() =>
       expect(document.activeElement?.getAttribute("data-fonts-manage")).toBe("")
     );
+  });
+
+  it("puts a Design search away when the screen sends the author to a variable", () => {
+    // The screen's "Edit this variable": back to Type, onto the fonts group.
+    // A search kept from before the screen opened would hide that group.
+    const choose = vi.fn();
+    const panel = (view: string): React.JSX.Element => (
+      <DesignPanel
+        view={{ current: view, choose }}
+        fonts={() => (
+          <DesignReveal>
+            {reveal => (
+              <button type="button" onClick={() => reveal("fonts")}>
+                Edit this variable
+              </button>
+            )}
+          </DesignReveal>
+        )}
+        tabs={{
+          colours: () => null,
+          type: () => <p>type rows</p>,
+          spacing: () => null,
+          styles: () => null,
+        }}
+      />
+    );
+    const view = render(panel("type"));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search Design" }), {
+      target: { value: "hero" },
+    });
+    view.rerender(panel(FONTS_SCREEN_VIEW));
+    fireEvent.click(screen.getByRole("button", { name: "Edit this variable" }));
+    view.rerender(panel("type"));
+    expect(
+      (
+        screen.getByRole("searchbox", {
+          name: "Search Design",
+        }) as HTMLInputElement
+      ).value
+    ).toBe("");
   });
 
   it('is named apart from every tab, and an older stored "fonts" tab still opens Colours', () => {

@@ -209,14 +209,24 @@ function useRevealRequest(
 
 /**
  * The panel's way to bring a group into view, for a part drawn inside a tab
- * that sends the author to it, such as the fonts' "Edit this variable".
+ * that sends the author to it, such as the fonts' "Edit this variable". The
+ * search is put away first, as a request from outside the panel puts it
+ * away, since a search kept from before can hide the group.
  */
 export function DesignReveal({
   children,
 }: {
   children: (reveal: (group: string) => void) => React.ReactNode;
 }): React.JSX.Element {
-  return <>{children(useDesignBrowse().reveal)}</>;
+  const { reveal, setSearch } = useDesignBrowse();
+  const revealCleared = React.useCallback(
+    (group: string) => {
+      setSearch("");
+      reveal(group);
+    },
+    [reveal, setSearch]
+  );
+  return <>{children(revealCleared)}</>;
 }
 
 /**
