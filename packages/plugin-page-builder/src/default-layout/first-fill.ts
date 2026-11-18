@@ -47,6 +47,7 @@
  * @module default-layout/first-fill
  */
 import { withVersionFrom } from "../document-version";
+import { areaRowsOf, withArea, type AreaRow } from "../layout-area-rows";
 import { retryOnStale } from "../stale-retry";
 
 import type { FillMarkStore } from "./fill-mark";
@@ -80,13 +81,6 @@ export interface PublishedAs {
   readonly area: StarterArea;
   /** The user who published it, who is told. */
   readonly by: string;
-}
-
-/** One row of a set's areas, as stored. */
-interface AreaRow {
-  readonly area?: unknown;
-  readonly component?: unknown;
-  readonly [key: string]: unknown;
 }
 
 /** The seeded set as read for the write, with the version the write sends. */
@@ -202,7 +196,7 @@ async function readSeed(
   if (row === null || row.status !== "published") return null;
   return {
     id,
-    areas: Array.isArray(row.areas) ? (row.areas as AreaRow[]) : [],
+    areas: areaRowsOf(row.areas),
     rev: typeof row._rev === "string" ? row._rev : undefined,
     pending: row._isWorkingDraft === true,
   };
@@ -250,24 +244,4 @@ async function publishedContentOf(
   });
   const row = found.items[0] as Record<string, unknown> | undefined;
   return row?.[deps.componentField];
-}
-
-/** `areas` with `area` naming `component`, every other row kept as stored. */
-function withArea(
-  areas: readonly AreaRow[],
-  area: StarterArea,
-  component: string
-): AreaRow[] {
-  let placed = false;
-  const next: AreaRow[] = [];
-  for (const entry of areas) {
-    if (entry.area !== area) {
-      next.push(entry);
-    } else if (!placed) {
-      // The area's own row keeps its place and its row id.
-      next.push({ ...entry, area, component });
-      placed = true;
-    }
-  }
-  return placed ? next : [...next, { area, component }];
 }

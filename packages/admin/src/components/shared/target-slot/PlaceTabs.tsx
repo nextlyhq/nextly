@@ -253,6 +253,83 @@ function useShownTabReport(
   }, [shown]);
 }
 
+/**
+ * @experimental One tab delivered to a place, ready for a page that draws the
+ * place's tabs in a row of its own, beside tabs of its own.
+ */
+export interface PlaceTabEntry {
+  /** The contribution's id, which the page's tab state names it by. */
+  id: string;
+  /** The tab's label, in the plugin's words. */
+  label: string;
+  /**
+   * The trigger's accessible name where the tab shows a count: its label
+   * with what the count means ("SEO (3 things to fix)"). Absent, the
+   * trigger's text names it.
+   */
+  accessibleName?: string;
+  /** What the trigger shows: the label, and the count where there is one. */
+  trigger: ReactNode;
+  /**
+   * The tab's body, behind its own boundary. Keep it mounted while another
+   * tab is shown, only hidden, so its count stays current and what it holds
+   * is kept, as `PlaceTabs` does.
+   */
+  panel: ReactNode;
+}
+
+/** @experimental What {@link usePlaceTabs} reads: `PlaceTabs`' own props. */
+export type UsePlaceTabsOptions<P extends AdminPlaceId> = Pick<
+  PlaceTabsProps<P>,
+  "place" | "context" | "entry" | "tabProps" | "fieldNames" | "withheld"
+>;
+
+/**
+ * @experimental The tabs delivered to a place, each with its trigger and its
+ * panel, for a page that draws them in its own row rather than under a strip
+ * `PlaceTabs` draws: the same tabs, filtered and handed the same props, with
+ * the same counts. None while the page's context is `null`.
+ */
+export function usePlaceTabs<P extends AdminPlaceId>({
+  place,
+  context,
+  entry,
+  tabProps,
+  fieldNames,
+  withheld,
+}: UsePlaceTabsOptions<P>): readonly PlaceTabEntry[] {
+  const t = useT();
+  const tabs = useDeliveredTabs(place, context, entry, {
+    fieldNames,
+    withheld,
+  });
+  const { badges, setterFor } = useTabBadges();
+  const handed = handedTo(tabProps, context, entry);
+  if (handed === undefined) return [];
+  return tabs.map(tab => {
+    const badge = drawnBadge(badges[tab.id]);
+    return {
+      id: tab.id,
+      label: tab.label,
+      ...(badge === undefined
+        ? {}
+        : {
+            accessibleName: t("nextly.places.tabWithBadge", {
+              tab: tab.label,
+              badge: badge.label,
+            }),
+          }),
+      trigger: <PlaceTabTriggerContent label={tab.label} badge={badge} />,
+      panel: (
+        <PlaceTabPanelBody<P>
+          component={tab.component}
+          props={{ ...handed, setBadge: setterFor(tab.id) }}
+        />
+      ),
+    };
+  });
+}
+
 export function PlaceTabs<P extends AdminPlaceId>({
   place,
   context,
@@ -267,7 +344,11 @@ export function PlaceTabs<P extends AdminPlaceId>({
   withheld,
   children,
 }: PlaceTabsProps<P>): ReactNode {
-  const tabs = useDeliveredTabs(place, context, entry, {
+  const tabs = usePlaceTabs({
+    place,
+    context,
+    entry,
+    tabProps,
     fieldNames,
     withheld,
   });
@@ -277,17 +358,15 @@ export function PlaceTabs<P extends AdminPlaceId>({
     onOpenTabChange
   );
   useShownTabReport(shown, onShownTabChange);
-  const handed = handedTo(tabProps, context, entry);
   return (
     <>
-      {handed === undefined || tabs.length === 0 ? null : (
-        <PlaceTabStrip<P>
+      {tabs.length === 0 ? null : (
+        <PlaceTabStrip
           tabs={tabs}
           shown={shown}
           choose={choose}
           contentLabel={contentLabel}
           className={className}
-          handed={handed}
         />
       )}
       <Activity mode={shown === CONTENT_TAB ? "visible" : "hidden"}>
@@ -314,26 +393,21 @@ function handedTo<P extends AdminPlaceId>(
 
 /**
  * The strip and each contributed tab's panel, drawn once the page knows its
- * ids and a tab is delivered. `handed` is what every tab receives besides its
- * own `setBadge`.
+ * ids and a tab is delivered.
  */
-function PlaceTabStrip<P extends AdminPlaceId>({
+function PlaceTabStrip({
   tabs,
   shown,
   choose,
   contentLabel,
   className,
-  handed,
 }: {
-  tabs: ReturnType<typeof useDeliveredTabs<P>>;
+  tabs: readonly PlaceTabEntry[];
   shown: string;
   choose: (value: string) => void;
   contentLabel: string;
   className: string | undefined;
-  handed: Omit<PlaceTabProps<P>, "setBadge"> &
-    Readonly<Record<string, unknown>>;
 }): ReactNode {
-  const { badges, setterFor } = useTabBadges();
   return (
     <Tabs
       value={shown}
@@ -348,70 +422,64 @@ function PlaceTabStrip<P extends AdminPlaceId>({
           {contentLabel}
         </TabsTrigger>
         {tabs.map(tab => (
-          <PlaceTabTrigger
+          <TabsTrigger
             key={tab.id}
             value={tab.id}
-            label={tab.label}
-            badge={drawnBadge(badges[tab.id])}
-          />
+            {...(tab.accessibleName === undefined
+              ? {}
+              : { "aria-label": tab.accessibleName })}
+          >
+            {tab.trigger}
+          </TabsTrigger>
         ))}
       </TabsList>
       {tabs.map(tab => (
-        <PlaceTabPanel<P>
+        // Mounted while closed, and hidden by its `hidden` attribute, which a
+        // mounted panel otherwise never carries.
+        <TabsContent
           key={tab.id}
-          id={tab.id}
-          component={tab.component}
-          open={shown === tab.id}
-          props={{ ...handed, setBadge: setterFor(tab.id) }}
-        />
+          value={tab.id}
+          forceMount
+          hidden={shown !== tab.id}
+        >
+          {tab.panel}
+        </TabsContent>
       ))}
     </Tabs>
   );
 }
 
-/**
- * One contributed tab's panel: mounted while closed, and hidden by its
- * `hidden` attribute, which a mounted panel otherwise never carries, with
- * its component behind its own boundary.
- */
-function PlaceTabPanel<P extends AdminPlaceId>({
-  id,
+/** One contributed tab's body: its component behind its own boundary. */
+function PlaceTabPanelBody<P extends AdminPlaceId>({
   component,
-  open,
   props,
 }: {
-  id: string;
   component: string;
-  open: boolean;
   props: PlaceTabProps<P> & Readonly<Record<string, unknown>>;
 }): ReactNode {
   return (
-    <TabsContent value={id} forceMount hidden={!open}>
-      <PlaceTabBody setBadge={props.setBadge}>
-        <IsolatedContribution>
-          <PluginSlot<PlaceTabProps<P> & Readonly<Record<string, unknown>>>
-            path={component}
-            fallback={<PlaceContributionFallback />}
-            props={props}
-          />
-        </IsolatedContribution>
-      </PlaceTabBody>
-    </TabsContent>
+    <PlaceTabBody setBadge={props.setBadge}>
+      <IsolatedContribution>
+        <PluginSlot<PlaceTabProps<P> & Readonly<Record<string, unknown>>>
+          path={component}
+          fallback={<PlaceContributionFallback />}
+          props={props}
+        />
+      </IsolatedContribution>
+    </PlaceTabBody>
   );
 }
 
 /**
- * One contributed tab in the strip: its label, and its count when it has one.
- * The count is drawn for sight and said in words, with the label, as the
- * tab's name, so a screen reader hears "SEO (3 things to fix)" rather than
- * "SEO 3".
+ * What a contributed tab's trigger shows: its label, and its count when it
+ * has one. The count is drawn for sight and said in words, with the label,
+ * as the tab's name (`accessibleName`), so a screen reader hears
+ * "SEO (3 things to fix)" rather than "SEO 3".
  */
-function PlaceTabTrigger({
-  value,
+function PlaceTabTriggerContent({
   label,
   badge,
 }: {
-  value: string;
   label: string;
   badge: PlaceTabBadge | undefined;
 }): ReactNode {
@@ -420,17 +488,7 @@ function PlaceTabTrigger({
   // alarm-coloured zero asks for attention it does not need.
   const attention = badge?.tone === "attention" && badge.count > 0;
   return (
-    <TabsTrigger
-      value={value}
-      {...(badge === undefined
-        ? {}
-        : {
-            "aria-label": t("nextly.places.tabWithBadge", {
-              tab: label,
-              badge: badge.label,
-            }),
-          })}
-    >
+    <>
       {label}
       {badge === undefined ? null : (
         <span
@@ -451,7 +509,7 @@ function PlaceTabTrigger({
             : badge.count}
         </span>
       )}
-    </TabsTrigger>
+    </>
   );
 }
 

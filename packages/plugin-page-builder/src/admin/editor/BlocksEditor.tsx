@@ -405,7 +405,7 @@ function EditorBody<TFieldValues extends FieldValues>({
   // inputs, which read them, and set by "Preview as visitor" below.
   const listsAsVisitor = useListsAsVisitor();
   const canvas = useCanvasInputs(mount, style, listsAsVisitor.lists);
-  const panels = useEditorPanels(mount, name, {
+  const panels = useEditorPanels(mount, {
     control,
     canvasRoot: canvas.canvasElement,
     siteTokens: offerableTokens(
@@ -709,7 +709,13 @@ function EditorBody<TFieldValues extends FieldValues>({
           // the visitor's view while it is on.
           canvasStrip={editorStrip(templatePreview, conditions)}
           openSettingsRequest={view.pages.settingsRequest}
-          renderSettings={editorSettings(view, page, settingsPlace)}
+          renderSettings={editorSettings(view, page, settingsPlace, {
+            kind: mount.initialDocument.kind,
+            fieldName: name,
+            control: control as unknown as Control<FieldValues>,
+            // At the bottom of Page settings, as in the ⋯ menu.
+            openAsForm: shellExit(componentView, done),
+          })}
           // The shell owns the region; this fills it. Rendered unconditionally
           // rather than only when something is selected, because with nothing
           // selected the panel shows the document's own settings: a region

@@ -20,47 +20,16 @@
  */
 import * as React from "react";
 
+import {
+  createValueHolder,
+  nowhereHolder,
+  type ValueHolder,
+} from "./value-holder";
+
 /** The hovered block, readable and writable by any surface under one editor. */
-export interface HoveredBlock {
-  /** The block pointed at, or `null` for none. */
-  readonly get: () => string | null;
-  /** Point at a block, or at nothing with `null`. */
-  readonly set: (id: string | null) => void;
-  /** Be told when it changes; answers the unsubscribe. */
-  readonly subscribe: (listener: () => void) => () => void;
-}
+export type HoveredBlock = ValueHolder<string>;
 
-/** A fresh holder, pointing at nothing. */
-function createHoveredBlock(): HoveredBlock {
-  let current: string | null = null;
-  const listeners = new Set<() => void>();
-  return {
-    get: () => current,
-    set: id => {
-      if (id === current) return;
-      current = id;
-      listeners.forEach(listener => listener());
-    },
-    subscribe: listener => {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-  };
-}
-
-/**
- * What a surface outside any editor reads: nothing hovered, and a set that
- * goes nowhere, so a panel or the marks drawn alone in a test still work.
- */
-const NOWHERE: HoveredBlock = {
-  get: () => null,
-  set: () => undefined,
-  subscribe: () => () => undefined,
-};
-
-const HoveredBlockContext = React.createContext<HoveredBlock>(NOWHERE);
+const HoveredBlockContext = React.createContext<HoveredBlock>(nowhereHolder());
 
 /**
  * Shares one hovered block with everything under it: the panels and the
@@ -71,7 +40,7 @@ export function HoveredBlockProvider({
 }: {
   children: React.ReactNode;
 }): React.JSX.Element {
-  const [hovered] = React.useState(createHoveredBlock);
+  const [hovered] = React.useState(() => createValueHolder<string>());
   return (
     <HoveredBlockContext.Provider value={hovered}>
       {children}
