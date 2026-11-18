@@ -30,6 +30,7 @@
 import {
   builderColumnIsUnique,
   fieldNameProblem,
+  fieldProducesColumn,
   siblingNameClash,
   type FieldNameProblem,
   type SiblingClashKind,
@@ -142,12 +143,9 @@ function nameFailure(
     surface: kind,
     nested: each.nested,
     lifecycleEnabled: ctx.lifecycleEnabled === true,
-    // A field-group field or a link to several keeps its values elsewhere,
-    // so no column carries its name.
-    producesColumn: !(
-      isFieldGroupFieldType(field.type) ||
-      (field.type === "relationship" && field.hasMany === true)
-    ),
+    // Asked as the save asks it: a field-group field keeps its values in its group's own table,
+    // so no column carries its name; a link to several entries keeps them in a column of its own.
+    producesColumn: fieldProducesColumn(field),
   });
   if (!problem) return null;
   const invalid =

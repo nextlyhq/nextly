@@ -41,6 +41,12 @@ export interface BuilderNamePlace {
   /** Whether Draft/Published is on, or turned on in the settings this save carries. */
   lifecycleEnabled: boolean;
   /**
+   * Whether the field becomes a column (`fieldProducesColumn`). A field that makes none carries its
+   * name in no column, so a column's length does not reach it. Absent is a column, as the save
+   * assumes.
+   */
+  producesColumn?: boolean;
+  /**
    * The names the other fields at the same level hold, the field's own left out. A field deleted
    * but not yet saved still holds its name, so its name is among them.
    */
@@ -74,6 +80,9 @@ export function nameRuleProblem(
     surface: place.surface,
     nested: place.nested,
     lifecycleEnabled: place.lifecycleEnabled,
+    ...(place.producesColumn === undefined
+      ? {}
+      : { producesColumn: place.producesColumn }),
   });
   return problem
     ? { kind: problem.kind, message: described(name, problem) }

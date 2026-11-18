@@ -74,9 +74,11 @@ export interface FieldPickerConfig {
   deriveName: (label: string) => string;
   /**
    * Why a derived name cannot be saved, in words for the person, or `null` when it can. While it
-   * says why, the field cannot be added, by button or by Enter.
+   * says why, the field cannot be added, by button or by Enter. Told the type the field is picked
+   * as, since what a name may be can depend on it (a field that makes no column is not held to a
+   * column's length).
    */
-  nameProblem?: (name: string) => string | null;
+  nameProblem?: (name: string, type: string) => string | null;
   /** The type that embeds a field group, and the groups it may embed. */
   fieldGroups?: {
     type: string;
@@ -560,12 +562,13 @@ function FieldGroupStep({
  */
 function labelledName(
   label: string,
+  type: string,
   deriveName: (label: string) => string,
-  nameProblem: ((name: string) => string | null) | undefined
+  nameProblem: ((name: string, type: string) => string | null) | undefined
 ): { trimmed: string; name: string; problem: string | null; addable: boolean } {
   const trimmed = label.trim();
   const name = trimmed ? deriveName(trimmed) : "";
-  const problem = name && nameProblem ? nameProblem(name) : null;
+  const problem = name && nameProblem ? nameProblem(name, type) : null;
   return { trimmed, name, problem, addable: name !== "" && problem === null };
 }
 
@@ -608,7 +611,7 @@ function LabelStep({
   initialLabel?: string;
   offerAddAnother: boolean;
   deriveName: (label: string) => string;
-  nameProblem?: (name: string) => string | null;
+  nameProblem?: (name: string, type: string) => string | null;
   onBack: () => void;
   onAdd: (label: string, name: string, addAnother: boolean) => void;
 }) {
@@ -616,6 +619,7 @@ function LabelStep({
   const [label, setLabel] = useState(fieldGroup?.label ?? initialLabel ?? "");
   const { trimmed, name, problem, addable } = labelledName(
     label,
+    type.type,
     deriveName,
     nameProblem
   );
