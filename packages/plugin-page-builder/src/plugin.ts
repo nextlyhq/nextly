@@ -29,6 +29,7 @@ import {
   installDefaultLayout,
   seedDefaultLayoutAtStart,
 } from "./default-layout/install";
+import { embedThumbnailRoute } from "./embed-thumbnail/route";
 import { blocksFieldType } from "./fields/blocksField";
 import { editorFormsRoutes } from "./forms/editor-forms-route";
 import {
@@ -36,6 +37,12 @@ import {
   FORM_SERVICE,
   startFormProviders,
 } from "./forms/providers";
+import {
+  createPageCheckProviders,
+  PAGE_CHECKS_SERVICE,
+  startPageCheckProviders,
+} from "./page-check-providers";
+import { providedChecksRoute } from "./page-checks-provided-route";
 import { FORM_SEND_LIMITS, formReceiverRoute } from "./forms/route";
 import { SITE_FORMS_SERVICE_NAME, siteForms } from "./forms/site-forms";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
@@ -112,6 +119,12 @@ import {
   BREAKPOINT_REMOVAL_UNDONE_AUDIT,
   BREAKPOINT_REMOVAL_UNDONE_METADATA,
 } from "./site-breakpoint-undo";
+import { appOrigin } from "./site-code/page-code";
+import {
+  PAGE_CODE_SAVED_AUDIT,
+  PAGE_CODE_SAVED_METADATA,
+  registerPageCodeAudit,
+} from "./site-code/page-code-audit";
 import {
   SITE_CODE_SAVED_AUDIT,
   SITE_CODE_SAVED_METADATA,
@@ -145,6 +158,9 @@ export const pageBuilder = (
   const formProviders = createFormProviders();
   // The Form block's picker and the canvas's picked form, read as the author.
   const editorForms = editorFormsRoutes(formProviders);
+  // The page check providers other plugins register, run by the
+  // provided-checks route for the editor's Page checks list.
+  const pageCheckProviders = createPageCheckProviders();
   // What a routed page's forms need: where they post, and its providers' forms.
   const pageForms = siteForms({
     providers: formProviders,
@@ -279,6 +295,8 @@ export const pageBuilder = (
       // Starts this boot's form providers, so the last boot's are forgotten
       // even when no plugin registers one.
       startFormProviders(ctx.services);
+      // And this boot's page check providers, the same way.
+      startPageCheckProviders(ctx.services);
       pageForms.start(ctx.self);
       // The site's named queries and the ones plugins declare, into a
       // registry emptied for this boot.
@@ -347,6 +365,14 @@ export const pageBuilder = (
         countPlacements
       );
       installBindingReport(ctx, def, bindingReportDeps);
+      // An audit row for each committed change to a page's own code.
+      registerPageCodeAudit({
+        ctx,
+        mayHoldBlocks: collection =>
+          def.state.writeReach.mayHoldBlocks(collection),
+        options: opts.siteCode,
+        siteOrigin: () => appOrigin(process.env.NEXT_PUBLIC_APP_URL),
+      });
       installBreakpointRemoval(
         ctx,
         def,
@@ -395,6 +421,11 @@ export const pageBuilder = (
             kind: SITE_CODE_SAVED_AUDIT,
             metadataKeys: [...SITE_CODE_SAVED_METADATA],
           },
+          // And one per committed change to a page's own code, the same.
+          {
+            kind: PAGE_CODE_SAVED_AUDIT,
+            metadataKeys: [...PAGE_CODE_SAVED_METADATA],
+          },
         ],
       },
       // The channel another plugin adds blocks through. Core carries no
@@ -405,6 +436,8 @@ export const pageBuilder = (
       services: {
         ...pluginServices(def, { removalService, readRetiredFor }),
         [FORM_SERVICE]: () => formProviders.start(),
+        // And `pageChecks`, the channel a plugin adds page checks through.
+        [PAGE_CHECKS_SERVICE]: () => pageCheckProviders.start(),
         [SITE_FORMS_SERVICE_NAME]: () => pageForms.service(),
       },
       // The form receiver's send limit per visitor address.
@@ -456,6 +489,8 @@ export const pageBuilder = (
       // plugin route declares one permission, so the tier a role may read
       // without the other has to be reachable without the other's gate.
       routes: [
+        // Other plugins' page checks about the page being edited.
+        providedChecksRoute(() => pageCheckProviders.all()),
         components.blocksList,
         components.patternLibrary,
         components.componentLibrary,
@@ -520,6 +555,9 @@ export const pageBuilder = (
         startup.builderStartup,
         editorForms.list,
         editorForms.describe,
+        // The Embed's "Use the video's thumbnail": copies a video's picture
+        // from its provider's fixed host into the media library.
+        embedThumbnailRoute(),
         // The one public route every form on the site posts to.
         formReceiverRoute({
           providers: formProviders,

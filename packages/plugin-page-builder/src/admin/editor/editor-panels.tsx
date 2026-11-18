@@ -50,7 +50,7 @@ import type { Control, FieldValues } from "react-hook-form";
 
 import type { ComponentLibraryRead } from "../component-library-client";
 import { lazyPart } from "../lazy-part";
-import { usePageLayoutSettings } from "../page-layout";
+import { usePageLayoutSettings, type RegionCardFacts } from "../page-layout";
 import {
   usePatternLibrary,
   type LibraryReadState,
@@ -642,8 +642,10 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     availablePanels: AVAILABLE_PANELS,
     pageLayout,
     canvasRegions: layoutRegions.canvas,
+    siteTokens: page.siteTokens,
     layersRegions: layoutRegions.selectedRegion.layers,
     selectedRegion: layoutRegions.selectedRegion,
+    regionCards: layoutRegions.cards,
     ...library,
     ...requests,
   };
@@ -805,10 +807,14 @@ export type EditorPanels = OfferedLibrary &
     pageLayout: ReactNode | null;
     /** The regions of the page's Layout, drawn locked around the page. */
     canvasRegions: readonly CanvasRegion[];
+    /** The site's variables as the panels offer them, once they are read. */
+    siteTokens: SiteTokenSet | undefined;
     /** The same regions, as rows in Layers that select them. */
     layersRegions: readonly LayersRegionRow[];
     /** The header or footer selected, and what reads it. */
     selectedRegion: SelectedRegion;
+    /** What each region drawn around the page is, and the set it is from. */
+    regionCards: readonly RegionCardFacts[];
     availablePanels: typeof AVAILABLE_PANELS;
     search: { open: boolean; setOpen: (open: boolean) => void };
     pages: PagesPanelMount;

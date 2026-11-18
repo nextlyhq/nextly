@@ -13,6 +13,7 @@ import {
 import type { ComponentProps } from "react";
 
 import { bindingFieldsReader, unbindPlanner } from "../binding-fields-client";
+import { copyEmbedThumbnail } from "../../embed-thumbnail/client";
 import { readEditorForm, readEditorForms } from "../editor-forms-client";
 import { findEntries } from "../entries-client";
 import { findLinkTargets, findLinkTargetsIn } from "../link-targets-client";
@@ -55,6 +56,8 @@ function borrowedServices(): ContentServices {
     findEntries,
     findLinkTargets,
     listLoopCollections,
+    // An Embed's "Use the video's thumbnail", through the copy route.
+    copyEmbedThumbnail,
   };
   return contentServices;
 }

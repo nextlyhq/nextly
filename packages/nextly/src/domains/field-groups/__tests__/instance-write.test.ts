@@ -169,4 +169,14 @@ describe("an instance's view of its host write", () => {
       inTransaction: true,
     });
   });
+
+  it("says the value sits in a field-group instance, and is made as the instance write's own caller", async () => {
+    const view = instanceWriteOf(host(), OWN, {
+      overrideAccess: true,
+    });
+
+    expect(view.inFieldGroup).toBe(true);
+    expect(view.caller?.kind).toBe("system");
+    await expect(view.caller?.can("manage", "anything")).resolves.toBe(true);
+  });
 });

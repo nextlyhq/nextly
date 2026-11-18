@@ -229,6 +229,7 @@
  */
 .nx-canvas-marks,
 .nx-image-states,
+.nx-embed-states,
 .nx-form-states {
   position: absolute;
   inset: 0;

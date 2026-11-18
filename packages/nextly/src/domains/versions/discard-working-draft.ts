@@ -125,8 +125,12 @@ export async function discardWorkingDraft(
   // reporting a failure the admin treats as a no-op (which would keep the stale
   // draft on screen and let a later Publish push its values straight to live).
   //
-  // Read and update were established by the caller, so both reads skip only the
-  // redundant coarse RBAC re-check while the document's own rules still run. The
+  // Neither read is attested by the route (`routeAuthorized: false`): the
+  // caller established read and update of the document, but the values handed
+  // back are the document in the language being discarded, so the read rule is
+  // asked in that language here, before anything is removed. A route's allow
+  // judged the request's language at most, and attesting it admitted a
+  // language the read rule refuses this caller. The
   // language being discarded is named, so the values handed back are the ones the
   // editor resets to: reading another language's would reset the form to text
   // belonging to a language the author is not looking at.
@@ -161,7 +165,7 @@ export async function discardWorkingDraft(
       ? await getService("singleEntryService").get(args.slug, {
           user: args.user,
           overrideAccess: false,
-          routeAuthorized: true,
+          routeAuthorized: false,
           authenticatedScope: args.authenticatedScope,
           status: "all",
           ...locale,
@@ -172,7 +176,7 @@ export async function discardWorkingDraft(
           entryId: args.entryId,
           user: args.user,
           overrideAccess: false,
-          routeAuthorized: true,
+          routeAuthorized: false,
           authenticatedScope: args.authenticatedScope,
           status: "all",
           ...locale,

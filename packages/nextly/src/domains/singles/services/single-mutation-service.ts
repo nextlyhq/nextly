@@ -64,6 +64,7 @@ import {
   isLifecycleStatus,
   transitionGrantNeeded,
   stripUndefinedStatus,
+  unknownStatusRefusal,
 } from "../../../lib/status-transition";
 import {
   buildSingleRevalidationIntent,
@@ -105,6 +106,7 @@ import {
   normalizeRelationshipFields,
   relationshipValidationView,
 } from "../../../shared/lib/field-transform";
+import { fieldWriteCaller } from "../../../shared/lib/field-write-caller";
 import {
   carryStoredPasswords,
   type FieldGroupReach,
@@ -186,6 +188,7 @@ import {
 } from "../../i18n/per-language-storage";
 import {
   assertClaimsAllowed,
+  assertCopySources,
   provenanceClaimsOf,
   type ProvenanceClaims,
 } from "../../i18n/provenance/provenance-claims";
@@ -328,6 +331,7 @@ import {
 } from "../../webhooks/record-mutation-event";
 import { isOutboxRecordingActive } from "../../webhooks/recording-activation";
 import type { WebhookResource } from "../../webhooks/types";
+import { workflowAttachedTo } from "../../workflows/registry";
 import { closeReviewOnDiscard } from "../../workflows/review-state-cleanup";
 import type {
   SingleDocument,
@@ -2346,18 +2350,23 @@ export class SingleMutationService extends BaseService {
         localizedFieldNames: args.localizedFieldNames,
         enforceLocalizedRequired: args.enforceLocalizedRequired,
         // Before the transaction opens, so on the pool.
-        write: storedFieldRead.entryWriteContext({
-          kind: "single",
-          slug,
-          ...(args.writeLocale === undefined
-            ? {}
-            : { locale: args.writeLocale }),
-          connection: {
-            db: this.adapter,
-            executor: undefined,
-            defaultLocale: this.localization?.defaultLocale ?? null,
-          },
-        }),
+        write: {
+          ...storedFieldRead.entryWriteContext({
+            kind: "single",
+            slug,
+            ...(args.writeLocale === undefined
+              ? {}
+              : { locale: args.writeLocale }),
+            connection: {
+              db: this.adapter,
+              executor: undefined,
+              defaultLocale: this.localization?.defaultLocale ?? null,
+            },
+          }),
+          // Who the write is made as, from the reader its access is judged
+          // by, as a collection entry's write is told it.
+          caller: fieldWriteCaller(args.reader),
+        },
       }
     );
     const validationIssues = await issuesTheReaderMaySee(judgedIssues, {
@@ -2450,6 +2459,14 @@ export class SingleMutationService extends BaseService {
         provenanceClaims,
         actorForWrite(rawOptions.actor, rawOptions.user)
       );
+      // A copy's source must be another of the site's languages, as for a collection's save.
+      assertCopySources(provenanceClaims, {
+        configured: this.localization?.locales.map(l => l.code) ?? [],
+        target:
+          rawOptions.locale === EVERY_LOCALE
+            ? null
+            : (rawOptions.locale ?? this.localization?.defaultLocale ?? null),
+      });
     } catch (error) {
       return buildSingleErrorResult(error, "Failed to update Single document");
     }
@@ -3195,6 +3212,13 @@ export class SingleMutationService extends BaseService {
       // would be sanitized to SQL NULL and silently unpublish a published Single
       // without the gate.
       stripUndefinedStatus(currentData);
+      // Under a workflow, a status it cannot place is refused after every hook, trusted code
+      // included; a Single with none stores any value, as before.
+      const unknownStatus = unknownStatusRefusal(
+        currentData,
+        workflowAttachedTo("single", slug) !== undefined
+      );
+      if (unknownStatus) throw unknownStatus;
 
       // A status-only write was judged by its publish or unpublish gate in
       // place of update. A hook that made it an edit, naming a field or
@@ -4922,6 +4946,7 @@ export class SingleMutationService extends BaseService {
               locale: writeLocale,
               values: companionData,
               localizedFields: companion.localizedFields,
+              languagesTable: companion.companionTableName,
               savedBy,
               claims: provenanceClaims,
               promotesDraft: promotedDraft,
@@ -5040,6 +5065,7 @@ export class SingleMutationService extends BaseService {
                 locale: singleDraftLocale,
                 values: companionData,
                 localizedFields: companion.localizedFields,
+                languagesTable: companion.companionTableName,
                 savedBy,
                 claims: provenanceClaims,
                 partState: "draft",
@@ -7119,6 +7145,7 @@ export class SingleMutationService extends BaseService {
       locale: translatedIn,
       values: translation,
       localizedFields: companion.localizedFields,
+      languagesTable: companion.companionTableName,
       savedBy: args.actor,
     });
   }

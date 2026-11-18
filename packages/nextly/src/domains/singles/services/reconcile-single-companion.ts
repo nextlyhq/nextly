@@ -161,6 +161,7 @@ export async function reconcileSingleCompanion(
     kind: "single",
     slug,
     tableName,
+    renamed: args.renamed,
   });
 
   // Register the companion runtime table (best-effort — next boot re-registers it). Skipped when

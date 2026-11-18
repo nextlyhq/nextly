@@ -15,13 +15,25 @@
  * @experimental The checks and the provider point grow with later checks.
  */
 import {
+  blockDefaultsOf,
   getBlock,
+  resolveComponentInstances,
   walkNodes,
   type AnyBlockDefinition,
   type BlockDocument,
   type BlockNode,
+  type DefinitionsById,
+  type RegionArea,
+  type ResolvedBlockNode,
+  type NamedClass,
+  type NodeStyles,
+  type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 
+import {
+  revealedDefinitions,
+  revealedForCanvas,
+} from "../conditions/applied-conditions";
 import type { AskedSetting } from "../editor-asks";
 import { layerLabel } from "../panels/layers/layers";
 
@@ -50,6 +62,32 @@ const CORE_GROUPS: readonly PageCheckGroup[] = [
 /** The groups in the list's order. */
 const GROUP_ORDER = Object.keys(GROUP_LABELS) as PageCheckGroup[];
 
+/**
+ * A header or footer drawn around the page, as its site's set places it: a
+ * check that judges the page as a visitor reads it, top to bottom, reads
+ * the header's blocks before the page's and the footer's after.
+ */
+export interface PageRegionDocument {
+  readonly area: RegionArea;
+  readonly document: BlockDocument;
+  /**
+   * The definitions its component placements are drawn from, where it is
+   * placed as a component, as a set's header is: the checks then read the
+   * blocks the component draws, not the one placement.
+   */
+  readonly definitions?: DefinitionsById;
+}
+
+/** A region as the checks read it: its placements drawn as their blocks. */
+function composedRegion(region: PageRegionDocument): PageRegionDocument {
+  if (region.definitions === undefined) return region;
+  return {
+    area: region.area,
+    document: resolveComponentInstances(region.document, region.definitions)
+      .document,
+  };
+}
+
 /** The page a check reads. */
 export interface CheckedPage {
   /** The draft as it stands, unsaved changes included, or a stored page. */
@@ -59,12 +97,45 @@ export interface CheckedPage {
    * process holds unless the caller resolves blocks its own way.
    */
   readonly blocks?: (type: string) => AnyBlockDefinition | undefined;
+  /** The header and footer drawn around it, where the caller knows them. */
+  readonly regions?: readonly PageRegionDocument[];
+  /**
+   * The definitions the page's own component placements are drawn from, so
+   * a check that reads what the page draws can read inside them.
+   */
+  readonly definitions?: DefinitionsById;
+  /**
+   * The site's variables, light and dark, which a colour written as one is
+   * read through; absent where the caller has none, and a colour that needs
+   * them is then not judged.
+   */
+  readonly tokens?: SiteTokenSet;
+  /**
+   * The site's shared styles, among them its edits to a block type's own
+   * look, which a block is drawn with under its own values.
+   */
+  readonly namedClasses?: readonly NamedClass[];
 }
 
 /** The page as every check is handed it, its definitions resolved. */
 export interface ResolvedPage {
   readonly document: BlockDocument;
+  /**
+   * The page's blocks as it draws them: its component placements drawn as
+   * their components' blocks, under the page's own limits, where the caller
+   * gave the definitions; the stored blocks otherwise. A check reads these,
+   * and a finding on a block a component drew is moved to its placement.
+   */
+  readonly drawn: readonly BlockNode[];
   readonly blocks: (type: string) => AnyBlockDefinition | undefined;
+  /** The header and footer drawn around it; none where none is known. */
+  readonly regions: readonly PageRegionDocument[];
+  /** The page's component definitions, where the caller knows them. */
+  readonly definitions?: DefinitionsById;
+  /** The site's variables, where the caller knows them. */
+  readonly tokens?: SiteTokenSet;
+  /** The site's edits to each block type's own look, by type. */
+  readonly siteLooks: Readonly<Record<string, NodeStyles>>;
 }
 
 /** What one check reports about one problem. */
@@ -84,6 +155,11 @@ export interface PageCheckResult {
    * absent where no one setting does, and the block alone is selected.
    */
   readonly fix?: AskedSetting;
+  /**
+   * The tab of the document's own settings that fixes it, by its id, where
+   * the fix is there rather than on a block (a plugin's tab of Page settings).
+   */
+  readonly settingsTab?: string;
 }
 
 /** One check: an id, the group it reports in, and what it finds. */
@@ -121,6 +197,43 @@ export interface PageCheckGroupView {
   readonly findings: readonly PageFinding[];
 }
 
+/**
+ * Each drawn block a component drew, by id, to the page's placement of it:
+ * the resolver marks every one (`instanceOf`), and leaves the page's own
+ * blocks unmarked, slot content a placement holds among them.
+ */
+function placementsOf(
+  drawn: readonly BlockNode[]
+): ReadonlyMap<string, string> {
+  const placements = new Map<string, string>();
+  walkNodes(drawn as BlockNode[], node => {
+    const placement = (node as ResolvedBlockNode).instanceOf;
+    if (placement !== undefined) placements.set(node.id, placement);
+  });
+  return placements;
+}
+
+/**
+ * A finding as the page knows it: one on a block a component drew points at
+ * the placement, which is what the author can select, and opens no setting,
+ * which is the component's to change.
+ */
+function onThePage(
+  result: PageCheckResult,
+  placementOf: ReadonlyMap<string, string>
+): PageCheckResult {
+  const placement =
+    result.nodeId === undefined ? undefined : placementOf.get(result.nodeId);
+  if (placement === undefined) return result;
+  return {
+    nodeId: placement,
+    ...(result.part === undefined ? {} : { part: result.part }),
+    what: result.what,
+    why: result.why,
+    todo: result.todo,
+  };
+}
+
 /** Each block's place on the page, by id, and the node itself. */
 function pageOrder(document: BlockDocument): Map<string, [number, BlockNode]> {
   const order = new Map<string, [number, BlockNode]>();
@@ -143,6 +256,40 @@ function keyOf(check: string, result: PageCheckResult, taken: Set<string>) {
 }
 
 /**
+ * The page's blocks as the editing canvas draws them: every conditioned
+ * block drawn with its conditions lifted, on the page and in the components
+ * it places (`revealedForCanvas`, `revealedDefinitions`), so a block the
+ * author sees on the canvas is judged, whatever its conditions decide.
+ */
+function drawnNodesOf(page: CheckedPage): readonly BlockNode[] {
+  const revealed = revealedForCanvas(page.document, undefined);
+  if (page.definitions === undefined) return revealed.nodes;
+  return resolveComponentInstances(
+    revealed,
+    revealedDefinitions(revealed, page.definitions, undefined)
+  ).document.nodes;
+}
+
+/**
+ * The page as every check is handed it: drawn once, its component
+ * placements as their blocks where the definitions are given, its header and
+ * footer read as their components draw them.
+ */
+function resolvedPageOf(page: CheckedPage): ResolvedPage {
+  return {
+    document: page.document,
+    drawn: drawnNodesOf(page),
+    blocks: page.blocks ?? getBlock,
+    regions: (page.regions ?? []).map(composedRegion),
+    ...(page.definitions === undefined
+      ? {}
+      : { definitions: page.definitions }),
+    ...(page.tokens === undefined ? {} : { tokens: page.tokens }),
+    siteLooks: blockDefaultsOf(page.namedClasses ?? []),
+  };
+}
+
+/**
  * Run the checks over a page. A check that throws is named in `notRun` and
  * the rest still run, so one broken check never hides the others' findings.
  */
@@ -150,11 +297,10 @@ export function runPageChecks(
   page: CheckedPage,
   checks: readonly PageCheck[]
 ): PageCheckReport {
-  const resolved: ResolvedPage = {
-    document: page.document,
-    blocks: page.blocks ?? getBlock,
-  };
+  const resolved = resolvedPageOf(page);
+  const { drawn } = resolved;
   const order = pageOrder(page.document);
+  const placementOf = placementsOf(drawn);
   const taken = new Set<string>();
   const found: PageFinding[] = [];
   const notRun: string[] = [];
@@ -166,7 +312,8 @@ export function runPageChecks(
       notRun.push(check.id);
       continue;
     }
-    for (const result of results) {
+    for (const drawnResult of results) {
+      const result = onThePage(drawnResult, placementOf);
       const node =
         result.nodeId === undefined ? undefined : order.get(result.nodeId)?.[1];
       found.push({

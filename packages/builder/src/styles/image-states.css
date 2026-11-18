@@ -16,7 +16,8 @@
  * whose colour the editor does not choose, and the editor's text holds its
  * contrast only on the editor's surfaces, in either theme.
  */
-.nx-image-state {
+.nx-image-state,
+.nx-embed-state {
   position: absolute;
   box-sizing: border-box;
   display: grid;
@@ -75,7 +76,8 @@
 }
 
 /* Mid-drag of a block, the plates keep the page's shape and take nothing. */
-.nx-image-states[data-dragging] .nx-image-state {
+.nx-image-states[data-dragging] .nx-image-state,
+.nx-embed-states[data-dragging] .nx-embed-state {
   pointer-events: none;
 }
 

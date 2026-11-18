@@ -338,3 +338,54 @@ describe("who wins over a row", () => {
     ).toBe("34px");
   });
 });
+
+describe("a row that follows a text style", () => {
+  const display: NamedClass = {
+    id: "t-display",
+    slug: "display",
+    label: "Display",
+    orderIndex: 0,
+    role: "text",
+    styles: {
+      base: { base: { fontSize: "56px", lineHeight: 1.05, fontWeight: 800 } },
+    } as unknown as NodeStyles,
+  };
+
+  it("renders an H1 following Display with Display's look, not the row's own size", () => {
+    const { css } = compiled(
+      page([
+        {
+          id: "h",
+          type: "core/heading",
+          version: 1,
+          props: { level: 1, text: "Hello" },
+        },
+      ]),
+      {
+        breakpoints,
+        namedClasses: [display],
+        siteText: { h1: { fontSize: "40px", textStyle: "t-display" } },
+      }
+    );
+    const h1 = css.match(/:where\(h1\) \{[^}]*\}/)?.[0];
+    expect(h1).toContain("font-size: 56px");
+    expect(h1).toContain("font-weight: 800");
+    expect(h1).not.toContain("40px");
+  });
+
+  it("lays a Buttons row following a text style over the Button block", () => {
+    const { css } = compiled(
+      page([
+        { id: "b", type: "core/button", version: 1, props: { label: "Go" } },
+      ]),
+      {
+        breakpoints,
+        namedClasses: [display],
+        siteText: { button: { fontSize: "15px", textStyle: "t-display" } },
+      }
+    );
+    const button = css.match(/:where\(\.nx-bt-core--button\) \{[^}]*\}/)?.[0];
+    expect(button).toContain("font-size: 56px");
+    expect(button).not.toContain("font-size: 15px");
+  });
+});

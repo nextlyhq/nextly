@@ -16,10 +16,13 @@ import {
   worklistId,
   worklistTitle,
   worklistTotal,
+  worklistHasNext,
+  worklistMaxPage,
   worklistTotalPages,
   worklistUpdatedAt,
   type TranslationWorkRow,
 } from "./translation-worklist-service";
+import { PAGINATION_DEFAULTS } from "../../../types/pagination";
 
 const row = (over: Partial<TranslationWorkRow>): TranslationWorkRow => ({
   kind: "collection",
@@ -604,5 +607,28 @@ describe("the two views cannot disagree", () => {
     );
     expect(eligible).toEqual([]);
     expect(unanswerable).toEqual(["visible"]);
+  });
+});
+
+describe("worklist paging", () => {
+  // Each page reads every collection's first `page × limit` rows, and a collection read gives at
+  // most `PAGINATION_DEFAULTS.maxLimit`: a page reaching deeper would be cut from rows that were
+  // never read.
+  const cap = PAGINATION_DEFAULTS.maxLimit;
+
+  it("reaches no deeper than one collection read gives", () => {
+    expect(worklistMaxPage(50) * 50).toBeLessThanOrEqual(cap);
+    expect(worklistMaxPage(50)).toBe(Math.floor(cap / 50));
+    // A limit larger than the depth still has its first page.
+    expect(worklistMaxPage(cap + 1)).toBe(1);
+  });
+
+  it("says there is a next page only when one can be asked for", () => {
+    const last = worklistMaxPage(50);
+    expect(worklistHasNext(1, 50, 120)).toBe(true);
+    expect(worklistHasNext(3, 50, 120)).toBe(false);
+    // The backlog reaches past the deepest page, but no page after it can be read.
+    expect(worklistHasNext(last, 50, cap * 10)).toBe(false);
+    expect(worklistHasNext(last - 1, 50, cap * 10)).toBe(true);
   });
 });

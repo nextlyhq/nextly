@@ -277,6 +277,7 @@ const DOCUMENT_ISSUE_CODES = {
   "invalid-visibility": "A node visibility structure is malformed.",
   "invalid-binding": "A binding is malformed.",
   "invalid-seo": "A document's own metadata is malformed.",
+  "invalid-code": "A document's own page code is malformed.",
   "missing-source-key":
     "A single-sourced binding does not name which single it reads.",
   "invalid-component-instance":

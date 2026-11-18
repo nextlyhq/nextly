@@ -192,6 +192,14 @@ function useStoredLayout<T extends FieldValues>(
   control: Control<T>
 ): { layout: unknown; noHeaderFooter: boolean } | undefined {
   const isPage = useIsPageForm();
+  const watched = useWatchedLayout(control);
+  return isPage ? watched : undefined;
+}
+
+/** The two values as `control` holds them, whatever form it is. */
+function useWatchedLayout<T extends FieldValues>(
+  control: Control<T>
+): { layout: unknown; noHeaderFooter: boolean } {
   const layout: unknown = useWatch({
     control,
     name: LAYOUT_FIELD as Path<T>,
@@ -203,9 +211,8 @@ function useStoredLayout<T extends FieldValues>(
   // One object per pair of values, so a reader keyed on it recomputes only
   // when the choice changes.
   return useMemo(
-    () =>
-      isPage ? { layout, noHeaderFooter: noHeaderFooter === true } : undefined,
-    [isPage, layout, noHeaderFooter]
+    () => ({ layout, noHeaderFooter: noHeaderFooter === true }),
+    [layout, noHeaderFooter]
   );
 }
 
@@ -293,6 +300,23 @@ export function PageLayoutPicker<T extends FieldValues>({
   return <Picker control={control} stored={stored} disabled={disabled} />;
 }
 
+/**
+ * The "Header & footer" menu for a page not made yet: the same picker, over
+ * the New page dialog's own small form, which holds the two values and is
+ * known to make a page. "Manage headers & footers" is left out there, since
+ * it would leave the dialog and what is typed in it.
+ */
+export function NewPageLayoutPicker<T extends FieldValues>({
+  control,
+}: {
+  control: Control<T>;
+}): JSX.Element {
+  const stored = useWatchedLayout(control);
+  return (
+    <Picker control={control} stored={stored} disabled={false} manage={false} />
+  );
+}
+
 /** Above this many sets the menu is searched rather than scrolled. */
 const SEARCH_ABOVE = 10;
 
@@ -363,10 +387,13 @@ function Picker<T extends FieldValues>({
   control,
   stored,
   disabled,
+  manage = true,
 }: {
   control: Control<T>;
   stored: { layout: unknown; noHeaderFooter: boolean };
   disabled: boolean;
+  /** Whether the menu offers "Manage headers & footers". */
+  manage?: boolean;
 }): JSX.Element {
   // Registered only here, once the form is known to hold both fields.
   const { field: layoutField, fieldState } = useController({
@@ -423,7 +450,7 @@ function Picker<T extends FieldValues>({
         {...(searchable
           ? { search: { ...search, ...(capped ? { note: CAPPED_NOTE } : {}) } }
           : {})}
-        {...withManage(manageHrefOf(state))}
+        {...(manage ? withManage(manageHrefOf(state)) : {})}
       />
       <WhyLine id={whyId} view={view} state={state} retry={retry} />
       <RefusedLine id={errorId} refused={refused} />

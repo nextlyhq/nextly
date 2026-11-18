@@ -46,6 +46,13 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
     label: "Width for this section",
   },
   {
+    block: "core/section",
+    setting: "paddingPreset",
+    tab: "style",
+    section: "Spacing",
+    label: "Padding",
+  },
+  {
     block: "core/box",
     setting: "link",
     tab: "content",
@@ -289,6 +296,13 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
     tab: "advanced",
     section: "HTML",
     label: "Link relationship",
+  },
+  {
+    block: "core/heading",
+    setting: "tocExclude",
+    tab: "advanced",
+    section: "Visibility",
+    label: "Leave out of table of contents",
   },
   {
     block: "core/text",
@@ -646,6 +660,27 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
     tab: "content",
     section: "Embed",
     label: "Screen reader label",
+  },
+  {
+    block: "core/embed",
+    setting: "load",
+    tab: "content",
+    section: "Embed",
+    label: "Load",
+  },
+  {
+    block: "core/embed",
+    setting: "privacy",
+    tab: "content",
+    section: "Embed",
+    label: "Privacy mode",
+  },
+  {
+    block: "core/embed",
+    setting: "poster",
+    tab: "content",
+    section: "Embed",
+    label: "Poster",
   },
   {
     block: "core/embed",

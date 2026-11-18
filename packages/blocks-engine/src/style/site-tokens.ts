@@ -212,6 +212,15 @@ export interface SiteTokenSet {
    * colour picker list colours in this order, and nothing is emitted from it.
    */
   order?: readonly string[];
+  /**
+   * Whether the Design panel and every colour picker list the built-in
+   * colours the site does not use. Shown where unset. Display-only, like
+   * `order`: every built-in colour is still a token, and still
+   * written, whatever this says, because core blocks read them.
+   *
+   * @experimental
+   */
+  builtInColoursShown?: boolean;
 }
 
 /**
@@ -709,6 +718,10 @@ export function resolveSiteTokens(override?: SiteTokenSet): SiteTokenSet {
       : { siteText: override.siteText }),
     // Site-wide as well: the order the site's colours are listed in.
     ...(override?.order === undefined ? {} : { order: override.order }),
+    // And whether the built-in colours it does not use are listed.
+    ...(override?.builtInColoursShown === undefined
+      ? {}
+      : { builtInColoursShown: override.builtInColoursShown }),
   };
 }
 
@@ -904,6 +917,33 @@ const SPACING_DEFAULTS: readonly SpacingDefault[] = [
     label: "Section padding (sides)",
     value: { min: "1rem", preferred: "4vw", max: "2rem" },
     description: "A section's padding beside its content.",
+  },
+  // A Section's Compact and Roomy padding (`padding-preset.ts`), each a pair
+  // like the two above, which are Normal's. Tighter and airier above and
+  // below; beside the content they start as Normal's.
+  {
+    name: "space.section-y-compact",
+    label: "Section padding, compact (top and bottom)",
+    value: { min: "1.5rem", preferred: "1rem + 2vw", max: "2.5rem" },
+    description: "A Compact section's padding above and below its content.",
+  },
+  {
+    name: "space.gutter-compact",
+    label: "Section padding, compact (sides)",
+    value: { min: "1rem", preferred: "4vw", max: "2rem" },
+    description: "A Compact section's padding beside its content.",
+  },
+  {
+    name: "space.section-y-roomy",
+    label: "Section padding, roomy (top and bottom)",
+    value: { min: "4.5rem", preferred: "3rem + 6vw", max: "7.5rem" },
+    description: "A Roomy section's padding above and below its content.",
+  },
+  {
+    name: "space.gutter-roomy",
+    label: "Section padding, roomy (sides)",
+    value: { min: "1rem", preferred: "4vw", max: "2rem" },
+    description: "A Roomy section's padding beside its content.",
   },
   {
     name: "space.columns",

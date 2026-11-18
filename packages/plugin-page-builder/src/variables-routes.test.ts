@@ -23,6 +23,7 @@ import type { UncoveredPage, UncoveredPages } from "./uncovered-pages";
 import type { DocumentsUsing } from "./usage-count";
 import type { UsageIndexHealth } from "./usage-index-health";
 import {
+  cleanUpEach,
   mergedSharedStyles,
   readVariableUsage,
   readVariableUses,
@@ -168,7 +169,7 @@ describe("the variable routes' permissions", () => {
     single: (slug: string, action: string) => `${action}-renamed_${slug}`,
   };
 
-  it("gates removal on Design's update, and leaves the reads to their handler", () => {
+  it("gates removal and the clean-up on Design's update, and leaves the reads to their handler", () => {
     expect(
       variableRoutes(setup).map(route => [
         route.method,
@@ -179,6 +180,7 @@ describe("the variable routes' permissions", () => {
       ["GET", "/variables/usage", undefined],
       ["GET", "/variables/where-used", undefined],
       ["POST", "/variables/remove", "update-renamed_site-style"],
+      ["POST", "/variables/clean-up", "update-renamed_site-style"],
     ]);
   });
 
@@ -1127,6 +1129,51 @@ describe("removing variables", () => {
       ).toMatchObject({ code: "NOT_FOUND" });
       expect(write).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("takes a removed colour out of the site's colour order", async () => {
+    const { store, write } = storeOf({
+      tokens: [brand, accent],
+      order: ["t-accent", "color.brand", "color.gone"],
+    });
+    await removeVariables(
+      post({ ids: ["t-accent"] }),
+      store,
+      supplied,
+      checksOf()
+    );
+    // Left there, a later colour given its free name would be listed where
+    // the removed one was.
+    expect(write.mock.calls[0]?.[0]).toEqual({
+      tokens: [brand],
+      order: ["color.brand", "color.gone"],
+    });
+  });
+
+  it("hands the clean-up what a removal took out, as stored, and the section it wrote", async () => {
+    const { store, write } = storeOf(
+      { tokens: [brand, accent], order: ["t-accent", "color.brand"] },
+      "7"
+    );
+    const one = await cleanUpEach(store, supplied, checksOf()).remove(
+      "t-accent"
+    );
+    expect(one).toEqual({
+      taken: [{ id: "t-accent", entry: accent, at: 1, orderAt: 0 }],
+      section: { tokens: [brand], order: ["color.brand"] },
+    });
+    // What it answers is what its one write stored.
+    expect(write.mock.calls).toEqual([[one.section, expect.anything()]]);
+  });
+
+  it("names the stored variables for the clean-up", async () => {
+    const { store } = storeOf({ tokens: [brand, accent] });
+    expect(await cleanUpEach(store, supplied, checksOf()).names()).toEqual(
+      new Map([
+        ["color.brand", "Brand"],
+        ["t-accent", "Accent"],
+      ])
+    );
   });
 
   it("removes several in one write, named by identity", async () => {

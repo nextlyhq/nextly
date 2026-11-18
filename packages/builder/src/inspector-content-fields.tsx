@@ -41,6 +41,7 @@ import {
   type BindableOptions,
   type BindableWrapper,
 } from "./prop-groups";
+import { TOC_NOTE_PROP, TocLeftOutNote } from "./toc-left-out-note";
 import {
   useVisitorUnreadable,
   VisitorUnreadableNote,
@@ -334,6 +335,7 @@ export function ContentFields({
     // Held as "List as" is: a design prop may be set exactly where the
     // block's styles may change, so the same lock check (Layers, a block it
     // sits inside, a content-only area) holds the Clear that writes them.
+    // Under a Table of contents' "Headings": where a heading is left out.
     const marker =
       prop.name === "kind" ? (
         <ListMarkerNote
@@ -341,6 +343,8 @@ export function ContentFields({
           disabled={!writable(prop.name)}
           onApply={onApply}
         />
+      ) : prop.name === TOC_NOTE_PROP ? (
+        <TocLeftOutNote node={findNode(document.nodes, inspection.nodeId)} />
       ) : null;
     if (fields === undefined) {
       // Always a fragment under one key, so a note appearing or going

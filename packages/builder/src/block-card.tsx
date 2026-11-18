@@ -88,6 +88,12 @@ export interface BlockCardProps {
    * its own, the words after it, and the way back to the block it is in.
    */
   readonly placedIn?: PlacedIn | undefined;
+  /**
+   * The region of the page's layout the block is in, while that region is
+   * edited in place ("Site header"): the title then reads "Navigation · in
+   * Site header", so the author always sees which document they are editing.
+   */
+  readonly inRegion?: string | undefined;
 }
 
 /** A block named by where it sits, and the way back to what it sits in. */
@@ -113,9 +119,11 @@ export function BlockCard({
   verbs,
   reasonId,
   placedIn,
+  // Where it is while a region is edited in place, which only the title reads.
+  ...where
 }: BlockCardProps): React.JSX.Element {
   const [renaming, setRenaming] = React.useState(false);
-  const reading = readingOf(name, type, placedIn);
+  const reading = readingOf(name, type, placedIn, where.inRegion);
   return (
     <div className="nx-block-card" data-block-card="">
       <div className="nx-block-card__head">
@@ -177,12 +185,19 @@ interface TitleReading {
   readonly after: string;
 }
 
-/** The block's own name, else where it sits, else nothing but its type. */
+/**
+ * The block's own name, else where it sits, else nothing but its type. In a
+ * region edited in place, its name or its type, then the region it is in.
+ */
 function readingOf(
   name: string,
   type: string,
-  placedIn: PlacedIn | undefined
+  placedIn: PlacedIn | undefined,
+  inRegion: string | undefined
 ): TitleReading {
+  if (placedIn === undefined && inRegion !== undefined) {
+    return { own: name === "" ? type : name, after: `in ${inRegion}` };
+  }
   return {
     own: name === "" ? (placedIn?.title ?? "") : name,
     after: placedIn === undefined ? type : placedIn.within,

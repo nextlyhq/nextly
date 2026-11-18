@@ -13,6 +13,9 @@ export const GENERAL_TAB = "general";
 /** The dialog's own second tab: every other field of the page. */
 export const FIELDS_TAB = "fields";
 
+/** The Code tab's value: the page's own code, last in the row. */
+export const CODE_TAB = "code";
+
 /** The plugin a contribution id belongs to: what comes before its first dot. */
 function pluginOf(id: string): string {
   return id.split(".")[0] ?? id;

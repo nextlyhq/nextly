@@ -55,6 +55,7 @@ import {
   readClassSlug,
   type StyleCompileContext,
 } from "./compile-page-context";
+import { customCssOf } from "./compile-page-custom-css";
 import {
   classLinksNarrowing,
   type ContainerReading,
@@ -87,6 +88,7 @@ import {
   classNameOf,
   isDefaultLook,
   isLook,
+  isTextStyle,
   isUsableNamedClass,
   MAX_NAMED_CLASS_NAME_LENGTH,
   NAMED_CLASS_SLUG_RE,
@@ -107,6 +109,7 @@ import {
   PAGE_ROOT_SELECTOR,
 } from "./node-class";
 import { OVERLAY_PREFIX, OVERLAY_RESET } from "./overlay";
+import { paddingPresetStyles } from "./padding-preset";
 import { partRouting } from "./part-routing";
 import { type CssRule, serializeRules } from "./serialize";
 import { SITE_TEXT_ROOT } from "./site-text";
@@ -116,6 +119,8 @@ import { newWarningAllowance, pushBoundedWarning } from "./warning-allowance";
 
 export type {
   CompiledPageCss,
+  CustomCssLevel,
+  CustomCssPolicy,
   StyleCompileContext,
 } from "./compile-page-context";
 export {
@@ -719,6 +724,8 @@ export function compilePageCss(
             // A look reaches only its own block type, so a reader of the
             // trace can refuse it on any other, as the compiler does.
             ...(isLook(cls) ? { blockType: cls.blockType } : {}),
+            // A text style is named as one wherever the trace is read.
+            ...(isTextStyle(cls) ? { role: "text" as const } : {}),
           },
           previewStates,
           trace,
@@ -776,7 +783,33 @@ export function compilePageCss(
     }
     const selector = `${pageRoot} .${className}`;
     const traceBeforeNode = trace?.length ?? 0;
+    const preset = paddingPresetStyles(node, {
+      path,
+      warnings,
+      warningAllowance,
+    });
     const nodeRules = [
+      // A Section's padding preset: a default of this one block, weightless
+      // and after its type's, so a block style and its own values still win.
+      ...(preset === undefined
+        ? []
+        : envelopeRules(
+            preset,
+            `.${className}`,
+            pointer(path, "props"),
+            contexts,
+            tokenPrefix,
+            warnings,
+            budget,
+            warningAllowance,
+            {
+              origin: { kind: "blockType", type: node.type, node: node.id },
+              trace,
+              mayFetchUrl,
+              previewStates,
+              weightlessAnchor: defaultsAnchor,
+            }
+          )),
       ...envelopeRules(
         node.styles,
         selector,
@@ -1001,12 +1034,27 @@ export function compilePageCss(
     attributeClasses.set(node.id, names.join(" "));
   }
 
+  // Custom CSS last, after every rule above, so an author's CSS wins a tie
+  // with the builder's own. Read before the gated entries are serialized into
+  // the sheet, since a gated block's CSS joins its own entry.
+  const custom = customCssOf({
+    doc,
+    nodes,
+    classes,
+    duplicateIds,
+    pageRoot,
+    policy: ctx.customCss,
+    gated,
+  });
+
   return {
     ...(effectiveScope === undefined ? {} : { scope: effectiveScope }),
     // The NORMALISED name, so a refused one leaves this absent and the artifact
     // reads as the published sheet it actually is.
     ...(preview === undefined ? {} : { previewContainer: preview }),
-    css: withPreludes(rules, gated, scope),
+    css: [withPreludes(rules, gated, scope), custom]
+      .filter(part => part !== "")
+      .join("\n"),
     warnings,
     classes: attributeClasses,
     // Omitted rather than empty when nobody asked, so a caller cannot mistake "not requested"

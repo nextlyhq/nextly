@@ -25,6 +25,11 @@ import {
 } from "./component-fields-panel";
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
+import {
+  EMBED_BLOCK_TYPE,
+  embedLinkOp,
+} from "./canvas/embed-states-model";
+import { embedSectionBodies } from "./embed-sections";
 import { FORM_BLOCK } from "./form-picked";
 import { formSectionBodies, formSourceSections } from "./form-sections";
 import { useFormSources } from "./form-source-control";
@@ -33,6 +38,7 @@ import {
   blockIsReadOnly,
   builderContentSectionsOf,
   contentRowsOf,
+  designIsWritable,
   designReadOnlyReason,
   fieldLabel,
   lockViewOf,
@@ -140,6 +146,15 @@ export function commitProp(
   if (!propIsWritable(document, id, name, lockViewOf(editor))) return null;
   const node = findNode(document.nodes, id);
   if (node === undefined) return null;
+  // An Embed's link, typed or pasted into its Link field, takes the
+  // provider's shape with it, in the same step, as a link pasted on the
+  // canvas does.
+  if (node.type === EMBED_BLOCK_TYPE && name === "src" && typeof value === "string") {
+    const linked = embedLinkOp(document, id, value, {
+      shape: designIsWritable(document, id, lockViewOf(editor)),
+    });
+    if (linked !== null) return editor.apply(linked);
+  }
   return editor.apply({
     kind: "update",
     id,
@@ -316,6 +331,26 @@ function ContentSurface({
             />
           ),
   });
+  // The Embed's section: its Link, which writes the provider's shape with
+  // the link, and the settings that apply to what the link is.
+  const embedNode = findNode(editor.document.nodes, inspection.nodeId);
+  const embedBodies = embedSectionBodies({
+    inspection,
+    stored: embedNode?.props ?? {},
+    linkBound: embedNode?.bindings?.src !== undefined,
+    services,
+    writable: name =>
+      propIsWritable(
+        editor.document,
+        inspection.nodeId,
+        name,
+        lockViewOf(editor)
+      ),
+    onCommit: (name, value) => {
+      onCommit(name, value);
+    },
+    rowsOf: fieldsFor,
+  });
   // Each section the block places in Content, folding on its own, after
   // the ones the builder draws for a core block (Columns' layout, a
   // Gallery's Pictures and Layout); a block
@@ -339,7 +374,7 @@ function ContentSurface({
       const body =
         formBodies?.has(section.label) === true
           ? formBodies.get(section.label)
-          : fieldsFor(section.rows);
+          : (embedBodies?.get(section.label) ?? fieldsFor(section.rows));
       return body === null || body === undefined
         ? []
         : [

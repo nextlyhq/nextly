@@ -24,6 +24,7 @@ import {
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { z } from "zod";
 
+import { copiedValuesFor } from "@admin/components/features/entries/copied-values";
 import type { EditorRestore } from "@admin/components/features/versions/editor-restore";
 import { useFormRestore } from "@admin/components/features/versions/useEditorRestoreSurface";
 import { useCreateEntry } from "@admin/hooks/queries/useCreateEntry";
@@ -663,6 +664,8 @@ function useEntryWriteGate(gate: {
     saveWithoutPublishing: gate.saveWithoutPublishing,
     resetToDocument: () => {
       gate.form.reset(gate.defaultValues);
+      // Unsaved work is gone, and with it what a copy put into the form.
+      copiedValuesFor(gate.form.control).clear();
       gate.onRecovered?.();
     },
     version: version.startedFrom,
@@ -881,6 +884,7 @@ function useConflictChoices(choices: {
       version.release();
       version.adoptRead(current.entry);
       form.reset(current.defaultValues);
+      copiedValuesFor(form.control).clear();
     },
     [version, hold, collection, entry?.id, form, locale, readDraft, resetKey]
   );
@@ -1042,6 +1046,9 @@ export function useEntryForm({
     resetKey.current = next;
     resetBy(entry, decision);
     form.reset(defaultValues, decision === "full" ? undefined : KEEP_UNSAVED);
+    // A form started afresh, on another entry or language or a version not this author's, holds
+    // nothing a copy put into it; one keeping unsaved work keeps its copies with it.
+    if (decision === "full") copiedValuesFor(form.control).clear();
     setAwaitingEntry(false);
   }, [entry, mode, defaultValues, form, locale, readDraft, holdsRead, resetBy]);
 
@@ -1349,6 +1356,8 @@ export function useEntryForm({
       const result = await discardMutation.mutateAsync(version.startedFrom());
       version.adoptRead(result.item);
       form.reset(getDefaultValues(fields, result.item));
+      // The working draft is discarded, copies into it with it.
+      copiedValuesFor(form.control).clear();
       // The discard answers with the live row as the API populates it, which
       // leaves out a related item the editor may not read, so a save of these
       // values would delete those links. Saving waits for the page to hand
