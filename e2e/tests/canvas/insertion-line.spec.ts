@@ -324,6 +324,9 @@ test.describe("the line where a highlighted tile would land", () => {
     const id = await createPage(page.request, true);
     await openBuilder(page, id);
     await selectContainer(page, HERO);
+    // The panel open first: opening it narrows the canvas, and the page
+    // reflows under it.
+    await openAdd(page);
     // Hero scrolled out of view above.
     await canvasFrame(page)
       .locator(".nx-canvas")
@@ -332,7 +335,6 @@ test.describe("the line where a highlighted tile would land", () => {
       });
     await expect.poll(() => scrolledBy(page)).toBeGreaterThan(1000);
     const before = await scrolledBy(page);
-    await openAdd(page);
     await tile(page, "Heading").hover();
     const edge = canvasLayer(page).locator(".nx-insertion-line__edge");
     await expect(edge).toHaveText("↑ Heading goes inside Hero, at the end");

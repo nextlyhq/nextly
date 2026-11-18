@@ -27,8 +27,16 @@ import {
 
 /** What the canvas draws for a place. */
 export type InsertionMark =
-  /** A line at the place, as a drag's drop line. */
-  | { readonly kind: "line"; readonly target: DropTarget }
+  /**
+   * A line at the place, as a drag's drop line, and the block beside it
+   * (before it, else after it, else its container), which is what is
+   * scrolled into view to show the place.
+   */
+  | {
+      readonly kind: "line";
+      readonly target: DropTarget;
+      readonly nearId: string | undefined;
+    }
   /** An empty container the block goes inside: its outline, not a line. */
   | { readonly kind: "empty"; readonly containerId: string };
 
@@ -69,8 +77,27 @@ export function insertionMarkOf(
       ? undefined
       : { kind: "empty", containerId: region.parentId };
   }
-  const target = targetsInRegion(region, rects).find(
-    candidate => candidate.at.index === at.index
-  );
-  return target === undefined ? undefined : { kind: "line", target };
+  const target = lineAt(targetsInRegion(region, rects), at.index);
+  if (target === undefined) return undefined;
+  return {
+    kind: "line",
+    target,
+    nearId:
+      region.childIds[at.index - 1] ??
+      region.childIds[at.index] ??
+      region.parentId,
+  };
+}
+
+/**
+ * The region's line for `index`. A block that rendered nothing has no line of
+ * its own and takes no room, so a place beside one is drawn at the next line
+ * after it, which is the same gap on screen; where none comes after, at the
+ * last line before it.
+ */
+function lineAt(
+  lines: readonly DropTarget[],
+  index: number
+): DropTarget | undefined {
+  return lines.find(line => line.at.index >= index) ?? lines[lines.length - 1];
 }

@@ -42,13 +42,7 @@ import {
 } from "./canvas-geometry-watch";
 import { DropIndicator } from "./drop-indicator";
 import type { DropTarget, RectSource } from "./drop-targets";
-import {
-  canvasContentRect,
-  canvasScroller,
-  onScreenBandOf,
-  onScreenOf,
-  overlaySpaceOf,
-} from "./geometry-dom";
+import { canvasContentRect, onScreenOf, overlaySpaceOf } from "./geometry-dom";
 import { insertionMarkOf } from "./insertion-line-geometry";
 import {
   useInsertionPreview,
@@ -72,14 +66,25 @@ type Drawn =
     }
   | {
       readonly kind: "edge";
-      /** The place, in the canvas's content coordinates, to scroll to. */
-      readonly place: Rect;
+      /** The block beside the place, scrolled into view to show it. */
+      readonly revealId: string | undefined;
       /** Which edge of the canvas the label is pinned to. */
-      readonly edge: "top" | "bottom";
+      readonly edge: Edge;
       readonly left: number;
       readonly top: number;
     }
   | { readonly kind: "empty"; readonly rect: Rect };
+
+/** An edge of what the canvas shows. */
+type Edge = "top" | "bottom" | "left" | "right";
+
+/** The arrow an edge label points with. */
+const ARROWS: Readonly<Record<Edge, string>> = {
+  top: "↑",
+  bottom: "↓",
+  left: "←",
+  right: "→",
+};
 
 /** How far an edge label keeps from the canvas's edge, in pixels. */
 const EDGE_GAP = 8;
@@ -102,7 +107,9 @@ export const EDGE_HOLD_MS = 1500;
  * selector built from an id, which reaches this from stored data. The
  * outermost element stands for a block, as a drag measures it.
  */
-function lazyRects(root: HTMLElement): RectSource {
+function lazyRects(
+  root: HTMLElement
+): RectSource & { elementOf: (id: string) => Element | undefined } {
   const elements = new Map<string, Element>();
   root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
     const id = nodeAddressOf(element);
@@ -124,6 +131,7 @@ function lazyRects(root: HTMLElement): RectSource {
       return measured.get(id);
     },
     rootRect: () => canvasContentRect(root, root),
+    elementOf: id => elements.get(id),
   };
 }
 
@@ -144,25 +152,44 @@ function lineRectOf(target: DropTarget): Rect {
       };
 }
 
+/** Which edge of the screen a place lies past, or `undefined` for none. */
+function edgePast(drawnAt: Rect, screen: Rect): Edge | undefined {
+  if (drawnAt.y + drawnAt.height < screen.y) return "top";
+  if (drawnAt.y > screen.y + screen.height) return "bottom";
+  if (drawnAt.x + drawnAt.width < screen.x) return "left";
+  if (drawnAt.x > screen.x + screen.width) return "right";
+  return undefined;
+}
+
+/** `value` kept between `low` and `high`. */
+function within(value: number, low: number, high: number): number {
+  return Math.min(Math.max(value, low), high);
+}
+
 /**
  * The label pinned to the canvas edge for a place off screen, or `undefined`
- * for one on screen. `place` is in the canvas's coordinates, to scroll to;
- * `drawnAt` and `screen` are in the chrome's.
+ * for one on screen. A canvas zoomed past its region can leave a place off
+ * to either side as well as above or below. `drawnAt` and `screen` are in
+ * the chrome's coordinates.
  */
 function edgeLabelFor(
-  place: Rect,
+  revealId: string | undefined,
   drawnAt: Rect,
   screen: Rect
 ): Drawn | undefined {
-  const above = drawnAt.y + drawnAt.height < screen.y;
-  const below = drawnAt.y > screen.y + screen.height;
-  if (!above && !below) return undefined;
+  const edge = edgePast(drawnAt, screen);
+  if (edge === undefined) return undefined;
+  const right = screen.x + screen.width - EDGE_GAP;
+  const bottom = screen.y + screen.height - EDGE_GAP;
+  const across = edge === "top" || edge === "bottom";
+  const sideways = edge === "left" ? screen.x + EDGE_GAP : right;
+  const upright = edge === "top" ? screen.y + EDGE_GAP : bottom;
   return {
     kind: "edge",
-    place,
-    edge: above ? "top" : "bottom",
-    left: Math.max(screen.x + EDGE_GAP, drawnAt.x),
-    top: above ? screen.y + EDGE_GAP : screen.y + screen.height - EDGE_GAP,
+    revealId,
+    edge,
+    left: across ? within(drawnAt.x, screen.x + EDGE_GAP, right) : sideways,
+    top: across ? upright : within(drawnAt.y, screen.y + EDGE_GAP, bottom),
   };
 }
 
@@ -186,7 +213,11 @@ function drawnFor(
   if (place === undefined) return null;
   const drawnAt = space.place(place);
   const screen = onScreenOf(space);
-  const edge = edgeLabelFor(place, drawnAt, screen);
+  const edge = edgeLabelFor(
+    mark.kind === "empty" ? mark.containerId : mark.nearId,
+    drawnAt,
+    screen
+  );
   if (edge !== undefined) return edge;
   if (mark.kind === "empty") return { kind: "empty", rect: drawnAt };
   return {
@@ -198,17 +229,18 @@ function drawnFor(
 }
 
 /**
- * Scroll the canvas so the place is in the middle of what it shows. Asked of
- * the canvas's own scroller, the frame's page where the canvas has a frame.
+ * Bring the place into view: the block beside it, scrolled to the middle of
+ * the canvas by the browser, which moves every scroller that clips it, the
+ * frame's page and the region around a zoomed frame alike, in both
+ * directions.
  */
-function scrollToPlace(layer: HTMLElement, place: Rect): void {
+function revealPlace(layer: HTMLElement, revealId: string | undefined): void {
+  if (revealId === undefined) return;
   const space = overlaySpaceOf(layer, CANVAS_ROOT_CLASS);
   if (space === null) return;
-  const scroller = canvasScroller(space.root, space.frame !== null);
-  if (scroller === null) return;
-  const band = onScreenBandOf(space.root, space.frame);
-  const along = place.y + place.height / 2;
-  scroller.scrollBy({ top: along - (band.y + band.height / 2) });
+  lazyRects(space.root)
+    .elementOf(revealId)
+    ?.scrollIntoView({ block: "center", inline: "center" });
 }
 
 /**
@@ -333,12 +365,13 @@ export function InsertionLine({
           onPointerEnter={() => pointed(true)}
           onPointerLeave={() => pointed(false)}
           onClick={() => {
-            if (layer.current !== null)
-              scrollToPlace(layer.current, drawn.place);
+            if (layer.current !== null) {
+              revealPlace(layer.current, drawn.revealId);
+            }
             release();
           }}
         >
-          {`${drawn.edge === "top" ? "↑" : "↓"} ${words}`}
+          {`${ARROWS[drawn.edge]} ${words}`}
         </button>
       ) : null}
       {drawn?.kind === "empty" ? (

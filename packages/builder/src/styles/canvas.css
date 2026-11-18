@@ -696,6 +696,15 @@
   transform: translateY(-100%);
 }
 
+/* A canvas zoomed past its region can leave the place off to a side. */
+.nx-insertion-line__edge[data-edge="left"] {
+  transform: translateY(-50%);
+}
+
+.nx-insertion-line__edge[data-edge="right"] {
+  transform: translate(-100%, -50%);
+}
+
 .nx-insertion-line__edge:focus-visible {
   outline: 2px solid var(--nx-builder-accent);
   outline-offset: 2px;

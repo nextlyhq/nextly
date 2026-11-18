@@ -62,6 +62,13 @@ beforeAll(() => {
           createElement("div", { className }),
       },
       {
+        name: "acme/nothing",
+        version: 1,
+        description: "A block that draws nothing.",
+        example: { props: {} },
+        render: () => null,
+      },
+      {
         name: "acme/box",
         version: 1,
         description: "A container.",
@@ -283,8 +290,7 @@ describe("the line where a highlighted tile would land", () => {
 
   it("names an empty container below the screen at the edge, and scrolls it into view when pressed", async () => {
     layOutBoxBelow();
-    const scrollBy = vi.fn();
-    Element.prototype.scrollBy = scrollBy;
+    const revealed = revealSpy();
     const { container } = drawWith(
       {
         at: { parentId: "box", slot: "children", index: 0 },
@@ -298,8 +304,10 @@ describe("the line where a highlighted tile would land", () => {
     expect(edge?.textContent).toBe("↓ Text goes inside Box");
     if (edge === null) throw new Error("no edge label");
     fireEvent.click(edge);
-    // The Box's middle, 1125, to the middle of the 500px screen.
-    expect(scrollBy).toHaveBeenCalledWith({ top: 875 });
+    // The Box itself, to the middle of the canvas.
+    expect(revealed()).toEqual([
+      ["box", { block: "center", inline: "center" }],
+    ]);
   });
 
   it("keeps an edge label a while after the panel lets go, and while it is pointed at", async () => {
@@ -360,8 +368,7 @@ describe("the line where a highlighted tile would land", () => {
 
   it("names a place below the screen at the bottom edge, and scrolls only when that is pressed", async () => {
     layOut();
-    const scrollBy = vi.fn();
-    Element.prototype.scrollBy = scrollBy;
+    const revealed = revealSpy();
     const { container } = drawWith({
       at: { index: 3 },
       words: "Text goes at the end of the page",
@@ -373,10 +380,98 @@ describe("the line where a highlighted tile would land", () => {
     expect(edge?.getAttribute("data-edge")).toBe("bottom");
     expect(edge?.textContent).toBe("↓ Text goes at the end of the page");
     // Drawing it scrolled nothing.
-    expect(scrollBy).not.toHaveBeenCalled();
+    expect(revealed()).toEqual([]);
     if (edge === null) throw new Error("no edge label");
     fireEvent.click(edge);
-    // To the middle of the 500px screen: 1000 - 250.
-    expect(scrollBy).toHaveBeenCalledWith({ top: 750 });
+    // The block before the place, "far", to the middle of the canvas.
+    expect(revealed()).toEqual([
+      ["far", { block: "center", inline: "center" }],
+    ]);
+  });
+
+  it("names a place off to the side at that edge, in a row wider than the screen", async () => {
+    // Hero's two blocks side by side, the second running past the 1000px
+    // screen, as at a zoom wider than the canvas region.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 1000, 500);
+        }
+        switch (this.getAttribute(NODE_ID_ATTRIBUTE)) {
+          case "hero":
+            return new DOMRect(0, 0, 1700, 100);
+          case "one":
+            return new DOMRect(0, 0, 600, 100);
+          case "two":
+            return new DOMRect(1100, 0, 600, 100);
+          default:
+            return new DOMRect(0, 0, 1000, 2000);
+        }
+      }
+    );
+    const revealed = revealSpy();
+    const { container } = drawWith({
+      at: { parentId: "hero", slot: "children", index: 2 },
+      words: "Text goes inside Hero, at the end",
+    });
+    await act(async () => undefined);
+    // Past Two's right edge at 1700: off the right of the screen.
+    expect(lineIn(container)).toBeNull();
+    const edge = edgeIn(container);
+    expect(edge?.getAttribute("data-edge")).toBe("right");
+    expect(edge?.textContent).toBe("→ Text goes inside Hero, at the end");
+    if (edge === null) throw new Error("no edge label");
+    fireEvent.click(edge);
+    expect(revealed()).toEqual([
+      ["two", { block: "center", inline: "center" }],
+    ]);
+  });
+
+  it("draws a place before a block that renders nothing at the gap where it shows", async () => {
+    // Hero holds One and then a block that draws nothing: the place between
+    // them is the gap after One on screen.
+    layOut();
+    const withGhost: BlockDocument = {
+      ...page,
+      nodes: [
+        {
+          id: "hero",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          slots: {
+            children: [
+              { id: "one", type: "acme/leaf", version: 1, props: {} },
+              { id: "ghost", type: "acme/nothing", version: 1, props: {} },
+            ],
+          },
+        },
+      ],
+    };
+    const { container } = drawWith(
+      {
+        at: { parentId: "hero", slot: "children", index: 1 },
+        words: "Text goes after One, inside Hero",
+      },
+      withGhost
+    );
+    await act(async () => undefined);
+    expect(lineIn(container)?.style.top).toBe("100px");
   });
 });
+
+/**
+ * Every block the canvas scrolled into view, by id, with how. Read from the
+ * element's own node id rather than which element was asked, so a test reads
+ * what was revealed.
+ */
+function revealSpy(): () => unknown[][] {
+  const calls: unknown[][] = [];
+  Element.prototype.scrollIntoView = function reveal(
+    this: Element,
+    how?: unknown
+  ) {
+    calls.push([this.getAttribute(NODE_ID_ATTRIBUTE), how]);
+  };
+  return () => calls;
+}
