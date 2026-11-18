@@ -39,6 +39,7 @@ import { drawsInteractive, RichTextParagraphContent } from "../rich-text";
 
 import { CONTENT } from "./categories";
 import { boundText, text } from "./props";
+import { TEXT_CONVERTERS } from "./text-conversions";
 
 export interface ParagraphProps {
   /**
@@ -135,5 +136,7 @@ export const paragraph: BlockDefinition<ParagraphProps, PageContext> =
       drawsInteractive(toOneParagraph(props.text).value.root.children)
         ? { is: ["flow", "interactive"] }
         : { is: ["flow"] },
+    // "Turn into" Rich text (marks kept) or Heading (words kept).
+    converters: TEXT_CONVERTERS,
     render: renderParagraph,
   });

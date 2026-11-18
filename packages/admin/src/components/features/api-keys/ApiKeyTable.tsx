@@ -316,7 +316,10 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
       search={{
         value: search,
         onChange: setSearch,
-        placeholder: "Search API keys by name, description, or role...",
+        // Names every field the search matches. A role-based key's role is
+        // shown in its Type badge, so a key found by role says why.
+        placeholder:
+          "Search API keys by name, description, type, role, or key prefix...",
         isLoading,
       }}
       columnsControl={columnsControl}
