@@ -14,7 +14,12 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import type { BuilderOp } from "./op-vocabulary";
-import { joinsTyping, typingRunNow, type TypingStep } from "./typing-run";
+import {
+  joinsTyping,
+  typingEpoch,
+  typingRunNow,
+  type TypingStep,
+} from "./typing-run";
 
 /** How deep the undo history goes before the oldest step is dropped. */
 export const MAX_HISTORY = 100;
@@ -132,7 +137,14 @@ export function useHistoryStacks(): {
       // A later write of a run of typing keeps the run's one step, whose
       // inverse puts back what was there before the author started.
       const run = into === "new" ? typingRunNow() : null;
-      if (joinsTyping(typing.current, undoStack.current.at(-1), run)) return;
+      if (joinsTyping(typing.current, undoStack.current.at(-1), run)) {
+        typing.current = widenedTyping(
+          typing.current,
+          entry,
+          undoStack.current
+        );
+        return;
+      }
       // Read before this push changes them; the redo stack is replaced, never
       // emptied in place, so the array kept here stays as it was.
       const redoBefore = redoStack.current;
@@ -281,7 +293,134 @@ function beganTyping(
   entry: HistoryEntry,
   before: TypingBefore
 ): TypingHeld | null {
-  return run === null ? null : { run, entry, before };
+  return run === null ? null : { run, entry, before, epoch: typingEpoch() };
+}
+
+/**
+ * The run's step after a later write of it. That write may change what the
+ * first did not, as a recognised embed link sets a style, so its inverse
+ * joins the step's for the fields the step does not already put back: undo
+ * then restores every property the run touched, each to its value from before
+ * the run, without replaying every keystroke. A write of fields already
+ * covered leaves the step as it is, so a long edit is still one small step.
+ * The step stays the newest entry, replaced in place.
+ */
+function widenedTyping(
+  held: TypingHeld | null,
+  entry: HistoryEntry,
+  undo: HistoryEntry[]
+): TypingHeld | null {
+  if (held === null || entry.kind !== "ops" || held.entry.kind !== "ops") {
+    return held;
+  }
+  const ops = joinedInverse(held.entry.ops, entry.ops);
+  if (ops === held.entry.ops) return held;
+  const joined: HistoryEntry = { kind: "ops", ops };
+  undo[undo.length - 1] = joined;
+  return { ...held, entry: joined };
+}
+
+/**
+ * The step's inverse with a later one's uncovered fields joined in, or the
+ * step's own when there are none. An update replaces each field it names
+ * whole, set or removed (`unset`), so a field the step's inverse names is put
+ * back by it, to its earlier value. A field for a node the step already
+ * updates joins THAT update rather than standing alone: a later write can name
+ * a field it leaves as it was (a link's look that stays the same), and an
+ * inverse of only that field would change nothing, which the op layer refuses,
+ * failing the whole undo. Any op but an update is kept as it is, ahead of the
+ * step's, since what it restores is not a field of one node.
+ */
+function joinedInverse(
+  step: readonly BuilderOp[],
+  later: readonly BuilderOp[]
+): readonly BuilderOp[] {
+  const covered = coveredFields(step);
+  const merged = [...step];
+  const ahead: BuilderOp[] = [];
+  for (const op of later) {
+    const part = op.kind === "update" ? uncoveredPart(op, covered) : op;
+    if (part !== null) placePart(part, merged, ahead);
+  }
+  const changed = ahead.length > 0 || merged.some((op, at) => op !== step[at]);
+  return changed ? [...ahead, ...merged] : step;
+}
+
+/**
+ * Put a later inverse's part in the step: into the step's update of the same
+ * node where there is one, otherwise ahead of the step's own ops.
+ */
+function placePart(
+  part: BuilderOp,
+  merged: BuilderOp[],
+  ahead: BuilderOp[]
+): void {
+  if (part.kind === "update") {
+    const at = merged.findIndex(
+      held => held.kind === "update" && held.id === part.id
+    );
+    const into = merged[at];
+    if (into?.kind === "update") {
+      merged[at] = mergedUpdate(into, part);
+      return;
+    }
+  }
+  ahead.push(part);
+}
+
+/** Two updates of one node, over different fields, as one. */
+function mergedUpdate(
+  held: Extract<BuilderOp, { kind: "update" }>,
+  part: Extract<BuilderOp, { kind: "update" }>
+): BuilderOp {
+  const unset = [...(held.unset ?? []), ...(part.unset ?? [])];
+  return {
+    kind: "update",
+    id: held.id,
+    patch: { ...held.patch, ...part.patch },
+    ...(unset.length > 0 ? { unset } : {}),
+  };
+}
+
+/** Each node's fields the step's updates already put back. */
+function coveredFields(
+  step: readonly BuilderOp[]
+): ReadonlyMap<string, ReadonlySet<string>> {
+  const covered = new Map<string, Set<string>>();
+  for (const op of step) {
+    if (op.kind !== "update") continue;
+    const fields = covered.get(op.id) ?? new Set<string>();
+    for (const field of updatedFields(op)) fields.add(field);
+    covered.set(op.id, fields);
+  }
+  return covered;
+}
+
+/** An update cut to the fields not covered yet, or `null` when none are. */
+function uncoveredPart(
+  op: Extract<BuilderOp, { kind: "update" }>,
+  covered: ReadonlyMap<string, ReadonlySet<string>>
+): Extract<BuilderOp, { kind: "update" }> | null {
+  const fields = covered.get(op.id);
+  const fresh = (field: string) => fields?.has(field) !== true;
+  const patch = Object.fromEntries(
+    Object.entries(op.patch).filter(([field]) => fresh(field))
+  );
+  const unset = (op.unset ?? []).filter(fresh);
+  if (Object.keys(patch).length === 0 && unset.length === 0) return null;
+  return {
+    kind: "update",
+    id: op.id,
+    patch,
+    ...(unset.length > 0 ? { unset } : {}),
+  };
+}
+
+/** The fields an update writes or removes. */
+function updatedFields(
+  op: Extract<BuilderOp, { kind: "update" }>
+): readonly string[] {
+  return [...Object.keys(op.patch), ...(op.unset ?? [])];
 }
 
 /** The history's stacks and runs, as `takeTypingBack` reads and resets them. */
@@ -305,7 +444,10 @@ function takeTypingBack(
   sync: () => void
 ): HistoryEntry | undefined {
   const last = refs.typing.current;
-  if (last === null || last.run !== run) return undefined;
+  // A run a save ended (`endTypingRuns`) is over: what it wrote was saved.
+  if (last === null || last.run !== run || last.epoch !== typingEpoch()) {
+    return undefined;
+  }
   const { before } = last;
   if (refs.undoStack.current.at(-1) !== last.entry) return undefined;
   refs.undoStack.current.pop();

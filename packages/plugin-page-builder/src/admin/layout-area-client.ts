@@ -1,7 +1,8 @@
 /**
  * The "Use a component ▾" menu's reads and its write: the published
  * components marked for an area, with their pictures once the menu opens,
- * and putting one in a set's area, through the plugin's routes.
+ * and putting one in a set's area, through the plugin's routes. And "Create
+ * a header" on the canvas's band: a new one put in the default's empty area.
  *
  * The write sends through `writePluginRoute`, so it carries the admin's
  * session and CSRF token and rejects with the admin's parsed error when it is
@@ -18,6 +19,7 @@ import {
 
 import {
   areaComponentsPath,
+  defaultAreaPath,
   layoutAreaPath,
   type AreaComponentsResponse,
   type PutInAreaBody,
@@ -75,6 +77,29 @@ export async function putComponentInArea(
   });
   if (answer?.item === undefined) {
     throw new Error("The set route answered without what it wrote.");
+  }
+  return { message: answer.message ?? "", item: answer.item };
+}
+
+/**
+ * Create a header (or footer) from the starter's design and put it in the
+ * site default's empty `area`, answering what was written and the route's
+ * sentence saying so. The default is found on the server.
+ */
+export async function createInDefaultArea(
+  area: RegionArea
+): Promise<{ readonly message: string; readonly item: WrittenArea }> {
+  const answer = await writePluginRoute<{
+    message?: string;
+    item?: WrittenArea;
+  }>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: defaultAreaPath(area),
+    method: "POST",
+    body: {},
+  });
+  if (answer?.item === undefined) {
+    throw new Error("The default area route answered without what it wrote.");
   }
   return { message: answer.message ?? "", item: answer.item };
 }

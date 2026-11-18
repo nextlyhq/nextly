@@ -407,6 +407,14 @@ Hover already chosen, it opens on Style.
 
 ### Editing a field
 
+The canvas follows what you type in the **Content** and **Style** fields, letter by
+letter, without waiting for you to leave the field. While a value isn't complete yet,
+such as `12p` on the way to `12px`, half a hex colour or an emptied number, the canvas
+keeps the last value that worked. A Style field says what's wrong; a Content number
+quietly goes back to its last value when you leave it. Some fields save only when you
+leave them or press Enter: the **Advanced** tab's, such as **Anchor (ID)**, and a shared
+style's, because a shared style changes every page that uses it.
+
 One edit to a field is one step to undo, however many keys it takes: a sentence typed
 into a Text's words, or a value dragged on a number field's label, comes back whole with
 one **Undo**. Two separate edits are two steps. An edit ends when you leave the field,
@@ -1502,6 +1510,16 @@ Other pages that place the component keep showing what they show now. If the com
 can't take the setting, for instance because someone changed it since, the binding comes
 off this page, the Save stops with a message that says why, and **Save again** saves the
 page without it.
+
+**In the component's own view.** Editing a component on its own, a block's bind button
+lists **This component's settings** first: the settings that can fill the prop, each
+with its default beside it. Then come the Singles and the site, folded. There's no
+**This page** group, since a component has no page of its own. A line above the
+settings says how many pages use the component, as the banner counts them, such as
+**Used on 4 pages**. Pick a setting and the block follows it: on each page, it shows
+what that page gives the setting, or the setting's default where it gives nothing, so
+the chip has no **Fallback**. A prop that holds a setting's own value can't follow
+one, and a setting of another kind isn't listed: an image setting can't fill a text.
 
 **Format.** A date or a number shows as text only through a format, so a text prop bound
 to one has a **Format** under its fallback. The picker names the format a date or a number

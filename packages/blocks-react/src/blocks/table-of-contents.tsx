@@ -91,6 +91,12 @@ const MARKER_ATTRIBUTE = "data-nx-toc";
 const HIGHLIGHT_ATTRIBUTE = "data-nx-toc-highlight";
 
 /**
+ * The mark on the folding title's `<summary>`: the one thing a visitor taps
+ * to fold the contents, so a target at least 44px tall, as each link is.
+ */
+const TOGGLE_ATTRIBUTE = "data-nx-toc-toggle";
+
+/**
  * The markers and the highlight, which no stored style can say: a counter
  * per list, joined down the nesting (`2.1`), or a bullet, each drawn before
  * the entry's link with an empty alternative text (the second `content`;
@@ -110,6 +116,11 @@ const TABLE_OF_CONTENTS_CSS = [
   `[${MARKER_ATTRIBUTE}="bullets"] li li::before{content:"\\25E6";content:"\\25E6"/""}`,
   `[${HIGHLIGHT_ATTRIBUTE}]{scroll-target-group:auto}`,
   `[${HIGHLIGHT_ATTRIBUTE}] a:target-current{font-weight:600}`,
+  // A floor, under `:where`, so an author's own minimum height on the title
+  // replaces it; a smaller `height` cannot take the target below 44px. Only
+  // the folding title takes it: a title that cannot fold is a label, not a
+  // target.
+  `:where([${TOGGLE_ATTRIBUTE}]){min-height:44px}`,
 ].join("");
 
 /** The key the contents' rules are hoisted under. */
@@ -254,7 +265,7 @@ function renderTableOfContents({
            * which Style › Icon paints and places; with no icon chosen it is
            * nothing, and the browser's marker shows.
            */}
-          <summary className={titleClass}>
+          <summary className={titleClass} {...{ [TOGGLE_ATTRIBUTE]: "" }}>
             <span className={DISCLOSURE_ICON_CLASS} aria-hidden="true" />
             <span className={DISCLOSURE_TITLE_CLASS} {...markProp?.("title")}>
               {title}
