@@ -90,6 +90,9 @@ export {
   formFields,
   MAX_FIELDS as FORM_MAX_FIELDS,
 } from "./blocks/form-fields";
+// A Form's picked form, by the rule the block draws with, for the editor's
+// panel, canvas notice and page checks. `@experimental`.
+export { pickedForm } from "./blocks/form";
 // Binding sources read on a server, carried to the editor's canvas and read
 // back there. `@experimental` with the editor's binding sources.
 export {
@@ -185,6 +188,28 @@ export { withTypographyDefaults } from "./blocks/typography-defaults";
  */
 export { fetchableUrl } from "./blocks/props";
 /**
+ * Which provider an Embed's link is from, by the block's own table: exported
+ * so the editor, which says what it found as a link is pasted and sizes the
+ * block from it, and the thumbnail copy, which fetches only from the
+ * provider's fixed host, answer from the table the block renders by.
+ *
+ * @experimental
+ */
+export {
+  detectEmbed,
+  type EmbedMatch,
+  type EmbedProviderId,
+  type EmbedShape,
+  type ThumbnailSource,
+} from "./blocks/embed-providers";
+/**
+ * The attribute on the box an Embed with no link draws on the editor's
+ * canvas, which the editor draws its link field over.
+ *
+ * @experimental
+ */
+export { EMBED_EMPTY_ATTRIBUTE } from "./blocks/embed";
+/**
  * What a click on a picture does, by the Image's one reading of its props:
  * exported so the editor's panel shows the choice the render follows.
  *
@@ -240,6 +265,7 @@ export type {
   ConditionDayStart,
   ConditionDemand,
   ConditionSubject,
+  DocumentCode,
   DocumentSeo,
   EntryContentIssueCode,
   ImageValue,
@@ -558,6 +584,9 @@ export type {
   // where a block lands, and the block that lands there.
   OpPosition,
   Placed,
+  // A host's checker for custom CSS, reachable from `StyleCompileContext`.
+  CustomCssLevel,
+  CustomCssPolicy,
   StyleCompileContext,
   StyleOrigin,
   StyleState,

@@ -1,0 +1,70 @@
+/*
+ * The Style tab's "Text style" picker, at the top of the Text section: a
+ * button naming what the block wears, drawn as the admin's choice menus are
+ * (`nx-fonts__choice`), and a menu listing each text style by name, a sample
+ * drawn in its look (as Site text's rows draw theirs) and its size and line
+ * height. The menu stays inside the window at any width, and a long name is
+ * cut with its full text on hover. Admin tokens for every colour, so both
+ * themes follow.
+ */
+.nx-text-style-picker {
+  min-width: 0;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  border: 0;
+}
+
+/* At least the 24px target the panel holds every control to. */
+.nx-text-style-picker__button {
+  width: 100%;
+  min-height: 28px;
+  font-size: var(--text-xs);
+}
+
+.nx-text-style-picker__menu {
+  max-width: min(18rem, calc(100vw - 16px));
+}
+
+/* Name, sample and pair on one line, the sample the part that gives way. */
+.nx-text-style-picker__item {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.nx-text-style-picker__name {
+  max-width: 6rem;
+}
+
+.nx-text-style-picker__pair {
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Design → Type → "Text styles": a row's popup of parts. Each part's field
+ * sits beside the list of variables that fit it; the sizes are one group,
+ * a device to a line. Rows are the Site text rows' own (`nx-site-text__row`).
+ */
+.nx-text-styles__sizes {
+  display: grid;
+  gap: 0.375rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.nx-text-styles__value,
+.nx-text-styles__spacing {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.nx-text-styles__value > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}

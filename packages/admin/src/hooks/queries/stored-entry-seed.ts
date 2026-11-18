@@ -42,13 +42,20 @@ export const STORED_REFERENCES = "stored-references";
 export function storedEntryKey(
   collectionSlug: string,
   entryId: string,
-  scope: { locale?: string; fallbackLocale?: string; draft?: boolean }
+  scope: {
+    locale?: string;
+    fallbackLocale?: string;
+    draft?: boolean;
+    /** Whether the read asks every language's state; keyed only when it does. */
+    translationStatus?: boolean;
+  }
 ): readonly unknown[] {
   return [
     ...entryKeys.detailScoped(collectionSlug, entryId, {
       locale: scope.locale,
       fallbackLocale: scope.fallbackLocale,
       draft: scope.draft,
+      ...(scope.translationStatus === true ? { translationStatus: true } : {}),
     }),
     STORED_REFERENCES,
   ];

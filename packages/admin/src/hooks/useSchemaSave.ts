@@ -17,13 +17,21 @@
  * `endApply` leaves the page permanently "applying", and a `stopRestart` missed
  * on one branch leaves the overlay up over a page that has finished.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { FieldGroupCreate } from "@admin/components/features/schema-builder/FieldGroupCreatesList";
 import type { SchemaChangeConfirmation } from "@admin/components/features/schema-builder/types";
 import { toast } from "@admin/components/ui";
 import { useRestart } from "@admin/context/RestartContext";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import { acknowledgedConversionsOf } from "@admin/lib/builder/brought-up-to-date";
+import type { PendingChange } from "@admin/lib/builder/pending-changes";
+import {
+  draftRenamesOf,
+  renameAnswers,
+  renameNotOffered,
+  withDecidedRenames,
+} from "@admin/lib/builder/rename-answers";
 import type { SettingChange } from "@admin/lib/builder/settings-changes";
 import type {
   FieldResolution,
@@ -115,7 +123,9 @@ export interface UseSchemaSaveOptions {
     fields: FieldDefinition[],
     schemaVersion: number,
     resolutions: Record<string, FieldResolution>,
-    renameResolutions: SchemaRenameResolution[]
+    renameResolutions: SchemaRenameResolution[],
+    /** The keys of the conversions the reviewed preview listed, which its Save confirmed. */
+    acknowledgedConversions: string[]
   ) => Promise<SchemaApplyOutcome>;
   /**
    * The preview found nothing to migrate: persist the settings. Run at once
@@ -131,6 +141,11 @@ export interface UseSchemaSaveOptions {
    * the preview was made with, as for the fields.
    */
   previewedWith?: unknown;
+  /**
+   * The draft's pending changes: its renames of saved fields are the save's to answer as renames
+   * (`draftRenamesOf`), and the review shows them as renames whose values are kept.
+   */
+  pendingChanges?: readonly PendingChange[];
   /**
    * The entity's settings changed since the save. A save that changes only
    * these is reviewed before it is saved, and a confirmation saves them only
@@ -174,6 +189,9 @@ export interface UseSchemaSaveReturn {
   ) => void;
 }
 
+/** No pending change, as one constant so the callbacks keep their identity across renders. */
+const NO_PENDING_CHANGES: readonly PendingChange[] = [];
+
 export function useSchemaSave({
   slug,
   missingSlugMessage,
@@ -185,9 +203,15 @@ export function useSchemaSave({
   onNoChanges,
   onApplied,
   previewedWith,
+  pendingChanges = NO_PENDING_CHANGES,
   settingChanges = NO_SETTING_CHANGES,
   fieldGroupsFirst,
 }: UseSchemaSaveOptions): UseSchemaSaveReturn {
+  // The saved fields the draft renamed, read from its pending changes, which the save answers.
+  const draftRenames = useMemo(
+    () => draftRenamesOf(pendingChanges),
+    [pendingChanges]
+  );
   // The entities the save creates first, by kind and address: part of what a review agrees to,
   // as the fields are, so a confirmation creates exactly the entities the review listed.
   const creates = JSON.stringify(
@@ -231,6 +255,18 @@ export function useSchemaSave({
       try {
         const previewed = await preview(fields);
         if (!mounted.current) return;
+        // A rename the preview does not offer as one would not keep the field's values with it, so
+        // nothing is put in front of the person to confirm. Judged before a preview with no change
+        // is saved as settings alone: two fields trading names leave the same columns, which the
+        // preview sees as no change, and saving their definitions would swap their values.
+        const { missing } = renameAnswers(
+          draftRenames,
+          previewed.renamed ?? []
+        );
+        if (missing) {
+          toast.error(renameNotOffered(missing));
+          return;
+        }
         // Nothing to migrate, no setting changed and no field group to create: nothing to review.
         if (
           !previewed.hasChanges &&
@@ -260,6 +296,7 @@ export function useSchemaSave({
     onNoChanges,
     confirmation,
     previewedWith,
+    draftRenames,
     settingChanges,
     createsAny,
     creates,
@@ -320,11 +357,18 @@ export function useSchemaSave({
             stopRestart(false, refused);
             return;
           }
+          // The renames the Builder made are its own to answer, whatever the dialog chose.
           const result = await apply(
             fields,
             previewed.schemaVersion,
             resolutions,
-            renameResolutions
+            withDecidedRenames(
+              renameResolutions,
+              renameAnswers(draftRenames, previewed.renamed ?? []).decided,
+              previewed.renamed ?? []
+            ),
+            // Every conversion the dialog listed: its Save confirms them all.
+            acknowledgedConversionsOf(previewed)
           );
           if (!result.success) {
             stopRestart(
@@ -367,6 +411,7 @@ export function useSchemaSave({
       startRestart,
       stopRestart,
       previewedWith,
+      draftRenames,
       settingChanges,
       onNoChanges,
       fieldGroupsFirst,

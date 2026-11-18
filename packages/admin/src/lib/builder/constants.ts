@@ -1,5 +1,7 @@
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
+import type { SchemaTemplateKind } from "./schema-templates";
+
 /**
  * Default system fields present in every collection and single.
  * These cannot be deleted or renamed by the user.
@@ -33,3 +35,22 @@ export const DEFAULT_SYSTEM_FIELDS: BuilderField[] = [
 export const SYSTEM_FIELD_NAMES: string[] = DEFAULT_SYSTEM_FIELDS.map(
   f => f.name
 );
+
+/**
+ * The built-in fields an entity of `kind` holds beside its own: a collection's and a Single's
+ * title and slug (`DEFAULT_SYSTEM_FIELDS`). A field group holds none, so a field it names `title`
+ * or `slug` is its own, shown, edited and saved as any other. The one table the Builder's loader,
+ * its save and the template check all read, so no kind's own field is taken for a built-in one.
+ */
+export function builtInFieldsOf(
+  kind: SchemaTemplateKind
+): readonly BuilderField[] {
+  return kind === "fieldGroup" ? [] : DEFAULT_SYSTEM_FIELDS;
+}
+
+/** The names `builtInFieldsOf(kind)` occupy. */
+export function builtInFieldNamesOf(
+  kind: SchemaTemplateKind
+): readonly string[] {
+  return builtInFieldsOf(kind).map(field => field.name);
+}

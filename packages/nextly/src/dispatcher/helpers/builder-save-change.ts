@@ -19,11 +19,13 @@ import type {
   BuilderSaveSetup,
   CollectionSave,
   CollectionSaveDeps,
+  CollectionSavePreview,
 } from "../../domains/schema/builder-save/collection-save";
 import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
+import { busyTableLeftNothing } from "../../domains/schema/busy-table/report";
 import type { PipelineResult } from "../../domains/schema/pipeline/pushschema-pipeline";
 import type { DesiredSchema } from "../../domains/schema/pipeline/types";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
@@ -165,8 +167,10 @@ export async function writeBuilderSchemaChange(
  * A schema dialog's push that notes once one of its pushes may have changed
  * the database, for `writeBuilderSchemaChange` to tell a failure before the
  * main table changed from one after it: a push that succeeded, and on MySQL
- * any push at all, since MySQL commits each schema statement as it runs, so
- * a push refused part way may have left some of them applied.
+ * any push that failed, since MySQL commits each schema statement as it runs,
+ * so a push refused part way may have left some of them applied. The one
+ * exception is a busy table's stop that says itself nothing ran
+ * (`leftNothing`): its files are withdrawn, as a refusal anywhere else.
  */
 export function landingPush(
   push: (desired: DesiredSchema) => Promise<PipelineResult>,
@@ -180,15 +184,34 @@ export function landingPush(
     push: async desired => {
       try {
         const result = await push(desired);
-        if (result.success || dialect === "mysql") landed = true;
+        if (
+          result.success ||
+          (dialect === "mysql" && !leftNothing(result.error?.details))
+        ) {
+          landed = true;
+        }
         return result;
       } catch (error) {
-        if (dialect === "mysql") landed = true;
+        if (dialect === "mysql" && !leftNothing(error)) landed = true;
         throw error;
       }
     },
     landed: () => landed,
   };
+}
+
+/**
+ * Whether `error` is a busy table's stop that left nothing of the push and
+ * applied nothing before it in the run, as the stop itself records it
+ * (`busyTableLeftNothing`, and the stop's `appliedBefore`), never read from
+ * its message.
+ */
+function leftNothing(error: unknown): boolean {
+  if (!NextlyError.is(error) || !busyTableLeftNothing(error)) return false;
+  const stop = (
+    error.logContext as { stop?: { appliedBefore?: readonly string[] } }
+  ).stop;
+  return (stop?.appliedBefore ?? []).length === 0;
 }
 
 /**
@@ -201,8 +224,8 @@ export function landingPush(
 export async function reviewBuilderSchemaChange(
   deps: CollectionSaveDeps | undefined,
   change: Parameters<typeof writeBuilderSchemaChange>[2]
-): Promise<string[]> {
-  if (deps === undefined) return [];
+): Promise<BuilderSaveReview> {
+  if (deps === undefined) return NOTHING_TO_REVIEW;
   const { save } = saveOfSchemaChange({
     ...change,
     row: {
@@ -215,5 +238,26 @@ export async function reviewBuilderSchemaChange(
     }),
   });
   const { previewCollectionSave } = await loadCollectionSave();
-  return (await previewCollectionSave(deps, save)).notices;
+  return reviewOf(await previewCollectionSave(deps, save));
+}
+
+/**
+ * What a save's review shows beside the change: each line, and each conversion by the key its
+ * apply confirms it by (`acknowledgedConversions`), which the Builder sends back once the person
+ * confirms the review.
+ */
+export type BuilderSaveReview = Pick<
+  CollectionSavePreview,
+  "notices" | "conversions"
+>;
+
+/** The review of a save with no writer: nothing beyond the change. */
+export const NOTHING_TO_REVIEW: BuilderSaveReview = {
+  notices: [],
+  conversions: [],
+};
+
+/** The review a save's preview gives. */
+export function reviewOf(preview: CollectionSavePreview): BuilderSaveReview {
+  return { notices: preview.notices, conversions: preview.conversions };
 }
