@@ -204,8 +204,23 @@ test.describe("the block panel", () => {
           "button Only changed",
           "button Panel options",
         ]);
-        // The sixth stop is a control of the tab, never the tab panel itself.
+        // The sixth stop is a control inside the tab shown: never the tab
+        // panel itself, and never a control outside the inspector, which a
+        // walk skipping the tab's controls would reach instead.
         expect(stops[5], `${tab}: the first control`).not.toMatch(/^tabpanel/);
+        expect(
+          await page.evaluate(() => {
+            const focused = document.activeElement;
+            const panel = focused?.closest("[role=tabpanel]");
+            return (
+              panel !== null &&
+              panel !== undefined &&
+              panel !== focused &&
+              panel.getAttribute("data-state") === "active"
+            );
+          }),
+          `${tab}: the sixth stop is inside the tab shown`
+        ).toBe(true);
         // Shift+Tab walks the same stops back.
         const back = [await focusedStop(page)];
         for (let step = 0; step < 5; step++) {
@@ -248,23 +263,32 @@ test.describe("the block panel", () => {
         await text.click();
       const field = inspector.getByRole("textbox", { name: /^Font size\b/ });
       await expect(field).toBeVisible();
+      // Each control tagged once, before the change, so it is found again
+      // by that tag whatever its words become: a section's header gains
+      // "has changes" when a value is set in it.
+      await inspector.evaluate(root => {
+        [
+          ...root.querySelectorAll(
+            "button, input, [role=radio], [role=switch], [role=combobox], [role=tab]"
+          ),
+        ]
+          .filter(element => element.getBoundingClientRect().height > 0)
+          .forEach((element, index) =>
+            element.setAttribute("data-qa-control", String(index))
+          );
+      });
       const boxes = async () =>
         inspector.evaluate(root =>
-          [
-            ...root.querySelectorAll(
-              "button, input, [role=radio], [role=switch], [role=combobox], [role=tab]"
-            ),
-          ]
-            .filter(element => element.getBoundingClientRect().height > 0)
-            .map(element => {
-              const box = element.getBoundingClientRect();
-              return {
-                key: `${element.tagName}:${element.getAttribute("aria-label") ?? element.id ?? ""}:${(element.textContent ?? "").trim().slice(0, 30)}`,
-                top: Math.round(box.top),
-                left: Math.round(box.left),
-                width: Math.round(box.width),
-              };
-            })
+          [...root.querySelectorAll("[data-qa-control]")].map(element => {
+            const box = element.getBoundingClientRect();
+            return {
+              key: element.getAttribute("data-qa-control") ?? "",
+              name: `${element.tagName.toLowerCase()} ${(element.getAttribute("aria-label") ?? element.textContent ?? "").trim().slice(0, 30)}`,
+              top: Math.round(box.top),
+              left: Math.round(box.left),
+              width: Math.round(box.width),
+            };
+          })
         );
       const fieldTop = Math.round((await field.boundingBox())?.y ?? 0);
       const before = (await boxes()).filter(box => box.top < fieldTop - 2);
@@ -274,15 +298,26 @@ test.describe("the block panel", () => {
       // The changed mark arrives, and the panel settles.
       await page.waitForTimeout(300);
       const after = new Map((await boxes()).map(box => [box.key, box]));
-      const moved = before.filter(box => {
-        const now = after.get(box.key);
-        return (
-          now !== undefined &&
-          (now.top !== box.top ||
-            now.left !== box.left ||
-            now.width !== box.width)
-        );
-      });
+      // Every control above is still there, the same element: one redrawn in
+      // its place would lose its tag and be counted as gone.
+      const gone = before
+        .filter(box => !after.has(box.key))
+        .map(box => box.name);
+      expect(
+        gone,
+        "controls above the changed field that were redrawn"
+      ).toEqual([]);
+      const moved = before
+        .filter(box => {
+          const now = after.get(box.key);
+          return (
+            now !== undefined &&
+            (now.top !== box.top ||
+              now.left !== box.left ||
+              now.width !== box.width)
+          );
+        })
+        .map(box => box.name);
       expect(moved, "controls above the changed field that moved").toEqual([]);
     });
   });
