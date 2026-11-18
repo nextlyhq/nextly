@@ -68,13 +68,38 @@ The editor draws the header and footer of the header & footer set in effect arou
 visitor gets them: the published header & footer set and the published versions of its components.
 Changing the menu redraws them at once, and the choice is stored with the page's next save.
 
-The regions are locked. A click selects nothing and shows where the region comes
-from, such as "Header, from header & footer set Main". If you may edit header & footer sets, **Edit header & footer set ↗**
-opens it in a new tab, so your page and its undo history stay as they are. Press
-Enter on a focused region to show the same tag, and Escape to close it. When the
-header & footer set or one of its components has changes that are not published yet, the tag says
-"Draft changes not live" and names which. Layers lists the regions as locked rows
-above and below the page's blocks; selecting one shows it on the canvas.
+A click on the header or footer selects it, and the sidebar says where it comes from and how
+many pages show it. Each is one Tab stop on the canvas: Enter selects it. Layers lists them
+above and below the page's blocks. When the header & footer set or one of its components has
+changes that are not published yet, the sidebar says "Draft changes not live" and names which.
+
+### Edit the header or footer on the page
+
+If you may edit components, **Edit header** (or **Edit footer**) in the sidebar edits it right
+on the page; so does a double-click on it, or Enter while it is selected. The rest of the page
+dims, and a bar above the canvas says "Editing the site header · changes show on 11 pages",
+with "Unpublished changes from …" when you open a version that isn't published yet. Layers
+reads **Layers · Site header**, the sidebar edits the header's blocks, and the Add panel adds
+to the header. A click on the dimmed page changes nothing and highlights **Done**.
+
+- **Save header** stores your changes as a draft; visitors still see the published header.
+- **Publish header** asks "Publish the header to 11 pages?" first.
+- If you changed a shared style meanwhile, **Save header** and **Publish header** wait for it
+  to be saved first, and save nothing while it couldn't be, as the page's **Save** does.
+- **Undo** and **Redo** step through the header's changes only, starting from when you came
+  in. After **Done** they step through the page's again, which are kept as you left them.
+- **Done**, or Escape with nothing selected in the header, goes back to the page. With
+  changes not saved it asks "Publish your header changes?": **Publish to 11 pages**, **Save as
+  draft**, **Discard** or **Keep editing**. Without the right to publish components, it offers
+  no publish.
+
+Your page's own unsaved changes stay unsaved and untouched; save them with the page's **Save**
+after **Done**. If someone else has the header open, it doesn't open, and the editor says who
+has it: "Ana Diaz is editing this header. Try again when they're done." Leaving the editor or
+reloading with unsaved header changes asks first, as it does for the page. If the browser
+closes, or someone else takes over the page while you edit its header, the header's changes are
+kept as its recovery point, offered when it is next opened. The header's variants are edited in
+its own view, not here.
 
 Publishing a page that names an unpublished header & footer set asks first: **Publish page only**
 leaves the header & footer set as it is, and the site default shows until it is published;

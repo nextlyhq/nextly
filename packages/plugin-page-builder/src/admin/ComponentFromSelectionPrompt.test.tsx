@@ -220,6 +220,27 @@ describe("converting from the editor", () => {
     );
   });
 
+  it("writes the page's held component settings before creating, and creates nothing when one is refused", async () => {
+    // The selection may bind a setting planned for the page's next Save;
+    // the new component would keep that binding, and the page, past the
+    // convert, no placement of it.
+    stubWriter();
+    const refused = mount({
+      beforeCreate: vi.fn(() => Promise.resolve(false)),
+    });
+    await confirm();
+    expect(refused.props.beforeCreate).toHaveBeenCalledTimes(1);
+    expect(writer.current.create).not.toHaveBeenCalled();
+    expect(refused.applyAll).not.toHaveBeenCalled();
+    cleanup();
+
+    stubWriter();
+    const written = mount({ beforeCreate: vi.fn(() => Promise.resolve(true)) });
+    await confirm();
+    expect(written.props.beforeCreate).toHaveBeenCalledTimes(1);
+    expect(writer.current.create).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses to convert when the dry run refused, before anything is created", async () => {
     stubWriter({
       preview: vi.fn(() => Promise.resolve(undefined)),

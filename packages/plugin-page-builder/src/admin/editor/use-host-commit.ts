@@ -356,6 +356,7 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   savePoint,
   removalReach,
   flushHeld,
+  otherUnsavedWork = false,
 }: {
   name: Path<TFieldValues>;
   /**
@@ -384,6 +385,11 @@ export function useHostCommit<TFieldValues extends FieldValues>({
     | undefined;
   /** The edits Settings tabs hold, made before a store (`SettingsPlace`). */
   flushHeld?: () => BlockDocument | null;
+  /**
+   * Work the editor holds in another document than the field's (a header
+   * edited in place), reported with the field's so the leave guard asks.
+   */
+  otherUnsavedWork?: boolean;
 }): {
   done: () => void;
   /**
@@ -413,7 +419,7 @@ export function useHostCommit<TFieldValues extends FieldValues>({
    */
   useReportUnsavedWork(
     `blocks:${address}`,
-    hasUnsavedWork(editor, inline, savePoint.savedAt)
+    hasUnsavedWork(editor, inline, savePoint.savedAt) || otherUnsavedWork
   );
 
   /*
