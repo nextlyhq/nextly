@@ -1176,11 +1176,6 @@ export class EmailService extends BaseService {
       providerName,
       resolvedProviderId,
     } = await this.resolveProviderForSend(options.providerId);
-    this.providerReport?.({
-      type: providerType,
-      id: resolvedProviderId ?? null,
-      origin: resolvedProviderId ? "stored" : "code",
-    });
     observe?.provider?.({
       provider: providerName,
       type: providerType,
@@ -1341,6 +1336,13 @@ export class EmailService extends BaseService {
     // A keyed send's records are kept, to commit with its claim's outcome;
     // any other send's are written as each message is answered, as before.
     const records: EmailDeliveryInput[] | undefined = claimed ? [] : undefined;
+    // Reported only now that it is sent: a repeat answered from its claim
+    // dispatched nothing, and its provider is the one that sent it before.
+    this.providerReport?.({
+      type: providerType,
+      id: resolvedProviderId ?? null,
+      origin: resolvedProviderId ? "stored" : "code",
+    });
     const calls = await this.dispatchAll(messages, {
       adapter,
       providerType,

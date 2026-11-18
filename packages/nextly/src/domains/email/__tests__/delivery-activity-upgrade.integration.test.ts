@@ -31,6 +31,7 @@ const DELIVERY_INDEXES = {
   [TEMPLATE_INDEX]: ["template_slug", "status", "created_at"],
   email_deliveries_provider_type_idx: ["provider_type", "created_at"],
   email_deliveries_queued_idx: ["queued_id"],
+  email_deliveries_provider_origin_idx: ["provider_origin", "created_at"],
   email_deliveries_template_created_idx: ["template_slug", "created_at", "id"],
 };
 

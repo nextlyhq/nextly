@@ -20,7 +20,6 @@
 import {
   and,
   eq,
-  inArray,
   isNotNull,
   not,
   or,
@@ -48,46 +47,41 @@ export interface ProviderRead {
 
 /**
  * A record's provider as it reads now: `recorded` is the origin it was
- * written with, if any, and `stored` the provider ids that exist.
+ * written with, if any, and `exists` whether its provider row exists, read
+ * with the record in the same query (`providerExists`), so the filter and
+ * the answer never disagree.
  */
 export function providerRead(
   type: string,
   providerId: string | null,
   recorded: string | null,
-  stored: ReadonlySet<string>
+  exists: unknown
 ): ProviderRead {
-  const exists = providerId !== null && stored.has(providerId);
-  const origin: ProviderOrigin = exists
+  // A boolean on PostgreSQL, 0 or 1 on MySQL and SQLite.
+  const found = providerId !== null && Boolean(Number(exists));
+  const origin: ProviderOrigin = found
     ? "stored"
     : recorded === "code"
       ? "code"
       : recorded === "stored" || providerId !== null
         ? "deleted"
         : "not-recorded";
-  return { id: exists ? providerId : null, type, origin };
+  return { id: found ? providerId : null, type, origin };
 }
 
-/** The Drizzle surface reading which providers exist needs. */
-interface ProvidersDb {
-  select(fields: Record<string, unknown>): {
-    from(table: unknown): { where(condition: unknown): PromiseLike<unknown[]> };
-  };
-}
-
-/** Which of `ids` name a provider row that exists now. */
-export async function storedProviderIds(
-  db: ProvidersDb,
-  dialect: string,
-  ids: readonly (string | null)[]
-): Promise<Set<string>> {
-  const wanted = [...new Set(ids.filter((id): id is string => id !== null))];
-  if (wanted.length === 0) return new Set();
+/**
+ * Whether a record's provider row exists now: selected with the record, and
+ * the test the origin filter makes. The id is compared as text on
+ * PostgreSQL, where the queue keeps it as text and the providers as a uuid.
+ */
+export function providerExists(table: OriginColumns, dialect: string): SQL {
   const providers = loadedDialect(dialect).tables.emailProviders;
-  const rows = (await db
-    .select({ id: providers.id })
-    .from(providers)
-    .where(inArray(providers.id, wanted))) as Array<{ id: string }>;
-  return new Set(rows.map(row => String(row.id)));
+  const asText = (value: SQL | Column) =>
+    dialect === "postgresql" ? sql`${value}::text` : sql`${value}`;
+  return and(
+    isNotNull(table.providerId),
+    sql`exists (select 1 from ${providers} where ${asText(providers.id)} = ${asText(table.providerId)})`
+  ) as SQL;
 }
 
 /** The columns an origin is read from, on either table that keeps them. */
@@ -106,14 +100,8 @@ export function originCondition(
   origin: FilterableOrigin,
   dialect: string
 ): SQL {
-  const providers = loadedDialect(dialect).tables.emailProviders;
   const { providerId, providerOrigin } = table;
-  const asText = (value: SQL | Column) =>
-    dialect === "postgresql" ? sql`${value}::text` : sql`${value}`;
-  const exists = and(
-    isNotNull(providerId),
-    sql`exists (select 1 from ${providers} where ${asText(providers.id)} = ${asText(providerId)})`
-  ) as SQL;
+  const exists = providerExists(table, dialect);
   if (origin === "stored") return exists;
   if (origin === "code") return eq(providerOrigin, "code");
   return and(

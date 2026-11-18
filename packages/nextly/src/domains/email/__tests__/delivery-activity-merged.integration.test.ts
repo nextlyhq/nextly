@@ -32,6 +32,7 @@ import { defineEmailProvider } from "../provider-definition";
 import { storeQueuedEmail } from "../queued-send";
 import { resolveEmailRetentionConfig } from "../retention-config";
 import type { EmailDeliveryService } from "../services/email-delivery-service";
+import type { EmailService, SentProvider } from "../services/email-service";
 import type { EmailProviderAdapter } from "../types";
 
 const SUBJECT = "A subject naming Alice";
@@ -426,6 +427,29 @@ for (const dialect of getConfiguredTestDialects()) {
       } finally {
         getFilterRegistry().removeFilter(FilterSeams.EmailBeforeSend, addCopy);
       }
+    });
+
+    it("hears a send's provider only when it goes out, not from a repeat its key answers", async () => {
+      const t = await boot(dialect);
+      await provider(t, true);
+      const heard: SentProvider[] = [];
+      const emails = (
+        t.getService("emailService") as unknown as EmailService
+      ).withProviderReport(provider => heard.push(provider));
+      const message = {
+        to: "a@example.com",
+        subject: "S",
+        html: "<p>x</p>",
+        idempotencyKey: "once-only",
+      };
+      await emails.send(message);
+      const repeat = await emails.send(message);
+
+      // The repeat is answered from its claim and dispatches nothing.
+      expect(repeat.repeat).toBeDefined();
+      expect(heard).toEqual([
+        { type: "capturing-merged", id: expect.any(String), origin: "stored" },
+      ]);
     });
   });
 }

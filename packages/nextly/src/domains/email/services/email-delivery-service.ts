@@ -30,6 +30,7 @@ import {
   and,
   desc,
   eq,
+  getTableColumns,
   gte,
   inArray,
   isNull,
@@ -82,8 +83,8 @@ import {
 import { eraseRecipientDeliveries } from "../erase-recipient";
 import {
   originCondition,
+  providerExists,
   providerRead,
-  storedProviderIds,
   type FilterableOrigin,
   type ProviderRead,
 } from "../provider-origin";
@@ -159,6 +160,8 @@ interface EmailDeliveryRow {
   failureKind: string | null;
   failureStatus: number | null;
   providerOrigin: string | null;
+  /** Whether its provider row exists, read with the row. */
+  providerExists: unknown;
   createdAt: Date;
 }
 
@@ -210,16 +213,13 @@ export interface EmailDeliveryRecord {
  * look correct beside a listing that does not — so the translation lives where
  * a new caller gets it by construction instead of by noticing.
  */
-function toDeliveryRecord(
-  row: EmailDeliveryRow,
-  stored: ReadonlySet<string>
-): EmailDeliveryRecord {
+function toDeliveryRecord(row: EmailDeliveryRow): EmailDeliveryRecord {
   return {
     provider: providerRead(
       row.providerType,
       row.providerId,
       row.providerOrigin,
-      stored
+      row.providerExists
     ),
     id: row.id,
     providerId: row.providerId,
@@ -1085,7 +1085,11 @@ export class EmailDeliveryService extends BaseService {
     let rows: unknown[];
     try {
       rows = await this.db
-        .select()
+        .select({
+          ...getTableColumns(this.deliveries),
+          // Read with the row, as the origin filter tests it.
+          providerExists: providerExists(this.deliveries, this.dialect),
+        })
         .from(this.deliveries)
         .where(filters.length > 0 ? and(...filters) : undefined)
         // `id` breaks the tie, and what that buys is DETERMINISM, not
@@ -1103,17 +1107,6 @@ export class EmailDeliveryService extends BaseService {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
-    const found = rows as EmailDeliveryRow[];
-    let stored: Set<string>;
-    try {
-      stored = await storedProviderIds(
-        this.db as never,
-        this.dialect,
-        found.map(row => row.providerId)
-      );
-    } catch (error) {
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
-    }
-    return found.map(row => toDeliveryRecord(row, stored));
+    return (rows as EmailDeliveryRow[]).map(toDeliveryRecord);
   }
 }

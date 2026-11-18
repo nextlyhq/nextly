@@ -42,4 +42,6 @@ The Email hub's Activity can now be read as one merged list, and each provider s
 - **Queued email** records what it is (a message or a template), the kinds of recipient it goes to (never an address), and the provider its latest attempt went through. One not yet tried has no provider.
 - A route with a segment past a queued email's id no longer resolves to its detail.
 
-Migration: the core reconcile adds a nullable `provider_origin` column to `email_deliveries`. It also adds nullable `message_kind`, `recipient_kinds`, `provider_type`, `provider_id` and `provider_origin` columns to `email_queue`, in place, with existing rows kept. Older rows read as not recorded.
+Compatibility: this changes an existing response shape. `provider` on the delivery list (`GET /api/email-deliveries`, `nextly.emailDeliveries.find`) and on the detail reads (`/:id`, `findByID`, and each timeline attempt) gains a required `origin`, and its `id` is now null once that provider is deleted, on every dialect (MySQL used to keep the deleted id). Code that validates these responses exactly, snapshots them, or builds `DeliveryActivity` values by hand must add `origin` and allow a null `id` for a deleted provider. These reads are `@experimental`.
+
+Migration: the core reconcile adds a nullable `provider_origin` column to `email_deliveries`, with an index on it and time. It also adds nullable `message_kind`, `recipient_kinds`, `provider_type`, `provider_id` and `provider_origin` columns to `email_queue`, in place, with existing rows kept. Older rows read as not recorded.

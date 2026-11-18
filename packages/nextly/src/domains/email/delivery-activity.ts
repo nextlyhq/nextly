@@ -57,8 +57,8 @@ import type { EmailFailure } from "./failure";
 import {
   FILTERABLE_ORIGINS,
   originCondition,
+  providerExists,
   providerRead,
-  storedProviderIds,
   type FilterableOrigin,
   type ProviderRead,
 } from "./provider-origin";
@@ -491,6 +491,7 @@ interface QueueRow {
   providerType: string | null;
   providerId: string | null;
   providerOrigin: string | null;
+  providerExists: unknown;
   createdAt: number | string;
   updatedAt: number | string;
   settledAt: number | string | null;
@@ -628,6 +629,8 @@ export class EmailDeliveryActivity {
           providerType: queue.providerType,
           providerId: queue.providerId,
           providerOrigin: queue.providerOrigin,
+          // Read with the row, as the origin filter tests it.
+          providerExists: providerExists(queue, this.dialect),
           createdAt: queue.createdAt,
           updatedAt: queue.updatedAt,
           settledAt: queue.settledAt,
@@ -866,15 +869,8 @@ export class EmailDeliveryActivity {
     const jobs = await this.jobsOf(
       rows.flatMap(row => (row.jobId ? [row.jobId] : []))
     );
-    const stored = await this.run(() =>
-      storedProviderIds(
-        this.db as never,
-        this.dialect,
-        rows.map(row => row.providerId)
-      )
-    );
     return rows.map(row =>
-      queuedEntry(row, row.jobId ? jobs.get(row.jobId) : undefined, stored)
+      queuedEntry(row, row.jobId ? jobs.get(row.jobId) : undefined)
     );
   }
 
@@ -1018,11 +1014,7 @@ function deliveryEntry(record: EmailDeliveryRecord): ActivityEntry {
 const RECIPIENT_KINDS = new Set(["to", "cc", "bcc"]);
 
 /** A queued email as a merged row. */
-function queuedEntry(
-  row: QueueRow,
-  job: JobRow | undefined,
-  stored: ReadonlySet<string>
-): ActivityEntry {
+function queuedEntry(row: QueueRow, job: JobRow | undefined): ActivityEntry {
   const activity = queuedOf(row, job);
   return {
     kind: "queued",
@@ -1042,7 +1034,7 @@ function queuedEntry(
             row.providerType,
             row.providerId,
             row.providerOrigin,
-            stored
+            row.providerExists
           ),
     recipientKinds:
       row.recipientKinds === null
