@@ -132,29 +132,19 @@ test("with nothing selected, the right panel shows the page's settings", async (
     `/${seeded.slug}`
   );
 
-  // "All page settings…" opens Settings on the page's own tab, whichever
-  // tab it was left on.
+  // "All page settings…" opens Page settings on General, whichever tab it
+  // was left on, among the tabs other plugins add to the same row.
   const all = panel.getByRole("button", { name: "All page settings…" });
-  const dialog = page.getByRole("dialog", { name: "Settings" });
-  const thisPage = dialog.getByRole("tab", { name: "This page" });
+  const dialog = page.getByRole("dialog", { name: /^Page settings · / });
+  const general = dialog.getByRole("tab", { name: "General" });
   await all.click();
-  await expect(thisPage).toHaveAttribute("aria-selected", "true");
-  await dialog.getByRole("tab", { name: "Site" }).click();
-  await expect(thisPage).toHaveAttribute("aria-selected", "false");
+  await expect(general).toHaveAttribute("aria-selected", "true");
+  await dialog.getByRole("tab", { name: "SEO" }).click();
+  await expect(general).toHaveAttribute("aria-selected", "false");
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
   await all.click();
-  await expect(thisPage).toHaveAttribute("aria-selected", "true");
-  // And on General among the tabs other plugins add beside it.
-  const seo = dialog.getByRole("tab", { name: "SEO" });
-  await seo.click();
-  await page.keyboard.press("Escape");
-  await expect(dialog).toBeHidden();
-  await all.click();
-  await expect(dialog.getByRole("tab", { name: "General" })).toHaveAttribute(
-    "aria-selected",
-    "true"
-  );
+  await expect(general).toHaveAttribute("aria-selected", "true");
 });
 
 test("a rename in the panel is the page's title everywhere, saved with its draft", async ({
@@ -188,7 +178,7 @@ test("a rename in the panel is the page's title everywhere, saved with its draft
   await pageSettings(page)
     .getByRole("button", { name: "All page settings…" })
     .click();
-  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const dialog = page.getByRole("dialog", { name: /^Page settings · / });
   await expect(
     dialog.getByRole("textbox", { name: "Title", exact: true })
   ).toHaveValue(renamed);

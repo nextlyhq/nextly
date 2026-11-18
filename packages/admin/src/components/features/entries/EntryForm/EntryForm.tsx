@@ -88,6 +88,7 @@ import { pluginDocumentLock } from "./document-lock-affordances";
 import {
   topLevelFieldNames,
   useContentFields,
+  useFieldsTakenByTab,
   useWithoutWithheldFields,
   useDocumentPanelParts,
   useDocumentPlace,
@@ -121,10 +122,8 @@ import {
   useHasPublicAddress,
 } from "./entry-address";
 import type { EntryDetailsTarget } from "./entry-details-read";
-import {
-  fieldsBesidePanel,
-  type EntryFieldsPresentation,
-} from "./EntryFieldsPanel";
+import { entryFieldsLayout } from "./entry-fields-layout";
+import { fieldsBesidePanel, type EntryFieldsOptions } from "./EntryFieldsPanel";
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
 import {
@@ -941,15 +940,43 @@ export function EntryForm({
     documentPlace.context,
     historicalFields
   );
+  // Where the entry page draws each field, by the same content and tabs, for
+  // the surface covering it: it sends an author to a refused field's tab.
+  const takenByTab = useFieldsTakenByTab(documentPlace, fieldNames);
+  const fieldsLayout = useMemo(
+    () =>
+      entryFieldsLayout(allFields, besideFields, takenByTab, conditionValues),
+    [allFields, besideFields, takenByTab, conditionValues]
+  );
+  // Whether the entry's address is live, for the dialog's address as for
+  // the header's chip: a collection without a lifecycle is always live.
+  const addressLive =
+    !hasStatus ||
+    effectiveEntryStatus(entry, locale, defaultLocale) === "published";
+  // Held by its parts, so the renderer below changes only when one does.
+  const detailsEntryId = detailsOf.entryId;
+  const addressFacts = useMemo(
+    () => ({
+      detailsOf: {
+        collectionSlug: collection.name,
+        entryId: detailsEntryId,
+        locale,
+      },
+      published: addressLive,
+    }),
+    [collection.name, detailsEntryId, locale, addressLive]
+  );
   const renderEntryFields = useCallback(
-    (excludePath: string, presentation?: EntryFieldsPresentation) =>
+    (excludePath: string, options: EntryFieldsOptions = {}) =>
       fieldsBesidePanel(besideFields, excludePath, {
         disabled: savePending,
         readOnly: lock.readOnly,
         mode,
         values: conditionValues,
         hasPublicAddress,
-        ...(presentation === undefined ? {} : { presentation }),
+        // The slug drawn as the entry's full address, as the header does.
+        address: addressFacts,
+        ...options,
       }),
     [
       besideFields,
@@ -958,6 +985,7 @@ export function EntryForm({
       mode,
       conditionValues,
       hasPublicAddress,
+      addressFacts,
     ]
   );
   // One answer for every surface offering a write: the header reads the same
@@ -1554,6 +1582,7 @@ export function EntryForm({
                   // the whole body in a modal and hides nothing, so a panel there
                   // would offer a second copy of fields already on screen.
                   renderEntryFields={renderEntryFields}
+                  entryFieldsLayout={fieldsLayout}
                   // The header's own Preview handler, on the header's own
                   // terms, so a field offering the preview opens the same page
                   // and only where the header would.
