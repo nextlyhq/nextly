@@ -230,6 +230,41 @@ describe("dragging a handle", () => {
   });
 });
 
+describe("a drag that ends without a release", () => {
+  it("gives the page its pointer back when the frame goes mid-drag", () => {
+    const { unmount } = render(<Host />);
+    const page = document.querySelector<HTMLElement>(".nx-canvas-frame__page");
+    act(() => {
+      fireEvent.pointerDown(handle("right"), {
+        button: 0,
+        pointerId: 1,
+        clientX: 0,
+      });
+    });
+    expect(page?.style.pointerEvents).toBe("none");
+    // The page element outlives the handles here, as the frame's does when
+    // the host stops previewing widths.
+    const kept = page;
+    unmount();
+    expect(kept?.style.pointerEvents).toBe("");
+  });
+
+  it("settles when the pointer capture is lost", () => {
+    render(<Host />);
+    const right = handle("right");
+    act(() => {
+      fireEvent.pointerDown(right, { button: 0, pointerId: 1, clientX: 0 });
+    });
+    act(() => {
+      fireEvent.pointerMove(right, { pointerId: 1, clientX: -190 });
+    });
+    act(() => {
+      fireEvent.lostPointerCapture(right, { pointerId: 1 });
+    });
+    expect(told).toEqual([900]);
+  });
+});
+
 describe("the keys on a handle", () => {
   it("move the width as the slider's keys do", () => {
     render(<Host start={900} />);

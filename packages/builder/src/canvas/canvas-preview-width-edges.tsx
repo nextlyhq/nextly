@@ -167,16 +167,20 @@ function Edges({
     return () => sizes.disconnect();
   }, []);
 
-  // Nothing left waiting once the frame goes.
+  // Nothing left waiting once the handles go, and a drag cut short gives
+  // the page its pointer back.
   React.useEffect(
     () => () => {
       if (keyTimer.current !== null) clearTimeout(keyTimer.current);
       const held = drag.current;
-      if (held?.frameRequest != null) {
-        root.current?.ownerDocument.defaultView?.cancelAnimationFrame(
+      drag.current = null;
+      if (held === null) return;
+      if (held.frameRequest !== null) {
+        held.box?.ownerDocument.defaultView?.cancelAnimationFrame(
           held.frameRequest
         );
       }
+      if (held.page !== null) held.page.style.pointerEvents = "";
     },
     []
   );
@@ -259,6 +263,8 @@ function Edges({
     });
   };
 
+  // Released, cancelled, or the capture lost without either: the drag
+  // settles where it is.
   const onPointerEnd = (event: React.PointerEvent<HTMLElement>): void => {
     const held = drag.current;
     if (held === null || held.pointerId !== event.pointerId) return;
@@ -304,6 +310,7 @@ function Edges({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerEnd}
       onPointerCancel={onPointerEnd}
+      onLostPointerCapture={onPointerEnd}
       onKeyDown={onKeyDown}
     >
       <span className="nx-preview-width__grip" aria-hidden="true" />
