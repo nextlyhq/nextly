@@ -79,7 +79,7 @@ export const EMAIL_PROVIDER_DELETE_PERMISSIONS: readonly string[] = slugsOf(
 export const EMAIL_DELIVERIES_READ_PERMISSION = "read-email-deliveries";
 
 /** The hub's tabs, in the order they appear. */
-export type EmailHubTab = "messages" | "design" | "sending";
+export type EmailHubTab = "messages" | "design" | "sending" | "activity";
 
 export interface EmailHubTabDefinition {
   id: EmailHubTab;
@@ -90,8 +90,8 @@ export interface EmailHubTabDefinition {
 }
 
 /**
- * Messages and Design show templates and layouts, Sending shows providers.
- * Activity joins when its screen does, gated on the delivery read grant.
+ * Messages and Design show templates and layouts, Sending shows providers,
+ * and Activity shows the delivery log and queued email.
  */
 export const EMAIL_HUB_TABS: readonly EmailHubTabDefinition[] = [
   {
@@ -111,6 +111,12 @@ export const EMAIL_HUB_TABS: readonly EmailHubTabDefinition[] = [
     label: "Sending",
     href: ROUTES.EMAIL_SENDING,
     permissions: EMAIL_PROVIDER_READ_PERMISSIONS,
+  },
+  {
+    id: "activity",
+    label: "Activity",
+    href: ROUTES.EMAIL_ACTIVITY,
+    permissions: [EMAIL_DELIVERIES_READ_PERMISSION],
   },
 ];
 

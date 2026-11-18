@@ -27,6 +27,7 @@ import type { FencedComponents } from "../host-rewrite/fence";
 import type { DeclaredShapesReader } from "./binding-judgement";
 import type { EntryBlocksFieldsReader } from "./entry-content-judgement";
 import type { ListFieldsReader, TemplateTargets } from "./list-query-judgement";
+import type { PageCodeJudgeDeps } from "./page-code-judgement";
 
 /** The issue shape core's validation envelope carries. */
 export interface Issue {
@@ -169,6 +170,12 @@ export interface CompositionSetup {
    * the write holds one. Both resolve the record by one reading
    * (`site-definitions`).
    */
+  /**
+   * What a page's own code (`settings.code`) is judged with on every write
+   * that changes it: the site code's declared policy and the site's origin.
+   * Absent, page code is not judged, as where nothing installed the plugin.
+   */
+  readonly pageCode?: PageCodeJudgeDeps;
   readonly siteDefinitions?: (
     transaction?: PluginCollectionTransaction
   ) => Promise<SiteDefinitions>;

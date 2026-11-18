@@ -2597,6 +2597,105 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
 ];
 
 /**
+ * The workflow routes, by path and verb (@experimental). Documents are named in the query or the
+ * body, as an entry of a collection or a Single, so one route serves both.
+ */
+const WORKFLOW_ROUTES: readonly {
+  path: readonly [string, string | null];
+  verb: string;
+  operation: OperationType;
+  method: string;
+}[] = [
+  {
+    path: ["review-state", null],
+    verb: "GET",
+    operation: "single",
+    method: "getReviewState",
+  },
+  {
+    path: ["waiting", null],
+    verb: "GET",
+    operation: "list",
+    method: "listWaiting",
+  },
+  {
+    path: ["steps", null],
+    verb: "POST",
+    operation: "update",
+    method: "takeStep",
+  },
+  {
+    path: ["steps", "bulk"],
+    verb: "POST",
+    operation: "update",
+    method: "stepMany",
+  },
+  {
+    path: ["assignments", null],
+    verb: "POST",
+    operation: "update",
+    method: "assign",
+  },
+  {
+    path: ["assignments", "bulk"],
+    verb: "POST",
+    operation: "update",
+    method: "assignMany",
+  },
+];
+
+/**
+ * A workflow route, or null; a longer path than the table's names none. Beside the table:
+ * `/workflows` lists the registered workflows, and `/workflows/:slug/settings` reads or changes
+ * one's settings, the slug put in `routeParams`. The table's fixed paths are matched first, so a
+ * workflow cannot shadow one by its slug.
+ */
+function parseWorkflowRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): Omit<ParsedRoute, "routeParams"> | null {
+  if (subId !== undefined) return null;
+  if (id === undefined) {
+    return httpMethod === "GET"
+      ? { service: "workflows", operation: "list", method: "listWorkflows" }
+      : null;
+  }
+  const route = WORKFLOW_ROUTES.find(
+    candidate =>
+      candidate.path[0] === id &&
+      candidate.path[1] === (subresource ?? null) &&
+      candidate.verb === httpMethod
+  );
+  if (route) {
+    return {
+      service: "workflows",
+      operation: route.operation,
+      method: route.method,
+    };
+  }
+  if (subresource !== "settings") return null;
+  const settings: Record<string, Omit<ParsedRoute, "routeParams">> = {
+    GET: {
+      service: "workflows",
+      operation: "single",
+      method: "getWorkflowSettings",
+    },
+    PATCH: {
+      service: "workflows",
+      operation: "update",
+      method: "updateWorkflowSettings",
+    },
+  };
+  const parsed = settings[httpMethod];
+  if (!parsed) return null;
+  routeParams.slug = id;
+  return parsed;
+}
+
+/**
  * `/api/releases` — the content-release surface.
  *
  * A release is a first-class object with its own lifecycle rather than a
@@ -3451,6 +3550,18 @@ export function parseRestRoute(
   if (resource === "api-keys") {
     const result = parseApiKeyRoutes(id, subresource, httpMethod, routeParams);
     if (result) return result;
+  }
+
+  // Review state, steps, assignments and settings under a workflow (@experimental).
+  if (resource === "workflows") {
+    const result = parseWorkflowRoutes(
+      id,
+      subresource,
+      subId,
+      httpMethod,
+      routeParams
+    );
+    if (result) return { ...result, routeParams };
   }
 
   // Handle content releases
