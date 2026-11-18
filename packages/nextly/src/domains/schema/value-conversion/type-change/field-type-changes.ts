@@ -22,12 +22,15 @@ import {
   type SupportedDialect,
 } from "../../services/field-column-descriptor";
 import { describeClassed } from "../describe";
+import type { RowKey } from "../types";
 
 import { type FieldTypeOnDialect, fieldTypeOnDialect } from "./field-type";
 import {
+  FIRST_KEYS,
   fieldAccepts,
   judgeStoredTypeChange,
   type StoredTypeChangeJudgement,
+  uniqueValues,
 } from "./judge-stored";
 
 /** One field whose type a save changes, read as the rules read both types on one database. */
@@ -138,13 +141,21 @@ export async function judgeFieldTypeChanges(args: {
 }): Promise<JudgedFieldTypeChange[]> {
   const judged: JudgedFieldTypeChange[] = [];
   const columnsOf = liveColumnReader(args.db, args.dialect);
-  const charsetOf = tableCharsetReader(args.db, args.dialect);
+  const textOf = tableTextReader(args.db, args.dialect);
   for (const change of args.changes) {
     const held = await whereHeld(change, args, columnsOf);
     if (held === undefined) continue;
     const { table, column } = held;
     const perLanguage = table === args.translationsTable;
-    const result = await judgeStoredTypeChange({
+    const text = await textOf(table);
+    // A unique MySQL text compares values by its collation, which only the database can weigh:
+    // the readings are gathered and weighed after the scan instead of compared as they come.
+    const collated =
+      text !== undefined &&
+      change.to.unique === true &&
+      COLLATED_FAMILIES.has(change.toType.family);
+    const readings: { key: RowKey; readsAs: string }[] = [];
+    const judgedHere = await judgeStoredTypeChange({
       db: args.db,
       dialect: args.dialect,
       table,
@@ -153,11 +164,21 @@ export async function judgeFieldTypeChanges(args: {
       from: change.fromType,
       // A MySQL text column counts its bytes in the table's character set, which a column the
       // change converts takes.
-      to: withCharset(change.toType, await charsetOf(table)),
+      to: withCharset(change.toType, text?.charset),
       accepts: fieldAccepts(change.toType, change.to),
       // A unique field holds each value once: two that read as one value of the new type block.
-      unique: change.to.unique === true,
+      unique: change.to.unique === true && !collated,
+      ...(collated
+        ? { onReading: (key, readsAs) => readings.push({ key, readsAs }) }
+        : {}),
     });
+    const result =
+      collated && text !== undefined
+        ? withRepeats(
+            judgedHere,
+            await repeatsByCollation(args.db, readings, text)
+          )
+        : judgedHere;
     judged.push({ ...change, table, column, result });
   }
   return judged;
@@ -223,30 +244,119 @@ function liveColumnReader(
   };
 }
 
+/** A MySQL table's default text rule: its character set and collation, as MySQL names them. */
+interface TableText {
+  charset: string;
+  collation: string;
+}
+
 /**
- * Each MySQL table's character set, read from the database once per table: what a text column the
- * change converts counts its bytes in. Undefined on PostgreSQL and SQLite, whose text holds any
- * length, and where the table is not found.
+ * Each MySQL table's default character set and collation, read from the database once per table:
+ * what a text column the change converts counts its bytes in, and how a unique index on it compares
+ * two values. Undefined on PostgreSQL and SQLite, whose text holds any length and whose default
+ * collations compare values exactly, and where the table is not found.
  */
-function tableCharsetReader(
+function tableTextReader(
   db: unknown,
   dialect: SupportedDialect
-): (table: string) => Promise<string | undefined> {
-  const read = new Map<string, Promise<string | undefined>>();
+): (table: string) => Promise<TableText | undefined> {
+  const read = new Map<string, Promise<TableText | undefined>>();
   return table => {
     if (dialect !== "mysql") return Promise.resolve(undefined);
-    let charset = read.get(table);
-    if (charset === undefined) {
-      charset = querySqlRows<{ charset: unknown }>(
+    let text = read.get(table);
+    if (text === undefined) {
+      text = querySqlRows<{ charset: unknown; collation: unknown }>(
         db,
         dialect,
-        sql`SELECT c.CHARACTER_SET_NAME AS charset FROM information_schema.TABLES t JOIN information_schema.COLLATION_CHARACTER_SET_APPLICABILITY c ON c.COLLATION_NAME = t.TABLE_COLLATION WHERE t.TABLE_SCHEMA = DATABASE() AND t.TABLE_NAME = ${table}`
-      ).then(rows =>
-        typeof rows[0]?.charset === "string" ? rows[0].charset : undefined
+        sql`SELECT c.CHARACTER_SET_NAME AS charset, t.TABLE_COLLATION AS collation FROM information_schema.TABLES t JOIN information_schema.COLLATION_CHARACTER_SET_APPLICABILITY c ON c.COLLATION_NAME = t.TABLE_COLLATION WHERE t.TABLE_SCHEMA = DATABASE() AND t.TABLE_NAME = ${table}`
+      ).then(([row]) =>
+        typeof row?.charset === "string" && typeof row.collation === "string"
+          ? { charset: row.charset, collation: row.collation }
+          : undefined
       );
-      read.set(table, charset);
+      read.set(table, text);
     }
-    return charset;
+    return text;
+  };
+}
+
+/** The new types a unique MySQL index compares by its collation: those kept as text. */
+const COLLATED_FAMILIES = new Set<FieldTypeOnDialect["family"]>([
+  "text",
+  "email",
+  "choice",
+]);
+
+/** How many readings one weighing query asks about. */
+const WEIGH_AT_ONCE = 500;
+
+/** A MySQL character set's or collation's name, which is spelled into the weighing query. */
+const MYSQL_NAME = /^[A-Za-z0-9_]+$/;
+
+/**
+ * The rows whose reading a unique index in `text`'s collation holds as another row's in the same
+ * language (`uniqueValues`, over each reading's collation weight): MySQL's weight of each value,
+ * asked a few hundred at a time, so "A" and "a" are one value under a case-insensitive collation.
+ */
+async function repeatsByCollation(
+  db: unknown,
+  readings: readonly { key: RowKey; readsAs: string }[],
+  text: TableText
+): Promise<RowKey[]> {
+  if (!MYSQL_NAME.test(text.charset) || !MYSQL_NAME.test(text.collation)) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "a MySQL table names an unexpected collation",
+        text,
+      },
+    });
+  }
+  const repeatsOf = uniqueValues();
+  const repeated: RowKey[] = [];
+  for (let at = 0; at < readings.length; at += WEIGH_AT_ONCE) {
+    const batch = readings.slice(at, at + WEIGH_AT_ONCE);
+    const rows = await querySqlRows<{ i: unknown; w: unknown }>(
+      db,
+      "mysql",
+      sql.join(
+        batch.map(
+          (reading, i) =>
+            sql`SELECT ${i} AS i, HEX(WEIGHT_STRING(CONVERT(${reading.readsAs} USING ${sql.raw(text.charset)}) COLLATE ${sql.raw(text.collation)})) AS w`
+        ),
+        sql` UNION ALL `
+      )
+    );
+    const weights = new Map(rows.map(row => [Number(row.i), String(row.w)]));
+    batch.forEach((reading, i) => {
+      const found = repeatsOf(reading.key, weights.get(i) ?? reading.readsAs);
+      if (found !== undefined) repeated.push(...found);
+    });
+  }
+  return repeated;
+}
+
+/** `result` with the rows a unique field would hold twice, which block the change (`repeated`). */
+function withRepeats(
+  result: StoredTypeChangeJudgement,
+  repeated: readonly RowKey[]
+): StoredTypeChangeJudgement {
+  if (repeated.length === 0) return result;
+  return {
+    ...result,
+    judgement: {
+      class: "blocked",
+      reasons: [
+        ...result.judgement.reasons,
+        {
+          kind: "repeated",
+          class: "blocked",
+          rows: {
+            first: repeated.slice(0, FIRST_KEYS),
+            count: repeated.length,
+          },
+        },
+      ],
+    },
   };
 }
 

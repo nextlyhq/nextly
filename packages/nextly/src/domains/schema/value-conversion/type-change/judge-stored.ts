@@ -32,7 +32,7 @@ import {
 import { type StoredAsRead, storedAsRead } from "./stored-as-read";
 
 /** How many keys a reason names before it gives only the count. */
-const FIRST_KEYS = 20;
+export const FIRST_KEYS = 20;
 
 /** A field's type change judged over its stored values. */
 export interface StoredTypeChangeJudgement {
@@ -253,7 +253,7 @@ class TypeChangeTally {
  * name for it: the first row that held it, the first time it is repeated, and this one. Holds the
  * distinct values, which counting a unique field's repeats needs, and nothing for any other field.
  */
-function uniqueValues(): (
+export function uniqueValues(): (
   key: RowKey,
   readsAs: string
 ) => RowKey[] | undefined {

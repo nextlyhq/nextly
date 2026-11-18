@@ -138,6 +138,57 @@ describeEachDialect("a stored date read for a type change", dialect => {
     120_000
   );
 
+  it("counts a unique field's repeats as its table's collation compares them", async () => {
+    // MySQL's default collation is case-insensitive: "Apple" and "apple" are one value to a unique
+    // index there, and two on PostgreSQL and SQLite, which compare exactly.
+    const handler = current.getService(
+      "collectionsHandler"
+    ) as unknown as CollectionsHandler;
+    const created = await handler.createCollection({
+      name: "codes",
+      label: "Code",
+      fields: [{ name: "code", type: "textarea" }],
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    for (const [title, code] of [
+      ["A", "Apple"],
+      ["B", "apple"],
+    ]) {
+      const entry = await handler
+        .getEntryService()
+        .createEntry(
+          { collectionName: "codes", overrideAccess: true },
+          { title, code }
+        );
+      expect(entry.success, JSON.stringify(entry)).toBe(true);
+    }
+
+    const [judged] = await judgeFieldTypeChanges({
+      db: current.adapter.getDrizzle(),
+      dialect,
+      builtBy: "collection",
+      table: "dc_codes",
+      changes: fieldTypeChangesOf({
+        previous: [{ name: "code", type: "textarea" }] as FieldDefinition[],
+        next: [
+          { name: "code", type: "text", unique: true },
+        ] as FieldDefinition[],
+        dialect,
+        builtBy: "collection",
+      }),
+    });
+
+    const repeated = judged?.result.judgement.reasons.find(
+      r => r.kind === "repeated"
+    );
+    if (dialect === "mysql") {
+      expect(repeated?.rows?.count).toBe(2);
+    } else {
+      expect(repeated).toBeUndefined();
+      expect(judged?.result.judgement.class).toBe("safe");
+    }
+  }, 120_000);
+
   it("reads the values under the new name, where an earlier apply already made the rename", async () => {
     // MySQL commits a rename on its own: an apply refused after it leaves the old values under the
     // new name, where the retried change finds them.
