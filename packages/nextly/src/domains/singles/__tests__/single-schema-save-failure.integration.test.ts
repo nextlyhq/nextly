@@ -4,8 +4,9 @@
  * and the status it had. It used to record the requested fields with the status "failed" and answer
  * that the migration was pending, which neither was.
  *
- * The change is a field's type, which carries values, so the save runs the service's own statements
- * rather than its migration file. The first of them fails, so nothing has committed on any dialect.
+ * The change adds a required field stating a default to a Single holding its row, which fills that
+ * row and so carries values: the save runs the service's own statements rather than its migration
+ * file. The statement adding the column fails, so nothing has committed on any dialect.
  */
 // Set before the harness boots (env validation reads it once).
 process.env.NEXTLY_SECRET =
@@ -49,6 +50,11 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
       {},
       { slug: SLUG, label: "Home", fields: [{ name: "count", type: "text" }] }
     );
+    // The row the Single holds, which a required field added to it fills.
+    await t.nextly.updateSingle({
+      slug: SLUG,
+      data: { count: "one", _overwrite: true },
+    });
   });
 
   afterEach(async () => {
@@ -74,15 +80,12 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
   }
 
   /**
-   * Fail the first statement that changes the Single's table, on the adapter or on a transaction,
-   * before it runs. Returns how many it failed.
+   * Fail the first statement adding the new field's column to the Single's table, on the adapter
+   * or on a transaction, before it runs. Returns how many it failed.
    */
   function failTableStatement(): () => number {
     let failed = 0;
-    const pattern = new RegExp(
-      `(ALTER|CREATE)\\s+TABLE[^;]*["\`]?${TABLE}`,
-      "i"
-    );
+    const pattern = new RegExp(`ALTER\\s+TABLE[^;]*${TABLE}[^;]*tagline`, "i");
     const refuse = (statement: string) => {
       if (failed > 0 || !pattern.test(statement)) return;
       failed += 1;
@@ -133,21 +136,32 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
       answer = await dispatchSingles(
         "updateSingleSchema",
         { slug: SLUG },
-        { fields: [{ name: "count", type: "number" }] }
+        {
+          fields: [
+            { name: "count", type: "text" },
+            {
+              name: "tagline",
+              type: "text",
+              required: true,
+              defaultValue: "Draft",
+            },
+          ],
+        }
       );
     } catch (error) {
       thrown = error;
     }
     vi.restoreAllMocks();
 
-    // Positive control: the save reached its table statement.
-    expect(failed(), "no statement changing the Single's table was met").toBe(
-      1
-    );
     const said =
       answer instanceof Response
         ? JSON.stringify(await answer.json())
         : JSON.stringify(answer);
+    // Positive control: the save reached its table statement.
+    expect(
+      failed(),
+      `no statement changing the Single's table was met; the save answered ${said}, threw ${String(thrown)}`
+    ).toBe(1);
     expect(
       thrown,
       `the save answered instead of failing: ${said}`
