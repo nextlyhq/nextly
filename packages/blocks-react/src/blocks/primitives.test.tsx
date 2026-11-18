@@ -83,9 +83,9 @@ describe("core/heading", () => {
   it("renders the stored level rather than one derived from nesting", async () => {
     // A level computed from depth changes when a block is dragged, which is the
     // accessibility failure headings exist to prevent.
-    expect(html(await renderHeading(args({ text: "Title", level: "h3" })))).toBe(
-      '<h3 class="nx-n1">Title</h3>'
-    );
+    expect(
+      html(await renderHeading(args({ text: "Title", level: "h3" })))
+    ).toBe('<h3 class="nx-n1">Title</h3>');
   });
 
   it("falls back to h2 for a level nothing recognises", async () => {
@@ -95,7 +95,9 @@ describe("core/heading", () => {
 
   it("puts the link inside the heading, not around it", async () => {
     // Around it, a screen reader announces the whole heading as a link.
-    const out = html(await renderHeading(args({ text: "Title", href: "/docs" })));
+    const out = html(
+      await renderHeading(args({ text: "Title", href: "/docs" }))
+    );
     expect(out).toBe('<h2 class="nx-n1"><a href="/docs">Title</a></h2>');
   });
 
@@ -182,7 +184,11 @@ describe("core/quote", () => {
     // The figcaption is a PART now, so it carries a class. Asserted on the
     // content and the element rather than on the exact opening tag, which is
     // what made this pin markup the block is free to change.
-    expect(out).toContain("Ada, <cite>A Book</cite></figcaption>");
+    // The dash drawn in CSS on an empty, hidden element before the name, so
+    // it is never part of the words, copied or read out.
+    expect(out).toContain(
+      '<span data-nx-quote-dash="" aria-hidden="true"></span>Ada, <cite>A Book</cite></figcaption>'
+    );
   });
 
   it("is a bare blockquote when there is nothing to attribute", () => {
