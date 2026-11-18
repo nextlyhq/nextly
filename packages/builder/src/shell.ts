@@ -912,3 +912,15 @@ export type {
  */
 export { ExposurePicker, selectionAsComponent } from "./exposure-picker";
 export type { ExposurePickerProps } from "./exposure-picker";
+
+/**
+ * Page checks: the count beside Publish that opens the list and walks it
+ * while the author fixes things, and the list itself. The checks they run
+ * are on the root entry, callable without a DOM.
+ *
+ * @experimental
+ */
+export { PageChecksChip } from "./page-checks/page-checks-chip";
+export type { PageChecksChipProps } from "./page-checks/page-checks-chip";
+export { PageChecksList } from "./page-checks/page-checks-list";
+export type { PageChecksListProps } from "./page-checks/page-checks-list";

@@ -164,7 +164,9 @@ export function sectionShown(
 
 /**
  * A row the filter may hide. Hidden rather than taken away, so a field's
- * unsaved text and its focus outlive a search typed and cleared.
+ * unsaved text and its focus outlive a search typed and cleared. Marked with
+ * its settings' ids, so a setting asked for from outside the panel (a page
+ * check's fix) finds the row it is drawn in.
  */
 export function SettingSlot({
   ids,
@@ -177,7 +179,7 @@ export function SettingSlot({
 }): React.JSX.Element {
   const shown = useSettingShown(ids, tab);
   return (
-    <div className="nx-setting" hidden={!shown}>
+    <div className="nx-setting" data-setting={ids.join(" ")} hidden={!shown}>
       {children}
     </div>
   );

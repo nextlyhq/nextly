@@ -45,6 +45,8 @@
  *   Show when's conditions, built from those filters.
  * - preview: content a visitor cannot read, the preview strip and picker.
  * - read-panel: the read meter and the read panel.
+ * - page-checks: the checks' count beside Publish, the list it opens and the
+ *   bar under it while fixing.
  * - bindings: data bindings, the image fallback and the media library picker.
  * - image-states: an Image's empty state on the canvas, its upload, link and
  *   missing file.
@@ -111,6 +113,8 @@
 @import "./preview.css";
 
 @import "./read-panel.css";
+
+@import "./page-checks.css";
 
 @import "./bindings.css";
 

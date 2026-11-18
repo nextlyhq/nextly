@@ -22,7 +22,7 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
-import type { AskedSetting } from "../editor-state";
+import type { AskedSetting } from "../editor-asks";
 import { layerLabel } from "../panels/layers/layers";
 
 /** The groups a finding is listed under. */
