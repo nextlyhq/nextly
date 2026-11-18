@@ -385,6 +385,7 @@ export type {
   MigratedNode,
   MigrateFn,
   MigrateResult,
+  MigrationDrops,
   MigrationFailure,
   MigrationMap,
   MigrationRenames,

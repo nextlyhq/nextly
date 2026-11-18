@@ -367,14 +367,18 @@ const TABLE_OF_CONTENTS_PARTS = {
 } as const;
 
 /**
- * Version 1 to 2: the list is built from the page's headings, so the bound
- * passage it read (`content`) goes, with no fallback to it. `marker` stays
- * unset, which reads as bullets: version 1 drew no numbers.
+ * Version 1 to 2: the list is built from the page's headings, so the passage
+ * it read (`content`) goes, with any binding on it and any component setting
+ * exposing it (`VERSION_1_DROPS`), and no fallback to it. Nothing else
+ * changes: `marker` stays unset, which reads as bullets, as version 1 drew
+ * no numbers.
  */
 function fromVersion1(props: Record<string, unknown>): Record<string, unknown> {
-  const { content: _content, ...rest } = props;
-  return rest;
+  return props;
 }
+
+/** The props version 1 to 2 drops: the bound passage. */
+const VERSION_1_DROPS = { 1: ["content"] } as const;
 
 /** What a new block stores: the defaults the settings show. */
 const NEW_BLOCK_PROPS = {
@@ -396,6 +400,7 @@ export const tableOfContents: BlockDefinition<
   name: TABLE_OF_CONTENTS_BLOCK,
   version: 2,
   migrate: { 1: fromVersion1 },
+  drops: VERSION_1_DROPS,
   // What an author reads, in the Add panel and the block card: one plain line.
   description: "Links to the headings on the page.",
   editor: {

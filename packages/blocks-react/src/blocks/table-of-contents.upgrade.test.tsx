@@ -102,6 +102,40 @@ describe("a Table of contents saved as version 1", () => {
     });
     // No marker is written: unset reads as bullets, as version 1 drew none.
     expect(node?.props).not.toHaveProperty("marker");
+    // Its passage's binding goes with the passage: nothing is left bound to
+    // a prop the block no longer has.
+    expect(node).not.toHaveProperty("bindings");
+  });
+
+  it("keeps its other bindings while its passage's goes", () => {
+    const title = { $bind: "title" };
+    const { doc } = migrateDocument(
+      page([{ ...v1, bindings: { ...v1.bindings, title } }]),
+      migrationSourceFor(resolver)
+    );
+    expect(doc.nodes[0]?.bindings).toEqual({ title });
+  });
+
+  it("drops a component's setting that exposed its passage", () => {
+    const exposure = (id: string, propPath: string) => ({
+      id,
+      label: id,
+      nodeId: "toc",
+      propPath,
+      type: "richText",
+    });
+    const { doc } = migrateDocument(
+      {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "component",
+        nodes: [v1],
+        exposed: [exposure("passage", "content"), exposure("name", "title")],
+      } as unknown as BlockDocument,
+      migrationSourceFor(resolver)
+    );
+    expect(
+      (doc as { exposed?: { id: string }[] }).exposed?.map(each => each.id)
+    ).toEqual(["name"]);
   });
 
   it("lists the page's own headings, as bullets, never the passage it held", async () => {

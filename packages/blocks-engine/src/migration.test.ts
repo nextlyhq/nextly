@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { BlockDocument } from "./document";
+import type { BlockDocument, BlockNode } from "./document";
 import type { MigrationSource } from "./migration";
 import {
   findMigrationGaps,
@@ -20,6 +20,7 @@ function source(
         number,
         (p: Record<string, unknown>) => Record<string, unknown>
       >;
+      drops?: Record<number, readonly string[]>;
     }
   >
 ): MigrationSource {
@@ -767,5 +768,133 @@ describe("a step's renames", () => {
   it("reach every migration source through the one reading of a definition", () => {
     expect(migrationInfoOf(quote)).toEqual(quote);
     expect(migrationInfoOf({ version: 1 })).toEqual({ version: 1 });
+  });
+});
+
+describe("a step's drops", () => {
+  const same = (p: Record<string, unknown>) => p;
+  const contents = {
+    version: 2,
+    migrate: { 1: same },
+    drops: { 1: ["content"] },
+  };
+  const page = (node: BlockNode): BlockDocument => ({
+    formatVersion: 1,
+    kind: "page",
+    nodes: [node],
+  });
+
+  it("drop the prop once its step has run, which still saw it", () => {
+    const seen: Record<string, unknown>[] = [];
+    const result = migrateProps(
+      { title: "On this page", content: { root: {} } },
+      1,
+      2,
+      { 1: p => (seen.push(p), p) },
+      undefined,
+      { 1: ["content"] }
+    );
+    expect(seen[0]).toHaveProperty("content");
+    expect(result.props).toEqual({ title: "On this page" });
+  });
+
+  it("drop a value bound to the dropped prop, keeping every other binding", () => {
+    const title = { $bind: "title" };
+    const { doc } = migrateDocument(
+      page({
+        id: "toc",
+        type: "core/table-of-contents",
+        version: 1,
+        props: { title: "On this page", content: { root: {} } },
+        bindings: { content: { $bind: "body" }, title },
+      }),
+      source({ "core/table-of-contents": contents })
+    );
+    const [node] = doc.nodes;
+    expect(node?.version).toBe(2);
+    expect(node?.props).toEqual({ title: "On this page" });
+    expect(node?.bindings).toEqual({ title });
+  });
+
+  it("leave no empty bindings behind when the dropped prop held the only one", () => {
+    const { doc } = migrateDocument(
+      page({
+        id: "toc",
+        type: "core/table-of-contents",
+        version: 1,
+        props: {},
+        bindings: { content: { $bind: "body" } },
+      }),
+      source({ "core/table-of-contents": contents })
+    );
+    expect(doc.nodes[0]).not.toHaveProperty("bindings");
+  });
+
+  it("drop only through the steps that ran", () => {
+    const { doc } = migrateDocument(
+      page({
+        id: "n",
+        type: "t",
+        version: 1,
+        props: { a: 1, b: 2 },
+        bindings: { a: { $bind: "x" }, b: { $bind: "y" } },
+      }),
+      source({
+        t: {
+          version: 3,
+          migrate: {
+            1: same,
+            2: () => {
+              throw new Error("no");
+            },
+          },
+          drops: { 1: ["a"], 2: ["b"] },
+        },
+      })
+    );
+    // Step 1 ran, so `a` went; step 2 failed, so `b` stays with its binding.
+    expect(doc.nodes[0]?.props).toEqual({ b: 2 });
+    expect(doc.nodes[0]?.bindings).toEqual({ b: { $bind: "y" } });
+  });
+
+  it("remove a component's exposures into the dropped prop, on that node only", () => {
+    // A placement writes its override through the exposure's path: one left
+    // on a dropped prop writes where the upgraded block reads nothing.
+    const exposure = (id: string, nodeId: string, propPath: string) => ({
+      id,
+      label: id,
+      nodeId,
+      propPath,
+      type: "text",
+    });
+    const component = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        {
+          id: "toc",
+          type: "core/table-of-contents",
+          version: 1,
+          props: { content: {} },
+        },
+        { id: "other", type: "t", version: 1, props: { content: "kept" } },
+      ],
+      exposed: [
+        exposure("passage", "toc", "content"),
+        exposure("deep", "toc", "content.root"),
+        exposure("title", "toc", "title"),
+        exposure("elsewhere", "other", "content"),
+      ],
+    } as unknown as BlockDocument;
+    const { doc } = migrateDocument(
+      component,
+      source({ "core/table-of-contents": contents, t: { version: 1 } })
+    );
+    const left = (doc as { exposed?: { id: string }[] }).exposed;
+    expect(left?.map(each => each.id)).toEqual(["title", "elsewhere"]);
+  });
+
+  it("reach every migration source through the one reading of a definition", () => {
+    expect(migrationInfoOf(contents)).toEqual(contents);
   });
 });
