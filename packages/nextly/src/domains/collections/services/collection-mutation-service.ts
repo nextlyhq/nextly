@@ -179,6 +179,7 @@ import {
   normalizeRelationshipFields,
   relationshipValidationView,
 } from "../../../shared/lib/field-transform";
+import { fieldWriteCaller } from "../../../shared/lib/field-write-caller";
 import { filterKeys } from "../../../shared/lib/filterable-fields";
 import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
 import {
@@ -540,7 +541,6 @@ import {
   collectionFields,
   collectionTableName,
   generateSlug,
-  normalizeSlugPath,
 } from "./collection-utils";
 import {
   entryStillReferenced,
@@ -557,6 +557,7 @@ import {
   WITHOUT_REVIEW_KEY,
   withoutReviewOfBody,
 } from "./save-door-gate";
+import { slugAsStored } from "./slug-as-stored";
 import {
   entryWriteContext,
   fieldAccessPass,
@@ -3484,15 +3485,20 @@ export class CollectionMutationService extends BaseService {
         ...(args.goesLive === true && !judgeInstances
           ? { judgeContainedComponents: false }
           : {}),
-        write: this.validationWrite(
-          args.collectionName,
-          args.id ??
-            suppliedCreateId(args.mode, args.collectionName, args.data),
-          args.tx,
-          // The language judged: each in turn where a write judges several,
-          // else the one this write is in.
-          args.readLocale ?? args.writeLocale
-        ),
+        write: {
+          ...this.validationWrite(
+            args.collectionName,
+            args.id ??
+              suppliedCreateId(args.mode, args.collectionName, args.data),
+            args.tx,
+            // The language judged: each in turn where a write judges several,
+            // else the one this write is in.
+            args.readLocale ?? args.writeLocale
+          ),
+          // Who the write is made as, from the reader its access is judged
+          // by, for a field type whose values only some callers may change.
+          caller: fieldWriteCaller(args.reader),
+        },
       }
     );
     // The document judged can hold fields the caller may not read; their
@@ -8757,11 +8763,9 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * `raw` as `collectionName` stores a slug: one segment, normalised by
-   * {@link generateSlug}, or, where the collection's `db.slugPaths` is on, a
-   * path of several, each normalised alike ({@link normalizeSlugPath}). A
-   * path that cannot be stored is refused as a validation error on `slug`
-   * when `refuse` is set, in words an author can act on, and is otherwise
+   * `raw` as `collectionName` stores a slug, by {@link slugAsStored}. A path
+   * that cannot be stored is refused as a validation error on `slug` when
+   * `refuse` is set, in words an author can act on, and is otherwise
    * returned as given for a later pass to refuse.
    */
   private slugAsStored(
@@ -8769,10 +8773,7 @@ export class CollectionMutationService extends BaseService {
     raw: string,
     refuse: boolean
   ): string {
-    if (collectionDbOptions(collectionName).slugPaths !== true) {
-      return generateSlug(raw);
-    }
-    const read = normalizeSlugPath(raw);
+    const read = slugAsStored(collectionName, raw);
     if ("slug" in read) return read.slug;
     if (!refuse) return raw;
     throw NextlyError.validation({

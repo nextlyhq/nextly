@@ -25,6 +25,7 @@ import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
+import { busyTableLeftNothing } from "../../domains/schema/busy-table/report";
 import type { PipelineResult } from "../../domains/schema/pipeline/pushschema-pipeline";
 import type { DesiredSchema } from "../../domains/schema/pipeline/types";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
@@ -166,8 +167,10 @@ export async function writeBuilderSchemaChange(
  * A schema dialog's push that notes once one of its pushes may have changed
  * the database, for `writeBuilderSchemaChange` to tell a failure before the
  * main table changed from one after it: a push that succeeded, and on MySQL
- * any push at all, since MySQL commits each schema statement as it runs, so
- * a push refused part way may have left some of them applied.
+ * any push that failed, since MySQL commits each schema statement as it runs,
+ * so a push refused part way may have left some of them applied. The one
+ * exception is a busy table's stop that says itself nothing ran
+ * (`leftNothing`): its files are withdrawn, as a refusal anywhere else.
  */
 export function landingPush(
   push: (desired: DesiredSchema) => Promise<PipelineResult>,
@@ -181,15 +184,34 @@ export function landingPush(
     push: async desired => {
       try {
         const result = await push(desired);
-        if (result.success || dialect === "mysql") landed = true;
+        if (
+          result.success ||
+          (dialect === "mysql" && !leftNothing(result.error?.details))
+        ) {
+          landed = true;
+        }
         return result;
       } catch (error) {
-        if (dialect === "mysql") landed = true;
+        if (dialect === "mysql" && !leftNothing(error)) landed = true;
         throw error;
       }
     },
     landed: () => landed,
   };
+}
+
+/**
+ * Whether `error` is a busy table's stop that left nothing of the push and
+ * applied nothing before it in the run, as the stop itself records it
+ * (`busyTableLeftNothing`, and the stop's `appliedBefore`), never read from
+ * its message.
+ */
+function leftNothing(error: unknown): boolean {
+  if (!NextlyError.is(error) || !busyTableLeftNothing(error)) return false;
+  const stop = (
+    error.logContext as { stop?: { appliedBefore?: readonly string[] } }
+  ).stop;
+  return (stop?.appliedBefore ?? []).length === 0;
 }
 
 /**
