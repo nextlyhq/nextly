@@ -74,6 +74,9 @@ afterEach(async () => {
 type BuilderField = Record<string, unknown>;
 
 const text = (name: string): BuilderField => ({ name, type: "text" });
+// A field of another type than `text`, so a save dropping it while adding a text field is a drop and an
+// addition: one field leaving and one of the same type arriving is taken as a rename of it.
+const number = (name: string): BuilderField => ({ name, type: "number" });
 
 /** One of the Builder's save paths that applies its change through its file. */
 interface SavePath {
@@ -562,8 +565,8 @@ describe.each(getConfiguredTestDialects())(
         "stopped at an addition after a drop committed, stops naming the dropped field and keeps reading the rest",
         async () => {
           const t = await boot();
-          await path.create([text("heading"), text("old_note")]);
-          await path.store?.(t, { heading: "Hello", old_note: "Gone" });
+          await path.create([text("heading"), number("old_note")]);
+          await path.store?.(t, { heading: "Hello", old_note: 7 });
           const folderBefore = filesBelow(history());
           const failed = failStatement(t, adding(path.table, "beta"));
 
