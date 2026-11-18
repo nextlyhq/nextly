@@ -20,6 +20,8 @@ export interface BuildMessage {
     column: number;
     lineText?: string;
   } | null;
+  /** What esbuild adds about the message: a resolver's explanation, a suggested remedy. */
+  notes?: ReadonlyArray<{ text: string }>;
 }
 
 /** Where a message points, as an editor shows it: line and column from 1, in characters. */
@@ -54,6 +56,14 @@ export function buildMessagesOf(cause: unknown): BuildMessage[] {
     .map(message => ({
       ...message,
       text: redactCredentialsInText(message.text),
+      // A note quotes what it explains, a specifier among it, so it is redacted as the text is.
+      ...(Array.isArray(message.notes)
+        ? {
+            notes: message.notes
+              .filter(note => typeof note?.text === "string")
+              .map(note => ({ text: redactCredentialsInText(note.text) })),
+          }
+        : {}),
     }));
 }
 
@@ -205,7 +215,8 @@ export function formatBuildMessages(messages: readonly BuildMessage[]): string {
 }
 
 /**
- * A failure carrying `failure`'s build messages, its message rendered by `formatBuildMessages`.
+ * A failure carrying `failure`'s build messages, its message rendered by `formatBuildMessages`,
+ * each message's notes beneath it.
  * esbuild's own message counts the column in bytes from 0, so a report that printed it, or chained
  * it as a cause, under the editor's place named one error at two places; the messages are all
  * kept, so nothing a reader of them needs is lost. Undefined when `failure` carries none.
@@ -214,7 +225,16 @@ export function withEditorPlaces(failure: unknown): Error | undefined {
   const messages = buildMessagesOf(failure);
   if (messages.length === 0) return undefined;
   return Object.assign(
-    new Error(`Build failed:\n${formatBuildMessages(messages)}`),
+    new Error(
+      `Build failed:\n${messages
+        .map(message =>
+          [
+            formatBuildMessages([message]),
+            ...(message.notes ?? []).map(note => `  note: ${note.text}`),
+          ].join("\n")
+        )
+        .join("\n")}`
+    ),
     { errors: messages }
   );
 }
