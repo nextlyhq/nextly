@@ -133,9 +133,10 @@ function styleOf(property: string): unknown {
   return values?.[property];
 }
 
-/** Type `text` one character at a time into `field`, still focused. */
+/** Type `text` one character at a time into `field`, focused as by a click. */
 function typeInto(field: HTMLElement, text: string, from = ""): void {
-  fireEvent.focus(field);
+  // Moved for real, so the edit registers against the field and not `body`.
+  act(() => field.focus());
   let value = from;
   for (const character of text) {
     value += character;
@@ -191,6 +192,11 @@ describe("the Content tab's typed fields", () => {
     typeInto(field, " half typed", "Old title");
     expect(card().props.title).toBe("Old title half typed");
 
+    // Escape in another field is that field's, and leaves this run alone.
+    const other = screen.getByLabelText("Summary");
+    expect(escapeFieldEdit(other)).not.toBe("put-back");
+    expect(card().props.title).toBe("Old title half typed");
+
     // What the keyboard layer asks of the field Escape is pressed in.
     let outcome: string | undefined;
     act(() => {
@@ -204,12 +210,33 @@ describe("the Content tab's typed fields", () => {
     expect(escapeFieldEdit(field)).toBe("leave-field");
   });
 
+  it("shows what the canvas holds when Escape can no longer take the run back", () => {
+    mount();
+    const field = screen.getByLabelText("Title") as HTMLInputElement;
+    typeInto(field, " half typed", "Old title");
+    // Another edit lands first, so the run's step is no longer the newest and
+    // Escape cannot withdraw it: the text typed stays on the canvas.
+    act(() => {
+      editor().apply({
+        kind: "update",
+        id: "card",
+        patch: { props: { ...card().props, summary: "Other words" } },
+      });
+    });
+    act(() => {
+      escapeFieldEdit(field);
+    });
+    expect(card().props.title).toBe("Old title half typed");
+    expect(field.value).toBe("Old title half typed");
+  });
+
   it("puts a Style value back on Escape, as it was before the edit", () => {
     mount();
     openStyle();
     const field = row("padding").getByLabelText(
       "Block start"
     ) as HTMLInputElement;
+    act(() => field.focus());
     fireEvent.change(field, { target: { value: "" } });
     typeInto(field, "24");
     expect(styleOf("padding")).toEqual({ blockStart: "24px" });
@@ -238,6 +265,36 @@ describe("the Content tab's typed fields", () => {
     fireEvent.keyDown(field, { key: "Enter" });
     typeInto(field, "?", "Old title!");
     expect(editor().undoDepth).toBe(2);
+  });
+
+  it("leaves the Enter that confirms an input method's characters to it", () => {
+    mount();
+    const field = screen.getByLabelText("Title");
+    typeInto(field, "!", "Old title");
+    // The keydown that picks a candidate while composing is the IME's: it
+    // must not end the step, nor be kept from the IME.
+    const composing = fireEvent.keyDown(field, {
+      key: "Enter",
+      isComposing: true,
+    });
+    expect(composing).toBe(true);
+    typeInto(field, "?", "Old title!");
+    expect(editor().undoDepth).toBe(1);
+  });
+
+  it("leaves a Style field's composing Enter to the input method too", () => {
+    mount();
+    openStyle();
+    const field = row("width").getByLabelText("Width") as HTMLInputElement;
+    act(() => field.focus());
+    fireEvent.change(field, { target: { value: "" } });
+    typeInto(field, "2");
+    expect(fireEvent.keyDown(field, { key: "Enter", isComposing: true })).toBe(
+      true
+    );
+    typeInto(field, "0", "2");
+    expect(styleOf("width")).toBe("20px");
+    expect(editor().undoDepth).toBe(1);
   });
 
   it("writes a textarea as it is typed", () => {
@@ -338,6 +395,26 @@ describe("the Style tab's typed fields", () => {
       void editor().undo();
     });
     expect(styleOf("width")).toBe("12px");
+  });
+
+  it("shows the stored unit beside the number again once Escape puts it back", () => {
+    mount();
+    openStyle();
+    const field = row("width").getByLabelText("Width") as HTMLInputElement;
+    act(() => field.focus());
+    fireEvent.change(field, { target: { value: "" } });
+    typeInto(field, "20");
+    expect(styleOf("width")).toBe("20px");
+    act(() => {
+      escapeFieldEdit(field);
+    });
+    expect(styleOf("width")).toBe("12px");
+    // "12" beside a "px" suffix, as before the edit, not "12px" alone.
+    expect(field.value).toBe("12");
+    expect(row("width").getByLabelText("Unit for Width").textContent).toBe(
+      "px"
+    );
+    expect(document.activeElement).toBe(field);
   });
 
   it("writes a line height as it is typed, a number or a length", () => {

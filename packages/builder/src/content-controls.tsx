@@ -53,6 +53,7 @@ import * as React from "react";
 
 import { propWrites } from "./code-hints";
 import { CollectionControl, SortControl } from "./collection-loop-controls";
+import { commitOnEnter } from "./commit-on-enter";
 import {
   CONTENT_CONTROL_TYPES,
   hasContentControl,
@@ -200,10 +201,7 @@ function TextishControl({
           // where an author expects Enter to mean "done", so what they type
           // next is a new undo step.
           onKeyDown={event => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              send();
-            }
+            commitOnEnter(event, send);
           }}
         />
       )}
@@ -591,7 +589,11 @@ function ArrayItems({
   const write = (next: unknown[]) => {
     // Advanced only when the write lands: a refused one (a cap, a lock that
     // arrived) changed nothing, and the next action must not start from it.
-    if (onCommit(prop.name, next) !== null) latest.current = next;
+    const outcome = onCommit(prop.name, next);
+    if (outcome !== null) latest.current = next;
+    // Answered as is, so an item's field typing live reads a refusal as one
+    // and does not take the next stored value for its own write's echo.
+    return outcome;
   };
   // "Item 1", "Item 2": each item sits in the group the setting's own name
   // labels, so repeating that name ("Items, item 1") says it twice.

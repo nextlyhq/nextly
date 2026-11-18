@@ -48,7 +48,10 @@ import { tokenForTypedName } from "./style-variables";
  * `live` is the same draft written as it is typed (`live-draft.ts`), for the
  * text field to type through.
  */
-export function useDraft(stored: StyleValue | undefined): {
+export function useDraft(
+  stored: StyleValue | undefined,
+  putBackDone?: () => void
+): {
   draft: string;
   setDraft: (value: string) => void;
   edited: boolean;
@@ -56,7 +59,7 @@ export function useDraft(stored: StyleValue | undefined): {
   live: LiveDraft;
 } {
   const text = storedText(stored);
-  const live = useLiveDraft(text);
+  const live = useLiveDraft(text, putBackDone);
   return {
     draft: live.draft,
     setDraft: live.setDraft,

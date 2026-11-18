@@ -96,12 +96,25 @@ function idle(stretch: Stretch): void {
 
 /**
  * @param stored - the value the document holds, as the field shows it
+ * @param putBackDone - told after Escape puts the draft back, for a field
+ *   that keeps state of its own about the typing
  * @returns the draft, reset whenever `stored` moves for any reason but the
  *   field's own typing. A draft set away from `stored` without typing, and a
  *   stretch of typing, are both an edit Escape puts back (`field-edit.ts`).
  */
-export function useLiveDraft(stored: string): LiveDraft {
+export function useLiveDraft(
+  stored: string,
+  putBackDone?: () => void
+): LiveDraft {
   const [draft, show] = React.useState(stored);
+  // Read when Escape puts the draft back, so a field showing typing as typed
+  // (a unit kept in the text) shows the value as stored again.
+  const onPutBack = React.useRef(putBackDone);
+  onPutBack.current = putBackDone;
+  // Escape runs the put-back registered by the first keystroke's render, so
+  // the stored value it falls back on is read from here, never from then.
+  const storedNow = React.useRef(stored);
+  storedNow.current = stored;
   // Set without typing: a draft over the stored value, as every field's is.
   const setDraft = useFieldEdit(stored, show);
   const edit = useTypedFieldEdit();
@@ -131,8 +144,12 @@ export function useLiveDraft(stored: string): LiveDraft {
     const putBack = () => {
       const { run, before } = stretch;
       idle(stretch);
-      if (run !== null) cancelTyping?.(run);
-      show(before);
+      // The text from before only where the canvas went back to it too. A run
+      // another edit has since followed, or one with no editor to cancel it,
+      // stays on the canvas, and the field shows what the document holds.
+      const cancelled = run === null || cancelTyping?.(run) === true;
+      show(cancelled ? before : storedNow.current);
+      onPutBack.current?.();
     };
     return {
       draft,
