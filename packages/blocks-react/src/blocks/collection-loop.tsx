@@ -34,6 +34,7 @@ import {
   type ListFilter,
   type ListNamedQuery,
   type ListRelation,
+  toOneParagraph,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
@@ -704,6 +705,12 @@ const COLLECTION_LOOP_PARTS = {
   },
 } as const;
 
+/** A new list's order: newest first, by the date every entry is created on. */
+const NEWEST_FIRST = "-createdAt";
+
+/** What a new list's empty state says until the author writes their own. */
+const NOTHING_HERE_YET = "Nothing here yet.";
+
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
@@ -791,8 +798,18 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
       as: htmlTagProp(["div", "section", "article"]),
       ...CONTENT_WIDTH_PROPS,
     },
-    defaultProps: { as: "div", limit: 10, contained: false },
-    example: { props: { collection: "posts", limit: 3 } },
+    // A new list shows six entries, newest first: `createdAt` is the date
+    // every collection keeps unless it turns timestamps off, and where it
+    // doesn't the reader lists in creation order and the author is told.
+    defaultProps: {
+      as: "div",
+      limit: 6,
+      sort: NEWEST_FIRST,
+      contained: false,
+    },
+    // No source: a block is placed with its example's props, and a new list
+    // starts by asking on the canvas which entries it shows.
+    example: { props: {} },
     slots: {
       // The template repeated per entry, structurally editable.
       //
@@ -808,8 +825,16 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
       children: {},
       // Drawn in place of the entries when none match, or when the read
       // failed, so a visitor sees a designed "nothing here yet" rather than
-      // a gap. Left empty, the list shows nothing, as it always did.
-      empty: {},
+      // a gap. A new list starts it with a Text saying so; emptied, the list
+      // shows nothing, as it always did.
+      empty: {
+        defaultBlock: [
+          {
+            type: "core/text",
+            props: { text: toOneParagraph(NOTHING_HERE_YET).value },
+          },
+        ],
+      },
     },
     parts: COLLECTION_LOOP_PARTS,
     // Spaces one entry from the next, as any container spaces its blocks.
