@@ -99,7 +99,9 @@ export type {
 export { composedRootTypes, placementTypesOf } from "./resolve-instances-roots";
 export { readableDefinition } from "./resolve-instances-expand";
 export {
+  boundSettingId,
   instanceExposure,
+  settingBindingKey,
   variantPreview,
 } from "./resolve-instances-exposures";
 export type {

@@ -46,6 +46,11 @@ export interface NodePlan {
   slots?: Map<string, PlannedSlot>;
   /** Prop path to the host placement's exposure that feeds it, in editor mode. */
   exposedProps?: Record<string, PropExposure>;
+  /**
+   * Prop path to the binding the placement gave the setting that fills it,
+   * written over the node's own binding of that prop.
+   */
+  bindings?: Record<string, unknown>;
 }
 
 /**
@@ -74,6 +79,7 @@ export function planEdits(
   const plans = new Map<string, NodePlan>();
   const values = effectiveOverrides(definition, instance);
   if (values.size > 0) planExposed(definition.exposed, values, plans);
+  planBoundSettings(definition.exposed, instance.bindings, plans);
   if (supplied !== undefined) {
     planSlots(definition.slots, supplied, plans, composed);
   }
@@ -753,6 +759,71 @@ function planExposed(
     if (typeof id !== "string" || !values.has(id)) continue;
     if (typeof nodeId !== "string" || nodeId === "") continue;
     applyExposure(planFor(plans, nodeId), entry, values.get(id)?.value);
+  }
+}
+
+/**
+ * The prefix of the key a placement binds one of its settings under:
+ * `overrides.<id>`, the path the setting's value is stored at in the
+ * placement's props.
+ */
+const SETTING_BINDING_PREFIX = "overrides.";
+
+/**
+ * The key a placement binds the setting `id` under.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function settingBindingKey(id: string): string {
+  return `${SETTING_BINDING_PREFIX}${id}`;
+}
+
+/**
+ * The setting a placement's binding key names, or `undefined` for a key that
+ * is not `overrides.<id>` with one non-empty id.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function boundSettingId(key: string): string | undefined {
+  if (!key.startsWith(SETTING_BINDING_PREFIX)) return undefined;
+  const id = key.slice(SETTING_BINDING_PREFIX.length);
+  return id === "" || id.includes(".") ? undefined : id;
+}
+
+/**
+ * Turn a placement's bound settings into bindings of the props they fill.
+ *
+ * A placement binds a setting under `overrides.<id>`; the block that reads
+ * the binding is the component's own, so the binding is written there, on
+ * the prop the setting fills, where the page's binding pass reads it as it
+ * reads any block's. A visibility setting decides whether a block is shown,
+ * which no field fills, so it is never bound; nor is a setting the component
+ * no longer has, nor a stored binding that is not a record.
+ */
+function planBoundSettings(
+  exposed: unknown,
+  bindings: unknown,
+  plans: Map<string, NodePlan>
+): void {
+  if (!isPlainRecord(bindings)) return;
+  const keys = boundedOwnKeys(bindings, MAX_ENVELOPE_ENTRIES);
+  if (keys === null) return;
+  const bound = new Map<string, unknown>();
+  for (const key of keys) {
+    const id = boundSettingId(key);
+    const binding = ownEntry(bindings, key);
+    if (id !== undefined && isPlainRecord(binding)) bound.set(id, binding);
+  }
+  if (bound.size === 0) return;
+  for (const property of usableExposures(exposed)) {
+    const binding = bound.get(property.id);
+    if (binding === undefined || property.type === "visibility") continue;
+    if (property.nodeId === "" || !isUsablePropPath(property.propPath)) {
+      continue;
+    }
+    const plan = planFor(plans, property.nodeId);
+    plan.bindings = { ...plan.bindings };
+    defineEntry(plan.bindings, property.propPath, binding);
   }
 }
 

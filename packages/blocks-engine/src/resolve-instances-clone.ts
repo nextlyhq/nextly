@@ -289,6 +289,14 @@ export function scopeNode(
       ctx.nodeIds
     ) as ResolvedBlockNode["bindings"];
   }
+  // The placement's bound settings, after the remap: a list they name is one
+  // around the placement, on the page, and is read under its own id.
+  if (plan?.bindings !== undefined) {
+    scoped.bindings = {
+      ...scoped.bindings,
+      ...plan.bindings,
+    } as ResolvedBlockNode["bindings"];
+  }
   // Removing the envelope rather than emptying it: `conditions` is only half of
   // what gates a node, and an instance saying "show this" means the reader
   // should stop asking.

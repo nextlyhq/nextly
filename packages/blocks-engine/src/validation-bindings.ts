@@ -5,9 +5,15 @@
  * @module validation-bindings
  */
 import { isBindPath } from "./binding-rules";
-import { BINDING_SOURCES, type BlockNode, isBindingSource } from "./document";
+import {
+  BINDING_SOURCES,
+  type BlockNode,
+  COMPONENT_INSTANCE_TYPE,
+  isBindingSource,
+} from "./document";
 import { describeValue, pointer } from "./issue-text";
 import { isPlainRecord } from "./plain-record";
+import { boundSettingId } from "./resolve-instances-exposures";
 import type { ValidationIssue } from "./validation-contract";
 
 /**
@@ -36,6 +42,21 @@ export function validateBindings(
   const bindingsPath = pointer(path, "bindings");
   for (const [prop, binding] of Object.entries(node.bindings)) {
     const bPath = pointer(bindingsPath, prop);
+    // A component placement has no props of its own to fill: it binds its
+    // settings, each under `overrides.<setting id>`, and composing it writes
+    // the binding onto the component's block that the setting fills.
+    if (
+      node.type === COMPONENT_INSTANCE_TYPE &&
+      boundSettingId(prop) === undefined
+    ) {
+      issues.push({
+        path: bPath,
+        code: "invalid-binding",
+        severity: "error",
+        message: `A component placement binds only its settings, each as overrides.<setting id>, not "${describeValue(prop)}".`,
+      });
+      continue;
+    }
     // The schema-aware checks run over the whole document once the walk is
     // done (`bindingSchemaIssues`), so a problem a stored form already held
     // stays a warning.

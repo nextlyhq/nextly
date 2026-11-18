@@ -23,10 +23,15 @@
  */
 
 import {
+  bindablePropKind,
   findNode,
+  getBlock,
   instanceExposure,
   isComponentInstance,
+  isPlainRecord,
   readableDefinition,
+  settingBindingKey,
+  type Binding,
   type BlockDocument,
   type BlockNode,
   type ComponentDocument,
@@ -34,6 +39,7 @@ import {
   type ExposedPropertyType,
   type ExposedValueSource,
   type OverrideValue,
+  type PropSchema,
   type ResolvedBlockNode,
 } from "@nextlyhq/blocks-engine";
 
@@ -118,6 +124,16 @@ export interface ExposedRow {
    * what the store would refuse. Absent where the row may change.
    */
   readonly heldBy?: RefusalWording;
+  /**
+   * Where the setting may be bound to data: the schema of the component
+   * block's prop it fills, named as the setting, which the binding picker
+   * lists the fitting fields for. The placement's binding is written onto
+   * that prop when the component is composed, so it is judged by that prop.
+   * Absent for a setting no field fills.
+   */
+  readonly bindable?: PropSchema;
+  /** The placement's binding of this setting, where it has one. */
+  readonly binding?: Binding;
 }
 
 /**
@@ -219,7 +235,7 @@ export function inspectInstance(
     rows:
       exposure === undefined
         ? []
-        : rowsOf(exposure.properties, node).map(entry => {
+        : rowsOf(exposure.properties, node, definition).map(entry => {
             const reason = held(entry);
             return reason === undefined ? entry : { ...entry, heldBy: reason };
           }),
@@ -366,10 +382,60 @@ function composedNodesOf(
   return found;
 }
 
+/**
+ * The setting types a placement may bind to data: those whose value a field
+ * can be, text, an address and a picture. A choice is a design decision, and
+ * whether a block is shown is decided by its conditions.
+ */
+const BINDABLE_SETTING_TYPES: ReadonlySet<string> = new Set([
+  "text",
+  "link",
+  "image",
+]);
+
+/**
+ * The schema of the component block's prop a setting fills, named as the
+ * setting, where a field can fill it: read from the block's own declaration,
+ * the prop the composed binding lands on.
+ */
+function bindableSchemaOf(
+  property: ReturnType<
+    typeof instanceExposure
+  >["properties"][number]["property"],
+  definition: ComponentDocument | undefined
+): PropSchema | undefined {
+  if (!BINDABLE_SETTING_TYPES.has(property.type)) return undefined;
+  const target =
+    definition === undefined
+      ? undefined
+      : findNode(definition.nodes, property.nodeId);
+  if (target === undefined) return undefined;
+  const declared = getBlock(target.type)?.props;
+  const schema =
+    declared === undefined || !Object.hasOwn(declared, property.propPath)
+      ? undefined
+      : declared[property.propPath];
+  if (schema === undefined || bindablePropKind(schema) === undefined) {
+    return undefined;
+  }
+  return { ...schema, label: labelOf(property) };
+}
+
+/** The placement's stored binding of one setting, where it is a record. */
+function storedBindingOf(node: BlockNode, id: string): Binding | undefined {
+  // Read as stored, which a save has not judged: a record of records only.
+  const bindings = node.bindings;
+  if (!isPlainRecord(bindings)) return undefined;
+  const key = settingBindingKey(id);
+  const binding = Object.hasOwn(bindings, key) ? bindings[key] : undefined;
+  return isPlainRecord(binding) ? binding : undefined;
+}
+
 /** The resolver's rows, as the panel draws them. */
 function rowsOf(
   properties: ReturnType<typeof instanceExposure>["properties"],
-  node: BlockNode
+  node: BlockNode,
+  definition: ComponentDocument | undefined
 ): ExposedRow[] {
   const labels = new Map(
     properties.map(
@@ -391,6 +457,7 @@ function rowsOf(
       state.property.type
     ),
     options: optionsOf(state.property.options),
+    ...bindingOf(state.property, node, definition),
     ...(state.shadowedBy === undefined
       ? {}
       : {
@@ -400,6 +467,20 @@ function rowsOf(
           },
         }),
   }));
+}
+
+/** A row's binding fields: its bindable schema and stored binding, if any. */
+function bindingOf(
+  property: ReturnType<
+    typeof instanceExposure
+  >["properties"][number]["property"],
+  node: BlockNode,
+  definition: ComponentDocument | undefined
+): Pick<ExposedRow, "bindable" | "binding"> {
+  const bindable = bindableSchemaOf(property, definition);
+  if (bindable === undefined) return {};
+  const binding = storedBindingOf(node, property.id);
+  return binding === undefined ? { bindable } : { bindable, binding };
 }
 
 /**
