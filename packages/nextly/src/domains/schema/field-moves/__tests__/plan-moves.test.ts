@@ -267,6 +267,53 @@ describe("planEntityMoves", () => {
     );
   });
 
+  it("refuses a field moved into a group of its own name in its place, whose making would overwrite it first", () => {
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [group("g", [text("a")])],
+        after: [group("g", [group("a", [text("a")])])],
+        moves: [{ from: ["g", "a"], to: ["g", "a", "a"] }],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "FIELD_MOVE_REFUSED",
+              message: expect.stringMatching(
+                /^a cannot be moved .*inside its own place.*Move a somewhere else first, then into its new place in a later save\.$/
+              ),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
+  it("refuses a field moved up into the place of the group that held it", () => {
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [group("g", [group("a", [text("a")])])],
+        after: [group("g", [text("a")])],
+        moves: [{ from: ["g", "a", "a"], to: ["g", "a"] }],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              message: expect.stringMatching(
+                /^a cannot be moved .*inside its own place.*Move a somewhere else first, then into its new place in a later save\.$/
+              ),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
   it("plans nothing for a save that moves nothing", () => {
     expect(
       planEntityMoves({

@@ -102,6 +102,11 @@ import {
   readAuthenticatedUser,
   requireAuthenticatedUser,
 } from "../helpers/authenticated-user";
+import {
+  NOTHING_TO_REVIEW,
+  reviewOf,
+  type BuilderSaveReview,
+} from "../helpers/builder-save-change";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
@@ -907,7 +912,7 @@ const COLLECTIONS_METHODS: Record<
           after: fields as FieldDefinition[],
         }),
       });
-      const notices = await reviewLinesOf({
+      const review = await reviewLinesOf({
         slug: p.collectionName,
         collection: writerRowOf(collection),
         fields: fields as FieldDefinition[],
@@ -926,7 +931,7 @@ const COLLECTIONS_METHODS: Record<
             : { acknowledgedConversions: answers.acknowledgedConversions }),
         },
       });
-      return respondData({ ...preview, notices });
+      return respondData({ ...preview, ...review });
     },
   },
   // Apply confirmed schema changes via the in-process schema service.
@@ -2128,17 +2133,17 @@ async function saveThroughWriter(
 }
 
 /**
- * The lines the review shows for a field change through the writer: each
+ * What the review shows for a field change through the writer: each
  * conversion an adoption makes, each fill and each delete
  * (`previewCollectionSave`). None without a writer.
  */
-async function reviewLinesOf(change: WriterChange): Promise<string[]> {
+async function reviewLinesOf(change: WriterChange): Promise<BuilderSaveReview> {
   const prepared = await writerSaveOf(change);
-  if (prepared === undefined) return [];
+  if (prepared === undefined) return NOTHING_TO_REVIEW;
   const { previewCollectionSave } = await import(
     "../../domains/schema/builder-save/collection-save"
   );
-  return (await previewCollectionSave(prepared.deps, prepared.save)).notices;
+  return reviewOf(await previewCollectionSave(prepared.deps, prepared.save));
 }
 
 /** What a push reports of the change it applied. */

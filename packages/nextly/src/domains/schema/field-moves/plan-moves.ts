@@ -183,6 +183,25 @@ function refuseOverlapping(moves: readonly FieldMoveRequest[]): void {
 }
 
 /**
+ * Refuses a field moved inside its own place, one path holding the other (`g.a` to `g.a.a`, or
+ * back): the group made there, or taken away, would replace the value in the group's JSON before
+ * the copy reads it. Asked before the paths are matched, so the person is told what to do.
+ */
+function refuseInsideOwnPlace(request: FieldMoveRequest): void {
+  if (
+    !reaches(request.from, request.to) &&
+    !reaches(request.to, request.from)
+  ) {
+    return;
+  }
+  const name = request.from.at(-1) ?? request.from.join(".");
+  throw refused(
+    request,
+    `${name} cannot be moved from ${request.from.join(".")} to ${request.to.join(".")}, inside its own place: the group there would replace its value before the value is copied. Move ${name} somewhere else first, then into its new place in a later save.`
+  );
+}
+
+/**
  * Refuses a move the save's fields do not show: a field still at the place it moves from, or one
  * already at the place it moves to. A move is the request's word for which field went where, so
  * one naming another field would copy that field's values over the wrong place.
@@ -249,6 +268,7 @@ export function planEntityMoves(args: {
   for (const request of args.moves) {
     // A field that keeps its path (moved into or out of a group with no name) keeps its place.
     if (samePath(request.from, request.to)) continue;
+    refuseInsideOwnPlace(request);
     refuseUnmatched(args.before, args.after, request);
     const checked = checkMove(args.before, args.after, request, {
       localized: args.localized,

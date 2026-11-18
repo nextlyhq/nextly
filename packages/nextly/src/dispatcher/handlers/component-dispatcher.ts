@@ -619,7 +619,7 @@ export const COMPONENTS_METHODS: Record<
       // What the save writes beyond the person's change, for the review to show before they
       // confirm, as a collection's does: each conversion an adoption makes, each fill and delete.
       const answers = body as SchemaChangeAnswers;
-      const notices = await reviewBuilderSchemaChange(builderSaveDeps(), {
+      const review = await reviewBuilderSchemaChange(builderSaveDeps(), {
         kind: "fieldGroup",
         slug,
         table: tableName,
@@ -641,7 +641,7 @@ export const COMPONENTS_METHODS: Record<
             : { acknowledgedConversions: answers.acknowledgedConversions }),
         },
       });
-      return respondData({ ...preview, notices });
+      return respondData({ ...preview, ...review });
     },
   },
 
