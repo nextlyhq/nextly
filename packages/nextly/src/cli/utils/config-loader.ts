@@ -89,6 +89,7 @@ import {
   CONFIG_SEARCH_DIRS,
   findConfigFile,
 } from "../../shared/lib/config-file";
+import { configurationProblems } from "../../shared/lib/config-problems";
 import { consoleLogger } from "../../shared/types";
 
 import { bundleAndRequire } from "./config-bundler";
@@ -844,6 +845,18 @@ async function loadConfigInternal(
       stored: builderFieldGroups.stored,
       warn: message => consoleLogger.warn(message),
     });
+
+    // Every problem in the configuration's entities, found by the rules that judge each one, so
+    // a command refuses an invalid configuration before it does anything else, and names every
+    // problem rather than the first. Run once the plugins' field types are registered, since a
+    // field's type is judged against them.
+    const problems = configurationProblems(config);
+    if (problems.length > 0) {
+      throw NextlyError.validation({
+        errors: problems,
+        logContext: { configPath, reason: "config-invalid" },
+      });
+    }
 
     debugLog(options, "Config loaded successfully");
     debugLog(options, "Dependencies:", dependencies);

@@ -319,7 +319,7 @@ describe("a configuration with several problems", () => {
       // Each problem, at its path in the configuration.
       expect(report, report).toContain("collections[0].slug");
       expect(report, report).toContain("collections[1].fields");
-      expect(report, report).toContain("collections[1].fields[2].type");
+      expect(report, report).toContain("collections[1].score.type");
       expect(report, report).toContain("acme-rating");
       // In the order the configuration declares them.
       expect(report.indexOf("collections[0].slug")).toBeLessThan(
