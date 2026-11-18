@@ -40,28 +40,50 @@ export function isNextlyPackage(name: string): boolean {
 
 type Manifest = Partial<Record<Section, Record<string, string>>>;
 
+/**
+ * Whether `spec` is one the registry answers: a version, a range, or a
+ * dist-tag (`alpha`, `latest`). Anything with a protocol or a path
+ * (`workspace:*`, `file:../x`, `github:org/repo`, a URL) is not.
+ */
+function isRegistrySpec(spec: string): boolean {
+  return semver.validRange(spec) !== null || /^[a-z][a-z0-9._-]*$/i.test(spec);
+}
+
 /** `package.json` as text and parsed, or undefined where the folder has none it can read. */
 export function readManifest(
   projectDir: string
 ): { text: string; manifest: Manifest } | undefined {
   try {
     const text = readFileSync(join(projectDir, "package.json"), "utf8");
-    return { text, manifest: JSON.parse(text) as Manifest };
+    const manifest: unknown = JSON.parse(text);
+    // A file that parses to something other than an object is not a manifest.
+    return manifest !== null && typeof manifest === "object"
+      ? { text, manifest: manifest as Manifest }
+      : undefined;
   } catch {
     return undefined;
   }
 }
 
+/** What `manifest` holds under `section`, where that is a map of names. */
+function sectionOf(manifest: Manifest, section: Section): object {
+  const entries: unknown = manifest[section];
+  return entries !== null && typeof entries === "object" ? entries : {};
+}
+
 /** Every Nextly package `manifest` declares, in the order it declares them. */
 export function declaredNextlyPackages(manifest: Manifest): DeclaredPackage[] {
   return SECTIONS.flatMap(section =>
-    Object.entries(manifest[section] ?? {})
-      .filter(([name]) => isNextlyPackage(name))
+    Object.entries(sectionOf(manifest, section))
+      .filter(
+        (entry): entry is [string, string] =>
+          isNextlyPackage(entry[0]) && typeof entry[1] === "string"
+      )
       .map(([name, spec]) => ({
         name,
         section,
         spec,
-        fromRegistry: semver.validRange(spec) !== null,
+        fromRegistry: isRegistrySpec(spec),
       }))
   );
 }

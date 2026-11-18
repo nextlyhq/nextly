@@ -248,6 +248,64 @@ describe.skipIf(OTHER_LEG)(
     );
 
     it(
+      "on the channel's newest release, still moves a package held at another version into lockstep",
+      async () => {
+        const app = await project({
+          manager: "npm",
+          versions: {
+            nextly: MIDDLE,
+            "@nextlyhq/admin": OLDEST,
+            "@nextlyhq/adapter-sqlite": MIDDLE,
+          },
+        });
+
+        const run = await app.nextly(["upgrade"]);
+
+        expect(run.status, output(run)).toBe(0);
+        expect(versions(app)).toEqual(allAt(MIDDLE));
+      },
+      TIMEOUT
+    );
+
+    it(
+      "lists each package's move in a dry run, changes nothing and exits 0",
+      async () => {
+        const app = await project({ manager: "npm", versions: OLDEST });
+        const before = app.files();
+
+        const run = await app.nextly(["upgrade", "--dry-run"]);
+
+        expect(run.status, output(run)).toBe(0);
+        for (const name of PACKAGES) {
+          expect(run.stdout).toContain(
+            `Would move ${name} from ${OLDEST} to ${MIDDLE}`
+          );
+        }
+        expect(run.stdout).toContain("Dry run: nothing was changed.");
+        expect(app.files()).toEqual(before);
+        expect(versions(app)).toEqual(allAt(OLDEST));
+      },
+      TIMEOUT
+    );
+
+    it(
+      "names in a dry run the refusal a real run would make, and exits 0",
+      async () => {
+        const app = await project({ manager: "npm", versions: OLDEST });
+        const before = app.files();
+
+        const run = await app.nextly(["upgrade", "9.0.0-beta.9", "--dry-run"]);
+
+        expect(run.status, output(run)).toBe(0);
+        expect(run.stdout).toContain("A real run would refuse:");
+        expect(run.stdout).toContain("9.0.0-beta.9");
+        expect(run.stdout).toContain(`nextly upgrade ${MIDDLE}`);
+        expect(app.files()).toEqual(before);
+      },
+      TIMEOUT
+    );
+
+    it(
       "follows latest from a release with no prerelease identifier",
       async () => {
         const app = await project({ manager: "npm", versions: STABLE });

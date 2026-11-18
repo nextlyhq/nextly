@@ -18,6 +18,9 @@
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { CliError } from "../../errors";
+import type { DryRunPlan } from "../../dry-run";
+
 import {
   detectPackageManager,
   forgetInstallState,
@@ -35,7 +38,11 @@ import {
   type DeclaredPackage,
 } from "./project-packages";
 import { releasesOf } from "./registry-releases";
-import { chooseRelease, type ReleaseChoice } from "./release-choice";
+import {
+  chooseRelease,
+  type RegistryReleases,
+  type ReleaseChoice,
+} from "./release-choice";
 import {
   cannotStart,
   installFailed,
@@ -55,6 +62,8 @@ export interface UpgradePackagesArgs {
   /** Show what would change, and change nothing. */
   dryRun: boolean;
   log: (line: string) => void;
+  /** Reports a dry run's plan, as every command's dry run is reported. */
+  report: (plan: DryRunPlan) => void;
 }
 
 /** The project as the run found it. */
@@ -91,11 +100,11 @@ function readProject(projectDir: string): Project {
   return { dir: projectDir, manifestText: read.text, packages, detected };
 }
 
-/** The release to move to, or the choice that ends the run without a move. */
+/** What the registry holds for `nextly`, and the choice made from it. */
 async function choose(
   project: Project,
   version: string | undefined
-): Promise<ReleaseChoice> {
+): Promise<{ choice: ReleaseChoice; releases: RegistryReleases }> {
   const answer = await releasesOf(
     project.detected.manager,
     project.dir,
@@ -109,27 +118,31 @@ async function choose(
       "Check the registry the project's package manager is configured with, then run `nextly upgrade` again."
     );
   }
-  return chooseRelease({
-    argument: version,
-    installed: installedVersion(project.dir, "nextly"),
+  return {
     releases: answer.releases,
-  });
+    choice: chooseRelease({
+      argument: version,
+      installed: installedVersion(project.dir, "nextly"),
+      releases: answer.releases,
+    }),
+  };
 }
 
 /** Why `declared` cannot move to `version`, or undefined when it can. */
 async function whyNot(
   project: Project,
   declared: DeclaredPackage,
-  version: string
+  version: string,
+  /** What the registry holds for `nextly`, already read. */
+  nextly: RegistryReleases
 ): Promise<string | undefined> {
   if (!declared.fromRegistry) {
     return `${declared.name} is declared as \`${declared.spec}\`, which is not a version of the registry.`;
   }
-  const answer = await releasesOf(
-    project.detected.manager,
-    project.dir,
-    declared.name
-  );
+  const answer =
+    declared.name === "nextly"
+      ? ({ kind: "found", releases: nextly } as const)
+      : await releasesOf(project.detected.manager, project.dir, declared.name);
   if (answer.kind === "unreadable") {
     return `${declared.name}: the registry could not be asked (${answer.why}).`;
   }
@@ -138,16 +151,23 @@ async function whyNot(
     : `${declared.name} has no release ${version} on the registry.`;
 }
 
-/** Refuses before anything changes unless every package has `version`. */
+/**
+ * Refuses before anything changes unless every package has `version`. The
+ * packages are asked about together: each is its own question to the
+ * registry.
+ */
 async function assertEveryPackageCanMove(
   project: Project,
-  version: string
+  version: string,
+  nextly: RegistryReleases
 ): Promise<void> {
-  const reasons: string[] = [];
-  for (const declared of project.packages) {
-    const reason = await whyNot(project, declared, version);
-    if (reason !== undefined) reasons.push(reason);
-  }
+  const reasons = (
+    await Promise.all(
+      project.packages.map(declared =>
+        whyNot(project, declared, version, nextly)
+      )
+    )
+  ).filter(reason => reason !== undefined);
   if (reasons.length > 0) throw packagesCannotMove(version, reasons);
 }
 
@@ -231,12 +251,31 @@ async function move(
 ): Promise<void> {
   const { manager } = project.detected;
   const saved = save(project);
+  // Interrupted while the manager installs, the run ends at once, so the
+  // two files are put back here, synchronously, and the operator is told
+  // the one thing left undone: the packages installed so far.
+  const interrupted = () => {
+    putFilesBack(project, saved);
+    process.stderr.write(
+      `\nInterrupted: package.json and the lockfile were put back as they were. Run \`${manager} install\` to put the installed packages back.\n`
+    );
+    process.exit(130);
+  };
+  process.once("SIGINT", interrupted);
+  process.once("SIGTERM", interrupted);
   writeFileSync(
     join(project.dir, "package.json"),
     withVersions(project.manifestText, project.packages, version)
   );
   log(`Installing with ${manager}...`);
-  const run = await runManager(manager, installArgs(manager), project.dir);
+  const run = await runManager(
+    manager,
+    installArgs(manager),
+    project.dir
+  ).finally(() => {
+    process.off("SIGINT", interrupted);
+    process.off("SIGTERM", interrupted);
+  });
   const left = project.packages
     .map(({ name }) => name)
     .filter(name => installedVersion(project.dir, name) !== version);
@@ -251,34 +290,99 @@ async function move(
   );
 }
 
-/** Each package's move as a line: `name: from → to`. */
-const moves = (project: Project, version: string) =>
-  project.packages.map(
-    ({ name, spec }) =>
-      `  ${name}: ${installedVersion(project.dir, name) ?? spec} → ${version}`
-  );
+/** The packages not yet declared and installed at exactly `version`, each with where it is. */
+const toMove = (project: Project, version: string) =>
+  project.packages
+    .map(({ name, spec }) => ({
+      name,
+      spec,
+      from: installedVersion(project.dir, name) ?? spec,
+    }))
+    .filter(({ spec, from }) => spec !== version || from !== version);
 
 /** What a run that has nothing to move says: the channel, and newer releases elsewhere. */
-function reportCurrent(
-  choice: Extract<ReleaseChoice, { kind: "current" }>,
-  log: UpgradePackagesArgs["log"]
-): void {
-  log(
-    `This project is on the newest release of its channel (\`${choice.channel}\`). Nothing was changed.`
-  );
-  for (const { tag, version } of choice.newer) {
-    log(
-      `The \`${tag}\` tag holds a newer release: run \`nextly upgrade ${version}\` to move to it.`
-    );
-  }
+function currentLines(
+  choice: Extract<ReleaseChoice, { kind: "current" }>
+): string[] {
+  return [
+    `This project is on the newest release of its channel (\`${choice.channel}\`). Nothing was changed.`,
+    ...choice.newer.map(
+      ({ tag, version }) =>
+        `The \`${tag}\` tag holds a newer release: run \`nextly upgrade ${version}\` to move to it.`
+    ),
+  ];
 }
 
-/** Whether every package is already declared and installed at exactly `version`. */
-const allAt = (project: Project, version: string) =>
-  project.packages.every(
-    ({ name, spec }) =>
-      spec === version && installedVersion(project.dir, name) === version
-  );
+/** What a run does once it has read the project and the registry. */
+type Plan =
+  | { kind: "move"; project: Project; version: string }
+  /** Nothing to move, and what to say of it. */
+  | { kind: "nothing"; lines: string[] };
+
+/**
+ * What the run would do, having changed nothing: the release every package
+ * moves to, checked to exist for each, or that there is nothing to move. It
+ * throws the refusal where no release can be chosen or a package cannot
+ * move.
+ *
+ * On the newest release of its channel a project still moves any package
+ * held at another version, to the release `nextly` is at: the packages are
+ * one release or they are not Nextly as released.
+ */
+async function plan(
+  projectDir: string,
+  given: string | undefined
+): Promise<Plan> {
+  const project = readProject(projectDir);
+  const { choice, releases } = await choose(project, given);
+  if (choice.kind === "refused") throw releaseUnknown(choice);
+  const version =
+    choice.kind === "move"
+      ? choice.version
+      : installedVersion(project.dir, "nextly");
+  if (version === undefined || toMove(project, version).length === 0) {
+    return {
+      kind: "nothing",
+      lines:
+        choice.kind === "current"
+          ? currentLines(choice)
+          : [
+              `Every Nextly package is already at ${String(version)}. Nothing was changed.`,
+            ],
+    };
+  }
+  await assertEveryPackageCanMove(project, version, releases);
+  return { kind: "move", project, version };
+}
+
+/**
+ * `nextly upgrade --dry-run`: the plan as every dry run reports one, with
+ * the refusal a real run would make named rather than ended on.
+ */
+async function dryRun(args: UpgradePackagesArgs): Promise<void> {
+  let planned: Plan;
+  try {
+    planned = await plan(args.projectDir, args.version);
+  } catch (error) {
+    if (!(error instanceof CliError)) throw error;
+    args.report({
+      changes: [],
+      refusals: [`${error.what} ${error.next}`],
+    });
+    return;
+  }
+  if (planned.kind === "nothing") {
+    args.report({ changes: [], notes: planned.lines });
+    return;
+  }
+  const { project, version } = planned;
+  args.report({
+    changes: toMove(project, version).map(({ name, from }) => ({
+      action: "move",
+      target: `${name} from ${from} to ${version}`,
+    })),
+  });
+}
 
 /**
  * Runs the upgrade. Returns having moved the packages, or having found
@@ -287,30 +391,22 @@ const allAt = (project: Project, version: string) =>
 export async function upgradePackages(
   args: UpgradePackagesArgs
 ): Promise<void> {
-  const { log } = args;
-  const project = readProject(args.projectDir);
-  const choice = await choose(project, args.version);
-  if (choice.kind === "refused") throw releaseUnknown(choice);
-  if (choice.kind === "current") {
-    reportCurrent(choice, log);
-    return;
-  }
-  const { version } = choice;
-  if (allAt(project, version)) {
-    log(`Every Nextly package is already at ${version}. Nothing was changed.`);
-    return;
-  }
-  await assertEveryPackageCanMove(project, version);
-
   if (args.dryRun) {
-    log(`Would move every Nextly package to ${version}:`);
-    for (const line of moves(project, version)) log(line);
-    log("Dry run: nothing was changed.");
+    await dryRun(args);
     return;
   }
+  const { log } = args;
+  const planned = await plan(args.projectDir, args.version);
+  if (planned.kind === "nothing") {
+    for (const line of planned.lines) log(line);
+    return;
+  }
+  const { project, version } = planned;
 
   log(`Moving every Nextly package to ${version}:`);
-  for (const line of moves(project, version)) log(line);
+  for (const { name, from } of toMove(project, version)) {
+    log(`  ${name}: ${from} → ${version}`);
+  }
   await move(project, version, log);
 
   log(`Every Nextly package is at ${version}.`);

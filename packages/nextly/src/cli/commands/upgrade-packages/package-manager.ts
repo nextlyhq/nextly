@@ -33,7 +33,7 @@ export interface DetectedManager {
   manager: PackageManager;
   /** The lockfile the install rewrites, where the project has one. */
   lockfile: string | undefined;
-  /** Where the lockfile would be: the folder that decided the manager. */
+  /** Where the lockfile is, or would be: the folder the manager installs from. */
   root: string;
 }
 
@@ -56,28 +56,42 @@ function declaredManager(dir: string): PackageManager | undefined {
 }
 
 /** What `dir` itself says of its manager: a lockfile, or a declaration. */
-function managerIn(dir: string): DetectedManager | undefined {
+function managerIn(dir: string): PackageManager | undefined {
   for (const [file, manager] of LOCKFILES) {
-    const lockfile = join(dir, file);
-    if (existsSync(lockfile)) return { manager, lockfile, root: dir };
+    if (existsSync(join(dir, file))) return manager;
   }
-  const declared = declaredManager(dir);
-  return declared === undefined
-    ? undefined
-    : { manager: declared, lockfile: undefined, root: dir };
+  return declaredManager(dir);
 }
 
-/** The manager of the project in `projectDir`. */
-export function detectPackageManager(projectDir: string): DetectedManager {
-  let dir = projectDir;
-  for (;;) {
-    const found = managerIn(dir);
-    if (found !== undefined) return found;
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
+/**
+ * `dir` and each folder above it, up to the one holding the repository
+ * (`.git`), or to the top where there is none: where a workspace's root is,
+ * and no further, so a lockfile left in a home folder is never taken for
+ * the project's.
+ */
+function upToRepository(dir: string): string[] {
+  const folders: string[] = [];
+  for (let at = dir; ; at = dirname(at)) {
+    folders.push(at);
+    if (existsSync(join(at, ".git")) || dirname(at) === at) return folders;
   }
-  return { manager: "npm", lockfile: undefined, root: projectDir };
+}
+
+/**
+ * The manager of the project in `projectDir`, and the lockfile its install
+ * rewrites: the nearest one that manager keeps, which in a workspace is the
+ * root's whatever the project's own `package.json` declares.
+ */
+export function detectPackageManager(projectDir: string): DetectedManager {
+  const folders = upToRepository(projectDir);
+  const decided = folders.find(dir => managerIn(dir) !== undefined);
+  const manager = (decided && managerIn(decided)) ?? "npm";
+  const holder = folders.find(dir => lockfileOf(manager, dir) !== undefined);
+  return {
+    manager,
+    lockfile: holder === undefined ? undefined : lockfileOf(manager, holder),
+    root: holder ?? decided ?? projectDir,
+  };
 }
 
 /** The lockfile `manager` keeps in `root` now, whichever spelling it uses. */
@@ -160,9 +174,12 @@ export function runManager(
 ): Promise<ManagerRun> {
   return new Promise(settle => {
     // Through a shell on Windows, where each manager is a `.cmd` shim.
+    // It is given no input: a manager or a script waiting for some reads
+    // the end of it at once, rather than waiting on a run nobody can answer.
     const child = spawn(manager, args, {
       cwd,
       shell: process.platform === "win32",
+      stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
     let output = "";

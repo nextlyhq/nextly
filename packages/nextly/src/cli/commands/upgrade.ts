@@ -13,8 +13,11 @@
  * @module cli/commands/upgrade
  */
 
+import { resolve } from "node:path";
+
 import type { Command } from "commander";
 
+import { reportDryRun } from "../dry-run";
 import { CliError, exitWithError } from "../errors";
 import { createContext } from "../program";
 
@@ -71,10 +74,12 @@ export async function upgradeAction(
 
   try {
     await upgradePackages({
-      projectDir: globalOpts.cwd ?? process.cwd(),
+      // Absolute, so the folders above it are the project's own.
+      projectDir: resolve(globalOpts.cwd ?? process.cwd()),
       version,
       dryRun: cmdOptions.dryRun === true,
       log: line => logger.info(line),
+      report: plan => reportDryRun(logger, plan),
     });
   } catch (error) {
     exitWithError(logger, error);

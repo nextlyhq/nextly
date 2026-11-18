@@ -41,6 +41,8 @@ function releasesIn(document: unknown): RegistryReleases | undefined {
       : versions !== null && typeof versions === "object"
         ? Object.keys(versions)
         : [];
+  // A document naming no version says nothing of what is published.
+  if (list.length === 0) return undefined;
   return {
     tags: Object.fromEntries(
       Object.entries(tags).filter(
