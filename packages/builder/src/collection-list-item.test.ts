@@ -98,6 +98,26 @@ describe("itemFieldsOf", () => {
     ).toBe("photo");
   });
 
+  it("passes over a declared title field that holds a number or a date", () => {
+    expect(
+      itemFieldsOf({
+        slug: "orders",
+        titleField: "number",
+        readable: [
+          { name: "number", type: "number" },
+          { name: "name", type: "text" },
+        ],
+      }).title
+    ).toBe("name");
+    expect(
+      itemFieldsOf({
+        slug: "events",
+        titleField: "when",
+        readable: [{ name: "when", type: "date" }],
+      }).title
+    ).toBeUndefined();
+  });
+
   it("ignores a declared title field visitors cannot read", () => {
     expect(
       itemFieldsOf({

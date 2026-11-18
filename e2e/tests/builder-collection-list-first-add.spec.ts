@@ -6,8 +6,8 @@
  *   the canvas.
  * - Posts, then "Cards, 3 across": the newest posts show at once, each a
  *   card with its own title; one Undo takes the whole list away.
- * - "Titles only" and "Skip": a linked title per entry, and an empty item
- *   that still has room on the canvas.
+ * - "Titles only" and "Skip", each on its own page: a linked title per
+ *   entry, and an empty item that still has room on the canvas.
  * - The keyboard: the first source is focused, the arrows move, Enter picks,
  *   Escape on the layouts goes back and on the sources leaves a blank list.
  *
@@ -18,7 +18,7 @@
  */
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
-import { clearSelection, pressSave, selection } from "./canvas/editor-driver";
+import { pressSave, selection } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { canvasFrame } from "./support/canvas-frame";
 import { storedPageNodes } from "./support/stored-page";
@@ -128,7 +128,7 @@ test.describe("a Collection list in two clicks", () => {
     await expect(canvas.locator(`[data-nx-node="${list}"]`)).toHaveCount(0);
   });
 
-  test("Titles only links each title, and Skip leaves an empty item with room", async ({
+  test("Titles only draws a linked title per entry, stored on the list", async ({
     page,
   }) => {
     const titles = await threePosts(page.request);
@@ -138,17 +138,32 @@ test.describe("a Collection list in two clicks", () => {
     const titled = await addList(page);
     await chooser(page).getByRole("button", { name: "Posts", exact: true }).click();
     await chooser(page).getByRole("button", { name: "Titles only" }).click();
-    const canvas = canvasFrame(page);
     await expect(
-      canvas.getByRole("heading", { name: titles[2] ?? "" })
+      canvasFrame(page).getByRole("heading", { name: titles[2] ?? "" })
     ).toBeVisible();
 
-    // Added at the page's level, not inside the list just filled.
-    await clearSelection(page);
+    await pressSave(page);
+    await expect
+      .poll(async () => {
+        const nodes = await storedPageNodes(page.request, PAGES, id);
+        return nodes.map(node => [node.id, node.props?.collection]);
+      })
+      .toEqual([[titled, "posts"]]);
+  });
+
+  test("Skip sets the source and leaves an empty item that still has room", async ({
+    page,
+  }) => {
+    await threePosts(page.request);
+    const id = await createPage(page.request);
+    await openBuilder(page, id);
+
     const skipped = await addList(page);
     await chooser(page).getByRole("button", { name: "Posts", exact: true }).click();
     await chooser(page).getByRole("button", { name: "Skip" }).click();
-    const box = await canvas.locator(`[data-nx-node="${skipped}"]`).boundingBox();
+    const box = await canvasFrame(page)
+      .locator(`[data-nx-node="${skipped}"]`)
+      .boundingBox();
     // Never a 0px line: the empty item draws its start.
     expect(box?.height ?? 0).toBeGreaterThan(24);
 
@@ -158,10 +173,7 @@ test.describe("a Collection list in two clicks", () => {
         const nodes = await storedPageNodes(page.request, PAGES, id);
         return nodes.map(node => [node.id, node.props?.collection]);
       })
-      .toEqual([
-        [titled, "posts"],
-        [skipped, "posts"],
-      ]);
+      .toEqual([[skipped, "posts"]]);
   });
 
   test("works from the keyboard, and Escape leaves a blank list", async ({

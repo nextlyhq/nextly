@@ -88,6 +88,9 @@ const TEXT_TYPES = new Set(["text"]);
 /** The field types that hold longer words, as plain text. */
 const LONG_TEXT_TYPES = new Set(["textarea"]);
 
+/** The field types a heading's text may be bound to as they are. */
+const TITLE_TYPES = new Set(["text", "textarea", "email"]);
+
 /** Names a title field goes by, where the collection names none. */
 const TITLE_NAMES = ["title", "name"];
 
@@ -122,9 +125,15 @@ export function itemFieldsOf(source: ItemSource): ItemFields {
     }
     return undefined;
   };
+  // The admin's title field, where it holds words: a heading's text takes
+  // text, and a number or a date bound to it with no format is refused when
+  // the page is saved.
   const declaredTitle =
     source.titleField !== undefined &&
-    single.some(field => field.name === source.titleField)
+    single.some(
+      field =>
+        field.name === source.titleField && TITLE_TYPES.has(field.type)
+    )
       ? source.titleField
       : undefined;
   const title = declaredTitle ?? named(TITLE_NAMES, TEXT_TYPES);
