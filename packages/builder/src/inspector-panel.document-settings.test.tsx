@@ -144,3 +144,64 @@ describe("the right panel with nothing selected", () => {
     expect(frame?.textContent).toBe("");
   });
 });
+
+describe("the right panel while a header or footer is selected", () => {
+  /** The host's card for the selected region. */
+  const card = (
+    <section aria-label="Site header card">
+      <h2>Site header</h2>
+    </section>
+  );
+
+  function mountWithRegion(): {
+    editor: () => EditorState;
+    setCard: (next: React.ReactNode | undefined) => void;
+  } {
+    const seen: {
+      editor?: EditorState;
+      setCard?: (next: React.ReactNode | undefined) => void;
+    } = {};
+    function Host() {
+      const editor = useEditorState({ initialDocument: documentOf("page") });
+      const [regionCard, setCard] = React.useState<React.ReactNode>(card);
+      seen.editor = editor;
+      seen.setCard = setCard;
+      return (
+        <InspectorPanel
+          editor={editor}
+          documentSettings={hostView}
+          {...(regionCard === undefined ? {} : { regionCard })}
+        />
+      );
+    }
+    render(<Host />);
+    return { editor: () => seen.editor!, setCard: next => seen.setCard!(next) };
+  }
+
+  const regionCard = () =>
+    screen.queryByRole("region", { name: "Site header card" });
+
+  it("draws the host's region card in the panel's frame, in place of the document's settings", () => {
+    mountWithRegion();
+    expect(regionCard()).not.toBeNull();
+    expect(hostRegion()).toBeNull();
+    expect(screen.queryByRole("tab")).toBeNull();
+    const frame = regionCard()?.closest(".nx-inspector");
+    expect(frame?.getAttribute("data-empty")).toBe("region");
+    expect(document.querySelectorAll(".nx-inspector")).toHaveLength(1);
+  });
+
+  it("never draws it beside a selected block's settings", () => {
+    const { editor } = mountWithRegion();
+    act(() => editor().select("c1"));
+    expect(regionCard()).toBeNull();
+    expect(screen.getByRole("tab", { name: "Content" })).toBeTruthy();
+  });
+
+  it("goes back to the document's settings once no region is selected", () => {
+    const { setCard } = mountWithRegion();
+    act(() => setCard(undefined));
+    expect(regionCard()).toBeNull();
+    expect(hostRegion()).not.toBeNull();
+  });
+});

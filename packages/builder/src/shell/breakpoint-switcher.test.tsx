@@ -9,7 +9,14 @@
  *
  * @module breakpoint-switcher.test
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { TooltipProvider } from "@nextlyhq/ui";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BreakpointSet } from "../breakpoints";
@@ -34,16 +41,29 @@ function mount(
 ) {
   const onSelect = vi.fn();
   const view = render(
-    <BreakpointSwitcher
-      breakpoints={site()}
-      selected="base"
-      onSelect={onSelect}
-      status="ready"
-      {...props}
-    />
+    <TooltipProvider delayDuration={0}>
+      <BreakpointSwitcher
+        breakpoints={site()}
+        selected="base"
+        onSelect={onSelect}
+        status="ready"
+        {...props}
+      />
+    </TooltipProvider>
   );
   return { onSelect, ...view };
 }
+
+/** The tooltip a device's control opens when it takes keyboard focus. */
+async function tooltipOf(control: HTMLElement): Promise<string> {
+  act(() => control.focus());
+  const tip = await screen.findByRole("tooltip");
+  return tip.textContent ?? "";
+}
+
+/** The width shown beside the buttons, as text. */
+const activeWidth = (): HTMLElement | null =>
+  document.querySelector<HTMLElement>("[data-nx-active-width]");
 
 describe("choosing a device", () => {
   it("emits the breakpoint's id", () => {
@@ -58,19 +78,27 @@ describe("choosing a device", () => {
     expect(onSelect).toHaveBeenCalledWith("base");
   });
 
-  it("names the base breakpoint Desktop, with where it applies", () => {
+  it("names the base breakpoint Desktop, with its width and the widths it styles", () => {
     mount();
     expect(
-      screen.getByRole("radio", { name: "Desktop, from 992 pixels" })
+      screen.getByRole("radio", {
+        name: "Desktop · 1280px · styles for 992px and wider",
+      })
     ).toBeDefined();
   });
 
-  it("says each breakpoint's range in its accessible name and tooltip", () => {
+  it("says each device's name, width and range in its accessible name and tooltip", async () => {
+    // A breakpoint at 991 reads 991 in both: the width an author styles at is
+    // the width the control says, not a rounded one.
     mount();
     const tablet = screen.getByRole("radio", {
-      name: "Tablet, up to 991 pixels",
+      name: "Tablet · 991px · styles for 991px and narrower",
     });
-    expect(tablet.getAttribute("title")).toBe("Tablet, up to 991 pixels");
+    expect(await tooltipOf(tablet)).toBe(
+      "Tablet · 991px · styles for 991px and narrower"
+    );
+    // A real tooltip, not the browser's slow one on top of it.
+    expect(tablet.hasAttribute("title")).toBe(false);
   });
 });
 
@@ -92,41 +120,39 @@ describe("which device is shown as being styled", () => {
     expect(checked()).toEqual([screen.getByRole("radio", { name: /^Tablet/ })]);
   });
 
-  it("shows the chosen device's exact preview width, unrounded", () => {
-    // A breakpoint at 991 reads 991, not 990 or 1000: the width an author
-    // styles at is the width the button says.
+  it("shows the chosen device's exact preview width beside the buttons, unrounded", () => {
     mount({ selected: "tablet" });
-    expect(checked()[0]?.textContent).toBe("Tablet · 991px");
+    expect(activeWidth()?.textContent).toBe("991px");
   });
 
-  it("shows Desktop at the width it is previewed at", () => {
+  it("shows Desktop's width as the width it is previewed at", () => {
     mount({ selected: "base" });
-    expect(checked()[0]?.textContent).toBe("Desktop · 1280px");
+    expect(activeWidth()?.textContent).toBe("1280px");
   });
 
   it("shows the base as chosen for a breakpoint the site no longer defines", () => {
     // Where the host sends the edit, so the control and the edit agree.
     mount({ selected: "watch" });
-    expect(checked()[0]?.textContent).toBe("Desktop · 1280px");
+    expect(checked()[0]?.getAttribute("aria-label")).toMatch(/^Desktop · /);
+    expect(activeWidth()?.textContent).toBe("1280px");
   });
 
-  it("lets the chosen device's label give way first on a narrow top bar", () => {
-    // A container query on the top bar hides it; the accessible name keeps
-    // the device and its range.
+  it("keeps the active width shown at every top-bar width", () => {
+    // The width being styled never gives way on a narrow bar: no container
+    // query hides it.
     mount({ selected: "tablet" });
-    const label = checked()[0]?.querySelector("span");
-    expect(label?.className).toContain("@max-[1400px]/topbar:hidden");
-    expect(checked()[0]?.getAttribute("aria-label")).toBe(
-      "Tablet, up to 991 pixels"
-    );
+    const width = activeWidth();
+    // The control: the width is drawn at all.
+    expect(width).not.toBeNull();
+    expect(width?.className).not.toMatch(/hidden/);
   });
 
-  it("names only the chosen device in visible text", () => {
+  it("draws every device as an icon, with its words in the name and tooltip", () => {
     mount({ selected: "tablet" });
-    const unchosen = options().filter(
-      option => option.getAttribute("aria-checked") !== "true"
-    );
-    for (const option of unchosen) expect(option.textContent).toBe("");
+    for (const option of options()) {
+      expect(option.textContent).toBe("");
+      expect(option.querySelector("svg")).not.toBeNull();
+    }
   });
 });
 
@@ -238,7 +264,9 @@ describe("a stored set the compiler has to reconcile", () => {
     });
     expect(options()).toHaveLength(2);
     expect(
-      screen.getByRole("radio", { name: "Beta, up to 991 pixels" })
+      screen.getByRole("radio", {
+        name: "Beta · 991px · styles for 991px and narrower",
+      })
     ).toBeDefined();
   });
 
@@ -253,7 +281,9 @@ describe("a stored set the compiler has to reconcile", () => {
       },
     });
     expect(
-      screen.getByRole("radio", { name: "Tablet, up to 991 pixels" })
+      screen.getByRole("radio", {
+        name: "Tablet · 991px · styles for 991px and narrower",
+      })
     ).toBeDefined();
     expect(screen.queryByRole("radio", { name: /Draft/ })).toBeNull();
   });
@@ -313,8 +343,8 @@ describe("how many devices are buttons", () => {
   it("shows two buttons and no menu for two breakpoints", () => {
     mount({ breakpoints: devicesFor(2) });
     expect(names(options())).toEqual([
-      "Desktop, from 1200 pixels",
-      "Laptop, up to 1199 pixels",
+      "Desktop · 1280px · styles for 1200px and wider",
+      "Laptop · 1199px · styles for 1199px and narrower",
     ]);
     expect(moreDevices()).toBeNull();
   });
@@ -328,9 +358,9 @@ describe("how many devices are buttons", () => {
   it("puts the fourth breakpoint in a menu, the base and the two widest staying buttons", () => {
     mount({ breakpoints: devicesFor(4) });
     expect(names(options())).toEqual([
-      "Desktop, from 1200 pixels",
-      "Laptop, up to 1199 pixels",
-      "Tablet, up to 991 pixels",
+      "Desktop · 1280px · styles for 1200px and wider",
+      "Laptop · 1199px · styles for 1199px and narrower",
+      "Tablet · 991px · styles for 991px and narrower",
     ]);
     expect(openMore().map(item => item.textContent)).toEqual([
       "Phone L · 767px",
@@ -345,6 +375,14 @@ describe("how many devices are buttons", () => {
       "Phone · 575px",
       "Phone S · 375px",
       "Watch · 280px",
+    ]);
+  });
+
+  it("names each device in the menu as its button would be named", () => {
+    mount({ breakpoints: devicesFor(5) });
+    expect(names(openMore())).toEqual([
+      "Phone L · 767px · styles for 767px and narrower",
+      "Phone · 575px · styles for 575px and narrower",
     ]);
   });
 
@@ -366,22 +404,23 @@ describe("a device chosen from the menu", () => {
     expect(onSelect).toHaveBeenCalledWith("phone");
   });
 
-  it("shows on the menu's button, with its exact width, while it is the one styled", () => {
+  it("shows on the menu's button, with its exact width beside the buttons, while it is the one styled", () => {
     mount({ breakpoints: devicesFor(7), selected: "phone" });
     const trigger = moreDevices();
-    expect(trigger?.textContent).toBe("Phone · 575px");
     expect(trigger?.getAttribute("aria-label")).toBe(
-      "More devices, styling Phone, up to 575 pixels"
+      "More devices, styling Phone · 575px · styles for 575px and narrower"
     );
+    expect(trigger?.getAttribute("data-styling")).toBe("");
+    expect(activeWidth()?.textContent).toBe("575px");
   });
 
   it("leaves no button checked, and the buttons where they were", () => {
     mount({ breakpoints: devicesFor(7), selected: "phone" });
     expect(checked()).toEqual([]);
     expect(names(options())).toEqual([
-      "Desktop, from 1200 pixels",
-      "Laptop, up to 1199 pixels",
-      "Tablet, up to 991 pixels",
+      "Desktop · 1280px · styles for 1200px and wider",
+      "Laptop · 1199px · styles for 1199px and narrower",
+      "Tablet · 991px · styles for 991px and narrower",
     ]);
   });
 
@@ -433,10 +472,12 @@ describe("arrow keys with a menu of devices", () => {
 });
 
 describe("the menu's button while a device in it is styled", () => {
-  it("keeps the device and its range in its tooltip, for when its label is hidden", () => {
+  it("says the device, its width and its range in its tooltip", async () => {
     mount({ breakpoints: devicesFor(7), selected: "phone" });
-    expect(moreDevices()?.getAttribute("title")).toBe(
-      "Phone, up to 575 pixels"
+    const trigger = moreDevices();
+    if (trigger === null) throw new Error("no More devices button");
+    expect(await tooltipOf(trigger)).toBe(
+      "Phone · 575px · styles for 575px and narrower"
     );
   });
 });
@@ -449,13 +490,20 @@ describe("an open menu when the saved breakpoints stop being trusted", () => {
       selected: "base",
       onSelect,
     } as const;
+    // Inside the shell's tooltip provider, as the top bar draws it.
     const { rerender } = render(
-      <BreakpointSwitcher {...props} status="ready" />
+      <TooltipProvider delayDuration={0}>
+        <BreakpointSwitcher {...props} status="ready" />
+      </TooltipProvider>
     );
     openMore();
     expect(screen.getAllByRole("menuitemradio")).toHaveLength(4);
 
-    rerender(<BreakpointSwitcher {...props} status="loading" />);
+    rerender(
+      <TooltipProvider delayDuration={0}>
+        <BreakpointSwitcher {...props} status="loading" />
+      </TooltipProvider>
+    );
     expect(screen.queryAllByRole("menuitemradio")).toEqual([]);
     expect(onSelect).not.toHaveBeenCalled();
   });

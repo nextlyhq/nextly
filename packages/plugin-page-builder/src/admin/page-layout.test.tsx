@@ -68,6 +68,7 @@ import {
   usePageLayoutRegions,
   usePageLayoutSettings,
 } from "./page-layout";
+import { ManageSetsContext } from "./editor/manage-sets";
 
 const read = vi.mocked(usePluginRoute);
 const identity = vi.mocked(useDocumentIdentity);
@@ -305,6 +306,30 @@ describe("the page's Layout picker", () => {
       "_blank",
       "noopener"
     );
+    opened.mockRestore();
+  });
+
+  it("opens the builder's own list of sets, inside the builder, from Manage headers & footers", async () => {
+    const opened = vi.spyOn(window, "open").mockReturnValue(null);
+    const openSets = vi.fn();
+    render(
+      <ManageSetsContext.Provider value={openSets}>
+        <Form defaults={{ layout: null, noHeaderFooter: false }}>
+          {control => <PageLayoutPicker control={control} />}
+        </Form>
+      </ManageSetsContext.Provider>
+    );
+    await openMenu();
+    const manage = screen.getByRole("option", {
+      name: /Manage headers & footers/,
+    });
+    // Not a new tab here: the Pages panel is in this window.
+    expect(manage.textContent).toBe("Manage headers & footers");
+    await act(async () => {
+      fireEvent.click(manage);
+    });
+    expect(openSets).toHaveBeenCalledTimes(1);
+    expect(opened).not.toHaveBeenCalled();
     opened.mockRestore();
   });
 
@@ -831,26 +856,28 @@ describe("the regions the editor draws from the choice", () => {
       return usePageLayoutRegions(form.control, null);
     });
     expect(hook.result.current.canvas[0]?.label).toBe(
-      "Header, from header & footer set Main"
+      "Site header, from the Main header & footer"
     );
     await act(async () => {
       form?.setValue("layout", "landing");
     });
     expect(hook.result.current.canvas[0]?.label).toBe(
-      "Header, from header & footer set Main"
+      "Site header, from the Main header & footer"
     );
   });
 
-  it("names each region, where it comes from, and offers Edit Layout in a new tab", () => {
-    const { canvas, layers } = regionsFor({
+  it("names each region, where it comes from, and what its selected card says", () => {
+    const { canvas, layers, cards } = regionsFor({
       layout: null,
       noHeaderFooter: false,
     });
     expect(canvas).toHaveLength(1);
     expect(canvas[0]).toMatchObject({
       area: "header",
-      label: "Header, from header & footer set Main",
-      badge: "Header · from header & footer set",
+      label: "Site header, from the Main header & footer",
+      badge: "Site header · Main",
+      name: "Site header",
+      // The page data panel's way to the set, for a block of it unread.
       edit: {
         href: "/admin/collections/layouts/main",
         text: "Edit header & footer set ↗",
@@ -858,13 +885,24 @@ describe("the regions the editor draws from the choice", () => {
       },
     });
     expect(layers.map(row => [row.name, row.origin])).toEqual([
-      ["Header", "from header & footer set Main"],
+      ["Site header", "Main header & footer"],
+    ]);
+    // What the sidebar card is drawn from: the component the region places,
+    // the set it comes from, and nothing said of drafts.
+    expect(cards).toEqual([
+      {
+        area: "header",
+        componentId: "h",
+        setId: "main",
+        setTitle: "Main",
+        starter: false,
+      },
     ]);
   });
 
-  it("says when the Layout in effect has changes a visitor does not see yet", () => {
-    const { canvas } = regionsFor({ layout: "landing", noHeaderFooter: false });
-    expect(canvas.map(region => region.note)).toEqual([
+  it("says on the card when the set in effect has changes a visitor does not see yet", () => {
+    const { cards } = regionsFor({ layout: "landing", noHeaderFooter: false });
+    expect(cards.map(card => card.note)).toEqual([
       "Draft changes not live: header & footer set Landing",
       "Draft changes not live: header & footer set Landing",
     ]);
@@ -896,14 +934,20 @@ describe("the regions the editor draws from the choice", () => {
         },
       },
     });
-    const { canvas } = regionsFor({ layout: null, noHeaderFooter: false });
+    const { canvas, cards } = regionsFor({
+      layout: null,
+      noHeaderFooter: false,
+    });
     expect(canvas.map(region => [region.label, region.badge])).toEqual([
       [
-        "Starter header, from header & footer set Landing",
+        "Starter header, from the Landing header & footer",
         "Starter header · edit or replace",
       ],
-      ["Starter footer, from header & footer set Landing", "Starter footer"],
+      ["Starter footer, from the Landing header & footer", "Starter footer"],
     ]);
+    expect(cards.map(card => card.starter)).toEqual([true, true]);
+    // The set the starter is replaced in: the one the page is drawn inside.
+    expect(cards.map(card => card.setId)).toEqual(["landing", "landing"]);
   });
 
   it("calls a starter someone has published a change to a header like any other", () => {
@@ -914,8 +958,12 @@ describe("the regions the editor draws from the choice", () => {
         regionComponents: { h: { draftChangesNotLive: false } },
       },
     });
-    const { canvas } = regionsFor({ layout: null, noHeaderFooter: false });
-    expect(canvas[0]?.badge).toBe("Header · from header & footer set");
+    const { canvas, cards } = regionsFor({
+      layout: null,
+      noHeaderFooter: false,
+    });
+    expect(canvas[0]?.badge).toBe("Site header · Main");
+    expect(cards[0]?.starter).toBe(false);
   });
 });
 

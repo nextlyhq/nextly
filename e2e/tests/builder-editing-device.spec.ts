@@ -148,14 +148,15 @@ test.describe("the device being edited", () => {
     await openLayers(page);
     await expect(
       devices(page).getByRole("radio", { checked: true })
-    ).toHaveText("Desktop · 1280px");
+    ).toHaveAccessibleName(/^Desktop · 1280px · /);
+    await expect(page.locator("[data-nx-active-width]")).toHaveText("1280px");
 
     await devices(page)
       .getByRole("radio", { name: /^Tablet/ })
       .click();
     const chosen = devices(page).getByRole("radio", { checked: true });
-    await expect(chosen).toHaveAccessibleName(/^Tablet/);
-    await expect(chosen).toHaveText("Tablet · 1024px");
+    await expect(chosen).toHaveAccessibleName(/^Tablet · 1024px · /);
+    await expect(page.locator("[data-nx-active-width]")).toHaveText("1024px");
 
     await openLayers(page);
     await expect(chosen).toHaveAccessibleName(/^Tablet/);
@@ -294,9 +295,9 @@ test.describe("the device buttons", () => {
       // The menu's button names the device being styled; no button is checked,
       // and the canvas lays the page out at the phone's width.
       await expect(more).toHaveAccessibleName(
-        "More devices, styling Phone, up to 480 pixels"
+        "More devices, styling Phone · 480px · styles for 480px and narrower"
       );
-      await expect(more).toHaveText("Phone · 480px");
+      await expect(page.locator("[data-nx-active-width]")).toHaveText("480px");
       await expect(
         devices(page).getByRole("radio", { checked: true })
       ).toHaveCount(0);

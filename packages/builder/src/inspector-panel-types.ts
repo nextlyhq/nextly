@@ -272,6 +272,14 @@ export interface InspectorPanelProps {
    * @experimental Settles with the page's settings panel.
    */
   documentSettings?: DocumentSettingsView;
+  /**
+   * The host's card for the header or footer selected on the canvas: what it
+   * is, where it comes from and how to change it. Drawn in place of
+   * everything else while no block is selected; absent while no region is.
+   *
+   * @experimental Settles with editing a header or footer in place.
+   */
+  regionCard?: React.ReactNode;
 }
 
 /** What the host draws of the open document while nothing is selected. */

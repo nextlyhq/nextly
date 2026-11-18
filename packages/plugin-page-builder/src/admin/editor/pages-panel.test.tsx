@@ -55,6 +55,15 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 let userId: string | null = "ada";
 const kept = new Map<string, string>();
 
+// The Collection templates group reads its own routes; tested on its own.
+vi.mock("./collection-templates-group", () => ({
+  CollectionTemplatesGroup: () => (
+    <section aria-label="Collection templates">
+      <button type="button" aria-label="Collection templates, 1" />
+    </section>
+  ),
+}));
+
 // The Header & footer group reads its own routes; it is tested on its own.
 vi.mock("./header-footer-group", () => ({
   HeaderFooterGroup: () => (
@@ -151,6 +160,9 @@ function Harness() {
       <output aria-label="Settings request">
         {mount.settingsRequest?.count ?? "none"}
       </output>
+      <button type="button" onClick={mount.revealSets}>
+        Reveal sets
+      </button>
       {mount.renderPagesPanel({ unsavedWork })}
     </>
   );
@@ -368,7 +380,7 @@ describe("the list", () => {
 });
 
 describe("the panel's groups", () => {
-  it("shows Pages, then Header & footer", async () => {
+  it("shows Pages, then Header & footer, then Collection templates", async () => {
     await mount([item("a", "Home")]);
     // The groups' folding headings, in the order they are drawn.
     const headings = screen
@@ -377,7 +389,11 @@ describe("the panel's groups", () => {
       .filter(label =>
         /^(Pages|Header & footer|Collection templates), \d+$/.test(label)
       );
-    expect(headings).toEqual(["Pages, 1", "Header & footer, 2"]);
+    expect(headings).toEqual([
+      "Pages, 1",
+      "Header & footer, 2",
+      "Collection templates, 1",
+    ]);
   });
 
   it("keeps the Pages group folded for the author who folded it, and only them", async () => {
@@ -404,6 +420,21 @@ describe("the panel's groups", () => {
         .getByRole("button", { name: "Pages, 1" })
         .getAttribute("aria-expanded")
     ).toBe("true");
+  });
+});
+
+describe("showing the sets", () => {
+  it("unfolds the Header & footer group when asked to show the sets", async () => {
+    kept.set("nx-pb-pages-folds:ada", JSON.stringify(["header-footer"]));
+    Element.prototype.scrollIntoView = vi.fn();
+    await mount([item("a", "Home")]);
+    await userEvent.click(screen.getByRole("button", { name: "Reveal sets" }));
+    await vi.waitFor(() =>
+      expect(JSON.parse(kept.get("nx-pb-pages-folds:ada") ?? "[]")).toEqual([])
+    );
+    await vi.waitFor(() =>
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
+    );
   });
 });
 

@@ -23,7 +23,6 @@ import {
   type DocumentLimits,
   type LayoutRegion,
 } from "@nextlyhq/blocks-engine";
-import { definitionsFor } from "@nextlyhq/blocks-react";
 import {
   NextlyError,
   PENDING_CHANGE_KEY,
@@ -36,7 +35,6 @@ import { COMPONENTS_SLUG } from "./collections/components";
 import { LAYOUTS_SLUG } from "./collections/layouts";
 import { PAGES_SLUG } from "./collections/pages";
 import { TEMPLATES_SLUG } from "./collections/templates";
-import { publishedStoreSource } from "./component-store-source";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
 import {
   starterRecordStore,
@@ -75,6 +73,7 @@ import {
   readingAsUser,
   type ComponentStore,
 } from "./library-route";
+import { publishedDefinitionsOf } from "./published-definitions";
 import { parseRouteQuery } from "./route-query";
 
 /**
@@ -523,14 +522,9 @@ async function pendingDrafts(
 }
 
 /**
- * The PUBLISHED definitions the regions reach, nested ones included.
- *
- * Discovered by the render's own discovery (`definitionsFor`) under the
- * renderer's own bounds, through the store read the readiness notice shares
- * with it, in the language being edited, so the canvas draws the graph the
- * published page draws. Read as the caller: a caller who may not read
- * components gets none, and each region then draws the marker a missing
- * component draws.
+ * The PUBLISHED definitions the regions reach, nested ones included: each
+ * drawing (one set's regions) discovered under its own bound, by the shared
+ * discovery the Pages panel's template pictures use too.
  */
 async function publishedDefinitions(
   nextly: LayoutChoicesDirectApi,
@@ -538,85 +532,14 @@ async function publishedDefinitions(
   drawings: readonly (readonly LayoutRegion[])[],
   read: { reading: AsUser; limits: DocumentLimits }
 ): Promise<Record<string, BlockDocument>> {
-  const groups = drawings.filter(regions => regions.length > 0);
-  if (groups.length === 0) return {};
-  const source = publishedStoreSource(nextly, {
-    ...store,
-    reading: read.reading,
-  });
-  // The ids every drawing asks for in the same turn, read together: the
-  // drawings start at once, so their reads coalesce into one batched read
-  // rather than one store query per set.
-  let gathering: {
-    ids: string[];
-    read: Promise<ReadonlyMap<string, BlockDocument>>;
-  } | null = null;
-  const gather = (
-    ids: readonly string[]
-  ): Promise<ReadonlyMap<string, BlockDocument>> => {
-    let current = gathering;
-    if (current === null) {
-      const batch: string[] = [];
-      const read = new Promise<void>(resolve => {
-        setTimeout(resolve, 0);
-      }).then(() => {
-        gathering = null;
-        return source(batch).catch(
-          (error: unknown): ReadonlyMap<string, BlockDocument> => {
-            // Refused: the caller may not read these, and the regions draw as
-            // missing, which is what they are to this caller. Anything else is
-            // a failure, not an answer, and fails the request, so the picker
-            // says it could not load rather than calling the components missing.
-            if (
-              NextlyError.isForbidden(error) ||
-              NextlyError.isNotFound(error)
-            ) {
-              return new Map<string, BlockDocument>();
-            }
-            throw error;
-          }
-        );
-      });
-      current = { ids: batch, read };
-      gathering = current;
-    }
-    current.ids.push(...ids);
-    return current.read;
-  };
-  // One answer per id across every drawing, kept as it is asked for, so a
-  // component that many sets place (a shared logo) is read once, and two
-  // drawings asking for it at the same moment share that read.
-  const asked = new Map<string, Promise<BlockDocument | undefined>>();
-  const readOnce = async (
-    ids: readonly string[]
-  ): Promise<Map<string, BlockDocument>> => {
-    const fresh = [...new Set(ids.filter(id => !asked.has(id)))];
-    if (fresh.length > 0) {
-      const batch = gather(fresh);
-      for (const id of fresh) {
-        asked.set(
-          id,
-          batch.then(found => found.get(id))
-        );
-      }
-    }
-    const answers = await Promise.all(
-      ids.map(async id => [id, await asked.get(id)] as const)
-    );
-    return new Map(
-      answers.filter(
-        (answer): answer is readonly [string, BlockDocument] =>
-          answer[1] !== undefined
-      )
-    );
-  };
-  // Each drawing discovered under its own bound, as the renderer draws it.
-  const found = await Promise.all(
-    groups.map(regions =>
-      definitionsFor(regionDocument(regions), readOnce, read.limits)
-    )
+  return publishedDefinitionsOf(
+    nextly,
+    store,
+    drawings
+      .filter(regions => regions.length > 0)
+      .map(regions => regionDocument(regions)),
+    read
   );
-  return Object.fromEntries(found.flatMap(definitions => [...definitions]));
 }
 
 /** An optional text parameter, where an empty value is none. */

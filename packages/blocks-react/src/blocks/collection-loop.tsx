@@ -686,8 +686,9 @@ const COLLECTION_LOOP_PARTS = {
     baseStyles: {
       base: {
         base: {
+          // In the text colour around it, so a pager inside a coloured
+          // container shows its gap in that colour.
           padding: { inlineStart: "0.25rem", inlineEnd: "0.25rem" },
-          color: { $token: "color.text" },
         },
       },
     },

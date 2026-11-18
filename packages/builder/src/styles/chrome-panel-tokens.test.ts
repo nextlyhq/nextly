@@ -340,12 +340,11 @@ describe("a picture's frame", () => {
     }
   });
 
-  it("draws the page in the site's own body font and ink, as the canvas does", () => {
+  it("draws the page in the site's own ink and the canvas's plain base face, as the canvas does", () => {
     const page = ruleBody(CHROME, /^\.nx-picture__page\s*\{/m);
     expect(page).toMatch(/color:\s*var\(--nx-canvas-site-ink,\s*CanvasText\)/);
-    expect(page).toMatch(
-      /font-family:\s*var\(--nx-canvas-site-font,\s*system-ui\),\s*sans-serif/
-    );
+    // The site's Body font is the drawn page's own rule on its root.
+    expect(page).toMatch(/font-family:\s*system-ui,\s*sans-serif/);
   });
 
   it("starts the drawn page from a plain page's text, not the tile's it sits in", () => {

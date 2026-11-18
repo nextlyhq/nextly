@@ -68,6 +68,7 @@ import { ContentServicesContext } from "./content-controls";
 import { CssNamesProvider } from "./css-names-context";
 import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
+import { galleryPictureOf } from "./gallery-pictures";
 import { HiddenStatus } from "./hide-on";
 import {
   inspectorTabsOf,
@@ -308,8 +309,19 @@ export function InspectorPanel({
   componentFields,
   componentVariants,
   canvasPassage = null,
+  regionCard,
   ...panel
 }: InspectorPanelProps): React.JSX.Element {
+  // A header or footer selected on the canvas: the host's card for it, in
+  // the panel's frame, so the canvas keeps its width. Never beside a block's
+  // settings, which a region's selection has already cleared.
+  if (regionCard !== undefined && panel.editor.selectedId === null) {
+    return (
+      <div className="nx-inspector" data-empty="region">
+        {regionCard}
+      </div>
+    );
+  }
   const look = editedLook(panel);
   if (look !== undefined && panel.lookEditing !== undefined) {
     // The host's services reach a look's Style controls as they reach a
@@ -518,8 +530,20 @@ function SelectedBlockCard({
   reasonId: string;
 }): React.JSX.Element {
   const lock = lockStatusOf(editor.document, block.nodeId, lockViewOf(editor));
+  // A picture in a gallery reads by its place there, with a way back to it.
+  const inGallery = galleryPictureOf(editor.document, block.nodeId);
   return (
     <BlockCard
+      placedIn={
+        inGallery === undefined
+          ? undefined
+          : {
+              title: `Picture ${String(inGallery.position)}`,
+              within: `in ${inGallery.galleryName}`,
+              backLabel: "← Back to the gallery",
+              onBack: () => editor.select(inGallery.galleryId),
+            }
+      }
       icon={block.icon}
       type={block.label}
       name={block.identity.name}

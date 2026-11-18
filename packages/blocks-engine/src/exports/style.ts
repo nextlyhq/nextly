@@ -82,6 +82,19 @@ export {
   // contains stops reading where the compiler does.
   MAX_VALUE_LENGTH,
 } from "../style/css-value";
+export {
+  collectStyleProperties,
+  collectStyleTokens,
+  documentTokenUsage,
+  forEachStyleValues,
+  onlySiteProperties,
+  onlyVariableIdentities,
+  styleEnvelopeProperties,
+  styleEnvelopeTokens,
+  styleSitePropertiesIn,
+  styleVariablesIn,
+  type TokenUsage,
+} from "../style/document-token-usage";
 export type {
   CssValueRejection,
   MayFetchUrl,

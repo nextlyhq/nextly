@@ -185,6 +185,7 @@ function region(area: "header" | "footer"): CanvasRegion {
     ]),
     label: `${area === "header" ? "Header" : "Footer"}, from Layout Main`,
     badge: `${area === "header" ? "Header" : "Footer"} · from Layout`,
+    name: area === "header" ? "Header" : "Footer",
     edit: {
       href: "/admin/collections/layouts/main",
       text: "Edit Layout ↗",
