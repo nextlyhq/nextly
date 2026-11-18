@@ -11,7 +11,11 @@
  * @module @nextlyhq/plugin-page-builder/admin/editor/use-host-commit
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
-import { documentAfter, type InlineEditOutcome } from "@nextlyhq/builder/shell";
+import {
+  documentAfter,
+  endTypingRuns,
+  type InlineEditOutcome,
+} from "@nextlyhq/builder/shell";
 import {
   useBeforeDocumentAction,
   useDocumentActions,
@@ -205,6 +209,10 @@ export function documentToStore(
   held: BlockDocument,
   flushHeld: (() => BlockDocument | null) | undefined
 ): BlockDocument {
+  // A store ends every run of typing: a field still being typed in when the
+  // page is saved writes on into a new step, so the save point and the step
+  // it stored are one, and undo after the save takes back only what followed.
+  endTypingRuns();
   return finishInlineEdit(inline, flushHeld?.() ?? held).document;
 }
 
@@ -356,6 +364,7 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   savePoint,
   removalReach,
   flushHeld,
+  otherUnsavedWork = false,
 }: {
   name: Path<TFieldValues>;
   /**
@@ -384,6 +393,11 @@ export function useHostCommit<TFieldValues extends FieldValues>({
     | undefined;
   /** The edits Settings tabs hold, made before a store (`SettingsPlace`). */
   flushHeld?: () => BlockDocument | null;
+  /**
+   * Work the editor holds in another document than the field's (a header
+   * edited in place), reported with the field's so the leave guard asks.
+   */
+  otherUnsavedWork?: boolean;
 }): {
   done: () => void;
   /**
@@ -413,7 +427,7 @@ export function useHostCommit<TFieldValues extends FieldValues>({
    */
   useReportUnsavedWork(
     `blocks:${address}`,
-    hasUnsavedWork(editor, inline, savePoint.savedAt)
+    hasUnsavedWork(editor, inline, savePoint.savedAt) || otherUnsavedWork
   );
 
   /*

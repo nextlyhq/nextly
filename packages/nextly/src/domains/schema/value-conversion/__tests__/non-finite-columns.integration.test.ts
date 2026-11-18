@@ -8,16 +8,16 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { FieldDefinition } from "../../../../../schemas/dynamic-collections";
-import { DynamicCollectionSchemaService } from "../../../../dynamic-collections/services/dynamic-collection-schema-service";
+import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
+import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
 import {
   LOCK_DIALECTS,
   lockWorld,
-} from "../../../pipeline/__tests__/helpers/schema-lock-world";
-import { splitStatements } from "../../../pipeline/sql-statement-utils";
-import { fieldTypeOnDialect } from "../field-type";
-import { holdsNonFinite } from "../judge";
-import { readNumber } from "../numbers";
+} from "../../pipeline/__tests__/helpers/schema-lock-world";
+import { splitStatements } from "../../pipeline/sql-statement-utils";
+import { fieldTypeOnDialect } from "../type-change/field-type";
+import { readNumber } from "../type-change/numbers";
+import { holdsNonFinite } from "../value-readings";
 
 const TABLE = "dc_tc_non_finite";
 
@@ -119,7 +119,7 @@ describe.each(LOCK_DIALECTS)(
             "collection"
           ).number;
           if (!format) throw new Error(`no number format for ${column}`);
-          expect(holdsNonFinite(format, dialect, value)).toBe(
+          expect(holdsNonFinite(format.kind, dialect, value)).toBe(
             await holds(column, value)
           );
         }, 60_000);

@@ -65,6 +65,7 @@ export interface FieldNamePlace {
 export type FieldNameProblemKind =
   | "spelling"
   | "column-too-long"
+  | "name-too-long"
   | "reserved"
   | "lifecycle";
 
@@ -89,6 +90,13 @@ const DECLARED_FIELD_NAME_RE = /^[a-z][a-zA-Z0-9_]*$/;
  * names sharing their first 63 characters reach one column and the second cannot be added.
  */
 export const MAX_FIELD_COLUMN_LENGTH = 63;
+
+/**
+ * The longest name any field may have, column or not. A field-group field's name is what its
+ * group's rows point back to it by, in a parent-pointer column of 255 characters on PostgreSQL and
+ * MySQL: a longer name would be saved, and every entry write then refused.
+ */
+export const MAX_FIELD_NAME_LENGTH = 255;
 
 /**
  * The names every entity table carries as system columns (`id`, `created_at`, `updated_at`), in
@@ -168,6 +176,14 @@ export function fieldNameProblem(
       kind: "column-too-long",
       code: "INVALID_FIELD_NAME",
       message: `field name '${name}' becomes a column longer than ${MAX_FIELD_COLUMN_LENGTH} characters, which the database cannot keep whole`,
+    };
+  }
+  // Every field, column or not: a field-group field's rows point back to it by its name.
+  if (name.length > MAX_FIELD_NAME_LENGTH) {
+    return {
+      kind: "name-too-long",
+      code: "INVALID_FIELD_NAME",
+      message: `field name is longer than ${MAX_FIELD_NAME_LENGTH} characters, the longest a field group's rows can point back to`,
     };
   }
   if (SYSTEM_FIELD_NAMES.has(name)) return reservedProblem(name);

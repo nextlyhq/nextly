@@ -23,6 +23,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import { numberedForPlace } from "../../accordion-questions";
 import {
   placementWording,
   refusalWording,
@@ -331,9 +332,14 @@ export function useInsertOffers({
     // `expandSlotDefaults`, which derives the rules from these same
     // definitions — the only source that can see a supplied block's `parent`
     // and its slots' `allow`.
-    const node = withEntryContentField(
-      nodeForEntry(entry, blockSource, nesting),
-      firstBlocksField
+    // A Question added to an Accordion takes the next number there.
+    const node = numberedForPlace(
+      withEntryContentField(
+        nodeForEntry(entry, blockSource, nesting),
+        firstBlocksField
+      ),
+      at,
+      editor.document
     );
     // `apply` is the only path a document changes by, so undo covers this
     // insert for free. It answers null when the op is refused, and a refusal

@@ -27,6 +27,7 @@ import {
   fieldNameProblem,
   type FieldNameProblemKind,
   MAX_FIELD_COLUMN_LENGTH,
+  MAX_FIELD_NAME_LENGTH,
 } from "../field-name-rule";
 
 const MAX_REGEX_PATTERN_LENGTH = 200;
@@ -78,6 +79,7 @@ const FIELD_NAME_MESSAGES: Record<FieldNameProblemKind, string> = {
   spelling:
     "Field name must start with a lowercase letter and contain only letters, numbers, and underscores",
   "column-too-long": `Field name's column would be longer than ${MAX_FIELD_COLUMN_LENGTH} characters`,
+  "name-too-long": `Field name must be ${MAX_FIELD_NAME_LENGTH} characters or less`,
   reserved: "Field name is reserved",
   lifecycle: "Field name is reserved",
 };

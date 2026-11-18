@@ -70,6 +70,14 @@ type Edit =
       prop: string;
       stored: unknown;
     }
+  | {
+      kind: "pick";
+      label: string;
+      /** The choice's words, as its radio in the row of choices says them. */
+      option: string;
+      prop: string;
+      stored: unknown;
+    }
   | { kind: "richText"; label: string; prop: string; text: string };
 
 interface Case {
@@ -171,7 +179,7 @@ const CASES: readonly Case[] = [
   },
   {
     type: "core/accordion-item",
-    label: "Accordion item",
+    label: "Question",
     props: { title: "What is included?", open: false },
     slots: true,
     parent: {
@@ -180,7 +188,7 @@ const CASES: readonly Case[] = [
     },
     edit: {
       kind: "type",
-      label: "Title",
+      label: "Question",
       prop: "title",
       value: "What ships?",
       stored: "What ships?",
@@ -271,18 +279,28 @@ const CASES: readonly Case[] = [
     },
     edit: {
       kind: "type",
-      label: "Submit button text",
+      label: "Button text",
       prop: "submitText",
       value: "Send it",
       stored: "Send it",
     },
   },
   {
+    // Its Content tab holds Pictures and Layout; Layout carries the one prop
+    // it declares there, what a click on its pictures does, drawn as a row of
+    // choices.
     type: "core/gallery",
     label: "Gallery",
     props: { as: "div" },
     slots: true,
-    content: "none",
+    section: "Layout",
+    edit: {
+      kind: "pick",
+      label: "When clicked",
+      option: "Enlarge",
+      prop: "whenClicked",
+      stored: "enlarge",
+    },
   },
   { type: "core/divider", label: "Divider", props: {} },
   {
@@ -531,6 +549,14 @@ async function makeEdit(page: Page, edit: Edit): Promise<void> {
     await page.getByRole("option", { name: edit.option }).click();
     return;
   }
+  if (edit.kind === "pick") {
+    await page
+      .locator(".nx-inspector")
+      .getByRole("radiogroup", { name: edit.label })
+      .getByRole("radio", { name: edit.option })
+      .click();
+    return;
+  }
   if (edit.kind === "richText") {
     const passage = page
       .locator(".nx-inspector")
@@ -561,6 +587,13 @@ async function expectShown(page: Page, edit: Edit): Promise<void> {
     await expect(
       page.locator(".nx-inspector").getByRole("combobox", { name: edit.label })
     ).toContainText(edit.option);
+  } else if (edit.kind === "pick") {
+    await expect(
+      page
+        .locator(".nx-inspector")
+        .getByRole("radiogroup", { name: edit.label })
+        .getByRole("radio", { name: edit.option })
+    ).toBeChecked();
   } else if (edit.kind === "richText") {
     await expect(
       page.locator(".nx-inspector").getByRole("textbox", { name: edit.label })

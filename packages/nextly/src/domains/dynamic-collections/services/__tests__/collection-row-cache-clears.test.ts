@@ -72,6 +72,9 @@ describe("writes outside the registry services clear the collection row cache", 
     const dir = mkdtempSync(join(tmpdir(), "nextly-row-cache-"));
     try {
       mkdirSync(join(dir, "meta"));
+      // The snapshot's migration file: a snapshot is read only once its
+      // migration was written.
+      writeFileSync(join(dir, "0001_init.sql"), "");
       writeFileSync(
         join(dir, "meta", "0001_init.snapshot.json"),
         JSON.stringify({

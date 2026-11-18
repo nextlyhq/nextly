@@ -13,7 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   SITE_CSS_DRAWN_ROUTE_PATH,
   SITE_CSS_ROUTE_PATH,
-} from "../library-contract";
+} from "../site-css-contract";
 import { sha256Hex } from "../sha256-hex";
 
 import {
