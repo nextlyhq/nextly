@@ -843,6 +843,66 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await foreignKeyColumns("single_site")).not.toContain("author");
     });
 
+    it("switches a Single's relationship from many to one, keeping its one link", async () => {
+      const t = await boot();
+      await createCollection("authors", [{ name: "name", type: "text" }]);
+      const a = (
+        await t.nextly.create({
+          collection: "authors",
+          data: { title: "A", name: "A" },
+        })
+      ).item.id as string;
+      const author = (hasMany: boolean) => ({
+        name: "author",
+        type: "relationship",
+        relationTo: "authors",
+        hasMany,
+      });
+      await inDevelopment(() =>
+        dispatchSingles(
+          "createSingle",
+          {},
+          {
+            slug: "site",
+            label: "Site",
+            fields: [
+              {
+                ...author(true),
+                options: { target: "authors", relationType: "manyToOne" },
+              },
+            ],
+          }
+        )
+      );
+      await t.nextly.updateSingle({
+        slug: "site",
+        data: { author: [a], _overwrite: true },
+      });
+      const [row] = await database.adapter.executeQuery<{
+        schema_version: unknown;
+      }>(`SELECT schema_version FROM dynamic_singles WHERE slug = 'site'`);
+
+      await inDevelopment(() =>
+        dispatchSingles(
+          "applySingleSchemaChanges",
+          { slug: "site" },
+          {
+            fields: [author(false)],
+            confirmed: true,
+            schemaVersion: Number(row?.schema_version ?? 1),
+            eventResolutions: [],
+            renameResolutions: [],
+          }
+        )
+      );
+
+      const site = (await t.nextly.findSingle({
+        slug: "site",
+        depth: 0,
+      })) as unknown as { author: unknown };
+      expect(site.author).toBe(a);
+    });
+
     it("stores a relationship to several collections the Builder creates as a list", async () => {
       const t = await boot();
       await createCollection("authors", [{ name: "name", type: "text" }]);
@@ -1020,6 +1080,32 @@ for (const dialect of getConfiguredTestDialects()) {
             }
           }
         );
+
+        // Each road converts a one-link list into its link and an empty list into no link
+        // (`referenceScalar`), so the change it carries is judged as carried, not as values to
+        // rewrite first.
+        it("switches many to one where no row holds several, keeping each link", async () => {
+          const t = await boot();
+          const { a } = await postsWithAuthors(t, true);
+          const one = (
+            await t.nextly.create({
+              collection: "posts",
+              data: { title: "P1", author: [a] },
+            })
+          ).item.id as string;
+          const none = (
+            await t.nextly.create({
+              collection: "posts",
+              data: { title: "P2", author: [] },
+            })
+          ).item.id as string;
+
+          expect(await switchAuthor(database.adapter, false)).toEqual({
+            accepted: true,
+          });
+          expect(await authorOf(t, one)).toBe(a);
+          expect(await authorOf(t, none)).toBeNull();
+        });
 
         it("refuses many to one while a row holds several, naming the field and its rows", async () => {
           const t = await boot();
