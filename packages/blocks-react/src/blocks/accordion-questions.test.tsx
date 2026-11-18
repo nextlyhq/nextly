@@ -17,9 +17,11 @@ import {
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
-import { renderToStaticMarkup } from "react-dom/server";
+import type { ReactElement } from "react";
+import { renderToReadableStream, renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { createStandaloneContext } from "../context";
 import { PageRenderer } from "../page-renderer";
 import { createBlockResolver } from "../resolver";
 import { resolvePageStyles } from "../styles";
@@ -215,6 +217,76 @@ describe("One at a time, on the page", () => {
     expect(tags).toHaveLength(4);
     expect(nameOf(tags[0] ?? "")).not.toBe(nameOf(tags[1] ?? ""));
     expect(new Set(tags.slice(1).map(nameOf)).size).toBe(1);
+  });
+});
+
+describe("First open, in a Collection list", () => {
+  /** A page drawn to the end, so a list's entries are read and drawn. */
+  async function streamed(element: ReactElement): Promise<string> {
+    const stream = await renderToReadableStream(element, {
+      onError(error) {
+        throw error;
+      },
+    });
+    await stream.allReady;
+    return await new Response(stream).text();
+  }
+
+  it("opens the first question an entry shows, when its conditions hide the first stored", async () => {
+    const shown = page({ openMode: "one", firstOpen: true }, [
+      { title: "Featured" },
+      { title: "Two" },
+      { title: "Three" },
+    ]);
+    // The first question shows only for a featured post.
+    const [first] = shown.slots?.children ?? [];
+    (first as { visibility?: unknown }).visibility = {
+      conditions: [[{ field: "featured", op: "is_true" }]],
+    };
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "loop",
+          type: "core/collection-loop",
+          version: 1,
+          props: { collection: "posts", limit: 2 },
+          slots: { children: [shown] },
+        },
+      ],
+    } as unknown as BlockDocument;
+    const html = await streamed(
+      <PageRenderer
+        document={document}
+        blocks={resolver}
+        siteStyles={false}
+        // Drawn as an editor draws a list, judging each entry's conditions
+        // and drawing nothing in a hidden question's place.
+        itemHiddenAs={() => undefined}
+        context={createStandaloneContext({
+          data: {
+            find: () =>
+              Promise.resolve({
+                items: [
+                  { id: "1", featured: true },
+                  { id: "2", featured: false },
+                ],
+              }),
+          },
+          fieldShapes: {
+            fieldsOf: ref =>
+              "collection" in ref && ref.collection === "posts"
+                ? [{ name: "featured", type: "checkbox" }]
+                : undefined,
+          },
+        })}
+      />
+    );
+    const opened = detailsTags(html).map(tag => /\bopen=""/.test(tag));
+    // The featured post draws all three, its first open; the other draws
+    // Two and Three, and opens Two, the first it shows.
+    expect(opened).toEqual([true, false, false, true, false]);
   });
 });
 

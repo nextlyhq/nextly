@@ -56,6 +56,7 @@ import type {
   BlockRenderArgs,
   PageContext,
 } from "../context";
+import { conditionAllows } from "../visibility";
 
 import {
   ACCORDION_BLOCK,
@@ -133,20 +134,39 @@ function groupName(args: BlockRenderArgs<AccordionProps>): string {
 }
 
 /**
+ * The first section this accordion draws. Inside a list, an entry's
+ * conditions can hide a section the page keeps, so each is asked the
+ * render's own gate, `conditionAllows`, against the entry being drawn and
+ * the blocks the route kept for the page (`heldConditions`), as a list
+ * reads its entries ahead. Outside a list the route has already removed
+ * what the page's conditions hide, so the first stored section is drawn.
+ */
+function firstDrawnId(
+  args: BlockRenderArgs<AccordionProps>
+): string | undefined {
+  const sections = args.node.slots?.children ?? [];
+  const { ctx } = args;
+  if (ctx.item === undefined) return sections[0]?.id;
+  const held = ctx.heldConditions;
+  return sections.find(section =>
+    conditionAllows(section, ctx, held === undefined ? {} : { held })
+  )?.id;
+}
+
+/**
  * How this accordion's sections open, for its own subtree: the shared name
- * while one opens at a time, and the first section's id while it starts open.
- * Each is read defensively, as stored props are: only `one` opens one at a
- * time, and only `true` opens the first.
+ * while one opens at a time, and the first drawn section's id while it
+ * starts open. Each is read defensively, as stored props are: only `one`
+ * opens one at a time, and only `true` opens the first.
  */
 function groupOf(
   args: BlockRenderArgs<AccordionProps>
 ): NonNullable<PageContext["accordionGroup"]> {
-  const first = args.node.slots?.children?.[0]?.id;
+  // Asked only while First open is on: judging conditions costs a walk.
+  const first = args.props.firstOpen === true ? firstDrawnId(args) : undefined;
   return {
     ...(args.props.openMode === "one" ? { name: groupName(args) } : {}),
-    ...(args.props.firstOpen === true && first !== undefined
-      ? { opens: first }
-      : {}),
+    ...(first === undefined ? {} : { opens: first }),
   };
 }
 
