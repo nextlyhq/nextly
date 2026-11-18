@@ -26,25 +26,21 @@ import {
   type TokenMode,
 } from "@nextlyhq/blocks-engine";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
-  Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@nextlyhq/ui";
-import { Ellipsis, Lock } from "lucide-react";
+import { Lock } from "lucide-react";
 import * as React from "react";
 
 import type { EditClasses } from "./block-style-actions";
-import { BlockStyleNameField } from "./block-style-row-menu";
-import { commitFocusedField } from "./editor-field-commit";
+import { BlockStyleNameField, RowMenuFrame } from "./block-style-row-menu";
 import { EDITOR_WORDS } from "./editor-words";
 import { removeSharedStylesThrough } from "./shared-style-details";
 import { sharedStyleRows, type SharedStyleRow } from "./shared-style-library";
 import type { SharedStylesAccess } from "./shared-styles-types";
+import { PopupRow } from "./site-text-panel";
 import { useQueuedStyles, type SharedStylesHost } from "./style-target";
 import { textStyleOptions, type TextStyleOption } from "./text-style-choice";
 import { TextStyleEditor } from "./text-style-editor";
@@ -246,83 +242,78 @@ function TextStyleRow({
   const actions = rowActions({ row, panel, setRefusal });
   const named = `${EDITOR_WORDS.textStyles}: ${option.name}${option.pair === "" ? "" : `, ${option.pair}`}${row.locked ? ", locked" : ""}`;
   return (
-    <li className="nx-vars__item" data-open={open ? "" : undefined}>
-      <Popover
-        open={open}
-        onOpenChange={next => {
-          // A field still being typed in commits before the popup closes.
-          if (!next) commitFocusedField(globalThis.document);
-          setOpen(next);
-        }}
-        modal
-      >
-        <div className="nx-vars__line">
-          <PopoverTrigger asChild>
-            <button
-              ref={button}
-              type="button"
-              className="nx-vars__row nx-site-text__row"
-              data-text-style={row.id}
-              aria-label={named}
-              aria-describedby={refusal === null ? undefined : issueId}
-              onKeyDown={event => {
-                if (event.key === "F2" && renamable) {
-                  event.preventDefault();
-                  setRenaming(true);
-                } else if (opensMenu(event) && writable) {
-                  event.preventDefault();
-                  returnTo.current = button.current;
-                  setMenu(true);
-                }
-              }}
+    <PopupRow
+      open={open}
+      onOpen={setOpen}
+      after={
+        refusal === null ? null : (
+          <p className="nx-vars-editor__issue" id={issueId} role="alert">
+            {refusal}
+          </p>
+        )
+      }
+    >
+      <div className="nx-vars__line">
+        <PopoverTrigger asChild>
+          <button
+            ref={button}
+            type="button"
+            className="nx-vars__row nx-site-text__row"
+            data-text-style={row.id}
+            aria-label={named}
+            aria-describedby={refusal === null ? undefined : issueId}
+            onKeyDown={event => {
+              if (event.key === "F2" && renamable) {
+                event.preventDefault();
+                setRenaming(true);
+              } else if (opensMenu(event) && writable) {
+                event.preventDefault();
+                returnTo.current = button.current;
+                setMenu(true);
+              }
+            }}
+          >
+            <span className="nx-vars__name" title={option.name}>
+              {option.name}
+            </span>
+            <span
+              className="nx-site-text__preview"
+              aria-hidden="true"
+              style={option.preview}
             >
-              <span className="nx-vars__name" title={option.name}>
-                {option.name}
-              </span>
-              <span
-                className="nx-site-text__preview"
-                aria-hidden="true"
-                style={option.preview}
-              >
-                {SAMPLE}
-              </span>
-              <span className="nx-vars__chip" title={option.pair}>
-                {row.locked ? <Lock aria-hidden="true" size={11} /> : null}
-                {option.pair}
-              </span>
-            </button>
-          </PopoverTrigger>
-          {writable ? (
-            <RowMenu
-              name={option.name}
-              locked={row.locked}
-              open={menu}
-              onOpenChange={setMenu}
-              returnTo={returnTo}
-              onRename={() => setRenaming(true)}
-              {...actions}
-            />
-          ) : null}
-        </div>
-        <PopoverContent
-          side="right"
-          align="start"
-          sideOffset={12}
-          collisionPadding={8}
-          className="nx-vars-editor nx-site-text__editor"
-          aria-label={`${panel.readOnly ? "" : "Edit "}${option.name}`}
-        >
-          <CloseVariableEditor.Provider value={() => setOpen(false)}>
-            <RowEditor row={row} name={option.name} panel={panel} />
-          </CloseVariableEditor.Provider>
-        </PopoverContent>
-      </Popover>
-      {refusal === null ? null : (
-        <p className="nx-vars-editor__issue" id={issueId} role="alert">
-          {refusal}
-        </p>
-      )}
-    </li>
+              {SAMPLE}
+            </span>
+            <span className="nx-vars__chip" title={option.pair}>
+              {row.locked ? <Lock aria-hidden="true" size={11} /> : null}
+              {option.pair}
+            </span>
+          </button>
+        </PopoverTrigger>
+        {writable ? (
+          <RowMenu
+            name={option.name}
+            locked={row.locked}
+            open={menu}
+            onOpenChange={setMenu}
+            returnTo={returnTo}
+            onRename={() => setRenaming(true)}
+            {...actions}
+          />
+        ) : null}
+      </div>
+      <PopoverContent
+        side="right"
+        align="start"
+        sideOffset={12}
+        collisionPadding={8}
+        className="nx-vars-editor nx-site-text__editor"
+        aria-label={`${panel.readOnly ? "" : "Edit "}${option.name}`}
+      >
+        <CloseVariableEditor.Provider value={() => setOpen(false)}>
+          <RowEditor row={row} name={option.name} panel={panel} />
+        </CloseVariableEditor.Provider>
+      </PopoverContent>
+    </PopupRow>
   );
 }
 
@@ -424,59 +415,33 @@ function RowMenu({
   onLock: () => void;
   onRemove: () => void;
 }): React.JSX.Element {
-  const handingOff = React.useRef(false);
   return (
-    // Not modal: a modal menu marks the panel around it aria-hidden while
-    // its rows stay focusable.
-    <DropdownMenu modal={false} open={open} onOpenChange={onOpenChange}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="nx-vars__icon-button nx-vars__more"
-          aria-label={`More actions for ${name}`}
-        >
-          <Ellipsis aria-hidden="true" size={14} />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        collisionPadding={8}
-        className="nx-vars__menu"
-        onCloseAutoFocus={event => {
-          if (handingOff.current) {
-            handingOff.current = false;
-            event.preventDefault();
-            return;
-          }
-          const back = returnTo.current;
-          if (back === null) return;
-          returnTo.current = null;
-          event.preventDefault();
-          back.focus();
-        }}
-      >
-        {locked ? null : (
-          <DropdownMenuItem
-            onSelect={() => {
-              // The name field takes focus.
-              handingOff.current = true;
-              onRename();
-            }}
-          >
-            Rename
+    <RowMenuFrame
+      name={name}
+      open={open}
+      onOpenChange={onOpenChange}
+      returnTo={returnTo}
+    >
+      {handOff => (
+        <>
+          {locked ? null : (
+            // The name field takes focus.
+            <DropdownMenuItem onSelect={handOff(onRename)}>
+              Rename
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuItem onSelect={onDuplicate}>Duplicate</DropdownMenuItem>
+          <DropdownMenuItem onSelect={onLock}>
+            {locked ? "Unlock" : "Lock"}
           </DropdownMenuItem>
-        )}
-        <DropdownMenuItem onSelect={onDuplicate}>Duplicate</DropdownMenuItem>
-        <DropdownMenuItem onSelect={onLock}>
-          {locked ? "Unlock" : "Lock"}
-        </DropdownMenuItem>
-        {locked ? null : (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={onRemove}>Remove</DropdownMenuItem>
-          </>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+          {locked ? null : (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={onRemove}>Remove</DropdownMenuItem>
+            </>
+          )}
+        </>
+      )}
+    </RowMenuFrame>
   );
 }

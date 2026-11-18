@@ -13,13 +13,13 @@ import {
   BASE_BREAKPOINT,
   isTextStyle,
   MAX_NAMED_CLASS_NAME_LENGTH,
-  MAX_TOKEN_LABEL_LENGTH,
   newId,
   tokenLabelIssue,
   type NamedClass,
 } from "@nextlyhq/blocks-engine";
 
 import {
+  firstCopyName,
   nextOrderIndex,
   unusedSlug,
   type BlockStylePlan,
@@ -31,9 +31,6 @@ export type TextStylePlanResult = BlockStylePlan;
 
 /** What a text style no longer on the site is told. */
 const GONE = "This text style is no longer on the site.";
-
-/** The most copies of one text style a copy's name counts to. */
-const MAX_COPIES = 999;
 
 /** A text style by id, or `undefined` for none, or a class of another kind. */
 function textStyleOf(
@@ -122,15 +119,10 @@ function copyName(
   library: readonly NamedClass[],
   name: string
 ): string | undefined {
-  const room = MAX_TOKEN_LABEL_LENGTH - ` copy ${MAX_COPIES}`.length;
-  const base = name.slice(0, room).trimEnd();
-  for (let count = 1; count <= MAX_COPIES; count += 1) {
-    const candidate = count === 1 ? `${base} copy` : `${base} copy ${count}`;
-    if (nameRefusal(library, candidate, undefined) === undefined) {
-      return candidate;
-    }
-  }
-  return undefined;
+  return firstCopyName(
+    name,
+    candidate => nameRefusal(library, candidate, undefined) === undefined
+  );
 }
 
 /**

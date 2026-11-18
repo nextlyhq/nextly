@@ -87,7 +87,7 @@ function mount(
     access?: Partial<SharedStylesAccess>;
   } = {}
 ) {
-  let library = options.library ?? [card, eyebrow];
+  let library: readonly NamedClass[] = options.library ?? [card, eyebrow];
   const edit = vi.fn(async (compose: ClassListEdit) => {
     const answer = compose(library);
     if ("reason" in answer) return answer.reason;
@@ -186,7 +186,9 @@ describe("a row's keys and menu", () => {
     fireEvent.keyDown(row(/^Text styles: Eyebrow/), { key: "F2" });
     const field = screen.getByRole("textbox", { name: "Rename Eyebrow" });
     fireEvent.keyDown(field, { key: "Escape" });
-    expect(screen.queryByRole("textbox", { name: "Rename Eyebrow" })).toBeNull();
+    expect(
+      screen.queryByRole("textbox", { name: "Rename Eyebrow" })
+    ).toBeNull();
 
     fireEvent.keyDown(row(/^Text styles: Eyebrow/), { key: "F2" });
     const again = screen.getByRole("textbox", { name: "Rename Eyebrow" });
@@ -212,7 +214,9 @@ describe("a row's keys and menu", () => {
     const { stored } = mount();
     const menu = menuOf();
     await act(async () => {
-      fireEvent.click(within(menu).getByRole("menuitem", { name: "Duplicate" }));
+      fireEvent.click(
+        within(menu).getByRole("menuitem", { name: "Duplicate" })
+      );
     });
     expect(stored().at(-1)).toMatchObject({
       label: "Eyebrow copy",
@@ -296,8 +300,12 @@ describe("a text style's parts", () => {
     const { writeStyles } = mount();
     openParts();
     const mobile = screen.getByRole("textbox", { name: "Size on Mobile" });
-    expect(screen.getByRole("textbox", { name: "Size on Desktop" })).toBeDefined();
-    expect(screen.getByRole("textbox", { name: "Size on Tablet" })).toBeDefined();
+    expect(
+      screen.getByRole("textbox", { name: "Size on Desktop" })
+    ).toBeDefined();
+    expect(
+      screen.getByRole("textbox", { name: "Size on Tablet" })
+    ).toBeDefined();
     fireEvent.change(mobile, { target: { value: "10px" } });
     fireEvent.blur(mobile);
     expect(written(writeStyles)?.base?.mobile).toMatchObject({
@@ -309,14 +317,20 @@ describe("a text style's parts", () => {
 describe("read-only", () => {
   it("offers no add, no menu and no changes to a role that may not change design", () => {
     const { writeStyles } = mount({ readOnly: true });
-    expect(screen.queryByRole("button", { name: "+ Add text style" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "+ Add text style" })
+    ).toBeNull();
     expect(
       screen.queryByRole("button", { name: /^More actions for/ })
     ).toBeNull();
     fireEvent.keyDown(row(/^Text styles: Eyebrow/), { key: "F2" });
-    expect(screen.queryByRole("textbox", { name: "Rename Eyebrow" })).toBeNull();
+    expect(
+      screen.queryByRole("textbox", { name: "Rename Eyebrow" })
+    ).toBeNull();
     fireEvent.click(row(/^Text styles: Eyebrow/));
-    expect(screen.getByText("You can't change this site's design.")).toBeDefined();
+    expect(
+      screen.getByText("You can't change this site's design.")
+    ).toBeDefined();
     const caps = screen.getByRole("radio", { name: "Capitalised" });
     expect((caps as HTMLInputElement).disabled).toBe(true);
     fireEvent.click(caps);

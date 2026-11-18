@@ -866,6 +866,13 @@ export { sharedStyleNameTaken } from "./shared-style-target";
 export { useNoticeQueue } from "./shell/builder-notices";
 export type { NoticeQueue, RaiseNotice } from "./shell/builder-notices";
 export { SharedStylesPanel } from "./shared-styles-panel";
+/**
+ * Design → Type → "Text styles": the site's text styles and their parts.
+ *
+ * @experimental Settles with text styles.
+ */
+export { TextStylesSection } from "./text-styles-section";
+export type { TextStylesSectionProps } from "./text-styles-section";
 // The whole-list class write the Styles tab's Block styles make, copy,
 // rename and hide block styles and move ★ through.
 export type { ClassListEdit, EditClasses } from "./block-style-actions";

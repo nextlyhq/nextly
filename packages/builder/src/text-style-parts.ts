@@ -95,11 +95,14 @@ export function letterSpacingParts(value: StyleValue | undefined): {
   const match = SPACING_RE.exec(String(value).trim());
   if (match === null) return { amount: String(value), unit: "em" };
   const [, sign = "", amount = "", unit = "em"] = match;
-  return { amount: `${sign === "-" ? "-" : ""}${amount}`, unit: unit.toLowerCase() };
+  return {
+    amount: `${sign === "-" ? "-" : ""}${amount}`,
+    unit: unit.toLowerCase(),
+  };
 }
 
 /** The Body and Headings fonts' variables, which a text style's font may follow. */
-export const FONT_ROLE_TOKENS = {
+const FONT_ROLE_TOKENS = {
   body: "font.body",
   heading: "font.heading",
 } as const;

@@ -390,6 +390,8 @@ function VariablesView({
           readOnly={readOnly}
           mode={mode}
           supplied={supplied?.siteText}
+          // The text styles a row may follow ("Heading 1 uses Display").
+          classes={hosted.classes}
         />
         <TypeTabRange
           groups={hosted.groups}
