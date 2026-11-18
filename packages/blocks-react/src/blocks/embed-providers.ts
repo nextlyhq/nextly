@@ -214,6 +214,10 @@ function youtube(parsed: URL): EmbedMatch | undefined {
   const start = startSeconds(
     parsed.searchParams.get("t") ?? parsed.searchParams.get("start")
   );
+  // The player's own settings a link already carries (an embed code's
+  // `controls=0`, `loop=1&playlist=…`), kept so a stored player address
+  // plays as it did; the start, autoplay and privacy are the block's.
+  const options = keptOptions(parsed, YOUTUBE_OPTIONS);
   return {
     provider: "youtube",
     name: "YouTube",
@@ -233,6 +237,7 @@ function youtube(parsed: URL): EmbedMatch | undefined {
         ? "https://www.youtube-nocookie.com"
         : "https://www.youtube.com";
       return withQuery(`${origin}/embed/${videoId}`, {
+        ...options,
         ...(start === undefined ? {} : { start: String(start) }),
         ...(autoplay ? { autoplay: "1" } : {}),
       });
@@ -280,6 +285,9 @@ function vimeo(parsed: URL): EmbedMatch | undefined {
   const videoId = id;
   const privateHash =
     hash !== undefined && VIMEO_HASH.test(hash) ? hash : undefined;
+  // The player's own settings the link carries, as for YouTube; privacy and
+  // autoplay are the block's.
+  const options = keptOptions(parsed, VIMEO_OPTIONS);
   return {
     provider: "vimeo",
     name: "Vimeo",
@@ -299,6 +307,7 @@ function vimeo(parsed: URL): EmbedMatch | undefined {
     },
     playerAddress: ({ privacy, autoplay }) =>
       withQuery(`https://player.vimeo.com/video/${videoId}`, {
+        ...options,
         ...(privateHash === undefined ? {} : { h: privateHash }),
         ...(privacy ? { dnt: "1" } : {}),
         ...(autoplay ? { autoplay: "1" } : {}),
@@ -361,6 +370,64 @@ function googleMaps(parsed: URL): EmbedMatch | undefined {
     privacyMode: false,
     playerAddress: () => `https://www.google.com/maps/embed?pb=${pb}`,
   };
+}
+
+/**
+ * The player settings each provider documents for its embed address, which a
+ * pasted player link may carry and the block keeps. Anything else in a link
+ * (a watch page's `v`, `list`, `si`, tracking parameters) is not a setting of
+ * the player and is left out.
+ */
+const YOUTUBE_OPTIONS: ReadonlySet<string> = new Set([
+  "cc_lang_pref",
+  "cc_load_policy",
+  "color",
+  "controls",
+  "disablekb",
+  "end",
+  "fs",
+  "hl",
+  "iv_load_policy",
+  "loop",
+  "mute",
+  "playlist",
+  "playsinline",
+  "rel",
+]);
+const VIMEO_OPTIONS: ReadonlySet<string> = new Set([
+  "autopause",
+  "background",
+  "byline",
+  "color",
+  "controls",
+  "loop",
+  "muted",
+  "playsinline",
+  "portrait",
+  "quality",
+  "speed",
+  "texttrack",
+  "title",
+  "transparent",
+]);
+
+/**
+ * A value a kept setting may hold: short, and made of the characters the
+ * providers' settings use (ids, numbers, colours, language codes, lists), so
+ * nothing in it can carry anything else into the player's address.
+ */
+const OPTION_VALUE = /^[A-Za-z0-9_,.-]{1,64}$/;
+
+/** The link's settings named in `allowed`, each with a value it may hold. */
+function keptOptions(
+  parsed: URL,
+  allowed: ReadonlySet<string>
+): Record<string, string> {
+  const kept: Record<string, string> = {};
+  for (const [name, value] of parsed.searchParams) {
+    if (allowed.has(name) && OPTION_VALUE.test(value)) kept[name] = value;
+  }
+  return kept;
 }
 
 /** A query parameter's value exactly as the address writes it, undecoded. */

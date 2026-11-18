@@ -3,40 +3,13 @@
  * over the box an Embed with no link draws, in the editor's own colours,
  * holding "Paste a YouTube, Vimeo or other link" and its field.
  *
- * Laid out as `.nx-image-states` is, for the same reasons: a layer over the
- * canvas root's content box that takes no presses itself, each plate opting
- * back in at the rectangle the component measured, opaque on the editor's
- * well so the editor's text keeps its contrast in either theme.
+ * Drawn on the Image's layer and plate rules (`image-states.css`), for the
+ * same reasons: a layer over the canvas root's content box that takes no
+ * presses itself, each plate opting back in at the rectangle the component
+ * measured, opaque on the editor's well so the editor's text keeps its
+ * contrast in either theme.
  */
-.nx-embed-states {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-}
-
-.nx-embed-state {
-  position: absolute;
-  box-sizing: border-box;
-  display: grid;
-  place-items: center;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  padding: 1rem;
-  pointer-events: auto;
-  /* Its own size decides what it shows, at any zoom: see the queries below. */
-  container-type: size;
-  border: 1.5px dashed var(--nx-builder-picture-edge);
-  border-radius: var(--radius-md);
-  background: var(--nx-builder-picture-ground);
-  color: var(--nx-builder-text-muted);
-  font:
-    400 0.8125rem/1.4 var(--font-sans, system-ui),
-    sans-serif;
-  text-align: center;
-  cursor: default;
-}
+/* The layer and the plate are the Image's (`image-states.css`), shared. */
 
 /* The cover over an Embed's frame: nothing to see, only a press to take. */
 .nx-embed-state[data-embed-state="frame"] {
@@ -44,11 +17,6 @@
   border: none;
   background: transparent;
   container-type: normal;
-}
-
-/* Mid-drag of a block, the plates keep the page's shape and take nothing. */
-.nx-embed-states[data-dragging] .nx-embed-state {
-  pointer-events: none;
 }
 
 .nx-embed-state__form {

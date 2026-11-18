@@ -79,6 +79,25 @@ describe("detectEmbed: YouTube", () => {
     ).toBe("https://www.youtube.com/embed/dQw4w9WgXcQ");
   });
 
+  it("keeps the player settings a stored player link carries, and the block's own choices win", () => {
+    const match = matched(
+      "https://www.youtube.com/embed/dQw4w9WgXcQ?controls=0&end=60&loop=1&playlist=dQw4w9WgXcQ&autoplay=0&si=track&evil=%22%3E"
+    );
+    const address = new URL(match.playerAddress({ privacy: true, autoplay: true }));
+    expect(Object.fromEntries(address.searchParams)).toEqual({
+      controls: "0",
+      end: "60",
+      loop: "1",
+      playlist: "dQw4w9WgXcQ",
+      autoplay: "1",
+    });
+    expect(address.origin).toBe("https://www.youtube-nocookie.com");
+    // A setting holding anything but its plain value is left out.
+    expect(
+      matched("https://www.youtube.com/embed/dQw4w9WgXcQ?color=%22onload%22").playerAddress(PLAIN)
+    ).toBe("https://www.youtube.com/embed/dQw4w9WgXcQ");
+  });
+
   it("names the video's pictures on YouTube's picture host only", () => {
     const { thumbnail } = matched("https://youtu.be/dQw4w9WgXcQ");
     expect(thumbnail).toEqual({
@@ -120,6 +139,12 @@ describe("detectEmbed: Vimeo", () => {
       "https://player.vimeo.com/video/76979871?dnt=1&autoplay=1"
     );
     expect(match.playerAddress(PLAIN)).not.toContain("dnt");
+  });
+
+  it("keeps a Vimeo player link's own settings beside privacy mode", () => {
+    expect(
+      matched("https://player.vimeo.com/video/76979871?h=8272103f6e&title=0&byline=0&dnt=0").playerAddress(PRIVATE)
+    ).toBe("https://player.vimeo.com/video/76979871?title=0&byline=0&h=8272103f6e&dnt=1");
   });
 
   it("finds the picture through Vimeo's oEmbed, on Vimeo's picture host", () => {
@@ -190,10 +215,12 @@ describe("detectEmbed: Google Maps", () => {
   it("does not take a link to a place, which Google does not let a site frame", () => {
     expect(detectEmbed("https://www.google.com/maps/place/Times+Square")).toBeUndefined();
     expect(detectEmbed("https://www.google.com/maps/embed")).toBeUndefined();
-    // A description carrying characters Maps never writes is not a map's.
-    expect(
-      detectEmbed('https://www.google.com/maps/embed?pb=!1m2"><script>')
-    ).toBeUndefined();
+    // Markup in a description stays escaped, as the link's own parser wrote
+    // it: nothing in the player address can end it or its attribute.
+    const marked = detectEmbed('https://www.google.com/maps/embed?pb=!1m2"><script>');
+    const address = marked?.playerAddress(PLAIN) ?? "";
+    expect(address).toBe("https://www.google.com/maps/embed?pb=!1m2%22%3E%3Cscript%3E");
+    expect(address).not.toMatch(/["<>]/);
   });
 });
 
