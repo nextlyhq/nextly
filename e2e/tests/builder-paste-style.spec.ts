@@ -10,7 +10,8 @@
  *   two selected Headings, one wearing "Display": both are drawn with it on
  *   Desktop and Mobile, both store the source's class list, their words are
  *   unchanged, and one Undo takes both back. A paste merged into the targets
- *   would keep "Display"; one applied block by block needs two undos.
+ *   would keep "Display"; one applied block by block needs two undos. One
+ *   Redo brings the look back on both.
  * - From a Heading with no text style onto one wearing "Display", "Display"
  *   is removed. A paste that kept a target's styles would leave it.
  * - Onto an Image, the builder says how many settings don't apply to Image:
@@ -260,6 +261,16 @@ test.describe("Copy style and Paste style", () => {
       "text-transform",
       "uppercase"
     );
+
+    // One Redo, both pasted again: the whole look on every target.
+    await page.getByRole("button", { name: "Redo", exact: true }).click();
+    for (const id of [FIRST, SECOND]) {
+      const target = await block(page, id);
+      await expect(target).toHaveCSS("font-size", "40px");
+      await expect(target).toHaveCSS("color", "rgb(200, 0, 0)");
+      await expect(target).toHaveCSS("text-transform", "uppercase");
+      await expect(target).toHaveCSS("border-top-width", "3px");
+    }
   });
 
   test("from a Heading with no text style, removes the target's Display", async ({

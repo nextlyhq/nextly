@@ -160,6 +160,16 @@ describe("Copy style and Paste style", () => {
       void result.current.editor.undo();
     });
     expect(result.current.editor.document.nodes).toEqual(THREE.nodes);
+
+    // One redo brings the look back on both.
+    act(() => {
+      void result.current.editor.redo();
+    });
+    for (const id of ["a", "b"]) {
+      const target = findNode(result.current.editor.document.nodes, id);
+      expect(target?.styles).toEqual(SOURCE_STYLES);
+      expect(target?.classes).toEqual([eyebrow.id, card.id]);
+    }
   });
 
   it("clears a target's text style when the source wears none", () => {
