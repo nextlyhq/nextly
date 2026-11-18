@@ -1,7 +1,8 @@
 /**
  * The entry and settings screens against axe's WCAG 2.2 AA scan, in light
  * and in dark: the New page dialog; Page settings, each of its tabs (General,
- * Fields, SEO, Code); a post's entry header (its document bar and address
+ * Fields, SEO, Code, the Code tab with the page's own CSS box); Site settings
+ * → Code with the site's CSS box open; a post's entry header (its document bar and address
  * chip) and Details; a Single's side panel (what it is, Last changed, "Shown
  * on (from the builder)", For developers); and the dashboard's Continue card
  * with its Pinned and Recent groups. And the polite announcements of copying
@@ -19,8 +20,11 @@ import { test } from "./support/test";
 
 // The Single panel opens the Homepage, whose form claims it; the Continue
 // card reads the file's own dashboard, and the dashboard's SEO card counts
-// the SEO pages this file writes.
-test.describe.configure({ lock: [LOCK.homepage, LOCK.dashboard] });
+// the SEO pages this file writes. Site settings → Code reads the site's code,
+// which another spec stores and clears.
+test.describe.configure({
+  lock: [LOCK.homepage, LOCK.dashboard, LOCK.siteCode],
+});
 
 const RUN = Date.now().toString(36);
 const PINS = "/admin/api/dashboard/pins";
@@ -120,11 +124,50 @@ for (const theme of THEMES) {
         await tab.click();
         await expect(tab).toHaveAttribute("aria-selected", "true");
         await expect(dialog.getByRole("tabpanel")).toBeVisible();
+        // The Code tab holds the page's own CSS box, above its code.
+        if (name === "Code") {
+          await expect(
+            dialog.getByText(
+              "CSS for this page only. Site-wide CSS lives in Site settings."
+            )
+          ).toBeVisible();
+        }
         // The whole page: the builder draws Page settings where a scan
         // scoped by selector measures none of it.
         await expectNoAxeViolations(page);
       }
     }
+  });
+
+  test(`Site settings → Code, with the site's CSS box open (${theme})`, async ({
+    page,
+  }) => {
+    const id = await seedPage(page, "Axe site css");
+    await gotoAdmin(
+      page,
+      `/collections/pages/${id}/builder?field=content`,
+      theme
+    );
+    await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
+      timeout: 60_000,
+    });
+    await page
+      .getByRole("navigation", { name: "Editor panels" })
+      .getByRole("button", { name: "Settings" })
+      .click();
+    await page
+      .getByRole("dialog", { name: /^Page settings · / })
+      .getByRole("button", { name: "Site settings" })
+      .click();
+    const site = page.getByRole("dialog", { name: "Site settings" });
+    const code = site.getByRole("region", { name: "Code" });
+    // "Add code" on a site with none, "Edit code" once it has some. Opening
+    // the editor saves nothing.
+    await code.getByRole("button", { name: /^(Add|Edit) code$/ }).click();
+    await expect(
+      code.getByText(/^CSS for every page of the site\. Write plain CSS; no/)
+    ).toBeVisible();
+    await expectNoAxeViolations(page);
   });
 
   test(`a post's entry header and Details (${theme})`, async ({ page }) => {

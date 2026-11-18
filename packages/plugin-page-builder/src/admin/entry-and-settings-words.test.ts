@@ -5,6 +5,9 @@
  * on"; the SEO plugin's tab in Page settings; and the builder's word modules
  * and shell.
  *
+ * The page's and the site's CSS boxes are among them: their labels, the line
+ * under each, and the checker's refusal of a pasted `<style>` tag.
+ *
  * Each decided word is said, in the file that draws it, and no author ever
  * reads "slug", "document view", "field type" or "blocks field" on these
  * screens: those are the code's names for an address, a way of opening an
@@ -49,6 +52,8 @@ const SCREENS: readonly string[] = [
   "plugin-page-builder/src/admin",
   "plugin-page-builder/src/builder-view.ts",
   "plugin-page-builder/src/shown-on-contract.ts",
+  // What the CSS boxes say when they refuse a line: the one checker's words.
+  "plugin-page-builder/src/site-code/css-check.ts",
   "plugin-seo/src/admin/PageBuilderSeoTab.tsx",
   "plugin-seo/src/admin/PageBuilderSearchResult.tsx",
   "plugin-seo/src/admin/SeoTab.tsx",
@@ -124,6 +129,29 @@ const DECIDED: readonly { word: string | RegExp; file: string }[] = [
     file: "plugin-page-builder/src/admin/editor/settings-dialog.tsx",
   })),
   { word: "SEO", file: "plugin-seo/src/tab/contributions.ts" },
+  // The page's Code tab: its CSS box and the line under it.
+  {
+    word: "CSS",
+    file: "plugin-page-builder/src/admin/editor/settings-code.tsx",
+  },
+  {
+    word: "CSS for this page only. Site-wide CSS lives in Site settings.",
+    file: "plugin-page-builder/src/admin/editor/settings-code.tsx",
+  },
+  // Site settings → Code: its CSS box and the line under it.
+  {
+    word: "CSS",
+    file: "plugin-page-builder/src/admin/editor/site-code-settings.tsx",
+  },
+  {
+    word: /^CSS for every page of the site\. Write plain CSS; no \{…\} tags needed\.$/,
+    file: "plugin-page-builder/src/admin/editor/site-code-settings.tsx",
+  },
+  // The checker's refusal of a pasted <style> tag, as either box says it.
+  {
+    word: "Leave out the <style> tags.",
+    file: "plugin-page-builder/src/site-code/css-check.ts",
+  },
   {
     word: "Shown on (from the builder)",
     file: "plugin-page-builder/src/shown-on-contract.ts",
