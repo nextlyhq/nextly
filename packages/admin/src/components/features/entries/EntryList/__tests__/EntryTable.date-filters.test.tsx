@@ -64,5 +64,7 @@ describe("the list's date filters", () => {
     });
     expect(clear.className.split(/\s+/)).toContain("text-foreground");
     expect(clear.className).not.toMatch(/(^|\s)text-primary(\s|$)/);
+    // In the menu's text colour, so underlined at rest to read as a link.
+    expect(clear.className.split(/\s+/)).toContain("underline");
   });
 });

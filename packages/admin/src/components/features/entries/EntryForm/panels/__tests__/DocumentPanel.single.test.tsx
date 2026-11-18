@@ -250,6 +250,9 @@ describe("a Single's side panel", () => {
     });
     expect(history.className.split(/\s+/)).toContain("text-foreground");
     expect(history.className).not.toMatch(/(^|\s)text-primary(\s|$)/);
+    // In the same colour as the sentence around it, so underlined at rest:
+    // its weight alone would not say it can be pressed.
+    expect(history.className.split(/\s+/)).toContain("underline");
   });
 
   it("leaves History out where the Single keeps no history", () => {

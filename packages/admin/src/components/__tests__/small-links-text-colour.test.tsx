@@ -8,7 +8,8 @@
  * `--nx-foreground`, which every theme and brand keeps readable:
  * "Forgot password?" on the sign-in page, the empty content widget's
  * "Launch Initial Entry", the stats grid's "Infrastructure", the media bulk
- * bar's "Move", and the file drop area's browse hint.
+ * bar's "Move", and the file drop area's browse hint. The links among them
+ * are underlined at rest, so they read as links without the brand's colour.
  *
  * @module components/__tests__/small-links-text-colour.test
  */
@@ -17,12 +18,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resetSetupStatusCache } from "@admin/lib/auth/setup-status";
 
-const get = vi.hoisted(() => vi.fn());
-const post = vi.hoisted(() => vi.fn());
+// One client for every render, as the admin's own is: the sign-in page reads
+// its extras again whenever the client changes, so a client made per render
+// would ask again on every answer.
+const { get, post, client } = vi.hoisted(() => {
+  const get = vi.fn();
+  const post = vi.fn();
+  return { get, post, client: { api: { public: { get, post } } } };
+});
 vi.mock("@admin/lib/api/publicApi", () => ({ publicApi: { get, post } }));
-vi.mock("@admin/hooks/useApi", () => ({
-  useApi: () => ({ api: { public: { get, post } } }),
-}));
+vi.mock("@admin/hooks/useApi", () => ({ useApi: () => client }));
 // What the dashboard's stats answer, set per test.
 const stats = vi.hoisted(() => ({
   current: { data: undefined as unknown, isLoading: true, error: null },
@@ -54,6 +59,14 @@ function expectTextColour(element: Element): void {
   expect(classes).not.toContain("text-primary");
 }
 
+/**
+ * A link that reads in the text colour beside other text shows it is a link
+ * by more than its colour: underlined at rest.
+ */
+function expectUnderlined(element: Element): void {
+  expect(classesOf(element)).toContain("underline");
+}
+
 beforeEach(() => {
   stats.current = { data: undefined, isLoading: true, error: null };
   get.mockReset();
@@ -73,8 +86,16 @@ beforeEach(() => {
 describe("small links read in the admin's text colour", () => {
   it("Forgot password? on the sign-in page", async () => {
     render(<Login />);
-    expectTextColour(
-      await screen.findByRole("link", { name: "Forgot password?" })
+    const forgot = await screen.findByRole("link", {
+      name: "Forgot password?",
+    });
+    expectTextColour(forgot);
+    expectUnderlined(forgot);
+    // Settled, not still asking: one client for every render, so the
+    // answer's own render starts no second read.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(get.mock.calls.filter(([path]) => path === "/auth/ui")).toHaveLength(
+      1
     );
   });
 
@@ -85,9 +106,9 @@ describe("small links read in the admin's text colour", () => {
       error: null,
     };
     render(<ContentStatusWidget />);
-    expectTextColour(
-      screen.getByRole("link", { name: /Launch Initial Entry/ })
-    );
+    const launch = screen.getByRole("link", { name: /Launch Initial Entry/ });
+    expectTextColour(launch);
+    expectUnderlined(launch);
   });
 
   it("Infrastructure on the stats grid", () => {

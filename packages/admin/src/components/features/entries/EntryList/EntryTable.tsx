@@ -672,10 +672,11 @@ export const EntryTable: ForwardRefExoticComponent<
 
                     {/* In the menu's text colour: the primary token is a fill
                         a brand may set to any colour, and small text drawn in
-                        it can fall under AA. */}
+                        it can fall under AA. Underlined at rest, so it reads
+                        as a link in the menu's own colour. */}
                     <button
                       type="button"
-                      className="w-full text-left text-xs text-foreground hover:underline"
+                      className="w-full text-left text-xs text-foreground underline underline-offset-2"
                       onClick={clearDateFilters}
                     >
                       Clear date filters

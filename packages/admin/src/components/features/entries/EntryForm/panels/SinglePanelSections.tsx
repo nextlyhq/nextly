@@ -97,11 +97,12 @@ export function LastChangedSection({
             </span>
             {/* In the panel's text colour, as its other links are: the
                 primary token is a fill a brand may set to any colour, and
-                text drawn in it can fall under AA on the panel. */}
+                text drawn in it can fall under AA on the panel. Underlined at
+                rest, since its colour is the sentence's own. */}
             <button
               type="button"
               onClick={onOpenHistory}
-              className="rounded-sm font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="rounded-sm font-medium text-foreground underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               History
             </button>
