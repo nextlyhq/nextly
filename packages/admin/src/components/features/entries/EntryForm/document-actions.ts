@@ -155,7 +155,10 @@ export interface ReviewStepState {
   name: string;
   label: string;
   kind: ReviewStepKind;
+  /** Whether this person may take it, as the server judges it. */
   held: boolean;
+  /** Whether it is the stage's primary step, which leads. */
+  primary: boolean;
 }
 
 /** The facts about the part's review the actions depend on. */
@@ -575,13 +578,15 @@ const LEADING_STEP_KINDS: readonly ReviewStepKind[] = [
 ];
 
 /**
- * The step a stage leads with: an approval where it has one, else a
- * submission, else a move. The review state does not name the stage's
- * primary step, so it is derived by kind; asking for changes never leads.
+ * The step a stage leads with: its primary step, as the review state marks
+ * it. Where none is marked, an approval, else a submission, else a move;
+ * asking for changes never leads.
  */
-export function leadingReviewStep<T extends { kind: ReviewStepKind }>(
-  steps: readonly T[]
-): T | undefined {
+export function leadingReviewStep<
+  T extends { kind: ReviewStepKind; primary: boolean },
+>(steps: readonly T[]): T | undefined {
+  const primary = steps.find(step => step.primary);
+  if (primary !== undefined) return primary;
   for (const kind of LEADING_STEP_KINDS) {
     const step = steps.find(candidate => candidate.kind === kind);
     if (step !== undefined) return step;

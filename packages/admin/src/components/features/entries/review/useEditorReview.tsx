@@ -11,13 +11,10 @@
  * attached it hands nothing, and the header is exactly the one a document
  * without a workflow has.
  *
- * Whether the person may take a step is read from their permissions: the
- * review state names each step leaving the stage but not the permission it
- * needs, so a step that sends work on (submit, move) is held by whoever may
- * edit the document, and one that judges it (approve, request changes) by
- * whoever holds `approve-<slug>`, or is the person the part waits for. The
- * server decides each step as it is taken; a refusal is said where it
- * happens.
+ * Whether the person may take a step, and which step leads, are the review
+ * state's own answers (`mayTake`, `primary`), judged on the server by the
+ * step's own checks. What a step checks of the content (the version seen, a
+ * comment) is asked when it is taken; a refusal is said where it happens.
  *
  * @module components/features/entries/review/useEditorReview
  * @experimental
@@ -32,17 +29,12 @@ import {
   useReviewState,
   useTakeStep,
 } from "@admin/hooks/queries/useReviewState";
-import { useCurrentUserId } from "@admin/hooks/useCurrentUserId";
-import { useHasPermission } from "@admin/hooks/useHasPermission";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
 import type { PartReview, ReviewStep } from "@admin/types/workflows";
 
-import {
-  leadingReviewStep,
-  type ReviewActionState,
-} from "../EntryForm/document-actions";
+import type { ReviewActionState } from "../EntryForm/document-actions";
 import type {
   DocumentActionOutcome,
   DocumentReviewBinding,
@@ -56,8 +48,6 @@ export interface EditorReviewInput {
   document: ReleaseDocumentRef | undefined;
   /** The language being edited; the default language where none is named. */
   locale: string | undefined;
-  /** Whether the person may change the document, which a submission needs. */
-  canEdit: boolean;
   /** Whether the page holds unsaved edits, which a step would not carry. */
   isDirty: boolean;
   /**
@@ -99,14 +89,11 @@ interface Asking {
 export function useEditorReview({
   document,
   locale,
-  canEdit,
   isDirty,
   storedStamp,
 }: EditorReviewInput): EditorReview {
   const query = useReviewState(document);
   const { defaultLocale } = useLocalization();
-  const has = useHasPermission();
-  const me = useCurrentUserId();
   const mutation = useTakeStep(document);
   const queryClient = useQueryClient();
   const [asking, setAsking] = useState<Asking | null>(null);
@@ -129,14 +116,7 @@ export function useEditorReview({
     return { binding: undefined, part: undefined, dialog: null };
   }
 
-  const leading = leadingReviewStep(part.steps);
-  const waitsForMe =
-    part.waitingFor?.kind === "user" && part.waitingFor.id === me;
-  const holds = (step: ReviewStep): boolean =>
-    step.kind === "submit" || step.kind === "move"
-      ? canEdit
-      : has(`approve-${document.scopeSlug}`) ||
-        (waitsForMe && step === leading);
+  const holds = (step: ReviewStep): boolean => step.mayTake;
 
   const send = async (
     step: ReviewStep,
@@ -182,6 +162,7 @@ export function useEditorReview({
       label: step.label,
       kind: step.kind,
       held: holds(step),
+      primary: step.primary,
     })),
     waitingFor: waitingForWords(part.waitingFor),
     ...stepHold(isDirty, onScreen),

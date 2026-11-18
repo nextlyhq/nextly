@@ -53,7 +53,14 @@ function part(over: Partial<PartReview> = {}): PartReview {
     revision: 4,
     version: "v4",
     steps: [
-      { name: "approve", label: "Approve", kind: "approve", to: "approved" },
+      {
+        name: "approve",
+        label: "Approve",
+        kind: "approve",
+        to: "approved",
+        mayTake: true,
+        primary: true,
+      },
     ],
     waitingFor: { kind: "roles", roles: [{ id: "r-ed", name: "Editors" }] },
     lastMove: {
@@ -77,7 +84,8 @@ function answer(...parts: PartReview[]) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  held.slugs = new Set(["approve-posts"]);
+  // Assigning follows the step the server says the person may take.
+  held.slugs = new Set();
   assignSpy.mockResolvedValue({ message: "Assigned.", item: {} });
 });
 
@@ -173,8 +181,23 @@ describe("ReviewSection", () => {
   });
 
   it("offers no assigning to a person who may neither edit nor take the stage's step", async () => {
-    held.slugs = new Set();
-    fetchSpy.mockResolvedValue(answer(part()));
+    held.slugs = new Set(["approve-posts"]);
+    fetchSpy.mockResolvedValue(
+      answer(
+        part({
+          steps: [
+            {
+              name: "approve",
+              label: "Approve",
+              kind: "approve",
+              to: "approved",
+              mayTake: false,
+              primary: true,
+            },
+          ],
+        })
+      )
+    );
     render(<ReviewSection document={post} />);
     const section = await screen.findByRole("region", { name: "Review" });
     expect(within(section).queryByRole("button")).not.toBeInTheDocument();

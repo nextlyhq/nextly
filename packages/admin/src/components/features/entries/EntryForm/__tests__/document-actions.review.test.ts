@@ -35,12 +35,23 @@ function state(over: Partial<DocumentActionState> = {}): DocumentActionState {
   };
 }
 
-const SUBMIT = { name: "submit", label: "Submit for review", kind: "submit" };
-const APPROVE = { name: "approve", label: "Approve", kind: "approve" };
+const SUBMIT = {
+  name: "submit",
+  label: "Submit for review",
+  kind: "submit",
+  primary: true,
+};
+const APPROVE = {
+  name: "approve",
+  label: "Approve",
+  kind: "approve",
+  primary: true,
+};
 const REQUEST = {
   name: "requestChanges",
   label: "Request changes",
   kind: "request-changes",
+  primary: false,
 };
 
 /** The preset's three stages, with which steps the person holds. */
@@ -209,6 +220,47 @@ describe("the next step, per person and stage", () => {
     expect(
       documentActions(s).some(action => action.id.startsWith("review-step:"))
     ).toBe(false);
+  });
+
+  it("leads with the stage's primary step, whatever its kind", () => {
+    const s = state({
+      ...reviewer,
+      review: {
+        ...inReview(true),
+        steps: [
+          { ...APPROVE, kind: "approve", primary: false, held: true },
+          {
+            name: "legal",
+            label: "Send to legal",
+            kind: "move",
+            primary: true,
+            held: true,
+          },
+        ],
+      },
+    });
+    expect(lead(s)[0]).toMatchObject({ id: "review-step:legal" });
+    expect(labels(s, "toolbar")).toEqual(["Approve"]);
+  });
+
+  it("falls back to approve, then submit, then move where no step is primary", () => {
+    const s = state({
+      ...reviewer,
+      review: {
+        ...inReview(true),
+        steps: [
+          {
+            name: "legal",
+            label: "Send to legal",
+            kind: "move",
+            primary: false,
+            held: true,
+          },
+          { ...APPROVE, kind: "approve", primary: false, held: true },
+        ],
+      },
+    });
+    expect(lead(s)[0]).toMatchObject({ id: "review-step:approve" });
   });
 
   it("keeps exactly one action leading, and no id twice, in every review case", () => {

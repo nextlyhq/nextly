@@ -22,6 +22,10 @@ export interface ReviewStep {
   label: string;
   kind: WorkflowStepKind;
   to: string;
+  /** Whether the caller may take it on this part, as the server judges the step's own checks. */
+  mayTake: boolean;
+  /** Whether it is its stage's primary step: the editor's main action there. */
+  primary: boolean;
 }
 
 /** Whom a part is assigned to: one person, or anyone holding one role. */
@@ -69,7 +73,8 @@ export interface PartReview {
 
 /** A document's review state, part by part. */
 export interface DocumentReview {
-  workflow: { slug: string; label: string };
+  /** Null where no workflow is attached; there are then no parts. */
+  workflow: { slug: string; label: string } | null;
   parts: PartReview[];
 }
 

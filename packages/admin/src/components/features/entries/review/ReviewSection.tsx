@@ -149,12 +149,10 @@ function AssignControls({
   const me = useCurrentUserId();
   const assign = useAssignPart(document);
   const leading = leadingReviewStep(part.steps);
+  // Whoever may edit the document, or may take the stage's primary step as
+  // the server judges it, may assign the part.
   const mayAssign =
-    has(`update-${document.scopeSlug}`) ||
-    (leading !== undefined &&
-      leading.kind !== "submit" &&
-      leading.kind !== "move" &&
-      has(`approve-${document.scopeSlug}`));
+    has(`update-${document.scopeSlug}`) || leading?.mayTake === true;
   if (!mayAssign || leading === undefined) return null;
 
   const to = (assignee: ReviewAssignee | null) => {

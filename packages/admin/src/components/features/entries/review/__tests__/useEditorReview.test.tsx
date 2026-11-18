@@ -60,6 +60,8 @@ function part(over: Partial<PartReview> = {}): PartReview {
         label: "Submit for review",
         kind: "submit",
         to: "inReview",
+        mayTake: true,
+        primary: true,
       },
     ],
     waitingFor: null,
@@ -68,20 +70,32 @@ function part(over: Partial<PartReview> = {}): PartReview {
   };
 }
 
-const IN_REVIEW: Partial<PartReview> = {
-  stage: "inReview",
-  stageLabel: "In review",
-  steps: [
-    { name: "approve", label: "Approve", kind: "approve", to: "approved" },
-    {
-      name: "requestChanges",
-      label: "Request changes",
-      kind: "request-changes",
-      to: "drafting",
-    },
-  ],
-  waitingFor: { kind: "roles", roles: [{ id: "r1", name: "Editors" }] },
-};
+/** In review, with whether the server says this person may take its steps. */
+function inReview(mayTake: boolean): Partial<PartReview> {
+  return {
+    stage: "inReview",
+    stageLabel: "In review",
+    steps: [
+      {
+        name: "approve",
+        label: "Approve",
+        kind: "approve",
+        to: "approved",
+        mayTake,
+        primary: true,
+      },
+      {
+        name: "requestChanges",
+        label: "Request changes",
+        kind: "request-changes",
+        to: "drafting",
+        mayTake,
+        primary: false,
+      },
+    ],
+    waitingFor: { kind: "roles", roles: [{ id: "r1", name: "Editors" }] },
+  };
+}
 
 function attached(...parts: PartReview[]): {
   attached: true;
@@ -106,7 +120,6 @@ function Editor({
   const review = useEditorReview({
     document: post,
     locale: undefined,
-    canEdit,
     isDirty,
   });
   return (
@@ -185,7 +198,7 @@ describe("the editor's next step under a workflow", () => {
 
   it("leads a reviewer with Approve, and asks a comment before requesting changes", async () => {
     held.slugs = new Set(["approve-posts"]);
-    fetchSpy.mockResolvedValue(attached(part(IN_REVIEW)));
+    fetchSpy.mockResolvedValue(attached(part(inReview(true))));
     render(<Editor canEdit={false} />);
     expect(
       await screen.findByRole("button", { name: "Approve" })
@@ -217,13 +230,70 @@ describe("the editor's next step under a workflow", () => {
 
   it("holds Publish for a publisher until the part is approved, saying who it waits for", async () => {
     held.slugs = new Set(["update-posts", "publish-posts"]);
-    fetchSpy.mockResolvedValue(attached(part(IN_REVIEW)));
+    fetchSpy.mockResolvedValue(attached(part(inReview(false))));
     render(<Editor />);
     const publish = await screen.findByRole("button", { name: /^publish$/i });
     await waitFor(() => expect(publish).toBeDisabled());
     expect(publish).toHaveAttribute(
       "title",
       "Needs approval: In review, waiting for Editors"
+    );
+  });
+
+  it("offers no step the server says the person may not take, whatever they hold", async () => {
+    // The permission a step names is the server's to judge, with the step's
+    // other checks (a refused self-approval): holding approve-posts is not
+    // enough where it says no.
+    held.slugs = new Set(["approve-posts", "publish-posts"]);
+    fetchSpy.mockResolvedValue(attached(part(inReview(false))));
+    render(<Editor canEdit={false} />);
+    // Settled on the review state: Publish is held for approval.
+    const publish = await screen.findByRole("button", { name: /^publish$/i });
+    await waitFor(() =>
+      expect(publish).toHaveAttribute(
+        "title",
+        "Needs approval: In review, waiting for Editors"
+      )
+    );
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Request changes" })
+    ).toBeNull();
+  });
+
+  it("leads with the stage's primary step, whatever its kind", async () => {
+    held.slugs = new Set(["approve-posts"]);
+    fetchSpy.mockResolvedValue(
+      attached(
+        part({
+          ...inReview(true),
+          steps: [
+            {
+              name: "approve",
+              label: "Approve",
+              kind: "approve",
+              to: "approved",
+              mayTake: true,
+              primary: false,
+            },
+            {
+              name: "legal",
+              label: "Send to legal",
+              kind: "move",
+              to: "legal",
+              mayTake: true,
+              primary: true,
+            },
+          ],
+        })
+      )
+    );
+    render(<Editor canEdit={false} />);
+    const lead = await screen.findByRole("button", { name: "Send to legal" });
+    // The move leads, drawn as the primary control; Approve sits beside it.
+    expect(lead).toHaveAttribute("data-primary", "true");
+    expect(screen.getByRole("button", { name: "Approve" })).not.toHaveAttribute(
+      "data-primary"
     );
   });
 
@@ -235,7 +305,6 @@ describe("the editor's next step under a workflow", () => {
       const review = useEditorReview({
         document: { scopeKind: "single", scopeSlug: "home", entryId: "s1" },
         locale: undefined,
-        canEdit: true,
         isDirty: false,
       });
       return (

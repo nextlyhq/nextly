@@ -11,7 +11,6 @@
  */
 
 import { fetcher } from "../lib/api/fetcher";
-import { validationIssues } from "../lib/api/parseApiError";
 import type { ReleaseDocumentRef } from "../types/releases";
 import type {
   AssignmentPayload,
@@ -20,12 +19,6 @@ import type {
   TakeStepPayload,
   WorkflowDocumentRef,
 } from "../types/workflows";
-
-/**
- * The code the review-state read refuses with where no workflow is attached
- * to the document's collection or Single: an answer, not a failure.
- */
-export const WORKFLOW_NOT_ATTACHED = "WORKFLOW_NOT_ATTACHED";
 
 /** A document as the workflow routes name it, from the editor's own reference. */
 export function workflowDocument(
@@ -46,30 +39,21 @@ function reviewStateQuery(document: WorkflowDocumentRef): string {
 }
 
 /**
- * A document's review state, or that no workflow is attached to it. Every
- * other refusal (a document the caller may not read, a server error) is
- * thrown, as a failed read is everywhere else.
+ * A document's review state, or that no workflow is attached to it: the route answers that with
+ * no workflow and no parts, not a refusal. A refusal (a document the caller may not read, a
+ * server error) is thrown, as a failed read is everywhere else.
  */
 export async function fetchReviewState(
   document: WorkflowDocumentRef
 ): Promise<ReviewStateAnswer> {
-  try {
-    const review = await fetcher<DocumentReview>(
-      `/workflows/review-state${reviewStateQuery(document)}`,
-      {},
-      true
-    );
-    return { attached: true, review };
-  } catch (reason) {
-    if (
-      validationIssues(reason).some(
-        issue => issue.code === WORKFLOW_NOT_ATTACHED
-      )
-    ) {
-      return { attached: false };
-    }
-    throw reason;
-  }
+  const review = await fetcher<DocumentReview>(
+    `/workflows/review-state${reviewStateQuery(document)}`,
+    {},
+    true
+  );
+  return review.workflow === null
+    ? { attached: false }
+    : { attached: true, review };
 }
 
 /** The mutation envelope the workflow writes answer with. */

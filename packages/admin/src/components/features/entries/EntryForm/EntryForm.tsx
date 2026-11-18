@@ -1330,7 +1330,6 @@ export function EntryForm({
             entryId: savedEntryId,
           },
     locale,
-    canEdit: mayEdit,
     isDirty: hasUnsavedWork,
     storedStamp: storedStampOf(entry),
   });

@@ -1793,7 +1793,6 @@ export function SingleForm({
       entryId: String(document.id),
     },
     locale,
-    canEdit: mayEdit,
     isDirty: hasUnsavedWork,
     storedStamp: storedStampOf(document),
   });

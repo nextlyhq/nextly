@@ -78,14 +78,15 @@ describe("workflowApi", () => {
     );
   });
 
-  it("answers a document with no workflow attached as not attached, not as an error", async () => {
-    fetcherSpy.mockRejectedValue(refusal("WORKFLOW_NOT_ATTACHED"));
+  it("answers a document with no workflow attached as not attached", async () => {
+    // The route answers 200 with no workflow, so no failed request is shown.
+    fetcherSpy.mockResolvedValue({ workflow: null, parts: [] });
     await expect(
       fetchReviewState({ collection: "posts", id: "e1" })
     ).resolves.toEqual({ attached: false });
   });
 
-  it("throws every other refusal", async () => {
+  it("throws every refusal", async () => {
     fetcherSpy.mockRejectedValue(refusal("REQUIRED"));
     await expect(
       fetchReviewState({ collection: "posts", id: "e1" })
