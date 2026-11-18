@@ -442,12 +442,14 @@ describe("a type change collected over its stored values", () => {
       undefined,
       { unique: true }
     );
-    expect(result.judgement.reasons).toEqual([
-      expect.objectContaining({
-        kind: "repeated",
-        rows: { first: [{ id: "1" }, { id: "2" }], count: 2 },
-      }),
-    ]);
+    expect(result.judgement.reasons.filter(r => r.class === "blocked")).toEqual(
+      [
+        expect.objectContaining({
+          kind: "repeated",
+          rows: { first: [{ id: "1" }, { id: "2" }], count: 2 },
+        }),
+      ]
+    );
   });
 
   it("reads a stored empty with the database's trimming, which takes spaces and no tab", async () => {

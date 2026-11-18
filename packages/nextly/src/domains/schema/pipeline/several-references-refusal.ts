@@ -264,6 +264,47 @@ export async function refuseSeveralReferencesForOne(args: {
 }
 
 /**
+ * What a switch of `op`'s column to or from naming several collections finds in its rows: a row
+ * holding a value no conversion carries across, and, where the column is or becomes NOT NULL, a
+ * row holding none, which the guard clears to NULL and the column then refuses.
+ */
+async function targetSwitchRefusals(
+  args: { db: unknown; dialect: SupportedDialect; desired: DesiredSchema },
+  op: Extract<Operation, { type: "change_column_type" }>,
+  live: { table: string; column: string; notNull: boolean }
+): Promise<RefusalError[]> {
+  const count = async (condition: RowCondition): Promise<number> => {
+    const [row] = await querySqlRows<{ n: number | string }>(
+      args.db,
+      args.dialect,
+      rowsWhere(args.dialect, live.table, live.column, condition)
+    );
+    return Number(row?.n ?? 0);
+  };
+  const { label, field } = subjectOf(args.desired, op.tableName, op.columnName);
+  const errors: RefusalError[] = [];
+  const none = live.notNull ? await count(NO_REFERENCES) : 0;
+  if (none > 0) {
+    const these = none === 1 ? "that row" : "those rows";
+    errors.push({
+      path: `fields.${field}`,
+      code: "RELATIONSHIP_REQUIRED_HOLDS_NONE",
+      message: `${label}: field '${field}' is required and cannot change how its related entries are stored while ${rowsHold(none)} none. The change needs the field empty on every row, which a required field cannot be: delete ${these} first, or make the field optional.`,
+    });
+  }
+  const rows = await count(HOLDS_A_VALUE);
+  if (rows > 0) {
+    const those = rows === 1 ? "that row" : "those rows";
+    errors.push({
+      path: `fields.${field}`,
+      code: "RELATIONSHIP_TARGETS_HOLD_VALUES",
+      message: `${label}: field '${field}' cannot change how its related entries are stored (between one target collection and several, or one entry and many across several) while ${rowsHold(rows)} a value. Clear the field on ${those} first, or keep its targets as they are.`,
+    });
+  }
+  return errors;
+}
+
+/**
  * Refuses the apply when a relationship it switches to or from naming several target collections
  * has a row holding a value, before any statement runs.
  *
@@ -293,42 +334,12 @@ export async function refuseTargetSwitchesOverValues(args: {
       continue;
     }
     const live = liveNames(renames, op.tableName, op.columnName);
-    const [row] = await querySqlRows<{ n: number | string }>(
-      args.db,
-      args.dialect,
-      rowsWhere(args.dialect, live.table, live.column, HOLDS_A_VALUE)
+    errors.push(
+      ...(await targetSwitchRefusals(args, op, {
+        ...live,
+        notNull: refusesNull(notNull, op, live),
+      }))
     );
-    const rows = Number(row?.n ?? 0);
-    const { label, field } = subjectOf(
-      args.desired,
-      op.tableName,
-      op.columnName
-    );
-    // The guard clears each row holding none to NULL, which a column that is or becomes NOT NULL
-    // refuses: counted as one switching to one reference counts it, before anything runs.
-    if (refusesNull(notNull, op, live)) {
-      const [empty] = await querySqlRows<{ n: number | string }>(
-        args.db,
-        args.dialect,
-        rowsWhere(args.dialect, live.table, live.column, NO_REFERENCES)
-      );
-      const none = Number(empty?.n ?? 0);
-      if (none > 0) {
-        const these = none === 1 ? "that row" : "those rows";
-        errors.push({
-          path: `fields.${field}`,
-          code: "RELATIONSHIP_REQUIRED_HOLDS_NONE",
-          message: `${label}: field '${field}' is required and cannot change how its related entries are stored while ${rowsHold(none)} none. The change needs the field empty on every row, which a required field cannot be: delete ${these} first, or make the field optional.`,
-        });
-      }
-    }
-    if (rows === 0) continue;
-    const those = rows === 1 ? "that row" : "those rows";
-    errors.push({
-      path: `fields.${field}`,
-      code: "RELATIONSHIP_TARGETS_HOLD_VALUES",
-      message: `${label}: field '${field}' cannot change how its related entries are stored (between one target collection and several, or one entry and many across several) while ${rowsHold(rows)} a value. Clear the field on ${those} first, or keep its targets as they are.`,
-    });
   }
   if (errors.length === 0) return;
   throw NextlyError.validation({
