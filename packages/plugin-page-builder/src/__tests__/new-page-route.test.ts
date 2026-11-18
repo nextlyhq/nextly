@@ -11,7 +11,7 @@
  * @module __tests__/new-page-route.test
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
-import { slugify } from "nextly";
+import { slugify } from "nextly/slugify";
 import { describe, expect, it, vi } from "vitest";
 
 import type { PageCollection } from "../pages-search-route";
@@ -25,8 +25,6 @@ import {
   parseNewPageQuery,
   readCreateBody,
   readNewPageFacts,
-  slugBaseOf,
-  typedSlugOf,
   type NewPageReads,
 } from "../pages-write-route";
 
@@ -141,38 +139,88 @@ describe("the address rule the dialog shares with the route", () => {
     "Café & Restaurant",
     "Ünïcödé — dashes – and “quotes”",
     "!!!",
-    "",
     "100% Off: Summer/Winter",
     "a".repeat(120),
     `${"word ".repeat(15)}tail`,
     `${"Ends with a dash at the cut-".padEnd(79, "x")}-y`,
   ];
+  const typed = [
+    "Docs / Install",
+    "/pricing/",
+    "Pricing Plans",
+    "a//b///c",
+    "x".repeat(300),
+    "über/straße",
+  ];
 
-  it("makes the same address from a title as the route, by core's slugify and the route's bounds", () => {
-    for (const title of titles) {
-      expect(pageSlugOfTitle(title), title).toBe(slugBaseOf(title));
-    }
-    // The route's rule is core's, the bound and the neutral word aside.
-    expect(slugBaseOf("Café & Restaurant")).toBe(slugify("Café & Restaurant"));
-  });
+  /** The slug the route wrote for `request`, every address free. */
+  async function stored(
+    request: Parameters<typeof createPage>[0],
+    reads: ReturnType<typeof readsOver>
+  ): Promise<unknown> {
+    await createPage(request, reads);
+    const data = reads.create.mock.lastCall?.[1] as Record<string, unknown>;
+    return data.slug;
+  }
 
-  it("keeps a typed address as the route stores it, `/` making a page beneath another", () => {
-    const typed = [
-      "Docs / Install",
-      "/pricing/",
-      "Pricing Plans",
-      "a//b///c",
-      "---",
-      "x".repeat(300),
-      "über/straße",
-    ];
-    for (const text of typed) {
-      expect(pageSlugOfTyped(text), text).toBe(typedSlugOf(text));
-    }
+  it("makes an address from a title by core's own slugify, bounded, with a word for one of no letters", () => {
+    expect(pageSlugOfTitle("Café & Restaurant")).toBe(
+      slugify("Café & Restaurant")
+    );
+    expect(pageSlugOfTitle("!!!")).toBe("page");
+    const long = pageSlugOfTitle("a".repeat(120));
+    expect(long.length).toBeLessThanOrEqual(80);
     expect(pageSlugOfTyped("Docs / Install")).toBe("docs/install");
     expect(pageSlugOfTyped("x".repeat(300)).length).toBeLessThanOrEqual(
       PAGE_SLUG_MAX
     );
+  });
+
+  it("previews a title's address as the route stores it", async () => {
+    for (const title of titles) {
+      const reads = readsOver();
+      const facts = await readNewPageFacts(
+        { collection: "pages", title },
+        reads
+      );
+      expect(facts.address?.slug, title).toBe(pageSlugOfTitle(title));
+      expect(await stored({ collection: "pages", title }, reads), title).toBe(
+        pageSlugOfTitle(title)
+      );
+    }
+  });
+
+  it("previews a typed path as the route stores it, `/` making a page beneath another", async () => {
+    for (const text of typed) {
+      const reads = readsOver();
+      const facts = await readNewPageFacts(
+        { collection: "pages", title: "A", slug: text },
+        reads
+      );
+      expect(facts.address?.slug, text).toBe(pageSlugOfTyped(text));
+      expect(
+        await stored({ collection: "pages", title: "A", slug: text }, reads),
+        text
+      ).toBe(pageSlugOfTyped(text));
+    }
+  });
+
+  it("previews a typed path in a collection keeping no paths as the route stores it, with no `/`", async () => {
+    const storedSlug = (collection: string, slug: string) =>
+      collection === "landing" ? slug.replace(/\//g, "") : slug;
+    for (const text of typed) {
+      const reads = readsOver({ storedSlug }, [PAGES, LANDING]);
+      const facts = await readNewPageFacts(
+        { collection: "landing", title: "A", slug: text },
+        reads
+      );
+      const written = await stored(
+        { collection: "landing", title: "A", slug: text },
+        reads
+      );
+      expect(facts.address?.slug, text).toBe(written);
+      expect(written, text).toBe(pageSlugOfTyped(text).replace(/\//g, ""));
+    }
   });
 });
 

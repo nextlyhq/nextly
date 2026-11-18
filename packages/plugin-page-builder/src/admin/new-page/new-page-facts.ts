@@ -8,7 +8,7 @@
  *
  * @module admin/new-page/new-page-facts
  */
-import { readPluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import { isApiError, readPluginRoute } from "@nextlyhq/plugin-sdk/admin";
 import { useEffect, useRef, useState } from "react";
 
 import { PAGE_BUILDER_PLUGIN_NAME } from "../../library-contract";
@@ -31,8 +31,17 @@ export interface NewPageFactsRead {
   /** Whether {@link facts} answers the ask as it stands. */
   readonly current: boolean;
   readonly failed: boolean;
+  /**
+   * Whether the read refused the collection as one holding no pages: the
+   * route's answer for a collection the pages search doesn't count, which
+   * the dialog can't make an entry in.
+   */
+  readonly holdsNoPages: boolean;
   readonly retry: () => void;
 }
+
+/** The status the route refuses a collection that holds no pages with. */
+const HOLDS_NO_PAGES_STATUS = 403;
 
 /** The ask as one key, so an answer can be matched to what it was for. */
 function keyOf(ask: NewPageAsk): string {
@@ -45,6 +54,9 @@ export function useNewPageFacts(ask: NewPageAsk): NewPageFactsRead {
     { key: string; facts: NewPageFacts } | undefined
   >(undefined);
   const [failedFor, setFailedFor] = useState<string | null>(null);
+  const [refusedCollection, setRefusedCollection] = useState<string | null>(
+    null
+  );
   const [attempt, setAttempt] = useState(0);
   const latest = useRef(ask);
   latest.current = ask;
@@ -76,8 +88,12 @@ export function useNewPageFacts(ask: NewPageAsk): NewPageFactsRead {
           setFailedFor(null);
           setAnswer({ key, facts });
         })
-        .catch(() => {
-          if (!controller.signal.aborted) setFailedFor(key);
+        .catch((error: unknown) => {
+          if (controller.signal.aborted) return;
+          setFailedFor(key);
+          if (isApiError(error) && error.status === HOLDS_NO_PAGES_STATUS) {
+            setRefusedCollection(asked.collection);
+          }
         });
     }, wait);
     return () => {
@@ -93,6 +109,7 @@ export function useNewPageFacts(ask: NewPageAsk): NewPageFactsRead {
     facts: sameCollection ? answer.facts : undefined,
     current: answer?.key === key,
     failed: failedFor === key,
+    holdsNoPages: refusedCollection === ask.collection,
     retry: () => setAttempt(count => count + 1),
   };
 }

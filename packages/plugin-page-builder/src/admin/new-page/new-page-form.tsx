@@ -38,6 +38,7 @@ import {
   type CreatePageRequest,
   type NewPageFacts,
 } from "../../pages-write-contract";
+import { entryCreatePath } from "../editor/builder-address";
 import { NewPageLayoutPicker } from "../page-layout";
 import { createPage } from "../pages-client";
 
@@ -72,6 +73,11 @@ export interface NewPageFormProps {
   readonly onCreated: (page: CreatedPageItem) => void;
   /** Told the collection's facts as they arrive, for the dialog's title. */
   readonly onFacts?: (facts: NewPageFacts) => void;
+  /**
+   * Told, once, that the collection holds no pages, so the dialog can't make
+   * its entries: the caller hands the author to its create form instead.
+   */
+  readonly onHoldsNoPages?: () => void;
 }
 
 /** The fields the dialog draws itself, whose refusals it shows in place. */
@@ -302,10 +308,15 @@ export function NewPageForm({
   onCancel,
   onCreated,
   onFacts,
+  onHoldsNoPages,
 }: NewPageFormProps): JSX.Element {
   const id = useId();
   const inputs = useInputs(startIn, onFacts);
   const { facts } = inputs;
+  const holdsNoPages = inputs.read.holdsNoPages;
+  useEffect(() => {
+    if (holdsNoPages) onHoldsNoPages?.();
+  }, [holdsNoPages, onHoldsNoPages]);
   const { busy, refusal, setRefusal, create, dismiss } = useCreate(
     unsaved,
     onCreated
@@ -582,11 +593,7 @@ function AlsoNeeded({
           type="button"
           variant="outline"
           size="sm"
-          onClick={() =>
-            navigateTo(
-              `/admin/collections/${encodeURIComponent(collection)}/create`
-            )
-          }
+          onClick={() => navigateTo(entryCreatePath(collection))}
         >
           {NEW_PAGE_WORDS.openForm}
         </Button>

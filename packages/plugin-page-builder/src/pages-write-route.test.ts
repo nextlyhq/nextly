@@ -15,7 +15,7 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
 import type { PageCollection } from "./pages-search-route";
-import { PAGE_TITLE_MAX } from "./pages-write-contract";
+import { PAGE_TITLE_MAX, pageSlugOfTitle } from "./pages-write-contract";
 import {
   createPage,
   deletePage,
@@ -24,7 +24,6 @@ import {
   readCreateBody,
   readRenameBody,
   renamePage,
-  slugBaseOf,
   type PagesWrites,
 } from "./pages-write-route";
 
@@ -313,9 +312,9 @@ describe("creating a page", () => {
   });
 
   it("makes a slug as core's slugify does, bounded, with a word for a title of no letters", () => {
-    expect(slugBaseOf("Café & Restaurant!")).toBe("cafe-restaurant");
-    expect(slugBaseOf("!!!")).toBe("page");
-    const long = slugBaseOf(`${"word ".repeat(40)}`);
+    expect(pageSlugOfTitle("Café & Restaurant!")).toBe("cafe-restaurant");
+    expect(pageSlugOfTitle("!!!")).toBe("page");
+    const long = pageSlugOfTitle(`${"word ".repeat(40)}`);
     expect(long.length).toBeLessThanOrEqual(80);
     expect(long.endsWith("-")).toBe(false);
   });

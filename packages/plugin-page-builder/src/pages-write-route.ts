@@ -39,7 +39,7 @@ import {
   respondMutation,
   type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
-import { slugAsStored, slugify } from "nextly";
+import { slugAsStored } from "nextly";
 import { readPublicSiteSettings, requireNextly } from "nextly/runtime";
 import { z } from "nextly/zod";
 
@@ -72,11 +72,11 @@ import {
   NEW_PAGE_ROUTE_PATH,
   PAGE_DUPLICATE_ROUTE_PATH,
   PAGE_ROUTE_PATH,
-  PAGE_SLUG_BASE_MAX,
   PAGE_SLUG_MAX,
   PAGE_TITLE_MAX,
   PAGES_ROUTE_PATH,
-  UNTITLED_PAGE_SLUG,
+  pageSlugOfTitle,
+  pageSlugOfTyped,
   type CreatedPageItem,
   type CreatePageRequest,
   type NewPageAddress,
@@ -92,12 +92,6 @@ const DRAFT = "draft";
 
 /** What a duplicate's title starts with. */
 const COPY_PREFIX = "Copy of ";
-
-/** The slug a title that holds no letter or digit is given. */
-const UNTITLED_SLUG = UNTITLED_PAGE_SLUG;
-
-/** The longest slug made from a title, before any `-2` suffix. */
-const SLUG_BASE_MAX = PAGE_SLUG_BASE_MAX;
 
 /** How many slugs, the base and `-2` up to this, one write considers. */
 const SLUG_CANDIDATES = 20;
@@ -251,32 +245,8 @@ function textTitleOf(source: PageCollection): string | undefined {
 }
 
 /**
- * The slug a title is stored under: core's `slugify`, the rule its auto-slug
- * hook makes slugs by, bounded so a `-2` still fits, and a neutral word for a
- * title with no letter or digit in it.
- */
-export function slugBaseOf(text: string): string {
-  const base = slugify(text).slice(0, SLUG_BASE_MAX).replace(/-+$/, "");
-  return base === "" ? UNTITLED_SLUG : base;
-}
-
-/**
- * A typed address as it is stored: each `/`-separated part by core's
- * `slugify`, empty parts dropped, bounded by the address column. The same
- * answers as the dialog's `pageSlugOfTyped`, which a test holds them to.
- */
-export function typedSlugOf(typed: string): string {
-  return typed
-    .split("/")
-    .map(part => slugify(part))
-    .filter(part => part !== "")
-    .join("/")
-    .slice(0, SLUG_PATH_MAX)
-    .replace(/[-/]+$/, "");
-}
-
-/**
- * A typed address as `source` will store it: read as {@link typedSlugOf},
+ * A typed address as `source` will store it: read as {@link pageSlugOfTyped},
+ * the dialog's own reading,
  * then by the collection's own rule, core's, so the address the dialog is
  * shown, the one checked for a holder and the one written are what core
  * stores. A collection without `db.slugPaths` drops the `/`.
@@ -286,7 +256,7 @@ function typedAsStored(
   typed: string,
   writes: Pick<PagesWrites, "storedSlug">
 ): string {
-  const sent = typedSlugOf(typed);
+  const sent = pageSlugOfTyped(typed);
   return sent === "" ? "" : writes.storedSlug(source.slug, sent);
 }
 
@@ -340,9 +310,6 @@ async function freeSlugs(
   return candidates.filter(candidate => !taken.has(candidate));
 }
 
-/** The longest address a page may be stored at (`db.slugPaths`). */
-const SLUG_PATH_MAX = 255;
-
 /** Room kept at the end of an address for a suffix that frees it (`-51`). */
 const SUFFIX_ROOM = 4;
 
@@ -353,9 +320,9 @@ const SUFFIX_ROOM = 4;
  * top level otherwise.
  */
 function nestedSlugBase(text: string, parent: string | undefined): string {
-  const own = slugBaseOf(text);
+  const own = pageSlugOfTitle(text);
   if (parent === undefined || parent === "") return own;
-  const room = SLUG_PATH_MAX - parent.length - 1 - SUFFIX_ROOM;
+  const room = PAGE_SLUG_MAX - parent.length - 1 - SUFFIX_ROOM;
   if (room < 1) return own;
   const cut = own.slice(0, room).replace(/-+$/, "");
   return cut === "" ? own : `${parent}/${cut}`;
@@ -717,7 +684,7 @@ async function newPageAddress(
     };
   }
   if (request.title === undefined) return { ...around, slug: "" };
-  const wanted = slugBaseOf(request.title);
+  const wanted = pageSlugOfTitle(request.title);
   const slug = field.unique
     ? ((await freeSlugs(source, field.name, wanted, reads))[0] ?? wanted)
     : wanted;

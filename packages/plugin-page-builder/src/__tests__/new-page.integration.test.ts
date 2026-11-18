@@ -446,6 +446,27 @@ describe.each(getConfiguredTestDialects())(
       expect(await storedAt(PAGES, "docs/install")).toHaveLength(1);
     });
 
+    it("stores a page made from a title at the address the read previewed, in either kind of collection", async () => {
+      for (const collection of [PAGES, ARTICLES]) {
+        const title = "Release Notes: Ünïcödé & More";
+        const read = (await (
+          await ask("GET", newPagePath({ collection, title }), editor)
+        ).json()) as NewPageFacts;
+        const item = await created(
+          await ask("POST", PAGES_ROUTE_PATH, editor, {
+            collection,
+            title,
+            fields: collection === ARTICLES ? { category: "News" } : {},
+          })
+        );
+        const slug = read.address?.slug ?? "";
+        expect(slug, collection).toBe("release-notes-unicode-more");
+        expect((await storedAt(collection, slug))[0]?.id, collection).toBe(
+          item.id
+        );
+      }
+    });
+
     it("answers that an author whose update rule is a row filter may change the page they made", async () => {
       const item = await created(
         await ask("POST", PAGES_ROUTE_PATH, editor, {

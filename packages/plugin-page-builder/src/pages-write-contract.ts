@@ -6,12 +6,16 @@
  * `pages-search-contract`), and every answer names it the way a search result
  * does, so the panel can put a written page in its list without reading again.
  *
- * FREE OF RUNTIME IMPORTS, for the reason `pages-search-contract.ts` gives: the
+ * FREE OF SERVER IMPORTS, for the reason `pages-search-contract.ts` gives: the
  * routes reach the Direct API through `nextly/runtime`, which is server-only.
- * The one import is another contract module, and only its types.
+ * Its imports are another contract module's types and core's slug rule from
+ * `nextly/slugify`, a client-safe leaf, so the dialog and the route make an
+ * address by one implementation.
  *
  * @module pages-write-contract
  */
+import { slugify } from "nextly/slugify";
+
 import type { PageItem, PageReference } from "./pages-search-contract";
 
 /** Where a page is created, under this plugin's namespace. */
@@ -163,52 +167,36 @@ export function newPagePath(ask: {
 }
 
 /** The longest address made from a title, before any `-2` suffix. */
-export const PAGE_SLUG_BASE_MAX = 80;
+const PAGE_SLUG_BASE_MAX = 80;
 
 /** The longest address a page may be stored at (`db.slugPaths`). */
 export const PAGE_SLUG_MAX = 255;
 
 /** The address a title that holds no letter or digit is given. */
-export const UNTITLED_PAGE_SLUG = "page";
+const UNTITLED_PAGE_SLUG = "page";
 
 /**
- * Words as an address part: core's `slugify` rule (lower case, accents
- * dropped, every run of other characters one hyphen, none at either end),
- * repeated here because this module may import nothing at run time. A test
- * holds the two to the same answers.
- */
-function addressPart(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .replace(/-{2,}/g, "-");
-}
-
-/**
- * The address a title makes, as the route makes it: the part the title
- * gives, cut so a `-2` still fits, or a neutral word for a title with no
- * letter or digit. The dialog shows it while the title is typed; the route
- * decides whether it is free.
+ * The address a title makes: core's `slugify`, the rule its auto-slug hook
+ * makes slugs by, cut so a `-2` still fits, or a neutral word for a title
+ * with no letter or digit. The dialog shows it while the title is typed; the
+ * route writes it, deciding whether it is free.
  */
 export function pageSlugOfTitle(title: string): string {
-  const base = addressPart(title)
-    .slice(0, PAGE_SLUG_BASE_MAX)
-    .replace(/-+$/, "");
+  const base = slugify(title).slice(0, PAGE_SLUG_BASE_MAX).replace(/-+$/, "");
   return base === "" ? UNTITLED_PAGE_SLUG : base;
 }
 
 /**
- * A typed address as it is stored: each `/`-separated part made an address
- * part, empty parts dropped, so `Docs / Install` is `docs/install`, a page
- * beneath another. "" where nothing usable was typed.
+ * A typed address as the route sends it: each `/`-separated part by core's
+ * `slugify`, empty parts dropped, so `Docs / Install` is `docs/install`, a
+ * page beneath another, bounded by the address column. "" where nothing
+ * usable was typed. The route then stores it by its collection's own rule,
+ * which may drop the `/`.
  */
 export function pageSlugOfTyped(typed: string): string {
   return typed
     .split("/")
-    .map(addressPart)
+    .map(part => slugify(part))
     .filter(part => part !== "")
     .join("/")
     .slice(0, PAGE_SLUG_MAX)

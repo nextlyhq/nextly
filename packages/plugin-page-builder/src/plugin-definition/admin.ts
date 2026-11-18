@@ -109,7 +109,8 @@ export function adminContributions(def: Definition): PluginAdminContributions {
         openLabel: OPEN_IN_BUILDER,
         // "+ New" on such a list opens the New page dialog: a title, an
         // address made from it, the header & footer, then straight into the
-        // builder on the saved draft.
+        // builder on the saved draft. A collection whose field holds no pages
+        // (only components or patterns) is handed to its create form.
         createDialog: NEW_PAGE_DIALOG_COMPONENT,
       },
     ],

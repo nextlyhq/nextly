@@ -27,23 +27,37 @@ import { Dialog, DialogContent, DialogTitle } from "@nextlyhq/ui";
 import { useCallback, useRef, useState, type JSX, type ReactNode } from "react";
 
 import type { CreatedPageItem } from "../../pages-write-contract";
-import { builderAddress } from "../editor/builder-address";
+import { builderAddress, entryCreatePath } from "../editor/builder-address";
 
 import { NewPageForm, type UnsavedWorkAsk } from "./new-page-form";
 import { UnsavedWorkQuestion, useUnsavedQuestion } from "./new-page-unsaved";
 import { newPageTitle } from "./new-page-words";
 
-/** The body of the dialog the admin opens from a list's "+ New". */
+/**
+ * The body of the dialog the admin opens from a list's "+ New".
+ *
+ * The admin offers it on every collection whose main field is a Page Builder
+ * field, and some of those hold no pages (a field that takes only components
+ * or patterns). The route is the one judge of which do, by the pages
+ * search's reading, so a collection it refuses is handed to its ordinary
+ * create form.
+ */
 export function NewPageCreateDialog({
   collection,
   close,
 }: DocumentCreateDialogProps): JSX.Element {
+  const slug = collection.slug;
+  const toForm = useCallback(() => {
+    close();
+    navigateTo(entryCreatePath(slug));
+  }, [close, slug]);
   return (
     <NewPageForm
-      collection={collection.slug}
+      collection={slug}
       onCancel={() => close()}
       // The admin opens it by the same rule a row of the list does.
       onCreated={page => close(page.id)}
+      onHoldsNoPages={toForm}
     />
   );
 }

@@ -29,7 +29,8 @@ import type {
 class Refused extends Error {
   constructor(
     message: string,
-    readonly issues: { path: string; code: string; message: string }[] = []
+    readonly issues: { path: string; code: string; message: string }[] = [],
+    readonly status = 400
   ) {
     super(message);
   }
@@ -44,6 +45,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     error instanceof Error ? error.message : fallback,
   validationIssues: (error: unknown) =>
     error instanceof Refused ? error.issues : [],
+  isApiError: (error: unknown) => error instanceof Refused,
   navigateTo: (href: string) => navigateTo(href),
   readPluginRoute: async ({ path }: { path: string }) => {
     const query = new URL(path, "http://x").searchParams;
@@ -265,6 +267,28 @@ describe("what the dialog shows", () => {
     mount({ offerType: true });
     await screen.findByText("Saved as a draft.");
     expect(screen.queryByRole("combobox", { name: "Type" })).toBeNull();
+  });
+});
+
+describe("a collection that holds no pages", () => {
+  it("is handed on, once the read refuses the collection", async () => {
+    const onHoldsNoPages = vi.fn();
+    facts = () => {
+      throw new Refused("Forbidden", [], 403);
+    };
+    mount({ collection: "snippets", onHoldsNoPages });
+    await waitFor(() => expect(onHoldsNoPages).toHaveBeenCalledTimes(1));
+  });
+
+  it("is not assumed when the read fails for another reason", async () => {
+    const onHoldsNoPages = vi.fn();
+    facts = () => {
+      throw new Error("offline");
+    };
+    mount({ onHoldsNoPages });
+    await waitFor(() => expect(asked.length).toBeGreaterThan(0));
+    await new Promise(done => setTimeout(done, 20));
+    expect(onHoldsNoPages).not.toHaveBeenCalled();
   });
 });
 

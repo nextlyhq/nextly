@@ -76,6 +76,9 @@ vi.mock("./new-page-form", () => ({
         <button type="button" onClick={props.onCancel}>
           cancel
         </button>
+        <button type="button" onClick={() => props.onHoldsNoPages?.()}>
+          holds no pages
+        </button>
       </div>
     );
   },
@@ -111,6 +114,26 @@ describe("from a list's + New", () => {
     expect(close).toHaveBeenLastCalledWith("new");
     await userEvent.click(screen.getByRole("button", { name: "cancel" }));
     expect(close).toHaveBeenLastCalledWith();
+  });
+
+  it("hands a collection that holds no pages to its create form", async () => {
+    const close = vi.fn();
+    render(
+      <NewPageCreateDialog
+        collection={{
+          slug: "snippets",
+          labels: { singular: "Snippet", plural: "Snippets" },
+        }}
+        close={close}
+      />
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "holds no pages" })
+    );
+    expect(close).toHaveBeenCalledWith();
+    expect(navigateTo).toHaveBeenCalledWith(
+      "/admin/collections/snippets/create"
+    );
   });
 });
 
