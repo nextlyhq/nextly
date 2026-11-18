@@ -12,14 +12,19 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_LIMITS,
+  type BlockDocument,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
 
 import {
   batchStyleClearOps,
   batchStyleWriteOps,
+  batchStyleWritesOps,
   sharedValueAt,
 } from "./batch-style";
-import { applyOp } from "./ops";
+import { applyOp, applyOps } from "./ops";
 import type { StyleAddress } from "./style-values";
 
 const AT: StyleAddress = {
@@ -225,6 +230,40 @@ describe("the ops that change a whole selection", () => {
      */
     expect(colourOf(working, "a")).toBe("red");
     expect(colourOf(working, "b")).toBeUndefined();
+  });
+
+  it("writes different values at sibling paths as ONE op per block, so one undo takes both back", () => {
+    /*
+     * Two parts of one value set together (the top and the bottom of a
+     * padding, each its own size). Built as two single writes from one
+     * before-state, the second op's whole envelope would drop the first's
+     * value: one op per block, carrying both, is what keeps them and costs
+     * one history entry.
+     */
+    const before = doc(padNode("a", { inlineStart: "4px" }));
+    const { ops, refused } = batchStyleWritesOps(before.nodes, [
+      { address: { ...PAD, path: ["blockStart"] }, value: "8px" },
+      { address: { ...PAD, path: ["blockEnd"] }, value: "16px" },
+    ]);
+    expect(refused).toBeUndefined();
+    expect(ops).toHaveLength(1);
+    const applied = applyOps(before, ops, DEFAULT_LIMITS);
+    const padding = (
+      applied.document.nodes[0]?.styles as {
+        base: { base: { padding: Record<string, string> } };
+      }
+    ).base.base.padding;
+    expect(padding).toEqual({
+      inlineStart: "4px",
+      blockStart: "8px",
+      blockEnd: "16px",
+    });
+    // Its one inverse is the one undo step, and it restores both at once.
+    expect(applied.inverses).toHaveLength(1);
+    const [inverse] = applied.inverses;
+    if (inverse === undefined) throw new Error("no inverse");
+    const undone = applyOp(applied.document, inverse, DEFAULT_LIMITS).document;
+    expect(undone.nodes[0]?.styles).toEqual(before.nodes[0]?.styles);
   });
 
   it("clears across the selection, skipping blocks with nothing to clear", () => {

@@ -7,10 +7,10 @@
  * sections a block offers, which properties sit in each, and which control each
  * property draws all live there, where they can be asserted without a DOM.
  *
- * **One section open at a time.** The choice is remembered across selections
- * rather than reset, because an author working on spacing selects one block
- * after another and means to stay on spacing; it falls back to the first
- * section only when the newly selected block does not offer the open one.
+ * **Sections fold on their own**, and stay as the author left them across
+ * selections and visits (`panel-folds`), because an author working on spacing
+ * selects one block after another and means to keep Spacing open; a section
+ * nothing remembers opens when it holds a value or is the first.
  *
  * **Text commits on blur, discrete controls immediately**, the same rule the
  * content tab follows and for the same reason: undo is built from op inverses,
@@ -57,6 +57,7 @@ import {
   walkNodes,
   type BreakpointId,
   type BreakpointSet,
+  type NamedClass,
   type SiteTokenSet,
   type TokenMode,
   type StyleState,
@@ -66,13 +67,20 @@ import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
 import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
-import { useCanvasFrame } from "./canvas-frame-context";
+import { useCanvasFrame } from "./canvas/canvas-frame-context";
+import {
+  CanvasTokenModeProvider,
+  useCanvasTokenModeAt,
+} from "./canvas/prefers-dark";
+import { CssNamesProvider } from "./css-names-context";
 import type { EditorState } from "./editor-state";
 import { FocalFrame } from "./focal-frame";
 import { FontChoicesContext, type FontChoices } from "./font-family-field";
-import { layerLabel } from "./layers";
-import { CanvasTokenModeProvider, useCanvasTokenModeAt } from "./prefers-dark";
+import { PanelFoldsProvider } from "./panel-folds-context";
+import { layerLabel } from "./panels/layers/layers";
+import { ParentArrangementContext } from "./plain-parent-controls";
 import type { SideOrientation } from "./side-orientation";
+import { SpacingApplyToProvider } from "./spacing-side";
 import {
   BLOCK_TARGET,
   StyleTargetContext,
@@ -80,9 +88,11 @@ import {
   tokenPrefixOf,
   type StyleFieldSurroundings,
   AppliedAtTier,
+  BeneathAtTier,
   type EditedAddress,
 } from "./style-field-surroundings";
 import {
+  fieldStyles,
   sharedStyleNamer,
   targetProvenance,
   targetReadOnly,
@@ -92,6 +102,7 @@ import {
 import { inspectStyle, type StyleInspection } from "./style-inspector";
 import {
   appliedAtReader,
+  beneathAtReader,
   selectedSubject,
   cascadeFor,
   provenanceReader,
@@ -100,6 +111,7 @@ import { StyleSections, rendersMedia } from "./style-panel-sections";
 import { breakpointLabel } from "./style-provenance-indicators";
 import type { StyleTarget } from "./style-target";
 import type { StylePolicy } from "./style-values";
+import { TextStyleLibrary } from "./text-style-picker";
 
 export { commitsFor, supersedes } from "./style-colour-field";
 export { pickedReference } from "./style-control-value";
@@ -277,6 +289,11 @@ export interface StyleInspectorPanelProps {
    */
   fonts?: FontChoices;
   /**
+   * The site's class library, for the Text section's "Text style" picker,
+   * which lists the text styles in it. Absent: no picker is drawn.
+   */
+  classLibrary?: readonly NamedClass[];
+  /**
    * Whether the tab says above its controls why a held block's design can't
    * be changed. True when omitted. A host that says it already, as the
    * inspector's block card does, turns it off, so the reason is said once.
@@ -381,11 +398,21 @@ export function StyleInspectorPanel(
 ): React.JSX.Element {
   return (
     <FontChoicesContext.Provider value={props.fonts}>
-      {props.tokenMode === undefined ? (
-        <StyleInspectorOwnMode {...props} />
-      ) : (
-        <StyleInspectorBody {...props} tokenMode={props.tokenMode} />
-      )}
+      {/* The library the Text section's "Text style" picker lists from. */}
+      <TextStyleLibrary.Provider value={props.classLibrary}>
+        {/* The panel's own folds where nothing above lends them. */}
+        <PanelFoldsProvider>
+          <SpacingApplyToProvider>
+            <CssNamesProvider>
+              {props.tokenMode === undefined ? (
+                <StyleInspectorOwnMode {...props} />
+              ) : (
+                <StyleInspectorBody {...props} tokenMode={props.tokenMode} />
+              )}
+            </CssNamesProvider>
+          </SpacingApplyToProvider>
+        </PanelFoldsProvider>
+      </TextStyleLibrary.Provider>
     </FontChoicesContext.Provider>
   );
 }
@@ -415,11 +442,6 @@ function StyleInspectorBody({
   showReadOnlyReason = true,
   tokenMode,
 }: StyleInspectorPanelProps & { tokenMode: TokenMode }): React.JSX.Element {
-  // `null` is "the author has not chosen yet", which is NOT the same as the
-  // empty string the accordion sends when they collapse the open section. The
-  // two collapsed onto one value made the first section impossible to close,
-  // and closing any later one silently opened the first.
-  const [openGroup, setOpenGroup] = React.useState<string | null>(null);
   // The form an author chose at a union position, keyed by property and path.
   // Panel state rather than document state: it is only consulted where nothing
   // is stored, so there is nothing to persist — the moment a value exists, the
@@ -546,18 +568,6 @@ function StyleInspectorBody({
    * the block's lock does not hold a site-wide style.
    */
   const readOnlyReason = targetReadOnly(target, editor, inspected.nodeId);
-  const groups = inspected.sections.map(section => section.key);
-  // Held rather than left to the accordion, so the open section survives a
-  // change of selection. Falling back to the first is what keeps it valid when
-  // the newly selected block does not offer the section that was open — an
-  // accordion asked to open a section it does not have shows nothing open at
-  // all, which reads as the panel having failed to load.
-  //
-  // Compared as strings because that is what the accordion hands back, and
-  // narrowing its argument to a catalog group would be this file claiming to
-  // know the vocabulary rather than reading it off the sections in hand.
-  const available = new Set<string>(groups);
-  const open = openSection(openGroup, available, groups[0] ?? "");
   /*
    * What every section and field below needs from this panel, assembled once.
    *
@@ -583,44 +593,59 @@ function StyleInspectorBody({
   return (
     <StyleTargetContext.Provider value={target}>
       <TokenPrefixContext.Provider value={tokenPrefixOf(cascade)}>
-        <AppliedAtTier.Provider
-          value={appliedAtReader({
-            cascade,
-            subject,
-            state: inspected.state,
-            breakpoints,
-            nodeId: inspected.nodeId,
-          })}
-        >
-          <CanvasTokenModeProvider value={tokenMode}>
-            {/*
-             * Spell-check off for the tab's fields: they hold numbers,
-             * lengths, colours and keywords, which a spell-checker marks as
-             * misspelt with the same red line an error would show. Set once
-             * here because the attribute is inherited by every field inside,
-             * including the ones other components draw and any added later.
-             * The Content tab is a different element and keeps its own.
-             */}
-            <div
-              className="nx-style-inspector"
-              data-style-target={target.kind}
-              spellCheck={false}
+        <ParentArrangementContext.Provider value={inspection?.parentLayout}>
+          <AppliedAtTier.Provider
+            value={appliedAtReader({
+              cascade,
+              subject,
+              state: inspected.state,
+              breakpoints,
+              nodeId: inspected.nodeId,
+            })}
+          >
+            <BeneathAtTier.Provider
+              value={beneathAtReader({
+                cascade,
+                subject,
+                state: inspected.state,
+                breakpoints,
+                nodeId: inspected.nodeId,
+              })}
             >
-              {showReadOnlyReason ? (
-                <ReadOnlyNote target={target} reason={readOnlyReason} />
-              ) : null}
-              <NoStyleProperties count={inspected.sections.length} />
-              <StyleSections
-                sections={inspected.sections}
-                open={open}
-                onOpen={setOpenGroup}
-                readOnlyReason={readOnlyReason}
-                surroundings={surroundings}
-                fit={inspected.objectFit}
-              />
-            </div>
-          </CanvasTokenModeProvider>
-        </AppliedAtTier.Provider>
+              <CanvasTokenModeProvider value={tokenMode}>
+                {/*
+                 * Spell-check off for the tab's fields: they hold numbers,
+                 * lengths, colours and keywords, which a spell-checker marks as
+                 * misspelt with the same red line an error would show. Set once
+                 * here because the attribute is inherited by every field inside,
+                 * including the ones other components draw and any added later.
+                 * The Content tab is a different element and keeps its own.
+                 */}
+                <div
+                  className="nx-style-inspector"
+                  data-style-target={target.kind}
+                  spellCheck={false}
+                >
+                  {showReadOnlyReason ? (
+                    <ReadOnlyNote target={target} reason={readOnlyReason} />
+                  ) : null}
+                  <NoStyleProperties count={inspected.sections.length} />
+                  <StyleSections
+                    sections={inspected.sections}
+                    readOnlyReason={readOnlyReason}
+                    surroundings={surroundings}
+                    fit={inspected.objectFit}
+                    report={{
+                      shared: target.kind === "shared",
+                      styles: editedStyles(target, editor),
+                      parent: inspected.parent,
+                    }}
+                  />
+                </div>
+              </CanvasTokenModeProvider>
+            </BeneathAtTier.Provider>
+          </AppliedAtTier.Provider>
+        </ParentArrangementContext.Provider>
       </TokenPrefixContext.Provider>
     </StyleTargetContext.Provider>
   );
@@ -782,20 +807,10 @@ function sharesItsId(editor: EditorState, id: string): boolean {
 }
 
 /**
- * Which section is open, given what the author has said.
- *
- * Three states, not two: not yet chosen falls back to the first section so the
- * panel never opens onto a column of headings; the empty string is an explicit
- * collapse and is honoured; and a section the newly selected block does not
- * offer falls back, because an accordion asked to open one it does not have
- * shows nothing open at all.
+ * The edited target's own styles at every state and device, as the controls
+ * read them: a shared style's while one is the target, the block's otherwise.
  */
-function openSection(
-  chosen: string | null,
-  available: ReadonlySet<string>,
-  first: string
-): string {
-  if (chosen === null) return first;
-  if (chosen === "") return "";
-  return available.has(chosen) ? chosen : first;
+function editedStyles(target: StyleTarget, editor: EditorState): unknown {
+  if (editor.selectedId === null) return undefined;
+  return fieldStyles(target, editor, editor.selectedId).styles;
 }

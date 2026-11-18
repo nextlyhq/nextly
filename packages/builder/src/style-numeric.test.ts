@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CSS_NUMBER,
+  lineHeightAsPixels,
   measurementOf,
   scrubbedValue,
   scrubOrigin,
@@ -390,6 +391,24 @@ describe("a toggle is a projection of a keyword leaf", () => {
     expect(toggleOptionsFor(long)).toBeUndefined();
   });
 
+  it("measures the words the buttons show, not the keywords", () => {
+    // Two short keywords whose words are long: a row of two buttons reading
+    // "When scrolled into view" and "When the page loads" does not fit.
+    const start = {
+      kind: "keyword",
+      cssProperty: "--nx-pb-appear-start",
+      values: ["scroll", "load"],
+    } as unknown as StyleLeaf;
+    expect(toggleOptionsFor(start)).toBeUndefined();
+    // Words as short as the keywords still fit.
+    const style = {
+      kind: "keyword",
+      cssProperty: "font-style",
+      values: ["normal", "italic"],
+    } as unknown as StyleLeaf;
+    expect(toggleOptionsFor(style)).toEqual(["normal", "italic"]);
+  });
+
   it("declines a vocabulary of four, whatever its length", () => {
     const four = {
       kind: "keyword",
@@ -502,5 +521,19 @@ describe("where a drag on a label starts", () => {
   it("does not start on text that is not one measurement", () => {
     expect(scrubOrigin(MARGIN, "auto", "px", undefined)).toBeUndefined();
     expect(scrubOrigin(PADDING, "10px 20px", "px", undefined)).toBeUndefined();
+  });
+});
+
+describe("a line height that reads as pixels", () => {
+  it("is a bare number above 4, offered as that many pixels", () => {
+    expect(lineHeightAsPixels("20")).toBe("20px");
+    expect(lineHeightAsPixels("4.5")).toBe("4.5px");
+    expect(lineHeightAsPixels(" 24 ")).toBe("24px");
+  });
+
+  it("is never 4 or under, a value with a unit, or a function", () => {
+    for (const value of ["4", "1.5", "0", "-6", "20px", "150%", "calc(20px)"]) {
+      expect(lineHeightAsPixels(value), value).toBeUndefined();
+    }
   });
 });

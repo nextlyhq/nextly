@@ -365,6 +365,9 @@ describe.each(getConfiguredTestDialects())(
           ],
           localization,
         });
+        // The comparison asks the document's read gate as its caller, which
+        // looks the caller up: the super-admin it is handed must be stored.
+        await superAdminUser(current, "tester");
         const handler =
           current.getService<CollectionsHandler>("collectionsHandler");
         const save = (locale: string, title: string, id?: string) =>

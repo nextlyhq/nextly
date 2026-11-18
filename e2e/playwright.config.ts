@@ -85,6 +85,8 @@ const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
  *   refuses it.
  * - `admin-hydration`: React reports invalid nesting in a development build
  *   only. The spec also watches the document itself, which holds anywhere.
+ * - `builder-publish-requests`: it counts the engine's whole-document survey
+ *   by the function's name, which a production build minifies away.
  */
 const DEV_SPECS = [
   "**/setup-*.spec.ts",
@@ -103,6 +105,7 @@ const DEV_SPECS = [
   "**/removed-from-code-singles-list.spec.ts",
   "**/builder-fonts.spec.ts",
   "**/admin-hydration.spec.ts",
+  "**/builder-publish-requests.spec.ts",
 ];
 
 /** Only the dev specs, for the run beside a production one. */
@@ -275,10 +278,14 @@ export default defineConfig({
       // canvas that a production build never draws, which the keyboard specs
       // walking in and out of the frame would otherwise meet.
       NEXTLY_E2E_DEV_INDICATORS: "0",
-      // Registers the style fixture, which plugin-admin-styling.spec.ts and
-      // plugin-page-routing.spec.ts both depend on. Off by default so a test
-      // double does not appear in a contributor's plugins list or inject a
-      // showcase section into the Posts collection.
+      // Registers the playground's test fixtures: the style fixture
+      // (plugin-admin-styling.spec.ts, plugin-page-routing.spec.ts), the
+      // block fixture's "Test fixture: …" blocks (plugin-blocks.spec.ts,
+      // plugin-block-frame-environment.spec.ts), the widget-kit fixture's
+      // dashboard widgets (the dashboard and widget-kit specs) and the
+      // contributions fixture (plugin-contributions.spec.ts and the specs that
+      // read its pieces). Off by default so no test double appears in a
+      // contributor's plugins list, Add panel or dashboard.
       NEXTLY_E2E_STYLE_FIXTURE: "1",
       // Leaves the query devtools out of the dev server's admin: their floating icon sits over
       // the bottom-right corner, where a toast's Undo is drawn, and takes the click a phone-width

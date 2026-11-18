@@ -26,6 +26,7 @@ import { toSnakeName } from "@admin/lib/builder";
 import { startingFields } from "@admin/lib/builder/starting-field";
 import { addUnsavedEntity } from "@admin/lib/builder/unsaved-entities";
 import { navigateTo } from "@admin/lib/navigation";
+import type { FieldDefinition } from "@admin/types/collection";
 
 import { COLLECTION_BUILDER_CONFIG } from "./builder-config";
 
@@ -40,7 +41,10 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
     }
   }, [open]);
 
-  const handleSubmit = (values: BuilderSettingsValues) => {
+  const handleSubmit = (
+    values: BuilderSettingsValues,
+    templateFields: FieldDefinition[]
+  ) => {
     const singular = values.singularName.trim();
     const plural = values.pluralName?.trim() || `${singular}s`;
     const slug = values.slug?.trim() || toSnakeName(singular);
@@ -50,7 +54,11 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
       settings: { ...values, singularName: singular, pluralName: plural, slug },
       // The field the dialog's answer starts the collection with; the save
       // sends it to the server and to ui-schema.json alike.
-      fields: startingFields(values.startingFieldType ?? null),
+      fields: [
+        ...startingFields(values.startingFieldType ?? null),
+        // The template's fields after the starting one, as picked.
+        ...templateFields,
+      ],
     });
     // The dialog's check counts an unsaved entity's address as used, so this
     // is reached only if another unsaved collection took it meanwhile.

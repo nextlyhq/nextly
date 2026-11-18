@@ -2,22 +2,24 @@
 
 /**
  * The editor's top bar: the page's title and state with its history at the
- * start, the devices in the centre, and search, Preview and the document's
- * actions at the end.
+ * start, the devices and the light and dark preview in the centre, and
+ * search, Preview, the document's actions and its ⋯ menu at the end.
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-top-bar
  */
-import { BreakpointSwitcher } from "@nextlyhq/builder/shell";
+import { BreakpointSwitcher, PageChecksChip } from "@nextlyhq/builder/shell";
 import { DocumentSaveAndPublish } from "@nextlyhq/plugin-sdk/admin";
 
 import { BindingsToFixChip } from "../bindings-report/BindingsToFixChip";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import { OwnDesignsChip } from "../TemplateOwnDesigns";
 
+import { CanvasModeSwitch } from "./canvas-preview-mode";
+import { EditorMoreMenu } from "./editor-more-menu";
 import { SearchButton } from "./editor-search";
 import type { EditorView } from "./editor-view";
 import { HistoryButtons } from "./history-buttons";
-import { PageReadMeter } from "./page-read-meter";
+import { PageReadMeter, type PageDataCount } from "./page-read-meter";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton, type VisitorPreview } from "./preview-button";
 import { siteStyleStatus } from "./site-style-studios";
@@ -60,7 +62,9 @@ export function editorTopBar(
    * The page's title as the form has it now, the field being edited by its
    * address, where that field sits in words when below the top level, and
    * the canvas, which a binding's Select brings its block into view in,
-   * and "Preview as visitor", which Preview's menu holds.
+   * and "Preview as visitor", which Preview's menu holds, and the page's
+   * data count, which the bar shows only near the limit, and the way to the
+   * document's form, which the ⋯ menu offers.
    */
   page: {
     title: string | undefined;
@@ -68,6 +72,8 @@ export function editorTopBar(
     location?: string | undefined;
     canvas: HTMLElement | null;
     visitor: VisitorPreview;
+    pageData: PageDataCount | null;
+    openAsForm: (() => void) | undefined;
   }
 ): {
   topBar: React.JSX.Element;
@@ -80,6 +86,8 @@ export function editorTopBar(
     siteStyleError,
     editedBreakpoint,
     chooseDevice,
+    previewWidth,
+    setPreviewWidth,
     editor,
     inline,
   } = view;
@@ -118,16 +126,11 @@ export function editorTopBar(
             own design, opening the list; nothing on any other document. */}
         <OwnDesignsChip />
         <HistoryButtons editor={editor} inline={inline} />
-        {/* What the page costs to read, against its allowance: a page's
-            alone, since a component is read as part of each page placing it. */}
-        {view.initialDocument.kind === "page" ? (
-          <PageReadMeter
-            editor={editor}
-            drawnWith={view.canvasRender}
-            regions={view.canvasRegions}
-            componentTitle={view.componentLibrary.titleOf}
-          />
-        ) : null}
+        {/* The page's data against its limit, after undo and redo, in the
+            column that shortens first: shown only once the page nears its
+            limit, and only on a page, since a component is read as part of
+            each page placing it. */}
+        <PageReadMeter count={page.pageData} />
       </>
     ),
     topBarCenter: (
@@ -147,7 +150,14 @@ export function editorTopBar(
           selected={editedBreakpoint}
           onSelect={chooseDevice}
           status={siteStyleStatus(siteStylePending, siteStyleError)}
+          // A width previewed in place of the device's own: shown, typed
+          // and reset here, dragged at the canvas frame's edges.
+          previewWidth={previewWidth}
+          onPreviewWidth={setPreviewWidth}
         />
+        {/* Beside the devices: the whole site in its dark values, offered
+            while some variable has one. */}
+        <CanvasModeSwitch preview={view.previewMode} />
       </>
     ),
     topBarEnd: (
@@ -156,6 +166,22 @@ export function editorTopBar(
           blocks, the page, other pages and commands, also on ⌘K. */}
         <SearchButton onOpen={() => view.search.setOpen(true)} />
         <PreviewButton visitor={page.visitor} />
+        {/* Beside Publish, on a page: how many of the draft's checks need
+          attention, opening the list. Never a reason to hold Save or
+          Publish back, which read nothing of it. */}
+        {editor.document.kind === "page" ? (
+          <PageChecksChip
+            editor={editor}
+            canvas={page.canvas}
+            // The site's header and footer, read with the page, so their
+            // headings count in the page's order.
+            regions={view.canvasRegions}
+            // The components the canvas draws the page's placements with.
+            {...(canvasRender.definitions === undefined
+              ? {}
+              : { definitions: canvasRender.definitions })}
+          />
+        ) : null}
         {/* Last, at the bar's far end where the header kept them: Save and
           Publish, which say themselves whether the work is saved and
           whether the live page is behind, so nothing else in the bar says
@@ -163,6 +189,10 @@ export function editorTopBar(
           the builder's taking the window would otherwise leave reachable
           only from the keyboard. */}
         <DocumentSaveAndPublish />
+        {/* After them, as the entry page's own ⋯ follows its Publish: the
+          form and the pin, which a page that opens here would otherwise
+          leave out of reach. */}
+        <EditorMoreMenu onOpenAsForm={page.openAsForm} />
       </>
     ),
   };

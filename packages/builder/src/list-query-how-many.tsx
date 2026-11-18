@@ -11,11 +11,7 @@ import { listPageCount, NAMED_QUERY_TEXT } from "@nextlyhq/blocks-engine";
 import { Input, Label, Switch } from "@nextlyhq/ui";
 import * as React from "react";
 
-import {
-  SegmentedChoice,
-  type ContentServices,
-  type ListEntriesCount,
-} from "./content-controls";
+import type { ContentServices, ListEntriesCount } from "./content-controls";
 import { readBound } from "./list-query-model";
 import { FieldError, GroupTitle } from "./list-query-parts";
 import { issuesAt, LIST_QUERY_PROPS, type Issues } from "./list-query-reading";
@@ -283,11 +279,11 @@ export function HowManyGroup({
   const counted = useListCount(count, values);
   return (
     <section className="nx-list-query__group" aria-labelledby={`${id}-title`}>
-      <GroupTitle id={`${id}-title`}>How many</GroupTitle>
+      <GroupTitle id={`${id}-title`}>Entries shown</GroupTitle>
       <BoundField
         id={`${id}-limit`}
         prop="limit"
-        words={{ label: "Number of items" }}
+        words={{ label: "How many" }}
         stored={values.limit}
         fallback={limitFallback}
         disabled={disabled}
@@ -302,7 +298,7 @@ export function HowManyGroup({
       <BoundField
         id={`${id}-offset`}
         prop="offset"
-        words={{ label: "Skip the first", suffix: "entries" }}
+        words={{ label: "Skip", suffix: "entries" }}
         stored={values.offset}
         unsetValue={0}
         disabled={disabled}
@@ -366,7 +362,10 @@ function PagesField({
   );
 }
 
-/** When nothing matches: whether the canvas draws the entries or the empty state. */
+/**
+ * When nothing matches: whether the canvas previews the list's empty message
+ * in place of its entries. Editor state, never stored.
+ */
 export function CanvasShowsGroup({
   id,
   showsEmpty,
@@ -376,28 +375,22 @@ export function CanvasShowsGroup({
   showsEmpty: boolean;
   onShowEmpty: (empty: boolean) => void;
 }): React.JSX.Element {
-  const canvasId = `${id}-canvas`;
+  const previewId = `${id}-canvas`;
   return (
     <section className="nx-list-query__group" aria-labelledby={`${id}-title`}>
       <GroupTitle id={`${id}-title`}>When nothing matches</GroupTitle>
       <div className="nx-inspector__field" data-content-control="canvasShows">
-        <span id={`${canvasId}-label`} className="nx-inspector__field-name">
-          Canvas shows
-        </span>
-        <SegmentedChoice
-          id={canvasId}
-          labelledBy={`${canvasId}-label`}
-          options={["entries", "empty"]}
-          labels={["Entries", "When empty"]}
-          value={showsEmpty ? "empty" : "entries"}
-          disabled={false}
-          onChoose={option => onShowEmpty(option === "empty")}
+        <Label htmlFor={previewId}>Preview the empty message</Label>
+        <Switch
+          id={previewId}
+          checked={showsEmpty}
+          onCheckedChange={onShowEmpty}
         />
       </div>
       <p className="nx-inspector__note nx-list-query__hint nx-list-query__indented">
         {showsEmpty
           ? "Visitors see these blocks when no entry matches. Left empty, the list shows nothing."
-          : "Switch to design what visitors see when no entry matches."}
+          : "Turn on to design what visitors see when no entry matches."}
       </p>
     </section>
   );

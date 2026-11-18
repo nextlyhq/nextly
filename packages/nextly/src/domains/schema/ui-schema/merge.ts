@@ -1,5 +1,5 @@
 /**
- * Merge code-first and UI-built entities into one set per type (spec §4.11).
+ * Merge code-first and UI-built entities into one set per type.
  *
  * Code-first wins on slug collision: a UI entity whose slug already exists in
  * the code config is dropped (and reported via `shadowed`, with its kind, so the
@@ -7,7 +7,7 @@
  * `generateMigration` — no new snapshot logic.
  *
  * @module domains/schema/ui-schema/merge
- * @since v0.0.3-alpha (Plan D2)
+ * @since v0.0.3-alpha
  */
 import type { FieldConfig } from "../../../collections/fields/types";
 import {

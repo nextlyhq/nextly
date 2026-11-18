@@ -134,10 +134,14 @@ describe("a block's settings by tab and section", () => {
 
 describe("the Style sections a style setting names", () => {
   it("are the Style tab's own sections", () => {
-    // The engine refuses a style setting naming anything else, so the two
-    // lists are one list.
-    expect([...STYLE_SECTION_KEYS]).toEqual(
-      INSPECTOR_SECTIONS.map(section => section.key)
-    );
+    // The engine refuses a style setting naming anything else, so every one
+    // it accepts is a section here. The Style tab's other three hold the
+    // block's style tiles, how it sits in its parent, and other CSS
+    // properties, which no setting of a block's own is drawn in.
+    const keys = INSPECTOR_SECTIONS.map(section => section.key);
+    for (const key of STYLE_SECTION_KEYS) expect(keys).toContain(key);
+    expect(
+      keys.filter(key => !STYLE_SECTION_KEYS.some(each => each === key))
+    ).toEqual(["block-style", "inside-parent", "css-properties"]);
   });
 });

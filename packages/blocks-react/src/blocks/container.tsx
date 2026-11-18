@@ -43,7 +43,16 @@ import {
   sizedFirstBackground,
 } from "../image-sources";
 
-import { url } from "./props";
+import {
+  canLink,
+  LINK_PROPS,
+  linkFor,
+  readClaimOf,
+  relFor,
+  text,
+  url,
+  type LinkAttributes,
+} from "./props";
 
 /** What both presets store. */
 export interface ContainerProps {
@@ -74,6 +83,14 @@ export interface ContainerProps {
    * anything interactive inside it.
    */
   link?: string;
+  /** The entry a linkable preset links to, with `entryId`; beats `link`. */
+  entryCollection?: string;
+  /** The linked entry's id, used with `entryCollection`. */
+  entryId?: string;
+  /** How a linkable preset's link opens: this tab, or a new one. */
+  target?: "_self" | "_blank";
+  /** A linkable preset's link relationship tokens (`nofollow`, …). */
+  rel?: string;
 }
 
 /**
@@ -180,9 +197,16 @@ export const CONTAINER_SUPPORTS = {
   dimensions: true,
   background: true,
   border: true,
+  // A card or a panel often casts one: Style › Effects › Shadow.
+  shadow: true,
   effects: true,
   position: true,
   container: true,
+  // Style › Text: a colour and type set once on the container, which every
+  // block inside inherits unless it sets its own. The page compile makes the
+  // links inside take the colour too, while the site's Links row sets none.
+  typography: true,
+  color: true,
 } as const;
 
 /** Whether a stored value is a tag a container may render. */
@@ -217,12 +241,57 @@ export function containerContentModel(props: ContainerProps): ContentModel {
 }
 
 /**
- * The link a linkable preset renders, or undefined when it renders none.
- * The renderer and the content model both ask this, so a link the renderer
- * would drop never makes the block count as interactive, and the reverse.
+ * A linkable preset's link settings: where it links (`link`, an address, or
+ * an entry), how it opens, and its relationship. Declared once, as
+ * {@link CONTENT_WIDTH_PROPS} is, so Box and Card cannot drift apart in what
+ * they store or where each setting is edited. The address keeps its stored
+ * name, `link`; the entry, the new tab and the relationship are the names
+ * every linking block stores them under (`LINK_PROPS`), which the editor's
+ * link control groups and the renderer follows.
+ *
+ * Content › Link for where it goes and how it opens; the relationship is
+ * HTML a visitor never reads, so Advanced › HTML.
  */
-function linkOf(props: { readonly link?: unknown }): string | undefined {
-  return url(props.link);
+export function containerLinkProps(
+  hint?: string
+): Readonly<
+  Record<"link" | "entryCollection" | "entryId" | "target" | "rel", PropSchema>
+> {
+  return {
+    link: {
+      label: "Link",
+      role: "content",
+      type: "url",
+      section: "Link",
+      ...(hint === undefined ? {} : { hint }),
+    },
+    entryCollection: { ...LINK_PROPS.entryCollection, section: "Link" },
+    entryId: { ...LINK_PROPS.entryId, section: "Link" },
+    target: { ...LINK_PROPS.target, section: "Link" },
+    rel: { ...LINK_PROPS.rel, group: "advanced" },
+  };
+}
+
+/** A linkable preset's link, read as every linking block reads one. */
+function linkPropsOf(props: ContainerProps) {
+  return {
+    href: props.link,
+    entryCollection: props.entryCollection,
+    entryId: props.entryId,
+    target: props.target,
+    rel: props.rel,
+  };
+}
+
+/**
+ * Whether a linkable preset renders a link: an address `url` follows, or an
+ * entry. The renderer and the content model both ask this, so a link the
+ * renderer would drop never makes the block count as interactive, and the
+ * reverse. An entry that then fails to resolve draws no link where
+ * interactive content was allowed, which refuses nothing it should not.
+ */
+function isLinked(props: ContainerProps): boolean {
+  return canLink(linkPropsOf(props));
 }
 
 /**
@@ -230,15 +299,15 @@ function linkOf(props: { readonly link?: unknown }): string | undefined {
  * while it is linked, else its tag, and `div` for a tag it may not render.
  * The render functions below draw it, and an editor asks it, through
  * `containerRootTag`, to say what the page will hold, so the two never
- * disagree; whether a preset is linked is `linkOf`'s answer, the one the
+ * disagree; whether a preset is linked is `isLinked`'s answer, the one the
  * renderer and the content model use. Read from stored props, which may
  * hold anything.
  */
 export function rootTagOf(
-  props: { readonly as?: unknown; readonly link?: unknown },
+  props: ContainerProps,
   linkable: boolean
 ): ContainerTag | "a" {
-  if (linkable && linkOf(props) !== undefined) return "a";
+  if (linkable && isLinked(props)) return "a";
   return isContainerTag(props.as) ? props.as : "div";
 }
 
@@ -248,7 +317,7 @@ export function rootTagOf(
  * otherwise what its tag makes it.
  */
 export function linkableContentModel(props: ContainerProps): ContentModel {
-  if (linkOf(props) === undefined) return containerContentModel(props);
+  if (!isLinked(props)) return containerContentModel(props);
   return {
     is: ["flow", "interactive"],
     accepts: { without: ["interactive", "main"] },
@@ -335,18 +404,48 @@ function firstBackground({
   );
 }
 
-/** Render a linkable preset: an `<a>` while linked, its tag otherwise. */
+/**
+ * Render a linkable preset: an `<a>` while linked, its tag otherwise. Where
+ * it links is read as every linking block reads it: an entry beats a typed
+ * address, and a new tab adds its `rel` safety tokens. Only a link to an
+ * entry waits, for the entry's address; a typed one renders at once, as it
+ * always did, so a page linking by address streams as it did before.
+ */
 export function renderLinkableContainer(
   args: BlockRenderArgs<ContainerProps>
+): ReactElement | Promise<ReactElement> {
+  const link = linkPropsOf(args.props);
+  if (text(link.entryCollection) !== "" && text(link.entryId) !== "") {
+    return linkFor(link, (collection, id) =>
+      args.ctx.resolveEntryPath(collection, id, readClaimOf(args.node))
+    ).then(resolved => drawLinked(args, resolved));
+  }
+  const href = url(link.href);
+  const rel = relFor(link.target, link.rel);
+  return drawLinked(
+    args,
+    href === undefined
+      ? undefined
+      : {
+          href,
+          ...(link.target === "_blank" ? { target: "_blank" as const } : {}),
+          ...(rel === undefined ? {} : { rel }),
+        }
+  );
+}
+
+/** A linkable preset drawn with its link's attributes, or unlinked with none. */
+function drawLinked(
+  args: BlockRenderArgs<ContainerProps>,
+  link: LinkAttributes | undefined
 ): ReactElement {
-  const href = linkOf(args.props);
-  if (href === undefined) return renderContainer(args);
+  if (link === undefined) return renderContainer(args);
   const classes = withRevision(
     withContentWidth(args.className, args.props),
     args
   );
   return (
-    <a className={classes} href={href}>
+    <a className={classes} {...link}>
       {firstBackground(args)}
       {args.renderSlot("children", childImageContext(args.ctx, args.node))}
     </a>

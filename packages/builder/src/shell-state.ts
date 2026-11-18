@@ -14,7 +14,13 @@
  * @module shell-state
  */
 
-import { FIT_ZOOM, readZoom, writeZoom, type CanvasZoom } from "./canvas-zoom";
+import {
+  FIT_ZOOM,
+  readZoom,
+  writeZoom,
+  type CanvasZoom,
+} from "./canvas/canvas-zoom";
+import { readSectionFolds, type SectionFolds } from "./panel-folds";
 
 /**
  * The panels the left rail switches between, in the order an author meets
@@ -50,7 +56,8 @@ function storedPanel(
 ): { panel: LeftPanel | null; view: string | null } {
   const shown = typeof view === "string" ? view : null;
   if (isLeftPanel(panel)) return { panel, view: shown };
-  if (panel === null || panel === undefined) return { panel: null, view: shown };
+  if (panel === null || panel === undefined)
+    return { panel: null, view: shown };
   return {
     panel: DEFAULT_PREFERENCES.leftPanel,
     view: DEFAULT_PREFERENCES.leftPanelView,
@@ -117,32 +124,20 @@ export const RAIL_WIDTH = 48;
  * The canvas is the thing being edited, so it is the region with a floor rather
  * than the one that absorbs whatever is left.
  *
- * This is the EDITING SURFACE, not the panel holding it. The panel is wider by
- * its gutters, and {@link MIN_CANVAS_PANEL_WIDTH} is what a bound is read from.
+ * This is the EDITING SURFACE, and {@link MIN_CANVAS_PANEL_WIDTH} is what a
+ * bound is read from.
  */
 export const MIN_CANVAS_WIDTH = 480;
 
 /**
- * The gap between the canvas region's edge and the page inside it, per side.
+ * The narrowest the canvas PANEL may become.
  *
- * Declared rather than written as a utility class because it is load-bearing
- * twice: it is the space the page's own edge is painted into, and it is the
- * difference between the editing surface and the panel that has to contain it.
- * Spelled in one place so the two cannot drift.
+ * The page meets the panel's edges with no gap around it, so the panel and the
+ * editing surface it holds are one width, and the panel's floor is the
+ * surface's own. Named apart from {@link MIN_CANVAS_WIDTH} because it is what
+ * a resize bound is read from, and the surface is what the floor protects.
  */
-export const CANVAS_GUTTER = 16;
-
-/**
- * The narrowest the canvas PANEL may become, gutters included.
- *
- * DERIVED, because the constraint is on the editing surface and the panel is
- * the thing a resize bound can be expressed on. Bounding the panel at the
- * surface's own floor spends the gutters out of the surface: at 480px of panel
- * the page has 448px, so the drag stops only once the canvas is already
- * narrower than the floor that exists to stop it.
- */
-export const MIN_CANVAS_PANEL_WIDTH: number =
-  MIN_CANVAS_WIDTH + CANVAS_GUTTER * 2;
+export const MIN_CANVAS_PANEL_WIDTH: number = MIN_CANVAS_WIDTH;
 
 /**
  * The narrowest viewport the full shell is supported at (PB-D17 D10-5).
@@ -249,6 +244,20 @@ export interface ShellPreferences {
    * written before the switch still compiles; absent reads as on.
    */
   panelKeys?: boolean;
+  /**
+   * Which sections of the block panel the author left open or closed, by tab
+   * and section name (`panel-folds`).
+   *
+   * Optional in this published type, as `panelKeys` is; absent reads as none
+   * remembered.
+   */
+  sectionFolds?: SectionFolds;
+  /**
+   * Whether the block panel prints each control's CSS names under its label
+   * ("Show CSS names" in the panel's options menu). Off by default, and
+   * optional in this published type, as `panelKeys` is: absent reads as off.
+   */
+  showCssNames?: boolean;
 }
 
 /**
@@ -310,6 +319,8 @@ export const DEFAULT_PREFERENCES: ShellPreferences = {
   editingBreakpoint: null,
   layouts: {},
   panelKeys: true,
+  sectionFolds: {},
+  showCssNames: false,
 };
 
 /**
@@ -541,6 +552,9 @@ export function readPreferences(store: PreferenceStore): ShellPreferences {
     // On unless a stored false says otherwise, which covers every preference
     // written before the keys could be turned off.
     panelKeys: record.panelKeys !== false,
+    sectionFolds: readSectionFolds(record.sectionFolds),
+    // Off unless a stored true says otherwise.
+    showCssNames: record.showCssNames === true,
   };
 }
 

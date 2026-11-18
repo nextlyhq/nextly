@@ -10,15 +10,18 @@
  */
 import {
   resolveSiteTokens,
+  type BlockDocument,
+  type ComponentLookup,
+  type DocumentLimits,
   type NamedClass,
   type SiteTokenSet,
+  type TokenMode,
 } from "@nextlyhq/blocks-engine";
 import {
   DESIGN_TAB_GROUPS,
   TokensPanel,
   type DesignTab,
   type TokensPanelProps,
-  type VariablesPreview,
   useVariablesHeader,
   variableMatchesByTab,
 } from "@nextlyhq/builder/shell";
@@ -47,9 +50,14 @@ import { sameStoredValue } from "../../stored-json";
 import { conflictWords } from "../conflict-words";
 import { useHeldSiteStyle, useSaveSiteStyle } from "../site-style-client";
 import { useShown } from "../use-shown";
-import { useVariablesClient } from "../variables-client";
+import {
+  cleanUpUnused,
+  useVariablesClient,
+  type CleanUpResult,
+} from "../variables-client";
 
 import { useDesignBrowse, useDesignHeaderSlot } from "./design-panel";
+import { usedOnPage } from "./used-on-page";
 
 /**
  * The tokens studio, and the state that belongs to it rather than to the editor.
@@ -70,10 +78,10 @@ import { useDesignBrowse, useDesignHeaderSlot } from "./design-panel";
  * panel goes away, or the page is saved.
  *
  * It is the Design panel's FRAME rather than its Variables tab, because the
- * panel's header belongs to every tab: the preview switch and the
- * import-and-export menu are drawn into it from here, and an import made from
- * the Fonts tab writes through the same edits the Variables tab shows. The tab
- * reads the studio through {@link VariablesTab}.
+ * panel's header belongs to every tab: the import-and-export menu is drawn
+ * into it from here, and an import made from the Fonts tab writes through the
+ * same edits the Variables tab shows. The tab reads the studio through
+ * {@link VariablesTab}.
  */
 export function TokensStudio({
   merged,
@@ -81,7 +89,7 @@ export function TokensStudio({
   pending,
   classes,
   opens,
-  preview,
+  mode,
   children,
 }: {
   /** The site's tokens as the canvas compiles them: config under stored. */
@@ -98,11 +106,10 @@ export function TokensStudio({
   /** Where a shared style or a block look using a variable opens. */
   opens?: StyleOpeners;
   /**
-   * The preview mode the editor holds, which it draws the canvas in too, so
-   * the header's switch previews the canvas as well as the swatches. Absent,
-   * the switch keeps its mode itself and previews the swatches alone.
+   * The mode the editor draws the canvas in, which the swatches show too.
+   * Absent, they show the mode the canvas draws by itself.
    */
-  preview?: VariablesPreview;
+  mode?: TokenMode;
   /** The Design panel's tabs. */
   children: React.ReactNode;
 }): React.JSX.Element {
@@ -131,7 +138,7 @@ export function TokensStudio({
    * tier further down.
    */
   const { editable, baseline } = resolvedTiers(merged, supplied);
-  const { edits, shownNow, issue, notice, commit } = useTokenCommits(
+  const { edits, shownNow, issue, notice, commit, cleanUp } = useTokenCommits(
     baseline,
     editable,
     supplied
@@ -143,16 +150,25 @@ export function TokensStudio({
    * anything, so it answers for an edit the panel has not been re-rendered
    * with yet.
    */
-  const currentTokens = (): SiteTokenSet | undefined => shownNow() ?? editable;
+  const currentTokens = (): SiteTokenSet | undefined =>
+    withReadPrefix(shownNow(), editable);
   const header = useVariablesHeader({
     onChange: commit,
     currentTokens,
     readOnly: !mayChange,
-    preview,
+    ...(mode === undefined ? {} : { mode }),
   });
-  useReportVariableMatches(edits ?? editable);
+  // Memoised, so a set whose prefix was replaced is the same object until
+  // the edits or the read change, as `edits ?? editable` was.
+  const shown = useMemo(
+    () => withReadPrefix(edits, editable),
+    [edits, editable]
+  );
+  useReportVariableMatches(shown);
+  // Where a colour the clean-up kept is used, to name it.
+  const uses = usage.props.usage?.uses;
   const studio: TokensPanelProps = {
-    tokens: edits ?? editable,
+    tokens: shown,
     supplied: baseline,
     issue,
     ...optionalNotice(notice),
@@ -164,14 +180,16 @@ export function TokensStudio({
     currentTokens,
     header,
     ...usage.props,
+    ...cleanUpOffered(mayChange, uses, held.release, cleanUp),
   };
 
   return (
     <VariablesStudio.Provider value={studio}>
       <InHeaderSlot slot={headerSlot}>{header.controls}</InHeaderSlot>
-      {/* Above whichever tab is open, since an import or export can be
-          started from any of them. */}
-      <div className="nx-pb-design__reports">{header.overlays}</div>
+      {/* The import preview and "What wasn't exported": dialogs over the
+          editor, so they take no room above the tab. An export or import says
+          what it did in a toast. */}
+      {header.overlays}
       <SharedStyleToOpen.Provider value={usage.toOpen}>
         {children}
       </SharedStyleToOpen.Provider>
@@ -214,6 +232,23 @@ function InHeaderSlot({
 }
 
 /**
+ * The studio's own copy of the variables, with the site's CSS variable prefix
+ * as the site style was last read. The prefix is changed in Settings, never in
+ * Design, so a copy made before a change must not keep the old one: every
+ * code name would read it, a colour picked into a shadow would be written
+ * under it, and the next save would carry it back.
+ */
+function withReadPrefix(
+  edits: SiteTokenSet | null,
+  read: SiteTokenSet | undefined
+): SiteTokenSet | undefined {
+  if (edits === null) return read;
+  if (edits.prefix === read?.prefix) return edits;
+  const { prefix: _kept, ...rest } = edits;
+  return read?.prefix === undefined ? rest : { ...rest, prefix: read.prefix };
+}
+
+/**
  * The studio's edits: what it shows, what the last save said, and the commit
  * every edit goes through.
  *
@@ -237,8 +272,10 @@ function useTokenCommits(
   /** What the last save met of someone else's, with the way to read again. */
   notice: TokensPanelProps["notice"];
   commit: (next: SiteTokenSet) => void;
+  /** "Clean up unused…": see {@link useCleanUp}. */
+  cleanUp: CleanUpThrough;
 } {
-  const { save, reread } = useSaveSiteStyle();
+  const { save, reread, changeThrough } = useSaveSiteStyle();
   const [edits, show, shownNow] = useShown<SiteTokenSet | null>(null);
   const [issue, setIssue] = useState<string | undefined>(undefined);
   /*
@@ -356,8 +393,81 @@ function useTokenCommits(
   };
   const notice =
     conflict === undefined ? undefined : { text: conflict, onReload: reload };
-  return { edits, shownNow, issue, notice, commit };
+  const cleanUp = useCleanUp(changeThrough, reread, () => {
+    const before = latest.current;
+    return stored => {
+      // An edit made while the route ran is saved after it, onto what the
+      // route left, and its own answer says what is shown: never this.
+      if (latest.current !== before) return;
+      // What the server holds once the route has written, as the studio
+      // shows and knows it stored: not its own older copy, less what went.
+      const adopted = tokensFromStored(supplied, stored);
+      latest.current = adopted;
+      persisted.current = adopted;
+      show(adopted);
+    };
+  });
+  return { edits, shownNow, issue, notice, commit, cleanUp };
 }
+
+/**
+ * "Clean up unused…" for the panel, where the author may change Design and
+ * the where-used read is in hand: made once what is held for the author's
+ * pause is written, so the route judges the section as they left it.
+ */
+function cleanUpOffered(
+  mayChange: boolean,
+  uses: Parameters<typeof cleanUpUnused>[1] | undefined,
+  release: () => Promise<void>,
+  cleanUp: CleanUpThrough
+): Pick<TokensPanelProps, "onCleanUp"> {
+  if (!mayChange || uses === undefined) return {};
+  return {
+    onCleanUp: async ids => {
+      await release();
+      return cleanUp(ids, uses);
+    },
+  };
+}
+
+/** The studio's clean-up, handed the where-used read that names a kept one. */
+type CleanUpThrough = (
+  ids: readonly string[],
+  uses: Parameters<typeof cleanUpUnused>[1]
+) => Promise<CleanUpResult>;
+
+/**
+ * "Clean up unused…": the colours removed through the clean-up route, which
+ * judges each on its own, as one step of the editor's history whose halves
+ * are the server's own: the section as its last removal wrote it, and that
+ * with what each removal took put back. Where any went, and the author
+ * made no edit while it ran, the studio shows the section the server
+ * answered at once; the site style is read again whatever came of it.
+ */
+function useCleanUp(
+  changeThrough: ReturnType<typeof useSaveSiteStyle>["changeThrough"],
+  reread: () => void,
+  /** Called as the clean-up starts; what it hands back takes the answer. */
+  begin: () => (stored: unknown) => void
+): CleanUpThrough {
+  return async (ids, uses) => {
+    const adopt = begin();
+    let answer: Awaited<ReturnType<typeof cleanUpUnused>> | undefined;
+    await changeThrough("tokens", async () => {
+      answer = await cleanUpUnused(ids, uses);
+      return answer.halves;
+    });
+    if (answer?.halves !== undefined) adopt(answer.halves.after);
+    reread();
+    return answer?.result ?? NOT_ASKED;
+  };
+}
+
+/** The answer of a clean-up the history never ran. */
+const NOT_ASKED: CleanUpResult = {
+  kind: "refused",
+  reason: "The colours could not be removed. Try again.",
+};
 
 /**
  * What the Variables tab is handed of usage: the variable routes, with the
@@ -553,25 +663,80 @@ function absenceOf(pending: boolean): "pending" | "failed" {
 /** The tokens studio's state, for the Variables tab inside it. */
 const VariablesStudio = createContext<TokensPanelProps | null>(null);
 
+/**
+ * The studio's state, for a tab drawn inside its frame that edits the same
+ * variables: `null` outside one.
+ */
+export function useVariablesStudio(): TokensPanelProps | null {
+  return useContext(VariablesStudio);
+}
+
 /** The Variables tab: the studio's variables, in the panel its frame holds. */
 export function VariablesTab({
   tab,
+  usedOnPage,
 }: {
   /** The Design tab this is: its groups are the ones listed. */
   tab: Exclude<DesignTab, "styles">;
+  /** The variables the open page uses, for "Used on this page". */
+  usedOnPage?: ReadonlySet<string>;
 }): React.JSX.Element | null {
   const studio = useContext(VariablesStudio);
-  const { search, setSearch, searchRef, folds } = useDesignBrowse();
+  const { search, searchRef, folds } = useDesignBrowse();
   return studio === null ? null : (
     <TokensPanel
       {...studio}
       groups={DESIGN_TAB_GROUPS[tab]}
       search={search}
-      onSearch={setSearch}
       searchRef={searchRef}
       {...(folds === undefined ? {} : { folds })}
+      {...(usedOnPage === undefined ? {} : { usedOnPage })}
     />
   );
+}
+
+/** No components, for a region that reaches none. */
+const NO_COMPONENTS: ComponentLookup = new Map();
+
+/**
+ * The Colours tab, with what the open page and the components it places use,
+ * read from the editor's document so it follows an edit before any save.
+ */
+export function ColoursTab({
+  document,
+  components,
+  regions,
+  limits,
+}: {
+  document: BlockDocument;
+  components: ComponentLookup;
+  /** The header and footer drawn around the page, each with its components. */
+  regions: readonly {
+    readonly document: BlockDocument;
+    readonly definitions?: ComponentLookup;
+  }[];
+  limits: DocumentLimits;
+}): React.JSX.Element | null {
+  const studio = useContext(VariablesStudio);
+  const tokens = studio?.tokens;
+  const classes = studio?.classes;
+  const used = useMemo(
+    () =>
+      usedOnPage(
+        [
+          { document, components },
+          ...regions.map(region => ({
+            document: region.document,
+            components: region.definitions ?? NO_COMPONENTS,
+          })),
+        ],
+        limits,
+        tokens,
+        classes
+      ),
+    [document, components, regions, limits, tokens, classes]
+  );
+  return <VariablesTab tab="colours" usedOnPage={used} />;
 }
 
 /**

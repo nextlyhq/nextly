@@ -1,72 +1,64 @@
 "use client";
 
 /**
- * Settings: this page's configuration and the site's, in one dialog the
- * rail's Settings item opens.
+ * Page settings: everything about the page being edited, in one dialog the
+ * rail's Settings item opens, with one row of tabs that stays in view while a
+ * tab's content scrolls.
  *
- * Two tabs, because the two save differently and an author must be able to
- * tell which is which:
+ * - **General**: the page's title, its address (the site's address and the
+ *   page's part, with copy and edit) and its header & footer, then its
+ *   search and sharing, as a plugin that edits SEO says it, or the builder's
+ *   own preview where none does (`settings-general`).
+ * - **Fields**: every other field of the page, drawn by the entry form's own
+ *   renderer (`settings-fields`); left out where nothing is left for it.
+ * - Then the tabs other plugins add to the Settings place, in their declared
+ *   order, lifted into the same row; a tab that says it does not apply to
+ *   this document (`setLeftOut`) is left out of the row, its panel kept.
  *
- * - **This page** is the entry's own fields, drawn by the admin as the entry
- *   form draws them, with a preview of how a shared link would look. It saves
- *   with the page, from the top bar's Save or Publish.
- * - **Site** applies to the live site at once, and says so. It is offered only
- *   to a role that may manage the site's settings: its breakpoints, and with
- *   the Layout rights, its default Layout.
+ * "Site settings ▸" sits apart at the right of the row, only for a role that
+ * may change the site's settings: they apply to the live site at once, so
+ * they open in their own dialog that says so (`settings-site`). Everything
+ * here is saved with the page, as the line at the bottom of every tab says,
+ * beside "Open as form".
+ *
+ * A document that is not a page (a component, a template) keeps its own
+ * settings on General, with the place's tabs in the same row.
  *
  * Enter in a field never saves the page: the dialog is drawn inside the page's
- * form, where Enter would submit it.
+ * form. A save the page refused for a field shown here offers "Show me",
+ * which opens this dialog on that field's tab with the field focused.
  *
  * @module admin/editor/settings-dialog
  */
-import type { BreakpointSet } from "@nextlyhq/blocks-engine";
+import type { DocumentKind } from "@nextlyhq/blocks-engine";
+import type { BuilderShellProps } from "@nextlyhq/builder/shell";
 import {
-  BASE_DEVICE_LABEL,
-  BreakpointManager,
-  EDITOR_WORDS,
-  type BuilderShellProps,
-} from "@nextlyhq/builder/shell";
-import {
-  PlaceTabs,
+  useDocumentField,
+  useEntryFieldsLayout,
+  usePlaceTabs,
   usePluginRoute,
-  writePluginRoute,
+  useRevealField,
+  type PlaceTabEntry,
 } from "@nextlyhq/plugin-sdk/admin";
 import {
-  Alert,
-  AlertDescription,
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
   Button,
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
   Tabs,
   TabsContent,
   TabsList,
   TabsTrigger,
 } from "@nextlyhq/ui";
-import { AlertCircle, Check, Loader2, TriangleAlert } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import {
+  useContext,
   useEffect,
-  useId,
   useRef,
   useState,
-  type ComponentProps,
   type JSX,
-  type KeyboardEvent,
   type ReactNode,
 } from "react";
 
@@ -75,46 +67,27 @@ import {
   SITE_SETTINGS_ROUTE_PATH,
   type SiteSettingsRead,
 } from "../../library-contract";
-import {
-  pageAddressPath,
-  type PageAddressResponse,
-} from "../../pages-search-contract";
-import type { PublishReadinessResponse } from "../../publish-readiness-contract";
 import { PAGE_BUILDER_SETTINGS_PLACE } from "../../settings-place-contract";
-import { lazyPart } from "../lazy-part";
-import {
-  askReadiness,
-  publishChosen,
-  PublishOfferDialog,
-  reportLeftUnpublished,
-  type PublishChoice,
-} from "../publish-offer";
 
-import { RemovalStatusRow, RemovalStepPanel } from "./breakpoint-removal-step";
-import { undoableHint } from "./breakpoint-undo-flow";
-import { UndoStatusRow, UndoStepPanel } from "./breakpoint-undo-step";
+import { ManageSetsContext } from "./manage-sets";
 import type { SettingsAddress } from "./settings-address";
+import { PageFieldsTab, usePageFields } from "./settings-fields";
+import { DocumentGeneral, PageGeneral } from "./settings-general";
 import type { SettingsPlace } from "./settings-place";
+import {
+  keepEnterFromThePage,
+  mayOpenSiteSettings,
+  SiteSettingsDialog,
+  type SettingsBreakpoints,
+} from "./settings-site";
+import {
+  FIELDS_TAB,
+  focusFieldIn,
+  GENERAL_TAB,
+  inEditedField,
+  tabForField,
+} from "./settings-tabs";
 import type { SharePreview } from "./share-preview";
-import type { SiteCodeSection as SiteCodeSectionPart } from "./site-code-settings";
-import {
-  useBreakpointRemoval,
-  type BreakpointRemoval,
-} from "./use-breakpoint-removal";
-import {
-  useBreakpointUndo,
-  type BreakpointUndo,
-  type UndoStep,
-} from "./use-breakpoint-undo";
-
-/**
- * The site's code, fetched when the Site tab first draws it rather than with
- * the editor: it carries the code's own checks and words, which an author
- * who never opens the tab has no use for.
- */
-const SiteCodeSection: typeof SiteCodeSectionPart = lazyPart(() =>
-  import("./site-code-settings").then(m => m.SiteCodeSection)
-);
 
 /** What the shell hands the dialog. */
 type DialogState = Parameters<
@@ -122,938 +95,541 @@ type DialogState = Parameters<
 >[0];
 
 export interface SettingsDialogProps extends DialogState {
-  /** The entry's own fields, drawn by the admin, or null where there are none. */
-  pageFields: ReactNode | null;
+  /** Which document is open: a page gets General, Fields and its address. */
+  kind: DocumentKind;
+  /** The page's title as the author has it now, for the dialog's heading. */
+  pageTitle: string | undefined;
+  /** The form path of the field the builder edits, which is never drawn. */
+  fieldName: string;
+  /** The page's header & footer menu, or null for a page without one. */
+  headerFooter?: ReactNode | null;
   /**
-   * The place other plugins add tabs to, beside the page's own settings, or
-   * null for a document that offers none (a Layout, a component).
+   * The place other plugins add tabs to, or null for a document that offers
+   * none (a Layout, a component).
    */
   place?: SettingsPlace | null;
-  /**
-   * The page's Layout section, heading and all, or null for a document that
-   * is not a page drawn inside a Layout. Drawn as given.
-   */
-  pageLayout?: ReactNode | null;
   /**
    * How a shared link to this page would look. It names no host: the public
    * site may be served from another origin than the admin, and only the
    * server knows which.
    */
   share: SharePreview;
-  /**
-   * Whether the page has the SEO plugin's fields. Where it does, they are among
-   * the page's fields above; where it does not, the preview is all there is,
-   * and a line says the SEO plugin adds them.
-   */
-  seoFields: boolean;
-  /**
-   * The page whose address to show, or null for a page never saved, which
-   * has no address to read yet.
-   */
+  /** The saved page, for the hint about addresses beneath another page's. */
   address?: SettingsAddress | null;
-  /**
-   * The site's breakpoints: what is saved, how to save, whether it is read,
-   * and how to read the site's style again once a removal has changed it.
-   */
-  breakpoints: Pick<
-    ComponentProps<typeof BreakpointManager>,
-    "value" | "onSave" | "status"
-  > & { refresh: () => void };
+  breakpoints: SettingsBreakpoints;
+  /** Opens the document's form, where the editor offers it. */
+  openAsForm?: (() => void) | undefined;
+}
+
+/** Said once at the top while the page takes no edits. */
+const READ_ONLY_NOTE =
+  "You can't change this page right now, so its settings are read-only. The note above the editor says why.";
+
+/** The dialog's heading: the page's settings, named by the page's title. */
+function headingOf(kind: DocumentKind, title: string | undefined): string {
+  if (kind !== "page") return "Settings";
+  const named = title?.trim() ?? "";
+  return `Page settings · ${named === "" ? "Untitled" : named}`;
 }
 
 /**
- * Enter in a field submits the form it sits in, and this dialog is drawn inside
- * the page's form. Stopped once the field has had its turn, so a control that
- * uses Enter itself still does.
+ * The tab chosen, and the field "Show me" asked to focus once its tab is
+ * drawn. The tab shown is the one chosen while it is offered: one no longer
+ * offered (Fields emptied, a plugin's tab gone) gives General back rather
+ * than a blank dialog.
  */
-function keepEnterFromThePage(event: KeyboardEvent<HTMLElement>): void {
-  if (event.key !== "Enter") return;
-  // An IME uses Enter to accept a candidate; that is not a submission.
-  if (event.nativeEvent.isComposing) return;
-  if (event.target instanceof HTMLInputElement) event.preventDefault();
+function useChosenTab() {
+  const [chosen, setChosen] = useState(GENERAL_TAB);
+  const [focusPath, setFocusPath] = useState<string | null>(null);
+  return {
+    chosen,
+    choose: setChosen,
+    focusPath,
+    show: (tab: string, path: string): void => {
+      setChosen(tab);
+      setFocusPath(path);
+    },
+    focused: (): void => setFocusPath(null),
+  };
+}
+
+/**
+ * The dialog's tabs: Fields where a page has anything left for it, the
+ * place's tabs after it, which one is shown, and "Show me" for a field the
+ * page refused to save, which opens the dialog on that field's tab.
+ */
+function useSettingsTabs({
+  page,
+  fieldName,
+  place,
+  onOpenChange,
+}: {
+  page: boolean;
+  fieldName: string;
+  place: SettingsPlace | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const pageFields = usePageFields(fieldName);
+  const fields = page ? pageFields : null;
+  const tabs = useChosenTab();
+  const placeTabs = usePlaceTabs(
+    placeTabsOf(place, () => tabs.choose(GENERAL_TAB))
+  );
+  // A tab left out of the row is never shown: General comes back instead.
+  const offered = placeTabs.filter(tab => !tab.leftOut);
+  const ids = [
+    GENERAL_TAB,
+    ...(fields === null ? [] : [FIELDS_TAB]),
+    ...offered.map(tab => tab.id),
+  ];
+  const contentTab = contentTabOf(page, fields !== null);
+  useShowMe({
+    fieldName,
+    contentTab,
+    placeTabs: offered,
+    show: (tab, path) => {
+      tabs.show(tab, path);
+      onOpenChange(true);
+    },
+  });
+  return {
+    fields,
+    placeTabs,
+    offered,
+    shown: ids.includes(tabs.chosen) ? tabs.chosen : GENERAL_TAB,
+    choose: tabs.choose,
+    focusPath: tabs.focusPath,
+    focused: tabs.focused,
+  };
 }
 
 export function SettingsDialog({
   open,
   onOpenChange,
   returnFocus,
-  pageFields,
+  kind,
+  pageTitle,
+  fieldName,
+  headerFooter = null,
   place = null,
-  pageLayout = null,
   share,
-  seoFields,
   address = null,
   breakpoints,
+  openAsForm,
 }: SettingsDialogProps): JSX.Element {
-  const site = usePluginRoute<SiteSettingsRead>({
+  const page = kind === "page";
+  const site = useSiteSettingsEntry(open);
+  const tabs = useSettingsTabs({ page, fieldName, place, onOpenChange });
+  const leaveToSets = useLeaveToSets(onOpenChange);
+  const body = useRef<HTMLDivElement | null>(null);
+  useFocusShownField(open, tabs.shown, tabs.focusPath, body, tabs.focused);
+  return (
+    // The header & footer menu's "Manage headers & footers" and Site
+    // settings' default line leave through here for the Pages panel's sets.
+    <ManageSetsContext.Provider value={leaveToSets}>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent
+          // One height for every tab, so moving between them never resizes
+          // the dialog under the pointer.
+          className="flex h-[min(85vh,720px)] max-w-[680px] flex-col gap-0 p-0"
+          data-page-settings=""
+          onKeyDown={keepEnterFromThePage}
+          onEscapeKeyDown={leaveEscapeToItsControl}
+          // "Show me" focuses its field once the tab is drawn.
+          onOpenAutoFocus={event => keepFocusFor(event, tabs.focusPath)}
+          onCloseAutoFocus={event => returnFocusTo(event, returnFocus())}
+        >
+          <DialogHeader className="px-6 pt-6">
+            <DialogTitle className="truncate">
+              {headingOf(kind, pageTitle)}
+            </DialogTitle>
+            <DialogDescription className="sr-only">
+              {"This page's settings, in tabs."}
+            </DialogDescription>
+          </DialogHeader>
+          <Tabs
+            value={tabs.shown}
+            onValueChange={tabs.choose}
+            className="flex min-h-0 flex-1 flex-col"
+          >
+            <TabRow
+              showsFields={tabs.fields !== null}
+              // A tab that left the row keeps its panel below, hidden.
+              placeTabs={tabs.offered}
+              site={site.offer}
+            />
+            <ReadOnlyNote />
+            <SettingsBody
+              bodyRef={body}
+              tabs={tabs}
+              general={
+                <GeneralTab
+                  page={page}
+                  fieldName={fieldName}
+                  headerFooter={headerFooter}
+                  share={share}
+                  place={place}
+                  address={address}
+                  open={open}
+                />
+              }
+            />
+          </Tabs>
+          <SavedWithThePage openAsForm={openAsForm} />
+        </DialogContent>
+      </Dialog>
+      <SiteSettingsDialog
+        open={site.open && open}
+        onOpenChange={site.setOpen}
+        site={site.read}
+        breakpoints={breakpoints}
+      />
+    </ManageSetsContext.Provider>
+  );
+}
+
+/**
+ * The editor's way to its list of sets, closing Page settings first: it
+ * holds no draft of its own (its changes are the page's, kept unsaved), and
+ * Site settings over it asks first about its own. Null where the editor
+ * offers none.
+ */
+function useLeaveToSets(
+  onOpenChange: (open: boolean) => void
+): (() => void) | null {
+  const openSets = useContext(ManageSetsContext);
+  if (openSets === null) return null;
+  return () => {
+    onOpenChange(false);
+    openSets();
+  };
+}
+
+/**
+ * The tabs' content, the one part of the dialog that scrolls: the row of
+ * tabs above it stays in view.
+ */
+function SettingsBody({
+  bodyRef,
+  tabs,
+  general,
+}: {
+  bodyRef: { current: HTMLDivElement | null };
+  tabs: ReturnType<typeof useSettingsTabs>;
+  general: ReactNode;
+}): JSX.Element {
+  return (
+    <div
+      ref={bodyRef}
+      className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-4"
+      data-settings-body=""
+    >
+      <TabPanel value={GENERAL_TAB} shown={tabs.shown}>
+        {general}
+      </TabPanel>
+      {tabs.fields === null ? null : (
+        <TabPanel value={FIELDS_TAB} shown={tabs.shown}>
+          <PageFieldsTab page={tabs.fields} />
+        </TabPanel>
+      )}
+      {tabs.placeTabs.map(tab => (
+        <TabPanel key={tab.id} value={tab.id} shown={tabs.shown}>
+          {tab.panel}
+        </TabPanel>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Where the page's own content is shown here: on Fields for a page, on
+ * General for a document that is not one, and nowhere for a page with
+ * nothing left for Fields.
+ */
+function contentTabOf(page: boolean, showsFields: boolean): string | null {
+  if (!page) return GENERAL_TAB;
+  return showsFields ? FIELDS_TAB : null;
+}
+
+/**
+ * What the place's tabs are read with: the document's context, and the
+ * page's props with a way back to General; none for a document that offers
+ * no place.
+ */
+function placeTabsOf(
+  place: SettingsPlace | null,
+  openGeneral: () => void
+): Parameters<typeof usePlaceTabs>[0] {
+  if (place === null) {
+    return { place: PAGE_BUILDER_SETTINGS_PLACE, context: null };
+  }
+  return {
+    place: PAGE_BUILDER_SETTINGS_PLACE,
+    context: place.context,
+    tabProps: { ...place.tabProps, openGeneral },
+  };
+}
+
+/**
+ * The site's settings read, while Page settings is open, and whether Site
+ * settings is open over it: offered to a role that may change them. Closed
+ * with Page settings, from wherever that closes (the editor giving way to
+ * its narrow-window notice among them), so it never comes back by itself.
+ */
+function useSiteSettingsEntry(open: boolean) {
+  const read = usePluginRoute<SiteSettingsRead>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: SITE_SETTINGS_ROUTE_PATH,
     staleTime: 0,
     enabled: open,
   });
-  const leave = useLeaveGuard(onOpenChange, open);
-  // The Site tab is offered to a manager, and also when the read failed: a
-  // failure must not look like a missing permission.
-  const siteTab = site.data?.mayManageSite === true || site.error !== null;
-  // A tab that went away (a retry that answered "not yours") is not left on
-  // screen as a blank dialog.
-  useEffect(() => {
-    if (!siteTab) leave.leaveSite();
-  }, [siteTab, leave]);
-
-  return (
-    <>
-      <Dialog
-        open={open}
-        onOpenChange={next =>
-          next ? onOpenChange(true) : leave.request({ kind: "close" })
-        }
-      >
-        <DialogContent
-          // One height for both tabs, so moving between them never resizes
-          // the dialog under the pointer.
-          className="flex h-[min(85vh,720px)] max-w-[680px] flex-col gap-0 p-0"
-          onCloseAutoFocus={event => {
-            const target = returnFocus();
-            if (target === null) return;
-            event.preventDefault();
-            target.focus();
-          }}
-        >
-          <DialogHeader className="px-6 pt-6">
-            <DialogTitle>{EDITOR_WORDS.settings}</DialogTitle>
-            <DialogDescription className="sr-only">
-              {"This page's settings, and the site's."}
-            </DialogDescription>
-          </DialogHeader>
-          <Tabs
-            value={leave.tab}
-            onValueChange={next => leave.request({ kind: "tab", to: next })}
-            className="flex min-h-0 flex-1 flex-col"
-          >
-            <TabsList className="mx-6 mt-3 w-fit">
-              <TabsTrigger value="page">This page</TabsTrigger>
-              {siteTab ? <TabsTrigger value="site">Site</TabsTrigger> : null}
-            </TabsList>
-            <TabsContent
-              value="page"
-              className="min-h-0 flex-1 overflow-y-auto px-6 pb-6"
-            >
-              <PlaceTabsOf place={place}>
-                <ThisPage
-                  pageFields={pageFields}
-                  pageLayout={pageLayout}
-                  share={share}
-                  seoFields={seoFields}
-                  address={
-                    address === null ? null : (
-                      <AddressLine address={address} open={open} />
-                    )
-                  }
-                />
-              </PlaceTabsOf>
-            </TabsContent>
-            {siteTab ? (
-              <TabsContent
-                value="site"
-                className="min-h-0 flex-1 overflow-y-auto px-6 pb-6"
-                // The Site tab's own fields (the breakpoints). This page's are
-                // the entry's, which keep Enter from the page themselves.
-                onKeyDown={keepEnterFromThePage}
-              >
-                <SiteTab
-                  site={site}
-                  breakpoints={breakpoints}
-                  onEditingBreakpoints={leave.setEditing}
-                  onSavingBreakpoints={leave.setSaving}
-                  onEditingCode={leave.setEditingCode}
-                  onSavingCode={leave.setSavingCode}
-                  onClose={() => leave.request({ kind: "close" })}
-                />
-              </TabsContent>
-            ) : null}
-          </Tabs>
-          {/* Per tab, one line: This page says when its settings save. Site
-              has its own banner saying it applies at once, so it adds none. */}
-          {leave.tab === "page" ? (
-            <p className="border-t px-6 py-3 text-xs text-muted-foreground">
-              Saved with the page when you Save or Publish.
-            </p>
-          ) : null}
-        </DialogContent>
-      </Dialog>
-      <AlertDialog
-        open={leave.asking}
-        onOpenChange={asking => {
-          if (!asking) leave.keepEditing();
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {DISCARD_WORDS[leave.discarding].title}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {DISCARD_WORDS[leave.discarding].description}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Keep editing</AlertDialogCancel>
-            <AlertDialogAction onClick={leave.discard}>
-              Discard
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </>
-  );
-}
-
-/**
- * The page's own settings, with the tabs other plugins add beside them under
- * General; the settings alone where nothing is added or the document offers
- * no place.
- */
-function PlaceTabsOf({
-  place,
-  children,
-}: {
-  place: SettingsPlace | null;
-  children: ReactNode;
-}): JSX.Element {
-  // The tab shown, held here so a tab can show General (`openGeneral`).
-  const [open, setOpen] = useState<string | null>(null);
-  if (place === null) return <>{children}</>;
-  return (
-    <PlaceTabs
-      place={PAGE_BUILDER_SETTINGS_PLACE}
-      context={place.context}
-      tabProps={{ ...place.tabProps, openGeneral: () => setOpen(null) }}
-      openTab={open}
-      onOpenTabChange={setOpen}
-      contentLabel="General"
-      className="pt-4"
-    >
-      {children}
-    </PlaceTabs>
-  );
-}
-
-/** What leaving would discard, and how the question says so. */
-const DISCARD_WORDS = {
-  breakpoints: {
-    title: "Discard your breakpoint changes?",
-    description:
-      "They have not been saved. The site keeps the breakpoints it has.",
-  },
-  code: {
-    title: "Discard your code changes?",
-    description: "They have not been saved. The site keeps the code it has.",
-  },
-  both: {
-    title: "Discard your breakpoint and code changes?",
-    description:
-      "Neither has been saved. The site keeps the breakpoints and the code it has.",
-  },
-} as const;
-
-/** A way out of the breakpoint editor: closing Settings, or another tab. */
-type Leave = { kind: "close" } | { kind: "tab"; to: string };
-
-/** Which drafts leaving would discard. */
-function discardingOf(
-  breakpoints: boolean,
-  code: boolean
-): keyof typeof DISCARD_WORDS {
-  if (breakpoints && code) return "both";
-  return code ? "code" : "breakpoints";
-}
-
-/**
- * Leaving the Site tab while its breakpoints or its code are being edited
- * asks first, by closing Settings or by switching tabs alike, since either
- * takes the draft away. While a save of either is in flight, neither happens:
- * the write must answer on screen, and a "discard" could not stop it reaching
- * the site.
- */
-function useLeaveGuard(onOpenChange: (open: boolean) => void, open: boolean) {
-  const [tab, setTab] = useState("page");
-  const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [editingCode, setEditingCode] = useState(false);
-  const [savingCode, setSavingCode] = useState(false);
-  const [pending, setPending] = useState<Leave | null>(null);
-  // Closed from outside (the editor giving way to its narrow-window notice),
-  // the editor's draft went with the dialog, so nothing is left to guard.
-  useEffect(() => {
-    if (open) return;
-    setEditing(false);
-    setSaving(false);
-    setEditingCode(false);
-    setSavingCode(false);
-    setPending(null);
-  }, [open]);
-  const go = (leave: Leave): void => {
-    if (leave.kind === "close") onOpenChange(false);
-    else setTab(leave.to);
-  };
+  const [siteOpen, setOpen] = useState(false);
+  if (!open && siteOpen) setOpen(false);
   return {
-    tab,
-    asking: pending !== null,
-    // What a discard would throw away: both drafts where both are open, as a
-    // breakpoint draft stays while the code is open over it.
-    discarding: discardingOf(editing, editingCode),
-    setEditing,
-    setSaving,
-    setEditingCode,
-    setSavingCode,
-    request: (leave: Leave): void => {
-      if (saving || savingCode) return;
-      if (leave.kind === "tab" && leave.to === tab) return;
-      if ((editing || editingCode) && tab === "site") {
-        setPending(leave);
-        return;
-      }
-      go(leave);
-    },
-    keepEditing: (): void => setPending(null),
-    leaveSite: (): void => {
-      if (tab === "site") setTab("page");
-    },
-    discard: (): void => {
-      setEditing(false);
-      setEditingCode(false);
-      if (pending !== null) go(pending);
-      setPending(null);
-    },
+    read,
+    open: siteOpen,
+    setOpen,
+    offer: mayOpenSiteSettings(read) ? () => setOpen(true) : undefined,
   };
 }
 
-/** The Site tab: what the read answered, or why it could not answer. */
-function SiteTab({
-  site,
-  breakpoints,
-  onEditingBreakpoints,
-  onSavingBreakpoints,
-  onEditingCode,
-  onSavingCode,
-  onClose,
+/** General: a page's own, or the settings another document keeps. */
+function GeneralTab({
+  page,
+  fieldName,
+  headerFooter,
+  share,
+  place,
+  address,
+  open,
 }: {
-  site: ReturnType<typeof usePluginRoute<SiteSettingsRead>>;
-  breakpoints: SettingsDialogProps["breakpoints"];
-  onEditingBreakpoints: (editing: boolean) => void;
-  onSavingBreakpoints: (saving: boolean) => void;
-  onEditingCode: (editing: boolean) => void;
-  onSavingCode: (saving: boolean) => void;
-  onClose: () => void;
-}): JSX.Element | null {
-  if (site.data === undefined) {
-    return site.error === null ? null : (
-      <div className="flex items-center gap-3 pt-4 text-sm">
-        <AlertCircle
-          className="size-4 shrink-0 text-destructive"
-          aria-hidden="true"
-        />
-        <span>{"The site's settings could not be loaded."}</span>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={site.refetch}
-        >
-          Retry
-        </Button>
-      </div>
+  page: boolean;
+  fieldName: string;
+  headerFooter: ReactNode | null;
+  share: SharePreview;
+  place: SettingsPlace | null;
+  address: SettingsAddress | null;
+  open: boolean;
+}): JSX.Element {
+  if (!page) {
+    return (
+      <DocumentGeneral fieldName={fieldName} share={share} place={place} />
     );
   }
-  const read = site.data;
   return (
-    <SiteSettings
-      read={read}
-      reread={site.refetch}
-      breakpoints={{
-        // Read with the site permission, as their write is, so a role that
-        // may manage them sees them without Design's read.
-        value: read.breakpoints ?? breakpoints.value,
-        // Not while the read is refreshing: a cached set opened as a draft
-        // and saved later would overwrite a newer one.
-        status: site.fetching ? "loading" : "ready",
-        onSave: async next => {
-          const answer = await breakpoints.onSave(next);
-          site.refetch();
-          return typeof answer === "string" ? answer : undefined;
-        },
-        refresh: breakpoints.refresh,
-      }}
-      onEditingBreakpoints={onEditingBreakpoints}
-      onSavingBreakpoints={onSavingBreakpoints}
-      onEditingCode={onEditingCode}
-      onSavingCode={onSavingCode}
-      onClose={onClose}
+    <PageGeneral
+      fieldName={fieldName}
+      headerFooter={headerFooter}
+      share={share}
+      place={place}
+      address={address}
+      open={open}
     />
   );
 }
 
+/** The dialog's own first focus gives way to the field "Show me" focuses. */
+function keepFocusFor(event: Event, path: string | null): void {
+  if (path !== null) event.preventDefault();
+}
+
+/** Focus goes back to what opened the dialog, where the shell names it. */
+function returnFocusTo(event: Event, target: HTMLElement | null): void {
+  if (target === null) return;
+  event.preventDefault();
+  target.focus();
+}
+
 /**
- * Where the page is served, as it is saved: read from the server, which
- * resolves it as the pages search does, never built here from the slug, so
- * it names the address visitors reach rather than a guess at it.
- *
- * A slug changed since the last save does not move it: the line says this is
- * the saved address and that it changes when the page is saved. Nothing shows
- * while it is read, or where the page has no address (another collection, a
- * site that states none, a page whose fields cannot fill it yet).
+ * One tab's content, mounted while another is shown and only hidden: a
+ * plugin's tab keeps its count current and what it holds, and the form's
+ * fields stay where "Show me" finds them.
  */
-function AddressLine({
-  address,
-  open,
+function TabPanel({
+  value,
+  shown,
+  children,
 }: {
-  address: SettingsAddress;
-  open: boolean;
-}): JSX.Element | null {
-  const read = usePluginRoute<PageAddressResponse>({
-    plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path: pageAddressPath(address.page, address.locale),
-    staleTime: 0,
-    enabled: open,
-  });
-  // Read again after each save, whichever field it changed: the host's path
-  // can name more than the slug, and the query's own key would not move.
-  const { refetch } = read;
-  const revisionSeen = useRef(address.savedRevision);
-  useEffect(() => {
-    if (revisionSeen.current === address.savedRevision) return;
-    revisionSeen.current = address.savedRevision;
-    void refetch();
-  }, [address.savedRevision, refetch]);
-  if (read.data === undefined) {
-    return read.error === null ? null : (
-      <p className="text-xs text-muted-foreground">
-        {"This page's address could not be read."}
-      </p>
-    );
-  }
-  const path = read.data.path;
-  if (path === null) return null;
+  value: string;
+  shown: string;
+  children: ReactNode;
+}): JSX.Element {
   return (
-    // Drawn as the Address field's own line, right under it, rather than as
-    // a section of its own: it is the same address, written out in full.
-    <section
-      aria-label="Address on your site"
-      className="space-y-1 text-xs text-muted-foreground"
+    <TabsContent value={value} forceMount hidden={shown !== value}>
+      {children}
+    </TabsContent>
+  );
+}
+
+/**
+ * Said once at the top while the page takes no edits: the title's own rule
+ * says whether it does now (a past version, a colleague's claim, a reader).
+ */
+function ReadOnlyNote(): JSX.Element | null {
+  const readOnly = useDocumentField("title")?.writable === false;
+  if (!readOnly) return null;
+  return (
+    <p
+      role="note"
+      className="mx-6 mt-3 rounded-md border border-border bg-muted px-3 py-2 text-sm text-muted-foreground"
     >
-      <p>
-        On your site:{" "}
-        <span
-          className="break-all font-mono text-sm text-foreground"
-          data-page-address=""
-        >
-          {path}
-        </span>
-      </p>
-      {address.slugChanged ? (
-        <p role="status">
-          This is the saved address. It changes when you save the page.
-        </p>
-      ) : null}
-      {/* Only the plugin's own Pages have this line, and their addresses
-          may sit beneath another page's, which nothing else says. */}
-      <p>
-        To put this page beneath another, use / in its address, as in{" "}
-        <span className="font-mono">docs/getting-started</span>.
-      </p>
-    </section>
+      {READ_ONLY_NOTE}
+    </p>
   );
 }
 
 /**
- * The page's own fields, its address, the Layout it is drawn inside, then how
- * a shared link to it would look.
+ * The one row of tabs: General, Fields, then the place's tabs in their
+ * declared order, and "Site settings ▸" apart at its right. Arrow keys move
+ * between the tabs; the Site settings button is not one of them.
  */
-function ThisPage({
-  pageFields,
-  pageLayout,
-  share,
-  seoFields,
-  address,
-}: Pick<
-  SettingsDialogProps,
-  "pageFields" | "pageLayout" | "share" | "seoFields"
-> & {
-  /** The page's address line, or null where it has none to show. */
-  address: ReactNode | null;
-}): JSX.Element {
-  return (
-    <div className="space-y-6 pt-4">
-      {/* The address line sits with the page's own fields, under the
-          Address field it writes out. */}
-      {pageFields === null && address === null ? null : (
-        <section className="space-y-2">
-          {pageFields}
-          {address}
-        </section>
-      )}
-      {pageLayout ?? null}
-      <section aria-labelledby="settings-share-title" className="space-y-2">
-        <h3 id="settings-share-title" className="text-sm font-semibold">
-          Search and sharing
-        </h3>
-        <SharePreviewCard share={share} />
-        <p className="text-xs text-muted-foreground">
-          {"Approximate: your site's metadata may differ."}
-        </p>
-        {seoFields ? null : (
-          <p className="text-sm text-muted-foreground">
-            {
-              "Built from this page's title, first heading and first image. The SEO plugin adds fields to set the title, description and image yourself."
-            }
-          </p>
-        )}
-      </section>
-    </div>
-  );
-}
-
-/** How a shared link would look: image, title and description. */
-function SharePreviewCard({ share }: { share: SharePreview }): JSX.Element {
-  return (
-    <figure
-      aria-label="Share preview"
-      className="max-w-[420px] overflow-hidden rounded-md border border-border"
-    >
-      {share.image === undefined ? null : share.image.kind === "url" ? (
-        <img
-          src={share.image.url}
-          alt=""
-          className="h-40 w-full border-b border-border object-cover"
-        />
-      ) : (
-        <div className="flex h-40 items-center justify-center border-b border-border bg-muted text-xs text-muted-foreground">
-          {share.image.kind === "media"
-            ? "Image from the media library"
-            : "Image from another site"}
-        </div>
-      )}
-      <figcaption className="grid gap-0.5 px-3 py-2.5">
-        <span className="text-sm font-semibold">{share.title}</span>
-        {share.description === undefined ? null : (
-          <span className="line-clamp-2 text-sm text-muted-foreground">
-            {share.description}
-          </span>
-        )}
-      </figcaption>
-    </figure>
-  );
-}
-
-/** The site's settings: live at once, and said to be. */
-function SiteSettings({
-  read,
-  reread,
-  breakpoints,
-  onEditingBreakpoints,
-  onSavingBreakpoints,
-  onEditingCode,
-  onSavingCode,
-  onClose,
+function TabRow({
+  showsFields,
+  placeTabs,
+  site,
 }: {
-  read: SiteSettingsRead;
-  reread: () => void;
-  breakpoints: SettingsDialogProps["breakpoints"];
-  onEditingBreakpoints: (editing: boolean) => void;
-  onSavingBreakpoints: (saving: boolean) => void;
-  onEditingCode: (editing: boolean) => void;
-  onSavingCode: (saving: boolean) => void;
-  onClose: () => void;
-}): JSX.Element {
-  // While the code is open the other sections step aside, as they do for a
-  // breakpoint removal's steps.
-  const [codeOpen, setCodeOpen] = useState(false);
-  const { refresh, ...manager } = breakpoints;
-  const removal = useBreakpointRemoval({
-    current: manager.value,
-    save: async next => {
-      const answer = await manager.onSave(next);
-      return typeof answer === "string" ? answer : undefined;
-    },
-    removals: read.removals,
-    undoable: read.undoable,
-    reread,
-    refreshStyle: refresh,
-  });
-  const undo = useBreakpointUndo({
-    undoable: read.undoable,
-    removals: read.removals,
-    reread,
-    refreshStyle: refresh,
-  });
-  // A step that asks or works has the tab to itself: a removal's first, then
-  // an undo's.
-  const takesOver = removal.takesOver || undo.takesOver;
-  // Counted up to open the breakpoint editor from a step, once it gives way.
-  const [editRequest, setEditRequest] = useState(0);
-  // The editor's own save is hidden under a removal's steps while they ask
-  // before saving: then leaving waits only on a request a step has out, and
-  // a confirmation on screen can be left, asking first as a draft is.
-  const [editorSaving, setEditorSaving] = useState(false);
-  const saving = takesOver ? removal.inFlight || undo.inFlight : editorSaving;
-  useEffect(() => {
-    onSavingBreakpoints(saving);
-  }, [saving, onSavingBreakpoints]);
-  // Reloaded, the editor starts again from the stored set, with no draft.
-  const steps = {
-    ...removal,
-    reload: (): void => {
-      onEditingBreakpoints(false);
-      removal.reload();
-    },
-  };
-  return (
-    <div className="space-y-6 pt-4">
-      <Alert variant="warning">
-        <TriangleAlert className="size-4" aria-hidden="true" />
-        <AlertDescription>
-          Changes here apply to the live site immediately.
-        </AlertDescription>
-      </Alert>
-      <section
-        aria-labelledby="settings-breakpoints-title"
-        className="space-y-2"
-        // Kept mounted while the code is open, so a breakpoint draft stays.
-        hidden={codeOpen}
-      >
-        <h3 id="settings-breakpoints-title" className="text-sm font-semibold">
-          Breakpoints
-        </h3>
-        <p className="text-sm text-muted-foreground">
-          Widths your styles can change at. Each applies at that width and
-          below.
-        </p>
-        <BreakpointSteps
-          removal={steps}
-          undo={undo}
-          current={manager.value}
-          onClose={onClose}
-          onEditBreakpoints={() => setEditRequest(value => value + 1)}
-        />
-        {/* Kept mounted under a step, so Back returns to the draft as it was. */}
-        <div hidden={takesOver}>
-          <BreakpointManager
-            key={removal.generation}
-            {...manager}
-            onSave={removal.save}
-            {...(removal.blocked === undefined
-              ? {}
-              : { blocked: removal.blocked })}
-            tags={undo.putBack}
-            editRequest={editRequest}
-            onEditingChange={editing => {
-              onEditingBreakpoints(editing);
-              removal.editing(editing);
-              undo.editing(editing);
-            }}
-            onSavingChange={setEditorSaving}
-          />
-        </div>
-      </section>
-      {/* The step has the tab to itself while it asks or works. */}
-      {takesOver ? null : (
-        <LaterSections
-          read={read}
-          reread={reread}
-          codeOpen={codeOpen}
-          code={{
-            onEditingChange: onEditingCode,
-            onSavingChange: onSavingCode,
-            onOpenChange: setCodeOpen,
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-/**
- * The Site sections after the breakpoints: the default Layout, which steps
- * aside while the code is open, and the code.
- */
-function LaterSections({
-  read,
-  reread,
-  codeOpen,
-  code,
-}: {
-  read: SiteSettingsRead;
-  reread: () => void;
-  codeOpen: boolean;
-  code: ComponentProps<typeof SiteCodeSection>;
+  showsFields: boolean;
+  placeTabs: readonly PlaceTabEntry[];
+  site: (() => void) | undefined;
 }): JSX.Element {
   return (
-    <>
-      {codeOpen ? null : <DefaultLayout read={read} reread={reread} />}
-      <SiteCodeSection {...code} />
-    </>
-  );
-}
-
-/** Whether an undo, going or finished, puts back removal `runId`. */
-function undoes(step: UndoStep, runId: string): boolean {
-  return (
-    (step.kind === "undoing" ||
-      step.kind === "undone" ||
-      step.kind === "left") &&
-    step.undoes === runId
-  );
-}
-
-/**
- * What the Site tab shows of a removal and its undo above the breakpoint
- * list: the step that takes the list's place while one asks or works (a
- * removal's first), else their rows. The removal's own finished row offers
- * its undo where it is the one on offer; otherwise the undo's row does.
- */
-function BreakpointSteps({
-  removal,
-  undo,
-  current,
-  onClose,
-  onEditBreakpoints,
-}: {
-  removal: BreakpointRemoval;
-  undo: BreakpointUndo;
-  current: BreakpointSet;
-  onClose: () => void;
-  onEditBreakpoints: () => void;
-}): JSX.Element {
-  if (removal.takesOver) {
-    return (
-      <RemovalStepPanel
-        removal={removal}
-        current={current}
-        baseLabel={BASE_DEVICE_LABEL}
-        onClose={onClose}
-      />
-    );
-  }
-  if (undo.takesOver) {
-    return (
-      <UndoStepPanel
-        undo={undo}
-        onClose={onClose}
-        onEditBreakpoints={onEditBreakpoints}
-      />
-    );
-  }
-  const shownRun =
-    removal.step.kind === "done" || removal.step.kind === "left"
-      ? removal.step.runId
-      : undefined;
-  const offered = undo.offered;
-  // A finished removal this tab saw gives way to its undo, going or done, so
-  // the tab never says at once that a breakpoint was removed and is back.
-  const undoneHere = shownRun !== undefined && undoes(undo.step, shownRun);
-  return (
-    <>
-      {undoneHere ? null : (
-        <RemovalStatusRow
-          removal={removal}
-          {...(offered !== undefined && shownRun === offered.runId
-            ? {
-                offer: {
-                  hint: undoableHint(offered),
-                  undo: () => undo.ask(offered),
-                },
-              }
-            : {})}
-        />
-      )}
-      <UndoStatusRow
-        undo={undo}
-        offerHere={shownRun === undefined && removal.step.kind !== "resumed"}
-      />
-    </>
-  );
-}
-
-type DefaultLayoutSave =
-  | { kind: "idle" }
-  | { kind: "saving" }
-  | { kind: "saved" }
-  | { kind: "failed"; message: string; retry: () => void };
-
-/** The site's default Layout: chosen here, or read here without the rights. */
-function DefaultLayout({
-  read,
-  reread,
-}: {
-  read: SiteSettingsRead;
-  reread: () => void;
-}): JSX.Element {
-  const selectId = useId();
-  const [save, setSave] = useState<DefaultLayoutSave>({ kind: "idle" });
-  // The Layout just made the default, held until the read says so too, so the
-  // select never shows the old default beside "Saved".
-  const [chosen, setChosen] = useState<string | null>(null);
-  const shown = chosen ?? read.defaultLayout;
-  // Once the read says so too, the read is the answer again: a later change
-  // made elsewhere must show.
-  useEffect(() => {
-    if (chosen !== null && read.defaultLayout === chosen) setChosen(null);
-  }, [chosen, read.defaultLayout]);
-  // A Layout about to wrap every page that names none, asked about first:
-  // the components its areas place that are not live, with the offer to
-  // publish them before it becomes the default. Never a refusal.
-  const [offer, setOffer] = useState<{
-    id: string;
-    readiness: PublishReadinessResponse;
-  } | null>(null);
-  const choose = (id: string): void => {
-    setSave({ kind: "saving" });
-    void askReadiness({ documents: [], layout: id }).then(readiness => {
-      if (
-        readiness === null ||
-        (readiness.dependencies.length === 0 && readiness.missing === 0)
-      ) {
-        makeDefault(id);
-        return;
-      }
-      setSave({ kind: "idle" });
-      setOffer({ id, readiness });
-    });
-  };
-  const answer = (choice: PublishChoice): void => {
-    const asked = offer;
-    setOffer(null);
-    if (asked === null || choice.kind === "cancel") return;
-    if (choice.kind === "only") {
-      makeDefault(asked.id);
-      return;
-    }
-    setSave({ kind: "saving" });
-    publishChosen(choice.dependencies).then(
-      result => {
-        reportLeftUnpublished(result, asked.readiness, "header & footer set");
-        makeDefault(asked.id);
-      },
-      (reason: unknown) => {
-        setSave({
-          kind: "failed",
-          message:
-            reason instanceof Error
-              ? reason.message
-              : "The components could not be published.",
-          retry: () => choose(asked.id),
-        });
-      }
-    );
-  };
-  const makeDefault = (id: string): void => {
-    setSave({ kind: "saving" });
-    writePluginRoute({
-      plugin: PAGE_BUILDER_PLUGIN_NAME,
-      path: `/layouts/${encodeURIComponent(id)}/make-default`,
-      body: {},
-    }).then(
-      () => {
-        setChosen(id);
-        setSave({ kind: "saved" });
-        reread();
-      },
-      (reason: unknown) => {
-        setSave({
-          kind: "failed",
-          message:
-            reason instanceof Error
-              ? reason.message
-              : "The default header & footer set could not be changed.",
-          retry: () => choose(id),
-        });
-      }
-    );
-  };
-  const current = read.layouts.find(layout => layout.id === shown);
-  return (
-    <section aria-labelledby={`${selectId}-title`} className="space-y-2">
-      <h3 id={`${selectId}-title`} className="text-sm font-semibold">
-        Default header & footer set
-      </h3>
-      <label htmlFor={selectId} className="block text-sm">
-        Pages without a header & footer set of their own use
-      </label>
-      <div className="flex flex-wrap items-center gap-3">
-        <Select
-          {...(shown === null ? {} : { value: shown })}
-          disabled={!read.mayChooseDefaultLayout || save.kind === "saving"}
-          onValueChange={choose}
-        >
-          <SelectTrigger id={selectId} className="w-56">
-            <SelectValue placeholder="None" />
-          </SelectTrigger>
-          <SelectContent>
-            {read.layouts.map(layout => (
-              <SelectItem key={layout.id} value={layout.id}>
-                {layout.title}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <SaveWords save={save} />
+    <div className="mx-6 mt-3 flex min-w-0 items-end">
+      <div className="min-w-0 flex-1">
+        <TabsList scrollable className="justify-start">
+          <TabsTrigger value={GENERAL_TAB}>General</TabsTrigger>
+          {showsFields ? (
+            <TabsTrigger value={FIELDS_TAB}>Fields</TabsTrigger>
+          ) : null}
+          {placeTabs.map(tab => (
+            <TabsTrigger
+              key={tab.id}
+              value={tab.id}
+              {...(tab.accessibleName === undefined
+                ? {}
+                : { "aria-label": tab.accessibleName })}
+            >
+              {tab.trigger}
+            </TabsTrigger>
+          ))}
+        </TabsList>
       </div>
-      <PublishOfferDialog
-        readiness={offer?.readiness ?? null}
-        subject="header & footer set"
-        onAnswer={answer}
-        onlyLabel="Make default anyway"
-        withLabel={count =>
-          count === 1
-            ? "Publish it, then make default"
-            : `Publish ${String(count)}, then make default`
-        }
-      />
-      {read.mayChooseDefaultLayout ? null : (
-        <p className="text-xs text-muted-foreground">
-          {current === undefined ? "" : `${current.title}. `}You can see the
-          default but not change it: that needs the rights to update and publish
-          header & footer sets.
-        </p>
-      )}
-    </section>
-  );
-}
-
-/** A site setting's save, in the save chip's words. */
-function SaveWords({ save }: { save: DefaultLayoutSave }): JSX.Element {
-  return (
-    <span
-      role="status"
-      className="flex items-center gap-1.5 text-sm text-muted-foreground"
-    >
-      {save.kind === "saving" ? (
-        <>
-          <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-          Saving…
-        </>
-      ) : save.kind === "saved" ? (
-        <>
-          <Check className="size-4 text-success" aria-hidden="true" />
-          Saved
-        </>
-      ) : save.kind === "failed" ? (
-        <>
-          <AlertCircle className="size-4 text-destructive" aria-hidden="true" />
-          <span className="text-destructive">Not saved</span>
-          <span className="sr-only">{save.message}</span>
+      {site === undefined ? null : (
+        // On the same rail as the tabs, so the row reads as one line.
+        <div className="flex h-10 shrink-0 items-center border-b border-border pl-3">
           <Button
             type="button"
             variant="ghost"
             size="sm"
-            title={save.message}
-            onClick={save.retry}
+            onClick={site}
+            aria-label="Site settings"
           >
-            Retry
+            Site settings
+            <ChevronRight className="size-4" aria-hidden="true" />
           </Button>
-        </>
-      ) : null}
-    </span>
+        </div>
+      )}
+    </div>
   );
+}
+
+/** The line every tab ends with, and the way to the document's form. */
+function SavedWithThePage({
+  openAsForm,
+}: {
+  openAsForm: (() => void) | undefined;
+}): JSX.Element {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border px-6 py-3">
+      <p className="text-xs text-muted-foreground">
+        Saved with the page when you Save or Publish.
+      </p>
+      {openAsForm === undefined ? null : (
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          className="ml-auto h-auto px-0"
+          onClick={openAsForm}
+        >
+          Open as form
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A control that answers Escape itself (the address's in-place edit puts the
+ * address back) keeps it: the dialog closes on Escape everywhere else.
+ */
+function leaveEscapeToItsControl(event: KeyboardEvent): void {
+  const target = event.target;
+  if (target instanceof Element && target.closest("[data-own-escape]")) {
+    event.preventDefault();
+  }
+}
+
+/**
+ * Tell the editor how to show a field the page refused to save: on the tab
+ * that holds it here, found by where the entry page draws it. A field this
+ * dialog does not show, the builder's own among them, is left to the
+ * message's usual link.
+ */
+function useShowMe({
+  fieldName,
+  contentTab,
+  placeTabs,
+  show,
+}: {
+  fieldName: string;
+  contentTab: string | null;
+  placeTabs: readonly PlaceTabEntry[];
+  show: (tab: string, path: string) => void;
+}): void {
+  const layout = useEntryFieldsLayout();
+  const placeIds = placeTabs.map(tab => tab.id);
+  useRevealField(path => {
+    if (inEditedField(path, fieldName)) return null;
+    const tab = tabForField(layout?.tabOf(path) ?? null, {
+      contentTab,
+      placeTabs: placeIds,
+    });
+    return tab === null ? null : () => show(tab, path);
+  });
+}
+
+/**
+ * Focus the field at `path` in the tab's content, or, where it cannot take
+ * the focus, the tab it is on: the dialog's own first focus was kept back
+ * for the field, so focus never stays outside the dialog.
+ */
+function focusShownField(body: HTMLElement, path: string): void {
+  if (focusFieldIn(body, path)) return;
+  body
+    .closest('[role="dialog"]')
+    ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+    ?.focus();
+}
+
+/**
+ * Focus the field "Show me" asked for, once its tab is drawn in the open
+ * dialog: on the next frame, after the dialog's own first focus.
+ */
+function useFocusShownField(
+  open: boolean,
+  shown: string,
+  path: string | null,
+  body: { current: HTMLDivElement | null },
+  focused: () => void
+): void {
+  const done = useRef(focused);
+  done.current = focused;
+  useEffect(() => {
+    if (!open || path === null) return;
+    const frame = requestAnimationFrame(() => {
+      if (body.current !== null) focusShownField(body.current, path);
+      done.current();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open, shown, path, body]);
 }

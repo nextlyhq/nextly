@@ -13,6 +13,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import * as React from "react";
@@ -97,6 +98,19 @@ function editorFor(id: string, document: BlockDocument = PAGE): EditorState {
 }
 
 /** The panel with `id` selected, re-selectable as an author clicks blocks. */
+/**
+ * Open Advanced's HTML section unless it is open: it starts closed on a block
+ * whose HTML holds nothing.
+ */
+function openHtmlSection(): void {
+  const header = document.querySelector<HTMLElement>(
+    '[data-section="html"] [data-slot="accordion-trigger"]'
+  );
+  if (header !== null && header.getAttribute("aria-expanded") !== "true") {
+    fireEvent.click(header);
+  }
+}
+
 function mount(id: string, styleState?: StyleStateBinding) {
   const view = render(
     <InspectorPanel editor={editorFor(id)} styleState={styleState} />
@@ -134,16 +148,154 @@ describe("the tabs a selected block has", () => {
     expect(screen.queryByRole("tabpanel", { name: "Content" })).toBeNull();
   });
 
-  it("follow the Section's settings: Content holds the one it still places there", () => {
-    // The Section's HTML tag is placed in Content today, so it has a Content
-    // tab holding only that; its content width is drawn in Style › Layout.
-    // It loses the tab when the HTML tag is placed in Advanced.
+  it("are only Style and Advanced for a Section, which says nothing itself", () => {
+    // Its HTML tag is in Advanced › HTML and its content width in Style ›
+    // Layout, so Content would hold nothing.
     mount("section");
-    expect(tabNames()).toEqual(["Content", "Style", "Advanced"]);
+    expect(tabNames()).toEqual(["Style", "Advanced"]);
+    choose("Advanced");
+    openHtmlSection();
+    const advanced = screen.getByRole("tabpanel", { name: "Advanced" });
+    const html = within(advanced).getByRole("region", { name: /^HTML/ });
+    expect(within(html).getByText("HTML tag")).toBeTruthy();
+  });
+});
+
+describe("a Columns block's layout", () => {
+  const ROW: BlockDocument = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [
+      {
+        ...nodeOf("row", "core/columns"),
+        slots: {
+          children: [nodeOf("c1", "core/column"), nodeOf("c2", "core/column")],
+        },
+      },
+    ],
+  } as BlockDocument;
+  const BREAKPOINTS = {
+    viewport: [
+      { id: "md", label: "Tablet", maxWidth: 1024 },
+      { id: "sm", label: "Mobile", maxWidth: 640 },
+    ],
+    container: [],
+  };
+
+  it("is in Content, in a Columns section, and no longer in Style", () => {
+    render(
+      <InspectorPanel
+        editor={editorFor("row", ROW)}
+        breakpoints={BREAKPOINTS}
+      />
+    );
+    expect(tabNames()).toContain("Content");
     const content = screen.getByRole("tabpanel", { name: "Content" });
-    expect(within(content).getByText("HTML tag")).toBeTruthy();
-    expect(within(content).queryByText("Content width")).toBeNull();
-    expect(within(content).queryByText("Constrain content width")).toBeNull();
+    expect(within(content).getByText("Columns")).toBeTruthy();
+    expect(
+      within(content).getByRole("radiogroup", { name: "Layout" })
+    ).toBeTruthy();
+    expect(
+      within(content).getByRole("radiogroup", { name: "Stack on" })
+    ).toBeTruthy();
+    choose("Style");
+    // Folded sections included: the tiles are drawn in no Style section.
+    const style = screen.getByRole("tabpanel", { name: "Style" });
+    expect(
+      within(style).queryByRole("radiogroup", { name: "Layout", hidden: true })
+    ).toBeNull();
+    expect(
+      within(style).queryByRole("radiogroup", {
+        name: "Stack on",
+        hidden: true,
+      })
+    ).toBeNull();
+  });
+
+  it("writes the row's own layout while the panel edits Mobile", () => {
+    const editor = editorFor("row", ROW);
+    render(
+      <InspectorPanel
+        editor={editor}
+        breakpoints={BREAKPOINTS}
+        breakpoint="sm"
+      />
+    );
+    const content = screen.getByRole("tabpanel", { name: "Content" });
+    fireEvent.click(within(content).getByRole("radio", { name: "3 equal" }));
+    expect(
+      JSON.stringify(vi.mocked(editor.applyAll).mock.calls[0]?.[0])
+    ).toContain('"base":{"base":{"gridTemplateColumns":"repeat(3, 1fr)"}}');
+  });
+
+  /**
+   * Every Layout tile, Stack on choice and the reverse switch is held, with
+   * the lock's reason as its description, and choosing any writes nothing.
+   */
+  function expectHeld(editor: EditorState): void {
+    const content = screen.getByRole("tabpanel", { name: "Content" });
+    const controls = [
+      ...within(
+        within(content).getByRole("radiogroup", { name: "Layout" })
+      ).getAllByRole("radio"),
+      ...within(
+        within(content).getByRole("radiogroup", { name: "Stack on" })
+      ).getAllByRole("radio"),
+      within(content).getByRole("switch", { name: "Reverse when stacked" }),
+    ];
+    for (const control of controls) {
+      const held = control.closest("fieldset");
+      expect(held?.disabled).toBe(true);
+      const reason = held?.getAttribute("aria-describedby") ?? "";
+      expect(document.getElementById(reason)?.textContent).toMatch(/lock/i);
+      fireEvent.click(control);
+    }
+    expect(vi.mocked(editor.applyAll)).not.toHaveBeenCalled();
+    expect(vi.mocked(editor.apply)).not.toHaveBeenCalled();
+  }
+
+  it("is held, writing nothing, while the row is locked in Layers", () => {
+    const [row] = ROW.nodes;
+    const locked = {
+      ...ROW,
+      nodes: [{ ...row, locked: true }],
+    } as BlockDocument;
+    const editor = editorFor("row", locked);
+    render(<InspectorPanel editor={editor} breakpoints={BREAKPOINTS} />);
+    expectHeld(editor);
+  });
+
+  it("is held, writing nothing, inside an area locked to its content", () => {
+    registerBlocks(
+      [
+        {
+          name: "acme/frame",
+          version: 1,
+          description: "A frame whose children keep their design.",
+          example: { props: {} },
+          editor: { label: "Frame" },
+          props: {},
+          slots: { children: { lock: "contentOnly" } },
+          render: () => null,
+        },
+      ] as never,
+      { source: "columns-lock-test" }
+    );
+    const framed = {
+      ...ROW,
+      nodes: [
+        {
+          id: "frame",
+          type: "acme/frame",
+          version: 1,
+          props: {},
+          slots: { children: ROW.nodes },
+        },
+      ],
+    } as BlockDocument;
+    const editor = editorFor("row", framed);
+    render(<InspectorPanel editor={editor} breakpoints={BREAKPOINTS} />);
+    expectHeld(editor);
   });
 });
 
@@ -273,44 +425,48 @@ describe("the shared settings in Advanced", () => {
   it("are drawn by the builder for a block that declares no settings", () => {
     mount("spacer");
     choose("Advanced");
+    openHtmlSection();
     const advanced = screen.getByRole("tabpanel", { name: "Advanced" });
 
-    expect(within(advanced).getByText("Visible on")).toBeTruthy();
+    expect(within(advanced).getByText("Hide on")).toBeTruthy();
     expect(within(advanced).getByText("Show when")).toBeTruthy();
-    expect(within(advanced).getByLabelText("CSS id")).toBeTruthy();
+    expect(within(advanced).getByLabelText("Anchor (ID)")).toBeTruthy();
     expect(
       within(advanced).getByRole("button", { name: /Add attribute/ })
     ).toBeTruthy();
   });
 
-  it("put Visibility before HTML, and the CSS id under HTML", () => {
+  it("put Visibility before HTML, and the anchor under HTML", () => {
     mount("button");
     choose("Advanced");
+    openHtmlSection();
     const advanced = screen.getByRole("tabpanel", { name: "Advanced" });
 
-    // The tab's own section headings, in order; a control's own title (Show
+    // The tab's own section headers, in order; a control's own title (Show
     // when names itself) is not one.
     expect(
       [
         ...advanced.querySelectorAll(
-          ":scope > .nx-inspector__group > .nx-inspector__heading"
+          "[data-section] > h3 .nx-style-inspector__section-label"
         ),
-      ].map(heading => heading.textContent)
+      ].map(label => label.firstChild?.textContent)
     ).toEqual(["Visibility", "HTML"]);
     const html = within(advanced).getByRole("region", { name: "HTML" });
-    expect(within(html).getByLabelText("CSS id")).toBeTruthy();
+    expect(within(html).getByLabelText("Anchor (ID)")).toBeTruthy();
     const visibility = within(advanced).getByRole("region", {
       name: "Visibility",
     });
-    expect(within(visibility).getByText("Visible on")).toBeTruthy();
+    expect(within(visibility).getByText("Hide on")).toBeTruthy();
     expect(within(visibility).getByText("Show when")).toBeTruthy();
   });
 
-  it("offer a Section's Never quote this in Advanced", () => {
+  it("offer a Section's Keep out of search previews in Advanced", () => {
     mount("section");
     choose("Advanced");
     const advanced = screen.getByRole("tabpanel", { name: "Advanced" });
-    expect(within(advanced).getByText("Never quote this")).toBeTruthy();
+    expect(
+      within(advanced).getByText("Keep out of search previews")
+    ).toBeTruthy();
   });
 
   it("are no longer in Content, which has no folded Advanced section", () => {
@@ -320,8 +476,110 @@ describe("the shared settings in Advanced", () => {
     expect(within(content).getByText("Label")).toBeTruthy();
     expect(within(content).queryByText("Advanced")).toBeNull();
     expect(content.querySelector("details")).toBeNull();
-    expect(within(content).queryByText("Visible on")).toBeNull();
+    expect(within(content).queryByText("Hide on")).toBeNull();
     expect(within(content).queryByText("Show when")).toBeNull();
-    expect(within(content).queryByLabelText("CSS id")).toBeNull();
+    expect(within(content).queryByLabelText("Anchor (ID)")).toBeNull();
+  });
+});
+
+describe("where the block is hidden, at the top of every tab", () => {
+  const SITE = {
+    viewport: [
+      { id: "tablet", label: "Tablet", maxWidth: 1023 },
+      { id: "mobile", label: "Mobile", maxWidth: 767 },
+    ],
+    container: [],
+  };
+  const LINE = "Hidden on Mobile. Visitors on that device won't see it.";
+
+  function mountHidden(): void {
+    const page = {
+      ...PAGE,
+      nodes: [
+        {
+          ...nodeOf("button", "core/button", { label: "Get a quote" }),
+          visibility: { devices: { mobile: false } },
+        },
+      ],
+    } as BlockDocument;
+    render(
+      <InspectorPanel editor={editorFor("button", page)} breakpoints={SITE} />
+    );
+  }
+
+  const shownPanel = (name: string): HTMLElement =>
+    screen.getByRole("tabpanel", { name });
+
+  it("is said on Content, Style and Advanced alike", () => {
+    mountHidden();
+    for (const tab of ["Content", "Style", "Advanced"]) {
+      choose(tab);
+      const panel = shownPanel(tab);
+      expect(panel.textContent, tab).toContain(LINE);
+      // At the top of the tab, before any of its settings.
+      expect(panel.querySelector(".nx-hidden-status"), tab).toBe(
+        panel.firstElementChild
+      );
+    }
+  });
+
+  it("is not said for a block shown on every device", () => {
+    render(<InspectorPanel editor={editorFor("button")} breakpoints={SITE} />);
+    for (const tab of ["Content", "Style", "Advanced"]) {
+      choose(tab);
+      expect(
+        shownPanel(tab).querySelector(".nx-hidden-status"),
+        tab
+      ).toBeNull();
+    }
+  });
+
+  it.each(["Content", "Style"])(
+    'goes from %s to Hide on with "Change"',
+    async tab => {
+      mountHidden();
+      choose(tab);
+      fireEvent.click(
+        within(shownPanel(tab)).getByRole("button", { name: "Change" })
+      );
+      expect(shownTabName()).toBe("Advanced");
+      await waitFor(() =>
+        expect(document.activeElement).toBe(
+          within(shownPanel("Advanced")).getByRole("button", {
+            name: "Hide on Desktop",
+          })
+        )
+      );
+    }
+  );
+
+  it('clears a search that leaves Hide on out, so "Change" still reaches it', async () => {
+    mountHidden();
+    choose("Style");
+    const search = (): HTMLInputElement =>
+      screen.getByRole("searchbox", { name: "Find a setting" });
+    fireEvent.change(search(), { target: { value: "padding" } });
+    // While filtering, each tab's name carries its count: the one shown.
+    fireEvent.click(
+      within(screen.getByRole("tabpanel")).getByRole("button", {
+        name: "Change",
+      })
+    );
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(shownPanel("Advanced")).getByRole("button", {
+          name: "Hide on Desktop",
+        })
+      )
+    );
+    expect(search().value).toBe("");
+  });
+
+  it('offers no "Change" on Advanced, where Hide on is', () => {
+    mountHidden();
+    choose("Advanced");
+    expect(
+      within(shownPanel("Advanced")).queryByRole("button", { name: "Change" })
+    ).toBeNull();
   });
 });

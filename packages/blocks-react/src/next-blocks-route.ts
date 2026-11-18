@@ -30,7 +30,6 @@ import { listEntryCount, listPagesOf, listWillRead } from "./blocks/list-read";
 import {
   createQueryBudget,
   createStandaloneContext,
-  DEFAULT_MAX_QUERIES,
   isBindingIssue,
 } from "./context";
 import type {
@@ -53,6 +52,7 @@ import {
   linkLanguageOf,
   entryPathResolver,
 } from "./next-entry-paths";
+import { ownPlugins, routedFormsFor } from "./next-forms";
 import { checkedLayoutsProvider } from "./next-layouts";
 import {
   MEDIA_TAG_COLLECTION,
@@ -77,6 +77,7 @@ import {
 import {
   readerFor,
   dataFor,
+  routeMaxQueries,
   siteBlocks,
   siteBoundConfig,
 } from "./next-readers";
@@ -432,7 +433,7 @@ export function blocksRouteConfig(
     // invocations, so sharing one counter would let the page's reads
     // starve the preview image, or the reverse. Shared BETWEEN the two
     // reads this invocation makes, because they are one page's cost.
-    const budget = createQueryBudget(config.maxQueries ?? DEFAULT_MAX_QUERIES);
+    const budget = createQueryBudget(routeMaxQueries(config));
     // The same reads, in the same order, as the render: the
     // components the page inlines (without them every instance would
     // be a placeholder, and a page built from components would publish
@@ -540,9 +541,7 @@ export function blocksRouteConfig(
       // days by, then the list's own read. A page whose allowance runs out
       // before the list (`maxQueries: 0`, or spent on those reads) has no
       // later pages, since its list draws none.
-      const budget = createQueryBudget(
-        config.maxQueries ?? DEFAULT_MAX_QUERIES
-      );
+      const budget = createQueryBudget(routeMaxQueries(config));
       const terms = readTermsOf(config, resolver);
       const sources = routeReadSources({
         config,
@@ -640,10 +639,9 @@ export function blocksRouteConfig(
         () => drawnPage.number,
         config.cacheScope
       );
-      const budget = createQueryBudget(
-        config.maxQueries ?? DEFAULT_MAX_QUERIES,
-        { onRefused: () => overrun.refused(budget) }
-      );
+      const budget = createQueryBudget(routeMaxQueries(config), {
+        onRefused: () => overrun.refused(budget),
+      });
       const media = mediaResolver(
         inRequestLanguage(config, context),
         readerFor(config),
@@ -665,6 +663,17 @@ export function blocksRouteConfig(
       // `isWorkingDraft` is surfaced, not acted on: the renderer draws the
       // pending content either way, and a host that wants to say so on the page
       // has to be told which one it got.
+      // Where the page's forms post, and the forms a provider describes,
+      // from the page builder: with none, the page's forms are left unsent.
+      const forms = await routedFormsFor({
+        ...ownPlugins(config.nextly),
+        entry,
+        field,
+        route: context,
+        language: linkLanguageOf(config.locale, context.locale),
+        cacheScope: config.cacheScope,
+        revalidate: await releaseBoundedRevalidate(listWindow),
+      });
       const pageContext: PageContext = createStandaloneContext({
         entry,
         // So a list of the entry's related entries reads the relation as the
@@ -702,6 +711,7 @@ export function blocksRouteConfig(
           context,
         }),
         // The page of its list this address draws, and where the others are.
+        forms: forms?.page,
       });
 
       const configuredSiteStyles = await configuredSiteStylesFor(
@@ -849,6 +859,7 @@ export function blocksRouteConfig(
             shared,
             siteStyles,
             definitions: regionDefinitions,
+            formsFor: forms?.region,
           })
         ),
         context.structuredData

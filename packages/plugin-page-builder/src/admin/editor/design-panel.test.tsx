@@ -8,15 +8,26 @@
  * open tab's content is mounted — each tab reads the site's style, and a
  * hidden one has no reason to.
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as React from "react";
 import * as ReactDOM from "react-dom";
 
+import { blockStyleFoldId, FontChoicesContext } from "@nextlyhq/builder/shell";
+
 import {
+  DesignFonts,
+  DesignGroup,
   DesignPanel,
   ReportStylesMatches,
+  SITE_FONTS_GROUP,
   designViewOf,
   useDesignBrowse,
   useDesignHeaderSlot,
@@ -396,5 +407,268 @@ describe("the Design panel's search and folds", () => {
       target: { value: "card" },
     });
     expect(tabText("Styles")).toBe("Styles, 1 match");
+  });
+});
+
+describe("Manage fonts… from a Font control in Design", () => {
+  /** What a Font control's footer does: the way to the site's fonts. */
+  function ManageFonts(): React.JSX.Element {
+    const fonts = React.useContext(FontChoicesContext);
+    return (
+      <button type="button" onClick={() => fonts?.onManageFonts?.()}>
+        Manage fonts…
+      </button>
+    );
+  }
+
+  it("opens the Type tab and the site's Fonts group, even folded", () => {
+    let folded = "";
+    const store = {
+      read: () => folded || null,
+      write: (next: string) => {
+        folded = next;
+      },
+    };
+    const choose = vi.fn();
+    render(
+      <DesignPanel
+        view={{ current: "type", choose }}
+        foldStore={store}
+        frame={designTabs => (
+          <DesignFonts
+            faces={[]}
+            fromCode={[]}
+            onManageFonts={() => choose("type")}
+          >
+            {designTabs}
+          </DesignFonts>
+        )}
+        tabs={{
+          colours: () => null,
+          type: () => (
+            <>
+              <DesignGroup id={SITE_FONTS_GROUP} heading="Fonts" count={1}>
+                <p>font rows</p>
+              </DesignGroup>
+              <ManageFonts />
+            </>
+          ),
+          spacing: () => null,
+          styles: () => null,
+        }}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Fonts/ }));
+    expect(screen.queryByText("font rows")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Manage fonts…" }));
+    expect(choose).toHaveBeenCalledWith("type");
+    expect(screen.getByText("font rows")).toBeTruthy();
+  });
+
+  /** The Type tab with the Fonts group and a Font control's way to it. */
+  function renderFonts(): { choose: ReturnType<typeof vi.fn> } {
+    const choose = vi.fn();
+    render(
+      <DesignPanel
+        view={{ current: "type", choose }}
+        frame={designTabs => (
+          <DesignFonts
+            faces={[]}
+            fromCode={[]}
+            onManageFonts={() => choose("type")}
+          >
+            {designTabs}
+          </DesignFonts>
+        )}
+        tabs={{
+          colours: () => null,
+          type: () => (
+            <>
+              <DesignGroup id={SITE_FONTS_GROUP} heading="Fonts" count={1}>
+                <p>font rows</p>
+              </DesignGroup>
+              <ManageFonts />
+            </>
+          ),
+          spacing: () => null,
+          styles: () => null,
+        }}
+      />
+    );
+    return { choose };
+  }
+
+  it("brings the Fonts group into view", async () => {
+    const scrolled: Element[] = [];
+    // jsdom draws nothing, so it has no scrollIntoView to spy on.
+    if (!("scrollIntoView" in window.Element.prototype)) {
+      Object.defineProperty(window.Element.prototype, "scrollIntoView", {
+        configurable: true,
+        writable: true,
+        value: () => undefined,
+      });
+    }
+    const scroll = vi
+      .spyOn(window.Element.prototype, "scrollIntoView")
+      .mockImplementation(function (this: Element) {
+        scrolled.push(this);
+      });
+    try {
+      renderFonts();
+      fireEvent.click(screen.getByRole("button", { name: "Manage fonts…" }));
+      // Once the opened group is drawn.
+      await waitFor(() =>
+        expect(
+          scrolled.some(
+            element =>
+              element instanceof HTMLElement &&
+              element.dataset.group === SITE_FONTS_GROUP
+          )
+        ).toBe(true)
+      );
+    } finally {
+      scroll.mockRestore();
+    }
+  });
+
+  it("puts a Design search away, which would hide the Fonts group", () => {
+    renderFonts();
+    const search = screen.getByRole("searchbox", { name: "Search Design" });
+    fireEvent.change(search, { target: { value: "heading" } });
+    expect(screen.queryByText("font rows")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Manage fonts…" }));
+    expect((search as HTMLInputElement).value).toBe("");
+    expect(screen.getByText("font rows")).toBeTruthy();
+  });
+});
+
+describe("a group asked for from outside the panel", () => {
+  // The block panel's "Edit block styles" asks for one block type's styles:
+  // the Styles tab, the type's group opened, brought to the top and focused.
+  const GROUP = blockStyleFoldId("core/section");
+
+  /** The type's group, drawn only once the tab's read has landed. */
+  function LateGroup(): React.JSX.Element | null {
+    const [drawn, setDrawn] = React.useState(false);
+    React.useEffect(() => {
+      const timer = window.setTimeout(() => setDrawn(true), 120);
+      return () => window.clearTimeout(timer);
+    }, []);
+    return drawn ? (
+      <DesignGroup id={GROUP} heading="Section" count={2}>
+        <p>section styles</p>
+      </DesignGroup>
+    ) : null;
+  }
+
+  function renderAsked(
+    current: string,
+    request: { view: "styles"; group: string; count: number } | undefined,
+    onRevealed = vi.fn()
+  ) {
+    // Folded by the author earlier.
+    let folded = JSON.stringify([GROUP]);
+    const store = {
+      read: () => folded,
+      write: (next: string) => {
+        folded = next;
+      },
+    };
+    const panel = (next: typeof request, view = current): React.JSX.Element => (
+      <DesignPanel
+        view={{ current: view, choose: vi.fn() }}
+        foldStore={store}
+        {...(next === undefined ? {} : { revealRequest: next })}
+        onRevealed={onRevealed}
+        tabs={{
+          colours: () => null,
+          type: () => null,
+          spacing: () => null,
+          styles: () => <LateGroup />,
+        }}
+      />
+    );
+    const view = render(panel(request));
+    return { onRevealed, rerender: view.rerender, panel };
+  }
+
+  /** scrollIntoView, which jsdom lacks, recorded with where it aligned. */
+  function recordScrolls(): {
+    scrolled: { element: Element; block: unknown }[];
+    restore: () => void;
+  } {
+    const scrolled: { element: Element; block: unknown }[] = [];
+    if (!("scrollIntoView" in window.Element.prototype)) {
+      Object.defineProperty(window.Element.prototype, "scrollIntoView", {
+        configurable: true,
+        writable: true,
+        value: () => undefined,
+      });
+    }
+    const spy = vi
+      .spyOn(window.Element.prototype, "scrollIntoView")
+      .mockImplementation(function (
+        this: Element,
+        options?: boolean | ScrollIntoViewOptions
+      ) {
+        scrolled.push({
+          element: this,
+          block: typeof options === "object" ? options.block : undefined,
+        });
+      });
+    return { scrolled, restore: () => spy.mockRestore() };
+  }
+
+  it("opens the type's folded group once it is drawn, at the top, focused", async () => {
+    const { scrolled, restore } = recordScrolls();
+    try {
+      const { onRevealed } = renderAsked("styles", {
+        view: "styles",
+        group: GROUP,
+        count: 1,
+      });
+      await waitFor(() =>
+        expect(screen.getByText("section styles")).toBeTruthy()
+      );
+      await waitFor(() =>
+        expect(
+          scrolled.some(
+            each =>
+              each.element.getAttribute("data-group") === GROUP &&
+              each.block === "start"
+          )
+        ).toBe(true)
+      );
+      expect(document.activeElement?.textContent).toMatch(/^Section/);
+      expect(onRevealed).toHaveBeenCalledWith(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it("puts a Design search away, which would hide the group", async () => {
+    const { rerender, panel, onRevealed } = renderAsked("styles", undefined);
+    const search = screen.getByRole("searchbox", { name: "Search Design" });
+    fireEvent.change(search, { target: { value: "hero" } });
+    rerender(panel({ view: "styles", group: GROUP, count: 1 }));
+    expect((search as HTMLInputElement).value).toBe("");
+    await waitFor(() =>
+      expect(screen.getByText("section styles")).toBeTruthy()
+    );
+    expect(onRevealed).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for its tab, and answers each request once", () => {
+    const request = { view: "styles" as const, group: GROUP, count: 1 };
+    const { rerender, panel, onRevealed } = renderAsked("colours", request);
+    // Another tab open: nothing answered yet.
+    expect(onRevealed).not.toHaveBeenCalled();
+    rerender(panel(request, "styles"));
+    expect(onRevealed).toHaveBeenCalledTimes(1);
+    // The same request drawn again is not a second one.
+    rerender(panel({ ...request }, "styles"));
+    expect(onRevealed).toHaveBeenCalledTimes(1);
+    rerender(panel({ ...request, count: 2 }, "styles"));
+    expect(onRevealed).toHaveBeenLastCalledWith(2);
   });
 });

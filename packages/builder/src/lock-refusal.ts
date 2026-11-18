@@ -22,9 +22,9 @@ import {
   type RepairStep,
 } from "@nextlyhq/blocks-engine";
 
-import type { RefusalWording } from "./drag-refusal";
-import { blockLabel } from "./inserter";
-import { layerLabel } from "./layers";
+import type { RefusalWording } from "./canvas/drag-refusal";
+import { blockLabel } from "./panels/add/inserter";
+import { layerLabel } from "./panels/layers/layers";
 
 /**
  * The facts a slot-lock refusal is worded from: the rule, and the block whose
@@ -128,6 +128,8 @@ function verbOf(
     case "move":
       return "move";
     case "update":
+    case "turnInto":
+      // Turning a block into another type changes it in place.
       return "change";
     case "insert":
       return "add";

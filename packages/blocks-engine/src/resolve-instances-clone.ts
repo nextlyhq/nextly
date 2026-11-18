@@ -16,6 +16,7 @@ import {
   ForestTooLargeError,
   MAX_ENVELOPE_ENTRIES,
 } from "./limits";
+import { remapListBindings } from "./list-binding-refs";
 import { isPlainRecord } from "./plain-record";
 import {
   type ResolvedBlockNode,
@@ -69,6 +70,23 @@ export interface InlineContext {
    * `reidForestWithMap` keeps, for the same reason.
    */
   domIds: Map<string, string>;
+  /**
+   * Each definition node's id → the id it wears in this instance, recorded
+   * as it is scoped. A node is scoped before what it holds, so a binding
+   * naming the list around it (`list`) finds that list here and follows it
+   * to its scoped id, the one the renderer records the list's entry under.
+   */
+  nodeIds: Map<string, string>;
+  /**
+   * Each scoped node's bindings the placement gave it, by prop: the page's
+   * own, so a fallback naming a page id is not re-pointed at the component's.
+   */
+  pageBound: Map<string, ReadonlySet<string>>;
+  /**
+   * The expansion of the component that holds this placement, if a component
+   * does: a binding its placement got from the page is the page's there too.
+   */
+  host?: InlineContext;
   /** The scope INSIDE this component, for instances the definition itself holds. */
   scope: ComposedScope;
   /**
@@ -272,6 +290,24 @@ export function scopeNode(
     id: mintScopedId(ctx.run, ctx.scopeKey, node.id),
     instanceOf: ctx.owner,
   };
+  ctx.nodeIds.set(node.id, scoped.id);
+  // A binding naming a list of this definition reads that list under its
+  // scoped id; one naming a list around the instance is left as it is.
+  if (node.bindings !== undefined) {
+    scoped.bindings = remapListBindings(
+      node.bindings,
+      ctx.nodeIds
+    ) as ResolvedBlockNode["bindings"];
+  }
+  // The placement's bound settings, after the remap: a list they name is one
+  // around the placement, on the page, and is read under its own id.
+  if (plan?.bindings !== undefined) {
+    scoped.bindings = {
+      ...scoped.bindings,
+      ...plan.bindings,
+    } as ResolvedBlockNode["bindings"];
+    notePageBound(ctx, scoped.id, plan);
+  }
   // Removing the envelope rather than emptying it: `conditions` is only half of
   // what gates a node, and an instance saying "show this" means the reader
   // should stop asking.
@@ -548,5 +584,34 @@ export function composedNodeId(
     if (taken.has(candidate)) continue;
     taken.add(candidate);
     return candidate;
+  }
+}
+
+/**
+ * Record a scoped node's bindings its placement gave it as this expansion's
+ * page-owned ones, and as each enclosing expansion's where the placement got
+ * that binding from the page there: a page binding passed down through a
+ * component inside the component stays the page's at every level, while one
+ * the component itself gave its placement is the component's above it.
+ */
+function notePageBound(
+  ctx: InlineContext,
+  nodeId: string,
+  plan: NodePlan
+): void {
+  const props = Object.keys(plan.bindings ?? {});
+  ctx.pageBound.set(nodeId, new Set(props));
+  const keys = plan.bindingKeys ?? {};
+  for (let host = ctx.host; host !== undefined; host = host.host) {
+    const given = host.pageBound.get(ctx.scopeKey);
+    const owned = props.filter(prop => {
+      const key = ownEntry(keys, prop);
+      return typeof key === "string" && given?.has(key) === true;
+    });
+    if (owned.length === 0) continue;
+    host.pageBound.set(
+      nodeId,
+      new Set([...(host.pageBound.get(nodeId) ?? []), ...owned])
+    );
   }
 }

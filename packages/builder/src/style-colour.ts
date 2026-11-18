@@ -89,6 +89,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { toHex } from "@nextlyhq/ui/color";
 
+import { colourOrder } from "./colour-groups";
 import { CSS_NUMBER } from "./style-numeric";
 import { lengthFamilyOf, type LengthFamily } from "./tokens-studio";
 
@@ -330,7 +331,11 @@ export function foldedLeaf(
 /** Whether a variable belongs to the family this leaf's field offers. */
 function madeFor(token: SiteVariable, leaf: StyleLeaf): boolean {
   const family = fieldFamilyOf(leaf.cssProperty);
-  return family === undefined || lengthFamilyOf(token) === family;
+  const own = lengthFamilyOf(token);
+  // A line height that is a plain number is made for line height alone:
+  // offered on an opacity field, H1's line height says nothing true there.
+  if (own === "line-height" && token.kind === "number") return own === family;
+  return family === undefined || own === family;
 }
 
 /**
@@ -380,12 +385,35 @@ function offeredTokens(
   const hit = byMode.get(mode);
   if (hit !== undefined) return hit;
   const resolved = resolveSiteTokens(tokens);
-  const built = emittableTokens(resolved, mode).map(token =>
-    siteVariableOf(token, mode)
+  const built = inColourOrder(
+    emittableTokens(resolved, mode).map(token => siteVariableOf(token, mode)),
+    colourOrder(resolved)
   );
   byMode.set(mode, built);
   cache.set(tokens, byMode);
   return built;
+}
+
+/**
+ * The variables with their colours in the site's colour order, the one the
+ * Design panel lists them in; every other variable keeps its place.
+ */
+function inColourOrder(
+  variables: readonly SiteVariable[],
+  order: readonly string[]
+): SiteVariable[] {
+  const rank = new Map(order.map((identity, at) => [identity, at]));
+  const colours = variables
+    .filter(variable => variable.kind === "color")
+    .sort(
+      (a, b) =>
+        (rank.get(a.identity) ?? order.length) -
+        (rank.get(b.identity) ?? order.length)
+    );
+  let next = 0;
+  return variables.map(variable =>
+    variable.kind === "color" ? (colours[next++] ?? variable) : variable
+  );
 }
 
 /**

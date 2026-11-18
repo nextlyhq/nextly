@@ -8,6 +8,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { loadedDialect } from "../../database/dialect-tables";
 
 export {
+  SOURCE_FINGERPRINT_MOVED,
   TRANSLATION_PROVENANCE_FIELD_PATH_LENGTH,
   TRANSLATION_PROVENANCE_ROW_SEPARATOR,
   TRANSLATION_PROVENANCE_TABLE,

@@ -1,9 +1,16 @@
 import {
   getBlock,
+  migrationInfoOf,
   type AnyBlockDefinition,
   type BlockRegistryReader,
   type MigrationSource,
 } from "@nextlyhq/blocks-engine";
+
+import type {
+  FormDrawing,
+  FormReference,
+  FormUnavailableDrawing,
+} from "./context";
 
 /**
  * How the renderer finds the definition for a stored node's `type`.
@@ -65,6 +72,105 @@ export const SITE_NAMED_QUERIES_SERVICE: {
   plugin: SITE_BLOCKS_SERVICE.plugin,
   service: "site-named-queries",
 };
+
+/**
+ * Where a started page builder offers what a routed page's forms need: the
+ * receiver's address, the stored document each drawn document is, and the
+ * description of a form picked from a provider. A route reads it on each
+ * render to fill `ctx.forms`.
+ *
+ * @experimental Settles with the form provider contract.
+ */
+export const SITE_FORMS_SERVICE: {
+  readonly plugin: typeof SITE_BLOCKS_SERVICE.plugin;
+  readonly service: "site-forms";
+} = {
+  plugin: SITE_BLOCKS_SERVICE.plugin,
+  service: "site-forms",
+};
+
+/**
+ * What a started page builder offers under {@link SITE_FORMS_SERVICE}.
+ *
+ * @experimental Settles with the form provider contract.
+ */
+export interface SiteFormsService {
+  /** The address every form on the site posts to. */
+  readonly action: string;
+  /**
+   * The value naming the stored row's document as a form's post names it,
+   * or `undefined` where the receiver reads no such document.
+   */
+  documentOf(row: {
+    readonly collection: string;
+    readonly id: string;
+    readonly field: string;
+    /** The entry is drawn by its design, its own blocks composed into it. */
+    readonly design?: boolean;
+  }): string | undefined;
+  /** The value naming a component's document, as a form's post names it. */
+  componentDocument(id: string): string;
+  /** A form picked from a provider, as the public reads it. */
+  describe(
+    form: FormReference,
+    locale: string | undefined
+  ): Promise<FormDrawing | FormUnavailableDrawing>;
+}
+
+/**
+ * The page builder's `site-forms` service as an instance offers it (its
+ * `plugins`), or `undefined` where it offers none of that shape.
+ */
+export function offeredSiteForms(
+  plugins: Readonly<Record<string, Readonly<Record<string, unknown>>>>
+): SiteFormsService | undefined {
+  const offered: unknown =
+    plugins[SITE_FORMS_SERVICE.plugin]?.[SITE_FORMS_SERVICE.service];
+  if (typeof offered !== "object" || offered === null) return undefined;
+  const service = offered as Record<string, unknown>;
+  return typeof service.action === "string" &&
+    typeof service.documentOf === "function" &&
+    typeof service.componentDocument === "function" &&
+    typeof service.describe === "function"
+    ? (offered as SiteFormsService)
+    : undefined;
+}
+
+/**
+ * Where a started page builder offers the site's page data limit on the
+ * instance: `pageBuilder({ maxQueries })`, the reads one page render may
+ * make, which a route given no `maxQueries` of its own renders under, so the
+ * editor's meter and the published page count against one number.
+ *
+ * @experimental Settles with the editor's page data meter.
+ */
+export const SITE_PAGE_DATA_LIMIT_SERVICE: {
+  readonly plugin: typeof SITE_BLOCKS_SERVICE.plugin;
+  readonly service: "site-page-data-limit";
+} = {
+  plugin: SITE_BLOCKS_SERVICE.plugin,
+  service: "site-page-data-limit",
+};
+
+/**
+ * The limit a started page builder offers under
+ * {@link SITE_PAGE_DATA_LIMIT_SERVICE}, or `undefined` where it offers none
+ * or one that is not a count: a whole number from 0, or `Infinity`.
+ */
+export function offeredSitePageDataLimit(
+  plugins: Readonly<Record<string, Readonly<Record<string, unknown>>>>
+): number | undefined {
+  const offered: unknown =
+    plugins[SITE_PAGE_DATA_LIMIT_SERVICE.plugin]?.[
+      SITE_PAGE_DATA_LIMIT_SERVICE.service
+    ];
+  if (typeof offered !== "object" || offered === null) return undefined;
+  const limit = (offered as { maxQueries?: unknown }).maxQueries;
+  return typeof limit === "number" &&
+    (limit === Infinity || (Number.isInteger(limit) && limit >= 0))
+    ? limit
+    : undefined;
+}
 
 /**
  * The mark a site's own blocks or named queries carry when they are bound to
@@ -146,10 +252,9 @@ export function migrationSourceFor(resolver: BlockResolver): MigrationSource {
   return {
     get: type => {
       const definition = resolver.get(type);
-      if (!definition) return undefined;
-      return definition.migrate === undefined
-        ? { version: definition.version }
-        : { version: definition.version, migrate: definition.migrate };
+      // The engine's one reading of a definition's migration info, so its
+      // renames reach the page as they reach the registry.
+      return definition ? migrationInfoOf(definition) : undefined;
     },
   };
 }

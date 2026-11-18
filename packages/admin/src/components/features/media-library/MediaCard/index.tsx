@@ -34,7 +34,16 @@ import {
   mediaImageSrc,
 } from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
+import type { Media } from "@admin/types/media";
 import type { MediaCardProps } from "@admin/types/ui/media-card";
+
+/**
+ * A tile's props: the card's, and what a double-click on it does, where the
+ * grid gives it one (the media picker's single pick: pick and close).
+ */
+type MediaTileProps = MediaCardProps & {
+  onDoubleClick?: (media: Media) => void;
+};
 
 /**
  * Get icon component for media type
@@ -70,8 +79,9 @@ export function MediaCard({
   isCurrent = false,
   onSelectionChange,
   onClick,
+  onDoubleClick,
   className = "",
-}: MediaCardProps): React.JSX.Element {
+}: MediaTileProps): React.JSX.Element {
   const [imageError, setImageError] = useState(false);
   const [imageLoading, setImageLoading] = useState(true);
 
@@ -113,6 +123,9 @@ export function MediaCard({
       role="button"
       tabIndex={0}
       onClick={handleCardClick}
+      onDoubleClick={
+        onDoubleClick === undefined ? undefined : () => onDoubleClick(media)
+      }
       onKeyDown={handleKeyDown}
       // The attribute the list view's rows carry too, so the library finds
       // an item's entry the same way in either view.

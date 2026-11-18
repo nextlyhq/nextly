@@ -45,6 +45,7 @@ import {
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
 } from "vitest";
 
@@ -87,11 +88,12 @@ vi.mock("@nextlyhq/blocks-engine", async importOriginal => {
   };
 });
 
-import { Canvas } from "./canvas";
-import { type CanvasRegion } from "./canvas-regions";
+import { Canvas } from "./canvas/canvas";
+import { type CanvasRegion } from "./canvas/canvas-regions";
 import { useEditorState, type EditorState } from "./editor-state";
-import { HoveredBlockProvider, useHoveredBlock } from "./hovered-block";
-import { InsertPanel } from "./insert-panel";
+import { HoveredBlockProvider, useHoveredBlock } from "./canvas/hovered-block";
+import { PageInserters } from "./canvas/page-inserters";
+import { InsertPanel } from "./panels/add/insert-panel";
 import { InspectorPanel } from "./inspector-panel";
 import { BlockKeyboardActions } from "./keyboard-actions";
 import { ShortcutProvider } from "@nextlyhq/ui";
@@ -183,6 +185,7 @@ function region(area: "header" | "footer"): CanvasRegion {
     ]),
     label: `${area === "header" ? "Header" : "Footer"}, from Layout Main`,
     badge: `${area === "header" ? "Header" : "Footer"} · from Layout`,
+    name: area === "header" ? "Header" : "Footer",
     edit: {
       href: "/admin/collections/layouts/main",
       text: "Edit Layout ↗",
@@ -223,9 +226,12 @@ function hoverTwoBlocks(): void {
 /** The editor and its canvas, wired as the page builder wires them. */
 function CanvasHost({
   sheet = SHEET,
+  inserters = false,
 }: {
   /** The site sheet; a new one is compiled once, then kept. */
   sheet?: typeof SHEET;
+  /** The "+" in the page's gaps drawn over the canvas, as the editor draws it. */
+  inserters?: boolean;
 }): React.JSX.Element {
   const state = useEditorState({ initialDocument: PAGE });
   editorRef = state;
@@ -240,6 +246,18 @@ function CanvasHost({
         selectedId={state.selectedId}
         selectedIds={state.selection.ids}
         onSelect={state.select}
+        {...(inserters
+          ? {
+              overlay: (
+                <PageInserters
+                  document={state.document}
+                  selectedId={state.selectedId}
+                  start={{ onStart: () => undefined }}
+                  onAddAfter={() => undefined}
+                />
+              ),
+            }
+          : {})}
       />
     </HoveredBlockProvider>
   );
@@ -386,6 +404,32 @@ function InspectorHost(): React.JSX.Element {
     </HoveredBlockProvider>
   );
 }
+
+describe("the + in a gap the pointer comes near", () => {
+  it("showing it draws the page again: budget none", () => {
+    // jsdom generates no layout boxes; each block is given one, so the gaps
+    // between them are measured.
+    const boxes = vi
+      .spyOn(Element.prototype, "getClientRects")
+      .mockImplementation(() =>
+        Object.assign([new DOMRect()], { item: () => new DOMRect() })
+      );
+    onTestFinished(() => boxes.mockRestore());
+    render(<CanvasHost inserters />);
+    resetCounts();
+    const root = document.querySelector(".nx-canvas");
+    if (root === null) throw new Error("no canvas");
+    // jsdom lays nothing out, so every gap is at the canvas's corner, where
+    // the pointer is put.
+    fireEvent.pointerMove(root, { clientX: 0, clientY: 0 });
+    // The control: a "+" did show.
+    expect(
+      document.querySelector(".nx-page-inserters__gap[data-near]")
+    ).not.toBe(null);
+    expectWithinBudget(counted.pageDraws);
+    expectWithinBudget(counted.regionDraws);
+  });
+});
 
 describe("the page drawn again while the editor around it re-renders", () => {
   it("switching the settings panel's tab draws no block", () => {

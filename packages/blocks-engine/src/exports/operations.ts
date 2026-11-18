@@ -76,6 +76,17 @@ export {
   type SlotAddress,
 } from "../ops";
 
+// "Turn into": the op that turns one block into another type, planned from
+// the block's own converter, so every surface (a menu, a toolbar, an agent)
+// carries over the same things and refuses for the same reasons.
+export {
+  planTurnInto,
+  turnIntoTargets,
+  type TurnIntoDefinitions,
+  type TurnIntoPlan,
+  type TurnIntoResult,
+} from "../turn-into";
+
 // The Layers lock's rule, stated once: for one op, which the apply asks of
 // every edit and an editing surface asks before offering one; and for a whole
 // write, judged against the document it would replace, which a save asks
@@ -109,6 +120,15 @@ export {
 // How every copy into a document keeps the Layers locks it carries.
 export { insertKeepingLocks, type Placed } from "../locked-insert";
 
+// The address of one item of a list of words typed on the canvas: the renderer
+// marks it, the editor finds and writes by it.
+export {
+  isInlineItemsProp,
+  itemOfPropName,
+  itemPropName,
+  type InlineItemAddress,
+} from "../inline-items";
+
 /**
  * The stored shape of rich text.
  *
@@ -119,11 +139,17 @@ export { insertKeepingLocks, type Placed } from "../locked-insert";
 export {
   codeTokenClass,
   hasFormat,
+  isOneParagraphProp,
   isRichTextNode,
   isRichTextValue,
+  ONE_PARAGRAPH_OPTION,
+  oneParagraphLines,
+  oneParagraphWords,
   RICH_TEXT_PROP_TYPE,
   richTextToPlainText,
   TEXT_FORMAT,
+  toOneParagraph,
+  type OneParagraph,
   type RichTextNode,
   type RichTextValue,
 } from "../rich-text";

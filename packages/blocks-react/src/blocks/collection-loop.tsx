@@ -43,11 +43,16 @@ import { LIST_ACTION_ATTRIBUTE, LIST_REF_ATTRIBUTE } from "../editor-markers";
 import { CONTENT } from "./categories";
 import {
   CONTAINER_CHILD_GAP,
+  CONTAINER_SUPPORTS,
+  containerContentModel,
   CONTENT_WIDTH_PROPS,
   type ContainerProps,
+  rootTagOf,
   withContentWidth,
 } from "./container";
+import { htmlTagProp } from "./html-tags";
 import { withReadAhead } from "./list-batch";
+import { withListEntry } from "./list-entries";
 import { ListPages } from "./list-pages";
 import {
   listPagesOf,
@@ -61,7 +66,7 @@ import { readNamedList } from "./named-read";
 import { readClaimOf } from "./props";
 
 export interface CollectionLoopProps
-  extends Pick<ContainerProps, "contained" | "contentWidth"> {
+  extends Pick<ContainerProps, "as" | "contained" | "contentWidth"> {
   /** The collection queried, or the collection a related source's entries are in. */
   collection?: string;
   /** How many entries at most: 1 to 100. */
@@ -266,6 +271,7 @@ function withoutItem(ctx: PageContext): PageContext {
     itemSource: _outerSource,
     itemQuery: _outerQuery,
     itemFollowed: _outerRows,
+    itemPosition: _outerPosition,
     ...rest
   } = ctx;
   return rest;
@@ -403,8 +409,10 @@ export async function renderCollectionLoop({
   partClass,
   ctx,
 }: BlockRenderArgs<CollectionLoopProps>): Promise<ReactElement> {
-  // Boxed or full width, as every container is.
+  // Boxed or full width, as every container is, and its own tag: an unknown
+  // stored one falls back to a `div`, as every container's does.
   const className = withContentWidth(ownClassName, props);
+  const Tag = rootTagOf(props, false);
   // An author asked to design what visitors see when nothing matches: the
   // empty state alone, with nothing read. Only where an author is looking.
   if (
@@ -412,13 +420,13 @@ export async function renderCollectionLoop({
     ctx.listsShowingEmpty?.has(node.id) === true
   ) {
     return (
-      <div
+      <Tag
         className={className}
         {...emptyMarks(ctx, "chosen")}
         {...tagMarks(ctx, node.id)}
       >
         {renderSlot("empty")}
-      </div>
+      </Tag>
     );
   }
   // The page this render draws, when the route pages this list.
@@ -431,9 +439,9 @@ export async function renderCollectionLoop({
     // collection: the template, once, so an author still sees it, with no
     // item, as an unconfigured list draws it.
     return (
-      <div className={className} {...tagMarks(ctx, node.id)}>
+      <Tag className={className} {...tagMarks(ctx, node.id)}>
         {renderSlot("children", withoutItem(ctx))}
-      </div>
+      </Tag>
     );
   }
   if (named !== undefined) {
@@ -441,7 +449,7 @@ export async function renderCollectionLoop({
     // collection's entries does, drawn with the query's own item context.
     return drawList(
       await withReadAhead(named, node, ctx, named.entriesOf),
-      { className, renderSlot, ctx, nodeId: node.id },
+      { className, Tag, renderSlot, ctx, nodeId: node.id },
       pageLinks(paging, named, props, partClass)
     );
   }
@@ -459,9 +467,9 @@ export async function renderCollectionLoop({
     // than vanishing: an author placing a loop before choosing a collection
     // still sees what they are building.
     return (
-      <div className={className} {...tagMarks(ctx, node.id)}>
+      <Tag className={className} {...tagMarks(ctx, node.id)}>
         {renderSlot("children", withoutItem(ctx))}
-      </div>
+      </Tag>
     );
   }
   // A loop inside a loop runs once per entry of the outer one, so depth in a
@@ -478,13 +486,13 @@ export async function renderCollectionLoop({
     // Refused its read, it draws no entry, and says so as a list that drew.
     reportShown(ctx, node.id, 0);
     return (
-      <div
+      <Tag
         className={className}
         {...emptyMarks(ctx, "none")}
         {...tagMarks(ctx, node.id)}
       >
         {renderSlot("empty", withoutItem(ctx))}
-      </div>
+      </Tag>
     );
   }
   // The count of matching entries, as the read reports it, for the links.
@@ -533,7 +541,11 @@ export async function renderCollectionLoop({
     props,
     partClass
   );
-  return drawList(read, { className, renderSlot, ctx, nodeId: node.id }, pages);
+  return drawList(
+    read,
+    { className, Tag, renderSlot, ctx, nodeId: node.id },
+    pages
+  );
 }
 
 /**
@@ -545,11 +557,11 @@ function drawList(
   args: Pick<
     BlockRenderArgs<CollectionLoopProps>,
     "className" | "renderSlot" | "ctx"
-  > & { readonly nodeId: string },
+  > & { readonly nodeId: string; readonly Tag: ReturnType<typeof rootTagOf> },
   pages: ReactElement | null = null
 ): ReactElement {
   const { outcome, itemContext } = read;
-  const { className, renderSlot, ctx } = args;
+  const { className, Tag, renderSlot, ctx } = args;
   // How many entries this list drew, told to an editor that asks, so what
   // it says of the list is of what is drawn, never of a read made again.
   reportShown(ctx, args.nodeId, outcome.items.length);
@@ -575,16 +587,32 @@ function drawList(
                 anything inside the template reads its own values rather than
                 the first entry's. Its source goes with it, so an item
                 binding is checked against that source's fields. */}
-            {renderSlot("children", itemContext(item))}
+            {renderSlot(
+              "children",
+              // Recorded among the entries of the lists around what it
+              // draws, for a binding inside naming this list.
+              withListEntry(
+                {
+                  ...itemContext(item),
+                  // Its place among the entries, after the places of the
+                  // entries around it: what tells its blocks' copies apart.
+                  itemPosition:
+                    ctx.itemPosition === undefined
+                      ? String(index)
+                      : `${ctx.itemPosition}-${index}`,
+                },
+                args.nodeId
+              )
+            )}
           </div>
         ));
   // The note, when an author is looking, goes above what visitors see.
   return (
-    <div className={className} {...marks}>
+    <Tag className={className} {...marks}>
       {note}
       {content}
       {pages}
-    </div>
+    </Tag>
   );
 }
 
@@ -667,8 +695,9 @@ const COLLECTION_LOOP_PARTS = {
     baseStyles: {
       base: {
         base: {
+          // In the text colour around it, so a pager inside a coloured
+          // container shows its gap in that colour.
           padding: { inlineStart: "0.25rem", inlineEnd: "0.25rem" },
-          color: { $token: "color.text" },
         },
       },
     },
@@ -708,39 +737,61 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
       // draws all of a list's query as one group where `collection` sits,
       // asked for by `display: "listFilters"`; the shapes are the engine's
       // `readListQuery`, which every reader shares.
-      collection: { label: "Source", type: "text", display: "collection" },
+      collection: {
+        label: "Show entries from",
+        section: "Entries",
+        type: "text",
+        display: "collection",
+      },
       relation: {
         label: "Related entries",
+        section: "Entries",
         type: "object",
         display: "listRelation",
         collectionProp: "collection",
       },
       filters: {
         label: "Filters",
+        section: "Entries",
         type: "array",
         display: "listFilters",
         collectionProp: "collection",
       },
       sort: {
-        label: "Sort by",
+        label: "Sort",
+        section: "Entries",
         type: "text",
         display: "sort",
         collectionProp: "collection",
       },
-      limit: { label: "Number of items", type: "number", min: 1, max: 100 },
-      offset: { label: "Skip the first", type: "number", min: 0 },
+      limit: {
+        label: "How many",
+        section: "Entries",
+        type: "number",
+        min: 1,
+        max: 100,
+      },
+      offset: { label: "Skip", section: "Entries", type: "number", min: 0 },
       // A custom source: a named query a developer registered, and a value
       // for each of its inputs, `{ name, params }`. Drawn by the same group
       // as the rest of the query, in its Source menu and Inputs.
       namedQuery: {
         label: "Custom source",
+        section: "Entries",
         type: "object",
         display: "listNamedQuery",
       },
-      paginate: { label: "Split into pages", type: "checkbox" },
+      paginate: {
+        label: "Split into pages",
+        section: "Entries",
+        type: "checkbox",
+      },
+      // The element the list renders, as every container chooses one. Left
+      // out, a `div`, as every list stored before it was offered renders.
+      as: htmlTagProp(["div", "section", "article"]),
       ...CONTENT_WIDTH_PROPS,
     },
-    defaultProps: { limit: 10, contained: false },
+    defaultProps: { as: "div", limit: 10, contained: false },
     example: { props: { collection: "posts", limit: 3 } },
     slots: {
       // The template repeated per entry, structurally editable.
@@ -763,16 +814,10 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
     parts: COLLECTION_LOOP_PARTS,
     // Spaces one entry from the next, as any container spaces its blocks.
     childGap: CONTAINER_CHILD_GAP,
-    supports: {
-      spacing: true,
-      layout: true,
-      dimensions: true,
-      background: true,
-      border: true,
-      effects: true,
-      position: true,
-      container: true,
-    },
+    // The same style capabilities as every container, from the one list.
+    supports: CONTAINER_SUPPORTS,
+    // What it is as HTML follows the tag it renders.
+    contentModel: containerContentModel,
     // The children are drawn once per entry, so a query returning nothing draws
     // them ZERO times. A reader of the stored document sees the template either
     // way and cannot tell which happened without running the query, so it is told

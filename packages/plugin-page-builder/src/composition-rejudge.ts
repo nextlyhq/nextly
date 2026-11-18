@@ -135,6 +135,7 @@ async function rejudgedIssues(
         slug: write.collection.slice(SINGLE_PREFIX.length),
         inTransaction: true,
         readStored: target => write.readStored(BLOCKS_TYPE, target),
+        readStoredOf: target => write.readStoredOf(BLOCKS_TYPE, target),
       }
     : {
         kind: "collection",
@@ -142,6 +143,7 @@ async function rejudgedIssues(
         id: write.id,
         inTransaction: true,
         readStored: target => write.readStored(BLOCKS_TYPE, target),
+        readStoredOf: target => write.readStoredOf(BLOCKS_TYPE, target),
       };
 
   await holdCompositionGraph(write.db, dialect);

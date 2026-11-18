@@ -12,29 +12,43 @@ import {
   findNode,
   type BlockDocument,
   type BlockInspectorProps,
+  type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
+import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { columnsContentSection } from "./columns-layout-field";
 import {
   PropExposeControl,
   type ComponentFieldsBinding,
 } from "./component-fields-panel";
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
+import { formSectionBodies } from "./form-sections";
+import { galleryContentSections } from "./gallery-fields";
 import {
   blockIsReadOnly,
+  builderContentSectionsOf,
   contentRowsOf,
+  designReadOnlyReason,
   fieldLabel,
   lockViewOf,
   propIsWritable,
   propPatch,
   type BlockInspection,
+  type EditableProp,
 } from "./inspector";
 import { ContentFields, listViewOf } from "./inspector-content-fields";
 import type { BlockInspectorResolver } from "./inspector-panel-types";
 import { keptWhileHidden, ownBlockChanged } from "./kept-while-hidden";
 import { commitLinkChanges } from "./link-control";
+import {
+  PanelSections,
+  rowsHoldValue,
+  type PanelSection,
+} from "./panel-section";
+import { useSettingsMatch } from "./settings-filter";
 import {
   useVisitorUnreadable,
   VisitorUnreadableNote,
@@ -57,6 +71,7 @@ function DrawnContentTab({
   services,
   reasonId,
   fields,
+  around,
 }: {
   block: BlockInspection;
   editor: EditorState;
@@ -69,6 +84,8 @@ function DrawnContentTab({
   onScreen: boolean;
   /** The component's own view, when the document is a component. */
   fields: ComponentFieldsBinding | undefined;
+  /** The page around the block, for a section the builder draws itself. */
+  around?: ContentAround | undefined;
 }): React.JSX.Element {
   return (
     <ContentSurface
@@ -82,8 +99,20 @@ function DrawnContentTab({
       services={services}
       reasonId={reasonId}
       fields={fields}
+      around={around}
     />
   );
+}
+
+/**
+ * What a section the builder draws in Content reads of the page around the
+ * block: Columns' Stack on names the site's devices, and reads a stack
+ * reaching the row through the canvas's cascade.
+ */
+interface ContentAround {
+  readonly breakpoints: BreakpointSet | undefined;
+  readonly cascade: PageStyleCascade | undefined;
+  readonly renderedTag: string | undefined;
 }
 
 /**
@@ -116,6 +145,82 @@ export function commitProp(
   });
 }
 
+/** The Content sections the builder draws itself for the block, if any. */
+function builderSectionsOf(
+  inspection: BlockInspection,
+  editor: EditorState,
+  around: ContentAround | undefined,
+  reasonId: string,
+  services: ContentServices | undefined
+): PanelSection[] {
+  const labels = builderContentSectionsOf(inspection.blockName);
+  if (labels.length === 0) return [];
+  // Layout, Stack on, Columns and On mobile write the block's design, so a
+  // design lock holds them.
+  const designHeldBy =
+    designReadOnlyReason(
+      editor.document,
+      inspection.nodeId,
+      lockViewOf(editor)
+    ) === undefined
+      ? undefined
+      : reasonId;
+  const gallery = galleryContentSections(
+    {
+      editor,
+      nodeId: inspection.nodeId,
+      breakpoints: around?.breakpoints,
+      services,
+      reasonId,
+      designHeldBy,
+    },
+    labels
+  );
+  if (gallery.length > 0) return gallery;
+  const [label] = labels;
+  if (label === undefined) return [];
+  const section = columnsContentSection({
+    editor,
+    nodeId: inspection.nodeId,
+    blockName: inspection.blockName,
+    label,
+    breakpoints: around?.breakpoints,
+    cascade: around?.cascade,
+    renderedTag: around?.renderedTag,
+    heldBy: designHeldBy,
+  });
+  return section === undefined ? [] : [section];
+}
+
+/**
+ * The builder's sections and the block's own, as one list: a block's
+ * section named as one the builder draws is drawn inside it, after the
+ * builder's controls, so the two never share a name in one tab.
+ */
+function joinedSections(
+  builder: readonly PanelSection[],
+  own: readonly PanelSection[]
+): PanelSection[] {
+  const named = new Set(builder.map(section => section.key));
+  return [
+    ...builder.map(section => {
+      const same = own.find(each => each.key === section.key);
+      if (same === undefined) return section;
+      return {
+        ...section,
+        holdsValue: section.holdsValue || same.holdsValue,
+        body: (
+          <>
+            {section.body}
+            {same.body}
+          </>
+        ),
+      };
+    }),
+    ...own.filter(section => !named.has(section.key)),
+  ];
+}
+
 /**
  * The Content tab: the block's own inspector where it names one the host
  * loaded, and the generated fields otherwise.
@@ -132,6 +237,7 @@ function ContentSurface({
   services,
   reasonId,
   fields,
+  around,
 }: {
   inspection: BlockInspection;
   editor: EditorState;
@@ -141,14 +247,16 @@ function ContentSurface({
   reasonId: string;
   /** The component's own view, when the document is a component. */
   fields: ComponentFieldsBinding | undefined;
+  around: ContentAround | undefined;
 }): React.JSX.Element {
   // A block's own inspector knows nothing of bindings visitors will not see,
   // so beside one, every such binding on the block is said above it.
   const unreadable = useVisitorUnreadable(inspection.nodeId);
-  const generated = (
+  const filterOn = useSettingsMatch().active;
+  const fieldsFor = (rows: readonly EditableProp[]): React.JSX.Element => (
     <ContentFields
       inspection={inspection}
-      rows={contentRowsOf(inspection)}
+      rows={rows}
       onCommit={onCommit}
       services={services}
       reasonId={reasonId}
@@ -171,11 +279,60 @@ function ContentSurface({
       listView={listViewOf(editor, inspection.nodeId)}
     />
   );
+  // The Form's Fields and After sending, which the builder draws in place
+  // of their generated rows.
+  const formBodies = formSectionBodies({
+    inspection,
+    stored: findNode(editor.document.nodes, inspection.nodeId)?.props ?? {},
+    services,
+    writable: name =>
+      propIsWritable(
+        editor.document,
+        inspection.nodeId,
+        name,
+        lockViewOf(editor)
+      ),
+    onCommit: (name, value) => {
+      onCommit(name, value);
+    },
+    rowsOf: fieldsFor,
+    exposeOf:
+      fields === undefined
+        ? undefined
+        : prop => (
+            <PropExposeControl
+              binding={fields}
+              nodeId={inspection.nodeId}
+              prop={prop}
+            />
+          ),
+  });
+  // Each section the block places in Content, folding on its own, after
+  // the ones the builder draws for a core block (Columns' layout, a
+  // Gallery's Pictures and Layout); a block
+  // with none draws the fields' own note that there is nothing to set.
+  const sections = joinedSections(
+    builderSectionsOf(inspection, editor, around, reasonId, services),
+    inspection.sections.content.map(section => ({
+      key: section.label,
+      label: section.label,
+      holdsValue: rowsHoldValue(section.rows),
+      body: formBodies?.get(section.label) ?? fieldsFor(section.rows),
+    }))
+  );
+  const generated =
+    sections.length === 0 ? (
+      fieldsFor(contentRowsOf(inspection))
+    ) : (
+      <PanelSections tab="content" sections={sections} />
+    );
   const Custom =
     inspection.inspector === undefined
       ? undefined
       : inspectors?.(inspection.inspector);
-  if (Custom === undefined) return generated;
+  // While the panel is filtered, the generated fields are drawn, which the
+  // filter can hide row by row; the block's own inspector knows nothing of it.
+  if (Custom === undefined || filterOn) return generated;
   return (
     <>
       <VisitorUnreadableNote

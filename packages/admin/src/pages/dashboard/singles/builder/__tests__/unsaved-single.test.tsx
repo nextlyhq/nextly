@@ -48,6 +48,46 @@ vi.mock("@admin/lib/navigation", async importOriginal => ({
   navigateTo: (...args: unknown[]) => navigate(...args),
 }));
 
+// The Page Builder's view, asking to open first on a blocks main field, and a
+// reader who may update the Single: what the admin's one "open this document"
+// rule reads for the toolbar's Page Builder link.
+vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => {
+  const original = await importOriginal<{
+    useBranding: () => Record<string, unknown>;
+  }>();
+  return {
+    ...original,
+    useBranding: () => ({
+      ...original.useBranding(),
+      plugins: [
+        {
+          name: "@acme/builder",
+          documentViews: [
+            {
+              fieldType: "blocks",
+              path: "builder",
+              component: "@acme/builder#View",
+              opensFirst: "mainField",
+            },
+          ],
+        },
+      ],
+    }),
+  };
+});
+vi.mock("@admin/hooks/useCurrentUserPermissions", async importOriginal => {
+  const original = await importOriginal<{
+    useCurrentUserPermissions: () => Record<string, unknown>;
+  }>();
+  return {
+    ...original,
+    useCurrentUserPermissions: () => ({
+      ...original.useCurrentUserPermissions(),
+      canAccessCollection: () => true,
+    }),
+  };
+});
+
 import {
   addUnsavedEntity,
   removeUnsavedEntity,
@@ -214,8 +254,9 @@ describe("the Single editor on a Single not saved yet", () => {
     ).toBeNull();
     await saveAndConfirm(user);
 
+    // Where the sidebar opens it: the builder, its main field being blocks.
     expect(
       await screen.findByRole("link", { name: "Open the Page Builder" })
-    ).toHaveAttribute("href", "/admin/singles/home-page");
+    ).toHaveAttribute("href", "/admin/singles/home-page/builder?field=blocks");
   });
 });

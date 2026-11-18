@@ -12,22 +12,39 @@ import {
   type SharedStylesHost,
   type VariantPreviewState,
 } from "@nextlyhq/builder/shell";
+import type { Control, FieldValues } from "react-hook-form";
 
 import { contributedInspector } from "../contributed-blocks";
 
+import { DocumentSettingsPanel } from "./document-settings-panel";
 import { servicesFor } from "./editor-services";
+import { pageAddressOf, type PageFacts } from "./editor-settings";
 import type { CardVerbs, EditorView } from "./editor-view";
+import { PageReadMeter, type PageDataCount } from "./page-read-meter";
+import { SelectedRegionCard } from "./region-card";
+import type { SettingsPlace } from "./settings-place";
 import {
   offerableFaces,
   offerableTokens,
   siteStyleStatus,
 } from "./site-style-studios";
 
+/** The entry's form and what the editor reads of it, for the panel's rows. */
+interface EntryForm<TFieldValues extends FieldValues> {
+  control: Control<TFieldValues>;
+  page: PageFacts;
+  /** The page's data count, which Page settings shows at every level. */
+  pageData: PageDataCount | null;
+  /** The Settings place, where a plugin that edits SEO draws the search result. */
+  place: SettingsPlace | null;
+}
+
 /** The inspector, given the same readings the canvas draws with. */
-export function editorInspector(
+export function editorInspector<TFieldValues extends FieldValues>(
   view: EditorView,
   verbs: CardVerbs,
-  sharedStyles: SharedStylesHost
+  sharedStyles: SharedStylesHost,
+  form: EntryForm<TFieldValues>
 ): React.JSX.Element {
   const {
     editor,
@@ -140,6 +157,9 @@ export function editorInspector(
         fromCode: configSiteStyle.fonts ?? [],
         onManageFonts: () => requestPanel("design", "type"),
       }}
+      // "Edit block styles" under the Block style tiles: Design's Styles tab,
+      // at the block's type.
+      onEditBlockStyles={view.openBlockStyles}
       // In a component's own view: the ids its live definition holds, which a
       // new field must never reuse, how far a removal reaches, and its name
       // for the card heading the view, which is the open document's title.
@@ -147,8 +167,45 @@ export function editorInspector(
       // And how many placements chose a variant, for its delete dialog, and
       // the open variant, which the canvas previews.
       componentVariants={previewingHost(componentVariants, view.preview)}
+      // A header or footer selected on the canvas: what it is, where it
+      // comes from and how to change it, in place of the page's settings.
+      {...regionCardOf(view)}
+      // With nothing selected: the open document's own settings, editing
+      // the entry's form as Settings does, saved with the page's draft.
+      documentSettings={own => (
+        <DocumentSettingsPanel
+          kind={view.initialDocument.kind}
+          own={own}
+          control={form.control as unknown as Control<FieldValues>}
+          onOpenSettings={view.pages.openSettings}
+          address={pageAddressOf(view, form.page)}
+          // The same place Settings' General draws the search result at.
+          place={form.place}
+          // The page's data at every level, so it can always be found.
+          pageData={<PageReadMeter count={form.pageData} place="settings" />}
+        />
+      )}
     />
   );
+}
+
+/**
+ * The selected header or footer's card, drawn afresh for each region chosen
+ * so its pages are counted as they stand; nothing while none is selected.
+ */
+function regionCardOf(view: EditorView): { regionCard?: React.ReactNode } {
+  const facts = view.selectedRegion.card;
+  if (facts === undefined) return {};
+  return {
+    regionCard: (
+      <SelectedRegionCard
+        key={`${facts.area}:${facts.componentId}`}
+        facts={facts}
+        onEditComponent={view.componentView.onEditComponent}
+        onOpenSettings={view.pages.openSettings}
+      />
+    ),
+  };
 }
 
 /** The variants host, holding the open variant for the canvas to preview. */

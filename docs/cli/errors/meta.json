@@ -77,6 +77,11 @@
     "migration-irreversible",
     "migration-missing",
     "migration-name-required",
+    "migration-not-proven",
+    "migrate-backup-declined",
+    "migrate-backup-not-confirmed",
+    "migrate-events-table-taken",
+    "migrate-ledger-unreadable",
     "migration-sql-uncheckable",
     "migration-tampered",
     "missing-migration",
@@ -216,6 +221,7 @@
     "upgrade-backup-not-confirmed",
     "upgrade-cancelled",
     "upgrade-events-table-taken",
+    "upgrade-ledger-unreadable",
     "widget-generate-cancelled",
     "workflow-cannot-attach"
   ]

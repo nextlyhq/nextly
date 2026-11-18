@@ -29,6 +29,7 @@
  */
 
 import {
+  isOneParagraphProp,
   ITEM_SCHEMA_MAX_DEPTH,
   optionLabel,
   type PropSchema,
@@ -49,6 +50,7 @@ import {
 import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import * as React from "react";
 
+import { propWrites } from "./code-hints";
 import { CollectionControl, SortControl } from "./collection-loop-controls";
 import {
   CONTENT_CONTROL_TYPES,
@@ -56,6 +58,7 @@ import {
   type ContentControlType,
 } from "./content-control-types";
 import type { ContentControl, ContentControlProps } from "./content-services";
+import { CssHint } from "./css-hint";
 import { EntryFieldControl } from "./entry-field-control";
 import { propLabel, type EditableProp } from "./inspector";
 import { loadLucideIcons } from "./lucide-icon-source";
@@ -392,23 +395,28 @@ function SelectControl({
         value={stored}
         onValueChange={next => onCommit(prop.name, next)}
       >
-        <SelectTrigger id={id}>
-          <SelectValue placeholder="Choose" />
-        </SelectTrigger>
+        {/* What the chosen option writes, on hover or keyboard focus. */}
+        <CssHint writes={propWrites(prop.schema, stored)}>
+          <SelectTrigger id={id}>
+            <SelectValue placeholder="Choose" />
+          </SelectTrigger>
+        </CssHint>
         <SelectContent>
-          {prop.options.map((option, index) => (
-            <SelectItem key={option} value={option}>
-              {labels[index]}
-              {/* What the choice writes, muted, where the block says: an
-                  HTML tag reads as words, with the tag still there. */}
-              {optionCode(prop.schema, option) !== undefined &&
-              labels[index] !== optionCode(prop.schema, option) ? (
-                <span className="nx-inspector__option-value">
-                  {optionCode(prop.schema, option)}
-                </span>
-              ) : null}
-            </SelectItem>
-          ))}
+          {prop.options.map((option, index) => {
+            const written = shownCode(prop.schema, option, labels[index]);
+            return (
+              <SelectItem key={option} value={option}>
+                {labels[index]}
+                {/* What the choice writes, muted, where the block says: an
+                    HTML tag reads as words, with the tag still there. The
+                    closed menu draws the chosen item's text, so it reads the
+                    same. */}
+                {written === undefined ? null : (
+                  <code className="nx-inspector__option-value">{written}</code>
+                )}
+              </SelectItem>
+            );
+          })}
         </SelectContent>
       </Select>
     </div>
@@ -576,7 +584,9 @@ function ArrayItems({
     // arrived) changed nothing, and the next action must not start from it.
     if (onCommit(prop.name, next) !== null) latest.current = next;
   };
-  const position = (index: number) => `${label}, item ${index + 1}`;
+  // "Item 1", "Item 2": each item sits in the group the setting's own name
+  // labels, so repeating that name ("Items, item 1") says it twice.
+  const position = (index: number) => `Item ${index + 1}`;
   const move = (index: number, by: -1 | 1) => {
     const next = [...latest.current];
     const [taken] = next.splice(index, 1);
@@ -784,10 +794,23 @@ function IconControl({
   );
 }
 
+/**
+ * A `textarea` prop: typed words, or, for a value restricted to one paragraph
+ * with bold, italic and links (`oneParagraph`, a Text's), the rich-text
+ * field held to that.
+ */
+function TextareaControl(props: ContentControlProps): React.JSX.Element {
+  return isOneParagraphProp(props.prop.schema) ? (
+    <RichTextControl {...props} />
+  ) : (
+    <TextishControl {...props} />
+  );
+}
+
 /** Each type's control. Total over the list, so neither can gain a member alone. */
 const CONTROLS: Readonly<Record<ContentControlType, ContentControl>> = {
   text: TextControl,
-  textarea: TextishControl,
+  textarea: TextareaControl,
   url: TextishControl,
   number: TextishControl,
   checkbox: CheckboxControl,
@@ -807,6 +830,21 @@ const CONTROLS: Readonly<Record<ContentControlType, ContentControl>> = {
  */
 export function contentControlFor(type: string): ContentControl | undefined {
   return hasContentControl(type) ? CONTROLS[type] : undefined;
+}
+
+/**
+ * The code to show beside a choice's words, or `undefined` where there is none
+ * or the words already are it. Compared without regard to case, so "Section"
+ * and `section` show the tag once, not as "Section section".
+ */
+function shownCode(
+  schema: PropSchema,
+  option: string,
+  words: string | undefined
+): string | undefined {
+  const written = optionCode(schema, option);
+  if (written === undefined) return undefined;
+  return words?.toLowerCase() === written.toLowerCase() ? undefined : written;
 }
 
 /**

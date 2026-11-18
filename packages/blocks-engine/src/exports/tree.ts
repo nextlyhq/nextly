@@ -97,6 +97,9 @@ export {
   planDetach,
   planDuplicateComponent,
   planInsertPattern,
+  // Paste of copied blocks, for the editor and for any script that pastes
+  // through the same ops and refusals.
+  planPasteBlocks,
   internalNestingVerdict,
   patternRefusal,
   saveAsPatternRefusal,

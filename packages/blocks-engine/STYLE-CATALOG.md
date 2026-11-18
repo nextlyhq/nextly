@@ -220,16 +220,28 @@ an overlay set at one device covers an image set at another.
 
 ### effects
 
-| Property       | Flag | Value      | Tokens           | Emits            | Applies when |
-| -------------- | ---- | ---------- | ---------------- | ---------------- | ------------ |
-| `opacity`      |      | number 0–1 | number           | `opacity`        | always       |
-| `filter`       |      | css value  |                  | `filter`         | always       |
-| `mixBlendMode` |      | keyword    |                  | `mix-blend-mode` | always       |
-| `transform`    |      | css value  |                  | `transform`      | always       |
-| `transition`   |      | css value  | custom, duration | `transition`     | always       |
+| Property       | Flag | Value                                                                                                           | Tokens           | Emits                                                              | Applies when |
+| -------------- | ---- | --------------------------------------------------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------ | ------------ |
+| `opacity`      |      | number 0–1                                                                                                      | number           | `opacity`                                                          | always       |
+| `filter`       |      | css value                                                                                                       |                  | `filter`                                                           | always       |
+| `mixBlendMode` |      | keyword                                                                                                         |                  | `mix-blend-mode`                                                   | always       |
+| `transform`    |      | css value                                                                                                       |                  | `transform`                                                        | always       |
+| `transition`   |      | css value                                                                                                       | custom, duration | `transition`                                                       | always       |
+| `appear`       |      | composite: `effect` (keyword), `duration` and `delay` (whole milliseconds, 0–10000), `start` (`scroll`, `load`) |                  | `--nx-pb-appear-effect` …, and the block's `animation-*` longhands | always       |
 
 Nothing is transitioned automatically. A transition happens because an author
 asked for one.
+
+`appear` is "Animation when it appears": `effect` is `none`, `fade-in`, `rise`,
+`slide-in-left`, `slide-in-right` or `zoom-in`, and `start` is `scroll` (the
+default) or `load`. Each part compiles to a custom property of its own, so each
+is set per device on its own, and the effect writes the animation's longhands
+reading them. The keyframes are defined only inside
+`@media screen and (prefers-reduced-motion: no-preference)`, so a printed page
+and a visitor asking for reduced motion see every block as it is. `scroll` is a
+scroll-driven animation, on the block's view timeline as it enters the window,
+and plays only under `@supports (animation-timeline: view())`; without support
+the block is shown as it is. Only opacity, `translate` and `scale` move.
 
 ### position
 

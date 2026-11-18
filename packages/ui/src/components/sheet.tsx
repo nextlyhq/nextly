@@ -325,6 +325,9 @@ function tabbablesIn(root: ParentNode): HTMLElement[] {
     element =>
       element.tabIndex >= 0 &&
       !element.hidden &&
+      // `:disabled` also matches a control disabled by its `<fieldset disabled>`, which carries no
+      // `disabled` of its own for the selector above to see, and takes no focus.
+      !element.matches(":disabled") &&
       // Radix's focus guards sit in the tab order at the page's edges, and are no control.
       !element.hasAttribute("data-radix-focus-guard") &&
       element.closest('[aria-hidden="true"], [inert]') === null &&
@@ -350,8 +353,20 @@ function leaveNonModalAtEdge(event: React.KeyboardEvent<HTMLElement>): void {
   }
   const sheet = event.currentTarget;
   const inside = tabbablesIn(sheet);
+  // The sheet itself holds focus as it opens. With controls inside, it is no edge: Tab goes in,
+  // to its first control, and Shift+Tab to its last, as the focus scope would take them.
+  if (document.activeElement === sheet && inside.length > 0) {
+    event.preventDefault();
+    (event.shiftKey ? inside[inside.length - 1] : inside[0])?.focus();
+    return;
+  }
   const edge = event.shiftKey ? inside[0] : inside[inside.length - 1];
-  if (edge === undefined || document.activeElement !== edge) return;
+  // An edge is the first or last control in the sheet, or the sheet itself while it holds focus
+  // and nothing inside it can (a loading or explanatory panel).
+  const atEdge =
+    document.activeElement === sheet ||
+    (edge !== undefined && document.activeElement === edge);
+  if (!atEdge) return;
   const page = tabbablesIn(sheet.ownerDocument.body).filter(
     element => !sheet.contains(element)
   );

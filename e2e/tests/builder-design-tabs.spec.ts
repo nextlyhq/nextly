@@ -14,11 +14,7 @@
  */
 import { expect, type Page } from "@playwright/test";
 
-import {
-  clickBlock,
-  openEditorWith,
-  selection,
-} from "./canvas/editor-driver";
+import { clickBlock, openEditorWith, selection } from "./canvas/editor-driver";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 
@@ -60,7 +56,12 @@ async function switchTo(page: Page, name: string): Promise<void> {
 
 /** The first variable row's name and value columns, in the window. */
 async function firstRowColumns(page: Page) {
-  const row = page.locator(".nx-vars__row").first();
+  // A variable's row, beside its ⋯: the fonts and site text rows a tab may
+  // list first are other lists, with no ⋯ of their own, and run the whole
+  // width.
+  const row = page
+    .locator(".nx-vars__line:has(.nx-vars__more) > .nx-vars__row")
+    .first();
   await expect(row).toBeVisible();
   const body = await page
     .locator(".nx-vars__body")
@@ -76,7 +77,9 @@ async function firstRowColumns(page: Page) {
     return {
       row: at(element),
       name: at(element.querySelector(".nx-vars__name")),
-      values: at(element.querySelector(".nx-vars__pair")),
+      swatch: at(element.querySelector(".nx-vars__swatch")),
+      // The ⋯ beside the row, on the same line.
+      more: at(element.parentElement?.querySelector(".nx-vars__more") ?? null),
     };
   });
   return { ...columns, body };
@@ -100,7 +103,7 @@ test("names its four tabs in order, each holding its own kind", async ({
   await expect(panel.getByRole("tab")).toHaveText([...TABS]);
   // Colours: the colour variables.
   await expect(
-    panel.getByRole("button", { name: /^Colours, \d+$/ })
+    panel.getByRole("button", { name: /^Text and surfaces, \d+$/ })
   ).toBeVisible();
   // Type: the site's fonts, then the type sizes.
   await switchTo(page, "Type");
@@ -110,13 +113,16 @@ test("names its four tabs in order, each holding its own kind", async ({
   await expect(
     panel.getByRole("button", { name: /^Type scale, \d+$/ })
   ).toBeVisible();
-  // Spacing: spacing, radius and shadows.
+  // Spacing: spacing, radius, shadows and the content width, each its own
+  // group.
   await switchTo(page, "Spacing");
+  for (const heading of ["Spacing", "Radius", "Shadows", "Content width"]) {
+    await expect(
+      panel.getByRole("button", { name: new RegExp(`^${heading}, \\d+$`) })
+    ).toBeVisible();
+  }
   await expect(
-    panel.getByRole("button", { name: /^Spacing, radius & shadows, \d+$/ })
-  ).toBeVisible();
-  await expect(
-    panel.getByRole("button", { name: /^Colours, \d+$/ })
+    panel.getByRole("button", { name: /^Text and surfaces, \d+$/ })
   ).toHaveCount(0);
 });
 
@@ -128,16 +134,21 @@ test("keeps a folded group folded across a reload, and opens every group on a fr
   await openEditorWith(page, NODES, "tabs-text");
   await openDesign(page);
   const panel = page.getByRole("region", { name: "Design panel" });
-  const colours = panel.getByRole("button", { name: /^Colours, \d+$/ });
+  const colours = panel.getByRole("button", {
+    name: /^Text and surfaces, \d+$/,
+  });
   await expect(colours).toHaveAttribute("aria-expanded", "true");
   await colours.click();
   await expect(colours).toHaveAttribute("aria-expanded", "false");
-  await expect(panel.locator(".nx-vars__row")).toHaveCount(0);
+  // Its own rows are gone; the other named groups of colours keep theirs.
+  await expect(
+    panel.locator('[data-colour-group="Text and surfaces"] .nx-vars__row')
+  ).toHaveCount(0);
 
   await page.reload();
   await openDesign(page);
   await expect(
-    panel.getByRole("button", { name: /^Colours, \d+$/ })
+    panel.getByRole("button", { name: /^Text and surfaces, \d+$/ })
   ).toHaveAttribute("aria-expanded", "false");
 
   // A fresh profile: nothing remembered, every group open.
@@ -161,13 +172,13 @@ test("keeps a folded group folded across a reload, and opens every group on a fr
     await expect(
       other
         .getByRole("region", { name: "Design panel" })
-        .getByRole("button", { name: /^Colours, \d+$/ })
+        .getByRole("button", { name: /^Text and surfaces, \d+$/ })
     ).toHaveAttribute("aria-expanded", "true");
   } finally {
     await fresh.close();
   }
   // Put it back for the specs after this one.
-  await panel.getByRole("button", { name: /^Colours, \d+$/ }).click();
+  await panel.getByRole("button", { name: /^Text and surfaces, \d+$/ }).click();
 });
 
 test("keeps the rows' columns where they were across all four tabs, at the default width and the narrowest", async ({
@@ -239,7 +250,7 @@ test("shows no word for the code underneath in any tab", async ({ page }) => {
   }
 });
 
-test("F2 opens a row's editor to rename it, and Escape closes it back to the row without moving the selection", async ({
+test("F2 renames a row in place, and Escape closes the field back to the row without moving the selection", async ({
   page,
 }) => {
   test.setTimeout(120_000);
@@ -247,28 +258,29 @@ test("F2 opens a row's editor to rename it, and Escape closes it back to the row
   await clickBlock(page, "tabs-text");
   await expect.poll(() => selection(page)).toEqual(["tabs-text"]);
   await openDesign(page);
-  const row = page.locator(".nx-vars__row").first();
+  // The first variable's line: its row gives way to the name field while
+  // it is renamed, so the row is found inside it.
+  const line = page.locator(".nx-vars__item").first();
+  const row = line.locator(".nx-vars__row");
   await row.focus();
   await page.keyboard.press("F2");
-  const editor = page.locator(".nx-vars-editor");
-  await expect(editor).toBeVisible();
-  const name = editor.getByLabel("Name", { exact: true });
+  const name = line.getByRole("textbox", { name: /^Name of / });
   await expect(name).toBeFocused();
+  await expect(page.locator(".nx-vars-editor")).toHaveCount(0);
   // The whole name is selected, so typing replaces it.
   expect(
     await name.evaluate(
       (input: HTMLInputElement) =>
-        input.selectionStart === 0 &&
-        input.selectionEnd === input.value.length
+        input.selectionStart === 0 && input.selectionEnd === input.value.length
     )
   ).toBe(true);
 
   await page.keyboard.press("Escape");
-  await expect(editor).toBeHidden();
+  await expect(name).toHaveCount(0);
   await expect(row).toBeFocused();
   expect(await selection(page)).toEqual(["tabs-text"]);
-  // Back on the row, its count's tooltip may show again once the counts are
-  // read, and an Escape closes that first. The next leaves the panel for the
+  // Back on the row, its tooltip may show again once the counts are read,
+  // and an Escape closes that first. The next leaves the panel for the
   // canvas, and the block is still selected after every press.
   const tooltip = page.getByRole("tooltip");
   if (await tooltip.isVisible()) {

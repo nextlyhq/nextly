@@ -48,7 +48,7 @@ export const DEFAULT_LAYOUT_WRITE_CONTEXT: Readonly<Record<string, unknown>> = {
 
 /** What an unsanctioned write is told. Names the one place the default is set. */
 export const SETTINGS_WRITE_REFUSAL =
-  "The default header & footer set is chosen from the Header & footer list, with Make default.";
+  "The site default is set from the Header & footer list, with Make site default.";
 
 /**
  * Refuse a write to the settings Single that does not carry the marker.

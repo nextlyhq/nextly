@@ -9,6 +9,12 @@
 /** The view's address segment, after the document's own address. */
 export const BUILDER_VIEW_PATH = "builder";
 
+/**
+ * The words the admin offers the view by where a document opens elsewhere: a
+ * list row's menu and the form's document bar, beside History.
+ */
+export const OPEN_IN_BUILDER = "Open in builder";
+
 /** The component the admin draws at that address. */
 export const BUILDER_VIEW_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#PageBuilderView";
@@ -42,6 +48,14 @@ export const BINDINGS_TO_FIX_CARD_COMPONENT =
 export const ENTRY_DESIGN_SECTION_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#EntryDesignSection";
 
+/**
+ * "Shown on (from the builder)", a section of every Single's side panel,
+ * declared at the `single.edit` place: where the builder shows the Single's
+ * values. Here, beside the others, for the same reason.
+ */
+export const SINGLE_SHOWN_ON_SECTION_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#ShownOnSection";
+
 /** The "Own designs" section of a template's document panel. */
 export const TEMPLATE_OWN_DESIGNS_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#TemplateOwnDesigns";
@@ -63,6 +77,14 @@ export const TEMPLATE_DELETE_COMPONENT =
  */
 export const COMPONENT_LIST_TOOLS_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#ComponentListTools";
+
+/**
+ * The tools above the Header & footer list: Import from file, and the
+ * "Make site default" row actions with the question they may ask. Declared
+ * here for the same reason.
+ */
+export const LAYOUT_LIST_TOOLS_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#LayoutListTools";
 
 /**
  * The delete tools for a host's own component store, drawn through the

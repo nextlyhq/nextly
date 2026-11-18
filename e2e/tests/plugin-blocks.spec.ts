@@ -2,10 +2,13 @@
  * Blocks another plugin contributes, in the real editor.
  *
  * The playground's block fixture declares two blocks for the page builder and
- * names an editor entry exporting them; the generated component map imports
- * that entry and the custom block's own inspector. So these tests cover the
- * whole path a contributed block takes: declaration, generated map, the
- * browser registry, the Add panel, the inspector, the save and a reload.
+ * names an editor entry exporting them. The fixture runs only on this suite's
+ * server, so the committed component map is written without it, and its own
+ * admin module hands the entry and the custom block's inspector to the editor
+ * as the map would. So these tests cover the path a contributed block takes
+ * from there: declaration, the browser registry, the Add panel, the
+ * inspector, the save and a reload. What the map writes for an editor entry
+ * is the generator's own unit tests' to hold.
  *
  * What each asserts, and the broken version it rules out:
  *
@@ -151,7 +154,7 @@ test.describe("blocks a plugin contributes", () => {
     await expect(page.locator(PLACEHOLDER)).toHaveCount(0);
   });
 
-  test("a custom inspector edits its block, beside the CSS id, attributes and Style", async ({
+  test("a custom inspector edits its block, beside the anchor, attributes and Style", async ({
     page,
   }) => {
     const id = await createPage(page.request);
@@ -171,9 +174,16 @@ test.describe("blocks a plugin contributes", () => {
     await expect(fixture(page, "custom")).toHaveText("Edited headline");
 
     // What every block keeps beside its own inspector: the Advanced tab,
-    // where the CSS id and attributes live.
+    // where the anchor and attributes live.
     await page.getByRole("tab", { name: "Advanced" }).click();
-    const cssId = page.getByRole("textbox", { name: "CSS id" });
+    // HTML starts closed on a block whose HTML holds nothing.
+    const html = page
+      .getByTestId("inspector")
+      .locator('[data-section="html"] [data-slot="accordion-trigger"]');
+    if ((await html.getAttribute("aria-expanded")) !== "true") {
+      await html.click();
+    }
+    const cssId = page.getByRole("textbox", { name: "Anchor (ID)" });
     await cssId.fill("fixture-anchor");
     await cssId.press("Enter");
     await page.getByRole("button", { name: "Add attribute" }).click();
@@ -185,9 +195,9 @@ test.describe("blocks a plugin contributes", () => {
     await value.press("Tab");
 
     await page.getByRole("tab", { name: "Style" }).click();
-    // Colour sits in Typography, its first and only section here.
+    // Colour sits in Text, its first and only section here.
     const color = page
-      .getByRole("region", { name: /^Typography/ })
+      .getByRole("region", { name: /^Text(\s?has changes)?$/ })
       .getByRole("textbox", { name: "Colour", exact: true });
     await color.fill("#1155cc");
     await color.press("Enter");

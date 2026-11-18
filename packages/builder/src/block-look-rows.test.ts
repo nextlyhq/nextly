@@ -147,6 +147,71 @@ describe("the Design panel's block looks", () => {
     ]);
   });
 
+  it("marks the block's own look ★ until a worn look of its type carries it", () => {
+    const marks = (library: NamedClass[]) =>
+      blockLookGroups(library, new Set()).flatMap(group =>
+        group.rows.map(row => [row.id, row.starred, row.hidden])
+      );
+    // The control: nothing starred, so each type's own look carries ★.
+    expect(marks([primary, outline, square])).toEqual([
+      [primary.id, true, false],
+      [outline.id, false, false],
+      [square.id, true, false],
+    ]);
+    // Moved to Outline, the Button's own look gives it up; the Image's keeps it.
+    expect(marks([primary, { ...outline, starred: true }, square])).toEqual([
+      [primary.id, false, false],
+      [outline.id, true, false],
+      [square.id, true, false],
+    ]);
+  });
+
+  it("marks a hidden look, and only the first ★ the compiler reads", () => {
+    const text: NamedClass = {
+      ...outline,
+      id: "look:core/button:text",
+      slug: "button-text",
+      label: "Text",
+      orderIndex: 2,
+      hidden: true,
+      starred: true,
+    };
+    const rows = blockLookGroups(
+      [primary, { ...outline, starred: true }, text],
+      new Set()
+    ).flatMap(group =>
+      group.rows.map(row => [row.id, row.starred, row.hidden])
+    );
+    expect(rows).toEqual([
+      [primary.id, false, false],
+      [outline.id, true, false],
+      [text.id, false, true],
+    ]);
+  });
+
+  it("reads a row's type and marks from the entry the compiler keeps for its id", () => {
+    // The first usable entry of the id is kept; a later one sharing it,
+    // another type's and hidden, says nothing of the row.
+    const twin: NamedClass = {
+      ...square,
+      id: outline.id,
+      slug: "image-twin",
+      isDefault: undefined,
+      orderIndex: 5,
+      hidden: true,
+    };
+    const rows = blockLookGroups(
+      [primary, { ...outline, starred: true }, twin],
+      new Set()
+    ).flatMap(group =>
+      group.rows.map(row => [row.blockType, row.id, row.starred, row.hidden])
+    );
+    expect(rows).toEqual([
+      ["core/button", primary.id, false, false],
+      ["core/button", outline.id, true, false],
+    ]);
+  });
+
   it("reads a library with no looks as no groups", () => {
     expect(blockLookGroups([card], new Set())).toEqual([]);
   });

@@ -126,7 +126,9 @@ describe("spell-check on the inspector's fields", () => {
     mount();
     // `mouseDown`, as the tab trigger activates on pointer-down.
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
-    const typography = screen.getByRole("button", { name: /^Typography/ });
+    const typography = screen.getByRole("button", {
+      name: /^Text(has changes)?$/,
+    });
     if (typography.getAttribute("aria-expanded") !== "true") {
       fireEvent.click(typography);
     }
@@ -149,7 +151,9 @@ describe("spell-check on the inspector's fields", () => {
      */
     mount();
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
-    const typography = screen.getByRole("button", { name: /^Typography/ });
+    const typography = screen.getByRole("button", {
+      name: /^Text(has changes)?$/,
+    });
     if (typography.getAttribute("aria-expanded") !== "true") {
       fireEvent.click(typography);
     }
