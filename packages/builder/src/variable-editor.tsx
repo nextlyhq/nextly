@@ -537,6 +537,7 @@ function Values({
       readOnly={readOnly}
       onChange={onChange}
       write={write}
+      preview={preview}
       refused={refused}
     />
   );
@@ -581,6 +582,7 @@ function TypePair({
   readOnly,
   onChange,
   write,
+  preview,
   refused,
 }: {
   size: SiteToken;
@@ -591,6 +593,7 @@ function TypePair({
   readOnly: boolean;
   onChange: (tokens: SiteTokenSet) => void;
   write: ValueWrite;
+  preview: ValuePreview;
   refused: Refused;
 }): React.JSX.Element {
   const hasDark =
@@ -624,6 +627,7 @@ function TypePair({
             readOnly={readOnly}
             refusedBy={refusalAt(refused, half.at, "light")}
             onCommit={value => write(half.at, "light", value)}
+            onPreview={text => preview(half.at, "light", text)}
             css={variableCss(tokens, half.token, half.token.values.light)}
           />
         ))}
@@ -647,6 +651,7 @@ function TypePair({
                   readOnly={readOnly}
                   refusedBy={refusalAt(refused, half.at, "dark")}
                   onCommit={value => write(half.at, "dark", value)}
+                  onPreview={text => preview(half.at, "dark", text)}
                 />
                 {/* Each half returns to following light on its own; the
                     action for both is below. */}
@@ -724,6 +729,8 @@ function HalfInput({
   readOnly: boolean;
   refusedBy: string | undefined;
   onCommit: (value: string) => void;
+  /** Draws the half's value before it is written; `null` ends it. */
+  onPreview: (text: string | null) => void;
   css: string;
 }): React.JSX.Element {
   return half === "Size" ? (

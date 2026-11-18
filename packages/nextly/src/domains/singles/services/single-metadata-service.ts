@@ -1254,9 +1254,9 @@ export class SingleMetadataService {
 
   /**
    * Whether this save carries values across its change, which the service's own statements do and
-   * the migration file does not (`pushCarriesValues`): translation turned on or off, its
-   * per-language Draft/Published turned on or off, a field joining or leaving translation, or a
-   * change reaching a relation's storage. Asked before the save writes anything.
+   * the migration file does not (`pushCarriesValues`): a Required or Unique field leaving
+   * translation, a column changing type, a field its row is filled in, or a change reaching a
+   * relation's storage. Asked before the save writes anything.
    */
   private async carriesValues(
     input: UpdateSingleSchemaInput,
@@ -1309,8 +1309,6 @@ export class SingleMetadataService {
       newFields: after,
       wasStored: input.wasLocalized,
       isStored: input.isLocalized,
-      wasStatus: input.layout?.wasPublishedPerLanguage ?? input.wasStatus,
-      status: input.layout?.isPublishedPerLanguage ?? input.hasStatus,
       renamed: companion?.rename,
       liveTable: async () =>
         (
@@ -2398,6 +2396,33 @@ export class SingleMetadataService {
    *
    * @throws NextlyError `NEXTLY_MIGRATION_APPLY_FAILED` when the database refuses the RENAME
    */
+  /**
+   * The moves made before the main table changes: a field becoming translated takes its value to
+   * the default language's companion row (the main ALTER drops its column), and a translated
+   * field's companion column is renamed (`renameTranslatedColumnFirst`). The save's migration file
+   * makes both itself, so after it neither is made again, and the companion reconcile plans from
+   * the companion as the file left it.
+   */
+  private async movesBeforeMain(
+    adapter: DrizzleAdapter,
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan,
+    main: "statements" | "file"
+  ): Promise<{ joinedBefore: string[]; undoRename: string[] }> {
+    if (main === "file") return { joinedBefore: [], undoRename: [] };
+    const joinedBefore = await this.moveJoiningFieldValues(
+      adapter,
+      input,
+      plan
+    );
+    const undoRename = await this.renameTranslatedColumnFirst(
+      adapter,
+      input,
+      plan
+    );
+    return { joinedBefore, undoRename };
+  }
+
   private async renameTranslatedColumnFirst(
     adapter: DrizzleAdapter,
     input: UpdateSingleSchemaInput,
@@ -2619,19 +2644,13 @@ export class SingleMetadataService {
       };
     }
 
-    // A field becoming translated takes its value to the default language's companion row first:
-    // the main ALTER below drops its column. Before the try below, as the migration is: a failure
-    // here stops the save before the main table changes.
-    const joinedBefore = await this.moveJoiningFieldValues(
+    // Before the try below, as the migration is: a failure here stops the save before the main
+    // table changes.
+    const { joinedBefore, undoRename } = await this.movesBeforeMain(
       adapter,
       input,
-      plan
-    );
-
-    const undoRename = await this.renameTranslatedColumnFirst(
-      adapter,
-      input,
-      plan
+      plan,
+      main
     );
 
     // Before the try below, which records what it catches: a refusal here has changed nothing

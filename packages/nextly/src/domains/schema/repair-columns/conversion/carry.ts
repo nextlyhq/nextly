@@ -135,6 +135,8 @@ const REFUSAL_WORDS: Record<ConversionReasonKind, string> = {
   "several-items": "is a list of several items",
   "item-not-held": "holds an item the new list cannot hold",
   "pair-blocked": "could never be held by the new type",
+  "link-not-carried":
+    "is a link the new relationship would not read as the entry it points at",
   repeated:
     "reads as a value another row holds, which a unique field holds once",
   "needs-rewrite": "is read by the new type only once rewritten into its form",

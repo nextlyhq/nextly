@@ -157,6 +157,12 @@ export type ConversionReasonKind =
   | "needs-rewrite"
   /** No value of the old type could ever be held by the new one. */
   | "pair-blocked"
+  /**
+   * A link a relationship holds that the new one would not read as the same entry: it points at
+   * another collection, or is kept in a form no save converts. Given by the rows holding one, so a
+   * column holding none changes.
+   */
+  | "link-not-carried"
   /** A value is stored in the new type's form, nothing of it lost. */
   | "new-form";
 
