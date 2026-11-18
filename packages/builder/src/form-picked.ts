@@ -35,12 +35,15 @@ export function pickedFormOf(value: unknown): PickedForm | undefined {
   return { provider, ref: typeof ref === "string" ? ref : "" };
 }
 
-/** Whether two picked forms are the same one. */
-export function sameForm(
-  a: PickedForm | undefined,
-  b: PickedForm | undefined
-): boolean {
-  return a?.provider === b?.provider && a?.ref === b?.ref;
+/**
+ * Whether a Form's answers have nowhere to go: a simple form (no form picked
+ * from a provider) whose "Send to" is empty. The one rule the canvas notice
+ * and the page's checks both read.
+ */
+export function answersGoNowhere(props: Readonly<Record<string, unknown>>) {
+  if (pickedFormOf(props.form) !== undefined) return false;
+  const { action } = props;
+  return typeof action !== "string" || action.trim() === "";
 }
 
 /** What the Form block's panel and canvas say, in one place. */

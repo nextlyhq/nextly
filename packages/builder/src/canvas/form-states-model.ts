@@ -27,7 +27,12 @@ import {
 import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
 import type { PickedFormState } from "../content-services";
-import { FORM_BLOCK, pickedFormOf, type PickedForm } from "../form-picked";
+import {
+  answersGoNowhere,
+  FORM_BLOCK,
+  pickedFormOf,
+  type PickedForm,
+} from "../form-picked";
 
 /** What the canvas says over one Form. */
 export type FormNoticeKind = "draft" | "closed" | "deleted" | "nowhere";
@@ -49,12 +54,6 @@ export function formNodeOf(
 ): BlockNode | undefined {
   const node = findNode(document.nodes, nodeId);
   return node?.type === FORM_BLOCK ? node : undefined;
-}
-
-/** Whether a simple form's "Send to" is empty, so its answers go nowhere. */
-function sendsNowhere(node: BlockNode): boolean {
-  const action = node.props.action;
-  return typeof action !== "string" || action.trim() === "";
 }
 
 /**
@@ -80,7 +79,7 @@ export function drawnForms(
       nodeId,
       element,
       picked,
-      nowhere: picked === undefined && sendsNowhere(node),
+      nowhere: answersGoNowhere(node.props),
     });
   }
   return found;

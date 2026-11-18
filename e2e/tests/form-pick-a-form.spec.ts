@@ -10,7 +10,8 @@
  *   with "Draft form: visitors can't send it until it's published".
  * - A picked form that was deleted says so on the canvas, with "Pick
  *   another form", and the live page shows nothing in its place.
- * - A simple form with no "Send to" says its answers have nowhere to go.
+ * - A simple form with no "Send to" says its answers have nowhere to go,
+ *   and the page's checks list it.
  *
  * Black box like the rest of `e2e/`: no product code is imported.
  *
@@ -211,5 +212,17 @@ test.describe("picking a Forms form in the Form block", () => {
     await expect(page.locator('[data-form-notice="nowhere"]')).toHaveText(
       "Answers have nowhere to go yet: add an address, or install the Forms plugin to save them"
     );
+
+    // The page's checks list it too, under Content and data.
+    await page
+      .locator('[data-topbar="end"]')
+      .getByRole("button", { name: /^\d+ checks?\b/ })
+      .click();
+    const checks = page.getByRole("dialog", { name: "Page checks" });
+    await expect(
+      checks
+        .getByRole("region", { name: "Content and data" })
+        .getByRole("button", { name: /^Form answers have nowhere to go: / })
+    ).toBeVisible();
   });
 });
