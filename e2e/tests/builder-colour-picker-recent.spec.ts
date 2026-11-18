@@ -38,11 +38,14 @@ async function addHeading(page: Page): Promise<void> {
   await expect(page.getByTestId("inspector")).toContainText("Heading");
 }
 
-/** The selected heading's Style tab, with Typography open, where its colour is. */
+/** The selected heading's Style tab, with its Text section open, where its colour is. */
 async function showColour(page: Page): Promise<Locator> {
   const inspector = page.getByTestId("inspector");
   await inspector.getByRole("tab", { name: "Style" }).click();
-  const typography = inspector.getByRole("button", { name: /^Typography/ });
+  const typography = inspector.getByRole("button", {
+    name: "Text",
+    exact: true,
+  });
   if ((await typography.getAttribute("aria-expanded")) !== "true") {
     await typography.click();
   }

@@ -153,7 +153,8 @@ test("half a hex colour keeps the colour the Heading had; the whole one turns it
   page,
 }) => {
   await selectBlock(page, HEADING);
-  await openStyleSection(page, /^Typography/);
+  // The section that holds a block's colour and type is named "Text".
+  await openStyleSection(page, /^Text$/);
   const heading = await block(page, HEADING);
   const field = page
     .getByTestId("inspector")
