@@ -30,6 +30,7 @@ import {
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -45,6 +46,7 @@ const hoisted = vi.hoisted(() => ({
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
   fills: vi.fn(),
+  locale: null as null | { code: string | null },
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
@@ -53,6 +55,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
     hoisted.target.push(target);
     return hoisted.session;
   },
+  useDocumentLocale: () => hoisted.locale,
   useBeforeDocumentAction: (
     handler: (action: string, store: unknown) => void | Promise<void>
   ) => {
@@ -80,7 +83,13 @@ vi.mock("../filled-default-notice", () => ({ sayFillNotices: hoisted.fills }));
 
 import type { RegionCardFacts } from "../page-layout";
 
-import { useRegionEditing, type RegionEditingHost } from "./region-editing";
+import {
+  pageInlineOf,
+  useRegionEditing,
+  useRegionsAsEdited,
+  type RegionEditingHost,
+} from "./region-editing";
+import { documentToHandOver } from "./use-host-commit";
 
 const base = { version: 1, description: "A block.", example: { props: {} } };
 
@@ -101,6 +110,7 @@ beforeEach(() => {
   hoisted.toastError.mockReset();
   hoisted.toastSuccess.mockReset();
   hoisted.fills.mockReset();
+  hoisted.locale = null;
   hoisted.session = sessionWith({});
 });
 
@@ -206,20 +216,29 @@ async function enterHeader(): Promise<void> {
 }
 
 /** An edit inside the header, so it holds work not saved. */
-function editHeader(): void {
+function editHeader(id = "cart"): void {
+  const before = current().editing.active.document.nodes.length;
   act(() => {
     current().editing.active.apply({
       kind: "insert",
       node: {
-        id: "cart",
+        id,
         type: "acme/nav",
         version: 1,
-        props: { text: "Cart" },
+        props: { text: id },
       },
-      at: { index: 1 },
+      at: { index: before },
     } as never);
   });
-  expect(current().editing.active.document.nodes).toHaveLength(2);
+  expect(current().editing.active.document.nodes).toHaveLength(before + 1);
+}
+
+/** The node ids of the header a store was sent. */
+function sentIds(store: ReturnType<typeof vi.fn>, call: number): string[] {
+  const changes = store.mock.calls[call]?.[0] as {
+    content: BlockDocument;
+  };
+  return changes.content.nodes.map(node => node.id);
 }
 
 describe("entering header editing", () => {
@@ -257,6 +276,18 @@ describe("entering header editing", () => {
     expect(target.kind === "region" ? target.words.bar : "").toContain(
       "· Unpublished changes from "
     );
+  });
+
+  it("opens the header in the language the page is edited in", async () => {
+    hoisted.locale = { code: "fr" };
+    render(<Host />);
+    await enterHeader();
+
+    expect(hoisted.target).toContainEqual({
+      collection: "components",
+      id: "h1",
+      locale: "fr",
+    });
   });
 
   it("does not enter while a colleague holds the header, and says who", async () => {
@@ -307,6 +338,57 @@ describe("saving the header", () => {
     act(() => options.action.onClick());
     await waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(current().host.dirty).toBe(false));
+  });
+
+  it("tries again with the header as it is now, not as the failed save sent it", async () => {
+    const saveDraft = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        reason: "refused",
+        message: "The server is down.",
+      })
+      .mockResolvedValueOnce(STORED);
+    hoisted.session = sessionWith({ saveDraft });
+    render(<Host />);
+    await enterHeader();
+    editHeader();
+
+    act(() => current().host.topBar?.save());
+    await waitFor(() => expect(hoisted.toastError).toHaveBeenCalled());
+    editHeader("shop");
+    const [, options] = hoisted.toastError.mock.calls[0] as [
+      string,
+      { action: { onClick: () => void } },
+    ];
+    act(() => options.action.onClick());
+
+    await waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(2));
+    expect(sentIds(saveDraft, 1)).toEqual(["menu", "cart", "shop"]);
+    await waitFor(() => expect(current().host.dirty).toBe(false));
+  });
+
+  it("keeps an edit made while a save is on its way unsaved", async () => {
+    let answer: (outcome: DocumentSessionOutcome) => void = () => undefined;
+    const saveDraft = vi.fn(
+      () =>
+        new Promise<DocumentSessionOutcome>(resolve => {
+          answer = resolve;
+        })
+    );
+    hoisted.session = sessionWith({ saveDraft });
+    render(<Host />);
+    await enterHeader();
+    editHeader();
+
+    act(() => current().host.topBar?.save());
+    await waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(1));
+    editHeader("shop");
+    await act(async () => answer(STORED));
+
+    await waitFor(() => expect(hoisted.toastSuccess).toHaveBeenCalled());
+    expect(sentIds(saveDraft, 0)).toEqual(["menu", "cart"]);
+    expect(current().host.dirty).toBe(true);
   });
 
   it("asks how far a publish reaches, publishes, and says any fill", async () => {
@@ -379,5 +461,55 @@ describe("Done", () => {
 
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(current().host.area).toBe("header");
+  });
+});
+
+describe("the page while a header is edited", () => {
+  const REGIONS = [
+    { area: "header" as const, document: PAGE },
+    { area: "footer" as const, document: PAGE },
+  ];
+
+  it("reads the bindings of the header as it is edited, and the footer as published", () => {
+    const { result } = renderHook(() => {
+      const page = useEditorState({ initialDocument: PAGE });
+      const editing = useEditingTarget(page);
+      return { editing, regions: useRegionsAsEdited(REGIONS, editing) };
+    });
+    expect(result.current.regions).toBe(REGIONS);
+
+    act(() =>
+      result.current.editing.enter({
+        area: "header",
+        document: HEADER,
+        definitions: new Map(),
+        label: "Site header",
+        words: { bar: "", done: "Done", entered: "", left: "" },
+      })
+    );
+
+    const [header, footer] = result.current.regions;
+    expect(header?.document).toBe(result.current.editing.active.document);
+    expect(header?.document.kind).toBe("component");
+    expect(footer?.document).toBe(PAGE);
+  });
+
+  it("hands over only the page's own work, never finishing the header's passage into it", () => {
+    const headerPassage = {
+      commit: vi.fn(() => ({ status: "written", document: HEADER }) as never),
+      editing: "menu",
+      editingRich: null,
+    };
+
+    const inline = pageInlineOf("header", headerPassage);
+
+    expect(
+      documentToHandOver({ document: PAGE, undoDepth: 0 }, inline, 0, undefined)
+    ).toBeNull();
+    expect(
+      documentToHandOver({ document: PAGE, undoDepth: 1 }, inline, 0, undefined)
+    ).toBe(PAGE);
+    expect(headerPassage.commit).not.toHaveBeenCalled();
+    expect(pageInlineOf(undefined, headerPassage)).toBe(headerPassage);
   });
 });

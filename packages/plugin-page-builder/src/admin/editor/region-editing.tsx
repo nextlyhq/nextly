@@ -37,14 +37,17 @@ import {
   type DefinitionsById,
   type RegionArea,
 } from "@nextlyhq/blocks-engine";
-import type {
-  EditingTargetState,
-  EditorState,
-  InlineEditOutcome,
-  RegionSelection,
+import {
+  canvasEditingOf,
+  INLINE_EDIT_UNCHANGED,
+  type EditingTargetState,
+  type EditorState,
+  type InlineEditOutcome,
+  type RegionSelection,
 } from "@nextlyhq/builder/shell";
 import {
   useBeforeDocumentAction,
+  useDocumentLocale,
   useDocumentSession,
   type DocumentSession,
   type DocumentSessionOutcome,
@@ -91,6 +94,59 @@ interface InlineTyping {
   readonly commit: () => InlineEditOutcome;
   readonly editing: unknown;
   readonly editingRich: unknown;
+}
+
+/** No passage open: what the page types while a region is edited in place. */
+const NO_PAGE_PASSAGE: InlineTyping = {
+  commit: () => INLINE_EDIT_UNCHANGED,
+  editing: null,
+  editingRich: null,
+};
+
+/**
+ * The page's own inline typing: none while a region is edited in place,
+ * since the passage open then is the region's, and finishing it into the
+ * page (as the page's handover does when the editor goes away) would put
+ * the header's document in the page's place.
+ */
+export function pageInlineOf<T extends InlineTyping>(
+  area: RegionArea | undefined,
+  inline: T
+): T | InlineTyping {
+  return area === undefined ? inline : NO_PAGE_PASSAGE;
+}
+
+/**
+ * The regions drawn around the page as their bindings are read: the one
+ * edited in place as it is now, so a source only its edits name is read for
+ * it, and the others as published.
+ */
+export function useRegionsAsEdited<
+  R extends {
+    readonly area: RegionArea;
+    readonly document: BlockDocument;
+    readonly definitions?: DefinitionsById;
+  },
+>(
+  regions: readonly R[],
+  editing: Pick<EditingTargetState, "target" | "active">
+): readonly R[] {
+  const edited = canvasEditingOf(editing);
+  const area = edited?.area;
+  const document = edited?.document;
+  const definitions = edited?.definitions;
+  return useMemo(() => {
+    if (area === undefined || document === undefined) return regions;
+    return regions.map(region =>
+      region.area === area
+        ? {
+            ...region,
+            document,
+            ...(definitions === undefined ? {} : { definitions }),
+          }
+        : region
+    );
+  }, [regions, area, document, definitions]);
 }
 
 /** The region an author asked to edit: its area and the component filling it. */
@@ -178,34 +234,39 @@ function regionDocumentOf(
  * Where the history stood when the region's document was last stored: an
  * undo depth, or `"unreachable"` once an undo went below it. Each editing
  * session starts from the stored version, at depth 0.
+ *
+ * A store names the document it sent, and moves the point only while that is
+ * still the document edited: an edit made while the store was on its way is
+ * not in what was stored, so it stays unsaved.
  */
 function useRegionSavePoint(
-  active: Pick<EditorState, "undoDepth">,
+  active: Pick<EditorState, "undoDepth" | "document">,
   editingArea: RegionArea | undefined,
   inline: InlineTyping
 ): {
   dirty: boolean;
-  stored: () => void;
-  depth: React.RefObject<number>;
+  stored: (sent: BlockDocument) => void;
 } {
   const [savedAt, setSavedAt] = useState<number | "unreachable">(0);
   const [session, setSession] = useState(editingArea);
+  const [sent, stored] = useState<BlockDocument | null>(null);
   if (session !== editingArea) {
     setSession(editingArea);
     setSavedAt(0);
   }
+  if (sent !== null) {
+    stored(null);
+    if (sent === active.document) setSavedAt(active.undoDepth);
+  }
   if (typeof savedAt === "number" && active.undoDepth < savedAt) {
     setSavedAt("unreachable");
   }
-  const depth = useRef(active.undoDepth);
-  depth.current = active.undoDepth;
-  const stored = useCallback(() => setSavedAt(depth.current), []);
   const dirty =
     editingArea !== undefined &&
     (savedAt !== active.undoDepth ||
       inline.editing !== null ||
       inline.editingRich !== null);
-  return { dirty, stored, depth };
+  return { dirty, stored };
 }
 
 /** A refusal of a save or publish, in the author's words. */
@@ -343,11 +404,14 @@ function useRegionStore({
   inline: InlineTyping;
   active: Pick<EditorState, "document">;
   session: DocumentSession;
-  stored: () => void;
+  stored: (sent: BlockDocument) => void;
   rereadRegions: () => void;
   sets: BuilderSets;
 }): RegionStore {
   const [busy, setBusy] = useState(false);
+  // "Try again" stores the header as it is when it is clicked, through the
+  // latest store, not the one whose attempt failed.
+  const latest = useRef<RegionStore["store"]>(() => Promise.resolve(false));
   const store = useCallback(
     async (intent: "save" | "publish"): Promise<boolean> => {
       if (area === undefined || field === undefined) return false;
@@ -361,11 +425,14 @@ function useRegionStore({
       setBusy(false);
       if (!outcome.ok) {
         toast.error(refusalWords(area, intent, outcome), {
-          action: { label: TRY_AGAIN, onClick: () => void store(intent) },
+          action: {
+            label: TRY_AGAIN,
+            onClick: () => void latest.current(intent),
+          },
         });
         return false;
       }
-      stored();
+      stored(finished.document);
       toast.success(storedWords(area, intent));
       // The regions are drawn from the published set and components: a
       // publish changes them, and a draft adds "Draft changes not live".
@@ -375,6 +442,7 @@ function useRegionStore({
     },
     [area, field, inline, active.document, session, stored, rereadRegions, sets]
   );
+  latest.current = store;
   return { busy, store };
 }
 
@@ -561,17 +629,25 @@ function usePageStoreWaits(
   });
 }
 
-/** The session on the component a region asked for, and how far it reaches. */
+/**
+ * The session on the component a region asked for, and how far it reaches:
+ * in the language the page is edited in, as its regions are drawn.
+ */
 function useOpenedComponent(opening: Opening | null): {
   store: ReturnType<typeof useComponentEditing>;
   session: DocumentSession;
   reach: { known: boolean; reach: RegionReach };
 } {
   const store = useComponentEditing();
+  const locale = useDocumentLocale()?.code ?? null;
   const session = useDocumentSession(
     opening === null || store === undefined
       ? null
-      : { collection: store.collection, id: opening.componentId }
+      : {
+          collection: store.collection,
+          id: opening.componentId,
+          ...(locale === null ? {} : { locale }),
+        }
   );
   const facts = useComponentFacts(opening?.componentId);
   const reach = useMemo(() => reachOf(facts), [facts]);

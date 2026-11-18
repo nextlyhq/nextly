@@ -86,7 +86,12 @@ import { usePageDataCount } from "./page-read-meter";
 import { useReadBack } from "./read-back";
 import { recentColoursStore } from "./recent-colours-store";
 import { regionRefusal } from "./region-card";
-import { useRegionEditing, type RegionEditingHost } from "./region-editing";
+import {
+  pageInlineOf,
+  useRegionEditing,
+  useRegionsAsEdited,
+  type RegionEditingHost,
+} from "./region-editing";
 import { useReveal } from "./reveal-hidden";
 import type { SelectedRegion } from "./selected-region";
 import { useSettingsPlace } from "./settings-place";
@@ -458,7 +463,9 @@ function EditorBody<TFieldValues extends FieldValues>({
     address: place.address,
     control,
     editor: pageState,
-    inline,
+    // The page's own typing: a passage open in a header edited in place is
+    // the header's, never handed over as the page.
+    inline: pageInlineOf(regionEditing.area, inline),
     onCommit: readBack.handOver,
     onClose,
     savePoint,
@@ -487,11 +494,13 @@ function EditorBody<TFieldValues extends FieldValues>({
   });
   // The canvas's render inputs with the sources its bindings read, asked of
   // the tree the canvas draws (in a component's view, the open variant's)
-  // and of the Layout regions drawn around it, together.
+  // and of the Layout regions drawn around it, together: a header edited in
+  // place, as it is edited.
+  const boundRegions = useRegionsAsEdited(panels.canvasRegions, editing);
   const { canvasRender, visitorUnreadable } = useDrawnCanvasRender(
     canvas.canvasRender,
     componentView.preview.document,
-    panels.canvasRegions,
+    boundRegions,
     mount.locale,
     mount.initialDocument.kind === "component",
     canvas.pageDataLimit
