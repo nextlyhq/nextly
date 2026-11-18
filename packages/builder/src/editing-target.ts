@@ -97,13 +97,26 @@ export interface EditingTargetState {
    * its `left` words after leaving, empty before either.
    */
   readonly announcement: string;
+  /**
+   * The definitions the region is drawn from now, while one is edited: the
+   * host's current ones, else those it was entered with.
+   */
+  readonly definitions?: DefinitionsById;
 }
 
 /** The arguments the region's state takes beyond its own document. */
 export type RegionStateArgs = Omit<
   UseEditorStateArgs,
   "initialDocument" | "definitions" | "stored" | "session"
->;
+> & {
+  /**
+   * The definitions the host draws component placements from now, which a
+   * region edited in place is drawn and judged by over the ones it was
+   * entered with: a component made or loaded while it is edited is known to
+   * it at once, its history kept.
+   */
+  readonly definitions?: DefinitionsById;
+};
 
 /** The page as the target: one value, so a render compares it by identity. */
 const PAGE_TARGET: EditingTarget = { kind: "page" };
@@ -136,12 +149,13 @@ export function useEditingTarget(
   const [pulse, setPulse] = useState(0);
   const [announcement, setAnnouncement] = useState("");
   const editing = target.kind === "region" ? target : undefined;
+  const { definitions: current, ...judged } = args;
+  const definitions =
+    editing === undefined ? undefined : (current ?? editing.definitions);
   const region = useEditorState({
-    ...args,
+    ...judged,
     initialDocument: editing?.document ?? NO_REGION,
-    ...(editing?.definitions === undefined
-      ? {}
-      : { definitions: editing.definitions }),
+    ...(definitions === undefined ? {} : { definitions }),
     // The target itself names the session: every entry is a new object, so
     // entering again, even the same region, starts from an empty history.
     session: target,
@@ -166,8 +180,17 @@ export function useEditingTarget(
 
   const active = editing === undefined ? page : region;
   return useMemo(
-    () => ({ target, active, enter, leave, pulse, pulseDone, announcement }),
-    [target, active, enter, leave, pulse, pulseDone, announcement]
+    () => ({
+      target,
+      active,
+      enter,
+      leave,
+      pulse,
+      pulseDone,
+      announcement,
+      ...(definitions === undefined ? {} : { definitions }),
+    }),
+    [target, active, enter, leave, pulse, pulseDone, announcement, definitions]
   );
 }
 
@@ -187,7 +210,7 @@ function said(previous: string, message: string): string {
  * region while the panels edit another.
  */
 export function canvasEditingOf(
-  editing: Pick<EditingTargetState, "target" | "active">
+  editing: Pick<EditingTargetState, "target" | "active" | "definitions">
 ):
   | {
       readonly area: RegionArea;
@@ -197,12 +220,11 @@ export function canvasEditingOf(
   | undefined {
   const { target } = editing;
   if (target.kind !== "region") return undefined;
+  const definitions = editing.definitions ?? target.definitions;
   return {
     area: target.area,
     document: editing.active.document,
-    ...(target.definitions === undefined
-      ? {}
-      : { definitions: target.definitions }),
+    ...(definitions === undefined ? {} : { definitions }),
   };
 }
 

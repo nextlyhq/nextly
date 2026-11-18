@@ -11,9 +11,8 @@ const sdk = vi.hoisted(() => ({
 vi.mock("@nextlyhq/plugin-sdk/admin", () => sdk);
 
 const { readSiteCss, saveSiteCss } = await import("./site-code-client");
-const { PAGE_BUILDER_PLUGIN_NAME, SITE_CSS_ROUTE_PATH } = await import(
-  "../library-contract"
-);
+const { PAGE_BUILDER_PLUGIN_NAME } = await import("../library-contract");
+const { SITE_CSS_ROUTE_PATH } = await import("../site-css-contract");
 
 beforeEach(() => {
   sdk.readPluginRoute.mockReset();

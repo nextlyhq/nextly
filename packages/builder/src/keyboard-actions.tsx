@@ -64,6 +64,7 @@ import {
   type MovePosition,
 } from "./canvas/toolbar-actions";
 import type { EditorState } from "./editor-state";
+import { escapeFieldEdit } from "./field-edit";
 import { lockViewOf } from "./inspector";
 import { placedComponentId } from "./instance-inspector";
 import {
@@ -101,6 +102,7 @@ import {
 import { planUnwrap, planWrap } from "./selection-wrap";
 import { blockActionRunners } from "./shell/builder-commands";
 import { useNoticeSink } from "./shell/builder-notices";
+import { useStyleClipboardVerbs } from "./style-clipboard-verbs";
 import { runTurnInto, turnIntoOffers } from "./turn-into-verb";
 
 // The keys and what is announced, the contexts the toolbar and menus read,
@@ -776,6 +778,17 @@ export function useBlockKeyboardActions({
           !modalIsOpen(typeof document === "undefined" ? undefined : document),
         run: event => {
           const editorNow = latest.current;
+          // A field being edited: the press puts back the value from before
+          // the edit, recording nothing, and does nothing else. Pressed again
+          // in that field, it leaves the field for the canvas, the block
+          // still selected: one thing per press, innermost first.
+          const field = escapeFieldEdit(pressOrigin(event));
+          if (field === "put-back") return;
+          if (field === "leave-field") {
+            const frame = latestFrame.current;
+            if (frame !== null) returnFocusToCanvas(frame);
+            return;
+          }
           // Where the press began, from the keystroke itself: a layer that
           // closed on this same key has already moved focus by now.
           const outcome = escapeOutcome(
@@ -985,6 +998,13 @@ export function useBlockKeyboardActions({
     sharedLibrary,
     announce
   );
+  // Copy style and Paste style: the blocks' own looks, never a shared style.
+  const styleClipboard = useStyleClipboardVerbs({
+    latest,
+    announce,
+    notify,
+    library: sharedLibrary,
+  });
 
   const actions = React.useMemo<BlockActions>(
     () => ({
@@ -1000,6 +1020,10 @@ export function useBlockKeyboardActions({
         clipboard.cut();
       },
       paste: clipboard.paste,
+      copyStyle: () => {
+        styleClipboard.copyStyle();
+      },
+      pasteStyle: styleClipboard.pasteStyle,
       selectParent,
       saveAsPattern: saveSelectionAsPattern,
       editComponent: editSelectedComponent,
@@ -1020,6 +1044,7 @@ export function useBlockKeyboardActions({
       deleteSelected,
       duplicateSelected,
       clipboard,
+      styleClipboard,
       selectParent,
       saveSelectionAsPattern,
       editSelectedComponent,

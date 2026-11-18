@@ -75,6 +75,7 @@ import {
 } from "./editor-preference-stores";
 import { useLookEditing, type LookEditingState } from "./look-editing";
 import {
+  offeredSelfOf,
   withoutSelf,
   withoutSelfPatterns,
   type ComponentGraph,
@@ -277,14 +278,19 @@ type OfferedLibrary = {
 };
 
 /** The library the insert panel may offer, for the field being edited. */
-function useOfferedLibrary({
-  componentLibrary,
-  documentLimits,
-  initialDocument,
-}: Pick<
-  EditorMount,
-  "componentLibrary" | "documentLimits" | "initialDocument"
->): OfferedLibrary {
+function useOfferedLibrary(
+  {
+    componentLibrary,
+    documentLimits,
+    initialDocument: opened,
+    editing,
+  }: Pick<
+    EditorMount,
+    "componentLibrary" | "documentLimits" | "initialDocument" | "editing"
+  >,
+  /** The regions around the page, with the component filling each. */
+  cards: readonly RegionCardFacts[]
+): OfferedLibrary {
   /*
    * The rows the panel may OFFER: the library without the definition this very
    * field is editing, when it is editing one. The MAP stays whole — the
@@ -294,7 +300,14 @@ function useOfferedLibrary({
   // Judged on the document the editor OPENED with: a document's kind does not
   // change while it is edited, and the opening document is the one this
   // field's own value described.
-  const identity = useDocumentIdentity();
+  // While a header or footer is edited in place, the one judged is its
+  // component, so the header is never offered inside itself.
+  const opener = useDocumentIdentity();
+  const { target } = editing;
+  const { document: initialDocument, identity } = useMemo(
+    () => offeredSelfOf(target, cards, { document: opened, identity: opener }),
+    [target, cards, opened, opener]
+  );
   /*
    * Built once and asked by BOTH tiers: the components filter below and the
    * patterns filter the panel runs on the rows it reads for itself. One
@@ -591,10 +604,12 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   const pageLayout = usePageLayoutSettings(page.control);
   // From the form's unsaved values, so a change of Layout redraws at once,
   // with the header or footer selected on the canvas or in Layers.
+  // The region selection follows the PAGE's blocks: a block chosen inside a
+  // header being edited leaves the header chosen, to come back to at Done.
   const layoutRegions = usePageRegions(
     page.control,
     page.canvasRoot,
-    editor,
+    { page: mount.page, active: editor },
     useLookEditing(editor)
   );
 
@@ -616,7 +631,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   );
   const identity = useDocumentIdentity();
   const checklist = useBuilderChecklist({
-    document: editor.document,
+    document: mount.page.document,
     documentKey: identityKey(identity),
     // Not until the author is known: their own dismissal is the one to read,
     // and a card drawn before it arrives would flash for an author who
@@ -625,7 +640,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     ...(checklistStore === undefined ? {} : { store: checklistStore }),
   });
 
-  const library = useOfferedLibrary(mount);
+  const library = useOfferedLibrary(mount, layoutRegions.cards);
   const requests = useEditorRequests(editor);
   // Whether the editor's search is open: ⌘K opens it, and so does the top
   // bar's button, so the state sits above both.
@@ -654,6 +669,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     layersRegions: layoutRegions.selectedRegion.layers,
     selectedRegion: layoutRegions.selectedRegion,
     regionCards: layoutRegions.cards,
+    rereadRegions: layoutRegions.reread,
     ...library,
     ...requests,
   };
@@ -823,6 +839,8 @@ export type EditorPanels = OfferedLibrary &
     selectedRegion: SelectedRegion;
     /** What each region drawn around the page is, and the set it is from. */
     regionCards: readonly RegionCardFacts[];
+    /** Read the regions again, after the header is published or saved. */
+    rereadRegions: () => void;
     availablePanels: typeof AVAILABLE_PANELS;
     search: { open: boolean; setOpen: (open: boolean) => void };
     pages: PagesPanelMount;
@@ -851,6 +869,7 @@ export type EditorPanels = OfferedLibrary &
  */
 export function editorPanelRenderer({
   editor,
+  editing,
   documentLimits,
   componentLibrary,
   componentVerbs,
@@ -889,7 +908,11 @@ export function editorPanelRenderer({
   pictureSession,
 }: Pick<
   EditorMount,
-  "editor" | "componentLibrary" | "componentVerbs" | "documentLimits"
+  | "editor"
+  | "editing"
+  | "componentLibrary"
+  | "componentVerbs"
+  | "documentLimits"
 > & {
   /** The look edited on its own, which the Design panel's Block looks choose. */
   lookEditing?: LookEditingState;
@@ -1034,6 +1057,11 @@ export function editorPanelRenderer({
           moveHints
           definitions={offered.definitions}
           regions={layersRegions}
+          // While a header or footer is edited in place: its blocks, under
+          // "Layers · Site header".
+          {...(editing.target.kind === "region"
+            ? { editedRegion: editing.target }
+            : {})}
           // Its titles come with the read, so a placement of a component
           // the panel does not offer (the one being edited) is still named.
           componentTitle={offered.titleOf}

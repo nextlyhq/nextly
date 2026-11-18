@@ -695,6 +695,23 @@ export const PLUGIN_CODES = defineCodes({
       "In production, a plugin expects a schema version its applied migrations have not reached.",
     from: [
       {
+        // A start whose own migrations the data-loss consent refused: the first line says the
+        // plugin is behind for it, and the rest is the consent's refusal, whose listing is why
+        // and whose consent is what to do next.
+        code: "PLUGIN_SCHEMA_BEHIND",
+        reason: "data-loss-consent",
+        describe: error => {
+          const [what = error.publicMessage, ...refused] =
+            error.publicMessage.split("\n");
+          const consent = dataLossParts(refused.join("\n"));
+          return {
+            what,
+            why: [consent.what, consent.why].filter(Boolean).join("\n"),
+            next: consent.next,
+          };
+        },
+      },
+      {
         code: "PLUGIN_SCHEMA_BEHIND",
         describe: error =>
           refusal(error.publicMessage, {
