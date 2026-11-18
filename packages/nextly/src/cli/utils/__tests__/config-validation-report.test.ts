@@ -45,6 +45,29 @@ async function reportFor(
 const occurrences = (text: string, needle: string) =>
   text.split(needle).length - 1;
 
+describe("the offending line of a configuration that does not parse", () => {
+  // The line is shown so the reader sees what to fix; a credential written on it must not reach
+  // a terminal or a CI log with it. The error is on the line holding them: a missing comma.
+  const WITH_SECRETS = [
+    "export default {",
+    "  db: { password: 'hunter2-not-a-real-one' url: 'postgres://app:s3cr3t-pw@db.example:5432/app' },",
+    "};",
+    "",
+  ].join("\n");
+
+  it("is shown with each credential on it redacted, --verbose included", async () => {
+    for (const verbose of [false, true]) {
+      const report = await reportFor(WITH_SECRETS, { verbose });
+
+      // The line is still shown: its place and the text around the credentials.
+      expect(report, report).toContain("nextly.config.ts:2:");
+      expect(report, report).toContain("db: { password:");
+      expect(report, report).not.toContain("hunter2-not-a-real-one");
+      expect(report, report).not.toContain("s3cr3t-pw");
+    }
+  });
+});
+
 describe("a configuration that does not parse", () => {
   // A brace left open: esbuild stops at the `]` on line 4. Two characters outside ASCII before
   // it on that line make esbuild's column (bytes, from 0) differ from an editor's (characters,

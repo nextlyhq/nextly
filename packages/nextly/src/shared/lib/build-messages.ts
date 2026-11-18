@@ -8,6 +8,8 @@
  * @module shared/lib/build-messages
  */
 
+import { redactCredentialsInText } from "../../observability/mask-emails";
+
 /** One of esbuild's build messages, as far as the readers here use it. */
 export interface BuildMessage {
   text: string;
@@ -65,7 +67,9 @@ export function editorPlaceOf(message: BuildMessage): EditorPlace | undefined {
 
 /**
  * Each message as `file:line:column: text` at the place an editor shows (`editorPlaceOf`),
- * followed by the line itself where esbuild kept it, one per line. Every surface that prints a
+ * followed by the line itself where esbuild kept it, one per line. The line is source the user
+ * wrote, and a configuration may hold a credential inline, so it is shown with every credential
+ * on it redacted (`redactCredentialsInText`), never as written. Every surface that prints a
  * build failure renders it here, so the error's reason and its verbose context name one place.
  */
 export function formatBuildMessages(messages: readonly BuildMessage[]): string {
@@ -74,7 +78,9 @@ export function formatBuildMessages(messages: readonly BuildMessage[]): string {
       const place = editorPlaceOf(message);
       if (place === undefined) return message.text;
       const at = `${place.file}:${place.line}:${place.column}: ${message.text}`;
-      return place.lineText === undefined ? at : `${at}\n${place.lineText}`;
+      return place.lineText === undefined
+        ? at
+        : `${at}\n${redactCredentialsInText(place.lineText)}`;
     })
     .join("\n");
 }
