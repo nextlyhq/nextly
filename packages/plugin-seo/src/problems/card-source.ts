@@ -13,24 +13,16 @@
  *
  * @module problems/card-source
  */
-import {
-  NextlyError,
-  readableContent,
-  type AttentionItem,
-} from "@nextlyhq/plugin-sdk";
+import { NextlyError, type AttentionItem } from "@nextlyhq/plugin-sdk";
 
 import { keptSeoContext } from "../not-found/report";
 
 import { problemList, type ProblemChecks } from "./check";
 import type { Problem } from "./contract";
-import { singleKey } from "./page-types";
-import { inChunks, readerAs } from "./reader";
+import { inChunks, readableTypesOf, readerAs } from "./reader";
 
 /** What a card's `load` and a Needs attention line's `count` are handed. */
 type CardInput = Parameters<AttentionItem["count"]>[0];
-
-/** The person a card or a Needs attention line is answered for. */
-type CardReader = CardInput["user"];
 
 /** The problem list as the person a card is answered for may read it. */
 export type ProblemsFor = (
@@ -42,30 +34,6 @@ export type ProblemsFor = (
  * makes to fifty, so a piece asked for in one read is no larger.
  */
 const WIDGET_READ = 50;
-
-/**
- * The types of `checks` that `user` may read, by the key their pages are
- * kept under, as core decides it for that person.
- */
-async function readableBy(
-  user: CardReader,
-  checks: ProblemChecks
-): Promise<Set<string>> {
-  const { entities } = await readableContent({
-    user: {
-      id: user.id,
-      ...(user.roles === undefined ? {} : { roles: user.roles }),
-    },
-  });
-  const collections = new Set(checks.targets);
-  const singles = new Set(checks.singles);
-  const readable = new Set<string>();
-  for (const { slug, kind } of entities) {
-    if (kind === "collection" && collections.has(slug)) readable.add(slug);
-    if (kind === "single" && singles.has(slug)) readable.add(singleKey(slug));
-  }
-  return readable;
-}
 
 /** The list's problems as each person on the dashboard may read them. */
 export function problemsForCard(checks: ProblemChecks): ProblemsFor {
@@ -94,7 +62,7 @@ export function problemsForCard(checks: ProblemChecks): ProblemsFor {
           }),
         count: type => services.count(type),
       },
-      await readableBy(user, checks),
+      await readableTypesOf(user, checks),
       false
     );
     return (await problemList(ctx, checks, reader)).problems;
