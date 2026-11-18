@@ -186,22 +186,24 @@ function drawnSections(
 
 /**
  * What moving to a row does: it becomes the active one, and an entry that can
- * be picked is said to `onActive`. A pointer resting on the active row moves
- * nothing, so it is said once.
+ * be picked is said to `onActive`, unless it is the entry said last. Judged by
+ * the entry rather than by its place: a search moves a different entry into
+ * the active place without the author moving, and the pointer or a key on it
+ * then still says it. A pointer resting on one entry says it once.
  */
 function activeMover<C extends ListedChoice>(
   shown: readonly DrawnRow<C>[],
-  active: number,
   setActive: (index: number) => void,
+  said: React.RefObject<string | undefined>,
   onActive: ((choice: C) => void) | undefined
 ): (index: number) => void {
   return index => {
-    if (index === active) return;
     setActive(index);
     const row = shown[index];
-    if (row?.kind === "choice" && row.choice.disabled !== true) {
-      onActive?.(row.choice);
-    }
+    if (row?.kind !== "choice" || row.choice.disabled === true) return;
+    if (row.choice.key === said.current) return;
+    said.current = row.choice.key;
+    onActive?.(row.choice);
   };
 }
 
@@ -292,7 +294,9 @@ export function ChoiceList<C extends ListedChoice>({
   };
 
   /** The author moved to the row at `index`: it is active, and said so. */
-  const moveTo = activeMover(shown, active, setActive, onActive);
+  // The entry last said to `onActive`; the stored one until the author moves.
+  const said = React.useRef<string | undefined>(currentKey);
+  const moveTo = activeMover(shown, setActive, said, onActive);
 
   /** What pressing a row does: pick an entry, or open a folded group. */
   const press = (row: DrawnRow<C>): void => {

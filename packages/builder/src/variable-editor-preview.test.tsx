@@ -232,6 +232,23 @@ describe("a variable's value previews as it is edited", () => {
     expect(heard).toEqual(["draw 2px", "draw 2rem", "end", "write 2rem"]);
   });
 
+  it("keeps a size's edit open while focus is in its own unit menu, and writes once when it leaves", async () => {
+    const heard: Heard[] = [];
+    render(<Hosted heard={heard} valueOf={lightOf("space.gutter")} />);
+    const editor = await open(/^Section padding \(sides\),/);
+    const field = within(editor).getByLabelText("Light");
+    const unit = within(editor).getByLabelText("Unit for Light");
+
+    fireEvent.change(field, { target: { value: "24" } });
+    // Tab from the field reaches its unit menu: a unit picked there is
+    // stored with the number, so the edit is not over yet.
+    fireEvent.blur(field, { relatedTarget: unit });
+    expect(heard).toEqual(["draw 24px"]);
+
+    fireEvent.blur(unit, { relatedTarget: null });
+    expect(heard).toEqual(["draw 24px", "end", "write 24px"]);
+  });
+
   it("ends a size's preview and writes nothing when the editor closes mid-edit", async () => {
     const heard: Heard[] = [];
     render(<Hosted heard={heard} valueOf={lightOf("space.gutter")} />);
@@ -305,6 +322,50 @@ describe("a variable's value previews as it is edited", () => {
     fireEvent.keyDown(keys, { key: "Enter" });
     const last = (draws[1] ?? "").replace("draw ", "");
     expect(heard.slice(2)).toEqual(["end", `write ${last}`]);
+  });
+
+  it("draws a font a search brings to the top once the pointer is on it", async () => {
+    const heard: Heard[] = [];
+    render(<Hosted heard={heard} valueOf={lightOf("font.heading")} />);
+    const editor = await open(/^Heading/);
+    fireEvent.click(within(editor).getByRole("button", { name: /^Font, / }));
+    const search = screen.getByRole("combobox", {
+      name: "Search fonts",
+      hidden: true,
+    });
+    // Another family drawn first, at the second row.
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(heard).toHaveLength(1);
+
+    // The search puts Monospace at the top, where the active row now is.
+    fireEvent.change(search, { target: { value: "Monospace" } });
+    const list = screen.getByRole("listbox", { name: "Fonts", hidden: true });
+    const top = within(list).getAllByRole("option", { hidden: true })[0];
+    if (top === undefined) throw new Error("no font matches");
+    fireEvent.mouseMove(top);
+    expect(heard.at(-1)).toBe("draw monospace");
+  });
+
+  it("draws the one font a search leaves when an arrow key is pressed", async () => {
+    const heard: Heard[] = [];
+    render(<Hosted heard={heard} valueOf={lightOf("font.heading")} />);
+    const editor = await open(/^Heading/);
+    fireEvent.click(within(editor).getByRole("button", { name: /^Font, / }));
+    const search = screen.getByRole("combobox", {
+      name: "Search fonts",
+      hidden: true,
+    });
+    fireEvent.change(search, { target: { value: "Cursive" } });
+    const list = screen.getByRole("listbox", { name: "Fonts", hidden: true });
+    expect(within(list).getAllByRole("option", { hidden: true })).toHaveLength(
+      1
+    );
+
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(heard).toEqual(["draw cursive"]);
+    // Pressed again on the same family, nothing new is drawn.
+    fireEvent.keyDown(search, { key: "End" });
+    expect(heard).toEqual(["draw cursive"]);
   });
 
   it("puts the stored font back when the list closes without a pick", async () => {

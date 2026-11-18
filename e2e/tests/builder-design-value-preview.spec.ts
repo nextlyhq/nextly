@@ -2,7 +2,8 @@
  * A Design size value typed slowly is drawn on the canvas as it is typed,
  * before the field is left, and stored on the site once, when it is: a
  * variable is read by every page, so a write per keystroke would publish
- * each half-typed value on the way.
+ * each half-typed value on the way. Moving into the field's own unit menu
+ * does not end the edit; leaving the field and its menu does.
  *
  * The canvas is read where every page reads a variable, its custom property
  * on the canvas's root; the writes are every request to the site style that
@@ -154,8 +155,21 @@ test("a Design size typed slowly is drawn on the canvas before the field is left
     expect(writes).toEqual([]);
     expect(await storedValue(page, "space.4")).toBe("16px");
 
-    // Leaving the field stores it, once.
+    // Tab first reaches the field's own unit menu, which is part of the same
+    // edit: a unit picked there is stored with the number, as one write. So
+    // the edit is still open, drawn and not stored.
     await light.press("Tab");
+    const unit = page
+      .locator(".nx-vars-editor")
+      .getByRole("combobox", { name: "Unit for Light" });
+    await expect(unit).toBeFocused();
+    await page.waitForTimeout(1_200);
+    expect(writes).toEqual([]);
+    expect(await canvasValue(page, "--site-space-4")).toBe("24px");
+    expect(await storedValue(page, "space.4")).toBe("16px");
+
+    // Leaving the field and its unit menu stores it, once.
+    await unit.press("Tab");
     await expect.poll(() => storedValue(page, "space.4")).toBe("24px");
     // Long enough for a second write to have been made.
     await page.waitForTimeout(1_500);
