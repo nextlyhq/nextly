@@ -74,6 +74,7 @@ import type { SettingsAddress } from "./settings-address";
 import { PageFieldsTab, usePageFields } from "./settings-fields";
 import { DocumentGeneral, PageGeneral } from "./settings-general";
 import type { SettingsPlace } from "./settings-place";
+import { SettingsTabRequestContext } from "./settings-tab-request";
 import {
   keepEnterFromThePage,
   mayOpenSiteSettings,
@@ -121,6 +122,28 @@ export interface SettingsDialogProps extends DialogState {
   openAsForm?: (() => void) | undefined;
 }
 
+/**
+ * Counts each close of Page settings with the editor's request, so what its
+ * settings decide (a plugin's page checks) is asked again once it closes.
+ */
+function useNoteClosed(open: boolean): void {
+  const request = useContext(SettingsTabRequestContext);
+  const noteClosed = useRef(request?.noteClosed);
+  noteClosed.current = request?.noteClosed;
+  const wasOpen = useRef(open);
+  useEffect(() => {
+    if (wasOpen.current && !open) noteClosed.current?.();
+    wasOpen.current = open;
+  }, [open]);
+  // Drawn afresh for each opening, it may close by going away while open.
+  useEffect(
+    () => () => {
+      if (wasOpen.current) noteClosed.current?.();
+    },
+    []
+  );
+}
+
 /** Said once at the top while the page takes no edits. */
 const READ_ONLY_NOTE =
   "You can't change this page right now, so its settings are read-only. The note above the editor says why.";
@@ -139,7 +162,9 @@ function headingOf(kind: DocumentKind, title: string | undefined): string {
  * than a blank dialog.
  */
 function useChosenTab() {
-  const [chosen, setChosen] = useState(GENERAL_TAB);
+  // A tab asked for before it opened (a page check's fix) is its first.
+  const request = useContext(SettingsTabRequestContext);
+  const [chosen, setChosen] = useState(() => request?.take() ?? GENERAL_TAB);
   const [focusPath, setFocusPath] = useState<string | null>(null);
   return {
     chosen,
@@ -220,6 +245,7 @@ export function SettingsDialog({
   const page = kind === "page";
   const site = useSiteSettingsEntry(open);
   const tabs = useSettingsTabs({ page, fieldName, place, onOpenChange });
+  useNoteClosed(open);
   const leaveToSets = useLeaveToSets(onOpenChange);
   const body = useRef<HTMLDivElement | null>(null);
   useFocusShownField(open, tabs.shown, tabs.focusPath, body, tabs.focused);
