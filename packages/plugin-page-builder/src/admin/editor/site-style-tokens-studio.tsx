@@ -98,8 +98,7 @@ export function TokensStudio({
   supplied,
   pending,
   classes,
-  onEditClasses,
-  breakpoints,
+  importing = {},
   opens,
   mode,
   children,
@@ -115,17 +114,16 @@ export function TokensStudio({
    * it. Absent while they are being read.
    */
   classes?: readonly NamedClass[];
-  /**
-   * The editor's one class writer, which an import's text styles are stored
-   * through, as one step of the style history. Absent: an import brings in
-   * no text styles.
-   */
-  onEditClasses?: EditClasses;
-  /**
-   * The site's breakpoints once read, which an import's text styles are
-   * matched with. Absent while they are being read.
-   */
-  breakpoints?: BreakpointSet;
+  /** What an import's text styles are stored through and matched with. */
+  importing?: {
+    /**
+     * The editor's one class writer, which they are stored through, as one
+     * step of the style history. Absent: an import brings in none.
+     */
+    onEditClasses?: EditClasses;
+    /** The site's breakpoints once read. Absent while being read. */
+    breakpoints?: BreakpointSet;
+  };
   /** Where a shared style or a block look using a variable opens. */
   opens?: StyleOpeners;
   /**
@@ -186,7 +184,7 @@ export function TokensStudio({
     storeTokensNow: commitNow,
     currentTokens,
     readOnly: !mayChange,
-    ...useTransferInputs({ classes, onEditClasses, breakpoints, mode }),
+    ...useTransferInputs({ classes, ...importing, mode }),
   });
   // Memoised, so a set whose prefix was replaced is the same object until
   // the edits or the read change, as `edits ?? editable` was.
@@ -244,8 +242,8 @@ function useTransferInputs({
   mode,
 }: {
   classes: readonly NamedClass[] | undefined;
-  onEditClasses: EditClasses | undefined;
-  breakpoints: BreakpointSet | undefined;
+  onEditClasses?: EditClasses;
+  breakpoints?: BreakpointSet;
   /** The host's mode, which the header's swatches show where it is given. */
   mode: TokenMode | undefined;
 }): Pick<

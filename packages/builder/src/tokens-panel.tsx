@@ -249,23 +249,13 @@ export interface VariablesHeader {
  * mode the canvas draws by itself.
  */
 export function useVariablesHeader({
-  onChange,
-  currentTokens,
-  readOnly,
   prefersDark,
   mode: hosted,
-  ...carried
-}: {
-  onChange: (tokens: SiteTokenSet) => void;
-  currentTokens: () => SiteTokenSet | undefined;
-  readOnly: boolean;
+  ...transferring
+}: Parameters<typeof useVariablesTransfer>[0] & {
   prefersDark?: boolean;
   mode?: TokenMode;
-} & Omit<
-  // What the import and exports carry beyond the variables, each optional.
-  Parameters<typeof useVariablesTransfer>[0],
-  "onChange" | "currentTokens" | "readOnly"
->): VariablesHeader {
+}): VariablesHeader {
   /*
    * Without a host's mode, the one the canvas actually draws: the marker on
    * the page it shows, which a site's own page may state, else the device's
@@ -274,14 +264,8 @@ export function useVariablesHeader({
    */
   const drawn = useCanvasTokenModeAt(null);
   const mode: TokenMode = hosted ?? statedMode(prefersDark) ?? drawn;
-  // The text styles an export writes and an import stores, and the
-  // catalogue a missing font is added from, where the host hands them in.
-  const transfer = useVariablesTransfer({
-    onChange,
-    currentTokens,
-    readOnly,
-    ...carried,
-  });
+  // The writers, and what an export and import carry beyond the variables.
+  const transfer = useVariablesTransfer(transferring);
   return {
     mode,
     controls: <div className="nx-vars__controls">{transfer.menu}</div>,
