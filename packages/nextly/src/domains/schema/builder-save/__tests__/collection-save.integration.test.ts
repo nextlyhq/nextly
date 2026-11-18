@@ -332,7 +332,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("refuses a field type change that would clear a value before writing anything, naming the field and the row", async () => {
-      // "abc" is no number. Refused before the definition or any file is written, so a deploy never
+      // "zz#q" is no number, and no generated name (a UUID, a folder's random suffix) holds a "#". Refused before the definition or any file is written, so a deploy never
       // receives a change this database refused.
       await writeCollectionSave(deps(), {
         slug: "posts",
@@ -341,7 +341,7 @@ describe.each(getConfiguredTestDialects())(
         change: "create",
       });
       await adapter.executeQuery(
-        `INSERT INTO dc_posts (id, title, body, slug, created_at, updated_at) VALUES ('p1', 'A post', 'abc', 'p1', '2026-11-06 00:00:00', '2026-11-06 00:00:00')`
+        `INSERT INTO dc_posts (id, title, body, slug, created_at, updated_at) VALUES ('p1', 'A post', 'zz#q', 'p1', '2026-11-06 00:00:00', '2026-11-06 00:00:00')`
       );
       const before = {
         files: migrationFiles(),
@@ -375,7 +375,7 @@ describe.each(getConfiguredTestDialects())(
         },
       });
       expect(JSON.stringify(refused)).toContain("id p1");
-      expect(JSON.stringify(refused)).not.toContain("abc");
+      expect(JSON.stringify(refused)).not.toContain("zz#q");
       expect({
         files: migrationFiles(),
         snapshots: snapshotFiles(),
@@ -1001,6 +1001,37 @@ describe.each(getConfiguredTestDialects())(
       await freshDatabase();
       await replayed(dialect === "mysql");
       expect(await nullable("subtitle")).toBe(false);
+    });
+
+    // A row fill gives a Single's one row a field's default. A collection holds any number of rows,
+    // which only the person's own answer settles, so a save of a collection carrying one is
+    // refused whoever passes it, and nothing is written.
+    it("refuses a row fill on a collection's save, writing nothing", async () => {
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("body")]),
+        change: "create",
+      });
+      const files = migrationFiles();
+      const written = definition();
+
+      await expect(
+        writeCollectionSave(deps(), {
+          slug: "posts",
+          previous: posts([text("body")]),
+          entity: posts([text("body"), text("subtitle")]),
+          change: "update",
+          rowFills: [{ column: "subtitle", value: "Hello" }],
+        })
+      ).rejects.toMatchObject({
+        publicData: {
+          errors: [expect.objectContaining({ code: "ROW_FILL_NOT_SINGLE" })],
+        },
+      });
+      expect(migrationFiles()).toEqual(files);
+      expect(definition()).toBe(written);
+      expect(await columns()).not.toContain("subtitle");
     });
 
     it("deletes the rows that do not fit a field made required, here, and asks consent on replay", async () => {

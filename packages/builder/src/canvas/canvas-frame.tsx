@@ -69,6 +69,7 @@ import {
   PreviewWidthEdges,
   type PreviewWidthControl,
 } from "./canvas-preview-width-edges";
+import { EMPTY_REGION_ATTRIBUTE } from "./canvas-regions";
 import {
   frameFillingRegion,
   frameFitScale,
@@ -1140,6 +1141,21 @@ const PAGE_CHROME_TOKENS: readonly {
     // reads only the editor's own names.
     selector: "[data-nx-list-shows]",
     tokens: ["--nx-builder-select", "--nx-builder-select-text"],
+  },
+  {
+    // The band where an area has no region holds the admin's words and
+    // buttons alone, so it takes the admin's scheme, colours and face.
+    selector: `[${EMPTY_REGION_ATTRIBUTE}]`,
+    tokens: [
+      "--nx-builder-scheme",
+      "--nx-builder-text",
+      "--nx-builder-text-muted",
+      "--nx-builder-surface-raised",
+      "--nx-builder-select",
+      "--nx-builder-select-text",
+      "--font-sans",
+      "--radius-sm",
+    ],
   },
   {
     // Its tag holds the admin's words alone, so it takes the admin's face.

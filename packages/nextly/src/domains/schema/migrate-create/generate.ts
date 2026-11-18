@@ -678,11 +678,14 @@ const columnKey = (table: string, column: string) => `${table}\u0000${column}`;
 /**
  * `operations` with each settled column left nullable — its creation made
  * nullable, its change to NOT NULL taken out — and the changes that make each
- * NOT NULL once its rows are settled.
+ * NOT NULL once its rows are settled, for the columns `desired` declares NOT
+ * NULL. A column filled for an optional field (a Single's row given the
+ * field's default) stays nullable after its fill, as its field declares it.
  */
 function settledColumns(
   operations: readonly Operation[],
-  resolutions: readonly ColumnResolution[]
+  resolutions: readonly ColumnResolution[],
+  desired: readonly TableSpec[]
 ): {
   operations: Operation[];
   tighten: Operation[];
@@ -710,7 +713,12 @@ function settledColumns(
     }
     return [op];
   });
-  const tighten = resolutions.map(
+  const required = (r: ColumnResolution) =>
+    desired
+      .find(table => table.name === r.tableName)
+      ?.columns.find(column => column.name === r.columnName)?.nullable ===
+    false;
+  const tighten = resolutions.filter(required).map(
     (r): Operation => ({
       type: "change_column_nullable",
       tableName: r.tableName,
@@ -1147,7 +1155,11 @@ export async function generateMigration(
   // leads to — the desired side for the UP, the previous side for the DOWN.
   // A column whose rows the person settled (`resolutions`) is created, or
   // kept, nullable; the fill or delete runs; then it is made NOT NULL.
-  const settled = settledColumns(operations, args.resolutions ?? []);
+  const settled = settledColumns(
+    operations,
+    args.resolutions ?? [],
+    desiredSnapshot.tables
+  );
   const sqlStatements = [
     ...generateStatements(
       settled.operations,

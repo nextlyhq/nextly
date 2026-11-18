@@ -4,7 +4,7 @@
  *
  * @module validation-bindings
  */
-import { isBindPath } from "./binding-rules";
+import { bindPathFits } from "./binding-rules";
 import {
   BINDING_SOURCES,
   type BlockNode,
@@ -112,12 +112,17 @@ export function validBindingShape(
     });
     return false;
   }
-  if (!isBindPath(bindPath)) {
+  // A binding following a setting names the setting's id, which is no field
+  // path; where it may stand is `settingBindingIssues`'s to say.
+  if (!bindPathFits(binding.source, bindPath)) {
     issues.push({
       path: pointer(bPath, "$bind"),
       code: "invalid-binding",
       severity: "error",
-      message: `Binding path "${describeValue(bindPath)}" must be a dot-joined field path (never an expression).`,
+      message:
+        binding.source === "setting"
+          ? `Binding "${describeValue(bindPath)}" must name one of the component's settings.`
+          : `Binding path "${describeValue(bindPath)}" must be a dot-joined field path (never an expression).`,
     });
   }
   const source: unknown = binding.source;
