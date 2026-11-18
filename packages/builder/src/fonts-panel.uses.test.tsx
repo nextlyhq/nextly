@@ -176,6 +176,49 @@ describe("where a font is used", () => {
     expect(onOpenTokens).toHaveBeenCalledTimes(1);
   });
 
+  it("counts a page using two of its variables once, where the host counts them together", async () => {
+    const usageTogether = vi.fn(
+      async (groups: readonly (readonly string[])[]) =>
+        groups.map(() => ({
+          documents: 10,
+          byKind: { pages: 10, components: 0, patterns: 0, layouts: 0 },
+          complete: true,
+        }))
+    );
+    panel({
+      usage: {
+        ...access({
+          "font.display": reach(9, ["card"]),
+          "font.quote": reach(2),
+        }),
+        usageTogether,
+      },
+    });
+    const open = await details("Lora");
+    // Ten documents between them, and the shared style: not 9 + 2 + 1.
+    expect(await within(open).findByText("Used in 11 places")).toBeTruthy();
+    expect(usageTogether).toHaveBeenCalledWith(
+      [["font.display", "font.quote"]],
+      expect.anything()
+    );
+  });
+
+  it("adds the variables' documents up where the host's count together fails", async () => {
+    panel({
+      usage: {
+        ...access({
+          "font.display": reach(9, ["card"]),
+          "font.quote": reach(2),
+        }),
+        usageTogether: async () => {
+          throw new Error("offline");
+        },
+      },
+    });
+    const open = await details("Lora");
+    expect(await within(open).findByText("Used in 12 places")).toBeTruthy();
+  });
+
   it("counts the places that use the Body font's own variable", async () => {
     panel({
       tokens: withFontRole(TOKENS, "body", '"Inter", sans-serif'),

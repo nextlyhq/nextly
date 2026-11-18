@@ -33,8 +33,8 @@ import {
   withRoleSnapshot,
   type FontRole,
 } from "./site-font-roles-model";
+import { useReachTogether } from "./variable-together-reads";
 import {
-  combinedReach,
   variableRemoval,
   variableStatus,
   type VariableReach,
@@ -81,16 +81,18 @@ export function useFamiliesUses(
     [byKey]
   );
   const reads = useVariableUsage(usage, identities);
+  const groups = React.useMemo(
+    () => [...byKey.values()].map(uses => uses.counted),
+    [byKey]
+  );
+  // A page naming two of a font's variables is one place.
+  const together = useReachTogether(usage, groups, reads.values);
   return (key: string): FamilyUsesHere => {
     const uses = byKey.get(key);
     if (uses === undefined) return UNUSED;
     // Every variable naming it counts, a role's own included.
     const reach =
-      uses.counted.length === 0
-        ? undefined
-        : combinedReach(
-            uses.counted.map(identity => reads.values.get(identity))
-          );
+      uses.counted.length === 0 ? undefined : together(uses.counted);
     return { uses, reach };
   };
 }
