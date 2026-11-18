@@ -181,8 +181,15 @@ export { useModalKeyboardHold } from "./shell/modal-keyboard-hold";
 export type { CanvasProps } from "./canvas/canvas";
 // The regions of a page's layout around the page on the canvas, and which one
 // is selected.
-export type { CanvasRegion } from "./canvas/canvas-regions";
-export { REGION_ATTRIBUTE } from "./canvas/canvas-regions";
+export type {
+  CanvasRegion,
+  EmptyRegionAnchor,
+  EmptyRegionBandProps,
+} from "./canvas/canvas-regions";
+export {
+  EMPTY_REGION_ATTRIBUTE,
+  REGION_ATTRIBUTE,
+} from "./canvas/canvas-regions";
 export {
   useRegionSelection,
   type RegionSelection,
