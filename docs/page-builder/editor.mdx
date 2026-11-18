@@ -169,6 +169,8 @@ saving or publishing either.
 A plugin's check runs on the server, as the person editing, so it can read what the page
 stores. Where it judges the saved page rather than your unsaved changes, its items follow
 your last save: the list asks again after each save, and each time Page settings closes.
+The [SEO plugin](/docs/plugins/seo#in-the-page-builder) adds its problem list's items for the
+page this way, under **Search**.
 
 The types come from `@nextlyhq/plugin-sdk/blocks`. Register a **page check provider** from
 your plugin's `init`, through the page builder's `pageChecks` service:
@@ -758,12 +760,12 @@ with a field for the link. Paste one and it is stored at once; type one and pres
 
 The Embed knows four providers, and sizes itself for each when its link is pasted:
 
-| Provider | Links it knows | Size it takes |
-| --- | --- | --- |
-| YouTube | a video's page, a `youtu.be` share link, a Short, a live stream, a player link | 16:9, or 9:16 for a Short |
-| Vimeo | a video's page, an unlisted video's link, a player link | 16:9 |
-| Spotify | a track, album, playlist, episode, show or artist | Spotify's own player height |
-| Google Maps | the link in Maps' **Share → Embed a map** code | 4:3 |
+| Provider    | Links it knows                                                                 | Size it takes               |
+| ----------- | ------------------------------------------------------------------------------ | --------------------------- |
+| YouTube     | a video's page, a `youtu.be` share link, a Short, a live stream, a player link | 16:9, or 9:16 for a Short   |
+| Vimeo       | a video's page, an unlisted video's link, a player link                        | 16:9                        |
+| Spotify     | a track, album, playlist, episode, show or artist                              | Spotify's own player height |
+| Google Maps | the link in Maps' **Share → Embed a map** code                                 | 4:3                         |
 
 The size is written as the block's own proportion (or height), in **Style**, so you can
 change it like any other. Under **Link**, the inspector says what it found: **YouTube
