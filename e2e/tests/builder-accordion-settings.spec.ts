@@ -2,18 +2,20 @@
  * An Accordion's Titles as, Icon and Position, in the real editor and on the
  * published page.
  *
- * - On the PUBLISHED page a new accordion draws each title in its summary as
- *   the heading Titles as names, with a chevron after it and no browser
- *   marker; opening a section turns the chevron, from the keyboard too.
- * - In the editor, Icon's Plus and Position's Before draw a plus before the
- *   title on the canvas, a minus while the section is open, and are stored on
- *   the accordion; Titles as stores the level and draws it.
+ * - On the PUBLISHED page an accordion draws each title in its summary as
+ *   the heading Titles as names, with a plus after it and no browser
+ *   marker; opening a section turns the plus to a minus, from the keyboard
+ *   too.
+ * - In the editor, Content's Icon (Chevron) and Style's Icon position
+ *   (Before) draw a chevron before the title on the canvas, turned while the
+ *   section is open, and are stored on the accordion; Titles as stores the
+ *   level and draws it.
  *
  * @module tests/builder-accordion-settings.spec
  */
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
-import { pressSave } from "./canvas/editor-driver";
+import { pressSave, selection } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { canvasFrame } from "./support/canvas-frame";
 import { storedPageNodes } from "./support/stored-page";
@@ -90,13 +92,10 @@ async function openAccordion(page: Page, id: string, tab: string) {
     .locator(`.nx-canvas [data-nx-node="${SECTION}"]`)
     .first()
     .click({ position: { x: 6, y: 6 } });
-  await expect(page.locator("[data-block-card]")).toContainText(
-    "Accordion item"
-  );
+  await expect.poll(() => selection(page)).toEqual([SECTION]);
+  await expect(page.locator("[data-block-card]")).toContainText("Question");
   await page.keyboard.press("Escape");
-  await expect(page.locator("[data-block-card]")).not.toContainText(
-    "Accordion item"
-  );
+  await expect.poll(() => selection(page)).toEqual([ACCORDION]);
   await expect(page.locator("[data-block-card]")).toContainText("Accordion");
   await page.getByRole("tab", { name: tab }).click();
 }
@@ -104,7 +103,7 @@ async function openAccordion(page: Page, id: string, tab: string) {
 test.describe("an Accordion's titles and icon", () => {
   test.describe.configure({ timeout: 180_000 });
 
-  test("a published accordion draws heading titles and a chevron that turns", async ({
+  test("a published accordion draws heading titles and a plus that becomes a minus", async ({
     page,
   }) => {
     const { slug } = await createPage(
@@ -137,26 +136,42 @@ test.describe("an Accordion's titles and icon", () => {
     expect(row.iconAfter).toBe(true);
     const icon = summary.locator(ICON);
     const closed = await icon.evaluate(iconLook);
-    expect(closed.mask).toContain("data:image/svg+xml");
-    expect(closed.transform).toBe("none");
-    // Opened from the keyboard, as the browser's own toggle is.
+    expect(decodeURIComponent(closed.mask)).toContain("M8 3.5v9");
+    // Opened from the keyboard, as the browser's own toggle is: the minus,
+    // the upright stroke gone.
     await summary.focus();
     await page.keyboard.press("Enter");
     await expect
-      .poll(async () => (await icon.evaluate(iconLook)).transform)
-      .toMatch(/^matrix\(-1, /);
+      .poll(async () =>
+        decodeURIComponent((await icon.evaluate(iconLook)).mask)
+      )
+      .not.toContain("M8 3.5v9");
+    expect(decodeURIComponent((await icon.evaluate(iconLook)).mask)).toContain(
+      "M3.5 8h9"
+    );
   });
 
-  test("Plus before the title, and Titles as, chosen in the editor", async ({
+  test("Chevron before the title, and Titles as, chosen in the editor", async ({
     page,
   }) => {
     const { id } = await createPage(page.request, {}, "draft");
-    await openAccordion(page, id, "Style");
+    // The icon is chosen in Content, its position in Style.
+    await openAccordion(page, id, "Content");
+    const iconSection = page
+      .getByRole("tabpanel", { name: "Content" })
+      .getByRole("button", { name: /^Icon/ });
+    if ((await iconSection.getAttribute("aria-expanded")) !== "true") {
+      await iconSection.click();
+    }
+    await page
+      .getByRole("radiogroup", { name: "Icon" })
+      .getByRole("radio", { name: "Chevron" })
+      .click();
+    await page.getByRole("tab", { name: "Style" }).click();
     const heading = page.getByRole("button", { name: /^Icon/ });
     if ((await heading.getAttribute("aria-expanded")) !== "true") {
       await heading.click();
     }
-    await page.getByRole("radio", { name: "Plus" }).click();
     await page.getByRole("button", { name: "Before", exact: true }).click();
     const frame = canvasFrame(page);
     const summary = frame
@@ -175,19 +190,20 @@ test.describe("an Accordion's titles and icon", () => {
       )
       .toBe(true);
     // The click that selected the section toggles it as a browser does, so
-    // the glyph is read against the state the section is in: a plus while
-    // closed, a minus (the bar alone) while open.
-    const drawn = await summary.evaluate(element => ({
-      open: (element.parentElement as HTMLDetailsElement | null)?.open === true,
-      mask: decodeURIComponent(
-        getComputedStyle(
-          element.querySelector(".nx-pb-disclosure-icon") ?? element
-        ).maskImage
-      ),
-    }));
-    expect(drawn.mask).toContain("M3.5 8h9");
-    if (drawn.open) expect(drawn.mask).not.toContain("M8 3.5v9");
-    else expect(drawn.mask).toContain("M8 3.5v9");
+    // the glyph is read against the state the section is in: the chevron,
+    // turned while open.
+    const drawn = await summary.evaluate(element => {
+      const glyph = element.querySelector(".nx-pb-disclosure-icon") ?? element;
+      return {
+        open:
+          (element.parentElement as HTMLDetailsElement | null)?.open === true,
+        mask: decodeURIComponent(getComputedStyle(glyph).maskImage),
+        transform: getComputedStyle(glyph).transform,
+      };
+    });
+    expect(drawn.mask).toContain("m4 6 4 4 4-4");
+    if (drawn.open) expect(drawn.transform).toMatch(/^matrix\(-1, /);
+    else expect(drawn.transform).toBe("none");
 
     await page.getByRole("tab", { name: "Content" }).click();
     await page.getByRole("combobox", { name: "Titles as" }).click();
@@ -203,7 +219,7 @@ test.describe("an Accordion's titles and icon", () => {
       );
     await expect.poll(storedAccordion).toContain('"titlesAs":"h2"');
     const stored = await storedAccordion();
-    expect(stored).toContain('"disclosureIcon":"plus"');
+    expect(stored).toContain('"disclosureIcon":"chevron"');
     expect(stored).toContain('"disclosurePosition":"before"');
   });
 });

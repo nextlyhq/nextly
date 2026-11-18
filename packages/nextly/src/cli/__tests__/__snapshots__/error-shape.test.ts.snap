@@ -1069,6 +1069,20 @@ exports[`each code, as a command ends with it > MIGRATION_TAMPERED 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/migration-tampered  (MIGRATION_TAMPERED)"
 `;
 
+exports[`each code, as a command ends with it > MIGRATIONS_WRITER_BUSY 1`] = `
+"✗ \`migrate:create\` wrote nothing: another run is still writing this project's migration files after waiting 60 s.
+  Why:  \`migrate:baseline\` holds it (process 4242 on build-01, started 75 s ago at 2026-10-29T10:00:45Z). If that process has stopped, the lock lapses in 45 s, at 2026-10-29T10:02:45Z, with nobody clearing it by hand.
+  Next: Run it again once that finishes.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrations-writer-busy  (MIGRATIONS_WRITER_BUSY)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATIONS_WRITER_OVERTAKEN 1`] = `
+"✗ \`migrate:create\` wrote no migration and no snapshot: it lost its hold on this project's migration files.
+  Why:  It stopped for longer than its lease, so another run may have written a migration. \`migrate:baseline\` has held it since.
+  Next: Run it again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrations-writer-overtaken  (MIGRATIONS_WRITER_OVERTAKEN)"
+`;
+
 exports[`each code, as a command ends with it > MISSING_MIGRATION 1`] = `
 "✗ The snapshot \`20261020_120000_add_posts.snapshot.json\` exists but \`20261020_120000_add_posts.sql\` does not.
   Why:  A snapshot is written beside the migration it describes, and this one's migration was deleted or never committed.

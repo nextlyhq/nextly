@@ -34,16 +34,32 @@ function emptyManifest(): UiSchemaManifest {
   return uiSchemaManifest.parse({});
 }
 
+/** The manifest alone, for a caller that does not ask whether the file exists. */
 export async function loadUiSchema(
   args: LoadUiSchemaArgs
 ): Promise<UiSchemaManifest> {
+  return (await readUiSchema(args)).manifest;
+}
+
+/**
+ * The manifest and whether its file exists, from one read. An empty manifest and an absent file
+ * parse alike, so a caller that treats them differently asks here rather than check the file a
+ * second time, which could see it in another state.
+ */
+export async function readUiSchema(args: LoadUiSchemaArgs): Promise<{
+  manifest: UiSchemaManifest;
+  /** False where the file is absent, and `manifest` is the empty one standing in for it. */
+  exists: boolean;
+}> {
   const path = resolve(args.projectRoot, args.uiSchemaFile);
 
   let raw: string;
   try {
     raw = await readFile(path, "utf-8");
   } catch (err) {
-    if ((err as { code?: string }).code === "ENOENT") return emptyManifest();
+    if ((err as { code?: string }).code === "ENOENT") {
+      return { manifest: emptyManifest(), exists: false };
+    }
     throw new NextlyError({
       code: "NEXTLY_UI_SCHEMA_INVALID",
       publicMessage: `Failed to read ui-schema file at ${path}: ${err instanceof Error ? err.message : String(err)}`,
@@ -74,5 +90,8 @@ export async function loadUiSchema(
   // field type's options, so a manifest loaded without this would hand every
   // later write a declaration already missing them — and rewriting the file for
   // one entity would quietly drop the options of all the others.
-  return restorePluginFieldOptions(result.data, json);
+  return {
+    manifest: restorePluginFieldOptions(result.data, json),
+    exists: true,
+  };
 }
