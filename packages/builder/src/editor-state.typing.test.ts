@@ -273,3 +273,74 @@ describe("a save while a field is still being typed in", () => {
     expect(label(result.current.document)).toBe("AB");
   });
 });
+
+describe("a run whose later write changes more than its first", () => {
+  it("puts every property back on undo, the ones first changed later too", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: page(text("A")) })
+    );
+    const run = {};
+    act(() => {
+      joinTyping(run, () => result.current.apply(write("AB")));
+    });
+    // A later keystroke whose write also sets a style, as a recognised
+    // embed link does.
+    act(() => {
+      joinTyping(run, () =>
+        result.current.apply({
+          kind: "update",
+          id: "t",
+          patch: {
+            props: { label: "ABC" },
+            styles: { base: { base: { color: "red" } } },
+          },
+        })
+      );
+    });
+    expect(result.current.undoDepth).toBe(1);
+    act(() => {
+      void result.current.undo();
+    });
+    expect(label(result.current.document)).toBe("A");
+    expect(result.current.document.nodes[0]?.styles).toBeUndefined();
+    act(() => {
+      void result.current.redo();
+    });
+    expect(label(result.current.document)).toBe("ABC");
+    expect(
+      (
+        result.current.document.nodes[0]?.styles as {
+          base?: { base?: { color?: unknown } };
+        }
+      )?.base?.base?.color
+    ).toBe("red");
+  });
+
+  it("cancelling the run takes back the properties a later write first changed", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: page(text("A")) })
+    );
+    const run = {};
+    act(() => {
+      joinTyping(run, () => result.current.apply(write("AB")));
+    });
+    act(() => {
+      joinTyping(run, () =>
+        result.current.apply({
+          kind: "update",
+          id: "t",
+          patch: {
+            props: { label: "ABC" },
+            styles: { base: { base: { color: "red" } } },
+          },
+        })
+      );
+    });
+    act(() => {
+      result.current.cancelTyping(run);
+    });
+    expect(label(result.current.document)).toBe("A");
+    expect(result.current.document.nodes[0]?.styles).toBeUndefined();
+    expect(result.current.undoDepth).toBe(0);
+  });
+});

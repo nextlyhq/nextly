@@ -137,7 +137,21 @@ export function useHistoryStacks(): {
       // A later write of a run of typing keeps the run's one step, whose
       // inverse puts back what was there before the author started.
       const run = into === "new" ? typingRunNow() : null;
-      if (joinsTyping(typing.current, undoStack.current.at(-1), run)) return;
+      const held = typing.current;
+      if (held !== null && joinsTyping(held, undoStack.current.at(-1), run)) {
+        // A later write may change what the first one did not, as a
+        // recognised embed link sets a style: its inverse joins the step's,
+        // applied first, so undo puts back every property the run touched.
+        if (entry.kind === "ops" && held.entry.kind === "ops") {
+          const joined: HistoryEntry = {
+            kind: "ops",
+            ops: [...entry.ops, ...held.entry.ops],
+          };
+          undoStack.current[undoStack.current.length - 1] = joined;
+          typing.current = { ...held, entry: joined };
+        }
+        return;
+      }
       // Read before this push changes them; the redo stack is replaced, never
       // emptied in place, so the array kept here stays as it was.
       const redoBefore = redoStack.current;
