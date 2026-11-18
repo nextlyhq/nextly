@@ -132,6 +132,12 @@ Under **Accessibility**, the checks find:
   more", and an icon that links somewhere with no **Screen reader label**. A button's
   Screen reader label counts as its words.
 - **Form fields with no label**, and **embeds with no title** for screen readers.
+- **Text with too little contrast** against its background: below 4.5:1, or 3:1 for large
+  text (a Heading 1 or 2, or text you sized 24px or more), with the ratio. Only colours you chose on the block or a container around it
+  are judged, and where the site has dark values that change them, dark mode too. Text
+  over a background image or gradient is listed as **Contrast not checked**, since no one
+  ratio can be measured there, and a block whose colours come from a shared style isn't
+  judged.
 
 Checks never stop you saving or publishing. Automatic checks catch common problems; they
 don't replace an accessibility review.
@@ -684,6 +690,52 @@ picture on the canvas or in **Layers** to change its place. With a picture selec
 inspector names it by its place, **Picture 2 · in Gallery**, and **← Back to the
 gallery** selects the gallery.
 
+## Embedding a video or a map
+
+A new Embed starts empty: on the canvas it reads **Paste a YouTube, Vimeo or other link**,
+with a field for the link. Paste one and it is stored at once; type one and press
+**Embed** or <kbd>Enter</kbd>. The link is kept exactly as you pasted it.
+
+The Embed knows four providers, and sizes itself for each when its link is pasted:
+
+| Provider | Links it knows | Size it takes |
+| --- | --- | --- |
+| YouTube | a video's page, a `youtu.be` share link, a Short, a live stream, a player link | 16:9, or 9:16 for a Short |
+| Vimeo | a video's page, an unlisted video's link, a player link | 16:9 |
+| Spotify | a track, album, playlist, episode, show or artist | Spotify's own player height |
+| Google Maps | the link in Maps' **Share → Embed a map** code | 4:3 |
+
+The size is written as the block's own proportion (or height), in **Style**, so you can
+change it like any other. Under **Link**, the inspector says what it found: **YouTube
+detected. Size set from the video.** Any other link is **Shown as a plain frame**: a
+sandboxed frame under your site's frame rules, loaded with the page.
+
+### Nothing loads from the provider until play
+
+For a provider's link, **Load** chooses when its player loads:
+
+- **When played** (a new Embed's choice): the page shows a poster, a frame with the
+  title, the provider's name and a play button named **Play:** and the title. Nothing is
+  requested from the provider (no player, no cookies, no picture) until a visitor
+  presses play, and the poster needs no JavaScript. Pressing play loads the player in
+  place and starts it.
+- **Right away**: the player loads with the page, as the visitor scrolls near it.
+
+An Embed added before **Load** existed reads as **Right away**.
+
+**Privacy mode**, on by default, uses YouTube's no-cookie player and asks Vimeo's player
+not to track. Spotify and Google Maps have no such player, so the setting isn't shown for
+them.
+
+The poster is drawn on your site's surface colour, in light and dark. To show a picture
+instead, choose one under **Poster** from the media library, or press **Use the video's
+thumbnail** (YouTube and Vimeo): the video's picture is copied into your media library
+once, and pressing it again finds that copy. Either way the picture comes from your own
+site, never from the provider.
+
+**Screen reader label** names the frame for screen readers. Left empty, it says what the
+link is, such as **YouTube video**.
+
 ## Bold, italic and links in a Text
 
 A Text is one paragraph of words, edited where it is shown: double-click it on the
@@ -1194,6 +1246,13 @@ The chip's menu has:
   different entry on every row.
 - **Unbind** keeps what visitors saw in the prop, and a note under it says what was
   kept and why. A field visitors can't read keeps the fallback instead.
+
+**A component's settings.** A component placed on the page has the same bind button
+on its text, link and image settings, in the placement's panel. Placed inside a
+Collection list, it lists the list's entries first, so a card's **Headline** can show
+each post's title, every row its own, on the canvas and on the published page. The
+binding belongs to this placement only, and fills the component's block the setting
+feeds. Unbinding keeps the value the placement already had for the setting.
 
 **Format.** A date or a number shows as text only through a format, so a text prop bound
 to one has a **Format** under its fallback. The picker names the format a date or a number

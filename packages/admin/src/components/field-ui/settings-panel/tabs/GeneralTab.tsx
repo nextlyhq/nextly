@@ -234,9 +234,13 @@ function LabelAndName({
   // System fields (title, slug) keep their name whatever the surface says.
   const nameDisabled =
     readOnly || field.isSystem === true || nameFixedReason !== undefined;
-  // A name the field cannot change is not the person's to fix, so it is not judged here. Every
-  // other name is, typed or followed from the label, before the input is left.
-  const problem = nameDisabled || !checkName ? null : checkName(field.name);
+  // A read-only or built-in field's name is not judged here. Every other name is, typed, followed
+  // from the label, or fixed by the surface: a fixed name the save will refuse where it now sits
+  // (its container renamed, say) still says why, which the surface's check alone decides.
+  const problem =
+    readOnly || field.isSystem === true || !checkName
+      ? null
+      : checkName(field.name);
   const describedBy = idList([
     nameHelpId,
     problem !== null && problemId,

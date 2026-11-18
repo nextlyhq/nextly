@@ -20,6 +20,7 @@ import {
   sharedStyleRows,
   sharedStyleSearchText,
   sharedStyleSlug,
+  sharedStylesOnly,
   SHARED_STYLE_COUNTING,
   SHARED_STYLE_NOT_WHOLE_REMOVAL,
   type SharedStyleReach,
@@ -56,6 +57,33 @@ const reachOf = (
     complete,
   };
 };
+
+describe("a text style beside the shared styles", () => {
+  const eyebrow: NamedClass = {
+    id: "t-eyebrow",
+    slug: "eyebrow",
+    label: "Eyebrow",
+    orderIndex: 2,
+    role: "text",
+    styles: { base: { [BASE_BREAKPOINT]: { fontSize: "12px" } } },
+  };
+
+  it("is a row that says it is a text style, and a shared style's is not", () => {
+    const rows = sharedStyleRows([card, eyebrow], new Set());
+    expect(rows.find(row => row.id === "t-eyebrow")).toMatchObject({
+      name: "Eyebrow",
+      className: ".nx-t-eyebrow",
+      text: true,
+    });
+    expect(rows.find(row => row.id === "c-card")).not.toHaveProperty("text");
+  });
+
+  it("is not listed among the shared styles an author applies", () => {
+    expect(
+      sharedStylesOnly([card, eyebrow, hero]).map(each => each.id)
+    ).toEqual(["c-card", "c-hero"]);
+  });
+});
 
 describe("the rows", () => {
   it("names a style by its label, an older one by its slug, and the class the page carries", () => {

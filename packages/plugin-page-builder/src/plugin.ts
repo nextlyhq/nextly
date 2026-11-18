@@ -29,6 +29,7 @@ import {
   installDefaultLayout,
   seedDefaultLayoutAtStart,
 } from "./default-layout/install";
+import { embedThumbnailRoute } from "./embed-thumbnail/route";
 import { blocksFieldType } from "./fields/blocksField";
 import {
   createFormProviders,
@@ -515,6 +516,9 @@ export const pageBuilder = (
         ...siteStyle.sharedStyles,
         ...siteStyle.variables,
         startup.builderStartup,
+        // The Embed's "Use the video's thumbnail": copies a video's picture
+        // from its provider's fixed host into the media library.
+        embedThumbnailRoute(),
         // The one public route every form on the site posts to.
         formReceiverRoute({
           providers: formProviders,

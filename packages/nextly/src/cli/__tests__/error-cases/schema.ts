@@ -140,7 +140,7 @@ export const SCHEMA_CASES = {
     new NextlyError({
       code: "NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED",
       publicMessage:
-        "This save also converts body from text to varchar(255), from an earlier Nextly version. Review the save and confirm the conversion to write it.",
+        "dc_posts was made by an earlier Nextly version. This save brings it up to date: changes body from text to varchar(255). Review the save and confirm the conversion to write it.",
       logContext: { columns: ["body"] },
     }),
 } satisfies ErrorCases;

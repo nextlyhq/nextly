@@ -55,7 +55,13 @@ import { dryRunReport } from "../run-report";
 import { TableWaits } from "../table-wait";
 import type { RepairEntity } from "../types";
 
-import { collection, f, tableTools } from "./apply-fixture";
+import {
+  AUTHOR,
+  collection,
+  f,
+  legacyFields,
+  tableTools,
+} from "./apply-fixture";
 
 const PREFIX = `rl${randomBytes(3).toString("hex")}`;
 const HELD = `dc_${PREFIX}_held`;
@@ -85,12 +91,6 @@ const LINKS = f({
   name: "links",
   type: "repeater",
   fields: [{ name: "url", type: "text" }],
-});
-const AUTHOR = f({
-  name: "author",
-  type: "relationship",
-  relationTo: "users",
-  required: true,
 });
 const PRICE = f({
   name: "price",
@@ -217,7 +217,7 @@ describe.each(LOCK_DIALECTS)(
 
     async function createTables() {
       for (const table of [HELD, OTHER]) {
-        await tools.createTable(table, fieldsFor(dialect));
+        await tools.createTable(table, legacyFields(fieldsFor(dialect)));
         if (dialect !== "sqlite") {
           await tools.retype(table, "links", "text");
           await tools.retype(table, "price", "decimal(10,2)");
