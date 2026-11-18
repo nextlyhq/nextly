@@ -72,6 +72,17 @@ describe("a many-to-many stored with options.target, saved again in the Builder 
         fields: [{ name: "label", type: "text" }],
       }
     );
+    // Another collection the person may pick instead.
+    await dispatchCollections(
+      {} as ServiceContainer,
+      "createCollection",
+      {},
+      {
+        name: "lm_other",
+        label: "Other",
+        fields: [{ name: "label", type: "text" }],
+      }
+    );
     await seedBuilderCollection(adapter, {
       slug: "lm_posts",
       fields: [{ name: "body", type: "text" }, LEGACY_TAGS],
@@ -218,14 +229,32 @@ describe("a many-to-many stored with options.target, saved again in the Builder 
   });
 
   // Another collection picked: the field is still a many-to-many, now naming the other collection.
-  it("answers a different collection picked", async () => {
-    const { before, after } = await resave({
+  // Its links named entries of the collection it no longer links to, so the table holding them
+  // goes, and an empty one for the other collection takes its place. (The review before the save
+  // does not yet say so: that is the next change's.)
+  it("becomes a many-to-many of the other collection when another is picked, its old links dropped", async () => {
+    const { after } = await resave({
       ...SENT_TAGS,
       relationTo: "lm_other",
       options: { target: "lm_other", relationType: "manyToMany" },
     });
-    const report = JSON.stringify({ before, after }, null, 2);
-    expect(after.outcome, report).toBe("__measure__");
+    const report = JSON.stringify(after, null, 2);
+    expect(after.outcome, report).toBe("accepted");
+    expect(after.stored, report).toMatchObject({
+      relationTo: "lm_other",
+      options: { target: "lm_other", relationType: "manyToMany" },
+    });
+    expect(after.junction, report).toEqual({ exists: false, links: [] });
+    const otherJunction = new DynamicCollectionSchemaService(
+      undefined,
+      "sqlite"
+    ).junctionTableNameFor("dc_lm_posts", {
+      ...LEGACY_TAGS,
+      relationTo: "lm_other",
+      options: { target: "lm_other", relationType: "manyToMany" },
+    } as FieldDefinition);
+    expect(await t.adapter.tableExists(otherJunction), report).toBe(true);
+    expect(await query(`SELECT * FROM "${otherJunction}"`)).toEqual([]);
   });
 });
 
