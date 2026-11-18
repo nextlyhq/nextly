@@ -56,8 +56,9 @@ function Host({ editor }: { editor: EditorState }): React.JSX.Element {
   );
 }
 
-const question = () =>
-  screen.queryByRole("group", { name: "Show entries from", hidden: true });
+// The plate is hidden until the canvas lays it out, which jsdom never does,
+// so the question and its buttons are found by their words.
+const question = () => screen.queryByText("Show entries from");
 
 describe("a list with no source", () => {
   it("asks which entries it shows whenever it is selected, and Skip puts that away", async () => {
@@ -66,7 +67,7 @@ describe("a list with no source", () => {
       await Promise.resolve();
     });
     expect(question()).not.toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Skip", hidden: true }));
+    fireEvent.click(screen.getByText("Skip"));
     expect(question()).toBeNull();
   });
 
@@ -88,7 +89,7 @@ describe("a list with no source", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    fireEvent.click(screen.getByRole("button", { name: "Skip", hidden: true }));
+    fireEvent.click(screen.getByText("Skip"));
     expect(skip).toHaveBeenCalledTimes(1);
     // The editor ends its step; the list is still selected with no source.
     rerender(<Host editor={editorOf(document)} />);

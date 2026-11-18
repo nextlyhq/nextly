@@ -5,6 +5,7 @@
  */
 import {
   DOCUMENT_FORMAT_VERSION,
+  toOneParagraph,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
@@ -56,17 +57,7 @@ const document: BlockDocument = {
             id: "none",
             type: "core/text",
             version: 2,
-            props: {
-              text: {
-                type: "root",
-                children: [
-                  {
-                    type: "paragraph",
-                    children: [{ type: "text", text: "Nothing here yet." }],
-                  },
-                ],
-              },
-            },
+            props: { text: toOneParagraph("Nothing here yet.").value },
           },
         ],
       },
@@ -81,6 +72,8 @@ async function drawEmpty(diagnostics: boolean): Promise<string> {
       document={document}
       blocks={resolver}
       siteStyles={false}
+      // Bindings resolved, as a page with bound blocks is drawn.
+      bindings={{}}
       context={createStandaloneContext({
         data: { find: () => Promise.resolve({ items: [], total: 0 }) },
         diagnostics,

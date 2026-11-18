@@ -528,8 +528,18 @@ export async function renderCollectionLoop({
     itemSource: collection,
     itemQuery: undefined,
   });
+  // Where an author is looking at a collection with nothing to show, the
+  // item is drawn with sample entries instead, read ahead as entries are so
+  // its bindings fill from them. A failed read keeps its empty state.
+  const samples =
+    outcome.items.length === 0 && !outcome.failed
+      ? sampleItems(ctx, collection)
+      : undefined;
   const read = await withReadAhead(
-    { outcome, itemContext: contextOf },
+    {
+      outcome: samples === undefined ? outcome : { ...outcome, items: samples },
+      itemContext: contextOf,
+    },
     node,
     ctx,
     collection
@@ -550,9 +560,7 @@ export async function renderCollectionLoop({
       renderSlot,
       ctx,
       nodeId: node.id,
-      // Where an author is looking at a collection with nothing to show,
-      // the item is drawn with sample values instead, from its fields.
-      samples: sampleItems(ctx, collection),
+      sampled: samples !== undefined,
     },
     pages
   );
@@ -625,50 +633,18 @@ function drawList(
   > & {
     readonly nodeId: string;
     readonly Tag: ReturnType<typeof rootTagOf>;
-    /** Sample entries to draw, where an author sees a list with none. */
-    readonly samples?: readonly Record<string, unknown>[] | undefined;
+    /** The entries are samples, drawn for an author over an empty read. */
+    readonly sampled?: boolean;
   },
   pages: ReactElement | null = null
 ): ReactElement {
   const { outcome, itemContext } = read;
   const { className, Tag, renderSlot, ctx } = args;
-  // A read that matched nothing, while an author is looking: the item drawn
-  // with sample values, marked so the editor greys it and tags it "Sample".
-  // A failed read shows its empty state and its note, as it always has.
-  if (
-    outcome.items.length === 0 &&
-    !outcome.failed &&
-    args.samples !== undefined
-  ) {
-    return (
-      <Tag className={className} {...tagMarks(ctx, args.nodeId)}>
-        {args.samples.map((item, index) => (
-          <div
-            key={String(item.id)}
-            className={ENTRY_CLASS}
-            {...{ [LIST_SAMPLE_ATTRIBUTE]: "" }}
-          >
-            {renderSlot(
-              "children",
-              withListEntry(
-                {
-                  ...itemContext(item),
-                  itemPosition:
-                    ctx.itemPosition === undefined
-                      ? `sample-${String(index)}`
-                      : `${ctx.itemPosition}-sample-${String(index)}`,
-                },
-                args.nodeId
-              )
-            )}
-          </div>
-        ))}
-      </Tag>
-    );
-  }
   // How many entries this list drew, told to an editor that asks, so what
   // it says of the list is of what is drawn, never of a read made again.
-  reportShown(ctx, args.nodeId, outcome.items.length);
+  // Samples are no entries: the list drew none of the collection's.
+  const sampled = args.sampled === true;
+  reportShown(ctx, args.nodeId, sampled ? 0 : outcome.items.length);
   const note = diagnosticNote(outcome, ctx);
   const marks = {
     ...emptyMarks(
@@ -686,6 +662,8 @@ function drawList(
           <div
             key={listItemKey(item, index, read.rowKey)}
             className={ENTRY_CLASS}
+            // A sample, which the editor greys and tags "Sample".
+            {...(sampled ? { [LIST_SAMPLE_ATTRIBUTE]: "" } : {})}
           >
             {/* Drawn again per entry, with this entry on the context, so
                 anything inside the template reads its own values rather than
