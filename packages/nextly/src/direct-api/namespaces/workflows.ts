@@ -159,9 +159,7 @@ const CALL_OPTIONS: ReadonlySet<string> = new Set(
  *
  * @experimental
  */
-export function settingsChangeOf(
-  args: Readonly<Record<string, unknown>>
-): Record<string, unknown> {
+export function settingsChangeOf(args: object): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(args).filter(([key]) => !CALL_OPTIONS.has(key))
   );
