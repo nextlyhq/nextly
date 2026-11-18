@@ -182,7 +182,8 @@ test("a font variable is picked from the site's and the system's fonts, and a we
     const panel = page.getByRole("region", { name: "Design panel" });
     const editor = page.locator(".nx-vars-editor");
 
-    await panel.getByRole("button", { name: /^Heading/ }).click();
+    // The Heading variable's row, not the Headings font picker above it.
+    await panel.getByRole("button", { name: /^Heading, / }).click();
     // A picker, with no box to type a family into.
     await expect(editor.getByRole("textbox", { name: "Light" })).toHaveCount(0);
     await editor.getByRole("button", { name: /^Font, / }).click();
