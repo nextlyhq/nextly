@@ -404,4 +404,13 @@ describe("a set's settings", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
     expect(flows.remove).toHaveBeenCalled();
   });
+
+  it("names its open list from the trigger, and holds only options and groups in it", async () => {
+    render();
+    const trigger = screen.getByLabelText("Header");
+    await userEvent.click(trigger);
+    const list = screen.getByRole("listbox");
+    expect(trigger.getAttribute("aria-controls")).toBe(list.id);
+    expect(list.querySelector('[role="separator"]')).toBeNull();
+  });
 });

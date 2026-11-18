@@ -19,7 +19,6 @@ import {
   CommandGroup,
   CommandInput,
   CommandList,
-  CommandSeparator,
 } from "@nextlyhq/ui";
 import { useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 
@@ -34,6 +33,9 @@ import { useSetAreaChoices } from "./set-reads";
 
 /** The value of the "None" row, which names no component. */
 const NONE_VALUE = "none";
+
+/** A part of the list set apart from the one above it, as a rule would. */
+const PART_APART = "mt-1 border-t pt-1";
 
 /** More choices than this, and the menu offers a search above them. */
 const SEARCH_ABOVE = 10;
@@ -96,6 +98,7 @@ export function SetAreaPicker({
     listed.data !== undefined
   );
   const chosen = answer?.items.find(item => item.id === value);
+  const listId = `${id}-list`;
   const label = AREA_LABELS[area];
   const groups = useMemo(() => groupsOf(answer?.items ?? []), [answer]);
   const choose = (next: string) => {
@@ -108,7 +111,7 @@ export function SetAreaPicker({
       open={open}
       onOpenChange={setOpen}
       listRoot={listRoot}
-      trigger={{ id, disabled }}
+      trigger={{ id, disabled, controls: listId }}
       face={
         <>
           <span className="nx-pb-hf-picture" aria-hidden="true">
@@ -134,45 +137,51 @@ export function SetAreaPicker({
           <CommandInput placeholder={`Search ${area}s and components`} />
         ) : null}
         <CommandList
+          id={listId}
           label={`Components to use as the ${area}`}
           className="max-h-80 p-1"
         >
           <CommandEmpty>No component matches.</CommandEmpty>
-          <ChoiceRows
-            area={area}
-            rows={groups.marked}
-            value={value}
-            picture={picture}
-            onChoose={choose}
-          />
-          {groups.others.length === 0 ? null : (
-            <>
-              {groups.marked.length === 0 ? null : (
-                <CommandSeparator className="my-1" />
-              )}
-              <CommandGroup heading="Other components">
-                <ChoiceRows
-                  area={area}
-                  rows={groups.others}
-                  value={value}
-                  picture={picture}
-                  onChoose={choose}
-                />
-              </CommandGroup>
-            </>
+          {/* Groups, not separators, set the parts apart: a list's children
+              are options and groups of them. */}
+          {groups.marked.length === 0 ? null : (
+            <CommandGroup>
+              <ChoiceRows
+                area={area}
+                rows={groups.marked}
+                value={value}
+                picture={picture}
+                onChoose={choose}
+              />
+            </CommandGroup>
           )}
-          <CommandSeparator className="my-1" />
-          <OptionRow
-            option={{
-              value: NONE_VALUE,
-              label: "None",
-              note: `No ${area} in this set`,
-              picture: [],
-            }}
-            current={value === undefined}
-            picture={picture([])}
-            onSelect={() => choose(NONE_VALUE)}
-          />
+          {groups.others.length === 0 ? null : (
+            <CommandGroup
+              heading="Other components"
+              className={groups.marked.length === 0 ? undefined : PART_APART}
+            >
+              <ChoiceRows
+                area={area}
+                rows={groups.others}
+                value={value}
+                picture={picture}
+                onChoose={choose}
+              />
+            </CommandGroup>
+          )}
+          <CommandGroup className={PART_APART}>
+            <OptionRow
+              option={{
+                value: NONE_VALUE,
+                label: "None",
+                note: `No ${area} in this set`,
+                picture: [],
+              }}
+              current={value === undefined}
+              picture={picture([])}
+              onSelect={() => choose(NONE_VALUE)}
+            />
+          </CommandGroup>
         </CommandList>
         <ListNote area={label} answer={answer} failed={listed.error !== null} />
       </Command>
