@@ -295,16 +295,34 @@ async function outcomeOf(
   }
 }
 
+/** One change a stopped save's failure names: the field, what the save asked of it, and whether it applied. */
+interface NamedChange {
+  field: string;
+  change: "add" | "drop" | "rename" | "retype" | "settings";
+  applied: boolean;
+  /** A rename's old name. */
+  from?: string;
+}
+
 /**
- * The changes the failure names, each as applied or not, from a thrown `NextlyError` or the
- * error envelope a response carries.
+ * The changes the failure names, from a thrown `NextlyError`'s public data or the error envelope a
+ * response carries, each kept to what the report promises and ordered by field, so a change named
+ * twice, missing or extra fails the comparison; undefined where the failure names none.
  */
-function namedChanges(error: unknown): unknown {
-  if (NextlyError.is(error)) {
-    return (error.publicData as { changes?: unknown } | undefined)?.changes;
-  }
-  const envelope = error as { error?: { data?: { changes?: unknown } } };
-  return envelope.error?.data?.changes;
+function namedChanges(error: unknown): NamedChange[] | undefined {
+  const changes = NextlyError.is(error)
+    ? (error.publicData as { changes?: unknown } | undefined)?.changes
+    : (error as { error?: { data?: { changes?: unknown } } }).error?.data
+        ?.changes;
+  if (!Array.isArray(changes)) return undefined;
+  return (changes as NamedChange[])
+    .map(({ field, change, applied, from }) => ({
+      field,
+      change,
+      applied,
+      ...(from === undefined ? {} : { from }),
+    }))
+    .sort((a, b) => a.field.localeCompare(b.field));
 }
 
 /** Every file below `dir`, relative to it. */
@@ -509,12 +527,10 @@ describe.each(getConfiguredTestDialects())(
             expect.soft(await path.read(t)).toMatchObject({ heading: "Hello" });
           }
           // The failure names each change the save asked for, as applied or not.
-          expect(namedChanges(outcome.error), "the report").toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ field: "alpha", applied: true }),
-              expect.objectContaining({ field: "beta", applied: false }),
-            ])
-          );
+          expect(namedChanges(outcome.error), "the report").toEqual([
+            { field: "alpha", change: "add", applied: true },
+            { field: "beta", change: "add", applied: false },
+          ]);
 
           // `nextly migrate` finds nothing to run, and the next save adds the rest.
           await migrated(t);
@@ -585,12 +601,10 @@ describe.each(getConfiguredTestDialects())(
             expect.soft(entry).toMatchObject({ heading: "Hello" });
             expect.soft(entry).not.toHaveProperty("old_note");
           }
-          expect(namedChanges(outcome.error), "the report").toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ field: "old_note", applied: true }),
-              expect.objectContaining({ field: "beta", applied: false }),
-            ])
-          );
+          expect(namedChanges(outcome.error), "the report").toEqual([
+            { field: "beta", change: "add", applied: false },
+            { field: "old_note", change: "drop", applied: true },
+          ]);
 
           await expectReplayGives(path, live);
         },
@@ -653,10 +667,10 @@ describe.each(getConfiguredTestDialects())(
             expect.soft(entry).not.toHaveProperty(droppedName);
           }
           expect(namedChanges(outcome.error), "the report").toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ field: droppedName, applied: true }),
-              expect.objectContaining({ field: keptName, applied: false }),
-            ])
+            [
+              { field: droppedName, change: "drop", applied: true },
+              { field: keptName, change: "drop", applied: false },
+            ].sort((a, b) => a.field.localeCompare(b.field))
           );
 
           await expectReplayGives(path, live);
