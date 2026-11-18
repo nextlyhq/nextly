@@ -648,6 +648,77 @@ describe("what naming an entity's main table covers", () => {
   });
 });
 
+describe("the targets a refusal asks for", () => {
+  // `dc_posts` is a collection's main table; `owned` marks a deletion of the
+  // collection's, and `posts` is its slug.
+  const owned = (d: Deletion): Deletion =>
+    ({ ...d, owner: "dc_posts" }) as Deletion;
+  const ofPosts = { kind: "collection", slug: "posts" } as const;
+  const value = (deletions: Deletion[]) =>
+    consentToCover(deletions).match(/^--accept-data-loss=(\S+) /)?.[1];
+
+  it("names a deletion no entity owns by its own table, a column as its table and column", () => {
+    expect(
+      value([table("drafts"), column("pages", "summary"), rows("nextly_seo")])
+    ).toBe("drafts,nextly_seo,pages.summary");
+  });
+
+  it("leaves out a column whose table it names", () => {
+    expect(value([column("posts", "summary"), table("posts")])).toBe("posts");
+  });
+
+  it("names an entity's other deletion by its own table while the run names no owner", () => {
+    expect(value([owned(column("dc_posts_locales", "title"))])).toBe(
+      "dc_posts_locales.title"
+    );
+  });
+
+  it("names only the owner once the run names it, wherever the run lists it", () => {
+    expect(
+      value([owned(column("dc_posts_locales", "title")), table("dc_posts")])
+    ).toBe("dc_posts");
+  });
+
+  it("names an entity's rows in a shared table by its main table, which then covers the rest", () => {
+    const archived: Deletion = {
+      kind: "rows",
+      table: "nextly_i18n_archive",
+      owner: "dc_posts",
+      of: ofPosts,
+    };
+    expect(value([owned(table("dc_posts_locales")), archived])).toBe(
+      "dc_posts"
+    );
+  });
+
+  it("names rows in a shared table by that table when no main table owns them", () => {
+    const ownerless: Deletion = {
+      kind: "rows",
+      table: "nextly_versions",
+      of: ofPosts,
+    };
+    expect(value([ownerless])).toBe("nextly_versions");
+  });
+
+  it("keeps the targets the consent named and adds the ones it left out", async () => {
+    const verdict = await judgeDataLoss({
+      deletions: [
+        table("dc_pages"),
+        column("posts", "summary"),
+        owned(table("dc_posts_locales")),
+      ],
+      consent: flag("dc_pages,posts.summary"),
+      interactive: false,
+      ask: () => Promise.resolve(false),
+      print: () => {},
+    });
+    if (verdict.kind !== "refused") throw new Error("expected a refusal");
+    expect(verdict.message).toContain(
+      "--accept-data-loss=dc_pages,dc_posts_locales,posts.summary"
+    );
+  });
+});
+
 describe("what an agreement to drop an entity's main table covers", () => {
   const archived: Deletion = {
     kind: "rows",

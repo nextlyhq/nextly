@@ -346,13 +346,8 @@ function onlyBlanketCovers(deletion: Deletion): boolean {
   if (deletion.kind === "unnamed") return true;
   // An entity's rows in a shared table are named by its main table alone, not
   // by the shared table, which may be no table's name (the field groups').
-  if (
-    deletion.kind === "rows" &&
-    deletion.of !== undefined &&
-    deletion.owner !== undefined
-  ) {
-    return !nameableTable(deletion.owner);
-  }
+  const owner = sharedRowsOwner(deletion);
+  if (owner !== undefined) return !nameableTable(owner);
   if (!nameableTable(deletion.table)) return true;
   return deletion.kind === "column" && !spellable(deletion.column);
 }
@@ -512,55 +507,92 @@ function consentForms(value: string | null, flag: boolean): string {
   return commandForms(cli, env);
 }
 
-/**
- * The targets naming every one of `deletions` besides those the given consent
- * names: tables first, then each column whose table is not named.
- */
-function consentTokens(
-  deletions: readonly Deletion[],
-  consent: DataLossConsent
-): string[] {
-  const named = consent.given?.targets;
-  const given = named === undefined || named === "all" ? undefined : named;
-  const tables = new Set(given?.tables ?? []);
-  const columns = new Set(given?.columns ?? []);
-  // An entity's rows in a shared table are named by the entity's main table:
-  // naming the shared table would agree to every other entity's rows there.
-  // Its other deletions are named by their own table, the narrowest
-  // consent, unless the owner is named already.
-  const owned: NamedDeletion[] = [];
-  for (const d of deletions) {
-    if (d.kind === "unnamed") continue;
-    if (d.kind === "rows" && d.of !== undefined && d.owner !== undefined) {
-      tables.add(d.owner);
-    } else if (d.owner !== undefined) {
-      owned.push(d);
-    } else {
-      nameByOwnTable(d, tables, columns);
-    }
-  }
-  for (const d of owned) {
-    if (!tables.has(d.owner ?? "")) nameByOwnTable(d, tables, columns);
-  }
-  return [
-    ...tables,
-    ...[...columns].filter(column => !tables.has(column.split(".")[0])),
-  ];
+/** Tables and `table.column` pairs, as a list of targets names them. */
+interface TargetNames {
+  tables: Set<string>;
+  columns: Set<string>;
 }
 
 /** A deletion a consent can name by its table. */
 type NamedDeletion = Exclude<Deletion, { kind: "unnamed" }>;
 
+/**
+ * The targets a consent covering every one of `deletions` names: those the
+ * given consent names already, then what names each deletion besides, tables
+ * first, then each column whose table is not named. Each rule is its own step
+ * below, so each can be read, and tested, alone.
+ */
+function consentTokens(
+  deletions: readonly Deletion[],
+  consent: DataLossConsent
+): string[] {
+  const names = givenNames(consent);
+  const named = deletions.filter(isNamedDeletion);
+  // What names itself goes first, so an entity's other deletions can see
+  // whether their owner is named already, by the run or by the consent.
+  for (const deletion of named) nameUnowned(deletion, names);
+  for (const deletion of named) nameOwned(deletion, names);
+  return listNames(names);
+}
+
+/** The tables and columns the given consent names; none for no consent or the form without targets. */
+function givenNames(consent: DataLossConsent): TargetNames {
+  const targets = consent.given?.targets;
+  const list = typeof targets === "object" ? targets : undefined;
+  return { tables: new Set(list?.tables), columns: new Set(list?.columns) };
+}
+
+/** Whether a list of targets can name `deletion` at all: every deletion but one its command cannot name. */
+function isNamedDeletion(deletion: Deletion): deletion is NamedDeletion {
+  return deletion.kind !== "unnamed";
+}
+
+/**
+ * Names a deletion that names itself: an entity's rows in a shared table by
+ * the entity's main table, since naming the shared table would agree to every
+ * other entity's rows there, and a deletion no entity owns by its own table.
+ */
+function nameUnowned(deletion: NamedDeletion, names: TargetNames): void {
+  const owner = sharedRowsOwner(deletion);
+  if (owner !== undefined) names.tables.add(owner);
+  else if (deletion.owner === undefined) nameByOwnTable(deletion, names);
+}
+
+/**
+ * Names an entity's other deletion by its own table, the narrowest consent,
+ * unless its owner is named already, which covers it. The entity's rows in a
+ * shared table always find it named: naming them named it.
+ */
+function nameOwned(deletion: NamedDeletion, names: TargetNames): void {
+  if (deletion.owner === undefined || names.tables.has(deletion.owner)) return;
+  nameByOwnTable(deletion, names);
+}
+
+/** Every table named, then each column whose table is not, as the consent lists them. */
+function listNames(names: TargetNames): string[] {
+  const columns = [...names.columns].filter(
+    column => !names.tables.has(column.split(".")[0])
+  );
+  return [...names.tables, ...columns];
+}
+
+/**
+ * The main table of the entity whose rows in a shared table `deletion` is,
+ * or `undefined` when it is not one entity's rows there. Only that table
+ * names such a deletion.
+ */
+function sharedRowsOwner(deletion: Deletion): string | undefined {
+  return deletion.kind === "rows" && deletion.of !== undefined
+    ? deletion.owner
+    : undefined;
+}
+
 /** Names `deletion` by its own table: a column as `table.column`, anything else as its table. */
-function nameByOwnTable(
-  deletion: NamedDeletion,
-  tables: Set<string>,
-  columns: Set<string>
-): void {
+function nameByOwnTable(deletion: NamedDeletion, names: TargetNames): void {
   if (deletion.kind === "column") {
-    columns.add(`${deletion.table}.${deletion.column}`);
+    names.columns.add(`${deletion.table}.${deletion.column}`);
   } else {
-    tables.add(deletion.table);
+    names.tables.add(deletion.table);
   }
 }
 
