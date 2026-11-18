@@ -52,6 +52,11 @@ function textOf(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+/** Whether a stored address has somewhere to go, as a link is drawn. */
+function goesSomewhere(address: unknown): boolean {
+  return textOf(address) !== "";
+}
+
 /** Whether a prop is bound to a field. */
 function bound(node: BlockNode, prop: string): boolean {
   return node.bindings?.[prop] !== undefined;
@@ -74,13 +79,24 @@ const WHY_VAGUE =
 
 /** A Button with no words, or only vague ones. */
 function buttonFindings(node: BlockNode): PageCheckResult[] {
-  if (
-    textOf(node.props.ariaLabel) !== "" ||
-    bound(node, "ariaLabel") ||
-    bound(node, "label")
-  ) {
-    return [];
+  if (bound(node, "ariaLabel")) return [];
+  // A Screen reader label is what screen readers say in place of the words,
+  // so it is the one judged where it is set.
+  const ariaLabel = textOf(node.props.ariaLabel);
+  if (ariaLabel !== "") {
+    return isVague(ariaLabel)
+      ? [
+          {
+            nodeId: node.id,
+            what: "Screen reader label doesn’t say where it goes",
+            why: WHY_VAGUE,
+            todo: "Say where it goes in Screen reader label, like “See pricing”.",
+            fix: { tab: "content", id: "ariaLabel" },
+          },
+        ]
+      : [];
   }
+  if (bound(node, "label")) return [];
   const label = textOf(node.props.label);
   const fix = { tab: "content", id: "label" } as const;
   if (label === "") {
@@ -167,7 +183,10 @@ function richButtonFinding(
   part: string
 ): PageCheckResult | undefined {
   const words = textOf(button.text);
-  if (words === "" || !isVague(words)) return undefined;
+  // Drawn only with somewhere to go: one with none isn't on the page.
+  if (!goesSomewhere(button.url) || words === "" || !isVague(words)) {
+    return undefined;
+  }
   return {
     nodeId: node.id,
     part,
@@ -190,6 +209,8 @@ function linkFindings(node: BlockNode): PageCheckResult[] {
   let index = 0;
   eachRichTextNode(node, part => {
     if (part.type === "link") {
+      // A link with nowhere to go is drawn as its plain words.
+      if (!goesSomewhere(part.url)) return;
       const finding = linkWordsFinding(
         node,
         richTextWords(part),

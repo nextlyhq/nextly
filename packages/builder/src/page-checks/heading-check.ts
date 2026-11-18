@@ -73,23 +73,33 @@ function drawnPage(
 ): DrawnPage {
   const placementOf = new Map<string, string>();
   const work: WorkAllowance = { left: MAX_NODES };
-  const draw = (list: readonly BlockNode[], depth: number): BlockNode[] =>
+  // `expand` is false inside what a placement drew: the resolver has drawn
+  // every placement it could there, and one it kept (missing, gated or over
+  // the allowance) stays a placement rather than being asked for again.
+  const draw = (
+    list: readonly BlockNode[],
+    depth: number,
+    expand = true
+  ): BlockNode[] =>
     list.flatMap((stored): BlockNode[] => {
       const node = withBoundWords(stored);
-      if (node.type === COMPONENT_INSTANCE_TYPE && definitions !== undefined) {
+      if (node.type === COMPONENT_INSTANCE_TYPE) {
+        if (!expand || definitions === undefined) return [node];
         const drawn = resolveComponentInstances(
           { formatVersion: 1, kind: "page", nodes: [node] },
           definitions,
           { work }
         ).document.nodes;
         walkNodes(drawn, inner => placementOf.set(inner.id, node.id));
-        return draw(drawn, depth + 1);
+        return draw(drawn, depth + 1, false);
       }
       if (node.slots === undefined || depth >= MAX_DEPTH) return [node];
       const slots = Object.fromEntries(
         Object.entries(node.slots).map(([slot, children]) => [
           slot,
-          Array.isArray(children) ? draw(children, depth + 1) : children,
+          Array.isArray(children)
+            ? draw(children, depth + 1, expand)
+            : children,
         ])
       );
       return [{ ...node, slots }];

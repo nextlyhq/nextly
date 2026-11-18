@@ -209,6 +209,25 @@ describe("the headings check", () => {
     expect(found.every(each => each.nodeId === "p1")).toBe(true);
   });
 
+  it("leaves a placement the resolver keeps, such as a missing component", () => {
+    const missing: BlockNode = {
+      id: "gone",
+      type: "nextly/component-instance",
+      version: 1,
+      props: { componentId: "deleted" },
+    };
+    const found = runPageChecks(
+      {
+        document: page(heading("a", "h1"), missing),
+        definitions: new Map(),
+      },
+      [HEADING_CHECK]
+    );
+    // The check ran, and found nothing wrong with the page's own heading.
+    expect(found.notRun).toEqual([]);
+    expect(found.findings).toEqual([]);
+  });
+
   it("counts a Heading 1 whose words come from a field", () => {
     const bound: BlockNode = {
       id: "title",
