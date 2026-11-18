@@ -777,6 +777,74 @@ ${EMPTY_LIST}[data-nx-list-visitors]:not([data-nx-list-still])::before {
     inset 0 0 0 4px var(--nx-builder-halo, #fff);
 }
 
+/* Where the page's header & footer set has no header (or footer): a dashed
+   band in the region's place saying so, with the ways to fill it. In the
+   admin's scheme and face, which the frame hands it as values, so it reads
+   the same over any site; its size is the admin's whatever the zoom, and
+   its spacing in its own text's units. A visitor's page never draws one. */
+.nx-canvas-region-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75em 1.25em;
+  margin: 0.75em;
+  padding: 1em 1.25em;
+  color-scheme: var(--nx-builder-scheme, light);
+  border: 1.5px dashed var(--nx-builder-text-muted, GrayText);
+  border-radius: var(--radius-sm, 0.25rem);
+  background: var(--nx-builder-surface-raised, Canvas);
+  color: var(--nx-builder-text, CanvasText);
+  font-family: var(--font-sans, system-ui), sans-serif;
+  font-size: calc(0.875rem / var(--nx-canvas-zoom, 1));
+  line-height: 1.5;
+}
+
+.nx-canvas-region-empty__sentence,
+.nx-canvas-region-empty__ask {
+  margin: 0;
+  max-width: 60ch;
+}
+
+.nx-canvas-region-empty__ask {
+  color: var(--nx-builder-text-muted, GrayText);
+}
+
+.nx-canvas-region-empty__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5em;
+}
+
+/* Its two buttons: the first fills the area at once, on the select hue; the
+   second opens the choice, edged in the text's own colour. */
+.nx-canvas-region-empty__actions > button {
+  padding: 0.35em 0.85em;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm, 0.25rem);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.nx-canvas-region-empty__actions > button[data-nx-region-empty-action="create"] {
+  border-color: var(--nx-builder-select, Highlight);
+  background: var(--nx-builder-select, Highlight);
+  color: var(--nx-builder-select-text, HighlightText);
+}
+
+.nx-canvas-region-empty__actions > button:focus-visible {
+  outline: 2px solid var(--nx-builder-select, Highlight);
+  outline-offset: -2px;
+}
+
+.nx-canvas-region-empty__actions > button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* The part holding the page between its regions lays out as if it were not
    there, so the page's own layout is the same with regions as without. */
 .nx-canvas-page-part {

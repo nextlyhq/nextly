@@ -16,7 +16,7 @@ import type { AppliedConditions } from "../conditions/applied-conditions";
 import type { SelectionMode } from "../selection";
 
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
-import type { CanvasRegion } from "./canvas-regions";
+import type { CanvasRegion, EmptyRegionBandProps } from "./canvas-regions";
 
 export interface CanvasProps {
   /** The document being edited. */
@@ -210,6 +210,13 @@ export interface CanvasProps {
    * @experimental Settles with editing a header or footer in place.
    */
   editingRegion?: CanvasEditingRegion;
+  /**
+   * What is drawn where an area has no region, by area: a band saying the
+   * site shows no header (or footer) yet, with the host's ways to fill it.
+   * In the editor's canvas only, in the region's place; never in the page.
+   * @experimental Settles with the site's empty header and footer.
+   */
+  emptyRegions?: Partial<Readonly<Record<RegionArea, EmptyRegionBandProps>>>;
   /**
    * The blocks whose visibility conditions the page can't check, which the
    * canvas marks in red: visitors never see them. Judged by the host, which

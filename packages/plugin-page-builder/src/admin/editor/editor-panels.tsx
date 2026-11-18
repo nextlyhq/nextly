@@ -69,10 +69,15 @@ import {
   type DesignRevealRequest,
   type DesignView,
 } from "./design-panel";
+import { readSiteHeaderFooter } from "./double-header-notice";
 import {
   checklistStoreFor,
   designFoldsStoreFor,
 } from "./editor-preference-stores";
+import {
+  useEmptyRegionBands,
+  type EmptyRegionBands,
+} from "./empty-region-bands";
 import { useLookEditing, type LookEditingState } from "./look-editing";
 import {
   offeredSelfOf,
@@ -161,6 +166,35 @@ const AVAILABLE_PANELS = [
  * so Add and Components wait until one of them is.
  */
 const SET_PANELS = ["layers", "pages", "design"] as const;
+
+/**
+ * Whether the getting-started card is shown: not on a set's own screen,
+ * which has no page to build; and not until the author is known, whose own
+ * dismissal is the one to read. `checklist === false` is the only value that
+ * turns it off: an absent config and a malformed one both leave it on.
+ */
+function checklistOffered(
+  set: SetMode | undefined,
+  clientConfig: EditorMount["clientConfig"],
+  store: unknown
+): boolean {
+  return (
+    set === undefined &&
+    clientConfig?.checklist !== false &&
+    store !== undefined
+  );
+}
+
+/**
+ * Whether a page is open, one of the Pages panel's list: not a component or
+ * a pattern, and not a set's own screen, whose page is a placeholder.
+ */
+function editsAPage(
+  mount: Pick<EditorMount, "initialDocument">,
+  set: SetMode | undefined
+): boolean {
+  return mount.initialDocument.kind === "page" && set === undefined;
+}
 
 /** The left panels offered, by what is being edited. */
 function availablePanelsFor(
@@ -655,11 +689,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     // Not until the author is known: their own dismissal is the one to read,
     // and a card drawn before it arrives would flash for an author who
     // dismissed it.
-    // A set's own screen has no page to build, so nothing to start on.
-    enabled:
-      page.set === undefined &&
-      clientConfig?.checklist !== false &&
-      checklistStore !== undefined,
+    enabled: checklistOffered(page.set, clientConfig, checklistStore),
     ...(checklistStore === undefined ? {} : { store: checklistStore }),
   });
 
@@ -669,11 +699,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   // bar's button, so the state sits above both.
   const [searchOpen, setSearchOpen] = useState(false);
   // The Pages panel, and the request its rows send to open Settings.
-  // A set's own screen edits no page: no page of the list is the one open.
-  const pages = usePagesPanel(
-    mount.initialDocument.kind === "page" && page.set === undefined,
-    page.set?.id
-  );
+  const pages = usePagesPanel(editsAPage(mount, page.set), page.set?.id);
   // Which look the inspector edits on its own: chosen in the Design panel,
   // left by selecting a block or a header or footer, by the bar's Back, or
   // by Esc. Choosing one leaves a selected header or footer.
@@ -695,6 +721,14 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     ),
     pageLayout,
     canvasRegions: layoutRegions.canvas,
+    // Where the site default shows no header or footer, the canvas's band
+    // saying so, with its ways to fill it.
+    emptyRegionBands: useEmptyRegionBands({
+      empty: layoutRegions.empty,
+      siteHeaderFooter: readSiteHeaderFooter(clientConfig),
+      followsDefault: layoutRegions.followsDefault,
+      reread: layoutRegions.reread,
+    }),
     siteTokens: page.siteTokens,
     layersRegions: layoutRegions.selectedRegion.layers,
     selectedRegion: layoutRegions.selectedRegion,
@@ -863,6 +897,8 @@ export type EditorPanels = OfferedLibrary &
     pageLayout: ReactNode | null;
     /** The regions of the page's Layout, drawn locked around the page. */
     canvasRegions: readonly CanvasRegion[];
+    /** The bands where the site default shows no header or footer. */
+    emptyRegionBands: EmptyRegionBands;
     /** The site's variables as the panels offer them, once they are read. */
     siteTokens: SiteTokenSet | undefined;
     /** The same regions, as rows in Layers that select them. */

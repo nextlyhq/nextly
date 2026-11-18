@@ -187,10 +187,12 @@ describe("Use a component ▾ on the starter's card", () => {
       path: "/layouts/area-components?area=header",
       enabled: true,
     });
-    expect(asked()).toContainEqual({
-      path: "/layouts/area-components?area=header&pictures=1",
-      enabled: false,
-    });
+    // Not asked for the pictures at all while the menu is closed.
+    expect(
+      asked().filter(
+        request => request.path.includes("pictures=1") && request.enabled
+      )
+    ).toEqual([]);
     await open();
     expect(asked().at(-1)).toEqual({
       path: "/layouts/area-components?area=header&pictures=1",

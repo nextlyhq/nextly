@@ -593,6 +593,7 @@ export const pageBuilder = (
         ...layouts.layoutWrites,
         ...layouts.layoutArea,
         layouts.setAreaChoices,
+        layouts.createInArea,
         pages.pageCollection,
         breakpoints.siteSettings,
         breakpoints.siteBreakpoints,

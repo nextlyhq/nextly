@@ -48,8 +48,20 @@ const TITLE_FIELD = "title";
 /** The areas in the order they are drawn and listed. */
 const AREAS: readonly RegionArea[] = ["header", "footer"];
 
+/**
+ * What a set's screen says of the site default: nothing. It draws the set's
+ * own areas, and an empty one is filled from its picker, not by the band a
+ * page following the default shows.
+ */
+const NOT_THE_DEFAULT = { empty: [], followsDefault: false } as const;
+
 /** What is drawn before any answer has arrived. */
-const NOTHING_DRAWN: PageLayoutRegions = { canvas: [], layers: [], cards: [] };
+const NOTHING_DRAWN: PageLayoutRegions = {
+  canvas: [],
+  layers: [],
+  cards: [],
+  ...NOT_THE_DEFAULT,
+};
 
 /** The set's title and the component each area names, from its form. */
 export function useSetFormAreas<T extends FieldValues>(
@@ -168,7 +180,7 @@ export function useSetRegions<T extends FieldValues>(
           : {}),
       })
     );
-    return { canvas, layers, cards };
+    return { canvas, layers, cards, ...NOT_THE_DEFAULT };
   }, [
     setId,
     form,

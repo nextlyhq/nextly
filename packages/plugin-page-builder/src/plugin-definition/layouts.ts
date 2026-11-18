@@ -10,6 +10,7 @@ import type { PluginRoute } from "@nextlyhq/plugin-sdk";
 import { COMPONENTS_SLUG } from "../collections/components";
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { PAGES_SLUG } from "../collections/pages";
+import { createInAreaRoute } from "../default-layout/create-in-area-route";
 import { fillNoticesRoute } from "../default-layout/fill-notice-route";
 import { makeDefaultRoute } from "../default-layout/make-default-route";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "../default-layout/settings-single";
@@ -67,6 +68,7 @@ export function routesForLayouts(def: Definition): {
   readonly layoutWrites: PluginRoute[];
   readonly layoutArea: PluginRoute[];
   readonly setAreaChoices: PluginRoute;
+  readonly createInArea: PluginRoute;
 } {
   const { opts } = def;
   return {
@@ -109,5 +111,9 @@ export function routesForLayouts(def: Definition): {
       componentStoreOf(opts),
       () => opts.limits ?? DEFAULT_LIMITS
     ),
+    // "Create a header" on the band the canvas draws where the default set
+    // has no header (or footer): the starter design, created as the caller
+    // and put in the default.
+    createInArea: createInAreaRoute(componentStoreOf(opts)),
   };
 }

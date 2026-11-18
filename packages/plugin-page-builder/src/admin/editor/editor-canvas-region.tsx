@@ -42,6 +42,7 @@ import { CanvasImageStates } from "./canvas-image-states";
 import { previewedCanvas } from "./canvas-preview-mode";
 import { DoubleHeaderNotice } from "./double-header-notice";
 import type { EditorView } from "./editor-view";
+import { EmptyRegionBandsOverlay } from "./empty-region-bands";
 import { PAGE_PLACEHOLDER_WORDS } from "./set-words";
 import { SiteLayoutNote } from "./site-canvas";
 import { EditorPageInserters } from "./starter-pages-client";
@@ -303,6 +304,13 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                   area={editedArea(view)}
                   onPress={view.editing.pulseDone}
                 />
+                {/* "Use a component", opened from an empty area's band,
+                    anchored where the band's button is. */}
+                <EmptyRegionBandsOverlay
+                  bands={view.emptyRegionBands}
+                  cards={view.regionCards}
+                  requestEdit={view.regionEditing.requestEdit}
+                />
                 {/* An Image with no picture: "Add an image" with Upload,
                     Media library and Link, and a file dropped on it, through
                     the admin's media library. First, so the marks, the drop
@@ -476,6 +484,9 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
               // The regions of the page's layout, drawn around it from the
               // published set, as a visitor gets them, and the one selected.
               regions={view.canvasRegions}
+              // Where the site default shows no header or footer: the band
+              // saying so, with its ways to fill it.
+              emptyRegions={view.emptyRegionBands.bands}
               selectedRegion={view.selectedRegion.selection.area}
               onSelectRegion={view.selectedRegion.selection.select}
               // A double-click on a region, or Enter on it while selected,

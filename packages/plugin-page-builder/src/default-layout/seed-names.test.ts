@@ -9,7 +9,14 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { seedSlug, seedTitle, starterSlug, starterTitle } from "./seed-names";
+import {
+  createdSlug,
+  createdTitle,
+  seedSlug,
+  seedTitle,
+  starterSlug,
+  starterTitle,
+} from "./seed-names";
 
 describe("the seeded Layout's title", () => {
   it("is the base title when nothing holds it", () => {
@@ -69,5 +76,21 @@ describe("the starter components' names", () => {
     expect(starterSlug("footer", new Set(["starter-footer"]))).toBe(
       "starter-footer-2"
     );
+  });
+});
+
+describe("a header or footer created from the canvas's band", () => {
+  it("is Header or Footer, never named as the seed's starter", () => {
+    expect(createdTitle("header", new Set())).toBe("Header");
+    expect(createdTitle("footer", new Set())).toBe("Footer");
+    expect(createdSlug("header", new Set())).toBe("header");
+    expect(createdSlug("footer", new Set())).toBe("footer");
+  });
+
+  it("takes the first free number when a component holds the name", () => {
+    expect(createdTitle("header", new Set(["Header", "Header 2"]))).toBe(
+      "Header 3"
+    );
+    expect(createdSlug("footer", new Set(["footer"]))).toBe("footer-2");
   });
 });

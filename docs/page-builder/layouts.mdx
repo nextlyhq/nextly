@@ -163,6 +163,28 @@ component, or replace them. In the builder it is tagged **Starter header · edit
 footer** until you publish a change to them. The **Contact us** button goes to your site's 404 page
 until you add a `/contact` page or change its link.
 
+### When the default has no header or footer
+
+If the default header & footer set has no header, the builder draws a dashed **No header yet** band
+in the header's place on every page that follows the default (the same goes for the footer). The
+band is drawn on the canvas only; the published page shows nothing there. It offers two ways to
+fill the area:
+
+- **Create a header** makes a new published header with the starter header's design, called **Header**
+  (or **Header 2**, and so on, when that name is taken), puts it in the default, and opens it for
+  editing in place.
+- **Use a component** lists the published components used as the header and puts the one you
+  choose in the default.
+
+Both need the right to update and publish header & footer sets, and creating one also needs the
+right to create and publish components. Anyone else sees who to ask instead. A site that draws its
+header and footer in code never shows the band. The create is a route of its own, which finds the
+default on the server and refuses an area that already shows a component:
+
+```http
+POST /admin/api/plugins/@nextlyhq/plugin-page-builder/default-layout/areas/:area
+```
+
 The starter header and footer are created once, on a new site only. A site that already had a
 default when it upgraded keeps it, and gets no starter header and footer. If the default is lost later and the plugin re-creates it,
 the new set is empty. A site that draws its header and footer in code

@@ -488,6 +488,7 @@ export function Canvas({
         environment={environment}
         selection={regionUse}
         editing={edited.drawn}
+        bands={regionUse.emptyRegions}
       >
         {page}
       </RegionsAround>
