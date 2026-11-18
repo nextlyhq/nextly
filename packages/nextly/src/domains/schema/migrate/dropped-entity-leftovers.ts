@@ -22,6 +22,7 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import type { Logger } from "../../../shared/types";
 import { teardownAdapterIn } from "../../collections/services/teardown-adapter-in-transaction";
@@ -67,11 +68,18 @@ export async function removeDroppedEntityLeftovers(args: {
   adapter: DrizzleAdapter;
   chain: readonly EntitySettingsRecord[];
   logger: Logger;
+  /**
+   * Makes every field group's table addressable before any is read, where the
+   * caller's adapter resolves Nextly's own tables alone (a command's, which
+   * boots no app). Called only when some entity's leftovers are to be removed.
+   */
+  prepareTables?: () => Promise<void>;
 }): Promise<string[]> {
   const { adapter, logger } = args;
   const removedFrom: string[] = [];
   const gone = await goneEntities(args);
   if (gone.length === 0) return removedFrom;
+  await args.prepareTables?.();
   // The archive's rows are removed by entity kind, which an archive from
   // before rows recorded it lacks. Bringing it up to date is DDL, which on
   // MySQL commits any transaction, so it runs once here, before any entity's.
@@ -105,9 +113,9 @@ export async function removeDroppedEntityLeftovers(args: {
       );
     } catch (error) {
       logger.warn(
-        `Could not remove what the deleted ${word} "${entity.slug}" left: ${
-          error instanceof Error ? error.message : String(error)
-        }. The next \`nextly migrate\` tries again.`
+        `Could not remove what the deleted ${word} "${entity.slug}" left: ${causeOf(
+          error
+        )}. The next \`nextly migrate\` tries again.`
       );
     }
   }
@@ -183,4 +191,13 @@ async function registryHolds(
 
 function plural(count: number, one: string): string {
   return `${String(count)} ${count === 1 ? one : `${one}s`}`;
+}
+
+/**
+ * What stopped a removal, for the person running the command: a Nextly error's
+ * own account of it (`logMessage`), which its public message leaves out.
+ */
+function causeOf(error: unknown): string {
+  if (error instanceof NextlyError) return error.logMessage ?? error.message;
+  return error instanceof Error ? error.message : String(error);
 }

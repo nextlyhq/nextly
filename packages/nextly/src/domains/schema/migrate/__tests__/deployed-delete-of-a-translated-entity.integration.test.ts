@@ -641,7 +641,10 @@ describe.each(getConfiguredTestDialects())(
      * translated and with an archived translation; then NOTES deleted in the
      * Builder and the delete applied by `nextly migrate`.
      */
-    async function deleteNotesOnTheDeployedDatabase() {
+    async function deleteNotesOnTheDeployedDatabase(
+      /** Run just before the delete is applied: a switch armed for that run alone. */
+      arm: () => void = () => {}
+    ) {
       const own = await openDatabase(dialect, "builder");
       const deployed = await openDatabase(dialect, "deployed");
 
@@ -689,6 +692,7 @@ describe.each(getConfiguredTestDialects())(
 
       reach(dialect, deployed.url);
       await start(deployed.adapter);
+      arm();
       const deleted = await migrate();
       const after = await sharedLeftOf(deployed.adapter);
       return { deployed, before, deleted, after };
@@ -722,9 +726,10 @@ describe.each(getConfiguredTestDialects())(
 
     it("removes what an earlier delete left on a later run with nothing to apply", async () => {
       // The delete applied as a release before the removal existed applied it.
-      leftovers.earlier = true;
       const { deployed, deleted, after } =
-        await deleteNotesOnTheDeployedDatabase();
+        await deleteNotesOnTheDeployedDatabase(() => {
+          leftovers.earlier = true;
+        });
       leftovers.earlier = false;
       expect(deleted.code, deleted.said).toBeUndefined();
       // Positive control: the earlier delete removed the row and left the rest.
@@ -748,9 +753,10 @@ describe.each(getConfiguredTestDialects())(
     }, 180_000);
 
     it("removes none of its rows in a run stopped part-way through them, and all of them in the next", async () => {
-      leftovers.stop = true;
       const { deployed, before, deleted, after } =
-        await deleteNotesOnTheDeployedDatabase();
+        await deleteNotesOnTheDeployedDatabase(() => {
+          leftovers.stop = true;
+        });
       expect(leftovers.stop, "the stop was reached").toBe(false);
       expect(deleted.code, deleted.said).toBeUndefined();
       // The field-group values went first in the same transaction, and came back with it.

@@ -136,6 +136,13 @@ export interface ReconcileMetadataDeps {
    * registry source uses, in place of any snapshot.
    */
   configurationRows?: EntitySettingsRecord;
+  /**
+   * Makes every field group's table addressable before a deleted entity's
+   * leftovers are removed (`removeDroppedEntityLeftovers`): given by the
+   * `nextly migrate` command, whose adapter resolves Nextly's own tables
+   * alone. A booted app's adapter already resolves them, and gives none.
+   */
+  prepareLeftoverTables?: () => Promise<void>;
   /** Each plugin-contributed collection's origin (`RegistryWriteDeps.collectionSources`). */
   collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
   /**
@@ -475,6 +482,9 @@ async function leftoversOfDroppedEntities(
       adapter,
       chain: source.chain ?? [source.entities],
       logger: asServiceLogger(logger),
+      ...(deps.prepareLeftoverTables === undefined
+        ? {}
+        : { prepareTables: deps.prepareLeftoverTables }),
     });
   } catch (error) {
     // A run that lost the schema lock stops; anything else costs only this

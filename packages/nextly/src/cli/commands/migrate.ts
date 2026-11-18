@@ -36,6 +36,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { container } from "../../di/container";
+import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import {
   isLocalizationIntentRefusal,
@@ -857,6 +858,18 @@ export async function runMigrate(
         // run does not put unmigrated edits back to the snapshot. Everywhere
         // else the rows are brought to the newest applied snapshot.
         registryRows: configWatchAllowed() ? "insert-missing" : "write",
+        // A deleted entity's field-group values are read through the ORM, which this command's
+        // resolver of Nextly's own tables cannot address: every field group's table is added to
+        // it first, as `prune` adds them (`registerComponentSchemas`).
+        prepareLeftoverTables: async () => {
+          const drizzleAdapter = adapter as unknown as DrizzleAdapter;
+          await registerComponentSchemas({
+            adapter: drizzleAdapter,
+            registry: installRegistryResolver(drizzleAdapter),
+            dialect,
+            logger,
+          });
+        },
         // An app file or a plugin module waits for a busy table in tries; each try's notice goes
         // to standard error, so a run with --json keeps one document on standard output, and is
         // kept back under --quiet.
@@ -1279,6 +1292,12 @@ export interface MigrateCoreDeps {
    * registry row the run creates (`pluginMigrationArgs`).
    */
   collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
+  /**
+   * Makes every field group's table addressable before a deleted entity's
+   * leftovers are removed: given by the command, whose adapter resolves
+   * Nextly's own tables alone; a booted app's adapter resolves them already.
+   */
+  prepareLeftoverTables?: () => Promise<void>;
   /**
    * Seam for tests; defaults to recording and retiring element owner rows
    * against the database.
@@ -2788,6 +2807,9 @@ export async function migrateCore(
     ...(deps.collectionSources === undefined
       ? {}
       : { collectionSources: deps.collectionSources }),
+    ...(deps.prepareLeftoverTables === undefined
+      ? {}
+      : { prepareLeftoverTables: deps.prepareLeftoverTables }),
     logger: {
       info: (m: string) => deps.logger.debug(m),
       warn: (m: string) => deps.logger.warn(m),
