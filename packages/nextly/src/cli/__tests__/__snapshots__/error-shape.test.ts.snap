@@ -3,22 +3,22 @@
 exports[`a command that ends with an error > adds the context and stack under --verbose, below the same plain message > with --verbose 1`] = `
 "✗ \`nextly.config.ts\` has a syntax error, so it could not be read.
   Why:  nextly.config.ts:3:21: Expected "}" but found "fields"
-            { slug: "posts" fields: [] },
+            { slug: "…" fields: [] },
   Next: Fix the code shown above, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/config-syntax-error  (CONFIG_SYNTAX_ERROR)
 
-  Context: {"code":"INVALID_INPUT","configPath":"<project>/nextly.config.ts","reason":"load-error","cause":"Build failed:\\nnextly.config.ts:3:21: Expected \\"}\\" but found \\"fields\\"\\n    { slug: \\"posts\\" fields: [] },"}
+  Context: {"code":"INVALID_INPUT","configPath":"<project>/nextly.config.ts","reason":"load-error","cause":"Build failed:\\nnextly.config.ts:3:21: Expected \\"}\\" but found \\"fields\\"\\n    { slug: \\"…\\" fields: [] },"}
   Stack:
     Error: Build failed:
     nextly.config.ts:3:21: Expected "}" but found "fields"
-    { slug: "posts" fields: [] },
+    { slug: "…" fields: [] },
     at <frames>"
 `;
 
 exports[`a command that ends with an error > adds the context and stack under --verbose, below the same plain message > without --verbose 1`] = `
 "✗ \`nextly.config.ts\` has a syntax error, so it could not be read.
   Why:  nextly.config.ts:3:21: Expected "}" but found "fields"
-            { slug: "posts" fields: [] },
+            { slug: "…" fields: [] },
   Next: Fix the code shown above, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/config-syntax-error  (CONFIG_SYNTAX_ERROR)"
 `;
@@ -26,7 +26,7 @@ exports[`a command that ends with an error > adds the context and stack under --
 exports[`a command that ends with an error > names a configuration's syntax error once, with its file, line and column 1`] = `
 "✗ \`nextly.config.ts\` has a syntax error, so it could not be read.
   Why:  nextly.config.ts:3:21: Expected "}" but found "fields"
-            { slug: "posts" fields: [] },
+            { slug: "…" fields: [] },
   Next: Fix the code shown above, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/config-syntax-error  (CONFIG_SYNTAX_ERROR)"
 `;
@@ -557,7 +557,7 @@ exports[`each code, as a command ends with it > COMPONENT_MAP_OUT_OF_DATE 1`] = 
 exports[`each code, as a command ends with it > CONFIG_IMPORT_NOT_FOUND 1`] = `
 "✗ \`nextly.config.ts\` imports something that could not be found.
   Why:  nextly.config.ts:2:23: Could not resolve "./collections/posts"
-        import { posts } from "./collections/posts";
+        import { posts } from "…";
   Next: Correct the import's path, or install the package it names, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/config-import-not-found  (CONFIG_IMPORT_NOT_FOUND)"
 `;
@@ -593,7 +593,7 @@ exports[`each code, as a command ends with it > CONFIG_NOT_FOUND 1`] = `
 exports[`each code, as a command ends with it > CONFIG_SYNTAX_ERROR 1`] = `
 "✗ \`nextly.config.ts\` has a syntax error, so it could not be read.
   Why:  nextly.config.ts:3:21: Expected "}" but found "fields"
-            { slug: "posts" fields: [] },
+            { slug: "…" fields: [] },
   Next: Fix the code shown above, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/config-syntax-error  (CONFIG_SYNTAX_ERROR)"
 `;

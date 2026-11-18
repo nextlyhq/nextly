@@ -66,6 +66,46 @@ describe("the offending line of a configuration that does not parse", () => {
       expect(report, report).not.toContain("s3cr3t-pw");
     }
   });
+
+  // A value under a name no rule recognises, on the line after its key: nothing in the line says
+  // it is a credential, so every string on a shown line is masked, whatever it holds.
+  it("is shown with every string on it masked, so a credential no rule recognises is not printed", async () => {
+    const report = await reportFor(
+      [
+        "export default {",
+        "  db: {",
+        "    password:",
+        "      'Xq9-not-a-real-one' broken,",
+        "  },",
+        "};",
+        "",
+      ].join("\n")
+    );
+
+    expect(report, report).toContain("nextly.config.ts:4:");
+    expect(report, report).toContain("broken");
+    expect(report, report).not.toContain("Xq9-not-a-real-one");
+  });
+
+  // A generated file can hold one very long line; the report shows a bounded excerpt around the
+  // place, marked where it was cut, rather than the whole line.
+  it("is shown as a bounded excerpt around the place on a very long line", async () => {
+    const padding = "a".repeat(5000);
+    const report = await reportFor(
+      [
+        `export const long = [${padding
+          .split("")
+          .map(() => "1")
+          .join(",")}] broken;`,
+        "export default {};",
+        "",
+      ].join("\n")
+    );
+
+    expect(report, report).toContain("broken");
+    expect(report, report).toContain("…");
+    expect(report.length, report.slice(0, 400)).toBeLessThan(1500);
+  });
 });
 
 describe("an import the configuration names that cannot be found", () => {

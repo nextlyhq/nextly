@@ -76,12 +76,35 @@ export function editorPlaceOf(message: BuildMessage): EditorPlace | undefined {
   };
 }
 
+/** How many characters of a line are shown either side of the place a message points at. */
+const EXCERPT_REACH = 60;
+
+/** A quoted string on a line: single, double or backtick quotes, a quote escaped inside it kept. */
+const STRING_LITERAL = /(["'`])(?:\\.|(?!\1)[^\\])*\1/g;
+
+/**
+ * The line a message points at, as it is shown: at most `EXCERPT_REACH` characters either side of
+ * the place, marked with `…` where it was cut, since a generated file's single line can run to
+ * thousands. Every string on it is masked, and what is left redacted (`redactCredentialsInText`):
+ * a configuration may hold a credential under any name, on a line that does not say what it is,
+ * and a syntax error is about the code's shape, which the masked line still shows.
+ */
+function shownLine(lineText: string, column: number): string {
+  const from = Math.max(0, column - 1 - EXCERPT_REACH);
+  const to = Math.min(lineText.length, column - 1 + EXCERPT_REACH);
+  const excerpt = `${from > 0 ? "…" : ""}${lineText.slice(from, to)}${
+    to < lineText.length ? "…" : ""
+  }`;
+  return redactCredentialsInText(
+    excerpt.replace(STRING_LITERAL, (_, quote: string) => `${quote}…${quote}`)
+  );
+}
+
 /**
  * Each message as `file:line:column: text` at the place an editor shows (`editorPlaceOf`),
- * followed by the line itself where esbuild kept it, one per line. The line is source the user
- * wrote, and a configuration may hold a credential inline, so it is shown with every credential
- * on it redacted (`redactCredentialsInText`), never as written. Every surface that prints a
- * build failure renders it here, so the error's reason and its verbose context name one place.
+ * followed by the line itself where esbuild kept it (`shownLine`: an excerpt, its strings
+ * masked), one per line. Every surface that prints a build failure renders it here, so the
+ * error's reason and its verbose context name one place.
  */
 export function formatBuildMessages(messages: readonly BuildMessage[]): string {
   return messages
@@ -91,7 +114,7 @@ export function formatBuildMessages(messages: readonly BuildMessage[]): string {
       const at = `${place.file}:${place.line}:${place.column}: ${message.text}`;
       return place.lineText === undefined
         ? at
-        : `${at}\n${redactCredentialsInText(place.lineText)}`;
+        : `${at}\n${shownLine(place.lineText, place.column)}`;
     })
     .join("\n");
 }
