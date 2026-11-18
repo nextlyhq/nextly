@@ -25,7 +25,7 @@ const noted = {
 };
 
 /** A MySQL-dialect connection whose catalog has `SRS_ID` or, as MariaDB's, has not. */
-function server(hasSrid: boolean) {
+function server(hasSrid: boolean, engine = "InnoDB") {
   const queries: string[] = [];
   return {
     queries,
@@ -40,10 +40,8 @@ function server(hasSrid: boolean) {
           new Error("Unknown column 'c.SRS_ID' in 'field list'")
         );
       }
-      return Promise.resolve([
-        [hasSrid ? { ...noted, srid: 4326 } : noted],
-        [],
-      ]);
+      const row = { ...noted, engine };
+      return Promise.resolve([[hasSrid ? { ...row, srid: 4326 } : row], []]);
     },
   };
 }
@@ -67,5 +65,25 @@ describe("readLiveColumnFacts on a MySQL-dialect server", () => {
       "COMMENT",
     ]);
     expect(db.queries.some(text => text.includes("c.SRS_ID"))).toBe(true);
+  });
+
+  it("says a table's column settings cannot be read where its engine keeps more than the catalog reports", async () => {
+    const ndb = await readLiveColumnFacts(
+      server(true, "ndbcluster"),
+      "mysql",
+      ["dc_posts"],
+      { tables: [] }
+    );
+    expect(ndb.settingsReadable("dc_posts")).toBe(false);
+    expect(ndb.settingsReadable("DC_POSTS")).toBe(false);
+    const innodb = await readLiveColumnFacts(
+      server(true),
+      "mysql",
+      ["dc_posts"],
+      {
+        tables: [],
+      }
+    );
+    expect(innodb.settingsReadable("dc_posts")).toBe(true);
   });
 });

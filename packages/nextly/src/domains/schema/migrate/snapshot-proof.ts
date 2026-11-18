@@ -114,8 +114,10 @@ export interface LiveFacts {
  * Two more things the snapshot comparison cannot see are asked of the live database: that a key a
  * statement has the database assign is assigned there (`generatedKeysAssigned`), and that a MySQL
  * column a statement restates holds nothing the statement would put back (`restatedColumnsKeep`).
- * Both ask about the column where the rest of the file leaves it: a later rename moves the
- * question with the column, and only a later drop ends it.
+ * Every question about a column, the count of its NULL rows included, is asked where the rest of
+ * the file leaves it (`whereItEnds`): each later rename of the column or of its table moves the
+ * question with it, and a later statement that drops it, or that settles the same thing again,
+ * ends it.
  */
 export async function proveStatements(args: {
   statements: readonly string[];
@@ -141,24 +143,32 @@ export async function proveStatements(args: {
         args.sides,
         live.schema
       ) ||
-      !generatedKeysAssigned(statements[at], later, {
-        dialect,
-        sides: args.sides,
-        schema: live.schema,
-      })
+      !generatedKeysAssigned(statements[at], later, dialect, live.schema)
     ) {
       proofs[at] = { ...proof, status: "not-done" };
-    } else if (
-      restatedColumnsKeep(statements[at], later, dialect, live.schema)
-    ) {
-      proofs[at] = { ...proof, status: "keeps" };
+      continue;
     }
+    const restated = restatedColumnsStand(
+      statements[at],
+      later,
+      dialect,
+      live.schema
+    );
+    if (restated !== "as-left") proofs[at] = { ...proof, status: restated };
   }
   const filled = columnsFilledBy(statements, dialect);
   for (const [at, proof] of proofs.entries()) {
     if (proof.status !== "shown") continue;
-    for (const { table, column } of filled[at]) {
-      if ((await live.nullsIn(table, column)) > 0) {
+    for (const column of filled[at]) {
+      // Counted where the rest of the file leaves the column; one it drops has no rows to count.
+      const end = whereItEnds(
+        column,
+        statements.slice(at + 1),
+        dialect,
+        "rows"
+      );
+      if (end === undefined) continue;
+      if ((await live.nullsIn(end.table, end.column)) > 0) {
         proofs[at] = { ...proof, status: "unfilled" };
         break;
       }
@@ -227,6 +237,14 @@ function hasRun(
   );
 }
 
+/** A PostgreSQL identity column's mode: whether a written value is refused or taken. */
+type IdentityMode = "always" | "by-default";
+
+/** A column a statement has the database assign, with its identity mode where it declares one. */
+interface DeclaredKey extends FilledColumn {
+  identity?: IdentityMode;
+}
+
 /**
  * Whether a column definition's tail has the database assign its value: PostgreSQL's serial types
  * and identity columns (`AS IDENTITY`), MySQL's `AUTO_INCREMENT`, its `SERIAL` type and its
@@ -254,127 +272,184 @@ function declaresGeneratedKey(
   );
 }
 
+/** The mode an identity column's definition declares, or undefined for any other column. */
+function declaredIdentity(
+  tail: readonly StatementToken[]
+): IdentityMode | undefined {
+  const declared = outsideParentheses(tail);
+  if (hasRun(declared, "ALWAYS", "AS", "IDENTITY")) return "always";
+  return hasRun(declared, "BY", "DEFAULT", "AS", "IDENTITY")
+    ? "by-default"
+    : undefined;
+}
+
 /**
- * Whether every key the statement has the database assign is one the live table assigns: on a
- * table it creates that the target snapshot holds, or in a column it adds to a table. The snapshot
- * comparison reads such a key as its storage type, so a table made by hand with a plain integer
- * key stands where the file ends, and every insert that leaves the key out fails there. Each key
- * is asked about under the name the rest of the file leaves it with (`whereItEnds`). True for any
- * other statement.
+ * Whether every key the statement has the database assign is one the live table assigns, an
+ * identity column in the mode declared: in a table it creates, or in a column it adds to one. The
+ * snapshot comparison reads such a key as its storage type, so a table made by hand with a plain
+ * integer key stands where the file ends, and every insert that leaves the key out fails there.
+ * Each key is asked about where the rest of the file leaves it (`whereItEnds`), so one made on a
+ * table the file renames into place is asked about there. True for any other statement.
  */
 function generatedKeysAssigned(
   statement: string,
   later: readonly string[],
-  file: {
-    dialect: SupportedDialect;
-    sides: { target: NextlySchemaSnapshot };
-    schema: LiveSchemaWithColumnFacts;
-  }
+  dialect: SupportedDialect,
+  schema: LiveSchemaWithColumnFacts
 ): boolean {
-  return generatedKeysOf(statement, file.dialect, file.sides).every(key => {
-    const end = whereItEnds(key, later, file.dialect);
-    return end === undefined || file.schema.generatesKey(end.table, end.column);
+  return generatedKeysOf(statement, dialect).every(key => {
+    const end = whereItEnds(key, later, dialect, "key");
+    if (end === undefined) return true;
+    return (
+      schema.generatesKey(end.table, end.column) &&
+      (key.identity === undefined ||
+        schema.identityMode(end.table, end.column) === key.identity)
+    );
   });
-}
-
-/** What one statement does to the names of a table's columns, and of the table itself. */
-interface NameMoves {
-  /** Tables renamed, as `[from, to]`. */
-  tables: Array<[string, string]>;
-  /** Tables dropped. */
-  droppedTables: string[];
-  /** The table whose columns the statement renames or drops, where it does. */
-  table?: string;
-  /** Columns of `table` renamed, as `[from, to]`. */
-  columns: Array<[string, string]>;
-  /** Columns of `table` dropped. */
-  droppedColumns: string[];
-}
-
-/**
- * The renames and drops one statement makes: a table renamed (`tableRenamesOf`) or dropped, and
- * within an `ALTER TABLE` each `RENAME [COLUMN] a TO b`, MySQL `CHANGE [COLUMN] a b` and `DROP
- * [COLUMN] a`.
- */
-function nameMovesOf(statement: string, dialect: SupportedDialect): NameMoves {
-  const moves: NameMoves = {
-    tables: tableRenamesOf(cursorOf(statement, dialect, EXACT), dialect) ?? [],
-    droppedTables: droppedBy(statement, dialect),
-    columns: [],
-    droppedColumns: [],
-  };
-  const cursor = cursorOf(statement, dialect, EXACT);
-  if (moves.tables.length > 0 || !cursor.accept("ALTER", "TABLE")) return moves;
-  cursor.acceptCondition();
-  if (dialect === "postgresql") cursor.accept("ONLY");
-  moves.table = cursor.name();
-  for (const tokens of cursor.clauses()) {
-    const clause = new StatementCursor(tokens);
-    if (clause.accept("DROP")) {
-      if (!clause.accept("COLUMN") && addsAnotherElement(clause, dialect)) {
-        continue;
-      }
-      clause.acceptCondition();
-      const dropped = clause.name();
-      if (dropped !== undefined) moves.droppedColumns.push(dropped);
-      continue;
-    }
-    const changes = dialect === "mysql" && clause.accept("CHANGE");
-    if (!changes && !clause.accept("RENAME")) continue;
-    if (!clause.accept("COLUMN") && addsAnotherElement(clause, dialect)) {
-      continue;
-    }
-    clause.acceptCondition();
-    const from = clause.name();
-    if (!changes) clause.accept("TO");
-    const to = clause.name();
-    if (from !== undefined && to !== undefined) moves.columns.push([from, to]);
-  }
-  return moves;
-}
-
-/**
- * The table and name a column stands under once the later statements of the file have run:
- * followed through each rename of it or of its table, or undefined where one of them drops it.
- * The live database is asked about a column there, since that is where the file leaves it.
- */
-function whereItEnds(
-  start: FilledColumn,
-  later: readonly string[],
-  dialect: SupportedDialect
-): FilledColumn | undefined {
-  let table = start.table.toLowerCase();
-  let column = start.column.toLowerCase();
-  for (const statement of later) {
-    const moves = nameMovesOf(statement, dialect);
-    if (moves.droppedTables.includes(table)) return undefined;
-    table = moves.tables.find(([from]) => from === table)?.[1] ?? table;
-    if (moves.table !== table) continue;
-    if (moves.droppedColumns.includes(column)) return undefined;
-    column = moves.columns.find(([from]) => from === column)?.[1] ?? column;
-  }
-  return { table, column };
 }
 
 /** The columns a statement declares with a key the database assigns (`declaresGeneratedKey`). */
 function generatedKeysOf(
   statement: string,
-  dialect: SupportedDialect,
-  sides: { target: NextlySchemaSnapshot }
-): FilledColumn[] {
-  const name = createdTable(statement, dialect);
-  if (name !== undefined) {
-    const table = sides.target.tables.find(
-      each => each.name.toLowerCase() === name
-    );
-    if (table === undefined) return [];
-    return columnDefinitions(statement, dialect)
-      .filter(([, tail]) => declaresGeneratedKey(tail, dialect))
-      .map(([column]) => ({ table: table.name, column }));
-  }
-  return columnsAdded(statement, dialect)
+  dialect: SupportedDialect
+): DeclaredKey[] {
+  const table = createdTable(statement, dialect);
+  const declared: Array<[string, string, StatementToken[]]> =
+    table === undefined
+      ? columnsAdded(statement, dialect)
+      : columnDefinitions(statement, dialect).map(([column, tail]) => [
+          table,
+          column,
+          tail,
+        ]);
+  return declared
     .filter(([, , tail]) => declaresGeneratedKey(tail, dialect))
-    .map(([table, column]) => ({ table, column }));
+    .map(([on, column, tail]) => ({
+      table: on,
+      column,
+      identity: declaredIdentity(tail),
+    }));
+}
+
+/**
+ * One thing a statement does to where a column stands: its table renamed or dropped, or the
+ * column itself renamed, dropped or settled again.
+ */
+type NameStep =
+  | { table: string; column?: undefined; to: string | undefined }
+  | {
+      table: string;
+      column: string;
+      /** The column's name afterwards, where the step renames it. */
+      to?: string;
+      /**
+       * What the step ends: `dropped`, every question about the column; `restated`, what a MySQL
+       * restatement settles again and asks for itself (its settings, its key); `plain`, the key
+       * the database assigned it.
+       */
+      ends?: "dropped" | "restated" | "plain";
+    };
+
+/** What `ALTER [COLUMN] c` goes on to say where it takes the key the database assigns away. */
+const KEY_CHANGES: readonly (readonly string[])[] = [
+  ["DROP", "DEFAULT"],
+  ["SET", "DEFAULT"],
+  ["DROP", "IDENTITY"],
+  ["SET", "GENERATED"],
+  ["ADD", "GENERATED"],
+];
+
+/**
+ * Every step one statement takes, in the order it takes them: each pair of a table rename
+ * (`tableRenamesOf`, MySQL's `RENAME TABLE a TO b, b TO c` included), each table dropped, and
+ * within an `ALTER TABLE` each clause that renames, drops or settles a column again.
+ */
+function nameStepsOf(statement: string, dialect: SupportedDialect): NameStep[] {
+  const renames = tableRenamesOf(cursorOf(statement, dialect, EXACT), dialect);
+  if (renames !== undefined) {
+    return renames.map(([table, to]) => ({ table, to }));
+  }
+  const dropped = droppedBy(statement, dialect);
+  if (dropped.length > 0) {
+    return dropped.map(table => ({ table, to: undefined }));
+  }
+  const cursor = cursorOf(statement, dialect, EXACT);
+  if (!cursor.accept("ALTER", "TABLE")) return [];
+  cursor.acceptCondition();
+  if (dialect === "postgresql") cursor.accept("ONLY");
+  const table = cursor.name();
+  if (table === undefined) return [];
+  return cursor
+    .clauses()
+    .flatMap(tokens =>
+      columnStepOf(new StatementCursor(tokens), table, dialect)
+    );
+}
+
+/** The step one `ALTER TABLE` clause takes on a column of `table`, where it takes one. */
+function columnStepOf(
+  clause: StatementCursor,
+  table: string,
+  dialect: SupportedDialect
+): NameStep[] {
+  const verb = ["DROP", "RENAME", "CHANGE", "MODIFY", "ALTER"].find(word =>
+    clause.accept(word)
+  );
+  if (verb === undefined) return [];
+  // A constraint, index or key dropped or renamed is not a column.
+  if (!clause.accept("COLUMN") && addsAnotherElement(clause, dialect)) {
+    return [];
+  }
+  clause.acceptCondition();
+  const column = clause.name();
+  if (column === undefined) return [];
+  if (verb === "DROP") return [{ table, column, ends: "dropped" }];
+  if (verb === "RENAME") {
+    clause.accept("TO");
+    const to = clause.name();
+    return to === undefined ? [] : [{ table, column, to }];
+  }
+  if (verb === "ALTER") {
+    return dialect === "postgresql" &&
+      KEY_CHANGES.some(words => clause.accept(...words))
+      ? [{ table, column, ends: "plain" }]
+      : [];
+  }
+  if (dialect !== "mysql") return [];
+  const to = verb === "CHANGE" ? clause.name() : column;
+  return to === undefined ? [] : [{ table, column, to, ends: "restated" }];
+}
+
+/**
+ * Where a column stands once the later statements of the file have run, for one question about
+ * it: followed, step by step and in order, through every rename of it and of its table
+ * (`nameStepsOf`), or undefined where a later statement ends the question. A drop ends them all.
+ * A MySQL restatement ends the questions it settles again and asks for itself, the column's
+ * settings and its key, and for its rows is a rename. A statement that makes the column plain
+ * ends the question of its key. The one routine for every question the proof asks of a column.
+ */
+function whereItEnds(
+  start: FilledColumn,
+  later: readonly string[],
+  dialect: SupportedDialect,
+  asking: "key" | "settings" | "rows"
+): FilledColumn | undefined {
+  let table = start.table.toLowerCase();
+  let column = start.column.toLowerCase();
+  for (const step of later.flatMap(each => nameStepsOf(each, dialect))) {
+    if (step.table !== table) continue;
+    if (step.column === undefined) {
+      if (step.to === undefined) return undefined;
+      table = step.to;
+      continue;
+    }
+    if (step.column !== column) continue;
+    if (step.ends === "dropped") return undefined;
+    if (step.ends === "restated" && asking !== "rows") return undefined;
+    if (step.ends === "plain" && asking === "key") return undefined;
+    column = step.to ?? column;
+  }
+  return { table, column };
 }
 
 /**
@@ -404,24 +479,28 @@ function restatedColumns(
 }
 
 /**
- * Whether a column the statement restates holds, in the live database, a setting the statement
- * would put back: the file was not run, so the column still has it, and a database the file did
- * run on does not. The column is asked about under the name the rest of the file leaves it with
- * (`whereItEnds`).
+ * How the columns a statement restates stand in the live database, each asked about where the
+ * rest of the file leaves it (`whereItEnds`): `keeps` where one holds a setting the statement
+ * would put back (the file was not run, so the column still has it, and a database the file did
+ * run on does not); `unshown` where one is on a table whose column settings cannot all be read
+ * (`LiveColumnFacts.settingsReadable`), so nothing shows what it holds; `as-left` otherwise, and
+ * for any other statement.
  */
-function restatedColumnsKeep(
+function restatedColumnsStand(
   statement: string,
   later: readonly string[],
   dialect: SupportedDialect,
   schema: LiveSchemaWithColumnFacts
-): boolean {
-  return restatedColumns(statement, dialect).some(restated => {
-    const end = whereItEnds(restated, later, dialect);
-    return (
-      end !== undefined &&
-      schema.untrackedSettings(end.table, end.column).length > 0
-    );
-  });
+): "as-left" | "keeps" | "unshown" {
+  const ends = restatedColumns(statement, dialect).flatMap(
+    restated => whereItEnds(restated, later, dialect, "settings") ?? []
+  );
+  if (ends.some(end => !schema.settingsReadable(end.table))) return "unshown";
+  return ends.some(
+    end => schema.untrackedSettings(end.table, end.column).length > 0
+  )
+    ? "keeps"
+    : "as-left";
 }
 
 /**
@@ -452,7 +531,8 @@ function twinColumnsLeftToDefault(
   copy: { twin: string; columns: string[] },
   dialect: SupportedDialect
 ): FilledColumn[] {
-  const table = copy.twin.replace(/^__new_/, "");
+  // Under the twin's own name: the rename that moves it into place is followed like any other.
+  const table = copy.twin;
   return columnDefinitions(create, dialect)
     .filter(
       ([column, tail]) =>

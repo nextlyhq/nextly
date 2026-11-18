@@ -485,12 +485,16 @@ describe("statementsShownBySnapshot: what passes the first condition", () => {
 
 describe("proveStatements: rows a statement fills with its default", () => {
   /** A live schema holding every object, each usable: the statements' schema effect is there. */
-  const everything: LiveSchema = {
+  const everything: LiveSchemaWithColumnFacts = {
     hasTable: () => true,
     hasColumn: () => true,
     hasIndex: () => true,
     hasConstraint: () => true,
     usable: () => true,
+    untrackedSettings: () => [],
+    settingsReadable: () => true,
+    generatesKey: () => true,
+    identityMode: () => undefined,
   };
 
   /** The statuses `proveStatements` gives, with `nulls` NULL rows in every column it counts. */
@@ -516,6 +520,22 @@ describe("proveStatements: rows a statement fills with its default", () => {
   }
 
   const ADD_NOTE = `ALTER TABLE "dc_posts" ADD COLUMN "note" varchar(32) DEFAULT 'n'`;
+
+  it("counts the rows under the name a later statement of the file leaves the column with", async () => {
+    const { counted } = await prove(
+      [ADD_NOTE, 'ALTER TABLE "dc_posts" RENAME COLUMN "note" TO "slug"'],
+      "postgresql",
+      0
+    );
+    expect(counted).toEqual(["dc_posts.slug"]);
+    // A column a later statement drops has no rows left to count.
+    const dropped = await prove(
+      [ADD_NOTE, 'ALTER TABLE "dc_posts" DROP COLUMN "note"'],
+      "postgresql",
+      3
+    );
+    expect(dropped.counted).toEqual([]);
+  });
 
   it("is not proven where rows it would have filled are still NULL", async () => {
     expect(await prove([ADD_NOTE], "postgresql", 2)).toEqual({
@@ -656,6 +676,10 @@ describe("constraints a file adds that the database holds but does not enforce",
               usable: object =>
                 validated ||
                 !(object.kind === "constraint" && object.name === fk.name),
+              untrackedSettings: () => [],
+              settingsReadable: () => true,
+              generatesKey: () => true,
+              identityMode: () => undefined,
             },
             nullsIn: () => Promise.resolve(0),
           },
@@ -701,7 +725,11 @@ describe("constraints a file adds that the database holds but does not enforce",
 /** A live schema holding every object, each usable, with the column facts a case gives. */
 const liveWith = (facts: {
   settings?: readonly string[];
+  /** Whether the table's column settings can be read at all: not on an NDB table. */
+  readable?: boolean;
   generatesKey?: boolean;
+  /** The mode of every identity column the database holds. */
+  identity?: "always" | "by-default";
   /** A column the database no longer has: the earlier name of one a `CHANGE` renamed. */
   gone?: string;
 }): LiveSchemaWithColumnFacts => ({
@@ -711,7 +739,9 @@ const liveWith = (facts: {
   hasConstraint: () => true,
   usable: () => true,
   untrackedSettings: () => facts.settings ?? [],
+  settingsReadable: () => facts.readable ?? true,
   generatesKey: () => facts.generatesKey ?? true,
+  identityMode: () => facts.identity ?? "always",
 });
 
 /** The statuses `proveStatements` gives one MySQL or PostgreSQL file against `schema`. */
@@ -777,6 +807,14 @@ describe("a MySQL column restated by MODIFY or CHANGE", () => {
       expect(status === "keeps" || status === "unshown", statement).toBe(true);
     }
     expect(asked.every(each => each === "dc_posts.slug")).toBe(true);
+  });
+
+  it("is not shown on a table whose column settings cannot be read", async () => {
+    // An NDB table's columns carry a format and a storage the catalog read here does not report,
+    // and a restatement resets them like any other setting.
+    expect(
+      await statusesAgainst([MODIFY], "mysql", liveWith({ readable: false }))
+    ).toEqual(["unshown"]);
   });
 
   it("is proven where the live column holds nothing the statement would reset", async () => {
@@ -1028,19 +1066,117 @@ describe("a key the database assigns, on a table the file creates", () => {
       )
     ).toEqual(["shown", "shown"]);
     expect(renamedTable.asked).toEqual(["dc_pages.position"]);
+  });
 
-    const changed = assignedOnly("dc_posts", "title");
+  it("follows every pair of a chained table rename, in order", async () => {
+    const asked: string[] = [];
+    const schema: LiveSchemaWithColumnFacts = {
+      ...liveWith({}),
+      untrackedSettings: (table, column) => {
+        asked.push(`${table}.${column}`);
+        return ["COMMENT"];
+      },
+    };
+    // The table restated ends under the other's name: `dc_posts` to `tmp`, then `tmp` to
+    // `dc_pages`, within one statement.
+    const [status] = await statusesAgainst(
+      [
+        "ALTER TABLE `dc_posts` MODIFY COLUMN `slug` varchar(500)",
+        "RENAME TABLE `dc_posts` TO `tmp`, `dc_pages` TO `dc_posts`, `tmp` TO `dc_pages`",
+      ],
+      "mysql",
+      schema
+    );
+    expect(asked).toEqual(["dc_pages.slug"]);
+    expect(status).toBe("keeps");
+  });
+
+  it("asks about a key made on a table the file later renames into place", async () => {
+    const STAGED = [
+      'CREATE TABLE "tmp_counters" ("id" serial PRIMARY KEY, "label" text)',
+      'ALTER TABLE "tmp_counters" RENAME TO "counters"',
+    ];
+    const live = (assigned: boolean) => {
+      const { schema, asked } = assignedOnly(
+        assigned ? "counters" : "elsewhere",
+        "id"
+      );
+      return {
+        asked,
+        schema: {
+          ...schema,
+          hasColumn: () => true,
+          hasTable: (name: string) => name !== "tmp_counters",
+        },
+      };
+    };
+    const plain = live(false);
     expect(
-      await statusesAgainst(
+      await statusesAgainst(STAGED, "postgresql", plain.schema, creating)
+    ).toEqual(["not-done", "shown"]);
+    expect(plain.asked).toEqual(["counters.id"]);
+    expect(
+      await statusesAgainst(STAGED, "postgresql", live(true).schema, creating)
+    ).toEqual(["shown", "shown"]);
+  });
+
+  it("asks nothing of a key a later statement of the file makes plain", async () => {
+    const CREATE =
+      'CREATE TABLE "counters" ("id" serial PRIMARY KEY, "label" text)';
+    for (const [dialect, statements] of [
+      [
+        "postgresql",
+        [CREATE, 'ALTER TABLE "counters" ALTER COLUMN "id" DROP DEFAULT'],
+      ],
+      [
+        "postgresql",
+        [
+          'CREATE TABLE "counters" ("id" integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "label" text)',
+          'ALTER TABLE "counters" ALTER COLUMN "id" DROP IDENTITY',
+        ],
+      ],
+      [
+        "mysql",
         [
           "ALTER TABLE `dc_posts` ADD COLUMN `position` int NOT NULL AUTO_INCREMENT UNIQUE",
           "ALTER TABLE `dc_posts` CHANGE COLUMN `position` `slug` int NOT NULL",
         ],
-        "mysql",
-        changed.schema
-      )
-    ).toEqual(["not-done", "shown"]);
-    expect(changed.asked).toEqual(["dc_posts.slug"]);
+      ],
+    ] as const) {
+      const plain = assignedOnly("elsewhere", "id");
+      // The statement that had the database assign the key is proven without asking: the file
+      // itself leaves the column plain. (`DROP IDENTITY` is its own statement to prove, and the
+      // snapshot records no identity to show it by.)
+      const [made] = await statusesAgainst(
+        [...statements],
+        dialect,
+        plain.schema,
+        dialect === "mysql" ? sides : creating
+      );
+      expect(made, statements[1]).toBe("shown");
+      expect(plain.asked, statements[1]).toEqual([]);
+    }
+  });
+
+  it("holds an identity column to the mode the file declares", async () => {
+    const identity = (mode: string) =>
+      `CREATE TABLE "counters" ("id" integer GENERATED ${mode} AS IDENTITY PRIMARY KEY, "label" text)`;
+    for (const [declared, live, status] of [
+      ["ALWAYS", "always", "shown"],
+      ["ALWAYS", "by-default", "not-done"],
+      ["BY DEFAULT", "by-default", "shown"],
+      ["BY DEFAULT", "always", "not-done"],
+    ] as const) {
+      expect(
+        await statusesAgainst(
+          [identity(declared)],
+          "postgresql",
+          liveWith({ identity: live }),
+          creating
+        ),
+        `${declared} against ${live}`
+      ).toEqual([status]);
+    }
   });
 
   it("asks nothing of a key a later statement of the file drops", async () => {
