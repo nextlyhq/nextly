@@ -26,6 +26,10 @@ import {
   type ResolvedBlockNode,
 } from "@nextlyhq/blocks-engine";
 
+import {
+  revealedDefinitions,
+  revealedForCanvas,
+} from "../conditions/applied-conditions";
 import type { AskedSetting } from "../editor-asks";
 import { layerLabel } from "../panels/layers/layers";
 
@@ -228,6 +232,38 @@ function keyOf(check: string, result: PageCheckResult, taken: Set<string>) {
 }
 
 /**
+ * The page's blocks as the editing canvas draws them: every conditioned
+ * block drawn with its conditions lifted, on the page and in the components
+ * it places (`revealedForCanvas`, `revealedDefinitions`), so a block the
+ * author sees on the canvas is judged, whatever its conditions decide.
+ */
+function drawnNodesOf(page: CheckedPage): readonly BlockNode[] {
+  const revealed = revealedForCanvas(page.document, undefined);
+  if (page.definitions === undefined) return revealed.nodes;
+  return resolveComponentInstances(
+    revealed,
+    revealedDefinitions(revealed, page.definitions, undefined)
+  ).document.nodes;
+}
+
+/**
+ * The page as every check is handed it: drawn once, its component
+ * placements as their blocks where the definitions are given, its header and
+ * footer read as their components draw them.
+ */
+function resolvedPageOf(page: CheckedPage): ResolvedPage {
+  return {
+    document: page.document,
+    drawn: drawnNodesOf(page),
+    blocks: page.blocks ?? getBlock,
+    regions: (page.regions ?? []).map(composedRegion),
+    ...(page.definitions === undefined
+      ? {}
+      : { definitions: page.definitions }),
+  };
+}
+
+/**
  * Run the checks over a page. A check that throws is named in `notRun` and
  * the rest still run, so one broken check never hides the others' findings.
  */
@@ -235,20 +271,8 @@ export function runPageChecks(
   page: CheckedPage,
   checks: readonly PageCheck[]
 ): PageCheckReport {
-  const drawn =
-    page.definitions === undefined
-      ? page.document.nodes
-      : resolveComponentInstances(page.document, page.definitions).document
-          .nodes;
-  const resolved: ResolvedPage = {
-    document: page.document,
-    drawn,
-    blocks: page.blocks ?? getBlock,
-    regions: (page.regions ?? []).map(composedRegion),
-    ...(page.definitions === undefined
-      ? {}
-      : { definitions: page.definitions }),
-  };
+  const resolved = resolvedPageOf(page);
+  const { drawn } = resolved;
   const order = pageOrder(page.document);
   const placementOf = placementsOf(drawn);
   const taken = new Set<string>();

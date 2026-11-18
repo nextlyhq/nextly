@@ -62,6 +62,8 @@ export function richTextWords(part: RichTextNode): string {
   const words: string[] = [];
   walkRichText([part], entry => {
     if (typeof entry.text === "string") words.push(entry.text);
+    // A line break draws as a break between words, so it reads as a space.
+    if (entry.type === "linebreak") words.push(" ");
     if (entry.type === "image") words.push(imageAlt(entry));
   });
   return words.join("");
