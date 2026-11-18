@@ -998,11 +998,29 @@ describe("a step's drops", () => {
         },
       ],
     };
-    const { doc } = migrateDocument(
+    const { doc, rewritten } = migrateDocument(
       component,
       source({ "core/table-of-contents": contents, t: { version: 1 } })
     );
     const words = doc.nodes[1];
+    // Its props were rewritten though its version stays, so the report names
+    // it, in document order: a reader examines only the nodes it names.
+    expect(rewritten).toEqual([
+      {
+        path: "/nodes/0",
+        id: "toc",
+        type: "core/table-of-contents",
+        fromVersion: 1,
+        toVersion: 2,
+      },
+      {
+        path: "/nodes/1",
+        id: "words",
+        type: "t",
+        fromVersion: 1,
+        toVersion: 1,
+      },
+    ]);
     expect(words?.props.content).toEqual({ root: "the passage" });
     expect(words?.bindings).toEqual({ title: follows("label") });
     expect(
