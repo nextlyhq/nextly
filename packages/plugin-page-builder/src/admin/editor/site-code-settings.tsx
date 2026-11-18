@@ -50,7 +50,7 @@ import {
 } from "../site-code-client";
 
 /** The two places site code goes, in the order a page has them. */
-const PLACES = [
+export const PLACES = [
   { slot: "head", label: "Head" },
   { slot: "body", label: "End of body" },
 ] as const;
@@ -58,7 +58,7 @@ const PLACES = [
 type Place = (typeof PLACES)[number]["slot"];
 
 /** Where the section is: shown, being edited, or being checked before a save. */
-type Step =
+export type Step =
   | { readonly kind: "view"; readonly saved?: SiteCodeChecked }
   | { readonly kind: "edit"; readonly refused?: SiteCodeChecked }
   | {
@@ -102,7 +102,7 @@ function worthAReview(checked: SiteCodeChecked): boolean {
  * Where a check leads: back to the code with what it refused, to what a
  * policy blocks, to what is worth seeing before saving, or straight to a save.
  */
-function stepAfter(
+export function stepAfter(
   checked: SiteCodeChecked,
   draft: SiteCodeDraft
 ): Step | "save" {
@@ -522,7 +522,7 @@ function Editor({
 }
 
 /** One place's code, its length, and what in it can't be stored. */
-function PlaceEditor({
+export function PlaceEditor({
   place,
   label,
   value,
@@ -774,18 +774,21 @@ function NotesRow({
 }
 
 /** What the site's policy would block, and the choice to save anyway. */
-function PolicyFindings({
+export function PolicyFindings({
   checked,
   working,
   problem,
   onBack,
   onSave,
+  saveLabel = "Save anyway",
 }: {
   checked: SiteCodeChecked;
   working: boolean;
   problem: string | null;
   onBack: () => void;
   onSave: () => void;
+  /** The save button's words, where what it keeps is not saved at once. */
+  saveLabel?: string;
 }): JSX.Element {
   const [understood, setUnderstood] = useState(false);
   const understoodId = useId();
@@ -847,7 +850,7 @@ function PolicyFindings({
           onClick={onSave}
           disabled={!understood || working}
         >
-          Save anyway
+          {saveLabel}
         </Button>
       </Actions>
     </div>
@@ -904,18 +907,21 @@ function ToAllow({ group }: { group: AllowGroup }): JSX.Element {
  * what a Report-Only policy would report, and, said plainly rather than
  * shown as a pass, that no policy is known.
  */
-function Review({
+export function Review({
   checked,
   working,
   problem,
   onBack,
   onSave,
+  saveLabel = "Save code",
 }: {
   checked: SiteCodeChecked;
   working: boolean;
   problem: string | null;
   onBack: () => void;
   onSave: () => void;
+  /** The save button's words, where what it keeps is not saved at once. */
+  saveLabel?: string;
 }): JSX.Element {
   const reported = findingsOf(checked);
   return (
@@ -954,7 +960,7 @@ function Review({
           Back to the code
         </Button>
         <Button type="button" onClick={onSave} disabled={working}>
-          Save code
+          {saveLabel}
         </Button>
       </Actions>
     </div>
