@@ -1770,7 +1770,7 @@ export class CollectionMetadataService extends BaseService {
       await this.forgetDeleted(
         slug,
         collection,
-        unregistered.get(slug) ?? { removed: 0, stored: undefined }
+        unregistered.get(slug) ?? { removed: 0, expire: undefined }
       );
     }
   }
@@ -1959,7 +1959,7 @@ export class CollectionMetadataService extends BaseService {
       await this.forgetDeleted(
         slug,
         collection,
-        unregistered.get(slug) ?? { removed: 0, stored: undefined }
+        unregistered.get(slug) ?? { removed: 0, expire: undefined }
       );
     }
   }
