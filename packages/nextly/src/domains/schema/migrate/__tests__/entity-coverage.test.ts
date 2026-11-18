@@ -520,4 +520,48 @@ describe("the server's rule for comparing table names", () => {
     expect(owners.mainOf("dc_posts")).toBeUndefined();
     expect(owners.mainOf("DC_POSTS")).toBeUndefined();
   });
+
+  it("lists the shared rows of each entity a run retires once, by the server's rule", () => {
+    const shouting = coveredEntity({
+      kind: "collection",
+      slug: "shouting",
+      tableName: "DC_POSTS",
+      source: "code",
+      fields: [],
+    }) as CoveredEntity;
+    /** The entities whose shared rows a run dropping `tables` lists, once each listing. */
+    const listedFor = (
+      entities: CoveredEntity[],
+      rules: ReturnType<typeof identifierCaseRules>,
+      tables: string[]
+    ) =>
+      coverRunDeletions(
+        [tables.map(name => table(name))],
+        entityOwners(entities, { identifierCase: rules.tables })
+      )
+        .flat()
+        .flatMap(d => (d.kind === "rows" && d.of ? [d.of.slug] : []));
+    // Where the server keeps case, two entities' tables differing only in case
+    // are two tables, and each entity's rows are listed.
+    const kept = listedFor(
+      [posts, shouting],
+      identifierCaseRules({ dialect: "mysql", lowerCaseTableNames: 0 }),
+      ["dc_posts", "DC_POSTS"]
+    );
+    expect(new Set(kept)).toEqual(new Set(["posts", "shouting"]));
+    expect(kept.filter(slug => slug === "shouting")).toHaveLength(
+      kept.filter(slug => slug === "posts").length
+    );
+    // Where it folds, one entity's table dropped under two spellings lists its rows once.
+    const folded = listedFor(
+      [posts],
+      identifierCaseRules({ dialect: "sqlite" }),
+      ["dc_posts", "DC_POSTS"]
+    );
+    expect(folded).toEqual(
+      listedFor([posts], identifierCaseRules({ dialect: "sqlite" }), [
+        "dc_posts",
+      ])
+    );
+  });
 });

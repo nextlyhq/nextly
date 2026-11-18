@@ -161,7 +161,10 @@ export function coverRunDeletions(
   owners: EntityOwners,
   retires: (entity: EntityRef) => boolean = () => true
 ): Deletion[][] {
-  const listed = new Set<string>();
+  // Keyed by the entity `mainOf` resolves, which compares table names by the server's rule: one
+  // entity dropped under two spellings is listed once, two entities whose tables differ only in
+  // case on a server that keeps case are listed each.
+  const listed = new Set<CoveredEntity>();
   return perUnit.map(deletions => {
     const owned = withOwners(deletions, owners);
     const shared: Deletion[] = [];
@@ -169,9 +172,8 @@ export function coverRunDeletions(
       if (deletion.kind !== "table" || deletion.owner !== undefined) continue;
       const entity = owners.mainOf(deletion.table);
       if (entity === undefined || !retires(entity)) continue;
-      const key = entity.table.toLowerCase();
-      if (listed.has(key)) continue;
-      listed.add(key);
+      if (listed.has(entity)) continue;
+      listed.add(entity);
       shared.push(...entityRowsOf(entity));
     }
     return [...owned, ...shared];

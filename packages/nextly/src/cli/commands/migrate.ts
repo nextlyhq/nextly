@@ -37,7 +37,6 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { container } from "../../di/container";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
-import { countPasswordsStoredAsGiven } from "../../domains/field-groups/stored-plain-passwords";
 import {
   isLocalizationIntentRefusal,
   parseLocalizationIntent,
@@ -306,7 +305,6 @@ import {
   readMigrationFolder,
   type DeclaredNames,
 } from "../utils/migration-discovery";
-import { askYesInTerminal } from "../utils/prompt-cancelled";
 import { installRegistryResolver } from "../utils/registry-resolver";
 
 import {
@@ -314,17 +312,12 @@ import {
   plainTextPasswordNotice,
 } from "./clear-plaintext-passwords";
 import { runPluginsOnMigrate } from "./migrate-hooks";
+import { migrateStoredData } from "./migrate-stored-data";
 import {
   CORE_UPGRADE_LABEL,
   coreUpgradeSource,
   judgeCoreDeletions,
 } from "./upgrade-steps/core-upgrade-consent";
-import {
-  storedPasswordsNotice,
-  storedPasswordsOn,
-  storedPasswordTotal,
-} from "./upgrade-steps/stored-passwords";
-
 // Re-exported for the callers that import it from this command. Other
 // commands import it from cli/utils, which does not pull this one in.
 export { installRegistryResolver };
@@ -380,10 +373,11 @@ export interface MigrateCommandOptions {
 
   /**
    * The operator's statement that the database is backed up
-   * (`--backup-confirmed`). Read only where the database still keeps its
-   * migration records the way an earlier release did: the run moves them into
-   * `nextly_schema_events` once this is given, or once a person at a terminal
-   * says yes, and otherwise changes nothing.
+   * (`--backup-confirmed`). Read only where an earlier release left work on
+   * the database: its migration records, which the run moves into
+   * `nextly_schema_events`, and data it stored, which the run brings up to
+   * date once its migrations have applied. Each is done once this is given,
+   * or once a person at a terminal says yes.
    * @default false
    */
   backupConfirmed?: boolean;
@@ -513,11 +507,12 @@ async function pluginsOnMigrateStep(args: {
 }
 
 /**
- * End the run through `fail` where a plugin's `onMigrate` failed, once every
- * other step has run: the schema it applied stays applied, and running it
- * again runs the hook again.
+ * End the run through `fail` with a failure kept until every other step has
+ * run: a plugin's `onMigrate` that failed, or the data steps' backup refusal.
+ * The schema the run applied stays applied, and running it again takes the
+ * hook, or the steps, again.
  */
-function endIfHooksFailed(
+function endIfFailed(
   failure: NextlyError | null,
   fail: (error: unknown) => never
 ): void {
@@ -578,6 +573,8 @@ async function moveEarlierRecords(args: {
   options: Pick<MigrateCommandOptions, "backupConfirmed" | "dryRun">;
   /** The run's `--force-unlock`, which clears a stale lock once in the whole run. */
   clearStaleLock: () => Promise<void>;
+  /** The run's one backup question, whose yes holds for the rest of the run. */
+  askBackedUp: () => Promise<boolean>;
   lockTtlSeconds: number | undefined;
   logger: CommandContext["logger"];
 }): Promise<boolean> {
@@ -607,8 +604,7 @@ async function moveEarlierRecords(args: {
     bounds: args.bounds,
     backupConfirmed,
     interactive: canPrompt(),
-    askBackedUp: () =>
-      askYesInTerminal("Have you backed up your database? [y/N]: "),
+    askBackedUp: args.askBackedUp,
     // A stale lock is cleared before this lock, and not again in this run.
     beforeLock: args.clearStaleLock,
     lockTtlSeconds: args.lockTtlSeconds,
@@ -723,12 +719,22 @@ export async function runMigrate(
     const clearStaleLock = oncePerRun(() =>
       maybeForceUnlock(options, db, dialect)
     );
+    // What the run does with data an earlier release stored, and its one
+    // backup question, shared with the move below so nobody is asked twice.
+    const storedData = migrateStoredData({
+      adapter: adapter as unknown as DrizzleAdapter,
+      logger,
+      backupConfirmed: options.backupConfirmed === true,
+      lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
+    });
+
     const ended = await moveEarlierRecords({
       adapter: adapter as unknown as DrizzleAdapter,
       dialect,
       bounds,
       options,
       clearStaleLock,
+      askBackedUp: storedData.askBackedUp,
       lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
       logger,
     });
@@ -799,9 +805,15 @@ export async function runMigrate(
         serverConstructs,
         extensionSchema,
       });
+      await storedData.preview(options.step !== undefined);
       logger.success("Dry run complete (no changes made).");
       return;
     }
+
+    // Data an earlier release stored is brought up to date once the
+    // migrations have applied, and only with a backup confirmed: work whose
+    // backup nobody confirmed is refused here, before anything changes.
+    await storedData.confirmBeforeMigrations(options.step).catch(fail);
 
     // The retired-table cleanup has flags of its own: removing those tables
     // and losing rows still in them are each a separate decision from
@@ -1010,6 +1022,11 @@ export async function runMigrate(
           adapter as unknown as DrizzleAdapter,
           serviceLoggerOf(logger)
         );
+        // Data an earlier release stored, brought up to date under the
+        // schema lock: with every migration applied, since each step reads
+        // the tables as this release keeps them, and after the permissions
+        // the run seeded, which a role's conversion gives.
+        await storedData.takeAfterMigrations();
         // The plugins' own deploy work, last, once every step above has
         // left the schema in step (`migrate-hooks`). Not where migrations
         // are still pending, as none of the steps above are.
@@ -1076,24 +1093,15 @@ export async function runMigrate(
     }
 
     // Read-only too: passwords an earlier release kept as given inside a
-    // container are counted, and `nextly upgrade`, which hashes them, is named.
-    try {
-      const notice = storedPasswordsNotice(
-        storedPasswordTotal(
-          await countPasswordsStoredAsGiven(
-            storedPasswordsOn(adapter as unknown as DrizzleAdapter)
-          )
-        )
-      );
-      if (notice) logger.warn(notice);
-    } catch (err) {
-      logger.warn(
-        `Could not check for passwords stored before this release: ${describeError(err)}`
-      );
-    }
+    // container, where this run did not reach the step that hashes them.
+    await storedData.warnOfPasswordsLeft();
+
+    // The data steps' backup refusal, made after the migrations applied:
+    // the run ends with it now that its other work is done.
+    endIfFailed(storedData.refusal(), fail);
 
     // Last, once the read-only notices above have run.
-    endIfHooksFailed(hooksFailed, fail);
+    endIfFailed(hooksFailed, fail);
 
     const duration = Date.now() - startTime;
     logger.divider();

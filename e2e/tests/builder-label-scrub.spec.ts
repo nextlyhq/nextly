@@ -4,7 +4,8 @@
  * - The label shows the resize cursor, and a plain click on it still focuses
  *   the field.
  * - A drag shows the value live in the field and on the canvas only once
- *   released, and one Undo takes the whole drag back.
+ *   released, and one Undo takes the whole drag back; two drags are two
+ *   steps, each Undo taking back one, on the canvas too.
  * - Escape during a drag puts the value back and writes nothing.
  * - Shift drags in steps of ten, and the result is what the page saves.
  *
@@ -146,6 +147,21 @@ test("a number field's label drags its value, as one undo step", async ({
   await page.keyboard.press("Escape");
   await page.mouse.up();
   await expect(field).toHaveValue("16");
+  await expect(undo).toBeDisabled();
+
+  // Two drags are two steps: each Undo takes back one, on the canvas too.
+  await pressAndMove(page, label, 10);
+  await page.mouse.up();
+  await pressAndMove(page, label, 10);
+  await page.mouse.up();
+  await expect(field).toHaveValue("36");
+  await expect.poll(() => canvasFontSize(page)).toBe("36px");
+  await undo.click();
+  await expect(field).toHaveValue("26");
+  await expect.poll(() => canvasFontSize(page)).toBe("26px");
+  await undo.click();
+  await expect(field).toHaveValue("16");
+  await expect.poll(() => canvasFontSize(page)).toBe("16px");
   await expect(undo).toBeDisabled();
 
   // Shift drags in steps of ten, and the page saves what the drag wrote.

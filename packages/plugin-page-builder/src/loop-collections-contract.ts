@@ -101,6 +101,16 @@ export interface LoopCollectionItem {
    * the offered fields are a narrower view of these.
    */
   readonly readable: readonly LoopReadableField[];
+  /**
+   * The field the admin titles its entries by, where the collection names
+   * one visitors may read: what a new list's item shows as its title.
+   */
+  readonly titleField?: string;
+  /**
+   * Whether its entries are served as pages of their own, so a new list's
+   * item links each title to its entry.
+   */
+  readonly entriesHavePages?: boolean;
 }
 
 /**
@@ -119,6 +129,11 @@ export interface LoopReadableField {
   readonly timeOnly?: true;
   /** The primitive a plugin's field type is stored as, which gives its kind. */
   readonly storage?: FieldStoragePrimitive;
+  /**
+   * For an upload field: whether it takes images, as its accepted types say.
+   * Absent where the field names no types.
+   */
+  readonly takesImages?: boolean;
 }
 
 /**
