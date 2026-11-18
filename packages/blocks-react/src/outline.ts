@@ -99,6 +99,7 @@ export interface PageOutline {
 
 const HEADING_BLOCK = "core/heading";
 const RICH_TEXT_BLOCK = "core/rich-text";
+const COLLECTION_LIST_BLOCK = "core/collection-loop";
 
 const NONE: readonly string[] = Object.freeze([]);
 
@@ -159,6 +160,11 @@ interface OutlineRecord {
   readonly taken: ReadonlySet<string>;
   /** Every id the page's headings are drawn with: the authors' and the made. */
   readonly drawn: ReadonlySet<string>;
+  /**
+   * Each Rich text block inside a Collection list, by node id: its place
+   * among the Rich text blocks of the nearest list holding it, from 1.
+   */
+  readonly passageInList: ReadonlyMap<string, number>;
 }
 
 /** The record of each outline this module made, and of each part's view. */
@@ -181,7 +187,11 @@ export function pageOutline(parts: readonly OutlinePart[]): PageOutline {
   const headings: OutlineHeading[] = [];
   const byPart = new Map<OutlineArea, Map<string, string[]>>();
   const firstById = new Map<string, string[]>();
+  const passageInList = new Map<string, number>();
+  const passagesPerList = new Map<BlockNode, number>();
   for (const part of parts) {
+    // The nearest Collection list holding each node, if any.
+    const listOf = new Map<BlockNode, BlockNode>();
     const byNode = byPart.get(part.area) ?? new Map<string, string[]>();
     byPart.set(part.area, byNode);
     const withinOf = new Map<BlockNode, readonly string[]>();
@@ -191,6 +201,22 @@ export function pageOutline(parts: readonly OutlinePart[]): PageOutline {
           ? NONE
           : [...(withinOf.get(parent) ?? NONE), parent.type];
       withinOf.set(node, within);
+      const list =
+        parent === undefined
+          ? undefined
+          : parent.type === COLLECTION_LIST_BLOCK
+            ? parent
+            : listOf.get(parent);
+      if (list !== undefined) listOf.set(node, list);
+      if (
+        list !== undefined &&
+        node.type === RICH_TEXT_BLOCK &&
+        !passageInList.has(node.id)
+      ) {
+        const place = (passagesPerList.get(list) ?? 0) + 1;
+        passagesPerList.set(list, place);
+        passageInList.set(node.id, place);
+      }
       const found = headingsOfBlock(node);
       if (found.length === 0) return;
       const anchors: string[] = [];
@@ -219,6 +245,7 @@ export function pageOutline(parts: readonly OutlinePart[]): PageOutline {
     byPart,
     taken,
     drawn: new Set([...taken, ...headings.map(heading => heading.anchor)]),
+    passageInList,
   });
   return outline;
 }
@@ -276,11 +303,16 @@ function entryId(id: string, taken: ReadonlySet<string> | undefined): string {
 
 /**
  * The anchors a Rich text block draws its passage's headings with: the
- * outline's, except inside a Collection list's entry. There the passage can
- * be the entry's own (bound to an item field, filled as each entry is drawn,
- * after the outline), so its anchors are made from the passage drawn: by the
- * same slug rules, never one the page's headings are drawn with, and with
- * the entry's place after each (`notes-2--0`).
+ * outline's, with the entry's place inside a Collection list's entry
+ * (`outlineAnchors`), while the passage drawn is the one the outline read.
+ *
+ * Inside an entry the passage can instead be the entry's own (bound to an
+ * item field and filled as each entry is drawn, after the outline). Its
+ * anchors are then made from the passage drawn: by the same slug rules,
+ * never an id the page's headings are drawn with, with the entry's place
+ * after each (`notes-2--0`), and, for the second and later Rich text block
+ * of the list, the block's place among them (`notes-2--0--p2`), since each
+ * passage is drawn alone and two could make the same id.
  *
  * @experimental
  */
@@ -294,10 +326,18 @@ export function passageAnchors(
   if (place === undefined || outline === undefined) {
     return outlineAnchors(ctx, nodeId);
   }
+  const drawn = headingsDrawn(passage);
+  const read = outline.headings.filter(heading => heading.node.id === nodeId);
+  const asRead =
+    read.length === drawn.length &&
+    read.every((heading, i) => heading.text === drawn[i]?.text);
+  if (asRead) return outlineAnchors(ctx, nodeId);
   const record = RECORDS.get(outline);
   const allocator = anchorAllocator(new Set(record?.drawn));
-  return headingsDrawn(passage).map(heading =>
-    entryId(`${allocator.take(heading.text)}--${place}`, record?.taken)
+  const block = record?.passageInList.get(nodeId) ?? 1;
+  const suffix = block > 1 ? `--p${block}` : "";
+  return drawn.map(heading =>
+    entryId(`${allocator.take(heading.text)}--${place}${suffix}`, record?.taken)
   );
 }
 

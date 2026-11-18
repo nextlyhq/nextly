@@ -532,6 +532,66 @@ describe("a heading drawn once per entry of a Collection list", () => {
     ]);
   });
 
+  it("keeps the page's anchors for passages an entry draws as the template holds them", async () => {
+    const find = vi.fn(() =>
+      Promise.resolve({ items: [{ id: "a" }, { id: "b" }], total: 2 })
+    );
+    const html = await drawn(
+      page({
+        id: "list",
+        type: "core/collection-loop",
+        version: 1,
+        props: { collection: "posts", limit: 10 },
+        slots: {
+          children: [
+            richText(passage(["h2", "Notes"])),
+            richText(passage(["h2", "Notes"])),
+          ],
+        },
+      }),
+      { context: createStandaloneContext({ data: { find } }) }
+    );
+    expect(headingIds(html)).toEqual([
+      "notes--0",
+      "notes-2--0",
+      "notes--1",
+      "notes-2--1",
+    ]);
+  });
+
+  it("tells apart two passages one entry gives two Rich text blocks", async () => {
+    const empty: RichTextValue = {
+      root: { type: "root", children: [{ type: "paragraph", children: [] }] },
+    };
+    const bound = (field: string): BlockNode => ({
+      ...richText(empty),
+      bindings: { content: { $bind: field, source: "item" } },
+    });
+    const find = vi.fn(() =>
+      Promise.resolve({
+        items: [
+          {
+            id: "a",
+            first: passage(["h2", "Notes"]),
+            second: passage(["h2", "Notes"]),
+          },
+        ],
+        total: 1,
+      })
+    );
+    const html = await drawn(
+      page(heading("Notes"), {
+        id: "list",
+        type: "core/collection-loop",
+        version: 1,
+        props: { collection: "posts", limit: 10 },
+        slots: { children: [bound("first"), bound("second")] },
+      }),
+      { context: createStandaloneContext({ data: { find } }), bindings: {} }
+    );
+    expect(headingIds(html)).toEqual(["notes", "notes-2--0", "notes-2--0--p2"]);
+  });
+
   it("never draws an entry's id an author gave another block", async () => {
     const find = vi.fn(() =>
       Promise.resolve({ items: [{ id: "a" }, { id: "b" }], total: 2 })
