@@ -1,7 +1,8 @@
 /**
- * The ◇'s hidden state in the stylesheet: faded AND out of hit testing, so a
- * hidden ◇ over a neighbouring side of a box cannot take the click meant for
- * it, and both back together wherever the ◇ is revealed.
+ * How the variable pieces are drawn: a variables menu always shown as a
+ * menu's chevron is, with no rule left for the ◇ it replaced; a value from a
+ * variable in the shared-style green; Unlink a full-size target; and a
+ * variable's name kept whole before its value.
  *
  * Read from the stylesheet because jsdom applies no CSS, so no rendered test
  * can see either property.
@@ -33,66 +34,72 @@ function bodiesOf(selector: string): string[] {
   return bodies;
 }
 
+/** The declarations of every rule with a selector that mentions `part`. */
+function bodiesOfAny(part: string): string[] {
+  const bodies: string[] = [];
+  for (const match of FLAT.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if ((match[1] ?? "").includes(part)) bodies.push(match[2] ?? "");
+  }
+  return bodies;
+}
+
 const declares = (selector: string, declaration: string): boolean =>
   bodiesOf(selector).some(body => body.includes(declaration));
 
-describe("a hidden ◇ takes no clicks", () => {
-  it.each([
-    ".nx-style-inspector__numeric .nx-variable-choice",
-    ".nx-style-inspector__select .nx-variable-choice",
-    "[data-side] .nx-variable-choice",
-  ])("is out of hit testing while hidden: %s", selector => {
-    expect(declares(selector, "opacity: 0")).toBe(true);
-    expect(declares(selector, "pointer-events: none")).toBe(true);
-  });
-
-  it.each([
-    ".nx-style-inspector__numeric:hover .nx-variable-choice",
-    ".nx-style-inspector__numeric:focus-within .nx-variable-choice",
-    ".nx-variable-choice[data-bound]",
-    ".nx-variable-choice[data-empty]",
-    '.nx-variable-choice[data-state="open"]',
-    "[data-side]:hover .nx-variable-choice",
-    "[data-side]:focus-within .nx-variable-choice",
-    '[data-side] .nx-variable-choice[data-state="open"]',
-  ])("takes clicks again wherever it shows: %s", selector => {
-    expect(declares(selector, "opacity: 1")).toBe(true);
-    expect(declares(selector, "pointer-events: auto")).toBe(true);
-  });
-});
-
-describe("a side of a box", () => {
-  it("draws its ◇ inside the side, never over the label or the side above", () => {
-    const body = bodiesOf(
-      ".nx-style-inspector__side-box .nx-variable-choice"
-    ).join(" ");
-    expect(body).toContain("position: absolute");
-    expect(body).toContain("inset-inline-end:");
-    expect(body).toContain("inset-block-start:");
-    expect(body).not.toContain("inset-block-end: 100%");
-  });
-
-  it("keeps a held variable's clear out of the name's way until the side is pointed at or focused", () => {
-    const body = bodiesOf(
-      ".nx-spacing-box .nx-style-inspector__token.nx-variable-chip > button"
-    ).join(" ");
-    // Out of the flow, so the name has the side's whole width at rest, and
-    // inside the chip rather than over the box below.
-    expect(body).toContain("position: absolute");
-    expect(body).toContain("inset-block-start: 0");
-    expect(body).toContain("inset-inline-end: 0");
-    expect(body).toContain("opacity: 0");
-    expect(body).toContain("pointer-events: none");
-    // The box's own reveal for a side's clear, on hover and on focus.
-    for (const reveal of [
-      ".nx-spacing-box .nx-inspector__field:hover .nx-style-inspector__token > button",
-      ".nx-spacing-box .nx-inspector__field:focus-within .nx-style-inspector__token > button",
-    ]) {
-      expect(declares(reveal, "opacity: 1")).toBe(true);
-      expect(declares(reveal, "pointer-events: auto")).toBe(true);
+describe("the variables menu", () => {
+  it("is never hidden until hover, as the ◇ was", () => {
+    const bodies = bodiesOfAny(".nx-variable-menu");
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) {
+      expect(body).not.toContain("opacity: 0");
+      expect(body).not.toContain("pointer-events: none");
     }
   });
 
+  it("is a 24px target, WCAG 2.2's minimum", () => {
+    expect(declares(".nx-variable-menu", "inline-size: 1.5rem")).toBe(true);
+    expect(declares(".nx-variable-menu", "block-size: 1.5rem")).toBe(true);
+  });
+
+  it("leaves no rule for the ◇ it replaced", () => {
+    // The trigger was `.nx-variable-choice`; its list's parts keep the name
+    // with a part after it (`__option`), which this leaves alone.
+    expect(FLAT).not.toMatch(/\.nx-variable-choice(?![\w-])/);
+    expect(FLAT).not.toMatch(/\.nx-variable-choice__menu/);
+  });
+});
+
+describe("a value from a variable", () => {
+  it.each([
+    ".nx-style-inspector__token.nx-variable-chip",
+    ".nx-style-inspector__colour-pick[data-bound]",
+    ".nx-font-pick[data-bound] > .nx-font-pick__trigger",
+  ])("is drawn in the shared-style green: %s", selector => {
+    expect(
+      declares(selector, "background: var(--nx-builder-target-shared-ground)")
+    ).toBe(true);
+    expect(declares(selector, "color: var(--nx-builder-target-shared)")).toBe(
+      true
+    );
+  });
+
+  it("has that green defined for light and for dark", () => {
+    expect(FLAT.match(/--nx-builder-target-shared:/g)?.length).toBeGreaterThan(
+      1
+    );
+    expect(
+      FLAT.match(/--nx-builder-target-shared-ground:/g)?.length
+    ).toBeGreaterThan(1);
+  });
+
+  it("offers Unlink as a 24px target", () => {
+    expect(declares(".nx-variable-unlink", "min-block-size: 1.5rem")).toBe(
+      true
+    );
+  });
+});
+
+describe("a held variable's chip", () => {
   it("lets a held variable's name shrink, so the field keeps the grid", () => {
     expect(declares(".nx-variable-chip__text", "contain: inline-size")).toBe(
       true
@@ -138,18 +145,9 @@ describe("a variable's name before its value", () => {
     ).toBe(true);
   });
 
-  it("leaves a gap between a side's name and its clear", () => {
-    expect(
-      declares(
-        ".nx-spacing-box .nx-style-inspector__token.nx-variable-chip > button",
-        "border-inline-start:"
-      )
-    ).toBe(true);
-  });
-
-  it("draws a unitless field and its ◇ as one box, as a field with a unit is", () => {
+  it("draws a unitless field and its variables menu as one box, as a field with a unit is", () => {
     const box =
-      ".nx-inspector__field:not([data-side]) > .nx-style-inspector__numeric:has(> input + .nx-variable-choice)";
+      ".nx-inspector__field:not([data-side]) > .nx-style-inspector__numeric:has(> input + .nx-variable-menu)";
     expect(declares(box, "border: 1px solid var(--nx-input)")).toBe(true);
   });
 });

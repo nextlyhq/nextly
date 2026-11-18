@@ -30,12 +30,14 @@ import { Undo2 } from "lucide-react";
 import * as React from "react";
 
 import { FluidButton, type FluidHook } from "./fluid-popover";
-import { DEFAULT_FLUID_RANGE } from "./fluid-size";
 import { useRecentColours } from "./recent-colours";
+import { siteTextUseWords } from "./site-text-rows";
 import { colourHexOf } from "./style-colour";
 import {
   clearDarkValue,
   labelNewVariable,
+  fluidRangeOf,
+  setFluidRange,
   setFluidSize,
   relabelToken,
   variableLabelIssue,
@@ -56,6 +58,7 @@ import {
   withoutParts,
   type RemovalPlan,
 } from "./variable-removal";
+import { ShadowValue, ShadowVariables } from "./variable-shadow-value";
 import { swatchStyle } from "./variable-swatch";
 import type { VariableRemoval } from "./variable-usage";
 import { VariableRefusal, type VariableUsageHere } from "./variable-usage-view";
@@ -67,6 +70,7 @@ import {
   unwritableValue,
   valueFieldFor,
   variableCss,
+  type ValueFieldProps,
 } from "./variable-value-controls";
 
 export interface VariableEditorProps {
@@ -165,10 +169,7 @@ export function VariableEditor({
           isNew={isNew}
         />
       </div>
-      <VariableDescription
-        token={token}
-        supplied={suppliedOf(row.identity)}
-      />
+      <VariableDescription token={token} supplied={suppliedOf(row.identity)} />
       {token === undefined ? null : (
         <Values
           entry={entry}
@@ -444,15 +445,18 @@ function Values({
 }): React.JSX.Element {
   const { row, lineHeight } = entry;
   const pair = (at: number, held: SiteToken): React.JSX.Element => (
-    <ModeValues
-      token={held}
-      cssOf={value => variableCss(tokens, held, value)}
-      readOnly={readOnly}
-      onCommit={(mode, value) => write(at, mode, value)}
-      onClear={() => onChange(clearDarkValue(tokens, at))}
-      refusedIn={mode => refusalAt(refused, at, mode)}
-      fluid={fluidHookOf({ token: held, tokens, at, onChange, readOnly })}
-    />
+    // A shadow's Colour offers the site's colour variables.
+    <ShadowVariables.Provider value={tokens}>
+      <ModeValues
+        token={held}
+        cssOf={value => variableCss(tokens, held, value)}
+        readOnly={readOnly}
+        onCommit={(mode, value) => write(at, mode, value)}
+        onClear={() => onChange(clearDarkValue(tokens, at))}
+        refusedIn={mode => refusalAt(refused, at, mode)}
+        fluid={fluidHookOf({ token: held, tokens, at, onChange, readOnly })}
+      />
+    </ShadowVariables.Provider>
   );
   const lineToken =
     lineHeight === undefined ? undefined : tokens.tokens[lineHeight.at];
@@ -488,7 +492,13 @@ function TypeSizeFluid({
   onChange: (tokens: SiteTokenSet) => void;
   readOnly: boolean;
 }): React.JSX.Element | null {
-  const hook = fluidHookOf({ token: size, tokens, at: sizeAt, onChange, readOnly });
+  const hook = fluidHookOf({
+    token: size,
+    tokens,
+    at: sizeAt,
+    onChange,
+    readOnly,
+  });
   return hook === undefined ? null : <FluidButton hook={hook} />;
 }
 
@@ -678,11 +688,13 @@ function fluidHookOf({
   readOnly: boolean;
 }): FluidHook | undefined {
   if (readOnly || token.kind !== "dimension") return undefined;
+  const range = fluidRangeOf(tokens);
   return {
     sizes: token.fluid,
     value: token.values.light,
-    onFluid: sizes =>
-      onChange(setFluidSize(tokens, at, sizes, DEFAULT_FLUID_RANGE)),
+    range,
+    onFluid: sizes => onChange(setFluidSize(tokens, at, sizes, range)),
+    onRange: next => onChange(setFluidRange(tokens, next)),
   };
 }
 
@@ -710,7 +722,7 @@ function ModeValues({
   /** "Fluid…" on a size's light value, where it can be changed. */
   fluid: FluidHook | undefined;
 }): React.JSX.Element {
-  const Field = token.kind === "color" ? ColourValue : valueFieldFor(token);
+  const Field = fieldFor(token);
   return (
     <>
       <Field
@@ -737,6 +749,17 @@ function ModeValues({
 }
 
 /**
+ * The field a variable's values are edited with: a colour's swatch and
+ * picker, a shadow's layers, and every other kind's own field.
+ */
+function fieldFor(
+  token: SiteToken
+): (props: ValueFieldProps) => React.JSX.Element {
+  if (token.kind === "color") return ColourValue;
+  return token.kind === "shadow" ? ShadowValue : valueFieldFor(token);
+}
+
+/**
  * A colour: a swatch that opens the picker inline, and its hex field.
  *
  * The picker sits inside this popover rather than in a second one, so focus
@@ -747,7 +770,7 @@ function ModeValues({
  * Its picker lists the author's Recent colours, as a block's does; a colour
  * written here, typed or picked, joins them.
  */
-function ColourValue({
+export function ColourValue({
   label,
   value,
   readOnly,
@@ -996,7 +1019,7 @@ function DarkValue({
       </div>
     );
   }
-  const Field = token.kind === "color" ? ColourValue : valueFieldFor(token);
+  const Field = fieldFor(token);
   return (
     <>
       <Field
@@ -1060,8 +1083,25 @@ function Actions({
     partsOf(entry, token, tokens, suppliedOf),
     usage
   );
-  const { step, setStep, remove } = useRemoveStep(plan, removing);
+  // A Site text row pointing at what Remove takes away holds it: the row
+  // would lose its size on every page, so the removal is refused here as
+  // the server refuses it, naming the row.
+  const heldBy = siteTextUseWords(
+    tokens,
+    plan.removable.map(part => part.identity)
+  );
+  const { step, setStep, remove } = useRemoveStep(plan, removing, heldBy);
   const shown = shownStep(step, plan.removal);
+  if (shown === "held" && heldBy !== undefined) {
+    return (
+      <HeldRemoval
+        plan={plan}
+        heldBy={heldBy}
+        onReset={() => onChange(resetParts(tokens, plan.changed))}
+        onRemove={remove}
+      />
+    );
+  }
   if (shown === "confirm" && plan.removable.length > 0) {
     return (
       <ConfirmRemove
@@ -1095,6 +1135,36 @@ function Actions({
           usage={plan.gate}
         />
       ) : null}
+    </>
+  );
+}
+
+/**
+ * Remove refused because a Site text row uses what it takes away: the row
+ * named, and what to do first.
+ */
+function HeldRemoval({
+  plan,
+  heldBy,
+  onReset,
+  onRemove,
+}: {
+  plan: RemovalPlan;
+  heldBy: string;
+  onReset: () => void;
+  onRemove: () => void;
+}): React.JSX.Element {
+  return (
+    <>
+      <ActionRow
+        plan={plan}
+        checking={false}
+        onReset={onReset}
+        onRemove={onRemove}
+      />
+      <p className="nx-vars-editor__issue" role="status">
+        {`${plan.named} is used by ${heldBy}, so it can't be removed. Point that row at another type size first.`}
+      </p>
     </>
   );
 }
@@ -1150,7 +1220,7 @@ function ActionRow({
  * Where Remove has got to: nothing yet, reading where it is used again, its
  * confirm, or why it cannot.
  */
-type RemoveStep = "idle" | "checking" | "confirm" | "refused";
+type RemoveStep = "idle" | "checking" | "confirm" | "refused" | "held";
 
 /**
  * Remove's steps. Counts read earlier may say a variable is used when it no
@@ -1161,7 +1231,9 @@ type RemoveStep = "idle" | "checking" | "confirm" | "refused";
  */
 function useRemoveStep(
   plan: RemovalPlan,
-  removing: boolean
+  removing: boolean,
+  /** The Site text rows holding what Remove takes away, in words, if any. */
+  heldBy: string | undefined
 ): {
   step: RemoveStep;
   setStep: (step: RemoveStep) => void;
@@ -1170,6 +1242,10 @@ function useRemoveStep(
   const [step, setStep] = React.useState<RemoveStep>("idle");
   const { gate, removal, removable } = plan;
   const remove = (): void => {
+    if (heldBy !== undefined) {
+      setStep("held");
+      return;
+    }
     if (!refuses(removal) || gate === undefined) {
       setStep("confirm");
       return;

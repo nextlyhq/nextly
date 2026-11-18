@@ -60,16 +60,19 @@ import type {
   NamedQueryLookup,
   PageBindings,
   PageContext,
+  PageForms,
   PageIssue,
   QueryBudget,
 } from "./context";
+import { createStandaloneContext } from "./context";
 import {
   anyListWhere,
   listCollectionsWhere,
   listPropsAsBound,
 } from "./list-collections";
+import { outlineForPart, pageOutline, withOutline } from "./outline";
 import { layoutPartSheets, type PagePart } from "./page-parts";
-import { PageRenderer } from "./page-renderer";
+import { outlinePartOf, PageRenderer } from "./page-renderer";
 import {
   heldConditionsOf,
   holdsBackConditions,
@@ -827,8 +830,13 @@ export function drawWithRegions(args: {
   shared: SharedRendererProps;
   siteStyles: SiteSheetInput | undefined;
   definitions: DefinitionsById;
+  /**
+   * The forms of a region's component: a form in a header or footer posts
+   * naming the component that defines it, not the page around it.
+   */
+  formsFor?: (componentId: string) => PageForms;
 }): ReactElement[] {
-  const { regions, page, shared, siteStyles, definitions } = args;
+  const { regions, page, shared, siteStyles, definitions, formsFor } = args;
   const header = regions.find(part => part.region.area === "header");
   const footer = regions.find(part => part.region.area === "footer");
   // In the order they are drawn: header, page, footer.
@@ -848,35 +856,60 @@ export function drawWithRegions(args: {
     pageScope:
       typeof page.styles?.scope === "string" ? page.styles.scope : undefined,
   });
-  return parts.map((part, index) => {
+  // Each part's props, then ONE outline over all of them in drawing order,
+  // set on every part's context: a heading in the header and one on the page
+  // with the same words get two anchors, and an id an author gave a block in
+  // the footer is never made for a heading on the page.
+  const drawnParts = parts.map((part, index) => {
     const sheet = sheets[index] ?? {};
     if (part === "page") {
-      return createElement(PageRenderer, { ...page, ...sheet, key: "page" });
+      return {
+        area: "content" as const,
+        key: "page",
+        props: { ...page, ...sheet },
+      };
     }
     const area = part.region.area;
-    return createElement(
+    return {
       area,
-      { key: area, "data-nextly-region": area },
-      createElement(PageRenderer, {
+      key: area,
+      props: {
         ...shared,
         // The blocks the renderer keeps for this region's own conditions,
         // from the preparation it draws the region with, not the page's.
-        ...(shared.context === undefined
-          ? {}
-          : {
-              context: {
-                ...shared.context,
-                heldConditions: heldConditionsOf(part.prepared ?? undefined),
-              },
-            }),
+        context: {
+          ...(shared.context ?? createStandaloneContext()),
+          heldConditions: heldConditionsOf(part.prepared ?? undefined),
+          ...(formsFor === undefined
+            ? {}
+            : { forms: formsFor(part.region.componentId) }),
+        },
         ...sheet,
         // The document the region was prepared from, so the renderer reuses
         // that preparation rather than running the pipeline again.
         document: part.document,
         ...(definitions.size === 0 ? {} : { definitions }),
         ...(part.prepared === null ? {} : { prepared: part.prepared }),
-      })
-    );
+      },
+    };
+  });
+  const outline = pageOutline(
+    drawnParts.map(part => outlinePartOf(part.props, part.area))
+  );
+  return drawnParts.map(({ area, key, props }) => {
+    const drawn = createElement(PageRenderer, {
+      ...props,
+      // The page's outline as this part reads it: node ids are unique only
+      // within one document, so a part's blocks find their own anchors.
+      context: withOutline(
+        props.context ?? createStandaloneContext(),
+        outlineForPart(outline, area)
+      ),
+      key,
+    });
+    return area === "content"
+      ? drawn
+      : createElement(area, { key: area, "data-nextly-region": area }, drawn);
   });
 }
 

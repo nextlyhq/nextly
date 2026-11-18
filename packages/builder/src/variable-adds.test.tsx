@@ -100,7 +100,8 @@ const addRows = (id: VariableGroup): string[] =>
 describe("the add rows", () => {
   it("ends each list with its own add row, and the headings have none", () => {
     render(<Host />);
-    expect(addRows("colours")).toEqual(["Add colour"]);
+    // The colours end with "+ New group" too, under the last group.
+    expect(addRows("colours")).toEqual(["Add colour", "New group"]);
     expect(addRows("type")).toEqual(["Add type size"]);
     expect(addRows("spacing")).toEqual(["Add spacing"]);
     expect(addRows("radius")).toEqual(["Add radius"]);
@@ -166,6 +167,31 @@ describe("the add rows", () => {
     );
     expect(
       await screen.findByRole("dialog", { name: "Edit New radius" })
+    ).toBeDefined();
+  });
+});
+
+describe("adding a shadow", () => {
+  it("starts it as a shadow that shows, built with the shadow's fields", async () => {
+    // A new shadow once started as `0 0 0 rgba(0, 0, 0, 0)`, which draws
+    // nothing, typed in one text box.
+    render(<Host />);
+    fireEvent.click(
+      within(group("shadows")).getByRole("button", { name: "Add shadow" })
+    );
+    const editor = await screen.findByRole("dialog", {
+      name: "Edit New shadow",
+    });
+    const light = within(editor).getByRole("group", { name: "Light" });
+    const layer = within(light).getByRole("group", { name: "Layer 1" });
+    expect(
+      (within(layer).getByLabelText("Y offset") as HTMLInputElement).value
+    ).toBe("4");
+    expect(
+      (within(layer).getByLabelText("Blur") as HTMLInputElement).value
+    ).toBe("12");
+    expect(
+      within(editor).getByRole("button", { name: "+ Add layer" })
     ).toBeDefined();
   });
 });

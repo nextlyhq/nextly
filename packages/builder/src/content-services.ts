@@ -72,6 +72,14 @@ export interface MediaPickerProps {
   accept?: string;
   /** What is chosen when it opens: the file the prop stores, if any. */
   initialSelectedIds?: Set<string>;
+  /**
+   * One file, or several: `multi` lets the author pick many, handed back in
+   * the order they were picked, as a Gallery's "Add images" asks. Unset is
+   * one.
+   *
+   * @experimental Settles with the Gallery's "Add images".
+   */
+  mode?: "single" | "multi";
 }
 
 /** What a relation control asks the host for: one collection's entries. */
@@ -274,6 +282,20 @@ export interface ContentServices extends BindingServices {
    * picker offers no Recent row.
    */
   readonly recentIcons?: PreferenceStore;
+  /**
+   * A form a Form block picked from a provider, read with the signed-in
+   * author's own access, for what its own "After sending" setting is.
+   * Absent, or answering `undefined`, the panel names the choice without
+   * saying what it is.
+   *
+   * @experimental Settles with the form provider contract.
+   */
+  readonly describeForm?: (form: {
+    readonly provider: string;
+    readonly ref: string;
+  }) => Promise<
+    { readonly afterSending: { readonly kind: "message" | "page" } } | undefined
+  >;
 }
 
 /**

@@ -2340,75 +2340,27 @@ describe("the nearest theme marker above the canvas", () => {
 
 describe("the site's body font on the canvas root", () => {
   /*
-   * The stylesheet sets the page in `--nx-canvas-site-font`, and the root
-   * states which token property that is. The property's name depends on the
-   * prefix the site's tokens are emitted under, so a hard-coded `--site-` left
-   * a site under another prefix in the fallback face.
+   * The canvas root names no font of its own: the site's Body font is the
+   * page sheet's rule on the page root, the rule a published page and a page
+   * the site serves carry too, so the blank canvas has no font path of its
+   * own.
    */
   const page: BlockDocument = { formatVersion: 1, kind: "page", nodes: [] };
   const breakpoints = { viewport: [], container: [] };
 
-  function fontOf(
-    siteStyles: SiteSheetInput | false,
-    routePrefix?: string
-  ): string {
+  it("names no font variable, whatever the site's prefix", () => {
     const { container } = render(
       <Canvas
         document={page}
-        siteStyles={siteStyles}
-        {...(routePrefix === undefined
-          ? {}
-          : {
-              render: {
-                styleContext: { breakpoints, tokenPrefix: routePrefix },
-              },
-            })}
+        siteStyles={{ breakpoints, tokens: { tokens: [], prefix: "--brand-" } }}
       />
     );
     const root = container.querySelector<HTMLElement>(`.${CANVAS_ROOT_CLASS}`);
-    return root?.style.getPropertyValue("--nx-canvas-site-font") ?? "";
-  }
-
-  it("names the body font under the token set's prefix", () => {
-    expect(
-      fontOf({ breakpoints, tokens: { tokens: [], prefix: "--brand-" } })
-    ).toBe("var(--brand-font-body, system-ui)");
-  });
-
-  it("lets the sheet's own prefix win, as the sheet compiler does", () => {
-    expect(
-      fontOf({
-        breakpoints,
-        tokenPrefix: "--acme-",
-        tokens: { tokens: [], prefix: "--brand-" },
-      })
-    ).toBe("var(--acme-font-body, system-ui)");
-  });
-
-  it("takes the route context's prefix when the site states none, as the renderer does", () => {
-    /*
-     * The renderer reconciles the route's prefix into the sheet it emits when
-     * the site states none, so the body font is declared under it. Reading the
-     * site input alone named `--site-font-body`, which nothing declared.
-     */
-    expect(fontOf({ breakpoints }, "--route-")).toBe(
-      "var(--route-font-body, system-ui)"
+    // The control: the root does name the site's ground under its prefix.
+    expect(root?.style.getPropertyValue("--nx-canvas-site-ground")).toBe(
+      "var(--brand-color-background, Canvas)"
     );
-    // The site's own prefix still outranks the route's, as in the sheet.
-    expect(
-      fontOf(
-        { breakpoints, tokens: { tokens: [], prefix: "--brand-" } },
-        "--route-"
-      )
-    ).toBe("var(--brand-font-body, system-ui)");
-  });
-
-  it("uses the default prefix when the site states none", () => {
-    expect(fontOf({ breakpoints })).toBe("var(--site-font-body, system-ui)");
-  });
-
-  it("states nothing when the host serves no site sheet", () => {
-    expect(fontOf(false)).toBe("");
+    expect(root?.getAttribute("style") ?? "").not.toMatch(/font/);
   });
 });
 

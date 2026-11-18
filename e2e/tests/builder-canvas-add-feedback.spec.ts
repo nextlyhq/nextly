@@ -2,10 +2,10 @@
  * Every add control on the canvas visibly answers, and the Add panel's tile
  * card never covers a tile.
  *
- * The empty page's "Add section", pressed with the Add panel closed and again
- * with it open and scrolled: the panel is open, its search has focus, its
- * list is back at the top, and the line naming the place is highlighted and
- * says where the block goes. A press that only re-opened an open panel
+ * The empty page's "Insert a saved section", pressed with the Add panel
+ * closed and again with it open and scrolled: the panel is open on its Saved
+ * sections tab, its search has focus, its list is back at the top, and the
+ * line naming the place is highlighted and says where the block goes. A press that only re-opened an open panel
  * changed nothing on screen, which is the broken version this rules out.
  *
  * An empty container's "+" and a gap's "+" answer in place instead: each
@@ -159,7 +159,7 @@ async function expectPicked(
 test.describe("the canvas's add controls", () => {
   test.describe.configure({ timeout: 240_000 });
 
-  test("the empty page's Add section answers with Add closed and open", async ({
+  test("the empty page's Insert a saved section answers with Add closed and open", async ({
     page,
   }) => {
     const id = await createPage(page.request, {
@@ -169,13 +169,21 @@ test.describe("the canvas's add controls", () => {
     });
     await openBuilder(page, id);
     const start = page.getByRole("button", {
-      name: "Add section",
+      name: "Insert a saved section",
       exact: true,
     });
     for (const open of [false, true]) {
+      if (open) {
+        // Back on Blocks, whose list is long enough to scroll down first.
+        await page.getByRole("tab", { name: "Blocks" }).click();
+      }
       await setAdd(page, open);
       await start.click();
       await expectAnswered(page, "Adding at the end of the page");
+      // On the tab that holds saved sections.
+      await expect(
+        page.getByRole("tab", { name: "Saved sections" })
+      ).toHaveAttribute("aria-selected", "true");
     }
   });
 
@@ -245,11 +253,11 @@ test.describe("the Add panel's tile card", () => {
 
     // The tile beside takes the very next click: it adds its block, which
     // is then the selection the line names (inside it, when it holds
-    // blocks).
+    // blocks). The pointer still rests on that tile, so the line names it.
     const name = (await beside.getAttribute("aria-label")) ?? "";
     await beside.click();
     await expect(page.locator(".nx-insert-panel__placement")).toHaveText(
-      new RegExp(`^Adding (after ${name}|inside ${name}, at the end)$`)
+      new RegExp(`^${name} goes (after ${name}|inside ${name}, at the end)$`)
     );
   });
 });

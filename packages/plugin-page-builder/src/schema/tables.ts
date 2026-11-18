@@ -33,7 +33,7 @@ export const SCHEMA_PREFIX = "page_builder";
  * The schema version the database must have applied before the plugin starts.
  * It moves with every migration module.
  */
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 /** The columns of {@link usageRuns}, as `defineTable` checks and publishes them. */
 type UsageRunsColumns = {
@@ -448,6 +448,7 @@ function usageSubjectColumns(): UsageSubjectColumns {
 /** The columns of {@link classUsageRows}. */
 type ClassUsageColumns = UsageSubjectColumns & {
   readonly classId: ColumnBuilder<string, false, false>;
+  readonly blocks: ColumnBuilder<number, true, false>;
 };
 
 /**
@@ -466,7 +467,14 @@ type ClassUsageColumns = UsageSubjectColumns & {
 export const classUsageRows: TableDefinition<"class_usage", ClassUsageColumns> =
   defineTable<"class_usage", ClassUsageColumns>(
     "class_usage",
-    { ...usageSubjectColumns(), classId: col.varchar(255) },
+    {
+      ...usageSubjectColumns(),
+      classId: col.varchar(255),
+      // How many of the document's blocks wear the class, so a shared style
+      // can say how many blocks it is on. Null on a marker row, and on a row
+      // written before the count existed, which the next walk replaces.
+      blocks: col.integer({ nullable: true }),
+    },
     {
       indexes: [{ columns: ["entity", "entityKey"] }, { columns: ["classId"] }],
     }

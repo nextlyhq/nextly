@@ -452,3 +452,75 @@ describe("a rule for an element the block draws inside itself", () => {
     expect(showing?.origin).toEqual({ kind: "blockType", type: "core/box" });
   });
 });
+
+describe("the page root's text, from Site text's Body row", () => {
+  /** A compile writing a size on the page root, and optionally a page value. */
+  function rootTrace(pageSize?: string): readonly StyleTraceEntry[] {
+    const { trace } = compilePageCss(
+      page(
+        [node({})],
+        pageSize === undefined
+          ? undefined
+          : { styles: styles({ fontSize: pageSize }) }
+      ),
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        elementBases: {
+          root: styles({ fontSize: "18px" }),
+          h1: styles({ fontSize: "40px" }),
+        },
+        trace: true,
+      } as never
+    );
+    expect(trace).toBeDefined();
+    return trace ?? [];
+  }
+
+  const askFontSize = {
+    property: "font-size",
+    state: "base" as const,
+    breakpoints: ["base"],
+  };
+
+  it("is recorded on the root", () => {
+    const entries = rootTrace().filter(entry => entry.property === "font-size");
+    expect(entries.map(entry => entry.origin)).toContainEqual({
+      kind: "element",
+      tag: "root",
+    });
+  });
+
+  it("reaches every block by inheritance, whatever it renders", () => {
+    const paragraph: StyleSubject = {
+      nodeId: "n1",
+      blockType: "core/box",
+      tag: "p",
+    };
+    expect(styleOrigin(rootTrace(), paragraph, askFontSize)?.origin).toEqual({
+      kind: "element",
+      tag: "root",
+    });
+    expect(styleOrigin(rootTrace(), box, askFontSize)?.origin).toEqual({
+      kind: "element",
+      tag: "root",
+    });
+  });
+
+  it("loses to a heading's own element rule, which lands on the heading", () => {
+    const heading: StyleSubject = {
+      nodeId: "n1",
+      blockType: "core/box",
+      tag: "h1",
+    };
+    expect(styleOrigin(rootTrace(), heading, askFontSize)?.origin).toEqual({
+      kind: "element",
+      tag: "h1",
+    });
+  });
+
+  it("loses to the page's own setting, written on the same root more strongly", () => {
+    expect(styleOrigin(rootTrace("20px"), box, askFontSize)?.origin).toEqual({
+      kind: "page",
+    });
+  });
+});

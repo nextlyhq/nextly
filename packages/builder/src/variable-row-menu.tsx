@@ -1,6 +1,7 @@
 /**
- * A variable row's ⋯ menu: Rename, Duplicate, the dark value, and Remove
- * or, for a variable the site's code supplies, Reset to built-in.
+ * A variable row's ⋯ menu: Rename, Duplicate, a colour's moves, the dark
+ * value, and Remove or, for a variable the site's code supplies, Reset to
+ * built-in.
  *
  * Remove opens the row's editor at its confirm rather than removing from the
  * menu, so the one removal there is, with its check of where the variable
@@ -20,6 +21,7 @@ import {
 import { Ellipsis } from "lucide-react";
 import * as React from "react";
 
+import { ColourMoveItems } from "./colour-move-items";
 import {
   clearDarkValue,
   setTokenValue,
@@ -107,6 +109,13 @@ export function RowMenu({
         <DropdownMenuItem onSelect={handOff(actions.onDuplicate)}>
           Duplicate
         </DropdownMenuItem>
+        {entry.row.kind === "color" ? (
+          <ColourMoveItems
+            row={entry.row}
+            tokens={tokens}
+            onChange={onChange}
+          />
+        ) : null}
         {dark ? (
           // Offered on any kind that holds one, as an import can leave on
           // a size, so it can be taken away; it is used until it is.

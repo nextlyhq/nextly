@@ -13,6 +13,7 @@ import { useDocumentOpensIn } from "../useDocumentOpensIn";
 const state = vi.hoisted(() => ({
   identity: null as DocumentIdentity | null,
   collections: undefined as readonly object[] | undefined,
+  singles: undefined as readonly object[] | undefined,
 }));
 
 vi.mock(
@@ -24,6 +25,10 @@ vi.mock(
 );
 vi.mock("@admin/hooks/queries/useCollections", () => ({
   useEveryNavCollection: () => ({ data: state.collections }),
+}));
+vi.mock("@admin/hooks/queries/useSingles", async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  useEverySingle: () => ({ data: state.singles }),
 }));
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => ({
@@ -60,9 +65,26 @@ const POSTS = {
   ],
 };
 
+/** A Homepage Single: a title and a page layout, so the builder comes first. */
+const HOMEPAGE = {
+  slug: "homepage",
+  label: "Homepage",
+  fields: [title, { name: "layout", type: "blocks" }],
+};
+/** Contact details: an email first, so it opens as a form. */
+const CONTACT = {
+  slug: "contact",
+  label: "Contact details",
+  fields: [
+    { name: "email", type: "email" },
+    { name: "extras", type: "blocks" },
+  ],
+};
+
 beforeEach(() => {
   state.identity = { kind: "collection", slug: "pages", documentId: "p1" };
   state.collections = [PAGES, POSTS];
+  state.singles = [HOMEPAGE, CONTACT];
 });
 
 const read = () => renderHook(() => useDocumentOpensIn()).result.current;
@@ -98,15 +120,42 @@ describe("useDocumentOpensIn", () => {
     expect(read()?.list.label).toBe("pages");
   });
 
-  it("is null outside an editor, on a new entry, on a Single and before the collection is known", () => {
+  it("is null outside an editor, on a new entry and before the collection is known", () => {
     state.identity = null;
     expect(read()).toBeNull();
     state.identity = { kind: "collection", slug: "pages" };
     expect(read()).toBeNull();
-    state.identity = { kind: "single", slug: "pages" };
-    expect(read()).toBeNull();
     state.identity = { kind: "collection", slug: "pages", documentId: "p1" };
     state.collections = undefined;
+    expect(read()).toBeNull();
+  });
+});
+
+describe("useDocumentOpensIn on a Single", () => {
+  it("names the builder for a Homepage, and the Content screen as where it is found", () => {
+    state.identity = { kind: "single", slug: "homepage", documentId: "h1" };
+    expect(read()).toEqual({
+      opensIn: "builder",
+      list: { label: "content", address: "/admin/content" },
+    });
+  });
+
+  it("says the form for a Single whose first field is not the builder", () => {
+    state.identity = { kind: "single", slug: "contact", documentId: "c1" };
+    expect(read()?.opensIn).toBe("form");
+  });
+
+  it("reads the Single, not a collection that shares its slug", () => {
+    // A collection named like the Single opens in the builder; the Single,
+    // whose first field is an email, still says the form.
+    state.collections = [{ ...PAGES, name: "contact" }];
+    state.identity = { kind: "single", slug: "contact", documentId: "c1" };
+    expect(read()?.opensIn).toBe("form");
+  });
+
+  it("is null before the Single is known", () => {
+    state.identity = { kind: "single", slug: "homepage", documentId: "h1" };
+    state.singles = undefined;
     expect(read()).toBeNull();
   });
 });

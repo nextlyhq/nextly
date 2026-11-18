@@ -18,6 +18,7 @@ import migration9 from "./20261107_174750_902_create_binding_report_tables";
 import migration10 from "./20261112_193109_764_seed_composition_graph_lock";
 import migration11 from "./20261117_054612_570_create_binding_uses_table";
 import migration12 from "./20261117_132736_174_reset_binding_uses_fill";
+import migration13 from "./20261117_184525_129_add_class_usage_blocks";
 
 export const migrations: PluginMigration[] = [
   migration0,
@@ -33,4 +34,5 @@ export const migrations: PluginMigration[] = [
   migration10,
   migration11,
   migration12,
+  migration13,
 ];

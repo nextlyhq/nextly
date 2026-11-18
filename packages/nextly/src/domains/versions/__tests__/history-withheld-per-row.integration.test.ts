@@ -9,6 +9,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import {
   defineCollection,
   defineFieldGroup,
@@ -183,6 +184,9 @@ async function documentWithMixedRows(
     { collectionName: "notes", entryId: id, overrideAccess: true },
     { title: "v2", items, cards: second, _overwrite: true }
   );
+  // The reader may read the document: a history read asks the document's read
+  // gate as its caller, which a reader without the permission does not pass.
+  await userWhoMay(current, READER.id, "read", ["notes"]);
   return id;
 }
 

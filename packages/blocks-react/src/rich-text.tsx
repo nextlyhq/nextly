@@ -8,9 +8,9 @@ import type { ReactNode } from "react";
 
 import {
   anchorAllocator,
-  anchorIds,
   headingRank,
   type HeadingAnchor,
+  type HeadingRank,
 } from "./blocks/heading-anchors";
 import { relFor, url } from "./blocks/props";
 import type { BlockHostPolicy } from "./context";
@@ -265,38 +265,64 @@ function drawnWords(
   return words.join("").replace(/\s+/g, " ").trim();
 }
 
+/** One heading a passage draws: the node drawn, its words and its level. */
+interface DrawnHeading {
+  readonly node: RichTextNode;
+  readonly text: string;
+  readonly rank: HeadingRank;
+}
+
 /** Every heading a passage's nodes draw, in the order they are drawn. */
 function headingsOf(
   nodes: readonly RichTextNode[],
   parts: PartsReader
-): HeadingAnchor[] {
-  const anchors: HeadingAnchor[] = [];
-  const ids = anchorAllocator();
+): DrawnHeading[] {
+  const headings: DrawnHeading[] = [];
   const budget: VisitBudget = { left: MAX_HEADING_VISITS };
   walkDrawn(nodes, budget, node => {
     const { inside, after } = parts(node);
     const text =
       node.type === "heading" ? drawnWords(inside, parts, budget) : "";
     // A heading with no words has no anchor: a link to it would have none.
-    if (text !== "")
-      anchors.push({ node, id: ids.take(text), text, rank: headingRank(node) });
+    if (text !== "") headings.push({ node, text, rank: headingRank(node) });
     // Walked as the render draws them: the node's own children, then what it
     // moved out after itself.
     return [inside, after];
   });
-  return anchors;
+  return headings;
 }
 
 /**
- * Every heading a stored passage draws, in order, each with its id and the
- * words it draws, read by the walk `RichText` draws the passage with.
+ * Every heading a stored passage draws, in order, with its words and level,
+ * read by the walk `RichText` draws the passage with. The page outline lists
+ * a Rich text block's headings by it, and hands back one anchor for each, in
+ * this order (`RichTextProps.anchors`).
  *
  * Takes `unknown` because it reads a block prop, which holds whatever was
  * stored: anything that is not rich text draws no headings.
  */
-export function passageHeadings(value: unknown): readonly HeadingAnchor[] {
+export function headingsDrawn(
+  value: unknown
+): readonly Pick<DrawnHeading, "text" | "rank">[] {
   if (!isRichTextValue(value)) return [];
   return headingsOf(value.root.children, partsReader());
+}
+
+/**
+ * Every heading a stored passage draws, in order, each with the id it would
+ * be anchored by on a page holding this passage alone.
+ *
+ * On a page the ids come from the page outline, which numbers a repeat
+ * across every heading on the page; this reads one passage by itself, for a
+ * reader that has only the passage.
+ */
+export function passageHeadings(value: unknown): readonly HeadingAnchor[] {
+  if (!isRichTextValue(value)) return [];
+  const ids = anchorAllocator();
+  return headingsOf(value.root.children, partsReader()).map(heading => ({
+    ...heading,
+    id: ids.take(heading.text),
+  }));
 }
 
 /**
@@ -586,11 +612,15 @@ export interface RichTextProps {
    */
   hostPolicy?: BlockHostPolicy;
   /**
-   * Whether each heading is drawn with an id, so a link (a table of contents
-   * among them) can reach it. Absent is none: a passage drawn somewhere other
-   * than a page, such as an email, keeps its markup as it was.
+   * The ids the passage's headings are drawn with, in the order it draws
+   * them (`headingsDrawn`), so a link (a table of contents among them) can
+   * reach each one. On a page they are the page outline's anchors for the
+   * block drawing the passage, unique on the whole page. A heading past the
+   * end of the list, and every heading when it is absent, is drawn with no
+   * id: a passage drawn somewhere other than a page, such as an email, keeps
+   * its markup as it was.
    */
-  anchorHeadings?: boolean;
+  anchors?: readonly string[];
 }
 
 /**
@@ -605,7 +635,7 @@ export interface RichTextProps {
 export function RichText({
   value,
   hostPolicy,
-  anchorHeadings,
+  anchors,
 }: RichTextProps): ReactNode {
   if (!isRichTextValue(value)) return null;
   // One reader for the render and for its headings' ids, so each id is found
@@ -614,9 +644,60 @@ export function RichText({
   const draw: DrawSettings = {
     host: hostPolicy,
     parts,
-    ...(anchorHeadings === true
-      ? { anchors: anchorIds(headingsOf(value.root.children, parts)) }
-      : {}),
+    ...(anchors === undefined || anchors.length === 0
+      ? {}
+      : {
+          anchors: anchorsByNode(
+            headingsOf(value.root.children, parts),
+            anchors
+          ),
+        }),
   };
   return <>{children(value.root.children, draw)}</>;
+}
+
+/**
+ * Each heading the render draws, by the node drawn, with the anchor at its
+ * place in the passage's order. Keyed by node because the render finds a
+ * heading by the node it is drawing, which is the very node the walk found
+ * (one `partsReader` for both).
+ */
+function anchorsByNode(
+  headings: readonly DrawnHeading[],
+  anchors: readonly string[]
+): ReadonlyMap<RichTextNode, string> {
+  const byNode = new Map<RichTextNode, string>();
+  headings.forEach(({ node }, place) => {
+    const anchor = anchors[place];
+    if (anchor !== undefined) byNode.set(node, anchor);
+  });
+  return byNode;
+}
+
+/**
+ * Draw the words of a ONE-PARAGRAPH value: its runs, links and line breaks,
+ * without the paragraph's own element.
+ *
+ * For a block whose own element IS the paragraph, as `core/text`'s `<p>` is:
+ * drawing the stored paragraph node too would put a `<p>` inside a `<p>`. The
+ * runs are drawn by the same views a passage is drawn by, so a bold word, an
+ * italic one and a link look the same in a Text and in a Rich text, and a link
+ * crosses the same address check (`url()`) and gets the same `rel` as every
+ * other.
+ *
+ * Takes `unknown` and draws only the first paragraph's children, so a caller
+ * hands it a value already restricted to one paragraph (`toOneParagraph`) and
+ * anything else draws nothing rather than throwing on a live page.
+ */
+export function RichTextParagraphContent({
+  value,
+}: {
+  /** A one-paragraph value, as `toOneParagraph` answers it. */
+  value: unknown;
+}): ReactNode {
+  if (!isRichTextValue(value)) return null;
+  const first = value.root.children[0];
+  if (!isRichTextNode(first) || first.type !== "paragraph") return null;
+  const draw: DrawSettings = { host: undefined, parts: partsReader() };
+  return <>{children(draw.parts(first).inside, draw)}</>;
 }

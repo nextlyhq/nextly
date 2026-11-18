@@ -15,6 +15,7 @@
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { clearSelection, clickBlock, selection } from "./canvas/editor-driver";
 import { canvasBlock } from "./support/canvas-frame";
 import { test } from "./support/test";
 
@@ -85,12 +86,16 @@ async function openEditor(page: Page, id: string): Promise<void> {
   });
 }
 
-/** Select a block on the canvas and open a Style section. */
+/**
+ * Select a block on the canvas and open a Style section. Selection is cleared
+ * first: a selected parent at the top of the page draws its toolbar inside
+ * itself, over its first blocks. Confirmed selected, since with the parent
+ * selected a block card is already showing.
+ */
 async function select(page: Page, block: string, section: string) {
-  await canvasBlock(page, block)
-    .first()
-    .click({ position: { x: 4, y: 4 } });
-  await expect(page.locator("[data-block-card]")).toBeVisible();
+  await clearSelection(page);
+  await clickBlock(page, block);
+  await expect.poll(() => selection(page)).toEqual([block]);
   await page
     .getByTestId("inspector")
     .getByRole("tab", { name: /^Style/ })
@@ -110,10 +115,17 @@ function width(page: Page) {
     .getByRole("radiogroup", { name: "Width", exact: true });
 }
 
+/**
+ * A block's box in the canvas's own CSS pixels, as its layout gives it: the
+ * page's pixels are scaled by the canvas zoom.
+ */
 async function box(page: Page, block: string) {
-  const found = await canvasBlock(page, block).first().boundingBox();
-  if (found === null) throw new Error(`${block} has no box`);
-  return found;
+  return canvasBlock(page, block)
+    .first()
+    .evaluate(node => {
+      const { x, y, width, height } = node.getBoundingClientRect();
+      return { x, y, width, height };
+    });
 }
 
 test.describe("a block inside its parent", () => {

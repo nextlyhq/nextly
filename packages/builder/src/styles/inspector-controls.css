@@ -262,6 +262,41 @@
 }
 
 /*
+ * A background's size: Cover, Fit and Tile as one row of buttons with "…"
+ * beside them for a size written as CSS, and the readout under them at the
+ * field's full width.
+ */
+.nx-background-size {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "choices more"
+    "readout readout"
+    "css css";
+  align-items: start;
+  column-gap: 0.5rem;
+  row-gap: 0.375rem;
+  min-width: 0;
+}
+
+.nx-background-size__choices {
+  grid-area: choices;
+}
+
+.nx-background-size__more {
+  grid-area: more;
+}
+
+/* Inherited: drawn, but not pressed, so it never reads as set here. */
+.nx-background-size__choices > button[data-inherited] {
+  border-style: dashed;
+}
+
+.nx-background-size .nx-focal__css {
+  grid-area: css;
+}
+
+/*
  * A Columns row's layout tiles: four to a line at the panel's width, each a
  * glyph of its tracks over its name. The glyphs are muted foreground, enough
  * contrast as graphics in both schemes, and filled where chosen.
@@ -689,12 +724,66 @@
   resize: none;
 }
 
+/*
+ * Whose words the alt field holds while the page stores none of its own:
+ * "From the media library", led by a small dot so it reads as a tag on the
+ * words above rather than as another sentence of advice.
+ */
+.nx-inspector .nx-image-alt__source {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-inspector .nx-image-alt__source::before {
+  content: "";
+  inline-size: 0.375rem;
+  block-size: 0.375rem;
+  border-radius: 9999px;
+  background: currentColor;
+}
+
+/* "Use the media library's alt text": sized to its words, under the field. */
+.nx-inspector .nx-image-alt__reset {
+  justify-self: start;
+}
+
+/* "Decorative, no alt text": the box and its words on one line. */
+.nx-image-alt__decorative {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-block-start: 0.5rem;
+}
+
+/* "When clicked", with the link's own settings under Link. */
+.nx-when-clicked {
+  display: grid;
+  gap: 0.5rem;
+  min-inline-size: 0;
+}
+
 /* A note with the action it offers beside it, wrapping when the rail is narrow. */
 .nx-inspector__note-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.25rem;
+}
+
+/*
+ * A Section's Padding above the spacing box: Compact, Normal and Roomy, then
+ * the line saying where the space comes from, or that a side is Custom.
+ */
+.nx-section-padding {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.25rem;
+  min-inline-size: 0;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  border: 0;
 }
 
 /*

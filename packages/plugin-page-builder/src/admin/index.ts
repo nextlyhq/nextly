@@ -31,6 +31,7 @@ import {
   COMPONENT_LIST_TOOLS_COMPONENT,
   DELETE_COMPONENT_REPLACEMENT_COMPONENT,
   ENTRY_DESIGN_SECTION_COMPONENT,
+  LAYOUT_LIST_TOOLS_COMPONENT,
   SINGLE_SHOWN_ON_SECTION_COMPONENT,
   OVERVIEW_PAGE_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
@@ -53,6 +54,7 @@ import type { PageBuilderView as PageBuilderViewPart } from "./editor/PageBuilde
 import { registerEntryDesignColumn } from "./entry-design-column";
 import type { EntryDesignSection as EntryDesignSectionPart } from "./EntryDesignSection";
 import { lazyPart, preloadPart, withEditorStylesheet } from "./lazy-part";
+import type { LayoutListTools as LayoutListToolsPart } from "./make-default-action";
 import type { PageBuilderOverview as PageBuilderOverviewPart } from "./overview/PageBuilderOverview";
 import { PUBLISHING_ACTIONS } from "./publishing-actions";
 import type { RemoveLayoutToolbarSlot as RemoveLayoutToolbarSlotPart } from "./RemoveLayoutAction";
@@ -97,6 +99,9 @@ const DeleteComponentReplacement: typeof DeleteComponentReplacementPart =
   lazyPart(() =>
     import("./DeleteComponentAction").then(m => m.DeleteComponentReplacement)
   );
+const LayoutListTools: typeof LayoutListToolsPart = lazyPart(() =>
+  import("./make-default-action").then(m => m.LayoutListTools)
+);
 const EntryDesignSection: typeof EntryDesignSectionPart = lazyPart(() =>
   import("./EntryDesignSection").then(m => m.EntryDesignSection)
 );
@@ -177,6 +182,9 @@ const COMPONENTS = {
   // Delete component dialog; for a host's component store, the same tools
   // drawn through the header slot.
   [COMPONENT_LIST_TOOLS_COMPONENT]: ComponentListTools,
+  // Above the Header & footer list: Import from file, and the rows' "Make
+  // site default".
+  [LAYOUT_LIST_TOOLS_COMPONENT]: LayoutListTools,
   [COMPONENT_STORE_DELETE_HOST_COMPONENT]: ComponentStoreDeleteHost,
   // The component store's own Delete, opening Delete component instead.
   [DELETE_COMPONENT_REPLACEMENT_COMPONENT]: DeleteComponentReplacement,
@@ -224,6 +232,7 @@ export {
   ComponentStoreDeleteHost,
   DeleteComponentReplacement,
   EntryDesignSection,
+  LayoutListTools,
   PageBuilderOverview,
   PageBuilderView,
   RemoveLayoutToolbarSlot,

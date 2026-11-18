@@ -248,3 +248,126 @@ describe("a wrapped image's corners and proportion", () => {
     ]);
   });
 });
+
+describe("a captioned image's text size", () => {
+  it("is written on its caption, not on the figure the caption sits in", async () => {
+    const document = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "c1",
+          type: "core/image",
+          version: 1,
+          props: {
+            src: "https://example.test/team.png",
+            alt: "The team",
+            caption: "Our team",
+          },
+          styles: { base: { base: { fontSize: "20px" } } },
+        },
+      ],
+    } as unknown as BlockDocument;
+    const html = await renderToHtml(
+      <PageRenderer
+        document={document}
+        blocks={resolver}
+        styleContext={{ breakpoints: BREAKPOINTS, namedClasses: [] }}
+      />
+    );
+    const rules = rulesIn(new DOMParser().parseFromString(html, "text/html"));
+    const sized = rules.filter(rule => rule.body.includes("font-size: 20px"));
+    // On the caption inside the figure: on the figure itself, the caption's
+    // own 0.875em would scale it to 17.5px. Its other rule reaches the root
+    // only while it is no figure, an Image without a caption.
+    expect(sized.map(rule => rule.selector)).toEqual([
+      expect.stringMatching(/:not\(\.nx-bp-core--image--frame\)$/),
+      expect.stringMatching(
+        /\.nx-bp-core--image--frame > \.nx-bp-core--image--caption$/
+      ),
+    ]);
+  });
+});
+
+describe("an image's shadow", () => {
+  /** The page's rules for one image, its props and own styles given. */
+  async function rulesFor(
+    props: Record<string, unknown>,
+    styles: Record<string, unknown>
+  ) {
+    const document = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "s1",
+          type: "core/image",
+          version: 1,
+          props: {
+            src: "https://example.test/team.png",
+            alt: "The team",
+            ...props,
+          },
+          styles: { base: { base: styles } },
+        },
+      ],
+    } as unknown as BlockDocument;
+    const html = await renderToHtml(
+      <PageRenderer
+        document={document}
+        blocks={resolver}
+        styleContext={{ breakpoints: BREAKPOINTS, namedClasses: [] }}
+      />
+    );
+    return rulesIn(new DOMParser().parseFromString(html, "text/html"));
+  }
+
+  const SHADOW = "0 4px 12px #0003";
+
+  it.each([
+    ["captioned", { caption: "Our team" }, "frame"],
+    ["linked", { href: "/team", whenClicked: "link" }, "link"],
+    ["enlarged", { whenClicked: "enlarge" }, "enlarge"],
+  ])(
+    "falls on the picture of a %s image, in its own shape",
+    async (_form, props, wrapper) => {
+      const rules = await rulesFor(props, {
+        boxShadow: SHADOW,
+        borderRadius: "50%",
+      });
+      const shadowed = rules
+        .filter(rule => rule.body.includes(`box-shadow: ${SHADOW}`))
+        // Each selector of a rule's list on its own.
+        .flatMap(rule => rule.selector.split(/,\s*(?![^()]*\))/));
+      // On the picture inside the wrapper, beside its corners; never on the
+      // wrapper's own box, which holds the caption or is square.
+      expect(
+        shadowed.some(selector =>
+          new RegExp(
+            `\\.nx-bp-core--image--${wrapper}( > [^ ]+)? > \\.nx-bp-core--image--picture$`
+          ).test(selector)
+        )
+      ).toBe(true);
+      expect(
+        shadowed.every(
+          selector =>
+            selector.endsWith(".nx-bp-core--image--picture") ||
+            selector.includes(`:not(`)
+        )
+      ).toBe(true);
+    }
+  );
+
+  it("is not clipped by the link or the enlarge button around the picture", async () => {
+    const rules = await rulesFor({ whenClicked: "enlarge" }, {});
+    // The wrapper parts' own rules, as the parts tier writes them
+    // (`:where(.part)`): present, so the check below reads real rules.
+    const wrappers = rules.filter(rule =>
+      /nx-bp-core--image--(link|enlarge)\)?$/.test(rule.selector)
+    );
+    expect(wrappers.length).toBeGreaterThan(0);
+    expect(
+      wrappers.filter(rule => /overflow:\s*hidden/.test(rule.body))
+    ).toEqual([]);
+  });
+});

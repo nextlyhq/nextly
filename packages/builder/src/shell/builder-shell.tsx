@@ -11,6 +11,7 @@ import * as React from "react";
 import { CanvasFrameShortcuts } from "../canvas/canvas-frame-context";
 import { FIT_ZOOM, type CanvasZoom } from "../canvas/canvas-zoom";
 import { HoveredBlockProvider } from "../canvas/hovered-block";
+import { InsertionPreviewProvider } from "../canvas/insertion-preview";
 import { CssNamesContext, type CssNames } from "../css-names-context";
 import type { SectionFolds } from "../panel-folds";
 import { PanelFoldsContext, type PanelFolds } from "../panel-folds-context";
@@ -258,13 +259,18 @@ export function BuilderShell({
     if (!loadedFromCurrentStore) return;
     if (handledPanelRequest.current === openPanelRequest.count) return;
     handledPanelRequest.current = openPanelRequest.count;
-    const { panel, view } = openPanelRequest;
-    update(current => ({
-      ...current,
-      leftPanel: panel,
-      leftPanelHidden: false,
-      leftPanelView: view ?? current.leftPanelView,
-    }));
+    const { panel, view, unlessHidden = false } = openPanelRequest;
+    update(current =>
+      // The author's own hiding outranks a request the editor made itself.
+      unlessHidden && current.leftPanelHidden
+        ? current
+        : {
+            ...current,
+            leftPanel: panel,
+            leftPanelHidden: false,
+            leftPanelView: view ?? current.leftPanelView,
+          }
+    );
   }, [openPanelRequest, update, loadedFromCurrentStore]);
 
   /*
@@ -626,8 +632,9 @@ export function BuilderShell({
 
 /**
  * What every shell provides to everything inside it: the shortcut manager,
- * and one hovered block for its panels and its canvas, so a Layers row the
- * pointer is over outlines its block on the page.
+ * one hovered block for its panels and its canvas, so a Layers row the
+ * pointer is over outlines its block on the page, and the Add panel's
+ * highlighted place, which the canvas draws its insertion line at.
  */
 function ShellProviders({
   children,
@@ -636,7 +643,10 @@ function ShellProviders({
 }): React.JSX.Element {
   return (
     <ShortcutProvider>
-      <HoveredBlockProvider>{children}</HoveredBlockProvider>
+      <HoveredBlockProvider>
+        {/* The Add panel's highlighted place, which the canvas draws. */}
+        <InsertionPreviewProvider>{children}</InsertionPreviewProvider>
+      </HoveredBlockProvider>
     </ShortcutProvider>
   );
 }

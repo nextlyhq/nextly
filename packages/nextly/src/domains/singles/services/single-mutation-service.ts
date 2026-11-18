@@ -56,14 +56,16 @@ import { keysToSnakeCase, toSnakeCase } from "../../../lib/case-conversion";
 import {
   isStatusOnlyWrite,
   stripImmutableSystemFields,
+  withoutContributedColumns,
   writableBodyOf,
   writeGateFor,
 } from "../../../lib/immutable-system-fields";
 import {
   LIFECYCLE_STATUSES,
   isLifecycleStatus,
-  resolvePublishTransition,
+  transitionGrantNeeded,
   stripUndefinedStatus,
+  unknownStatusRefusal,
 } from "../../../lib/status-transition";
 import {
   buildSingleRevalidationIntent,
@@ -235,6 +237,7 @@ import {
   resolveDraftOverlay,
 } from "../../versions/draft-overlay";
 import { storeDraftSave } from "../../versions/draft-save";
+import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
 import {
   assertRewritableField,
   refuseRewrittenValue,
@@ -327,6 +330,7 @@ import {
 } from "../../webhooks/record-mutation-event";
 import { isOutboxRecordingActive } from "../../webhooks/recording-activation";
 import type { WebhookResource } from "../../webhooks/types";
+import { workflowAttachedTo } from "../../workflows/registry";
 import { closeReviewOnDiscard } from "../../workflows/review-state-cleanup";
 import type {
   SingleDocument,
@@ -2499,37 +2503,6 @@ export class SingleMutationService extends BaseService {
       locale: options.locale,
     });
 
-    // The wildcard moves a LIFECYCLE and nothing else — see the same guard on
-    // `updateEntry` for why Strapi withholds `"*"` from its update method and
-    // why Nextly, having one door for both, has to enforce the split here.
-    if (sweepAllLocales) {
-      const named = Object.keys(data);
-      const statusOnly = named.length === 1 && named[0] === "status";
-      // The VALUE, not merely the key — see the collection guard for why a
-      // coerced non-string splits the write instead of refusing it.
-      if (statusOnly && !isLifecycleStatus(data.status)) {
-        return {
-          success: false,
-          statusCode: 400,
-          message:
-            `locale '${EVERY_LOCALE}' moves a publication status, so 'status' ` +
-            `must be one of ${LIFECYCLE_STATUSES.join(", ")}. Received: ` +
-            `${JSON.stringify(data.status)}.`,
-        };
-      }
-      if (!statusOnly) {
-        return {
-          success: false,
-          statusCode: 400,
-          message:
-            `locale '${EVERY_LOCALE}' moves the publication status of every ` +
-            `language and writes nothing else, so it accepts a 'status' patch ` +
-            `alone. Received: ${named.length === 0 ? "an empty patch" : named.join(", ")}. ` +
-            `To write field values, name the language they belong to.`,
-        };
-      }
-    }
-
     // Set true once the update transaction commits with a real write (which
     // always appends the outbox event); lets the catch and the `!updated`
     // return report a committed-but-post-hook-failed write as `eventRecorded`
@@ -2584,6 +2557,41 @@ export class SingleMutationService extends BaseService {
         };
       }
 
+      // 1.04. The wildcard moves a LIFECYCLE and nothing else — see the same guard on
+      // `updateEntry` for why Strapi withholds `"*"` from its update method and
+      // why Nextly, having one door for both, has to enforce the split here.
+      if (sweepAllLocales) {
+        // Judged on what the write stores: a column a schema hook contributed is never written,
+        // so it makes the patch no field write.
+        const named = Object.keys(
+          withoutContributedColumns(data, singleMeta.tableName)
+        );
+        const statusOnly = named.length === 1 && named[0] === "status";
+        // The VALUE, not merely the key — see the collection guard for why a
+        // coerced non-string splits the write instead of refusing it.
+        if (statusOnly && !isLifecycleStatus(data.status)) {
+          return {
+            success: false,
+            statusCode: 400,
+            message:
+              `locale '${EVERY_LOCALE}' moves a publication status, so 'status' ` +
+              `must be one of ${LIFECYCLE_STATUSES.join(", ")}. Received: ` +
+              `${JSON.stringify(data.status)}.`,
+          };
+        }
+        if (!statusOnly) {
+          return {
+            success: false,
+            statusCode: 400,
+            message:
+              `locale '${EVERY_LOCALE}' moves the publication status of every ` +
+              `language and writes nothing else, so it accepts a 'status' patch ` +
+              `alone. Received: ${named.length === 0 ? "an empty patch" : named.join(", ")}. ` +
+              `To write field values, name the language they belong to.`,
+          };
+        }
+      }
+
       // 1.05. The wildcard moves a LIFECYCLE, so a Single that has none has
       // nothing for it to move. Mirrors the collection path, and for the same
       // reason: a Single carrying an ordinary user field named `status` has the
@@ -2636,6 +2644,7 @@ export class SingleMutationService extends BaseService {
       const gate = await writeGateFor(
         data,
         "single",
+        singleMeta.tableName,
         () => (singleMeta as { status?: boolean }).status === true
       );
       // Handed on as the status alone: the system columns a status-only body
@@ -2690,7 +2699,12 @@ export class SingleMutationService extends BaseService {
       // its name, on the Single's row or a language's: refused here, with access judged and
       // before any hook, rather than written or left to fail in the database. The keys a read
       // adds are taken off, so a document sent back as it was read still saves.
-      data = writableBodyOf(data, "single", singleMeta.fields);
+      data = writableBodyOf(
+        data,
+        "single",
+        singleMeta.fields,
+        singleMeta.tableName
+      );
 
       // 2. Resolve the document to write against. When the Single has never been
       // written, build its default in memory but DO NOT persist it yet. The
@@ -2936,6 +2950,19 @@ export class SingleMutationService extends BaseService {
         singleMeta.versions?.drafts?.enabled === true
           ? await resolveComponentSchemas(fieldConfigs)
           : null;
+      // Whether this Single holds a working draft for an edit, by the same
+      // predicate as its hold below and the admin's `draftsEnabled`: where it
+      // does, a save naming published over its published row needs publish
+      // (`transitionGrantNeeded`).
+      const singleHoldsWorkingDrafts = isDraftSplitEligible({
+        collectionHasStatus:
+          (singleMeta as { status?: boolean }).status === true,
+        draftsVersioningEnabled: singleMeta.versions?.drafts?.enabled === true,
+        documentLocalized: singleMeta.localized === true,
+        entityKind: "single",
+        fields: fieldConfigs,
+        componentSchemas: singleComponentSchemas,
+      });
 
       // 6.1. Field-level access + beforeValidate hooks (functions resolved
       // via the field-level registry; serialized field defs drop them).
@@ -3187,6 +3214,13 @@ export class SingleMutationService extends BaseService {
       // would be sanitized to SQL NULL and silently unpublish a published Single
       // without the gate.
       stripUndefinedStatus(currentData);
+      // Under a workflow, a status it cannot place is refused after every hook, trusted code
+      // included; a Single with none stores any value, as before.
+      const unknownStatus = unknownStatusRefusal(
+        currentData,
+        workflowAttachedTo("single", slug) !== undefined
+      );
+      if (unknownStatus) throw unknownStatus;
 
       // A status-only write was judged by its publish or unpublish gate in
       // place of update. A hook that made it an edit, naming a field or
@@ -3650,13 +3684,17 @@ export class SingleMutationService extends BaseService {
             // makes the guarded transition against its row-locked prior status.
             const firesOnMainRow =
               mainNextStatus !== undefined &&
-              resolvePublishTransition(lockedMainStatus, mainNextStatus) ===
-                transitionGuard.op;
+              transitionGrantNeeded(
+                lockedMainStatus,
+                mainNextStatus,
+                singleHoldsWorkingDrafts
+              ) === transitionGuard.op;
             const firesOnCompanion =
               companionNextStatus !== undefined &&
-              resolvePublishTransition(
+              transitionGrantNeeded(
                 lockedCompanionStatus,
-                companionNextStatus
+                companionNextStatus,
+                singleHoldsWorkingDrafts
               ) === transitionGuard.op;
             // The sweep moves companion rows NEITHER test above can see, so a
             // wildcard write is judged as the lifecycle move it is,

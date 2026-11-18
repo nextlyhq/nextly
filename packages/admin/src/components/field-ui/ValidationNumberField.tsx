@@ -49,7 +49,22 @@ export interface ValidationNumberFieldProps {
  *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
  *   Builder and user custom fields use the shared picker and panel.
  */
-export function ValidationNumberField({
+export function ValidationNumberField(
+  props: ValidationNumberFieldProps
+): JSX.Element {
+  return <ValidationBoundField {...props} />;
+}
+
+/**
+ * The bound as `ValidationRulesEditor` draws it: the same control, with why the
+ * bound as it stands cannot be kept said under it and read with it.
+ *
+ * Kept apart from `ValidationNumberField` rather than added to its props: those
+ * are published to plugins and frozen (`field-ui-compat.test-d.ts` in the
+ * plugin SDK), so the problem is the editor's to say, which sees the bound's
+ * pair. Not exported from the kit.
+ */
+export function ValidationBoundField({
   label,
   value,
   onChange,
@@ -57,9 +72,17 @@ export function ValidationNumberField({
   disabled,
   counts = false,
   placeholder,
-}: ValidationNumberFieldProps): JSX.Element {
+  problem = null,
+}: ValidationNumberFieldProps & {
+  /** Why the bound cannot be kept, or `null` when it can. */
+  problem?: string | null;
+}): JSX.Element {
   const id = useId();
-  const describedBy = description ? `${id}-description` : undefined;
+  const problemId = `${id}-problem`;
+  const describedBy =
+    [problem !== null && problemId, description && `${id}-description`]
+      .filter(Boolean)
+      .join(" ") || undefined;
 
   return (
     <div className="space-y-1">
@@ -72,6 +95,7 @@ export function ValidationNumberField({
         placeholder={placeholder}
         value={value ?? ""}
         disabled={disabled}
+        aria-invalid={problem !== null}
         aria-describedby={describedBy}
         onChange={event =>
           onChange(
@@ -79,8 +103,17 @@ export function ValidationNumberField({
           )
         }
       />
+      {/* An alert, as the panel's name problem is, so it is announced as it
+          appears rather than only when the control is read again. In the
+          error text colour the form messages use, which reads at 4.5:1 in
+          both schemes. */}
+      {problem !== null ? (
+        <p id={problemId} role="alert" className="text-xs text-danger-text">
+          {problem}
+        </p>
+      ) : null}
       {description ? (
-        <p id={describedBy} className="text-xs text-muted-foreground">
+        <p id={`${id}-description`} className="text-xs text-muted-foreground">
           {description}
         </p>
       ) : null}

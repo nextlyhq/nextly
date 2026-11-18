@@ -1,0 +1,23 @@
+---
+title: MIGRATE_EVENTS_TABLE_TAKEN
+description: "A table of another shape already has the name `nextly migrate` moves the migration records of an earlier Nextly release into."
+---
+
+## Cause
+
+A table of another shape already has the name `nextly migrate` moves the migration records of an earlier Nextly release into.
+
+`nextly migrate` moves the migration records an earlier release kept into `nextly_schema_events`. A table of that name already exists without the columns the move writes, so the run stopped before writing anything.
+
+## Fix
+
+- Rename the existing table, then run `nextly migrate` again.
+
+## Example
+
+```text
+✗ A table named "nextly_schema_events" already exists with an unexpected shape.
+  Why:  `nextly migrate` moves the migration records of an earlier release into "nextly_schema_events", and the table there does not have the columns it writes. Nothing was changed.
+  Next: Rename it, then run `nextly migrate` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrate-events-table-taken  (MIGRATE_EVENTS_TABLE_TAKEN)
+```

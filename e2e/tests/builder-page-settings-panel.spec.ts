@@ -5,9 +5,10 @@
  * selection comes and goes.
  *
  * The playground runs the SEO plugin, which leaves the Page Builder's pages
- * out, so these pages show the builder's own search result. Where the SEO
- * plugin edits a page's type the row is its own to draw, which the panel's
- * component test covers.
+ * out, so the search result row says SEO is turned off for them. Without the
+ * plugin the row is the builder's own summary, and where it edits a page's
+ * type it is the plugin's own answer; the panel's and the plugin's
+ * component tests cover both, and builder-seo-tab.spec.ts the latter.
  *
  * @module tests/builder-page-settings-panel.spec
  */
@@ -115,10 +116,12 @@ test("with nothing selected, the right panel shows the page's settings", async (
   await expect(
     panel.getByRole("combobox", { name: "Header & footer" })
   ).toBeVisible();
-  // The SEO plugin leaves these pages out, so the builder's own summary.
-  const result = panel.getByRole("region", { name: "Search result" });
-  await expect(result).toContainText(seeded.title);
-  await expect(result).toContainText(`/${seeded.slug}`);
+  // The SEO plugin is installed and leaves these pages out, so the row says
+  // so, and draws no summary that could stand for the plugin's.
+  await expect(panel.getByText("SEO is turned off for Pages.")).toBeVisible();
+  await expect(
+    panel.getByRole("region", { name: "Search result" })
+  ).toHaveCount(0);
 
   // Copy puts the page's address on the clipboard.
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
@@ -132,29 +135,19 @@ test("with nothing selected, the right panel shows the page's settings", async (
     `/${seeded.slug}`
   );
 
-  // "All page settings…" opens Settings on the page's own tab, whichever
-  // tab it was left on.
+  // "All page settings…" opens Page settings on General, whichever tab it
+  // was left on, among the tabs other plugins add to the same row.
   const all = panel.getByRole("button", { name: "All page settings…" });
-  const dialog = page.getByRole("dialog", { name: "Settings" });
-  const thisPage = dialog.getByRole("tab", { name: "This page" });
+  const dialog = page.getByRole("dialog", { name: /^Page settings · / });
+  const general = dialog.getByRole("tab", { name: "General" });
   await all.click();
-  await expect(thisPage).toHaveAttribute("aria-selected", "true");
-  await dialog.getByRole("tab", { name: "Site" }).click();
-  await expect(thisPage).toHaveAttribute("aria-selected", "false");
+  await expect(general).toHaveAttribute("aria-selected", "true");
+  await dialog.getByRole("tab", { name: "Fields" }).click();
+  await expect(general).toHaveAttribute("aria-selected", "false");
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
   await all.click();
-  await expect(thisPage).toHaveAttribute("aria-selected", "true");
-  // And on General among the tabs other plugins add beside it.
-  const seo = dialog.getByRole("tab", { name: "SEO" });
-  await seo.click();
-  await page.keyboard.press("Escape");
-  await expect(dialog).toBeHidden();
-  await all.click();
-  await expect(dialog.getByRole("tab", { name: "General" })).toHaveAttribute(
-    "aria-selected",
-    "true"
-  );
+  await expect(general).toHaveAttribute("aria-selected", "true");
 });
 
 test("a rename in the panel is the page's title everywhere, saved with its draft", async ({
@@ -188,7 +181,7 @@ test("a rename in the panel is the page's title everywhere, saved with its draft
   await pageSettings(page)
     .getByRole("button", { name: "All page settings…" })
     .click();
-  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const dialog = page.getByRole("dialog", { name: /^Page settings · / });
   await expect(
     dialog.getByRole("textbox", { name: "Title", exact: true })
   ).toHaveValue(renamed);

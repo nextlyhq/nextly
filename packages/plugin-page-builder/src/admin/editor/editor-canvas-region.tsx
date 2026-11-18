@@ -14,6 +14,7 @@ import {
   Canvas,
   CanvasFrame,
   CanvasMarks,
+  InsertionLine,
   DropIndicator,
   DropRefusal,
   elementAnchor,
@@ -28,6 +29,7 @@ import { Button } from "@nextlyhq/ui";
 import { siteSheet } from "../../site-style";
 import type { LibraryReadState } from "../pattern-library-client";
 
+import { CanvasFirstAddChoosers } from "./canvas-first-add-choosers";
 import { CanvasImageStates } from "./canvas-image-states";
 import { previewedCanvas } from "./canvas-preview-mode";
 import { DoubleHeaderNotice } from "./double-header-notice";
@@ -158,8 +160,7 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
     visitorUnreadable,
     readMedia,
   } = view;
-  // The theme the frame draws the page in and the tags saying so, from one
-  // answer, so the tag never names a mode the canvas is not drawn in.
+  // The theme the frame draws the page in, and the tags over it.
   const previewed = previewedCanvas(view.previewMode, view.preview.previewing);
   return (
     <>
@@ -233,6 +234,15 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
           */}
           <CanvasFrame
             width={frameWidth}
+            // Any width from a small phone to Desktop, by the handles at the
+            // frame's edges, kept apart from the device every edit goes to.
+            previewWidth={{
+              breakpoints: canvasRender.styleContext.breakpoints,
+              edited: view.editedBreakpoint,
+              deviceWidth: view.deviceWidth,
+              override: view.previewWidth,
+              onChange: view.setPreviewWidth,
+            }}
             zoom={zoom}
             onScale={setAppliedScale}
             title={pageTitle}
@@ -288,6 +298,11 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                   }
                   shownLabel={view.conditionsShownLabel}
                 />
+                {/* Where the Add panel's highlighted tile would land: a line
+                    with the panel's words, or an empty container lit. Not
+                    while a block is dragged, whose own drop line says where
+                    it lands. */}
+                {dragging ? null : <InsertionLine document={editor.document} />}
                 {/* A block whose bound value a visitor will not see says
                     so above its corner; pressing the badge selects it, and
                     the inspector says it in full. Hidden mid-drag, as the
@@ -344,19 +359,35 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                   }
                 />
                 {/*
-                  The empty page's start card and the "+" in each gap. A gap's
+                  The empty page's start area and the "+" in each gap. A gap's
                   "+" opens the in-place picker beside it, aimed at exactly
                   that gap, after the block before it, with nothing selected
-                  on the way. The start card opens Add on a page with nothing
-                  to select. Hidden mid-drag, when the drag's own line says
-                  where a block lands.
+                  on the way; mid-drag no "+" shows, as the drag's own line
+                  says where a block lands. The start area's "＋ Add a block"
+                  opens the picker at the page's top level, and "Insert a
+                  saved section" opens Add on its Saved sections tab, with
+                  its search ready.
                 */}
                 <PageInserters
                   document={editor.document}
                   selectedId={editor.selectedId}
                   componentTitle={componentLibrary.titleOf}
-                  hidden={dragging}
-                  onStart={() => view.openInsertPanel()}
+                  dragging={dragging}
+                  start={{
+                    ...(pageTitle === undefined ? {} : { title: pageTitle }),
+                    onStart: control =>
+                      insertPicker.open(
+                        {
+                          kind: "place",
+                          place: {
+                            at: { index: editor.document.nodes.length },
+                          },
+                        },
+                        elementAnchor(control)
+                      ),
+                    onSavedSection: () =>
+                      view.openInsertPanel(undefined, "sections"),
+                  }}
                   onAddAfter={(nodeId, control) =>
                     insertPicker.open(
                       { kind: "place", place: { after: nodeId } },
@@ -364,6 +395,12 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                     )
                   }
                 />
+                {/* A block just added that asks for a choice (Columns: its
+                    layout) draws its chooser in place of its body until the
+                    author picks or skips. Last, so it covers the "+" of the
+                    block's own empty columns; hidden mid-drag. A store
+                    of the page ends it. */}
+                <CanvasFirstAddChoosers editor={editor} hidden={dragging} />
               </>
             }
           >
@@ -378,7 +415,9 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
               siteStyles={siteSheet(canvasSiteStyle)}
               selectedId={editor.selectedId}
               selectedIds={editor.selection.ids}
-              onSelect={editor.select}
+              // A block selected on the canvas, or none on its ground, clears
+              // a selected header or footer.
+              onSelect={view.selectedRegion.selectOnCanvas}
               // A list note's "Choose a field": the list selected and the
               // author taken to its first sort row.
               onListSortField={editor.askSortField}
@@ -387,9 +426,11 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
               // render.
               render={canvasRender}
               dragHandlers={drag.handlers}
-              // The regions of the page's Layout, drawn locked around it from
-              // the published Layout, as a visitor gets them.
+              // The regions of the page's layout, drawn around it from the
+              // published set, as a visitor gets them, and the one selected.
               regions={view.canvasRegions}
+              selectedRegion={view.selectedRegion.selection.area}
+              onSelectRegion={view.selectedRegion.selection.select}
               // The conditioned blocks visitors never see, because the page
               // can't check their conditions: badged in red on the canvas.
               conditionsUnchecked={view.conditionsUnchecked}

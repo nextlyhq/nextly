@@ -114,18 +114,23 @@ test("tags the starter on the canvas, in the builder only", async ({
     new RegExp(`©\\s*${String(new Date().getFullYear())}`)
   );
 
-  await expect(
-    header.getByRole("button", {
-      name: "Starter header, from header & footer set Main, locked",
-    })
-  ).toBeVisible();
-  await expect(header).toContainText("Starter header · edit or replace");
-  await expect(
-    footer.getByRole("button", {
-      name: "Starter footer, from header & footer set Main, locked",
-    })
-  ).toBeAttached();
-  await expect(footer).toContainText("Starter footer");
+  await expect(header).toHaveAccessibleName(
+    "Starter header, from the Main header & footer"
+  );
+  await expect(footer).toHaveAccessibleName(
+    "Starter footer, from the Main header & footer"
+  );
+  // The starter's tag, shown inside it while the pointer is on it.
+  await header.hover();
+  await expect(header.locator(".nx-canvas-region__tag")).toHaveText(
+    "Starter header · edit or replace"
+  );
+  await expect(header.locator(".nx-canvas-region__tag")).toBeVisible();
+  await footer.scrollIntoViewIfNeeded();
+  await footer.hover();
+  await expect(footer.locator(".nx-canvas-region__tag")).toHaveText(
+    "Starter footer"
+  );
 
   // The published page carries no builder tag.
   const published = await page.request.get(`/${SLUG}`);

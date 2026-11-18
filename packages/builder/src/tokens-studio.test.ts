@@ -36,6 +36,8 @@ import {
   clearDarkValue,
   removeToken,
   renameToken,
+  fluidRangeOf,
+  setFluidRange,
   setFluidSize,
   setTokenValue,
   tokenNameIssue,
@@ -44,6 +46,7 @@ import {
   LINE_HEIGHT_MIXED,
   DARK_FOLLOWS_LIGHT,
 } from "./tokens-studio";
+import { colourOrder } from "./colour-groups";
 import { fluidValue } from "./fluid-size";
 
 const BREAKPOINTS = { base: { id: "base", label: "Base" } } as never;
@@ -865,6 +868,129 @@ describe("duplicating a variable", () => {
     expect(labelClashes(twice.tokens)).toEqual([]);
   });
 
+  it("lists a copied colour right after the one it copies, where the site keeps an order", () => {
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.brand",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#111111" },
+        },
+        {
+          name: "color.accent",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#222222" },
+        },
+        {
+          name: "color.text",
+          kind: "color",
+          group: "Text",
+          values: { light: "#333333" },
+        },
+      ],
+      order: ["color.accent", "color.brand", "color.text"],
+    };
+    // Accent is listed first in Brand, so the copy's place is beside it,
+    // not at the group's end.
+    const made = duplicateVariable(set, 1, "Accent");
+    const copy = made.tokens.tokens[made.at]?.name;
+    expect(copy).toBeDefined();
+    expect(colourOrder(made.tokens)).toEqual([
+      "color.accent",
+      copy,
+      "color.brand",
+      "color.text",
+    ]);
+  });
+
+  it("keeps a copied colour's place when its name, and so its code name, changes", () => {
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.brand",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#111111" },
+        },
+        {
+          name: "color.accent",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#222222" },
+        },
+      ],
+      order: ["color.accent", "color.brand"],
+    };
+    const made = duplicateVariable(set, 1, "Accent");
+    const named = labelNewVariable(made.tokens, made.at, "Highlight");
+    expect(named.tokens[made.at]?.name).toBe("color.highlight");
+    expect(named.order).toEqual([
+      "color.accent",
+      "color.highlight",
+      "color.brand",
+    ]);
+  });
+
+  describe("a colour order naming a colour the site no longer has", () => {
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.brand",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#111111" },
+        },
+        {
+          name: "color.accent",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#222222" },
+        },
+      ],
+      // A copy made and removed before: its name is free again.
+      order: [
+        "color.accent",
+        "color.accent-copy",
+        "color.highlight",
+        "color.brand",
+      ],
+    };
+    const once = (order: readonly string[] | undefined) =>
+      new Set(order).size === order?.length;
+
+    it("lists a new copy under that name once", () => {
+      const made = duplicateVariable(set, 1, "Accent");
+      expect(made.tokens.tokens[made.at]?.name).toBe("color.accent-copy");
+      expect(once(made.tokens.order)).toBe(true);
+      expect(colourOrder(made.tokens)).toEqual([
+        "color.accent",
+        "color.accent-copy",
+        "color.brand",
+      ]);
+    });
+
+    it("lists a copy once when it is named as the colour removed was", () => {
+      const made = duplicateVariable(set, 1, "Accent");
+      const named = labelNewVariable(made.tokens, made.at, "Highlight");
+      expect(named.tokens[made.at]?.name).toBe("color.highlight");
+      expect(once(named.order)).toBe(true);
+      expect(colourOrder(named)).toEqual([
+        "color.accent",
+        "color.highlight",
+        "color.brand",
+      ]);
+    });
+
+    it("lets a removed colour go from the order", () => {
+      const made = duplicateVariable(set, 1, "Accent");
+      expect(removeToken(made.tokens, made.at).order).not.toContain(
+        "color.accent-copy"
+      );
+    });
+  });
+
   it("keeps a copy of a long name within the label limit", () => {
     const long = "L".repeat(MAX_TOKEN_LABEL_LENGTH);
     const set: SiteTokenSet = {
@@ -927,5 +1053,55 @@ describe("a fluid line height typed by hand", () => {
     const typed = writeTokenValue(made, 0, "light", "28px");
     if (!("tokens" in typed)) throw new Error("the write was refused");
     expect(typed.tokens.tokens[0]?.fluid).toBeUndefined();
+  });
+});
+
+describe("a change of the site's fluid range", () => {
+  const range = { min: 360, max: 1280 };
+  const made = setFluidSize(
+    {
+      tokens: [
+        {
+          name: "font-size.lead",
+          kind: "dimension",
+          values: { light: "18px" },
+        },
+        {
+          name: "space.stack",
+          kind: "dimension",
+          values: { light: "clamp(1rem, 0.875rem + 0.5vw, 1.25rem)" },
+        },
+      ],
+    },
+    0,
+    { small: 16, large: 20 },
+    range
+  );
+
+  it("makes every size made with Fluid… again, keeping its two sizes", () => {
+    const wider = { min: 320, max: 1440 };
+    const next = setFluidRange(made, wider);
+    expect(next.fluidRange).toEqual(wider);
+    expect(next.tokens[0]?.values.light).toBe(
+      fluidValue({ small: 16, large: 20 }, wider)
+    );
+    expect(next.tokens[0]?.fluid).toEqual({ small: 16, large: 20 });
+  });
+
+  it("leaves a fluid value written by hand as it is", () => {
+    const next = setFluidRange(made, { min: 320, max: 1440 });
+    expect(next.tokens[1]?.values.light).toBe(
+      "clamp(1rem, 0.875rem + 0.5vw, 1.25rem)"
+    );
+  });
+
+  it("is 360px to 1280px until the site sets its own", () => {
+    expect(fluidRangeOf(made)).toEqual({ min: 360, max: 1280 });
+    expect(
+      fluidRangeOf({ ...made, fluidRange: { min: 320, max: 1440 } })
+    ).toEqual({
+      min: 320,
+      max: 1440,
+    });
   });
 });

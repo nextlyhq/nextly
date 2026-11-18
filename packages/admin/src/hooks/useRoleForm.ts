@@ -103,11 +103,28 @@ const fetchInheritedPermissions = async (childIds: string[]) => {
 /** The grammar a slug the form sets is held to. */
 const newSlugSchema: z.ZodString = z
   .string()
+  .min(1, { message: "Slug is required." })
   .min(3, { message: "Slug must be at least 3 characters." })
   .max(50, { message: "Slug must not exceed 50 characters." })
   .regex(/^[a-z0-9_-]+$/, {
     message:
       "Slug must contain only lowercase letters, numbers, underscores, and hyphens.",
+  });
+
+/**
+ * The grammar a name the form sets is held to, trimmed as it is checked: a
+ * name of spaces alone is no name, and an empty one is told it is required
+ * rather than that it is too short.
+ */
+const roleNameSchema: z.ZodString = z
+  .string()
+  .trim()
+  .min(1, { message: "Role name is required." })
+  .min(3, { message: "Role name must be at least 3 characters." })
+  .max(50, { message: "Role name must not exceed 50 characters." })
+  .refine(val => /^[a-zA-Z0-9\s_-]+$/.test(val), {
+    message:
+      "Role name can only contain letters, numbers, spaces, underscores and hyphens.",
   });
 
 const roleFormSchema: z.ZodObject<{
@@ -117,14 +134,7 @@ const roleFormSchema: z.ZodObject<{
   permissions: z.ZodArray<z.ZodString>;
   baseRoleId: z.ZodOptional<z.ZodString>;
 }> = z.object({
-  name: z
-    .string()
-    .min(3, { message: "Role name must be at least 3 characters." })
-    .max(50, { message: "Role name must not exceed 50 characters." })
-    .refine(val => /^[a-zA-Z0-9\s_-]+$/.test(val), {
-      message:
-        "Role name can only contain letters, numbers, spaces, underscores and hyphens.",
-    }),
+  name: roleNameSchema,
   slug: newSlugSchema,
   description: z.string().optional(),
   permissions: z.array(z.string()),
@@ -132,12 +142,29 @@ const roleFormSchema: z.ZodObject<{
 });
 
 /**
- * The form for an existing role. Its stored slug is accepted as it is: a role
- * an app or plugin declared may hold one outside the grammar a new slug is
- * held to. A slug changed in the form is held to that grammar.
+ * The form for an existing role. Its stored slug and name are accepted as
+ * they are: a role an app or plugin declared may hold a slug outside the
+ * grammar a new slug is held to, and one saved before names were trimmed
+ * may hold its padding, which a save that never touched the name would
+ * otherwise send as a rename. A slug or name changed in the form is held
+ * to that grammar, a changed name trimmed as a new role's is.
  */
-function roleEditFormSchema(storedSlug: () => string | undefined) {
+function roleEditFormSchema(
+  storedSlug: () => string | undefined,
+  storedName: () => string | undefined
+) {
   return roleFormSchema.extend({
+    name: z
+      .string()
+      .transform(name => (name === storedName() ? name : name.trim()))
+      .superRefine((name, ctx) => {
+        if (name === storedName()) return;
+        const checked = roleNameSchema.safeParse(name);
+        if (checked.success) return;
+        for (const issue of checked.error.issues) {
+          ctx.addIssue({ code: "custom", message: issue.message });
+        }
+      }),
     slug: z.string().superRefine((slug, ctx) => {
       if (slug === storedSlug()) return;
       const checked = newSlugSchema.safeParse(slug);
@@ -238,10 +265,16 @@ async function fetchEveryPermission(): Promise<ListedPermission[]> {
  */
 export function useRoleForm(roleId?: string): UseRoleFormReturn {
   const queryClient = useQueryClient();
-  // The slug the edited role is stored with, once it has loaded.
+  // The slug and name the edited role is stored with, once it has loaded.
   const storedSlug = useRef<string | undefined>(undefined);
+  const storedName = useRef<string | undefined>(undefined);
   const [schema] = useState(() =>
-    roleId ? roleEditFormSchema(() => storedSlug.current) : roleFormSchema
+    roleId
+      ? roleEditFormSchema(
+          () => storedSlug.current,
+          () => storedName.current
+        )
+      : roleFormSchema
   );
   const form = useForm<RoleFormValuesType>({
     resolver: zodResolver(schema),
@@ -394,8 +427,10 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
     }
   };
 
+  // Leaves the form for the roles list without saving, as a save leaves it.
   const handleCancel = () => {
     setError(null);
+    navigateTo(ROUTES.SECURITY_ROLES);
   };
 
   // Load permissions from server
@@ -531,6 +566,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
         };
 
         storedSlug.current = roleWithPermissions.slug;
+        storedName.current = roleWithPermissions.name;
         setRole(roleWithPermissions);
         setLoadingState(prev => ({
           ...prev,
@@ -676,7 +712,9 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
   const handleNameChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       if (!isEditMode) {
-        const value = e.target.value;
+        // From the name as it is saved, trimmed, so a space typed at either
+        // end does not become an underscore in the slug.
+        const value = e.target.value.trim();
         const slugValue = value
           .toLowerCase()
           .replace(/\s+/g, "_")

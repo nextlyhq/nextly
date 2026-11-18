@@ -157,6 +157,11 @@ export {
   SITE_CODE_POLICY_DOCS_HREF,
 } from "./docs-links";
 export { CanvasMarks } from "./canvas/canvas-marks";
+/**
+ * @experimental The line where the Add panel's highlighted tile would land,
+ * drawn in the canvas's overlay.
+ */
+export { InsertionLine } from "./canvas/insertion-line";
 
 /**
  * @experimental Hold the editor's shortcuts while something modal is over it.
@@ -174,9 +179,39 @@ export { CanvasMarks } from "./canvas/canvas-marks";
  */
 export { useModalKeyboardHold } from "./shell/modal-keyboard-hold";
 export type { CanvasProps } from "./canvas/canvas";
-// The regions of a page's Layout, drawn locked around the page on the canvas.
+// The regions of a page's layout around the page on the canvas, and which one
+// is selected.
 export type { CanvasRegion } from "./canvas/canvas-regions";
 export { REGION_ATTRIBUTE } from "./canvas/canvas-regions";
+export {
+  useRegionSelection,
+  type RegionSelection,
+} from "./canvas/region-selection";
+/*
+ * A region of the page's layout edited in place: which document the editor
+ * edits and the second state that edits a region, the canvas's input for it,
+ * the bar for the strip above the canvas and the dim over the page.
+ * Experimental until editing a header or footer in place settles.
+ */
+export type { CanvasEditingRegion } from "./canvas/canvas-props";
+export {
+  RegionEditingScrim,
+  type RegionEditingScrimProps,
+} from "./canvas/region-editing-scrim";
+export {
+  canvasEditingOf,
+  regionEscape,
+  useEditingTarget,
+  type EditingTarget,
+  type EditingTargetState,
+  type RegionEditing,
+  type RegionEditingWords,
+  type RegionStateArgs,
+} from "./editing-target";
+export {
+  RegionEditingBar,
+  type RegionEditingBarProps,
+} from "./region-editing-bar";
 
 /**
  * The inserter, behind the same client banner as the shell it fills: it holds
@@ -229,8 +264,7 @@ export type {
 // The variant open in a component's view, previewed on the host's canvas.
 export { useVariantPreview, VariantPreviewTag } from "./variant-preview";
 export type { VariantPreviewState } from "./variant-preview";
-// The one row of tags over the canvas: the variant previewed, and the site
-// mode the author picked to preview the page in.
+// The one row of tags over the canvas: the variant previewed.
 export { CanvasPreviewTags } from "./canvas/canvas-preview-tags";
 export type { CanvasPreviewTagsProps } from "./canvas/canvas-preview-tags";
 
@@ -345,6 +379,9 @@ export type { BreakpointManagerProps } from "./shell/breakpoint-manager";
  */
 export { BreakpointSwitcher } from "./shell/breakpoint-switcher";
 export type { BreakpointSwitcherProps } from "./shell/breakpoint-switcher";
+// The top bar's light and dark preview, placed by the host beside the devices.
+export { DarkPreviewSwitch } from "./shell/dark-preview-switch";
+export type { DarkPreviewSwitchProps } from "./shell/dark-preview-switch";
 
 /**
  * The canvas zoom, and the control that names it.
@@ -482,6 +519,15 @@ export type { EmptyContainerAppendersProps } from "./canvas/empty-container-appe
 export { ImageStates } from "./canvas/image-states";
 export type { ImageStatesProps } from "./canvas/image-states";
 /**
+ * The chooser a block just added asks for, drawn over it on the canvas while
+ * the editor's first-add step holds: the Columns layouts with Skip. A canvas
+ * overlay composed like the ones above, from the editor alone.
+ *
+ * @experimental
+ */
+export { FirstAddChoosers } from "./canvas/first-add-choosers";
+export type { FirstAddChoosersProps } from "./canvas/first-add-choosers";
+/**
  * The badge on a block whose bound value a visitor will not see, drawn in the
  * canvas's overlay from the host's `visitorUnreadableBindings` answer.
  */
@@ -536,7 +582,8 @@ export {
   type ItemHiddenOptions,
 } from "./conditions/use-applied-conditions";
 export { PageInserters } from "./canvas/page-inserters";
-export type { PageInsertersProps } from "./canvas/page-inserters";
+export type { PageInsertersProps, StartOptions } from "./canvas/page-inserters";
+export type { StarterPage } from "./canvas/page-start-area";
 
 /**
  * The editor's document state, published beside the canvas because it is a hook
@@ -708,10 +755,11 @@ export type {
  * document and ships from the root entry.
  */
 export { LayersPanel } from "./panels/layers/layers-panel";
+export type { LayersPanelProps } from "./panels/layers/layers-panel";
 export type {
-  LayersPanelProps,
+  LayersEditedRegion,
   LayersRegionRow,
-} from "./panels/layers/layers-panel";
+} from "./panels/layers/layers-regions";
 /*
  * The tokens studio. A host that mounts it owns the site style document and
  * decides when an edit is persisted; this exports the surface, not the save.
@@ -722,7 +770,6 @@ export type {
   GroupFolds,
   TokensPanelProps,
   VariablesHeader,
-  VariablesPreview,
 } from "./tokens-panel";
 // Which variable groups each Design tab lists, and the one variable search,
 // so a tab's count and the rows it lists come from the same rule.
@@ -735,10 +782,16 @@ export {
 // and the way a host hands the tab its search.
 export { stylesTabMatches } from "./styles-tab-matches";
 export { SharedStylesHostSearch } from "./shared-styles-panel";
+// Where a block type's styles sit in the Styles tab, so a host sending the
+// author there ("Edit block styles") reveals the group the tab draws.
+export { blockStyleFoldId } from "./block-looks-group";
 // The site's fonts, for every Font control the host draws: the block panel's
 // and a font variable's in Design.
 export { FontChoicesContext } from "./font-family-field";
 export type { FontChoices } from "./font-family-field";
+// The top of Design's Type tab: the Body and Headings fonts every page uses.
+export { SiteFontRoles } from "./site-font-roles";
+export type { SiteFontRolesProps } from "./site-font-roles";
 export type { DesignTab, VariableGroup } from "./tokens-studio";
 /*
  * How widely variables are used, as a host reads it for the Variables view.
@@ -821,6 +874,7 @@ export type {
   SharedStylesPanelProps,
 } from "./shared-styles-panel";
 export type {
+  SharedStyleHereParts,
   SharedStyleKind,
   SharedStyleReach,
   SharedStyleRefusal,
@@ -890,3 +944,15 @@ export type {
  */
 export { ExposurePicker, selectionAsComponent } from "./exposure-picker";
 export type { ExposurePickerProps } from "./exposure-picker";
+
+/**
+ * Page checks: the count beside Publish that opens the list and walks it
+ * while the author fixes things, and the list itself. The checks they run
+ * are on the root entry, callable without a DOM.
+ *
+ * @experimental
+ */
+export { PageChecksChip } from "./page-checks/page-checks-chip";
+export type { PageChecksChipProps } from "./page-checks/page-checks-chip";
+export { PageChecksList } from "./page-checks/page-checks-list";
+export type { PageChecksListProps } from "./page-checks/page-checks-list";

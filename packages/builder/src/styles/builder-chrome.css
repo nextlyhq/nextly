@@ -21,10 +21,14 @@
  *   a block is visible on, and variable choices.
  * - canvas: the canvas region and frame, the marks drawn over blocks, the drop
  *   line and its refusals.
+ * - canvas-preview-width: the handles at the frame's edges, the ruler of
+ *   breakpoint starts and the line naming the device still edited.
  * - layers: the Layers panel.
  * - block-toolbar: the bottom bar, the breadcrumb, the block toolbar and the
  *   spacing overlay.
  * - variables: the Variables panel, its editor and import.
+ * - site-text: the Type tab's Site text rows and their popups, and a type
+ *   size's line height under a block's field.
  * - field-rows: attribute rows, where a value came from, a style field's row.
  * - inserters: the "+" on an empty container and between blocks.
  * - shared-styles: class chips, the Layers key hint, the zoom control, shared
@@ -43,9 +47,16 @@
  *   Show when's conditions, built from those filters.
  * - preview: content a visitor cannot read, the preview strip and picker.
  * - read-panel: the read meter and the read panel.
+ * - page-checks: the checks' count beside Publish, the list it opens and the
+ *   bar under it while fixing.
  * - bindings: data bindings, the image fallback and the media library picker.
  * - image-states: an Image's empty state on the canvas, its upload, link and
  *   missing file.
+ * - form-fields: a Form's Fields and After sending.
+ * - first-add: the chooser a block just added asks for on the canvas, such
+ *   as the Columns layouts.
+ * - region-editing: the bar and the dim while a header or footer is edited
+ *   in place.
  *
  * Tests that read the stylesheet's rules read it through
  * `chrome-stylesheet.ts` beside this file, which follows these imports in
@@ -65,12 +76,24 @@
 @import "./style-inspector.css";
 
 @import "./canvas.css";
+/* The handles, ruler and notice for previewing another width. */
+@import "./canvas-preview-width.css";
 
 @import "./layers.css";
 
 @import "./block-toolbar.css";
+/* The floating format bar over words being edited, and its paste notice. */
+@import "./format-bar.css";
 
 @import "./variables.css";
+
+@import "./colour-groups.css";
+
+@import "./usage-filter.css";
+
+@import "./shadow.css";
+
+@import "./site-text.css";
 
 @import "./field-rows.css";
 
@@ -83,6 +106,7 @@
 @import "./fonts.css";
 
 @import "./spacing-box.css";
+@import "./spacing-popover.css";
 
 @import "./link-picker.css";
 
@@ -96,6 +120,14 @@
 
 @import "./read-panel.css";
 
+@import "./page-checks.css";
+
 @import "./bindings.css";
 
 @import "./image-states.css";
+
+@import "./form-fields.css";
+
+@import "./first-add.css";
+
+@import "./region-editing.css";

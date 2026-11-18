@@ -156,7 +156,11 @@ describe("a site style write dropping a variable or a shared style", () => {
       setup,
       "postgresql"
     );
-    expect(variableUses).toHaveBeenCalledWith(["t-accent"], expect.anything());
+    // Asked by usage key: the identity, and the property it is written under.
+    expect(variableUses).toHaveBeenCalledWith(
+      ["t-accent", "var:--site-t-accent"],
+      expect.anything()
+    );
     // The Single is read first, on the write's own transaction, to judge what
     // the write leaves there: no other document is asked before the lock.
     expect(order).toEqual(["site style", "lock", "variable uses"]);
@@ -540,5 +544,111 @@ describe("a site style write's shared styles and the variables they name", () =>
       publicData: { errors: [{ code: "IN_USE" }] },
     });
     expect(siteStyleOn).toHaveBeenCalledWith(TRANSACTION);
+  });
+});
+
+describe("a site style write dropping a variable named through var()", () => {
+  /** A shadow variable whose value names `property`. */
+  const lift = (property: string) => ({
+    id: "t-lift",
+    name: "shadow.lift",
+    label: "Lift",
+    kind: "shadow",
+    values: { light: `0 1px 2px var(${property})` },
+  });
+
+  it("refuses dropping a colour a shadow variable the write keeps still names, before the lock", async () => {
+    const { setup, variableUses } = setupUsing();
+    await expect(
+      refuseRemovalsInUse(
+        update(
+          {
+            tokens: { tokens: [variable("t-accent"), lift("--site-t-accent")] },
+          },
+          { tokens: { tokens: [lift("--site-t-accent")] } }
+        ),
+        setup,
+        "postgresql"
+      )
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          {
+            path: "tokens",
+            code: "IN_USE",
+            message: "T accent is used by the variable Lift.",
+          },
+        ],
+      },
+    });
+    // The Single alone is read for its shared styles: no lock, no document.
+    expect(order).toEqual(["site style"]);
+    expect(variableUses).not.toHaveBeenCalled();
+    // CONTROL: dropping the shadow with it leaves nothing naming the colour.
+    const both = setupUsing();
+    await refuseRemovalsInUse(
+      update(
+        { tokens: { tokens: [variable("t-accent"), lift("--site-t-accent")] } },
+        { tokens: { tokens: [] } }
+      ),
+      both.setup,
+      "postgresql"
+    );
+    expect(both.variableUses).toHaveBeenCalled();
+  });
+
+  it("refuses dropping a colour a shared style's shadow names, under the Single's own prefix", async () => {
+    const shadowed = {
+      ...style("c-card"),
+      styles: {
+        base: { base: { boxShadow: "0 1px 2px var(--brand-t-accent)" } },
+      },
+    };
+    const { setup } = setupUsing();
+    await expect(
+      refuseRemovalsInUse(
+        update(
+          {
+            tokens: {
+              prefix: "--brand-",
+              tokens: [variable("t-accent"), variable("t-brand")],
+            },
+            classes: [shadowed],
+          },
+          {
+            tokens: { prefix: "--brand-", tokens: [variable("t-brand")] },
+            classes: [shadowed],
+          }
+        ),
+        setup,
+        "postgresql"
+      )
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [{ message: "T accent is used by the shared style c-card." }],
+      },
+    });
+  });
+
+  it("asks the stored documents for the property the Single as written uses", async () => {
+    const { setup, variableUses } = setupUsing();
+    await refuseRemovalsInUse(
+      update(
+        {
+          tokens: {
+            prefix: "--brand-",
+            tokens: [variable("t-accent"), variable("t-brand")],
+          },
+        },
+        { tokens: { prefix: "--brand-", tokens: [variable("t-brand")] } }
+      ),
+      setup,
+      "postgresql"
+    );
+    expect(variableUses).toHaveBeenCalledWith(
+      ["t-accent", "var:--brand-t-accent"],
+      expect.anything()
+    );
   });
 });

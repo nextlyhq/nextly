@@ -56,7 +56,9 @@ import {
   checkCssValue,
   checkUrlValue,
   decodeIdentifier,
+  referencesCustomProperty,
 } from "./css-value";
+import { darkModeSheet } from "./dark-mode-sheet";
 import {
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
@@ -66,7 +68,12 @@ import {
   safeTokenPrefix,
   tokenCustomProperty,
 } from "./declarations";
+import type { SiteTextMap } from "./site-text";
 import { checkTokenKind, tokenKindExample } from "./site-token-kind";
+import { typeSizeDefaultTokens } from "./type-size-defaults";
+
+/** The marker a host sets to choose a mode, written with the dark sheet. */
+export { DARK_MODE_ATTRIBUTE } from "./dark-mode-sheet";
 
 /** The modes a token may carry a value for. */
 export type TokenMode = "light" | "dark";
@@ -138,6 +145,12 @@ export interface SiteToken {
    */
   fluid?: { readonly small: number; readonly large: number };
   /**
+   * The named group a colour is listed under in the Design panel ("Brand",
+   * "Text and surfaces"). Display-only, as `label` is: never emitted, and a
+   * group never changes the code name, so moving a colour moves no CSS.
+   */
+  group?: string;
+  /**
    * Fields found under THIS system's own extension key that this build does not
    * read, kept so it can write them back out.
    *
@@ -174,6 +187,31 @@ export interface SiteTokenSet {
    * {@link DarkModeStrategy}.
    */
   darkMode?: DarkModeStrategy;
+  /**
+   * The page widths a size made with "Fluid…" grows across, in px: the
+   * smallest screen and the largest. 360 to 1280 where unset. Never
+   * emitted: each fluid size's value already holds it, and a change of it
+   * remakes those values.
+   */
+  fluidRange?: { readonly min: number; readonly max: number };
+  /**
+   * The site's text: Body, the six heading levels, Links, Buttons and
+   * Captions, each a font, size and line height (and for links a colour and
+   * an underline) set once for every page. A row left out keeps its built-in
+   * value (`resolveSiteText`). Never emitted here: the element tier writes
+   * it. Kept with the variables because a row points at them, so the two
+   * save, merge and undo as one.
+   *
+   * @experimental
+   */
+  siteText?: SiteTextMap;
+  /**
+   * The site's colours in the order its authors put them, by identity.
+   * Colours it does not name follow in the set's own order, so a site that
+   * never reorders stores nothing. Display-only: the Design panel and every
+   * colour picker list colours in this order, and nothing is emitted from it.
+   */
+  order?: readonly string[];
 }
 
 /**
@@ -359,102 +397,6 @@ export interface FontFaceDef {
 }
 
 /**
- * The marker a host sets to choose a mode: `"dark"` or `"light"`.
- *
- * Without it the visitor's device decides. With it the marker wins both ways:
- * `"dark"` shows dark values on a light device and `"light"` keeps light values
- * on a dark one.
- *
- * Named rather than themed: it says what it selects and belongs to no design
- * system, so a host wiring its own toggle to it is not adopting anything else.
- */
-export const DARK_MODE_ATTRIBUTE = "data-nx-theme";
-
-/** The selector root-scoped tokens are declared under. */
-const ROOT_TOKEN_SELECTOR = ":root";
-
-/**
- * The dark block, written for whichever element can actually carry the switch.
- *
- * **Root-scoped tokens are declared on the attribute-bearing element itself,
- * not on the root.** Custom properties inherit, so declaring them wherever the
- * host put the attribute cascades to everything below — which is the only shape
- * that works for all three placements a host chooses between. Measured, with
- * the attribute moved between `<html>`, `<body>` and a wrapper: this form
- * applies in every one. A form anchored to `:root` applies only when the
- * attribute is on `<html>`, because `:root` IS that element and cannot be
- * reached by a rule describing an ancestor.
- *
- * Its specificity equals the light block's `:root`, and it is emitted after it,
- * so order decides and dark wins where both match.
- *
- * **A scoped selector keeps the ancestor form**, because a bare attribute
- * selector would declare these tokens for the whole document and a scoped
- * sheet exists precisely so it does not. There the host has somewhere above the
- * element to put the switch, so the ancestor form is both available and
- * correct.
- */
-function darkSelectorFor(selector: string, dark: readonly string[]): string {
-  return markerBlockFor(selector, "dark", dark);
-}
-
-/**
- * Declarations under the marker for one mode, on whichever element carries it.
- *
- * The light block is the same shape as the dark one, for the same reason: the
- * device block above is guarded only against a marker on the root itself, so a
- * `data-nx-theme="light"` on `<body>` or a wrapper would otherwise inherit the
- * dark values from the root. Declaring the light values on the marked element
- * puts them nearer than anything inherited.
- */
-function markerBlockFor(
-  selector: string,
-  mode: TokenMode,
-  declarations: readonly string[]
-): string {
-  const body = `{${declarations.join(";")}}`;
-  const marker = `[${DARK_MODE_ATTRIBUTE}="${mode}"]`;
-  if (selector === ROOT_TOKEN_SELECTOR) {
-    return `${marker}${body}`;
-  }
-  // `:is()` around the whole selector, because this one may be a LIST. Appending
-  // the attribute to `.preview-a,.preview-b` yields `.preview-a` bare and only
-  // `.preview-b[...]` qualified, so the first member would take the dark values
-  // unconditionally and a scoped preview would render dark for good. `:is()`
-  // takes the specificity of its most specific argument, so a list of single
-  // classes weighs exactly what one of them did.
-  const scoped = `:is(${selector})`;
-  // The NEAREST marker decides. A light and a dark block would otherwise
-  // match with equal weight under nested markers, and whichever was written
-  // last would win however the markers nest. So a block that applies through
-  // an ancestor's marker stands down where the other mode's marker is on the
-  // scope itself, or sits between that ancestor and the scope.
-  const other = `[${DARK_MODE_ATTRIBUTE}="${mode === "dark" ? "light" : "dark"}"]`;
-  return `${scoped}${marker},${marker} ${scoped}:not(${other},${marker} ${other} *)${body}`;
-}
-
-/**
- * The dark block written for the visitor's device preference.
- *
- * Guarded by a `not` on the light marker, so a host (or the editor's preview)
- * can keep light values on a device that prefers dark. On `:root` the guard
- * reads the root element alone, because nothing sits above it; a scoped
- * selector is guarded against the marker on itself or on any ancestor, which
- * is where a host puts the switch for a scoped sheet.
- *
- * Wrapped in `:is()` for the same reason as the attribute form: the selector
- * may be a list, and `:not()` appended to it would guard only its last member.
- */
-function deviceDarkBlockFor(selector: string, dark: readonly string[]): string {
-  const light = `[${DARK_MODE_ATTRIBUTE}="light"]`;
-  const guarded =
-    selector === ROOT_TOKEN_SELECTOR
-      ? `${ROOT_TOKEN_SELECTOR}:not(${light})`
-      : `:is(${selector}):not(${light},${light} *)`;
-  return `@media (prefers-color-scheme:dark){${guarded}{${dark.join(";")}}}`;
-}
-
-/**
  * The longest font format this engine will write.
  *
  * The grammar below constrains the alphabet and not the length, and a format is
@@ -493,12 +435,34 @@ const FONT_FORMAT = /^[a-z0-9-]+$/i;
 export function resolveTokenPrefix(prefix: string | undefined): {
   prefix: string;
   issue?: ValidationIssue;
+  /**
+   * Why the requested prefix was refused, in words for the person choosing
+   * one (the site's settings), where `issue` reports to a compile. Both come
+   * from the one verdict, so a prefix a person is told is fine is the one the
+   * sheet is written under.
+   */
+  refusal?: string;
 } {
   const safe = safeTokenPrefix(prefix);
   return safe.warning === undefined
     ? { prefix: safe.prefix }
-    : { prefix: safe.prefix, issue: tokenIssue(safe.warning) };
+    : {
+        prefix: safe.prefix,
+        issue: tokenIssue(safe.warning),
+        refusal: PREFIX_REFUSALS[safe.reserved ?? "shape"],
+      };
 }
+
+/**
+ * The plain reason for each way a prefix is refused: each reserved prefix by
+ * whose it is, and a prefix the wrong shape by what a prefix looks like.
+ */
+const PREFIX_REFUSALS = {
+  "--nx-": "--nx- is kept for the admin's own styles. Choose another prefix.",
+  "--tw-": "--tw- is used by Tailwind. Choose another prefix.",
+  shape:
+    "A prefix starts with two dashes, uses only lowercase letters, numbers and dashes, and ends with a dash, like --brand-.",
+} as const;
 
 function tokenIssue(
   message: string,
@@ -659,6 +623,25 @@ function typeInstead(kind: TokenKind): string {
  * be a design system would be a set most sites delete.
  */
 /**
+ * A site's own token over the one it replaces, keeping the replaced token's
+ * group and label where the site's says neither: a built-in colour the site
+ * gave its own value to before colours had groups and these names is still
+ * listed where, and as, the built-in one is. Display only, as both are.
+ */
+function withDefaultWords(
+  token: SiteToken,
+  replaced: SiteToken | undefined
+): SiteToken {
+  const group = token.group ?? replaced?.group;
+  const label = token.label ?? replaced?.label;
+  return {
+    ...token,
+    ...(group === undefined ? {} : { group }),
+    ...(label === undefined ? {} : { label }),
+  };
+}
+
+/**
  * The token set a site actually renders with: the defaults, with a site's own
  * definitions layered over them by NAME.
  *
@@ -683,7 +666,7 @@ function typeInstead(kind: TokenKind): string {
  * that agree today drift, and the drift is invisible because a missing token
  * looks exactly like a token whose value did not apply.
  *
- * `prefix` and `darkMode` come from the override when it states them, because
+ * `prefix`, `darkMode` and `fluidRange` come from the override when it states them, because
  * they are site-wide decisions rather than per-token values. A site that sets a
  * prefix must set it in ONE place: `compileSiteSheet` derives the prefix used
  * for declaring and for referencing from a single value for exactly this
@@ -707,7 +690,8 @@ export function resolveSiteTokens(override?: SiteTokenSet): SiteTokenSet {
   // imported DTCG file can carry one, and taking the first would apply a value
   // the author replaced.
   for (const token of override?.tokens ?? []) {
-    byIdentity.set(tokenIdentity(token), token);
+    const identity = tokenIdentity(token);
+    byIdentity.set(identity, withDefaultWords(token, byIdentity.get(identity)));
   }
   return {
     tokens: [...byIdentity.values()],
@@ -715,6 +699,16 @@ export function resolveSiteTokens(override?: SiteTokenSet): SiteTokenSet {
     ...(override?.darkMode === undefined
       ? {}
       : { darkMode: override.darkMode }),
+    // Site-wide too: the widths the sizes made with Fluid… grow between.
+    ...(override?.fluidRange === undefined
+      ? {}
+      : { fluidRange: override.fluidRange }),
+    // And the site's text, which the element tier reads beside the tokens.
+    ...(override?.siteText === undefined
+      ? {}
+      : { siteText: override.siteText }),
+    // Site-wide as well: the order the site's colours are listed in.
+    ...(override?.order === undefined ? {} : { order: override.order }),
   };
 }
 
@@ -726,20 +720,25 @@ export function defaultSiteTokens(): SiteToken[] {
       values: { light: "72rem" },
       description: "How wide a centred container may grow.",
     },
+    // The brand colour first: the Design panel lists the site's colours in
+    // this order, and "Brand" comes before "Text and surfaces".
+    {
+      name: "color.primary",
+      kind: "color",
+      group: "Brand",
+      values: { light: "#2563eb", dark: "#60a5fa" },
+    },
     {
       name: "color.text",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#111827", dark: "#f9fafb" },
     },
     {
       name: "color.background",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#ffffff", dark: "#0b0f19" },
-    },
-    {
-      name: "color.primary",
-      kind: "color",
-      values: { light: "#2563eb", dark: "#60a5fa" },
     },
     /**
      * A raised surface: a card, a panel, a table header. DISTINCT from
@@ -761,6 +760,7 @@ export function defaultSiteTokens(): SiteToken[] {
     {
       name: "color.surface",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#f9fafb", dark: "#151b2b" },
     },
     /**
@@ -782,6 +782,7 @@ export function defaultSiteTokens(): SiteToken[] {
     {
       name: "color.border",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#e5e7eb", dark: "#1f2937" },
     },
     /**
@@ -810,7 +811,10 @@ export function defaultSiteTokens(): SiteToken[] {
      */
     {
       name: "color.border-strong",
+      // Named as an author reads it; the code name stays as it was.
+      label: "Strong border",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#6b7280", dark: "#9ca3af" },
     },
     /**
@@ -823,10 +827,22 @@ export function defaultSiteTokens(): SiteToken[] {
      */
     {
       name: "color.muted",
+      // Named as an author reads it; the code name stays as it was.
+      label: "Muted text",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#6b7280", dark: "#9ca3af" },
     },
     { name: "font.body", kind: "fontFamily", values: { light: "system-ui" } },
+    // The font the site's headings are set in once an author picks one. No
+    // rule reads it until then: the heading rows hold no font, so headings
+    // take the body text's, the site's own or the one picked for Body.
+    {
+      name: "font.heading",
+      kind: "fontFamily",
+      values: { light: "system-ui" },
+    },
+    ...typeSizeDefaultTokens(),
     { name: "space.4", kind: "dimension", values: { light: "1rem" } },
     ...SPACING_DEFAULTS.map(
       ({ name, value, description }): SiteToken => ({
@@ -888,6 +904,33 @@ const SPACING_DEFAULTS: readonly SpacingDefault[] = [
     label: "Section padding (sides)",
     value: { min: "1rem", preferred: "4vw", max: "2rem" },
     description: "A section's padding beside its content.",
+  },
+  // A Section's Compact and Roomy padding (`padding-preset.ts`), each a pair
+  // like the two above, which are Normal's. Tighter and airier above and
+  // below; beside the content they start as Normal's.
+  {
+    name: "space.section-y-compact",
+    label: "Section padding, compact (top and bottom)",
+    value: { min: "1.5rem", preferred: "1rem + 2vw", max: "2.5rem" },
+    description: "A Compact section's padding above and below its content.",
+  },
+  {
+    name: "space.gutter-compact",
+    label: "Section padding, compact (sides)",
+    value: { min: "1rem", preferred: "4vw", max: "2rem" },
+    description: "A Compact section's padding beside its content.",
+  },
+  {
+    name: "space.section-y-roomy",
+    label: "Section padding, roomy (top and bottom)",
+    value: { min: "4.5rem", preferred: "3rem + 6vw", max: "7.5rem" },
+    description: "A Roomy section's padding above and below its content.",
+  },
+  {
+    name: "space.gutter-roomy",
+    label: "Section padding, roomy (sides)",
+    value: { min: "1rem", preferred: "4vw", max: "2rem" },
+    description: "A Roomy section's padding beside its content.",
   },
   {
     name: "space.columns",
@@ -1238,6 +1281,13 @@ export function emitTokenBlocks(
   // The light values of the variables that have a dark one: what a light
   // marker has to restore, and nothing else.
   const undoDark: string[] = [];
+  // The light declarations of the variables with no dark value of their own
+  // that read another variable, such as a shadow coloured by a colour
+  // variable. A custom property's `var()` is resolved where it is declared
+  // and inherited as the result, so one declared only on the root keeps the
+  // light colour under a dark marker on <body> or a wrapper. Declared again in
+  // every mode block, it resolves on the same element as what it reads.
+  const reread: string[] = [];
   const seen = new Map<string, string>();
   /*
    * The tokens this call actually WROTE.
@@ -1356,6 +1406,8 @@ export function emitTokenBlocks(
         `${property}:${writtenTokenValue(token.kind, token.values.dark)}`
       );
       undoDark.push(`${property}:${lightValue}`);
+    } else if (referencesCustomProperty(lightValue)) {
+      reread.push(`${property}:${lightValue}`);
     }
   }
 
@@ -1377,18 +1429,19 @@ export function emitTokenBlocks(
   }
   if (light.length === 0) return { css: "", issues, emitted: [] };
 
-  let css = `${selector}{${light.join(";")}}`;
-  // Both forms, always, and in this order. The device block makes dark values
-  // work with no setup; the marker block after it lets a host choose dark on a
-  // light device. `set.darkMode` is deliberately not read: it once picked one
-  // of the two, and its default picked the form nothing set.
-  // The light marker block comes last, so where a light marker sits inside a
-  // dark one the nearer marker decides.
-  if (dark.length > 0) {
-    css +=
-      deviceDarkBlockFor(selector, dark) +
-      darkSelectorFor(selector, dark) +
-      markerBlockFor(selector, "light", undoDark);
+  // A site with no dark values writes its one block as it always has: there
+  // is no second scheme to state.
+  if (dark.length === 0) {
+    return { css: `${selector}{${light.join(";")}}`, issues, emitted };
   }
-  return { css, issues, emitted };
+  return {
+    css: darkModeSheet(
+      selector,
+      light,
+      [...dark, ...reread],
+      [...undoDark, ...reread]
+    ),
+    issues,
+    emitted,
+  };
 }
