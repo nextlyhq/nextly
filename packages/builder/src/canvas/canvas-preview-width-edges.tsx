@@ -28,6 +28,7 @@ import * as React from "react";
 
 import {
   deviceLabelOf,
+  draggedPaintedWidth,
   keyedPreviewWidth,
   previewAnnouncement,
   previewNotice,
@@ -80,6 +81,8 @@ interface Drag {
   readonly startWidth: number;
   /** The scale the frame is painted at, held for the whole drag. */
   readonly scale: number;
+  /** The region's width the frame is centred in, or 0 unmeasured. */
+  readonly region: number;
   readonly box: HTMLElement | null;
   readonly page: HTMLElement | null;
   /**
@@ -197,6 +200,15 @@ function Edges({
     return () => sizes.disconnect();
   }, []);
 
+  // A width keyed in for one device is not announced once another is edited.
+  React.useEffect(
+    () => () => {
+      if (keyTimer.current !== null) clearTimeout(keyTimer.current);
+      keyTimer.current = null;
+    },
+    [edited]
+  );
+
   // The frame's latest listener, for a drag the handles' going cuts short.
   const draggingSeen = React.useRef(onDragging);
   draggingSeen.current = onDragging;
@@ -255,6 +267,9 @@ function Edges({
   ): void => {
     if (event.button !== 0) return;
     event.preventDefault();
+    // A drag overtakes a keyed width still waiting to be announced.
+    if (keyTimer.current !== null) clearTimeout(keyTimer.current);
+    keyTimer.current = null;
     event.currentTarget.setPointerCapture(event.pointerId);
     const box =
       root.current?.closest<HTMLElement>(`[${CANVAS_FRAME_BOX_ATTRIBUTE}]`) ??
@@ -268,6 +283,12 @@ function Edges({
       startX: event.clientX,
       startWidth: width,
       scale,
+      // The well's own width: the stage grows past it with a frame wider
+      // than it, so the canvas region around it is what the frame centres
+      // in. The stage's where the frame is drawn outside the shell.
+      region:
+        (box?.closest(".nx-canvas-scroller") ?? box?.parentElement)
+          ?.clientWidth ?? 0,
       box,
       page,
       width,
@@ -281,11 +302,15 @@ function Edges({
   const onPointerMove = (event: React.PointerEvent<HTMLElement>): void => {
     const held = drag.current;
     if (held === null || held.pointerId !== event.pointerId) return;
-    // Both edges move together, so the width changes by twice the handle's
-    // travel, in the page's own pixels.
+    // The edge dragged follows the pointer, both edges moving together while
+    // the frame is centred, in the page's own pixels.
     const dragged =
-      held.startWidth +
-      (held.side * 2 * (event.clientX - held.startX)) / held.scale;
+      draggedPaintedWidth({
+        side: held.side,
+        start: held.startWidth * held.scale,
+        region: held.region,
+        travel: event.clientX - held.startX,
+      }) / held.scale;
     held.width = snappedPreviewWidth(
       clampPreviewWidth(dragged, range),
       marks,

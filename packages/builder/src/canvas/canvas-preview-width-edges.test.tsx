@@ -355,6 +355,48 @@ describe("what the canvas says", () => {
   });
 });
 
+describe("an announcement overtaken", () => {
+  it("is not made for keys pressed before another device was chosen", () => {
+    vi.useFakeTimers();
+    const control = (edited: string) => ({
+      breakpoints: SITE,
+      edited,
+      deviceWidth: edited === BASE_BREAKPOINT ? 1280 : 1023,
+      override: null,
+      onChange: () => {},
+    });
+    const { rerender } = render(
+      <PreviewWidthEdges
+        width={1280}
+        scale={1}
+        control={control(BASE_BREAKPOINT)}
+      />
+    );
+    fireEvent.keyDown(handle("right"), { key: "ArrowLeft" });
+    rerender(
+      <PreviewWidthEdges width={1023} scale={1} control={control("tablet")} />
+    );
+    act(() => {
+      vi.advanceTimersByTime(ANNOUNCE_AFTER_KEYS_MS);
+    });
+    expect(liveRegion().textContent).toBe("");
+  });
+
+  it("is not made for keys pressed before a drag began", () => {
+    vi.useFakeTimers();
+    render(<Host start={900} />);
+    const right = handle("right");
+    fireEvent.keyDown(right, { key: "ArrowLeft" });
+    act(() => {
+      fireEvent.pointerDown(right, { button: 0, pointerId: 1, clientX: 0 });
+    });
+    act(() => {
+      vi.advanceTimersByTime(ANNOUNCE_AFTER_KEYS_MS);
+    });
+    expect(liveRegion().textContent).toBe("");
+  });
+});
+
 describe("the announcement", () => {
   it("is made once, when a drag ends", () => {
     render(<Host />);

@@ -6,8 +6,15 @@
  * All drawn inside the frame's box, out of flow, so nothing here moves the
  * page or the well. No transitions: a width, a handle and the ruler change at
  * once, which is also what reduced motion asks for.
+ *
+ * Where the handles sit is said once, on the root, as custom properties the
+ * handles and their grips read: beside a frame narrower than the well they
+ * sit in the well, just outside the page's edge, and show at rest.
  */
 .nx-preview-width {
+  --nx-preview-handle-inset: -14px;
+  --nx-preview-handle-lift: -24px;
+  --nx-preview-grip-rest: 1;
   position: absolute;
   inset: 0;
   /* Over the chrome layer drawn in the same box. */
@@ -16,17 +23,28 @@
 }
 
 /*
- * A handle: a strip as tall as a grip and a little more, its grip centred in
- * it. Beside a frame narrower than the well it sits in the well, just outside
- * the page's edge; on a frame filling the region it sits just inside, and
- * shows on hover or focus.
+ * On a frame that meets the panels' dividers, just inside its edges, clear of
+ * each divider's own resize strip and grip, which straddle the edge at its
+ * middle: in from the edge and above the divider's grip, so the two never
+ * overlap and a press on either is unambiguous. Shown on hover or focus.
  */
+.nx-preview-width[data-handles="inside"] {
+  --nx-preview-handle-inset: 8px;
+  --nx-preview-handle-lift: -80px;
+  --nx-preview-grip-rest: 0;
+}
+
+.nx-preview-width[data-dragging] {
+  --nx-preview-grip-rest: 1;
+}
+
+/* A handle: a strip a little taller than its grip, the grip centred in it. */
 .nx-preview-width__handle {
   position: absolute;
   top: 50%;
   width: 12px;
   height: 48px;
-  margin-top: -24px;
+  margin-top: var(--nx-preview-handle-lift);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -36,32 +54,17 @@
   border-radius: 4px;
 }
 
+.nx-preview-width__handle:hover,
+.nx-preview-width__handle:focus-visible {
+  --nx-preview-grip-rest: 1;
+}
+
 .nx-preview-width__handle[data-side="left"] {
-  left: -14px;
+  left: var(--nx-preview-handle-inset);
 }
 
 .nx-preview-width__handle[data-side="right"] {
-  right: -14px;
-}
-
-/*
- * Inside a frame that meets the panels' dividers, kept clear of each
- * divider's own resize strip and grip, which straddle the edge at its middle:
- * in from the edge, and above the divider's grip, so the two never overlap
- * and a press on either is unambiguous.
- */
-.nx-preview-width[data-handles="inside"] .nx-preview-width__handle {
-  margin-top: -80px;
-}
-
-.nx-preview-width[data-handles="inside"]
-  .nx-preview-width__handle[data-side="left"] {
-  left: 8px;
-}
-
-.nx-preview-width[data-handles="inside"]
-  .nx-preview-width__handle[data-side="right"] {
-  right: 8px;
+  right: var(--nx-preview-handle-inset);
 }
 
 .nx-preview-width__handle:focus-visible {
@@ -74,17 +77,7 @@
   height: 32px;
   border-radius: 2px;
   background-color: var(--nx-builder-text-muted);
-}
-
-.nx-preview-width[data-handles="inside"] .nx-preview-width__grip {
-  opacity: 0;
-}
-
-.nx-preview-width[data-handles="inside"]
-  .nx-preview-width__handle:is(:hover, :focus-visible)
-  .nx-preview-width__grip,
-.nx-preview-width[data-dragging] .nx-preview-width__grip {
-  opacity: 1;
+  opacity: var(--nx-preview-grip-rest);
 }
 
 /*
@@ -100,7 +93,7 @@
   height: 20px;
   overflow: visible;
   pointer-events: none;
-  font-size: 10px;
+  font-size: var(--text-xs);
   line-height: 20px;
   font-variant-numeric: tabular-nums;
   color: var(--nx-builder-text-muted);
@@ -145,7 +138,7 @@
   border-radius: 999px;
   transform: translateX(-50%);
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--nx-builder-warning-text);
   background-color: var(--nx-builder-warning-ground);
   pointer-events: none;

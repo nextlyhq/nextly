@@ -119,6 +119,42 @@ export function snappedPreviewWidth(
 }
 
 /**
+ * The painted width that puts the dragged edge where the pointer has moved
+ * it, in screen pixels, from the painted width the drag `start`ed at, the
+ * `region`'s width and the pointer's `travel` since.
+ *
+ * The frame is centred while it is narrower than the region, so both edges
+ * move together and the width changes by twice the travel. A frame wider
+ * than the region starts at the region's left edge instead: there its right
+ * edge moves by the travel alone, and a left edge moved in from the
+ * region's start is one of a centred frame again. A region not measured is
+ * taken as roomy enough to centre.
+ *
+ * @experimental
+ */
+export function draggedPaintedWidth({
+  side,
+  start,
+  region,
+  travel,
+}: {
+  /** +1 for the right edge, -1 for the left. */
+  readonly side: 1 | -1;
+  readonly start: number;
+  readonly region: number;
+  readonly travel: number;
+}): number {
+  if (!(region > 0)) return start + side * 2 * travel;
+  const overflowing = start >= region;
+  if (side === 1) {
+    const edge = (overflowing ? start : (region + start) / 2) + travel;
+    return edge >= region ? edge : 2 * edge - region;
+  }
+  const edge = (overflowing ? 0 : (region - start) / 2) + travel;
+  return region - 2 * edge;
+}
+
+/**
  * The width a key on a handle moves to: the arrows by 10px (1px with Shift),
  * Page Up and Page Down to the next and previous mark (the range's ends past
  * the last), Home and End to the narrowest and widest. `undefined` for a key

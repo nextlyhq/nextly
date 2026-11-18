@@ -16,6 +16,7 @@ import {
 } from "./canvas-width";
 import {
   deviceLabelOf,
+  draggedPaintedWidth,
   keyedPreviewWidth,
   previewAnnouncement,
   previewNotice,
@@ -168,5 +169,43 @@ describe("the words", () => {
     expect(previewAnnouncement(900, "Desktop")).toBe(
       "Previewing at 900 pixels, still editing Desktop styles"
     );
+  });
+});
+
+describe("the painted width a dragged edge asks for", () => {
+  it("moves both edges together while the frame is centred in the region", () => {
+    // 600 painted in an 800 region: the right edge 100px in, both move.
+    expect(
+      draggedPaintedWidth({ side: 1, start: 600, region: 800, travel: -50 })
+    ).toBe(500);
+    expect(
+      draggedPaintedWidth({ side: -1, start: 600, region: 800, travel: -50 })
+    ).toBe(700);
+  });
+
+  it("follows the right edge alone while the frame overflows the region", () => {
+    // 1280 painted in an 800 region: the frame starts at the region's left
+    // edge, so its right edge moves by the pointer's travel alone.
+    expect(
+      draggedPaintedWidth({ side: 1, start: 1280, region: 800, travel: -100 })
+    ).toBe(1180);
+    // Past the region's width the frame centres again, both edges moving.
+    expect(
+      draggedPaintedWidth({ side: 1, start: 1280, region: 800, travel: -580 })
+    ).toBe(600);
+  });
+
+  it("puts the left edge at the pointer once it leaves the region's start", () => {
+    // The overflowing frame's left edge is the region's; moved 50px in, the
+    // frame is centred with that edge at 50.
+    expect(
+      draggedPaintedWidth({ side: -1, start: 1280, region: 800, travel: 50 })
+    ).toBe(700);
+  });
+
+  it("moves both edges together where the region is not measured", () => {
+    expect(
+      draggedPaintedWidth({ side: 1, start: 600, region: 0, travel: -50 })
+    ).toBe(500);
   });
 });

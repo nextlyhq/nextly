@@ -365,7 +365,13 @@ function FramedCanvas({
    * frame renders per pixel.
    */
   const resizing = React.useRef(false);
-  const viewport = useFrameViewport(frame, page, width, height, resizing);
+  // Counted at each drag's end, so the viewport is read again then, even
+  // where the drag settles on the width it started at.
+  const [settled, setSettled] = React.useState(0);
+  const viewport = useFrameViewport(frame, page, width, height, {
+    held: resizing,
+    settled,
+  });
   useRegistered(frame, scale, viewport);
 
   usePageMarkers(frame, page, mountPoint, markers);
@@ -416,6 +422,7 @@ function FramedCanvas({
           scale={scale}
           onDragging={active => {
             resizing.current = active;
+            if (!active) setSettled(count => count + 1);
           }}
         />
       </div>
@@ -919,14 +926,15 @@ function useReportedScale(
 /**
  * The frame's viewport in its own pixels, read again when the page, the
  * frame's size or the window's resize changes it; not while `held`, as while
- * the preview width is dragged, which the settled width then reads again.
+ * the preview width is dragged, and again each time `settled` counts a drag's
+ * end.
  */
 function useFrameViewport(
   frame: HTMLIFrameElement | null,
   page: Document | null,
   width: number,
   height: number,
-  held: React.RefObject<boolean>
+  { held, settled }: { held: React.RefObject<boolean>; settled: number }
 ): FrameSize | null {
   const [viewport, setViewport] = React.useState<FrameSize | null>(null);
   useIsomorphicLayoutEffect(() => {
@@ -950,7 +958,7 @@ function useFrameViewport(
     const view = page.defaultView;
     view?.addEventListener("resize", read);
     return () => view?.removeEventListener("resize", read);
-  }, [frame, page, width, height, held]);
+  }, [frame, page, width, height, held, settled]);
   return viewport;
 }
 

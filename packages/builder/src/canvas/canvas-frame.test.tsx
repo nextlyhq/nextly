@@ -582,6 +582,67 @@ describe("previewing another width", () => {
     expect(reading()).toBe(1000);
   });
 
+  it("reads the viewport again when a drag ends at the width it started at", () => {
+    let pageHeight = 800;
+    let seen: ReturnType<typeof useCanvasFrame> | null = null;
+    function Beside(): null {
+      seen = useCanvasFrame();
+      return null;
+    }
+    const proto = window.Element.prototype as unknown as Record<
+      string,
+      unknown
+    >;
+    proto.setPointerCapture = function setPointerCapture(): void {};
+    proto.releasePointerCapture = function releasePointerCapture(): void {};
+    const { container } = render(
+      <CanvasFrameProvider>
+        <Beside />
+        <CanvasFrame
+          width={1280}
+          title="Home"
+          source={TEST_SOURCE}
+          previewWidth={{
+            breakpoints: undefined,
+            edited: "base",
+            deviceWidth: 1280,
+            override: null,
+            onChange: () => {},
+          }}
+        />
+      </CanvasFrameProvider>
+    );
+    const frame = frameIn(container);
+    loadPage(frame);
+    const root = frame.contentDocument?.documentElement;
+    if (root == null) throw new Error("no frame root");
+    Object.defineProperty(root, "clientHeight", { get: () => pageHeight });
+    act(() => {
+      frame.contentWindow?.dispatchEvent(new Event("resize"));
+    });
+    const height = (): number | undefined =>
+      (seen as ReturnType<typeof useCanvasFrame> | null)?.viewport?.height;
+    expect(height()).toBe(800);
+    const right = container.querySelector<HTMLElement>(
+      '[role="slider"][data-side="right"]'
+    );
+    if (right === null) throw new Error("no handle");
+    act(() => {
+      fireEvent.pointerDown(right, { button: 0, pointerId: 1, clientX: 0 });
+    });
+    // The region grows mid-drag, while reads are held.
+    pageHeight = 900;
+    act(() => {
+      frame.contentWindow?.dispatchEvent(new Event("resize"));
+    });
+    expect(height()).toBe(800);
+    // Let go where it started: no width changes, and the read still comes.
+    act(() => {
+      fireEvent.pointerUp(right, { pointerId: 1, clientX: 0 });
+    });
+    expect(height()).toBe(900);
+  });
+
   it("draws no handles without it", () => {
     const { container } = render(
       <CanvasFrame width={1280} title="Home" source={TEST_SOURCE} />
