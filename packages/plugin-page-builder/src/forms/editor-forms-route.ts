@@ -6,7 +6,9 @@
  * that person's access (`{ as: "user" }`), so it lists and describes what
  * they may see and nothing else; the page builder adds no read of its own.
  * Whether a picked form is a draft or closed is the provider's answer, from
- * its own listing for that person and from what a visitor would be shown.
+ * that one form as it describes it to the author and to a visitor: never
+ * from listing every form, which would read a whole collection per picked
+ * form.
  *
  * **Core holds no plugin logic.** These routes name no plugin's collection,
  * field or address: a provider's label, its forms and each form's admin
@@ -96,6 +98,12 @@ export interface EditorFormQuery {
 /**
  * One picked form, as its author sees it on the canvas: drawn, with whether
  * it is a draft; closed, with what a visitor reads instead; or missing.
+ *
+ * Two reads of that form alone. The author's says whether it is there for
+ * them; a visitor's, which a provider answers for published, open forms
+ * only, tells the rest: drawn for a visitor is published, closed is closed
+ * with the words they read, and none at all, where the author has one, is
+ * a draft.
  */
 export async function describeEditorForm(
   providers: Pick<FormProviders, "get">,
@@ -113,21 +121,18 @@ export async function describeEditorForm(
       ? closed(asAuthor.message)
       : { state: "missing" };
   }
-  const listed = (await provider.list(access)).find(
-    form => form.ref === query.ref
-  );
-  if (listed?.state === "draft") return { state: "draft", drawing: asAuthor };
   // Closed now, by its setting or by a limit only its page counts: what a
   // visitor is shown decides, with the words they read.
   const asVisitor = await provider.describe(query.ref, {
     access: { as: "public" },
     ...locale,
   });
-  if ("unavailable" in asVisitor && asVisitor.unavailable === "closed") {
-    return closed(asVisitor.message);
+  if (!("unavailable" in asVisitor)) {
+    return { state: "published", drawing: asAuthor };
   }
-  if (listed?.state === "closed") return closed(undefined);
-  return { state: "published", drawing: asAuthor };
+  return asVisitor.unavailable === "closed"
+    ? closed(asVisitor.message)
+    : { state: "draft", drawing: asAuthor };
 }
 
 /** A closed form's answer, with a visitor's words where it has some. */

@@ -6,8 +6,9 @@
  *
  * Both are read as the person editing. An answer is kept a short while, for
  * that person only: the panel and the canvas each ask on every draw of a
- * Form, and a form made or closed in another tab shows once the short while
- * is over. A read that fails is never kept.
+ * Form. Nothing kept outlives the author coming back to the editor's tab,
+ * since a form may have been made, published or closed in another one, so
+ * what the editor asks then is read afresh. A read that fails is never kept.
  *
  * @module admin/editor-forms-client
  */
@@ -41,6 +42,20 @@ interface Kept {
 
 const kept = new Map<string, Kept>();
 let keptFor: string | null = null;
+let watchingReturns = false;
+
+/**
+ * Drop everything kept each time the editor's tab is shown again. Watched
+ * from the first read, never on the server; the editor's own reads on a
+ * return come after, as they run once React draws again.
+ */
+function watchReturns(): void {
+  if (watchingReturns || typeof document === "undefined") return;
+  watchingReturns = true;
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") kept.clear();
+  });
+}
 
 /**
  * `ask`'s answer for `key`, kept {@link EDITOR_FORMS_KEPT_MS} for `userId`.
@@ -57,6 +72,7 @@ function keptAnswer<T>(
     keptFor = userId;
   }
   if (userId === null) return ask();
+  watchReturns();
   const held = kept.get(key);
   if (held !== undefined && Date.now() - held.at < EDITOR_FORMS_KEPT_MS) {
     return held.read as Promise<T>;

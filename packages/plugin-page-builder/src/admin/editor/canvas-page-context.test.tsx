@@ -121,6 +121,31 @@ describe("the canvas's page context", () => {
     expect(result.current).toBe(first);
   });
 
+  it("is made afresh for a new round of picked forms, so a Form changed in its own tab is drawn again", () => {
+    const { result, rerender } = renderHook(
+      ({ round }: { round: number }) =>
+        useCanvasPageContext(
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          round
+        ),
+      { initialProps: { round: 0 } }
+    );
+    const first = result.current;
+    rerender({ round: 0 });
+    expect(result.current).toBe(first);
+    rerender({ round: 1 });
+    expect(result.current).not.toBe(first);
+    const second = result.current;
+    rerender({ round: 1 });
+    expect(result.current).toBe(second);
+  });
+
   it("draws a list as an author looks at it, with entries read for the canvas", () => {
     const { result } = renderHook(() => useCanvasPageContext());
     expect(result.current.diagnostics).toBe(true);

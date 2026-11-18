@@ -17,9 +17,11 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { form } from "@nextlyhq/blocks-react/blocks";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -27,6 +29,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { ContentServices, FormSource } from "./content-services";
 import type { EditorState } from "./editor-state";
+import { useFormsShownAgain } from "./form-source-control";
 import { InspectorPanel } from "./inspector-panel";
 
 beforeAll(() => {
@@ -218,5 +221,48 @@ describe("a Form with no form source", () => {
     await waitFor(() => expect(sectionNames()).toContain("Fields"));
     expect(screen.queryByText(/Install the Forms plugin/)).toBeNull();
     expect(screen.queryByRole("combobox", { name: "Form" })).toBeNull();
+  });
+});
+
+describe("the round a page's picked forms are drawn in", () => {
+  const page = (nodes: BlockNode[]): BlockDocument =>
+    ({ kind: "page", nodes }) as unknown as BlockDocument;
+  const picking = page([
+    {
+      id: "f",
+      type: "core/form",
+      version: 2,
+      props: { form: { provider: "forms", ref: "7" } },
+    },
+  ]);
+  const simpleOnly = page([
+    { id: "f", type: "core/form", version: 2, props: {} },
+  ]);
+  const shown = (): void => {
+    act(() => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => "visible",
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+  };
+
+  it("goes up each time the author comes back to a page picking a form, and only then", async () => {
+    const { result, rerender } = renderHook(
+      ({ doc }: { doc: BlockDocument }) => useFormsShownAgain(doc),
+      { initialProps: { doc: simpleOnly } }
+    );
+    expect(result.current).toBe(0);
+    // Nothing picked: coming back draws nothing again.
+    shown();
+    await waitFor(() => expect(result.current).toBe(0));
+    // Picking a form is no return: the round holds.
+    rerender({ doc: picking });
+    expect(result.current).toBe(0);
+    shown();
+    await waitFor(() => expect(result.current).toBe(1));
+    rerender({ doc: picking });
+    expect(result.current).toBe(1);
   });
 });

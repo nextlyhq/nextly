@@ -17,6 +17,7 @@
  *
  * @module form-source-control
  */
+import { walkNodes, type BlockDocument } from "@nextlyhq/blocks-engine";
 import {
   Button,
   Select,
@@ -30,7 +31,12 @@ import {
 import * as React from "react";
 
 import type { ContentServices, FormSource } from "./content-services";
-import { FORM_WORDS, pickedFormOf, type PickedForm } from "./form-picked";
+import {
+  FORM_BLOCK,
+  FORM_WORDS,
+  pickedFormOf,
+  type PickedForm,
+} from "./form-picked";
 
 /** What reading the site's form sources has come to. */
 export type FormSources =
@@ -43,18 +49,55 @@ export type FormSources =
  * A count that goes up each time the editor's tab is shown again: the author
  * coming back from another tab, such as a form's own page opened from "Edit
  * this form ↗", where the form may have been published, closed or deleted.
- * What was read about forms is read again on each.
+ * What was read about forms is read again on each. Counted as a transition,
+ * so what is drawn again keeps showing what it drew until the new reads
+ * come, rather than blinking out.
  */
 export function useShownAgain(): number {
   const [count, setCount] = React.useState(0);
   React.useEffect(() => {
     const shown = (): void => {
-      if (document.visibilityState === "visible") setCount(n => n + 1);
+      if (document.visibilityState !== "visible") return;
+      React.startTransition(() => setCount(n => n + 1));
     };
     document.addEventListener("visibilitychange", shown);
     return () => document.removeEventListener("visibilitychange", shown);
   }, []);
   return count;
+}
+
+/** Whether any Form in `nodes` picks a form from a provider. */
+function picksAForm(nodes: BlockDocument["nodes"]): boolean {
+  let picks = false;
+  walkNodes(nodes, node => {
+    if (node.type === FORM_BLOCK && pickedFormOf(node.props.form) !== undefined)
+      picks = true;
+  });
+  return picks;
+}
+
+/**
+ * The round a page's picked forms are drawn in: a count that goes up each
+ * time the author comes back to the editor (`useShownAgain`) while the page
+ * picks a form, and holds otherwise. A host draws its Forms afresh for each
+ * round, so a form changed in its own tab is drawn as it now is, and a page
+ * picking none is not drawn again for a return.
+ *
+ * @experimental Settles with the form provider contract.
+ */
+export function useFormsShownAgain(document: {
+  readonly nodes: BlockDocument["nodes"];
+}): number {
+  const shown = useShownAgain();
+  const { nodes } = document;
+  const picks = React.useMemo(() => picksAForm(nodes), [nodes]);
+  const [seen, setSeen] = React.useState({ shown, round: 0 });
+  if (seen.shown === shown) return seen.round;
+  // Shown again since the last render: a new round only for a page picking
+  // a form, kept so the next render agrees.
+  const round = picks ? seen.round + 1 : seen.round;
+  setSeen({ shown, round });
+  return round;
 }
 
 /**

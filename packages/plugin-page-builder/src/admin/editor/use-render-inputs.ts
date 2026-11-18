@@ -50,6 +50,7 @@ import {
   previewWidth,
   selectionIsInspectable,
   useCanvasDrag,
+  useFormsShownAgain,
   type CanvasDrag,
   type CanvasZoom,
   type PageClassBlocks,
@@ -392,6 +393,9 @@ function useCanvasRender({
   // they set none of their own: the canvas draws under it too, so a block
   // past it comes up empty here as on the live page.
   const pageDataLimit = readPageDataLimit(clientConfig);
+  // A new round each time the author comes back to a page picking a form,
+  // which may have changed in its own tab: the canvas draws its Forms again.
+  const formsRound = useFormsShownAgain(editor.document);
   // While the conditions are applied, the lists read as a visitor of the
   // document, and those a visitor sees fewer entries of say so.
   const canvasContext = useCanvasPageContext(
@@ -401,7 +405,8 @@ function useCanvasRender({
     pagedList,
     editor.listsStillShowing,
     asVisitor,
-    pageDataLimit
+    pageDataLimit,
+    formsRound
   );
   const pageInputs = useMemo(
     () =>

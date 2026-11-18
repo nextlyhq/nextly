@@ -171,6 +171,30 @@ describe("describing a picked form for the canvas", () => {
     });
   });
 
+  it("reads each state from the form's own descriptions, never listing every form", async () => {
+    const forms = provider([
+      {
+        listing: { ref: "1", title: "Quote", state: "published" },
+        asAuthor: QUOTE,
+        asVisitor: QUOTE,
+      },
+      {
+        listing: { ref: "2", title: "Quote", state: "draft" },
+        asAuthor: QUOTE,
+      },
+      {
+        listing: { ref: "3", title: "Quote", state: "published" },
+        asAuthor: QUOTE,
+        asVisitor: { unavailable: "closed" },
+      },
+    ]);
+    const set = registered(forms);
+    expect((await ask(set, "1")).state).toBe("published");
+    expect((await ask(set, "2")).state).toBe("draft");
+    expect((await ask(set, "3")).state).toBe("closed");
+    expect(forms.list).not.toHaveBeenCalled();
+  });
+
   it("says a form the author cannot read, or that was deleted, is missing", async () => {
     const forms = provider([]);
     expect(await ask(registered(forms), "8")).toEqual({ state: "missing" });

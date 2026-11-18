@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 /**
  * The editor's reads of its form routes: kept a short while per person, a
  * failed or malformed read never kept, and a picked form asked by its
@@ -92,5 +94,42 @@ describe("reading a picked form", () => {
     await expect(
       readEditorForm({ provider: "forms", ref: "3" }, undefined, "u1")
     ).rejects.toThrow(/could not be read/);
+  });
+});
+
+describe("coming back to the editor", () => {
+  /** The editor's tab is shown again, as switching back to it does. */
+  const shownAgain = (): void => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => "visible",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  };
+
+  it("asks again for what was kept, since a form may have changed in its own tab", async () => {
+    const form = { provider: "forms", ref: "7" };
+    read.mockResolvedValueOnce({
+      state: "draft",
+      drawing: { ref: "7", fields: [] },
+    });
+    await readEditorForm(form, undefined, "u1");
+    read.mockResolvedValueOnce(LISTED);
+    await readEditorForms("u1");
+    expect(read).toHaveBeenCalledTimes(2);
+    shownAgain();
+    read.mockResolvedValueOnce({
+      state: "published",
+      drawing: { ref: "7", fields: [] },
+    });
+    expect((await readEditorForm(form, undefined, "u1")).state).toBe(
+      "published"
+    );
+    read.mockResolvedValueOnce(LISTED);
+    await readEditorForms("u1");
+    expect(read).toHaveBeenCalledTimes(4);
+    // Read once more after coming back, then kept again.
+    await readEditorForm(form, undefined, "u1");
+    expect(read).toHaveBeenCalledTimes(4);
   });
 });
