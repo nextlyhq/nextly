@@ -117,7 +117,6 @@ import {
   VARIABLE_REMOVE_WRITE_CONTEXT,
   sharedStylesOverCode,
   siteTokensOverCode,
-  storedVariableIdentity,
   storedVariables,
   suppliedVariableIds,
   type NamedVariable,
@@ -144,6 +143,7 @@ import {
 import type { DocumentsUsing } from "./usage-count";
 import { indexIsWhole, indexStillCounting } from "./usage-index-health";
 import { cleanUpVariables, type CleanUpEach } from "./variables-clean-up";
+import { withoutVariables } from "./variables-without";
 
 /** A variable's identity, as the engine bounds one it can write. */
 const IDENTITY = z.string().min(1).max(MAX_TOKEN_NAME_LENGTH);
@@ -677,34 +677,6 @@ export interface VariableStore {
     section: Record<string, unknown>,
     from: VariableRead
   ): Promise<VariableRead>;
-}
-
-/**
- * The section without the entries whose identity is among `gone`, and with
- * their places in the colour order, as the panel's own removal leaves it: a
- * later colour given a removed one's free name is not listed where it was.
- */
-function withoutVariables(
-  section: Record<string, unknown>,
-  gone: ReadonlySet<string>
-): Record<string, unknown> {
-  const entries = Array.isArray(section.tokens) ? section.tokens : [];
-  // Each entry judged on its own by the token rules, so one they cannot read
-  // is kept exactly as stored rather than dropped by a removal of another.
-  return {
-    ...section,
-    tokens: entries.filter(entry => {
-      const id = storedVariableIdentity(entry);
-      return id === undefined || !gone.has(id);
-    }),
-    ...(Array.isArray(section.order)
-      ? {
-          order: section.order.filter(
-            (id: unknown) => typeof id !== "string" || !gone.has(id)
-          ),
-        }
-      : {}),
-  };
 }
 
 /**

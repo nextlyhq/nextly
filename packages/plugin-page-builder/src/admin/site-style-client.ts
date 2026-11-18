@@ -542,6 +542,12 @@ export interface SiteStyleSlot {
   ) => Promise<SiteStyleSaveResult>;
   /** Give the place up: nothing is saved. */
   readonly cancel: () => void;
+  /**
+   * Fill the place with a change already stored elsewhere, a route's write:
+   * the section as it stood before it and as the route left it, which undo
+   * and redo write back as a section save's would.
+   */
+  readonly stored: (before: unknown, after: unknown) => void;
 }
 
 export interface SiteStyleWrite {
@@ -556,6 +562,17 @@ export interface SiteStyleWrite {
    * and save its value into it later.
    */
   readonly reserve: (section: SiteStyleSection) => SiteStyleSlot;
+  /**
+   * Make a change through a route rather than a section save, as one step
+   * of the editor's history. `change` runs after every write already made to
+   * the section, is handed the section as they leave it, and answers the
+   * section as its route left it, or `undefined` when it stored nothing. A
+   * refusal it throws is passed on, and keeps no step.
+   */
+  readonly changeThrough: (
+    section: SiteStyleSection,
+    change: (before: unknown) => Promise<unknown>
+  ) => Promise<void>;
   /** Whether a save is in flight. */
   readonly saving: boolean;
   /**
@@ -888,6 +905,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
           save: (value, _inverse, options) =>
             write(section, value, options?.base),
           cancel: () => {},
+          stored: () => {},
         };
       }
       const { settled } = history;
@@ -953,6 +971,24 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       };
       return {
         cancel: drop,
+        stored: (before, after) => {
+          fill({
+            before: Promise.resolve(before),
+            done: Promise.resolve({
+              result: { saved: true, issues: {} },
+              holds: after,
+              wrote: true,
+            }),
+            inverse: undefined,
+          });
+          // What the section holds now, for the writes after it, until the
+          // read moves on and is believed instead.
+          const chain = chainOf(settled, section);
+          if (chain.pending === 0) {
+            chain.held = after;
+            chain.tail = Promise.resolve(after);
+          }
+        },
         save: async (value, inverse, options) => {
           const chain = chainOf(settled, section);
           // A save that leaves the section as it stands is no step to take
@@ -1107,11 +1143,45 @@ export function useSaveSiteStyle(): SiteStyleWrite {
     [write, writeWithoutStep, history, inTurn, chainOf]
   );
 
+  /*
+   * A route's change as a step: its place is taken now, the route runs
+   * after the writes before it, and the step is filled with the two halves
+   * of the section, or given up when the route stored nothing or refused.
+   */
+  const changeThrough = useCallback(
+    async (
+      section: SiteStyleSection,
+      change: (before: unknown) => Promise<unknown>
+    ): Promise<void> => {
+      if (history === null) {
+        await change(storedSection(stored.current, section));
+        return;
+      }
+      const slot = reserve(section);
+      try {
+        const before = await chainOf(history.settled, section).tail;
+        const after = await change(before);
+        if (after === undefined) slot.cancel();
+        else slot.stored(before, after);
+      } catch (refused) {
+        slot.cancel();
+        throw refused;
+      }
+    },
+    [history, reserve, chainOf]
+  );
+
   const reread = useCallback(() => {
     void refetch();
   }, [refetch]);
 
-  return { save, reserve, saving: mutation.isPending, reread };
+  return {
+    save,
+    reserve,
+    changeThrough,
+    saving: mutation.isPending,
+    reread,
+  };
 }
 
 /** How one section write is merged onto the newest stored copy. */

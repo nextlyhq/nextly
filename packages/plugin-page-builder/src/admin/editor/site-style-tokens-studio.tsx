@@ -10,6 +10,7 @@
  */
 import {
   resolveSiteTokens,
+  tokenIdentity,
   type BlockDocument,
   type ComponentLookup,
   type DocumentLimits,
@@ -46,11 +47,16 @@ import {
   readSiteStyleRecord,
   tokensKeptAfterRefusal,
 } from "../../site-style-record";
-import { sameStoredValue } from "../../stored-json";
+import { readStoredJson, sameStoredValue } from "../../stored-json";
+import { withoutVariables } from "../../variables-without";
 import { conflictWords } from "../conflict-words";
 import { useHeldSiteStyle, useSaveSiteStyle } from "../site-style-client";
 import { useShown } from "../use-shown";
-import { useVariablesClient } from "../variables-client";
+import {
+  cleanUpUnused,
+  useVariablesClient,
+  type CleanUpResult,
+} from "../variables-client";
 
 import { useDesignBrowse, useDesignHeaderSlot } from "./design-panel";
 import { usedOnPage } from "./used-on-page";
@@ -134,7 +140,7 @@ export function TokensStudio({
    * tier further down.
    */
   const { editable, baseline } = resolvedTiers(merged, supplied);
-  const { edits, shownNow, issue, notice, commit } = useTokenCommits(
+  const { edits, shownNow, issue, notice, commit, cleanUp } = useTokenCommits(
     baseline,
     editable,
     supplied
@@ -167,6 +173,16 @@ export function TokensStudio({
     currentTokens,
     header,
     ...usage.props,
+    // "Clean up unused…", once what is held for the author's pause is
+    // written, so the route judges the section as they left it.
+    ...(mayChange
+      ? {
+          onCleanUp: async (ids: readonly string[]) => {
+            await held.release();
+            return cleanUp(ids, usage.props.usage.uses);
+          },
+        }
+      : {}),
   };
 
   return (
@@ -240,8 +256,10 @@ function useTokenCommits(
   /** What the last save met of someone else's, with the way to read again. */
   notice: TokensPanelProps["notice"];
   commit: (next: SiteTokenSet) => void;
+  /** "Clean up unused…": see {@link useCleanUp}. */
+  cleanUp: CleanUpThrough;
 } {
-  const { save, reread } = useSaveSiteStyle();
+  const { save, reread, changeThrough } = useSaveSiteStyle();
   const [edits, show, shownNow] = useShown<SiteTokenSet | null>(null);
   const [issue, setIssue] = useState<string | undefined>(undefined);
   /*
@@ -359,7 +377,83 @@ function useTokenCommits(
   };
   const notice =
     conflict === undefined ? undefined : { text: conflict, onReload: reload };
-  return { edits, shownNow, issue, notice, commit };
+  const cleanUp = useCleanUp(changeThrough, reread, gone => {
+    // What the studio shows, and knows stored, without what the route took.
+    const kept = withoutColours(shownNow() ?? editable, gone);
+    if (kept === undefined) return;
+    latest.current = kept;
+    persisted.current = kept;
+    show(kept);
+  });
+  return { edits, shownNow, issue, notice, commit, cleanUp };
+}
+
+/** The studio's clean-up, handed the where-used read that names a kept one. */
+type CleanUpThrough = (
+  ids: readonly string[],
+  uses: Parameters<typeof cleanUpUnused>[1]
+) => Promise<CleanUpResult>;
+
+/**
+ * "Clean up unused…": the colours removed through the clean-up route, which
+ * judges each on its own, as one step of the editor's history, whose halves
+ * are the section before it and as the route left it. What went is taken out
+ * of what the studio shows at once, and the site style read again.
+ */
+function useCleanUp(
+  changeThrough: ReturnType<typeof useSaveSiteStyle>["changeThrough"],
+  reread: () => void,
+  taken: (gone: ReadonlySet<string>) => void
+): CleanUpThrough {
+  return async (ids, uses) => {
+    let result: CleanUpResult | undefined;
+    await changeThrough("tokens", async before => {
+      result = await cleanUpUnused(ids, uses);
+      const gone = removedBy(result);
+      const section = readStoredJson(before);
+      // Nothing removed, or nothing stored to remove it from: no step.
+      if (gone.size === 0 || !isSection(section)) return undefined;
+      return withoutVariables(section, gone);
+    });
+    const done = result ?? NOT_ASKED;
+    const gone = removedBy(done);
+    if (gone.size > 0) {
+      taken(gone);
+      reread();
+    }
+    return done;
+  };
+}
+
+/** The answer of a clean-up the history never ran. */
+const NOT_ASKED: CleanUpResult = {
+  kind: "refused",
+  reason: "The colours could not be removed. Try again.",
+};
+
+/** The identities a clean-up removed. */
+function removedBy(result: CleanUpResult): ReadonlySet<string> {
+  return new Set(result.kind === "done" ? result.removed : []);
+}
+
+/** Whether a stored section is one to take variables out of. */
+function isSection(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** The set without these colours, and without their places in the order. */
+function withoutColours(
+  set: SiteTokenSet | null | undefined,
+  gone: ReadonlySet<string>
+): SiteTokenSet | undefined {
+  if (set === null || set === undefined) return undefined;
+  return {
+    ...set,
+    tokens: set.tokens.filter(token => !gone.has(tokenIdentity(token))),
+    ...(set.order === undefined
+      ? {}
+      : { order: set.order.filter(identity => !gone.has(identity)) }),
+  };
 }
 
 /**

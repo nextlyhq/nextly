@@ -887,6 +887,80 @@ describe("a save inside the editor, as a step of its history", () => {
     expect(writes.at(-1)).toEqual({ tokens: { tokens: [] } });
   });
 
+  describe("a change a route stores, made through the history", () => {
+    const before = {
+      tokens: [
+        { id: "t-spare", name: "color.spare", kind: "color" },
+        { id: "t-kept", name: "color.kept", kind: "color" },
+      ],
+      order: ["t-kept", "t-spare"],
+    };
+    const after = {
+      tokens: [{ id: "t-kept", name: "color.kept", kind: "color" }],
+      order: ["t-kept"],
+    };
+
+    it("is one step: undo writes back what stood before it, redo what the route left", async () => {
+      readAnswer = { data: { tokens: before }, isPending: false, error: null };
+      const { steps, wrapper } = editorHistory();
+      const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+      const handed: unknown[] = [];
+      await act(async () => {
+        await result.current.changeThrough("tokens", async held => {
+          handed.push(held);
+          return after;
+        });
+      });
+      // The route made the write; the history only records it.
+      expect(handed).toEqual([before]);
+      expect(writes).toEqual([]);
+      expect(steps).toHaveLength(1);
+
+      await act(async () => {
+        await steps[0]?.undo();
+      });
+      expect(writes.at(-1)).toEqual({ tokens: before });
+      await act(async () => {
+        await steps[0]?.redo();
+      });
+      expect(writes.at(-1)).toEqual({ tokens: after });
+    });
+
+    it("hands the route the section as the writes before it left it", async () => {
+      readAnswer = { data: { tokens: before }, isPending: false, error: null };
+      const { wrapper } = editorHistory();
+      const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+      const handed: unknown[] = [];
+      await act(async () => {
+        void result.current.save("tokens", after);
+        await result.current.changeThrough("tokens", async held => {
+          handed.push(held);
+          return undefined;
+        });
+      });
+      expect(handed).toEqual([after]);
+    });
+
+    it("keeps no step when the route stored nothing, or refused", async () => {
+      readAnswer = { data: { tokens: before }, isPending: false, error: null };
+      const { steps, wrapper } = editorHistory();
+      const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+      await act(async () => {
+        await result.current.changeThrough("tokens", async () => undefined);
+      });
+      const refused = new Error("refused");
+      await act(async () => {
+        await expect(
+          result.current.changeThrough("tokens", async () => {
+            throw refused;
+          })
+        ).rejects.toBe(refused);
+      });
+      expect(steps).toEqual([]);
+      expect(writes).toEqual([]);
+    });
+  });
+
   it("undoes a first write to a section by clearing it", async () => {
     // Nothing was stored: taking the change back stores nothing again, so the
     // site's own defaults show through.

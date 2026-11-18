@@ -17,6 +17,7 @@ import { BUILDER_VIEW_PATH } from "../builder-view";
 import {
   SHARED_STYLE_COUNT_ROUTE_PATH,
   SHARED_STYLE_WHERE_USED_PAGES_MAX,
+  VARIABLE_CLEAN_UP_ROUTE_PATH,
   variableUsagePath,
   variableWhereUsedPath,
 } from "../library-contract";
@@ -59,7 +60,9 @@ vi.mock("./site-style-read", () => ({
   }),
 }));
 
-const { useVariablesClient } = await import("./variables-client");
+const { cleanUpUnused, useVariablesClient } = await import(
+  "./variables-client"
+);
 
 const signal = new AbortController().signal;
 
@@ -274,6 +277,116 @@ describe("counting the pages now", () => {
 
     expect(writes).toEqual([{ path: SHARED_STYLE_COUNT_ROUTE_PATH, body: {} }]);
     expect(counted).toEqual({ kind: "counted", whole: true, counting: false });
+  });
+});
+
+describe("cleaning up unused colours", () => {
+  /** A where-used page naming these places first. */
+  const placesOf = (
+    items: { id: string; title: string; collection: string; kind: string }[],
+    total = items.length,
+    hiddenCount = 0
+  ) => ({
+    items,
+    meta: { total, page: 1, limit: 20, totalPages: 1, hasNext: false, hiddenCount },
+  });
+  const answered = (kept: { id: string; name: string; reason: string }[]) =>
+    async () => ({
+      message: "1 variable was removed.",
+      item: { removed: ["color.spare"], kept },
+    });
+  const accentKept = {
+    id: "color.accent",
+    name: "Accent",
+    reason: "Accent is used on 1 document.",
+  };
+
+  it("sends the colours to the clean-up route, and hands back what went and what stayed", async () => {
+    writeBehaviour = answered([]);
+    const { result } = renderHook(() => useVariablesClient());
+    const cleaned = await cleanUpUnused(
+      ["color.spare"],
+      result.current.uses
+    );
+    expect(writes).toEqual([
+      { path: VARIABLE_CLEAN_UP_ROUTE_PATH, body: { ids: ["color.spare"] } },
+    ]);
+    expect(cleaned).toEqual({
+      kind: "done",
+      removed: ["color.spare"],
+      kept: [],
+    });
+  });
+
+  it("names where a kept colour is used now, from its where-used list", async () => {
+    writeBehaviour = answered([accentKept]);
+    readAnswer = placesOf(
+      [{ id: "p1", title: "Home", collection: "pages", kind: "pages" }],
+      3,
+      1
+    );
+    const { result } = renderHook(() => useVariablesClient());
+    const cleaned = await cleanUpUnused(
+      ["color.spare", "color.accent"],
+      result.current.uses
+    );
+    expect(reads).toEqual([{ path: variableWhereUsedPath("color.accent", 1) }]);
+    expect(cleaned).toMatchObject({
+      kept: [
+        {
+          id: "color.accent",
+          name: "Accent",
+          reason: "Accent is used on Home and 3 more places.",
+        },
+      ],
+    });
+  });
+
+  it("names a shared style using it as a shared style", async () => {
+    writeBehaviour = answered([accentKept]);
+    readAnswer = placesOf([
+      {
+        id: "c-card",
+        title: "Card",
+        collection: "site-style",
+        kind: "shared-style",
+      },
+    ]);
+    const { result } = renderHook(() => useVariablesClient());
+    const cleaned = await cleanUpUnused(
+      ["color.accent"],
+      result.current.uses
+    );
+    expect(cleaned).toMatchObject({
+      kept: [{ reason: "Accent is used by the shared style Card." }],
+    });
+  });
+
+  it("keeps the route's own words where the list names no place, or cannot be read", async () => {
+    const named = { ...accentKept, reason: "Accent is used by the variable Lift." };
+    writeBehaviour = answered([named]);
+    readAnswer = placesOf([]);
+    const { result } = renderHook(() => useVariablesClient());
+    expect(
+      await cleanUpUnused(["color.accent"], result.current.uses)
+    ).toMatchObject({ kept: [named] });
+    readAnswer = undefined;
+    expect(
+      await cleanUpUnused(["color.accent"], result.current.uses)
+    ).toMatchObject({ kept: [named] });
+  });
+
+  it("says a refusal in the route's words", async () => {
+    writeBehaviour = async () => {
+      throw Object.assign(new Error("You can't change this site's design."), {
+        code: "FORBIDDEN",
+        status: 403,
+      });
+    };
+    const { result } = renderHook(() => useVariablesClient());
+    expect(
+      await cleanUpUnused(["color.spare"], result.current.uses)
+    ).toEqual({ kind: "refused", reason: expect.any(String) });
   });
 });
 

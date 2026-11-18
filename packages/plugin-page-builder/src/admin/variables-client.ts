@@ -2,7 +2,8 @@
  * The Variables tab's reads through the plugin's variable routes: how widely
  * variables are used, where one is used, and counting the site's pages now.
  * Removing a variable stays a save of the whole tokens section, which the
- * server refuses while a dropped variable is used.
+ * server refuses while a dropped variable is used; "Clean up unused…"
+ * removes many through the clean-up route, which judges each on its own.
  *
  * The routes' answers are read into the builder's own types here, so the tab
  * knows nothing of the transport.
@@ -10,18 +11,27 @@
  * @module @nextlyhq/plugin-page-builder/admin/variables-client
  */
 import type {
+  TokensPanelProps,
   VariableReach,
   VariablesAccess,
   VariablesUsage,
   VariableUsesPage,
 } from "@nextlyhq/builder/shell";
-import { readPluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import {
+  apiErrorMessage,
+  readPluginRoute,
+  writePluginRoute,
+} from "@nextlyhq/plugin-sdk/admin";
 import { useCallback, useMemo } from "react";
 
 import {
   PAGE_BUILDER_PLUGIN_NAME,
+  VARIABLE_CLEAN_UP_ROUTE_PATH,
   variableUsagePath,
   variableWhereUsedPath,
+  type VariableCleanUpAnswer,
+  type VariableCleanUpRequest,
+  type VariableKept,
   type VariablesUsageResponse,
   type VariableUseItem,
 } from "../library-contract";
@@ -142,4 +152,81 @@ export function useVariablesClient(
     }),
     [usage, uses, openSharedStyle, openLook]
   );
+}
+
+/** What "Clean up unused…" came to, as the Colours tab reads it. */
+export type CleanUpResult = Awaited<
+  ReturnType<NonNullable<TokensPanelProps["onCleanUp"]>>
+>;
+
+/**
+ * Where a kept colour is used now, from the first page of its where-used
+ * list: its first place by name, then how many more; nothing where the list
+ * names no place, as for a colour another variable or a Site text row uses,
+ * which the route's own words already name.
+ */
+function whereWords(name: string, places: VariableUsesPage): string | undefined {
+  const [first] = places.items;
+  if (first === undefined) return undefined;
+  const at =
+    first.kind === "shared-style"
+      ? `by the shared style ${first.title}`
+      : first.kind === "block-default"
+        ? `by ${first.title}'s built-in look`
+        : `on ${first.title}`;
+  const more = places.total - 1 + places.hidden;
+  const rest =
+    more <= 0 ? "" : ` and ${more} more ${more === 1 ? "place" : "places"}`;
+  return `${name} is used ${at}${rest}.`;
+}
+
+/** A kept colour, said with where it is used where its list can say. */
+async function keptWhere(
+  kept: VariableKept,
+  uses: VariablesAccess["uses"]
+): Promise<VariableKept> {
+  try {
+    const places = await uses(kept.id, 1, new AbortController().signal);
+    const words = whereWords(kept.name, places);
+    return words === undefined ? kept : { ...kept, reason: words };
+  } catch {
+    // The route's own words stand: they say why it was kept.
+    return kept;
+  }
+}
+
+/**
+ * Remove these colours through the clean-up route, each judged on its own:
+ * what went, and what stayed with where it is used now; or the refusal of
+ * the whole request in its own words.
+ */
+export async function cleanUpUnused(
+  ids: readonly string[],
+  uses: VariablesAccess["uses"]
+): Promise<CleanUpResult> {
+  let answer: { readonly item?: VariableCleanUpAnswer } | undefined;
+  try {
+    answer = await writePluginRoute<{ readonly item?: VariableCleanUpAnswer }>({
+      plugin: PAGE_BUILDER_PLUGIN_NAME,
+      path: VARIABLE_CLEAN_UP_ROUTE_PATH,
+      body: { ids } satisfies VariableCleanUpRequest,
+    });
+  } catch (refused) {
+    return {
+      kind: "refused",
+      reason: apiErrorMessage(refused, "The colours could not be removed."),
+    };
+  }
+  const item = answer?.item;
+  if (item === undefined) {
+    return {
+      kind: "refused",
+      reason: "The clean-up answered without saying what it removed.",
+    };
+  }
+  return {
+    kind: "done",
+    removed: item.removed,
+    kept: await Promise.all(item.kept.map(kept => keptWhere(kept, uses))),
+  };
 }
