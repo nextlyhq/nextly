@@ -62,7 +62,7 @@ export const storedPasswordTotal = (
  */
 export function storedPasswordsNotice(count: number): string | null {
   if (count === 0) return null;
-  return `${String(count)} password(s) stored before this release are not yet hashed. Run \`nextly upgrade\` to hash them.`;
+  return `${String(count)} password(s) stored before this release are not yet hashed. \`nextly migrate\` hashes them once every migration has applied.`;
 }
 
 const sourceOf = (context: UpgradeStepContext) =>

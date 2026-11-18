@@ -305,12 +305,20 @@ import {
   plainTextPasswordCleanup,
   plainTextPasswordNotice,
 } from "./clear-plaintext-passwords";
+import {
+  confirmDataStepsBackup,
+  pendingDataSteps,
+  previewDataSteps,
+  runDataSteps,
+  type DataStepsDeps,
+} from "./data-steps";
 import { runPluginsOnMigrate } from "./migrate-hooks";
 import {
   CORE_UPGRADE_LABEL,
   coreUpgradeSource,
   judgeCoreDeletions,
 } from "./upgrade-steps/core-upgrade-consent";
+import { MIGRATE_DATA_STEPS } from "./upgrade-steps";
 import {
   storedPasswordsNotice,
   storedPasswordsOn,
@@ -570,6 +578,8 @@ async function moveEarlierRecords(args: {
   options: Pick<MigrateCommandOptions, "backupConfirmed" | "dryRun">;
   /** The run's `--force-unlock`, which clears a stale lock once in the whole run. */
   clearStaleLock: () => Promise<void>;
+  /** The run's one backup question, whose yes holds for the rest of the run. */
+  askBackedUp: () => Promise<boolean>;
   lockTtlSeconds: number | undefined;
   logger: CommandContext["logger"];
 }): Promise<boolean> {
@@ -599,8 +609,7 @@ async function moveEarlierRecords(args: {
     bounds: args.bounds,
     backupConfirmed,
     interactive: canPrompt(),
-    askBackedUp: () =>
-      askYesInTerminal("Have you backed up your database? [y/N]: "),
+    askBackedUp: args.askBackedUp,
     // A stale lock is cleared before this lock, and not again in this run.
     beforeLock: args.clearStaleLock,
     lockTtlSeconds: args.lockTtlSeconds,
@@ -608,6 +617,37 @@ async function moveEarlierRecords(args: {
     warn: message => logger.warn(message),
   });
   return false;
+}
+
+/**
+ * `nextly migrate --dry-run`: what the run would change in the data an
+ * earlier release stored (`previewDataSteps`), read-only. Nothing is said
+ * when no step has work. A count that cannot be read, on a database whose
+ * tables the pending migrations create, is said so rather than guessed.
+ */
+async function previewStoredData(
+  steps: DataStepsDeps,
+  logger: CommandContext["logger"]
+): Promise<void> {
+  let plan: Awaited<ReturnType<typeof previewDataSteps>>;
+  try {
+    plan = await previewDataSteps(steps);
+  } catch (error) {
+    logger.info(
+      `  Data stored by an earlier release could not be counted: ${describeError(error)}`
+    );
+    return;
+  }
+  if (plan.changes.length === 0) return;
+  logger.newline();
+  logger.info("Data stored by an earlier release, once the migrations apply:");
+  for (const { action, target } of plan.changes) {
+    logger.info(`  • would ${action} ${target}`);
+  }
+  for (const refusal of plan.refusals ?? []) {
+    logger.info(`  ✖ a real run would refuse: ${refusal}`);
+  }
+  for (const note of plan.notes ?? []) logger.info(`  ${note}`);
 }
 
 /**
@@ -715,12 +755,37 @@ export async function runMigrate(
     const clearStaleLock = oncePerRun(() =>
       maybeForceUnlock(options, db, dialect)
     );
+    // The run's backup: stated by `--backup-confirmed`, or by a yes at a
+    // terminal, which holds for the rest of the run so nobody is asked twice.
+    const backup = { confirmed: options.backupConfirmed === true };
+    const askBackedUp = async () => {
+      const yes = await askYesInTerminal(
+        "Have you backed up your database? [y/N]: "
+      );
+      if (yes) backup.confirmed = true;
+      return yes;
+    };
+    // What the steps bringing an earlier release's stored data up to date
+    // are run with, once the migrations have applied.
+    const dataSteps = (): DataStepsDeps => ({
+      adapter: adapter as unknown as DataStepsDeps["adapter"],
+      command: "nextly migrate",
+      steps: MIGRATE_DATA_STEPS,
+      backupConfirmed: backup.confirmed,
+      interactive: canPrompt(),
+      askBackedUp,
+      log: message => logger.info(message),
+      warn: message => logger.warn(message),
+      lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
+    });
+
     const ended = await moveEarlierRecords({
       adapter: adapter as unknown as DrizzleAdapter,
       dialect,
       bounds,
       options,
       clearStaleLock,
+      askBackedUp,
       lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
       logger,
     });
@@ -791,8 +856,27 @@ export async function runMigrate(
         serverConstructs,
         extensionSchema,
       });
+      await previewStoredData(dataSteps(), logger);
       logger.success("Dry run complete (no changes made).");
       return;
+    }
+
+    // Data an earlier release stored is brought up to date once the
+    // migrations have applied, and only with a backup confirmed. Asked here,
+    // before anything changes, so a run that would be refused for it leaves
+    // the migrations unapplied too. Not under `--step`, which may stop
+    // before the steps run. A count that cannot be read yet, on a database
+    // whose tables the migrations below create, is taken again after them.
+    if (options.step === undefined) {
+      try {
+        const steps = dataSteps();
+        await confirmDataStepsBackup(
+          steps,
+          await pendingDataSteps(steps).catch(() => [])
+        );
+      } catch (error) {
+        fail(error);
+      }
     }
 
     // The retired-table cleanup has flags of its own: removing those tables
@@ -1002,6 +1086,11 @@ export async function runMigrate(
           adapter as unknown as DrizzleAdapter,
           serviceLoggerOf(logger)
         );
+        // Data an earlier release stored, brought up to date under the
+        // schema lock: with every migration applied, since each step reads
+        // the tables as this release keeps them, and after the permissions
+        // the run seeded, which a role's conversion gives.
+        await runDataSteps(dataSteps());
         // The plugins' own deploy work, last, once every step above has
         // left the schema in step (`migrate-hooks`). Not where migrations
         // are still pending, as none of the steps above are.
@@ -1068,7 +1157,8 @@ export async function runMigrate(
     }
 
     // Read-only too: passwords an earlier release kept as given inside a
-    // container are counted, and `nextly upgrade`, which hashes them, is named.
+    // container and this run did not hash, since migrations are still
+    // pending, are counted, and the run that hashes them is named.
     try {
       const notice = storedPasswordsNotice(
         storedPasswordTotal(

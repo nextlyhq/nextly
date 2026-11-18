@@ -27,8 +27,12 @@ const retiredManageStep: UpgradeStep = {
     (await import("./retired-manage")).convertRoles(context),
 };
 
-/** Converting translated date columns an earlier release made with a time zone. */
-const zonedDatesStep: UpgradeStep = {
+/**
+ * Converting translated date columns an earlier release made with a time
+ * zone: the one step of `nextly i18n:convert-zoned-dates`, run once the
+ * release serves every instance, and so never by `nextly migrate`.
+ */
+export const zonedDatesStep: UpgradeStep = {
   title: "convert translated date columns kept with a time zone",
   pending: async context =>
     (await import("./zoned-dates")).zonedDatesToConvert(context),
@@ -36,9 +40,9 @@ const zonedDatesStep: UpgradeStep = {
     (await import("./zoned-dates")).convertZonedDates(context),
 };
 
-export const UPGRADE_STEPS: readonly UpgradeStep[] = [
+/** The steps `nextly migrate` runs once its migrations have applied, in order. */
+export const MIGRATE_DATA_STEPS: readonly UpgradeStep[] = [
   storedPasswordsStep,
   versionPasswordsStep,
   retiredManageStep,
-  zonedDatesStep,
 ];
