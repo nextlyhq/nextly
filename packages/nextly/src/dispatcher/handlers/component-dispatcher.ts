@@ -45,13 +45,13 @@ import {
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
 import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
-import { refuseMovesOffTheFile } from "../../domains/schema/field-moves/moves-road";
 import {
   renamedFieldsOf,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
 import { entityRelations } from "../../domains/schema/builder-save/single-relations";
 import { fieldGroupEntity } from "../../domains/schema/builder-save/stored-entity";
+import { refuseMovesOffTheFile } from "../../domains/schema/field-moves/moves-road";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
