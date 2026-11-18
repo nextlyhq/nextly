@@ -120,18 +120,21 @@ export function useBindingSources(
 }
 
 /**
- * The samples of a list's first entry, as the host reads them for the list
- * `list`: `undefined` until read, where the host has none, or where the read
- * fails, so the item's fields are then listed with no values. Read again only
- * when the list's stored props change.
+ * The samples of one of a list's entries, as the host reads them for the
+ * list `list`: the entry at `entry` (the one the author clicked on the
+ * canvas), else the first. `undefined` until read, where the host has none,
+ * or where the read fails, so the item's fields are then listed with no
+ * values. Read again only when the list's stored props or the entry change.
  */
 export function useListSample(
   read: ContentServices["readListSample"],
-  list: ItemSource["list"]
+  list: ItemSource["list"],
+  entry?: number
 ): ListSample | undefined {
   const props = list?.props;
   // By value: the document is a new object after every edit elsewhere.
-  const key = props === undefined ? undefined : JSON.stringify(props);
+  const key =
+    props === undefined ? undefined : JSON.stringify([props, entry ?? null]);
   const [found, setFound] = React.useState<{
     readonly read: NonNullable<typeof read>;
     readonly key: string;
@@ -140,7 +143,13 @@ export function useListSample(
   React.useEffect(() => {
     if (read === undefined || key === undefined) return;
     let live = true;
-    read(JSON.parse(key) as Readonly<Record<string, unknown>>).then(
+    const [stored, at] = JSON.parse(key) as [
+      Readonly<Record<string, unknown>>,
+      number | null,
+    ];
+    // The entry only where one was clicked, so a host reading the first
+    // entry is asked as before.
+    (at === null ? read(stored) : read(stored, at)).then(
       sample => {
         if (live) setFound({ read, key, sample });
       },

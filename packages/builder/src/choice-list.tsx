@@ -11,7 +11,7 @@
  * @module choice-list
  */
 import { Input } from "@nextlyhq/ui";
-import { Search } from "lucide-react";
+import { ChevronRight, Search } from "lucide-react";
 import * as React from "react";
 
 /** One entry: what keys it, what it is called, and the group it sits in. */
@@ -32,6 +32,18 @@ export interface ListedChoice {
   readonly disabled?: boolean;
 }
 
+/** One group of a grouped list: what keys it, and its heading. */
+export interface ChoiceGroup {
+  readonly group: string;
+  readonly heading: string;
+  /**
+   * Set to start the group folded: drawn as one row, `label`, which opens
+   * it in place, under `heading`, which folded groups listed together share
+   * ("Singles · Site"). A search shows a folded group's matching entries.
+   */
+  readonly fold?: { readonly heading: string; readonly label: string };
+}
+
 /** How many entries the list holds before it offers a search. */
 const SEARCH_FROM = 8;
 
@@ -50,7 +62,7 @@ export interface ChoiceListProps<C extends ListedChoice> {
    * The headings of the groups, in the order they are listed. Without them
    * the list is one run of entries.
    */
-  readonly groups?: ReadonlyArray<{ group: string; heading: string }>;
+  readonly groups?: ReadonlyArray<ChoiceGroup>;
   /** What an entry draws: its label unless said otherwise. */
   readonly renderChoice?: (choice: C) => React.ReactNode;
 
@@ -76,28 +88,83 @@ export interface ChoiceListProps<C extends ListedChoice> {
 }
 
 /**
- * The entries matching `query`, ignoring case, in the order the rows are
- * DRAWN: grouped, a list draws group by group, and the row it opens on and
- * the one an arrow moves to have to be the ones the author sees there, not
- * the next in the order they were given.
+ * One row as the list draws it: an entry, or a folded group's one row.
  */
-function drawnChoices<C extends ListedChoice>(
+type DrawnRow<C extends ListedChoice> =
+  | { readonly kind: "choice"; readonly key: string; readonly choice: C }
+  | {
+      readonly kind: "fold";
+      readonly key: string;
+      readonly group: ChoiceGroup;
+    };
+
+/** The entries matching `query`, ignoring case, in the order given. */
+function matchingChoices<C extends ListedChoice>(
   choices: readonly C[],
-  query: string,
-  groups: ChoiceListProps<C>["groups"]
+  query: string
 ): readonly C[] {
   const needle = query.trim().toLowerCase();
-  const matching =
-    needle === ""
-      ? choices
-      : choices.filter(choice =>
-          (choice.search ?? choice.label).toLowerCase().includes(needle)
-        );
-  return groups === undefined
-    ? matching
-    : groups.flatMap(({ group }) =>
-        matching.filter(choice => choice.group === group)
+  return needle === ""
+    ? choices
+    : choices.filter(choice =>
+        (choice.search ?? choice.label).toLowerCase().includes(needle)
       );
+}
+
+/**
+ * The rows matching `query`, ignoring case, in the order they are DRAWN:
+ * grouped, a list draws group by group, and the row it opens on and the one
+ * an arrow moves to have to be the ones the author sees there, not the next
+ * in the order they were given. A folded group with entries to show is one
+ * row in their place.
+ */
+function drawnRows<C extends ListedChoice>(
+  matching: readonly C[],
+  groups: ChoiceListProps<C>["groups"],
+  isFolded: (group: ChoiceGroup) => boolean
+): readonly DrawnRow<C>[] {
+  const row = (choice: C): DrawnRow<C> => ({
+    kind: "choice",
+    key: choice.key,
+    choice,
+  });
+  if (groups === undefined) return matching.map(row);
+  return groups.flatMap((group): DrawnRow<C>[] => {
+    const members = matching.filter(choice => choice.group === group.group);
+    if (members.length === 0) return [];
+    return isFolded(group)
+      ? [{ kind: "fold", key: `\u0000fold:${group.group}`, group }]
+      : members.map(row);
+  });
+}
+
+/**
+ * The groups as drawn, in order: each open group on its own, and each run of
+ * folded groups together under the headings they share.
+ */
+function drawnSections(
+  groups: ReadonlyArray<ChoiceGroup>,
+  isFolded: (group: ChoiceGroup) => boolean
+): ReadonlyArray<{ readonly heading: string; readonly groups: ChoiceGroup[] }> {
+  const sections: { heading: string; groups: ChoiceGroup[] }[] = [];
+  for (const group of groups) {
+    const last = sections.at(-1);
+    if (isFolded(group) && last !== undefined && isFolded(last.groups[0])) {
+      last.groups.push(group);
+      continue;
+    }
+    sections.push({ heading: group.heading, groups: [group] });
+  }
+  return sections.map(section =>
+    isFolded(section.groups[0])
+      ? {
+          ...section,
+          heading: [
+            ...new Set(section.groups.map(group => group.fold!.heading)),
+          ].join(" · "),
+        }
+      : section
+  );
 }
 
 export function ChoiceList<C extends ListedChoice>({
@@ -117,17 +184,24 @@ export function ChoiceList<C extends ListedChoice>({
 }: ChoiceListProps<C>): React.JSX.Element {
   const listId = React.useId();
   const [query, setQuery] = React.useState("");
+  // The folded groups the author opened; a search shows every group.
+  const [opened, setOpened] = React.useState<ReadonlySet<string>>(
+    () => new Set()
+  );
   const searchable = choices.length > searchFrom;
-  const shown = drawnChoices(choices, query, groups);
+  const isFolded = (group: ChoiceGroup): boolean =>
+    group.fold !== undefined && query.trim() === "" && !opened.has(group.group);
+  const matching = matchingChoices(choices, query);
+  const shown = drawnRows(matching, groups, isFolded);
   const [active, setActive] = React.useState(() =>
     Math.max(
       0,
-      shown.findIndex(choice => choice.key === currentKey)
+      shown.findIndex(row => row.key === currentKey)
     )
   );
-  const activeChoice = shown[Math.min(active, shown.length - 1)];
-  const optionId = (choice: C): string =>
-    `${listId}-${choice.key.replace(/[^a-z0-9-]/gi, "_")}`;
+  const activeRow = shown[Math.min(active, shown.length - 1)];
+  const rowId = (row: DrawnRow<C>): string =>
+    `${listId}-${row.key.replace(/[^a-z0-9-]/gi, "_")}`;
 
   const list = React.useRef<HTMLUListElement>(null);
   const search = React.useRef<HTMLInputElement>(null);
@@ -135,11 +209,40 @@ export function ChoiceList<C extends ListedChoice>({
     (searchable ? search.current : list.current)?.focus();
   }, [searchable]);
   React.useEffect(() => {
-    if (activeChoice === undefined) return;
-    document.getElementById(optionId(activeChoice))?.scrollIntoView({
+    if (activeRow === undefined) return;
+    document.getElementById(rowId(activeRow))?.scrollIntoView({
       block: "nearest",
     });
   });
+
+  /**
+   * A folded group opened in place, the author moved onto its first entry,
+   * so the keyboard goes on from where the row was.
+   */
+  const open = (group: ChoiceGroup): void => {
+    const next = new Set(opened).add(group.group);
+    setOpened(next);
+    const rows = drawnRows(
+      matching,
+      groups,
+      each =>
+        each.fold !== undefined && query.trim() === "" && !next.has(each.group)
+    );
+    setActive(
+      Math.max(
+        0,
+        rows.findIndex(
+          row => row.kind === "choice" && row.choice.group === group.group
+        )
+      )
+    );
+  };
+
+  /** What pressing a row does: pick an entry, or open a folded group. */
+  const press = (row: DrawnRow<C>): void => {
+    if (row.kind === "fold") open(row.group);
+    else if (row.choice.disabled !== true) onPick(row.choice);
+  };
 
   const onKeyDown = (event: React.KeyboardEvent): void => {
     const last = shown.length - 1;
@@ -155,39 +258,63 @@ export function ChoiceList<C extends ListedChoice>({
       setActive(next);
       return;
     }
-    if (event.key === "Enter" && activeChoice !== undefined) {
+    if (event.key === "Enter" && activeRow !== undefined) {
       event.preventDefault();
-      if (activeChoice.disabled !== true) onPick(activeChoice);
+      press(activeRow);
     }
   };
 
   const describedActive =
-    activeChoice === undefined ? undefined : optionId(activeChoice);
+    activeRow === undefined ? undefined : rowId(activeRow);
 
-  const option = (choice: C): React.JSX.Element => (
-    <li
-      key={choice.key}
-      id={optionId(choice)}
-      role="option"
-      aria-selected={choice === activeChoice}
-      aria-disabled={choice.disabled === true ? "true" : undefined}
-      data-current={choice.key === currentKey ? "" : undefined}
-      className={
-        choiceClassName === undefined
-          ? "nx-font-pick__option"
-          : `nx-font-pick__option ${choiceClassName}`
-      }
-      // Cut with an ellipsis when long: whole on hover.
-      title={choiceTitle === undefined ? choice.label : choiceTitle(choice)}
-      style={choiceStyle?.(choice)}
-      onMouseMove={() => setActive(shown.indexOf(choice))}
-      onClick={() => {
-        if (choice.disabled !== true) onPick(choice);
-      }}
-    >
-      {renderChoice === undefined ? choice.label : renderChoice(choice)}
-    </li>
-  );
+  const option = (row: DrawnRow<C>): React.JSX.Element => {
+    if (row.kind === "fold") {
+      const { fold } = row.group;
+      return (
+        <li
+          key={row.key}
+          id={rowId(row)}
+          role="option"
+          aria-selected={row === activeRow}
+          aria-expanded="false"
+          className="nx-font-pick__option nx-choice-fold"
+          title={`Show ${row.group.heading}`}
+          onMouseMove={() => setActive(shown.indexOf(row))}
+          onClick={() => press(row)}
+        >
+          <span className="nx-choice-fold__label">{fold?.label}</span>
+          <ChevronRight
+            aria-hidden="true"
+            className="nx-choice-fold__icon"
+            size={14}
+          />
+        </li>
+      );
+    }
+    const { choice } = row;
+    return (
+      <li
+        key={row.key}
+        id={rowId(row)}
+        role="option"
+        aria-selected={row === activeRow}
+        aria-disabled={choice.disabled === true ? "true" : undefined}
+        data-current={choice.key === currentKey ? "" : undefined}
+        className={
+          choiceClassName === undefined
+            ? "nx-font-pick__option"
+            : `nx-font-pick__option ${choiceClassName}`
+        }
+        // Cut with an ellipsis when long: whole on hover.
+        title={choiceTitle === undefined ? choice.label : choiceTitle(choice)}
+        style={choiceStyle?.(choice)}
+        onMouseMove={() => setActive(shown.indexOf(row))}
+        onClick={() => press(row)}
+      >
+        {renderChoice === undefined ? choice.label : renderChoice(choice)}
+      </li>
+    );
+  };
 
   return (
     <>
@@ -230,11 +357,17 @@ export function ChoiceList<C extends ListedChoice>({
         ) : null}
         {groups === undefined
           ? shown.map(option)
-          : groups.map(({ group, heading }) => {
-              const members = shown.filter(choice => choice.group === group);
+          : drawnSections(groups, isFolded).map(({ heading, groups: held }) => {
+              const members = shown.filter(row =>
+                held.some(group =>
+                  row.kind === "fold"
+                    ? row.group.group === group.group
+                    : row.choice.group === group.group
+                )
+              );
               if (members.length === 0) return null;
               return (
-                <li key={group} role="presentation">
+                <li key={held[0].group} role="presentation">
                   <span
                     className="nx-vars__group-name nx-font-pick__heading"
                     aria-hidden="true"

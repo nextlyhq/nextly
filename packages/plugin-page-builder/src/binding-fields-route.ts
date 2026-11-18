@@ -46,7 +46,7 @@ import {
   type PickerField,
   type PickerSource,
 } from "./binding-fields-contract";
-import { previewOf } from "./binding-preview";
+import { isEmptyValue, previewOf, thumbnailOf } from "./binding-preview";
 import { collectionNaming } from "./bindings-report/readable";
 import { labelOf } from "./collection-labels";
 import { PAGES_SLUG } from "./collections/pages";
@@ -253,10 +253,33 @@ function pickerField(shape: BindingFieldShape, read: SourceRead): PickerField {
     public: isPublic,
     ...(isPublic && draft ? { draft: true as const } : {}),
     ...(preview === undefined ? {} : { preview }),
+    ...(isPublic ? pictureOrEmpty(value) : {}),
     ...(group === undefined
       ? {}
       : { fields: group.shapes.map(inner => pickerField(inner, group)) }),
   };
+}
+
+/**
+ * What the picker shows for a value with no text to preview: a picture's
+ * small thumbnail, or that the field holds nothing. Only for a field
+ * visitors may read, as a preview is.
+ */
+function pictureOrEmpty(
+  value: unknown
+): Pick<PickerField, "thumbnail" | "empty"> {
+  const thumbnail = thumbnailOf(value);
+  if (thumbnail !== undefined) return { thumbnail };
+  return isEmptyValue(value) ? { empty: true } : {};
+}
+
+/** What a field shows of its value, with nothing absent written as a key. */
+function shownValue(
+  value: Pick<PickerField, "preview" | "thumbnail" | "empty">
+): Pick<PickerField, "preview" | "thumbnail" | "empty"> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, shown]) => shown !== undefined)
+  );
 }
 
 /**
@@ -269,7 +292,7 @@ function throughRelation(
   inner: PickerField,
   relation: PickerField
 ): PickerField {
-  const { preview, ...withoutPreview } = inner;
+  const { preview, thumbnail, empty, ...withoutPreview } = inner;
   const { draft: ownDraft, ...rest } = withoutPreview;
   const isPublic = inner.public && relation.public;
   const draft = relation.draft === true || ownDraft === true;
@@ -279,7 +302,7 @@ function throughRelation(
     ...withoutInside,
     public: isPublic,
     ...(isPublic && draft ? { draft: true as const } : {}),
-    ...(isPublic && preview !== undefined ? { preview } : {}),
+    ...(isPublic ? shownValue({ preview, thumbnail, empty }) : {}),
     ...(inside === undefined
       ? {}
       : { fields: inside.map(field => throughRelation(field, relation)) }),
@@ -406,7 +429,8 @@ async function siteSource(reads: BindingFieldsReads): Promise<PickerSource> {
     binding: { source: "site" },
     label: "Site",
     fields: SITE_SETTING_FIELD_SHAPES.map((shape): PickerField => {
-      const preview = previewOf(values[shape.name]);
+      const value = values[shape.name];
+      const preview = previewOf(value);
       return {
         name: shape.name,
         type: shape.type,
@@ -414,6 +438,9 @@ async function siteSource(reads: BindingFieldsReads): Promise<PickerSource> {
         ...siteSettingLabel(shape.name),
         public: true,
         ...(preview === undefined ? {} : { preview }),
+        ...(preview === undefined && isEmptyValue(value)
+          ? { empty: true as const }
+          : {}),
       };
     }),
   };

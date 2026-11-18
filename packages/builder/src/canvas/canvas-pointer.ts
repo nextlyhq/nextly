@@ -16,6 +16,7 @@ import {
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import { useCallback, useEffect, useRef } from "react";
 
+import { rememberClickedEntries } from "../clicked-entry";
 import { isElement } from "../dom-kind";
 import { selectionModeFor, type SelectionMode } from "../selection";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
@@ -205,7 +206,9 @@ export function useCanvasPointer(
       }
       // A click on the canvas background resolves to null, which CLEARS the
       // selection rather than being ignored. Ignoring it leaves an inspector
-      // showing a node the author believes they have deselected.
+      // showing a node the author believes they have deselected. The list
+      // entries pressed are kept with it, for the binding picker's values.
+      rememberClickedEntries(id, event.target);
       onSelect(id, selectionModeFor(event));
     },
     [onSelect, onListSortField]
