@@ -12,22 +12,42 @@
  * @experimental
  */
 import { usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import { useEffect } from "react";
 
+import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import {
-  PAGE_BUILDER_PLUGIN_NAME,
   SITE_CSS_DRAWN_ROUTE_PATH,
   type SiteCssDrawn,
-} from "../library-contract";
+} from "../site-css-contract";
+
+/** The mounted canvases' reads, each asked again when the CSS is saved. */
+const drawnReads = new Set<() => void>();
+
+/**
+ * Tell every canvas drawing the site's CSS that a save stored new CSS, so
+ * each reads it again. The save goes through a write the admin's read cache
+ * knows nothing of, so the canvas would otherwise draw the old CSS until it
+ * is opened again.
+ */
+export function siteCssSaved(): void {
+  for (const reread of drawnReads) reread();
+}
 
 /** The site's CSS as the canvas draws it, or `undefined` while there is none to draw. */
 export function useDrawnSiteCss(): string | undefined {
-  // The admin's own cached plugin read. Fresh on each mount: the CSS is
-  // saved in Settings, which this read's cache knows nothing of.
-  const { data } = usePluginRoute<SiteCssDrawn>({
+  // The admin's own cached plugin read. Fresh on each mount, and read again
+  // whenever Settings saves the CSS (`siteCssSaved`).
+  const { data, refetch } = usePluginRoute<SiteCssDrawn>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: SITE_CSS_DRAWN_ROUTE_PATH,
     staleTime: 0,
   });
+  useEffect(() => {
+    drawnReads.add(refetch);
+    return () => {
+      drawnReads.delete(refetch);
+    };
+  }, [refetch]);
   const css = data?.css;
   return typeof css !== "string" || css.trim() === "" ? undefined : css;
 }

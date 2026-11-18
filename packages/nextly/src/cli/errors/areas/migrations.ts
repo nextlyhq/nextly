@@ -6,6 +6,11 @@
  */
 
 import type { DataLossVerdict } from "../../../domains/schema/migrate/data-loss-consent";
+import {
+  WRITER_HOLD_HELD_REASON,
+  WRITER_HOLD_LOST_REASON,
+  WRITER_START_MOVED_REASON,
+} from "../../../domains/schema/migrate-create/writer-hold";
 import { PLAN_CHANGED_AFTER_CONSENT } from "../../../domains/schema/migrate/plan-changed-after-consent";
 import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-column-guard";
 import { UNIQUE_INDEX_NAME_HELD_ADVICE } from "../../../domains/schema/migrate/unique-index-name-advice";
@@ -53,13 +58,22 @@ function planChangedParts(error: NextlyError): CliErrorParts {
  * once that finishes." Split rather than reworded, so the CLI and the boot log keep one wording.
  */
 function lockRefusal(error: NextlyError): CliErrorParts {
+  return refusalParts(error, "Another run holds the schema lock.");
+}
+
+/**
+ * A refusal over something another run holds, as its three parts: its first
+ * sentence is what did not happen, its last says what to run again, and what
+ * lies between is why. `why` stands in where the message is not in that shape.
+ */
+function refusalParts(error: NextlyError, why: string): CliErrorParts {
   const message = error.publicMessage;
   const end = message.indexOf(". ");
   const nextAt = message.lastIndexOf(" Run it again");
   if (end === -1 || nextAt <= end) {
     return {
       what: message,
-      why: "Another run holds the schema lock.",
+      why,
       next: "Run it again once that run finishes.",
     };
   }
@@ -492,11 +506,50 @@ function malformedConsentParts(message: string): CliErrorParts {
   };
 }
 
+/** A writer of migration files that another overtook, as its three parts. */
+function overtakenParts(error: NextlyError): CliErrorParts {
+  return refusalParts(error, "Another run wrote a migration meanwhile.");
+}
+
 export const MIGRATION_CODES = defineCodes({
   NEXTLY_MIGRATE_LOCK_BUSY: {
     cause:
       "Another run holds the schema lock, so the command did not start and changed nothing.",
     from: [{ code: "NEXTLY_MIGRATE_LOCK_BUSY", describe: lockRefusal }],
+  },
+  MIGRATIONS_WRITER_BUSY: {
+    cause:
+      "Another run is writing this project's migration files, so the command wrote nothing.",
+    // Laid out as the schema lock's refusal is, and split the same way.
+    from: [
+      {
+        code: "SERVICE_UNAVAILABLE",
+        reason: WRITER_HOLD_HELD_REASON,
+        describe: error =>
+          refusalParts(
+            error,
+            "Another run holds this project's migration files."
+          ),
+      },
+    ],
+  },
+  MIGRATIONS_WRITER_OVERTAKEN: {
+    cause:
+      "Another run wrote a migration for this project while the command was part-way, so the command wrote no migration and no snapshot.",
+    // Two ways to find it out, one cause: the hold was lost to a stall, or
+    // the newest snapshot is no longer the one the run read.
+    from: [
+      {
+        code: "SERVICE_UNAVAILABLE",
+        reason: WRITER_HOLD_LOST_REASON,
+        describe: overtakenParts,
+      },
+      {
+        code: "SERVICE_UNAVAILABLE",
+        reason: WRITER_START_MOVED_REASON,
+        describe: overtakenParts,
+      },
+    ],
   },
   TABLE_BUSY: {
     cause:

@@ -204,6 +204,31 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("previews a change after the first migration from that migration's snapshot", async () => {
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("body")]),
+        change: "create",
+      });
+
+      const preview = await previewCollectionSave(deps(), {
+        slug: "posts",
+        previous: posts([text("body")]),
+        entity: posts([text("body"), text("subtitle")]),
+        change: "update",
+      });
+
+      // The column added to the table that exists, not the table made again.
+      expect(preview.files).toHaveLength(1);
+      const { sql } = preview.files[0]!;
+      const up = sql.split(/^-- DOWN/m)[0]!;
+      expect(up, sql).toMatch(/ADD (COLUMN )?[`"]?subtitle/);
+      expect(up, sql).not.toMatch(/CREATE TABLE/);
+      // And nothing written where the app reads.
+      expect(migrationFiles()).toHaveLength(1);
+    });
+
     it("writes each later change as its own applied file, and renames what the person renamed", async () => {
       await writeCollectionSave(deps(), {
         slug: "posts",
@@ -304,6 +329,145 @@ describe.each(getConfiguredTestDialects())(
         definition: definition(),
         columns: await columns(),
       }).toEqual(before);
+    });
+
+    it("refuses a field type change that would clear a value before writing anything, naming the field and the row", async () => {
+      // "abc" is no number. Refused before the definition or any file is written, so a deploy never
+      // receives a change this database refused.
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("body")]),
+        change: "create",
+      });
+      await adapter.executeQuery(
+        `INSERT INTO dc_posts (id, title, body, slug, created_at, updated_at) VALUES ('p1', 'A post', 'abc', 'p1', '2026-11-06 00:00:00', '2026-11-06 00:00:00')`
+      );
+      const before = {
+        files: migrationFiles(),
+        snapshots: snapshotFiles(),
+        definition: definition(),
+        columns: await columns(),
+      };
+
+      const refused = await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: posts([text("body")]),
+        entity: posts([text("content", { type: "number" })]),
+        change: "update",
+        renamedFields: [{ from: "body", to: "content" }],
+      }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(refused).toMatchObject({
+        publicData: {
+          errors: [
+            {
+              path: "fields.content",
+              code: "TYPE_CHANGE_LOSES_VALUES",
+              message: expect.stringContaining(
+                "Collection 'posts': field 'content' cannot change from text to number"
+              ) as unknown,
+            },
+          ],
+        },
+      });
+      expect(JSON.stringify(refused)).toContain("id p1");
+      expect(JSON.stringify(refused)).not.toContain("abc");
+      expect({
+        files: migrationFiles(),
+        snapshots: snapshotFiles(),
+        definition: definition(),
+        columns: await columns(),
+      }).toEqual(before);
+    });
+
+    it("refuses a type change while an earlier save's file for the collection is not applied yet", async () => {
+      // Outside development a save's file waits for the deploy's `nextly migrate`: the columns do
+      // not hold what the definition says yet, so no value can be judged against it.
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("body")]),
+        change: "create",
+      });
+      await writeCollectionSave(deps({ applies: false }), {
+        slug: "posts",
+        previous: posts([text("body")]),
+        entity: posts([text("body"), text("subtitle")]),
+        change: "update",
+      });
+      const before = { files: migrationFiles(), definition: definition() };
+
+      const refused = await writeCollectionSave(deps({ applies: false }), {
+        slug: "posts",
+        previous: posts([text("body"), text("subtitle")]),
+        entity: posts([text("body", { type: "number" }), text("subtitle")]),
+        change: "update",
+      }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(refused).toMatchObject({
+        publicData: {
+          errors: [
+            {
+              path: "fields.body",
+              code: "TYPE_CHANGE_BLOCKED",
+              message:
+                "Finish the pending migration of Collection 'posts' first, then change the field's type.",
+            },
+          ],
+        },
+      });
+      expect({ files: migrationFiles(), definition: definition() }).toEqual(
+        before
+      );
+    });
+
+    it("refuses a type change of a field inside a group with no name, before writing anything", async () => {
+      // The group has no name, so its field is kept on the row by its own name: judged as any other.
+      const grouped = (type: string) =>
+        posts([
+          {
+            type: "group",
+            fields: [text("heading", { type })],
+          } as unknown as UiSchemaEntity["fields"][number],
+        ]);
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: grouped("text"),
+        change: "create",
+      });
+      await adapter.executeQuery(
+        `INSERT INTO dc_posts (id, title, heading, slug, created_at, updated_at) VALUES ('p1', 'A post', 'abc', 'p1', '2026-11-06 00:00:00', '2026-11-06 00:00:00')`
+      );
+      const before = { files: migrationFiles(), definition: definition() };
+
+      const refused = await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: grouped("text"),
+        entity: grouped("number"),
+        change: "update",
+      }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(refused).toMatchObject({
+        publicData: {
+          errors: [
+            { path: "fields.heading", code: "TYPE_CHANGE_LOSES_VALUES" },
+          ],
+        },
+      });
+      expect({ files: migrationFiles(), definition: definition() }).toEqual(
+        before
+      );
     });
 
     it("outside development writes the definition, file and snapshot, and runs nothing", async () => {
@@ -837,6 +1001,37 @@ describe.each(getConfiguredTestDialects())(
       await freshDatabase();
       await replayed(dialect === "mysql");
       expect(await nullable("subtitle")).toBe(false);
+    });
+
+    // A row fill gives a Single's one row a field's default. A collection holds any number of rows,
+    // which only the person's own answer settles, so a save of a collection carrying one is
+    // refused whoever passes it, and nothing is written.
+    it("refuses a row fill on a collection's save, writing nothing", async () => {
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("body")]),
+        change: "create",
+      });
+      const files = migrationFiles();
+      const written = definition();
+
+      await expect(
+        writeCollectionSave(deps(), {
+          slug: "posts",
+          previous: posts([text("body")]),
+          entity: posts([text("body"), text("subtitle")]),
+          change: "update",
+          rowFills: [{ column: "subtitle", value: "Hello" }],
+        })
+      ).rejects.toMatchObject({
+        publicData: {
+          errors: [expect.objectContaining({ code: "ROW_FILL_NOT_SINGLE" })],
+        },
+      });
+      expect(migrationFiles()).toEqual(files);
+      expect(definition()).toBe(written);
+      expect(await columns()).not.toContain("subtitle");
     });
 
     it("deletes the rows that do not fit a field made required, here, and asks consent on replay", async () => {

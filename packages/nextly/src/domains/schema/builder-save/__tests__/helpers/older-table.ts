@@ -71,6 +71,48 @@ export async function withNoHistory(
 }
 
 /**
+ * Gives `column` of `table` the column DEFAULT `value`, as an earlier version's create wrote one for
+ * a field that stated a default, where today's writes none. SQLite cannot set a column's default
+ * in place, so there the table is rebuilt under the same name from its own definition, with its
+ * rows and indexes; a column whose type takes no literal DEFAULT on MySQL (`text`) is refused there.
+ */
+export async function withStrayDefault(
+  t: TestNextly,
+  dialect: TestDialect,
+  table: string,
+  column: string,
+  value: string
+): Promise<void> {
+  const exec = execOn(t);
+  const q = (name: string) => quote(dialect, name);
+  const literal = `'${value.replace(/'/g, "''")}'`;
+  if (dialect !== "sqlite") {
+    await exec(
+      `ALTER TABLE ${q(table)} ALTER COLUMN ${q(column)} SET DEFAULT ${literal}`
+    );
+    return;
+  }
+  const [created] = await exec<{ sql: string }>(
+    `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = '${table}'`
+  );
+  const indexes = await exec<{ sql: string }>(
+    `SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = '${table}' AND sql IS NOT NULL`
+  );
+  // The column's declaration is its quoted name and its type, then whatever constraints follow.
+  const declaration = new RegExp(`("${column}"\\s+[a-z]+(?:\\(\\d+\\))?)`, "i");
+  if (created === undefined || !declaration.test(created.sql)) {
+    throw new Error(`no column ${column} declared in ${table}`);
+  }
+  const before = `${table}__before_default`;
+  await exec(`ALTER TABLE "${table}" RENAME TO "${before}"`);
+  await exec(created.sql.replace(declaration, `$1 DEFAULT ${literal}`));
+  await exec(`INSERT INTO "${table}" SELECT * FROM "${before}"`);
+  // Dropping the renamed table drops its indexes, so each is made again on the rebuilt one.
+  await exec(`DROP TABLE "${before}"`);
+  for (const index of indexes) await exec(index.sql);
+}
+
+/**
  * Turns `table`, as today's create made it, into the table an earlier version's create made: no
  * `created_at` index; on MySQL each of `textColumns` (a text field's column) `text`; on PostgreSQL
  * the parent columns a field group's table carries `varchar(255)`.

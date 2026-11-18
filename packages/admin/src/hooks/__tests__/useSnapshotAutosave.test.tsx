@@ -52,6 +52,26 @@ describe("useSnapshotAutosave", () => {
     expect(save).not.toHaveBeenCalled();
   });
 
+  it("makes a recording asked for at once, and nothing when none was", async () => {
+    const save = vi.fn(() => saved());
+    const { result } = renderHook(() =>
+      useSnapshotAutosave({ identity: "doc-1", save, debounceMs: DEBOUNCE })
+    );
+
+    act(() => result.current.flushPending());
+    expect(save).not.toHaveBeenCalled();
+
+    act(() => result.current.schedule());
+    act(() => result.current.flushPending());
+    expect(save).toHaveBeenCalledTimes(1);
+    // Made, not made again when the wait would have ended.
+    act(() => void vi.advanceTimersByTime(DEBOUNCE * 2));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
   it("asks at fire time whether the work is still worth recording", async () => {
     let wanted = false;
     const save = vi.fn(() => saved());

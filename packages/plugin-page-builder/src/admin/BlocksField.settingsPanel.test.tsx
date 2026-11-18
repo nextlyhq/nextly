@@ -30,6 +30,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { useForm, type FieldValues } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closedDocumentSession } from "../__tests__/closed-document-session";
 
 /** What the entry-fields hook answers with for the test in hand. */
 let entryFields: React.ReactNode | null;
@@ -213,6 +214,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   // The form's storing gate, which site style writes are tracked with.
   useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
+  // The session a header edited in place opens; none is opened here.
+  useDocumentSession: () => closedDocumentSession(),
   // The header's controls the bar places; drawn by the admin, not here.
   DocumentSaveAndPublish: () => null,
   // The page's life stage as the admin answers it from the saved status:

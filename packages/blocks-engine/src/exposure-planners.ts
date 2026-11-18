@@ -49,6 +49,8 @@ import {
 import { isPlainRecord } from "./plain-record";
 import { exposureTypeForProp } from "./prop-exposure";
 import type { RetiredExposures } from "./retired-exposures";
+import { settingBindingIssues } from "./setting-bindings";
+import { withSettingDefaults } from "./setting-defaults";
 import { contentPropsOf } from "./slot-lock";
 import type { SlotDefaultSource } from "./tree";
 import {
@@ -223,6 +225,8 @@ export function planExposeProperty(
   const exposed = draft.exposed ?? [];
   const id = mintId(label, takenIds(exposed, sources.retired));
   draft.exposed = [...exposed, { id, label, ...pointed }];
+  const broken = newFollowerErrors(definition, draft, limits);
+  if (broken.length > 0) return { problem: "invalid-exposure", issues: broken };
   return finished(draft, id, NOTHING_RETIRED, [], limits);
 }
 
@@ -290,12 +294,21 @@ export function planRetargetExposure(
   if (keepsValues(current, pointed)) {
     exposed[at] = { id, label: current.label, ...pointed };
     draft.exposed = exposed;
+    const broken = newFollowerErrors(definition, draft, limits);
+    if (broken.length > 0) {
+      return { problem: "invalid-exposure", issues: broken };
+    }
     return finished(draft, id, NOTHING_RETIRED, [], limits);
   }
 
   const fresh = mintId(current.label, takenIds(exposed, sources.retired));
+  // A new type is a new setting, which a block following the old one may not
+  // fit: each keeps what it showed, and follows nothing.
+  draft.nodes = withSettingDefaults(draft, id, limits).nodes;
   exposed[at] = { id: fresh, label: current.label, ...pointed };
   draft.exposed = exposed;
+  const broken = newFollowerErrors(definition, draft, limits);
+  if (broken.length > 0) return { problem: "invalid-exposure", issues: broken };
   return retiring(draft, fresh, id, limits);
 }
 
@@ -317,6 +330,8 @@ export function planRemoveExposure(
   const at = exposureIndex(draft, id);
   if (at === undefined) return { problem: "unknown-exposure" };
 
+  // Each block following it keeps what it showed, and follows nothing.
+  draft.nodes = withSettingDefaults(draft, id, limits).nodes;
   draft.exposed = (draft.exposed ?? []).filter((_, i) => i !== at);
   return retiring(draft, id, id, limits);
 }
@@ -592,6 +607,26 @@ function retiring(
   const pruned = pruneVariants(draft, gone);
   const retired = { properties: [gone], slots: [] };
   return finished(draft, id, retired, pruned, limits);
+}
+
+/**
+ * The errors the save's follower check finds in an edited definition that
+ * the definition had not: a setting put on a prop that follows one, which
+ * the save would refuse. One the definition held already is not this edit's.
+ */
+function newFollowerErrors(
+  before: BlockDocument,
+  after: ComponentDocument,
+  limits: DocumentLimits
+): ValidationIssue[] {
+  const key = (issue: ValidationIssue): string =>
+    `${issue.path}\u0000${issue.message}`;
+  const errors = (doc: BlockDocument): ValidationIssue[] =>
+    settingBindingIssues(doc, limits).filter(
+      issue => issue.severity === "error"
+    );
+  const had = new Set(errors(before).map(key));
+  return errors(after).filter(issue => !had.has(key(issue)));
 }
 
 /** The edit, or the envelope errors that would refuse its save. */

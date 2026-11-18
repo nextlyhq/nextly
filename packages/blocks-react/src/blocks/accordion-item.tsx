@@ -16,36 +16,29 @@
  * is ordinary children, so a section holds whatever a section holds and every
  * block inside it is selectable and stylable in its own right.
  *
- * **What this deliberately does NOT do: close its siblings.** `<details name>`
- * makes a group mutually exclusive with no script, and it needs one shared name
- * across the group. A child cannot derive that: `BlockRenderArgs` carries the
- * node being rendered and never its ancestors, so this block can see its own id
- * and not the accordion's. Three ways to supply it were considered and each
- * costs more than the behaviour is worth:
+ * **How a section opens is its accordion's to say.** `<details name>` makes
+ * a group mutually exclusive with no script: opening one closes the others
+ * that share its name. A child cannot derive that name, since
+ * `BlockRenderArgs` carries the node being rendered and never its ancestors,
+ * so the accordion hands its sections a group on the render context
+ * (`accordionGroup`), for its own subtree, as it hands them their title
+ * level: the shared name while one opens at a time, and which section starts
+ * open while the first does. With one open at a time a section's own "Open
+ * by default" is not drawn (a browser keeps only one of a named group open
+ * anyway); with many, it is, beside the accordion's First open.
  *
- * - seeding a group id through the accordion's `SlotSpec.defaultBlock` — that
- *   declares each starting child by TYPE and props, and the group's name would
- *   have to be the PARENT's id, which no declaration written before the parent
- *   exists can name;
- * - passing it through the slot context — `renderSlot(name, ctx)` REPLACES the
- *   subtree's context, and `PageContext` says in as many words that widening it
- *   is "a deliberate act rather than a side effect of a new block";
- * - moving the whole group into one block that renders every `<details>`
- *   itself — which is the repeater design above, and loses the slot.
- *
- * Independent sections are also the safer default rather than merely the
- * cheaper one: an exclusive group collapses a section while someone is reading
- * it, which is why several design systems do not offer exclusivity at all.
- * Should it be wanted, the honest route is a group id on the context, decided
- * for the renderer as a whole rather than smuggled in with this block.
+ * **The toggle is a 44px target with a ring for the keyboard.** The
+ * `<summary>` is the native toggle, opened by a click, a tap, Enter and Space;
+ * its part sets a minimum height a finger can hit and a focus ring in the
+ * text's own colour, so it follows the site's colours and dark values.
  *
  * **The `<summary>` holds an icon and the title, and the group styles both.**
  * The title is text, or the heading level the accordion names through the
  * render context (`accordionTitles`): a heading inside `<summary>` is valid
- * HTML, and the summary stays the native toggle. Before it sits an empty,
- * hidden icon, which the accordion's icon choice paints with a mask, turns
- * while open, or hides; the browser's own marker is what "Browser default"
- * keeps. Both are marked with the engine's classes rather than parts, since it
+ * HTML, and the summary stays the native toggle. Before it sits an empty
+ * icon, hidden from screen readers, which the accordion's icon choice paints
+ * with a mask (a plus that becomes a minus, or a chevron that turns) or
+ * hides. Both are marked with the engine's classes rather than parts, since it
  * is the accordion's values that reach them, through child selectors, and a
  * section is never styled from inside itself.
  *
@@ -56,6 +49,7 @@ import {
   defineBlock,
   DISCLOSURE_ICON_CLASS,
   DISCLOSURE_TITLE_CLASS,
+  toOneParagraph,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
@@ -81,9 +75,17 @@ export const ACCORDION_BLOCK = "core/accordion";
 export interface AccordionItemProps {
   /** The always-visible label in the `<summary>`. */
   title: string;
-  /** Whether this section starts open. */
+  /** Whether this section starts open, while its accordion opens many. */
   open: boolean;
 }
+
+/** The answer a new question starts with, for its author to write over. */
+const STARTING_ANSWER = [
+  {
+    type: "core/text",
+    props: { text: toOneParagraph("Write the answer here.").value },
+  },
+];
 
 /**
  * What a section may be styled with.
@@ -145,6 +147,26 @@ const TITLE_HEADINGS: ReadonlySet<string> = new Set(
  * title looks as the section is styled whatever level it is.
  */
 const ACCORDION_ITEM_PARTS = {
+  // The `<summary>`: a target at least 44px tall, and a ring in the text's
+  // colour while it has keyboard focus, which a reset stylesheet may have
+  // taken away. Drawn just outside the row, so it never covers the title.
+  toggle: {
+    baseStyles: {
+      base: {
+        base: { minHeight: "44px" },
+      },
+      focus: {
+        base: {
+          outline: {
+            width: "2px",
+            style: "solid",
+            color: "currentColor",
+            offset: "2px",
+          },
+        },
+      },
+    },
+  },
   title: {
     baseStyles: {
       base: {
@@ -176,12 +198,28 @@ function titleTag(
     : "span";
 }
 
+/**
+ * Whether a section starts open: the one its accordion opens first, and,
+ * while the accordion opens many, any section set to open itself. While one
+ * opens at a time, its own setting is hidden in the editor and not drawn.
+ */
+function startsOpen(
+  props: AccordionItemProps,
+  id: string,
+  group: PageContext["accordionGroup"]
+): boolean {
+  if (group?.opens === id) return true;
+  return group?.name === undefined && props.open === true;
+}
+
 /** A section: its title always visible, its children revealed when open. */
 function renderAccordionItem({
   props,
+  node,
   ctx,
   className,
   partClass,
+  markProp,
   renderSlot,
 }: BlockRenderArgs<AccordionItemProps>): ReactElement {
   // Read defensively rather than trusted. The type states what an author may
@@ -190,11 +228,20 @@ function renderAccordionItem({
   // as a child object and throw, taking the page down with it.
   const title = typeof props.title === "string" ? props.title : "";
   const Title = titleTag(ctx.accordionTitles);
+  const group = ctx.accordionGroup;
   return (
-    <details className={className} open={props.open === true}>
-      <summary>
+    <details
+      className={className}
+      open={startsOpen(props, node.id, group)}
+      {...(group?.name === undefined ? {} : { name: group.name })}
+    >
+      <summary className={partClass("toggle")}>
         <span className={DISCLOSURE_ICON_CLASS} aria-hidden="true" />
-        <Title className={`${DISCLOSURE_TITLE_CLASS} ${partClass("title")}`}>
+        <Title
+          className={`${DISCLOSURE_TITLE_CLASS} ${partClass("title")}`}
+          // The element the editor types the title into, on the canvas.
+          {...(markProp?.("title") ?? {})}
+        >
           {title}
         </Title>
       </summary>
@@ -216,26 +263,33 @@ export const accordionItem: BlockDefinition<AccordionItemProps, PageContext> =
     // nineteen blocks cannot drift into nineteen headings; keywords are what
     // let a search for a word the description never uses still find this.
     editor: {
-      label: "Accordion item",
+      label: "Question",
       icon: "panel",
       category: INTERACTIVE,
-      keywords: ["disclosure", "panel", "faq"],
+      keywords: ["disclosure", "panel", "faq", "accordion item", "answer"],
     },
     props: {
-      title: { label: "Title", role: "content", type: "text" },
-      open: { label: "Open by default", type: "checkbox" },
+      title: { label: "Question", role: "content", type: "text", inline: true },
+      // Shown only while the accordion opens many at a time: with one at a
+      // time, its First open decides, and this is not drawn.
+      open: {
+        label: "Open by default",
+        type: "checkbox",
+        onlyWhenParent: { openMode: ["many"] },
+      },
     },
-    defaultProps: { title: "Section", open: false },
-    example: { props: { title: "What is included?", open: false } },
+    // A question added to an accordion is given the next number there by the
+    // editor; this is what one placed any other way says.
+    defaultProps: { title: "Question", open: false },
+    example: { props: { title: "Question 1", open: false } },
     // The child half of the nesting rule. The parent states the other half in
     // `accordion.tsx`; `block.ts` is explicit that neither implies the other.
     parent: [ACCORDION_BLOCK],
     slots: {
-      // No declared starting children. Unlike the accordion that holds it, this
-      // slot carries no allow-list: a section holds whatever a section holds, so
-      // there is no child type it exists to hold and no starting block righter
-      // than none.
-      children: {},
+      // No allow-list: a section holds whatever a section holds, a picture, a
+      // button or a list as much as words. It starts with one Text, the answer
+      // to write over; emptied, the editor draws its empty-container start.
+      children: { defaultBlock: STARTING_ANSWER },
     },
     // Every block after the `<summary>` is spaced from what precedes it, the
     // first one from the title included.

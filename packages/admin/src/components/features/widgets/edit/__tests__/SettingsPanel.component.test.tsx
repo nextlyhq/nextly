@@ -381,7 +381,7 @@ describe("the settings sheet with content settings", () => {
   it("lets a Group by choice be cleared on its own", async () => {
     const onSave = open({ collection: "posts", by: "title", items: 9 });
     await userEvent.click(
-      screen.getByRole("button", { name: "Clear selection" })
+      screen.getByRole("button", { name: "Clear Group by" })
     );
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());

@@ -6,6 +6,9 @@
  * person says they understand, with the declared policy's key; a check with
  * something to see is shown first; a clean one is kept at once. Kept means
  * one edit of the page, saved with it.
+ *
+ * And its CSS box, above them: checked by the one custom CSS checker, each
+ * refused line named and nothing kept; accepted CSS kept as one edit.
  */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -77,10 +80,12 @@ function blocked(key: string, live: boolean): SiteCodeChecked {
 }
 
 const set = vi.fn((_next: unknown) => true);
+const setCss = vi.fn((_next: string | null) => true);
 
 beforeEach(() => {
   writes.length = 0;
   set.mockClear();
+  setCss.mockClear();
   withLive = clean;
   declaredOnly = clean;
   vi.stubGlobal(
@@ -96,8 +101,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function show(value?: { head?: string; body?: string }) {
-  render(<PageCodeTab value={value} set={set} writable />);
+function show(value?: { head?: string; body?: string }, css?: string) {
+  render(
+    <PageCodeTab
+      value={value}
+      set={set}
+      css={{ value: css, set: setCss }}
+      writable
+    />
+  );
 }
 
 const head = () => screen.getByRole("textbox", { name: "Head" });
@@ -180,5 +192,85 @@ describe("the Code tab", () => {
     fireEvent.click(keep());
     await screen.findByText("Kept with the page. Save or Publish to store it.");
     expect(set).toHaveBeenCalledWith(null);
+  });
+});
+
+describe("the Code tab's CSS box", () => {
+  const cssBox = () => screen.getByRole("textbox", { name: "CSS" });
+  const keepCss = () =>
+    screen.getByRole("button", { name: "Check and keep CSS" });
+  const typed = (css: string) => {
+    fireEvent.change(cssBox(), { target: { value: css } });
+    fireEvent.click(keepCss());
+  };
+
+  it("sits above Head and End of body, says what it is for, and holds the page's CSS", () => {
+    show(undefined, "h1 { color: teal; }");
+    expect(
+      screen.getByText(
+        "CSS for this page only. Site-wide CSS lives in Site settings."
+      )
+    ).toBeTruthy();
+    expect((cssBox() as HTMLTextAreaElement).value).toBe("h1 { color: teal; }");
+    const boxes = screen.getAllByRole("textbox");
+    expect(boxes.indexOf(cssBox())).toBeLessThan(boxes.indexOf(head()));
+    // Nothing to keep until it changes.
+    expect((keepCss() as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("keeps accepted CSS as one edit of the page", async () => {
+    show();
+    typed("h1 { color: rebeccapurple; }");
+    expect(setCss).toHaveBeenCalledWith("h1 { color: rebeccapurple; }");
+    expect(
+      await screen.findByText(
+        "Kept with the page. Save or Publish to store it."
+      )
+    ).toBeTruthy();
+    // The page code's boxes are left alone.
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "an @import",
+      "@import url(https://example.com/x.css);",
+      ["Line 1: @import isn't allowed."],
+    ],
+    [
+      "a url() to another site",
+      "body {\n  background: url(https://example.com/a.png);\n}",
+      [
+        'Line 2: Only pictures and fonts from this site can be used: "https://example.com/a.png" isn\'t a path on this site.',
+      ],
+    ],
+    [
+      "a pasted <style> tag",
+      "<style>p { color: red; }</style>",
+      ["Line 1: Leave out the <style> tags."],
+    ],
+    [
+      "two refused lines",
+      "p { color: red; }\n@import url(/a.css);\np { behavior: url(/x.htc); }",
+      [
+        "Line 2: @import isn't allowed.",
+        "Line 3: behavior isn't allowed: it can run script.",
+      ],
+    ],
+  ])(
+    "names each line it refuses in %s, and keeps nothing",
+    (_case, css, lines) => {
+      show();
+      typed(css);
+      for (const line of lines) expect(screen.getByText(line)).toBeTruthy();
+      expect(screen.getAllByText("Nothing was kept.")).toHaveLength(1);
+      expect(setCss).not.toHaveBeenCalled();
+    }
+  );
+
+  it("removes the page's CSS when the box is emptied", () => {
+    show(undefined, "h1 { color: teal; }");
+    typed("");
+    expect(setCss).toHaveBeenCalledWith(null);
   });
 });

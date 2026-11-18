@@ -33,6 +33,7 @@ import {
 } from "vitest";
 
 import { clearBlocks, registerBlocks } from "@nextlyhq/blocks-engine";
+import { closedDocumentSession } from "../__tests__/closed-document-session";
 
 const DOCUMENT = {
   formatVersion: 1,
@@ -203,6 +204,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // The form's storing gate, which site style writes are tracked with.
   useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
+  // The session a header edited in place opens; none is opened here.
+  useDocumentSession: () => closedDocumentSession(),
   // The header's controls the bar places; drawn by the admin, not here.
   DocumentSaveAndPublish: () => null,
   useDocumentLifeStage: () => null,

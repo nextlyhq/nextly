@@ -173,7 +173,11 @@ export function NumericField({
   // author who types `20` over `12px` and then picks `rem` had the blur refuse
   // the unitless draft, leaving `12px` stored — and the menu composed from
   // THAT, committing `12rem` and discarding the 20 they were looking at.
-  const { draft, setDraft } = useDraft(stored);
+  // Owned here rather than by the field, so the suffix can step aside while
+  // the field shows a unit being typed. Escape ends that typing too, so the
+  // value it puts back shows its unit in the suffix again.
+  const [typing, setTyping] = React.useState(false);
+  const { draft, setDraft, live } = useDraft(stored, () => setTyping(false));
   useSeededDraft(seed, setDraft);
   // Read from the DRAFT, so the menu offers units for the quantity on screen
   // and swaps the unit on that quantity rather than on a superseded one.
@@ -200,9 +204,6 @@ export function NumericField({
   const { unit, keywords } = unitMenu;
   const showUnits = !compact && unitMenu.acts;
   const hold = useHeldBlur(storedText(stored));
-  // Owned here rather than by the field, so the suffix can step aside while
-  // the field shows a unit being typed.
-  const [typing, setTyping] = React.useState(false);
   const suffix = suffixState(unitMenu, typing, measurement);
   const menu = useValueMenu({
     // None in a side of the box, or where the caller lists them itself.
@@ -212,7 +213,12 @@ export function NumericField({
     showUnits,
     suffix,
     hold,
-    chooseUnit: unitMenu.choose,
+    // A unit picked straight after typing finishes the same edit: one undo
+    // step takes the number and its unit back together.
+    chooseUnit: choice => {
+      live.join(() => unitMenu.choose(choice));
+      live.end();
+    },
     onCommit,
   });
   // A stored unit the candidate list does not carry — `ch`, or an uppercase
@@ -249,6 +255,7 @@ export function NumericField({
         invalid={describedBy !== undefined}
         // With no menu drawn there is nothing to hold for: its refs are empty.
         editing={{ holdBlur: hold.holdBlur, typing, setTyping }}
+        live={live}
         onCommit={commitText}
         // The unit shown in the suffix is left out of the field.
         {...suffixedText(control, unit, unitMenu.isKeyword, showUnits)}

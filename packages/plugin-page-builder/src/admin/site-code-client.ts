@@ -10,14 +10,16 @@ import { readPluginRoute, writePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 import {
   PAGE_BUILDER_PLUGIN_NAME,
   SITE_CODE_ROUTE_PATH,
-  SITE_CSS_ROUTE_PATH,
   type SiteCodeChecked,
   type SiteCodeRequest,
   type SiteCodeSaved,
+} from "../library-contract";
+import {
+  SITE_CSS_ROUTE_PATH,
   type SiteCssRead,
   type SiteCssRequest,
   type SiteCssSaved,
-} from "../library-contract";
+} from "../site-css-contract";
 
 /** The policy a page of the site is served with, as a check is sent it. */
 export type LivePolicy = NonNullable<SiteCodeRequest["livePolicy"]>;
@@ -118,9 +120,26 @@ export async function saveSiteCode(
   );
 }
 
+/** Whether an answer is the site's CSS read, as far as the box relies on it. */
+function isSiteCssRead(answer: unknown): answer is SiteCssRead {
+  if (typeof answer !== "object" || answer === null) return false;
+  const { css, sha256, changedAt, changedBy } = answer as Record<
+    string,
+    unknown
+  >;
+  const text = (value: unknown) => value === null || typeof value === "string";
+  return (
+    typeof css === "string" &&
+    typeof sha256 === "string" &&
+    text(changedAt) &&
+    text(changedBy)
+  );
+}
+
 /**
  * The site's CSS as saved, its hash, and who changed it last and when: what
- * the CSS box opens with, and what its save hands back.
+ * the CSS box opens with, and what its save hands back. An answer of any
+ * other shape is refused, as one the site did not give.
  */
 export async function readSiteCss(signal?: AbortSignal): Promise<SiteCssRead> {
   const read = await readPluginRoute<SiteCssRead>({
@@ -128,7 +147,7 @@ export async function readSiteCss(signal?: AbortSignal): Promise<SiteCssRead> {
     path: SITE_CSS_ROUTE_PATH,
     ...(signal === undefined ? {} : { signal }),
   });
-  if (read === undefined) {
+  if (!isSiteCssRead(read)) {
     throw new Error("The site did not answer. Try again.");
   }
   return read;

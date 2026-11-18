@@ -27,6 +27,9 @@ const HOME = "crl_home";
 const PEOPLE = "crl_people";
 const GATED_PAGES = "crl_gated_pages";
 const GATED_HOME = "crl_gated_home";
+/** Saves to a published document wait as a pending change. */
+const DRAFTED_PAGES = "crl_drafted_pages";
+const DRAFTED_HOME = "crl_drafted_home";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -34,11 +37,20 @@ afterEach(async () => {
   current = undefined;
 });
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
+async function boot(
+  dialect: TestDialect,
+  options: { perLanguageStorage?: boolean } = {}
+): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
     seedPublic: true,
+    ...(options.perLanguageStorage ? { perLanguageStorage: true } : {}),
     fieldGroups: [
+      // No translated field: one value for every language.
+      defineFieldGroup({
+        slug: "crl_plain",
+        fields: [text({ name: "label", localized: false })],
+      }),
       defineFieldGroup({
         slug: "crl_seo",
         localized: true,
@@ -83,8 +95,32 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           fieldGroup({ name: "seo", component: "crl_seo" }),
         ],
       }),
+      defineCollection({
+        slug: DRAFTED_PAGES,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: { read: () => true },
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "seo", component: "crl_seo" }),
+          fieldGroup({ name: "plain", component: "crl_plain" }),
+        ],
+      }),
     ],
     singles: [
+      defineSingle({
+        slug: DRAFTED_HOME,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: { read: () => true },
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "seo", component: "crl_seo" }),
+          fieldGroup({ name: "plain", component: "crl_plain" }),
+        ],
+      }),
       defineSingle({
         slug: HOME,
         localized: true,
@@ -569,6 +605,167 @@ describe.each(getConfiguredTestDialects())(
       expect(languagesRead()).toContain("fr");
       expect(languagesRead()).not.toContain("es");
       readIn.mockRestore();
+    }, 90_000);
+
+    // An editor's read of every language that shows English's pending change
+    // carries, beside it, English's field groups as that change holds them.
+    for (const perLanguageStorage of [false, true]) {
+      it(`carries a pending change's field groups beside an editor's read of every language${perLanguageStorage ? " (per-language storage)" : ""}`, async () => {
+        const t = await boot(dialect, { perLanguageStorage });
+        const id = String(
+          (
+            await t.nextly.create({
+              collection: DRAFTED_PAGES,
+              locale: "en",
+              data: {
+                title: "Page",
+                seo: { metaTitle: "SEO in English" },
+                status: "published",
+              },
+            })
+          ).item.id
+        );
+        await t.nextly.update({
+          collection: DRAFTED_PAGES,
+          id,
+          locale: "fr",
+          data: {
+            title: "Page en français",
+            seo: { metaTitle: "SEO en français" },
+            status: "published",
+            _overwrite: true,
+          },
+        });
+        // Held: English is published, so the save waits as a pending change.
+        await t.nextly.update({
+          collection: DRAFTED_PAGES,
+          id,
+          locale: "en",
+          data: { seo: { metaTitle: "SEO pending" }, _overwrite: true },
+        });
+        const handler = t.getService("collectionsHandler") as unknown as {
+          getEntry(params: Record<string, unknown>): Promise<{
+            success: boolean;
+            data?: unknown;
+          }>;
+        };
+        const read = await handler.getEntry({
+          collectionName: DRAFTED_PAGES,
+          entryId: id,
+          locale: "en",
+          translations: "all",
+          includeWorkingDraft: true,
+          status: "all",
+          overrideAccess: true,
+        });
+        expect(read.success, JSON.stringify(read)).toBe(true);
+        const doc = read.data as Record<string, unknown>;
+        expect(doc.seo).toMatchObject({ metaTitle: "SEO pending" });
+        expect(doc._allLocales).toMatchObject({
+          seo: {
+            en: { metaTitle: "SEO pending" },
+            fr: { metaTitle: "SEO en français" },
+          },
+        });
+      }, 90_000);
+    }
+
+    it("carries a Single's pending change's field groups beside an editor's read of every language", async () => {
+      const t = await boot(dialect);
+      const singles = singlesOf(t);
+      for (const [locale, data] of [
+        [
+          "en",
+          {
+            title: "Home",
+            seo: { metaTitle: "SEO in English" },
+            status: "published",
+          },
+        ],
+        [
+          "fr",
+          {
+            title: "Accueil",
+            seo: { metaTitle: "SEO en français" },
+            status: "published",
+          },
+        ],
+        ["en", { seo: { metaTitle: "SEO pending" } }],
+      ] as const) {
+        const saved = await singles.update(
+          DRAFTED_HOME,
+          { ...data, _overwrite: true },
+          { locale, overrideAccess: true }
+        );
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+      }
+      const read = await singles.get(DRAFTED_HOME, {
+        locale: "en",
+        translations: "all",
+        includeWorkingDraft: true,
+        status: "all",
+        overrideAccess: true,
+      });
+      expect(read.success, JSON.stringify(read)).toBe(true);
+      expect(read.data?.seo).toMatchObject({ metaTitle: "SEO pending" });
+      expect(read.data?._allLocales).toMatchObject({
+        seo: {
+          en: { metaTitle: "SEO pending" },
+          fr: { metaTitle: "SEO en français" },
+        },
+      });
+    }, 90_000);
+
+    // A field group holding no translated field has one value for every
+    // language: it is read once, with the document, and nothing of it is put
+    // beside the read for each language.
+    it("puts no field group without translations beside a read of every language", async () => {
+      const t = await boot(dialect);
+      const id = String(
+        (
+          await t.nextly.create({
+            collection: DRAFTED_PAGES,
+            locale: "en",
+            data: {
+              title: "Page",
+              seo: { metaTitle: "SEO in English" },
+              plain: { label: "Same everywhere" },
+              status: "published",
+            },
+          })
+        ).item.id
+      );
+      const read = (await t.nextly.findByID({
+        collection: DRAFTED_PAGES,
+        id,
+        locale: "all",
+        status: "published",
+      })) as Record<string, unknown>;
+      expect(read.plain).toMatchObject({ label: "Same everywhere" });
+      const beside = read._allLocales as Record<string, unknown>;
+      expect(beside.seo).toBeDefined();
+      expect(beside).not.toHaveProperty("plain");
+
+      const singles = singlesOf(t);
+      const saved = await singles.update(
+        DRAFTED_HOME,
+        {
+          title: "Home",
+          seo: { metaTitle: "SEO in English" },
+          plain: { label: "Same everywhere" },
+          status: "published",
+          _overwrite: true,
+        },
+        { locale: "en", overrideAccess: true }
+      );
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+      const single = await singles.get(DRAFTED_HOME, {
+        translations: "all",
+        status: "published",
+      });
+      expect(single.data?.plain).toMatchObject({ label: "Same everywhere" });
+      expect(single.data?._allLocales).toHaveProperty("seo");
+      expect(single.data?._allLocales).not.toHaveProperty("plain");
     }, 90_000);
   }
 );

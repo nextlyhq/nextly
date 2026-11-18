@@ -235,8 +235,11 @@ function useAnnouncement(match: SettingsMatch): string {
  */
 export function SettingsSearchRow({
   field,
+  end,
 }: {
   field: React.RefObject<HTMLInputElement | null>;
+  /** What ends the row, after "Only changed": the panel's options menu. */
+  end?: React.ReactNode;
 }): React.JSX.Element {
   const { query, onlyChanged, setQuery, setOnlyChanged } = useFilterState();
   const match = useSettingsMatch();
@@ -290,6 +293,7 @@ export function SettingsSearchRow({
       >
         Only changed
       </button>
+      {end}
       {/* Polite, and a live region of its own rather than a status: the
           panel's other status lines say what one control is doing. */}
       <p className="nx-sr-only" aria-live="polite" aria-atomic="true">

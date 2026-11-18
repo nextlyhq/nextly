@@ -54,33 +54,25 @@ describe("the accordion pair", () => {
   });
 
   describe("what a fresh accordion starts with", () => {
-    it("declares ONE section, by type rather than as a stored node", () => {
-      // The same rule the columns pair follows: this slot admits only
-      // `core/accordion-item`, and that block names this one as its only
-      // parent, so an empty accordion is a container whose single legal child
-      // can be placed nowhere else on the page.
-      //
-      // The declaration names a TYPE and carries no id, which is what lets two
-      // accordions on one page expand from it without colliding.
-      expect(accordion.slots?.children?.defaultBlock).toEqual([
-        { type: ACCORDION_ITEM_BLOCK },
+    it("declares its three questions by type, never as stored nodes", () => {
+      // The declaration names a TYPE and carries no id, which is what lets
+      // two accordions on one page expand from it without colliding. What
+      // they expand to is `accordion-questions.test.tsx`'s.
+      const declared = accordion.slots?.children?.defaultBlock ?? [];
+      expect(declared.map(entry => entry.type)).toEqual([
+        ACCORDION_ITEM_BLOCK,
+        ACCORDION_ITEM_BLOCK,
+        ACCORDION_ITEM_BLOCK,
       ]);
+      expect(JSON.stringify(declared)).not.toContain('"id"');
     });
 
-    it("starts with one where a row starts with two", () => {
-      // A row of one is a box and `core/box` exists, so one column would be a
-      // degenerate spelling of a block already available. An accordion of one
-      // is not a spelling of anything: a lone section cannot stand on a page,
-      // which the parent rule above states, so one section is a finished
-      // document rather than half of one.
-      expect(accordion.slots?.children?.defaultBlock).toHaveLength(1);
-      expect(accordionItem.parent).toEqual([ACCORDION_BLOCK]);
-    });
-
-    it("gives the SECTION no default of its own", () => {
-      // The child half is unrestricted — a section holds whatever a section
-      // holds — so nothing about it says what it should start with.
-      expect(accordionItem.slots?.children?.defaultBlock).toBeUndefined();
+    it("gives a question a Text to start, and no allow-list", () => {
+      // The child half is unrestricted (a section holds whatever a section
+      // holds); it starts with the answer to write over.
+      expect(
+        accordionItem.slots?.children?.defaultBlock?.map(entry => entry.type)
+      ).toEqual(["core/text"]);
       expect(accordionItem.slots?.children?.allow).toBeUndefined();
     });
   });
@@ -204,7 +196,7 @@ describe("an accordion's titles and icon, on a rendered page", () => {
       />
     );
   const summaryOf = (html: string): string =>
-    /<summary>(.*?)<\/summary>/.exec(html)?.[1] ?? "";
+    /<summary[^>]*>(.*?)<\/summary>/.exec(html)?.[1] ?? "";
 
   it("draws each title as the heading Titles as names, inside its summary", () => {
     expect(summaryOf(markup(page({ titlesAs: "h3" })))).toBe(
@@ -247,11 +239,13 @@ describe("an accordion's titles and icon, on a rendered page", () => {
     );
   });
 
-  it("draws a chevron after the title", () => {
+  it("draws a plus after the title, a minus while open", () => {
     const html = markup(page({}));
     expect(html).toContain(`> details > summary > .${DISCLOSURE_ICON_CLASS}`);
     expect(html).toContain("list-style: none");
-    expect(html).toContain("rotate(180deg)");
+    // The plus's upright stroke closed, the minus alone while open.
+    expect(html).toContain(encodeURIComponent("M8 3.5v9M3.5 8h9"));
+    expect(html).not.toContain("rotate(180deg)");
     expect(html).toContain("margin-inline-start: auto");
   });
 });
