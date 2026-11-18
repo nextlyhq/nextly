@@ -108,10 +108,7 @@ export function importExtras(
   const fileStyles = (read.textStyles ?? []).map(style =>
     followingAdoption(style, adoption)
   );
-  const fileSite =
-    read.site === undefined
-      ? undefined
-      : followingAdoption(read.site, adoption);
+  const fileSite = siteFollowingAdoption(read.site, adoption);
   if (context.textStyles === undefined && fileStyles.length > 0) {
     refused.push(
       fileStyles.length === 1
@@ -126,7 +123,7 @@ export function importExtras(
     context.breakpoints
   );
   const site = withRowsItCanFollow(fileSite, fileStyles, {
-    library: context.textStyles ?? [],
+    library: context.textStyles,
     plan: textStyles,
     refused,
   });
@@ -138,6 +135,22 @@ export function importExtras(
         ? []
         : missingFonts(read.tokens, fileStyles, fileSite, context.faces),
   };
+}
+
+/**
+ * The file's site data with what it names following the variables they
+ * merge into: its rows as {@link followingAdoption} reads them, and each
+ * colour in its order, which names a variable by identity.
+ */
+function siteFollowingAdoption(
+  site: DtcgSiteData | undefined,
+  adoption: Adoption | undefined
+): DtcgSiteData | undefined {
+  if (site === undefined) return undefined;
+  const read = followingAdoption(site, adoption);
+  return read.order === undefined || adoption === undefined
+    ? read
+    : { ...read, order: read.order.map(id => adoption.ids.get(id) ?? id) };
 }
 
 /**
@@ -184,8 +197,9 @@ function escapeRegExp(text: string): string {
 }
 
 /**
- * The file's site data without the Site text rows that follow one of its
- * text styles the import doesn't store and the site doesn't have: such a
+ * The file's site data without the Site text rows that would follow a text
+ * style the site won't have: one of the file's the import doesn't store,
+ * or, where the site's styles are known, any the site doesn't hold. Such a
  * row would follow nothing, so the site's own row is kept, and `refused`
  * names it.
  */
@@ -193,41 +207,42 @@ function withRowsItCanFollow(
   site: DtcgSiteData | undefined,
   fileStyles: readonly NamedClass[],
   against: {
-    library: readonly NamedClass[];
+    /** The site's classes, or `undefined` where they aren't known. */
+    library: readonly NamedClass[] | undefined;
     plan: TextStylesPlan;
     refused: string[];
   }
 ): DtcgSiteData | undefined {
   if (site?.siteText === undefined) return site;
-  const { plan } = against;
+  const { plan, library } = against;
   const held = new Set(
     [
-      ...against.library.filter(isTextStyle),
+      ...(library ?? []).filter(isTextStyle),
       ...plan.added,
       ...plan.updated,
       ...plan.unchanged,
     ].map(style => style.id)
   );
-  const missing = new Map(
-    fileStyles
-      .filter(style => !held.has(style.id))
-      .map(style => [style.id, sharedStyleName(style)])
+  const named = new Map(
+    fileStyles.map(style => [style.id, sharedStyleName(style)])
   );
-  if (missing.size === 0) return site;
+  // Where the site's styles aren't known, only the file's own can be judged.
+  const judged = (id: string): boolean =>
+    !held.has(id) && (library !== undefined || named.has(id));
   const rows: Record<string, unknown> = { ...site.siteText };
   for (const role of SITE_TEXT_ROLES) {
     const followed = site.siteText[role]?.textStyle;
-    const name = followed === undefined ? undefined : missing.get(followed);
-    if (name === undefined) continue;
+    if (followed === undefined || !judged(followed)) continue;
     delete rows[role];
+    const name = named.get(followed);
     against.refused.push(
-      `Site text: ${SITE_TEXT_LABELS[role]} kept this site's own settings, because the text style it follows in the file, “${name}”, wasn't imported.`
+      name === undefined
+        ? `Site text: ${SITE_TEXT_LABELS[role]} kept this site's own settings, because the text style it follows isn't on this site.`
+        : `Site text: ${SITE_TEXT_LABELS[role]} kept this site's own settings, because the text style it follows in the file, “${name}”, wasn't imported.`
     );
   }
   const { siteText: _all, ...rest } = site;
-  return Object.keys(rows).length === 0
-    ? rest
-    : { ...rest, siteText: rows };
+  return Object.keys(rows).length === 0 ? rest : { ...rest, siteText: rows };
 }
 
 /** A file's text styles sorted against the site's, with what is refused. */
@@ -306,8 +321,11 @@ function textStyleVerdict(
     };
   }
   const notes: string[] = [];
+  // One the site has keeps its place among the site's styles.
+  const placed =
+    held === undefined ? file : { ...file, orderIndex: held.orderIndex };
   const style = withSiteLock(
-    withinBreakpoints(file, site.known, name, notes),
+    withinBreakpoints(placed, site.known, name, notes),
     held
   );
   if (held !== undefined && sameJsonValue(held, style)) {

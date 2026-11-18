@@ -27,6 +27,7 @@
  */
 import {
   resolveTokenPrefix,
+  sameJsonValue,
   tokenDisplayLabel,
   type BreakpointSet,
   type NamedClass,
@@ -295,16 +296,13 @@ export function useVariablesTransfer({
     void importInSteps({
       variables: withSiteRowsOf(result.tokens, into),
       classes: result.classes,
-      // Laid over the variables as they are by then, so an edit made
-      // meanwhile isn't lost; not ok only where the site holds it all.
-      rows: () => {
-        const again = applyImport(
-          plan,
+      // The rows laid over the variables as they are by then, so an edit
+      // made meanwhile isn't lost.
+      rows: () =>
+        withRows(
           latest.current.currentTokens() ?? into,
-          choices
-        );
-        return again.ok ? again.tokens : undefined;
-      },
+          result.tokens.siteText
+        ),
       writers: { storeNow, edit, onChange: latest.current.onChange },
       refuse,
     }).then(stored => {
@@ -703,6 +701,21 @@ async function importInSteps(steps: {
   const rows = steps.rows();
   if (rows !== undefined) writers.onChange(rows);
   return "all";
+}
+
+/**
+ * The variables as they are with the import's Site text rows laid over
+ * them, or `undefined` where that changes nothing. Only the rows: the
+ * variables were stored by the first step, so an edit made since stands.
+ */
+function withRows(
+  now: SiteTokenSet,
+  rows: SiteTokenSet["siteText"]
+): SiteTokenSet | undefined {
+  if (rows === undefined || sameJsonValue(now.siteText ?? null, rows)) {
+    return undefined;
+  }
+  return { ...now, siteText: rows };
 }
 
 /** `tokens` with the Site text rows `site` holds rather than its own. */

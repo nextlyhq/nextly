@@ -274,7 +274,6 @@ describe("a site's design exported and imported into a fresh site", () => {
 
   it("lists the font the first site uploaded as missing on the fresh one", () => {
     const { plan } = roundTrip();
-    if (!plan.ok) throw new Error(plan.error);
     expect(plan.extras.missingFonts).toContain("Brand Sans");
     // The first site has the file, so its own import lists nothing of it.
     const own = planImport(roundTrip().files, FIRST, {

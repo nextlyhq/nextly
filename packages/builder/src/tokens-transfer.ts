@@ -48,6 +48,8 @@ import {
   tokenIdentity,
   tokensToDtcg,
   isTextStyle,
+  DEFAULT_FLUID_RANGE,
+  type DtcgSiteData,
   type ModesRead,
   type NamedClass,
   type SiteToken,
@@ -56,7 +58,7 @@ import {
 
 import type { ClassListEdit } from "./block-style-actions";
 import { DESIGN_ACTION_WORDS } from "./editor-words";
-import { labelClashes } from "./tokens-studio";
+import { labelClashes, setFluidRange } from "./tokens-studio";
 import {
   importExtras,
   siteDataChanges,
@@ -300,6 +302,23 @@ export function planImport(
     ...planned(unique, into),
     extras,
   };
+}
+
+/**
+ * The site's variables with its own fluid sizes remade across the fluid
+ * range a file states, as the site's own range change remakes them, so a
+ * size the file doesn't restate keeps matching the range stored with it.
+ * Unchanged where the file states no range, or the site's own.
+ */
+function withFluidRangeOf(
+  into: SiteTokenSet,
+  site: DtcgSiteData | undefined
+): SiteTokenSet {
+  const range = site?.fluidRange;
+  if (range === undefined) return into;
+  const current = into.fluidRange ?? DEFAULT_FLUID_RANGE;
+  if (current.min === range.min && current.max === range.max) return into;
+  return setFluidRange(into, range);
 }
 
 /**
@@ -552,7 +571,7 @@ export function applyImport(
       skipped: plan.skipped,
     };
   }
-  const merged = mergeById(into, taken);
+  const merged = mergeById(withFluidRangeOf(into, plan.extras.site), taken);
   // Refused rather than saved: two variables under one name cannot be told
   // apart in the panel, and the site's own edits are held to the same rule.
   const clashing = newLabelClashes(into, merged.tokens);

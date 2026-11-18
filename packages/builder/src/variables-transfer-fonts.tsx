@@ -22,20 +22,26 @@ type Standing =
 
 /**
  * The cuts an add asks for: the regular and bold where the family has them,
- * else its first, in its default script. A variable family is added whole.
+ * else its first, in its default script and its upright style, or its first
+ * where it has none. A variable family is added whole.
  */
 function firstCuts(family: CatalogueFamilyView): {
   weights: readonly number[] | "variable";
+  styles: CatalogueFamilyView["styles"];
   subsets: readonly string[];
 } {
+  const styles: CatalogueFamilyView["styles"] = family.styles.includes("normal")
+    ? ["normal"]
+    : family.styles.slice(0, 1);
   if (family.variable)
-    return { weights: "variable", subsets: [family.defSubset] };
+    return { weights: "variable", styles, subsets: [family.defSubset] };
   const both = family.weights.filter(
     weight => weight === 400 || weight === 700
   );
   const first = family.weights[0];
   return {
     weights: both.length > 0 ? both : first === undefined ? [] : [first],
+    styles,
     subsets: [family.defSubset],
   };
 }
@@ -81,7 +87,7 @@ export function MissingFonts({
     const refusal = await catalogue.add({
       id: family.id,
       weights: cuts.weights,
-      styles: ["normal"],
+      styles: cuts.styles,
       subsets: cuts.subsets,
     });
     set(
