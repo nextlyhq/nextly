@@ -590,6 +590,8 @@ describe.each(getConfiguredTestDialects())(
   dialect => {
     let laid: TestNextly;
     let laidPageId = "";
+    /** The person every read here must answer with, by the id she was stored under. */
+    let laidAnnId = "";
     let projectRoot = "";
 
     beforeAll(async () => {
@@ -654,6 +656,7 @@ describe.each(getConfiguredTestDialects())(
           ).item.id
         );
       const ann = await person("Ann");
+      laidAnnId = ann;
       await person("Bea");
       laidPageId = String(
         (
@@ -668,7 +671,13 @@ describe.each(getConfiguredTestDialects())(
         collection: LAID_PAGES,
         id: laidPageId,
         locale: "fr",
-        data: { title: "Page en français", _overwrite: true },
+        // Its own reference in French too, so a read in French, and the French
+        // values beside a read of every language, are populated and masked.
+        data: {
+          title: "Page en français",
+          meta: { keeper: ann },
+          _overwrite: true,
+        },
       });
       await laid.nextly.updateSingle({
         slug: LAID_HOME,
@@ -678,7 +687,7 @@ describe.each(getConfiguredTestDialects())(
       await laid.nextly.updateSingle({
         slug: LAID_HOME,
         locale: "fr",
-        data: { title: "Accueil", _overwrite: true },
+        data: { title: "Accueil", meta: { keeper: ann }, _overwrite: true },
       } as never);
     }, 120_000);
 
@@ -691,14 +700,14 @@ describe.each(getConfiguredTestDialects())(
       if (projectRoot) await rm(projectRoot, { recursive: true, force: true });
     });
 
-    const visitor = (locale: "en" | "all") => ({
+    const visitor = (locale: "en" | "fr" | "all") => ({
       locale,
       depth: 2,
       overrideAccess: false,
     });
     const laidReads: Record<
       string,
-      (locale: "en" | "all") => Promise<Record<string, unknown>>
+      (locale: "en" | "fr" | "all") => Promise<Record<string, unknown>>
     > = {
       "an entry read by id": async locale =>
         (await laid.nextly.findByID({
@@ -722,7 +731,7 @@ describe.each(getConfiguredTestDialects())(
     // it, and her stored secret appears nowhere.
     it.each(
       Object.keys(laidReads).flatMap(read =>
-        (["en", "all"] as const).map(locale => ({ read, locale }))
+        (["en", "fr", "all"] as const).map(locale => ({ read, locale }))
       )
     )(
       "$read in locale $locale answers the related row as its field hook returns it",
@@ -738,6 +747,14 @@ describe.each(getConfiguredTestDialects())(
         expect(own, JSON.stringify(own)).toEqual(
           own.map(p => ({ ...p, secret: MASKED }))
         );
+        // Each language's values carried beside a read of every language are
+        // populated and masked the same way, the default language's and French.
+        if (locale === "all") {
+          const beside = peopleIn(answer._allLocales, "$._allLocales");
+          expect(beside, JSON.stringify(beside)).toEqual(
+            beside.map(p => ({ ...p, secret: MASKED }))
+          );
+        }
         expect(JSON.stringify(answer)).not.toMatch(/stored (Ann|Bea)/);
       },
       60_000
@@ -753,7 +770,7 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: false,
       } as never)) as unknown as Record<string, unknown>;
       const meta = answer.meta as Record<string, unknown>;
-      expect(typeof meta.keeper, JSON.stringify(meta)).toBe("string");
+      expect(meta.keeper, JSON.stringify(meta)).toBe(laidAnnId);
       expect(JSON.stringify(answer)).not.toMatch(/stored (Ann|Bea)/);
     }, 60_000);
   }
