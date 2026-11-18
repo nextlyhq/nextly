@@ -2,8 +2,8 @@
 
 /**
  * The field picker for a block inside a collection list's item: the item's
- * own fields first, named for the list's entries ("Each post"), then the
- * page, its Singles and the site; the field bound now marked; and each
+ * own fields first, named for the list's entries ("Each post in the
+ * list"), then the page, its Singles and the site; the field bound now marked; and each
  * field's value as the author would see it, a draft's included.
  */
 import {
@@ -199,12 +199,12 @@ describe("the field picker inside a collection list's item", () => {
     mount(undefined);
     const list = await openPicker();
     // The item group is drawn once the list's collection is read.
-    await within(list).findByRole("group", { name: "Each post" });
+    await within(list).findByRole("group", { name: "Each post in the list" });
+    // Singles and the site start folded while the item is listed.
     expect(groupNames(list)).toEqual([
-      "Each post",
+      "Each post in the list",
       "This page",
-      "Homepage",
-      "Site",
+      "Singles · Site",
     ]);
   });
 
@@ -219,7 +219,7 @@ describe("the field picker inside a collection list's item", () => {
     const { readListSample } = mount(undefined);
     const list = await openPicker();
     await within(list).findByText("Highway 9 realignment");
-    expect(rows(list, "Each post")).toEqual([
+    expect(rows(list, "Each post in the list")).toEqual([
       "TitleHighway 9 realignment",
       "SummaryTopographic survey",
     ]);
@@ -239,7 +239,9 @@ describe("the field picker inside a collection list's item", () => {
     const list = await openPicker();
     fireEvent.click(
       await within(
-        await within(list).findByRole("group", { name: "Each post" })
+        await within(list).findByRole("group", {
+          name: "Each post in the list",
+        })
       ).findByRole("option", { name: /^Title/ })
     );
     const op = vi.mocked(editor.apply).mock.calls[0]?.[0] as BuilderOp;
@@ -262,7 +264,9 @@ describe("the field picker inside a collection list's item", () => {
     const list = await screen.findByRole("listbox", {
       name: "Fields for Text",
     });
-    const item = await within(list).findByRole("group", { name: "Each post" });
+    const item = await within(list).findByRole("group", {
+      name: "Each post in the list",
+    });
     const marked = list.querySelectorAll("[data-current]");
     expect(marked).toHaveLength(1);
     expect(item.contains(marked[0] ?? null)).toBe(true);

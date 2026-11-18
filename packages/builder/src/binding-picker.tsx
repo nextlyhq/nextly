@@ -28,6 +28,7 @@ import {
   useBindingSources,
   useListSample,
   usePreviewFormatIn,
+  useSamplePictures,
   type PreviewFormatIn,
 } from "./binding-picker-reads";
 import type {
@@ -35,7 +36,8 @@ import type {
   BindingFieldSource,
   ListSample,
 } from "./binding-services";
-import { ChoiceList, type ListedChoice } from "./choice-list";
+import { ChoiceList, type ChoiceGroup, type ListedChoice } from "./choice-list";
+import { useClickedEntry } from "./clicked-entry";
 import type { ContentServices } from "./content-controls";
 import { fieldLabel, propLabel, type EditableProp } from "./inspector";
 import {
@@ -217,6 +219,49 @@ function groupOf(source: PickerSource): string {
   return at.source === "single" ? `single:${at.sourceKey}` : at.source;
 }
 
+/** The option `binding` reads, marked in the list. */
+function boundOption(
+  options: readonly FieldOption[],
+  binding: Binding
+): FieldOption | undefined {
+  return options.find(option => isBoundTo(option, binding));
+}
+
+/**
+ * The picker's groups, in the sources' order: each that offers a field
+ * (`offering`), a Single and the site folded while `folding`, except the
+ * group kept `open`.
+ */
+function pickerGroups(
+  sources: readonly PickerSource[],
+  offering: ReadonlySet<string | undefined>,
+  fold: { readonly folding: boolean; readonly open: string | undefined }
+): ChoiceGroup[] {
+  return sources.flatMap(source => {
+    const group = groupOf(source);
+    if (!offering.has(group)) return [];
+    return [pickerGroup(source, fold.folding && group !== fold.open)];
+  });
+}
+
+/**
+ * A source's group in the picker: headed by its name, and, `folded`, a
+ * Single or the site drawn as one row ("Homepage", "Site settings") under
+ * "Singles · Site", which opens it in place.
+ */
+function pickerGroup(source: PickerSource, folded: boolean): ChoiceGroup {
+  const group = { group: groupOf(source), heading: sourceName(source) };
+  const at = source.binding.source;
+  if (!folded || (at !== "single" && at !== "site")) return group;
+  return {
+    ...group,
+    fold:
+      at === "single"
+        ? { heading: "Singles", label: source.label }
+        : { heading: "Site", label: "Site settings" },
+  };
+}
+
 /**
  * The fields of `sources` that fit `prop`, one step into a relation or a
  * group, in the order the picker lists them. A relation or group whose own
@@ -369,11 +414,71 @@ function optionTitle(option: FieldOption): string {
     : `${option.label}: ${field.preview}`;
 }
 
+/**
+ * A thumbnail's address, where it is one a picture may be drawn from: the
+ * site's own path or a web address, never a script's.
+ */
+function drawableThumbnail(address: string | undefined): string | undefined {
+  if (address === undefined) return undefined;
+  return /^(?:https?:\/\/|\/(?!\/))/i.test(address) ? address : undefined;
+}
+
+/**
+ * A picture's value, small, before its name; the name says what it is, so
+ * the picture itself is not read out.
+ */
+function Thumbnail({
+  address,
+}: {
+  address: string | undefined;
+}): React.JSX.Element | null {
+  const drawn = drawableThumbnail(address);
+  return drawn === undefined ? null : (
+    <img
+      className="nx-binding-option__thumb"
+      src={drawn}
+      alt=""
+      width={20}
+      height={20}
+      loading="lazy"
+      decoding="async"
+    />
+  );
+}
+
+/**
+ * A readable field's value as the author reads it: its text, or "(empty)"
+ * for one holding nothing, with a draft's marked.
+ */
+function ShownValue({
+  field,
+}: {
+  field: BindingFieldChoice;
+}): React.JSX.Element {
+  return (
+    <>
+      {field.preview !== undefined ? (
+        <span className="nx-binding-option__preview">{field.preview}</span>
+      ) : field.empty === true ? (
+        <span className="nx-binding-option__preview nx-binding-option__empty">
+          (empty)
+        </span>
+      ) : null}
+      {/* A draft's value is shown with the word beside it, so the author
+          sees the real value and knows it isn't live yet. */}
+      {field.draft === true ? (
+        <span className="nx-binding-option__tag">Draft</span>
+      ) : null}
+    </>
+  );
+}
+
 /** The picker's row: the name, then the value as the author reads it, or why not. */
 function OptionRow({ option }: { option: FieldOption }): React.JSX.Element {
   const { field } = option;
   return (
     <span className="nx-binding-option">
+      <Thumbnail address={field.thumbnail} />
       <span className="nx-binding-option__name">
         {option.parent === undefined ? null : (
           <span className="nx-binding-option__parent">{option.parent} › </span>
@@ -398,16 +503,7 @@ function OptionRow({ option }: { option: FieldOption }): React.JSX.Element {
           Not public
         </span>
       ) : (
-        <>
-          {field.preview === undefined ? null : (
-            <span className="nx-binding-option__preview">{field.preview}</span>
-          )}
-          {/* A draft's value is shown with the word beside it, so the
-              author sees the real value and knows it isn't live yet. */}
-          {field.draft === true ? (
-            <span className="nx-binding-option__tag">Draft</span>
-          ) : null}
-        </>
+        <ShownValue field={field} />
       )}
     </span>
   );
@@ -415,23 +511,24 @@ function OptionRow({ option }: { option: FieldOption }): React.JSX.Element {
 
 /**
  * The list item as a source the picker lists first, named for the list's
- * entries ("Each post"); `undefined` outside every list.
+ * entries ("Each post in the list").
  */
 function itemPickerSource(
-  item: ItemSource | undefined,
-  sample: ListSample | undefined
-): PickerSource | undefined {
-  if (item === undefined) return undefined;
+  item: ItemSource,
+  sample: ListSample | undefined,
+  pictures: ReadonlyMap<string, string>
+): PickerSource {
   return {
     binding: { source: "item" },
-    label: `Each ${item.one}`,
-    fields: itemChoices(item.fields, sample),
+    label: item.name,
+    fields: itemChoices(item.fields, sample, undefined, pictures),
   };
 }
 
 /**
  * The picker: the fitting fields by source, nearest first (the list item a
- * block sits in, then the page, its Singles and the site), searched, moved
+ * block sits in, then the page, its Singles and the site, the last two
+ * folded while an item is listed), each with its value, searched, moved
  * through by key.
  */
 export function BindingPicker({
@@ -458,7 +555,11 @@ export function BindingPicker({
 }): React.JSX.Element {
   const listed = useBindingSources(services, true);
   const item = useListItem(document, nodeId, services, true);
-  const sample = useListSample(services?.readListSample, item?.list);
+  // The entry the author clicked on the canvas to select the block, else
+  // the first: the item's values are that entry's.
+  const entry = useClickedEntry(nodeId, item?.list?.id);
+  const sample = useListSample(services?.readListSample, item?.list, entry);
+  const pictures = useSamplePictures(services?.readMedia, item?.fields, sample);
   const formatIn = usePreviewFormatIn(services);
   const name = propLabel(prop.name, prop.schema);
   // The list's fields are waited for with the page's, so the groups are
@@ -473,9 +574,51 @@ export function BindingPicker({
       </p>
     );
   }
-  const nearest = itemPickerSource(item, sample);
-  const sources: readonly PickerSource[] =
-    nearest === undefined ? listed : [nearest, ...listed];
+  return (
+    <PickerBody
+      sources={
+        item === undefined
+          ? listed
+          : [itemPickerSource(item, sample, pictures), ...listed]
+      }
+      nearest={item !== undefined}
+      prop={prop}
+      name={name}
+      blockLabel={blockLabel}
+      formatIn={formatIn}
+      entryLink={entryLink}
+      current={current}
+      onPick={onPick}
+    />
+  );
+}
+
+/**
+ * The picker's list once its sources are read: the fitting fields by
+ * source, the field bound now marked, a Single and the site folded while a
+ * list's item is listed (`nearest`), and the hint under it.
+ */
+function PickerBody({
+  sources,
+  nearest,
+  prop,
+  name,
+  blockLabel,
+  formatIn,
+  entryLink,
+  current,
+  onPick,
+}: {
+  sources: readonly PickerSource[];
+  nearest: boolean;
+  prop: EditableProp;
+  name: string;
+  blockLabel: string;
+  formatIn: PreviewFormatIn;
+  entryLink: EntryLink | undefined;
+  current: Binding | undefined;
+  onPick: (option: FieldOption) => void;
+}): React.JSX.Element {
   // Previewed in the page's language and the site's zone.
   const options = fittingOptions(sources, prop, formatIn, entryLink);
   // A source with nothing to offer this prop is not listed: an empty group
@@ -483,24 +626,23 @@ export function BindingPicker({
   const offering = new Set(options.map(option => option.group));
   // A source the host could not read is said, above the fields that did.
   const failed = sources.filter(source => source.readFailed === true);
+  const marked =
+    current === undefined ? undefined : boundOption(options, current);
   return (
     <div className="nx-binding-picker">
       <ChoiceList
         choices={options}
-        currentKey={
-          current === undefined
-            ? undefined
-            : options.find(option => isBoundTo(option, current))?.key
-        }
+        currentKey={marked?.key}
         onPick={onPick}
         label={`Fields for ${name}`}
         searchLabel="Find a field"
         noMatch="No field matches."
-        groups={sources.flatMap(source =>
-          offering.has(groupOf(source))
-            ? [{ group: groupOf(source), heading: sourceName(source) }]
-            : []
-        )}
+        groups={pickerGroups(sources, offering, {
+          // Folded while a list's item is nearer, except the source the
+          // prop is bound to now, which is shown marked.
+          folding: nearest,
+          open: marked?.group,
+        })}
         renderChoice={choice => <OptionRow option={choice} />}
         choiceTitle={optionTitle}
         searchFrom={0}
