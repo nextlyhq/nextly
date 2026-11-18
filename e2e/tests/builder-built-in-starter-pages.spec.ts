@@ -61,7 +61,8 @@ async function publishedFrom(page: Page, starter: string): Promise<string> {
   ).toBe(true);
   const id = ((await created.json()) as { item: { id: string } }).item.id;
   const published = await page.request.patch(`${ENTRIES}/${id}`, {
-    data: { status: "published" },
+    // Just made, so nothing newer can be overwritten.
+    data: { status: "published", _overwrite: true },
   });
   expect(
     published.ok(),
@@ -160,8 +161,14 @@ for (const starter of STARTERS) {
         await headingContrast(page),
         `${starter.id} ${scheme}: heading contrast`
       ).toBeGreaterThanOrEqual(3);
+      // Kept in the test's output too, which a passing run keeps, for a
+      // person to look at.
+      const capture = await page.screenshot({
+        fullPage: true,
+        path: testInfo.outputPath(`${starter.id}-1440-${scheme}.png`),
+      });
       await testInfo.attach(`${starter.id}-1440-${scheme}`, {
-        body: await page.screenshot({ fullPage: true }),
+        body: capture,
         contentType: "image/png",
       });
     }
