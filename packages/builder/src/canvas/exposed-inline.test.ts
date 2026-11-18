@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * Typing into a component's exposed text: where the canvas's edit goes.
  *
@@ -28,6 +29,8 @@ import {
   exposedTextOp,
 } from "./exposed-inline";
 import { applyOps } from "../ops";
+
+import { elementWords } from "./use-inline-text";
 
 beforeEach(() => {
   registerBlocks(
@@ -113,6 +116,17 @@ describe("composedTextAt", () => {
           value: "Site name",
         },
       }
+    );
+  });
+
+  it("answers exposed text the placement binds to data as part of it, edited in the panel", () => {
+    const { document, composed, headingOf } = setUp(
+      placed("p1", {
+        bindings: { "overrides.title": { $bind: "title", source: "entry" } },
+      })
+    );
+    expect(composedTextAt(document, composed, headingOf("p1"), "text")).toEqual(
+      { kind: "part-of", placementId: "p1" }
     );
   });
 
@@ -581,5 +595,89 @@ describe("a component's exposed rich text, edited on the canvas", () => {
         passage("Something older")
       )
     ).toBeNull();
+  });
+});
+
+describe("an exposed Text whose one paragraph holds line breaks", () => {
+  it("is edited with its lines, so changing one word keeps the break", () => {
+    registerBlocks(
+      [
+        {
+          name: "acme/text",
+          version: 1,
+          description: "A paragraph.",
+          example: { props: {} },
+          render: () => null,
+          props: {
+            text: {
+              type: "textarea",
+              inline: true,
+              role: "content",
+              oneParagraph: true,
+            },
+          },
+        },
+      ] as never,
+      { source: "acme-text" }
+    );
+    const lines: ComponentDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [
+        {
+          id: "t",
+          type: "acme/text",
+          version: 1,
+          props: {
+            text: {
+              root: {
+                type: "root",
+                children: [
+                  {
+                    type: "paragraph",
+                    children: [
+                      { type: "text", text: "First", format: 1 },
+                      { type: "linebreak" },
+                      { type: "text", text: "Second", format: 0 },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+      exposed: [
+        {
+          id: "body",
+          label: "Body",
+          nodeId: "t",
+          propPath: "text",
+          type: "text",
+        },
+      ],
+    };
+    const document: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [placed("p1", { props: { componentId: "lines" } })],
+    };
+    const composed = resolveComponentInstances(
+      document,
+      new Map([["lines", lines as BlockDocument]]),
+      { exposures: true }
+    ).document;
+    const answer = composedTextAt(
+      document,
+      composed,
+      composed.nodes[0]?.id ?? "",
+      "text"
+    );
+    if (answer?.kind !== "exposed") throw new Error("expected exposed text");
+    expect(answer.target.value).toBe("First\nSecond");
+    // What the plain surface reads back from the element the page draws.
+    const drawn = window.document.createElement("p");
+    drawn.innerHTML = "<strong>First</strong><br>Second";
+    expect(elementWords(drawn)).toBe(answer.target.value);
   });
 });

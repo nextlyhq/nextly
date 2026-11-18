@@ -182,6 +182,42 @@ describe("a control's tooltip says what it writes", () => {
     ).getByRole("radio", { name: "Boxed" });
     expect(await hintOn(boxed)).toBe('class="nx-pb-contained"');
   });
+
+  it("on Arrange's choices, as what each one would write", async () => {
+    mount();
+    openTab("Style");
+    openSection("layout");
+    const modes = screen.getByRole("radiogroup", { name: "Arrange" });
+    expect(
+      await hintOn(within(modes).getByRole("radio", { name: "Grid" }))
+    ).toBe("display: grid");
+  });
+});
+
+describe("the Background section's hints", () => {
+  it("say what each position point writes", async () => {
+    mount();
+    openTab("Style");
+    openSection("background");
+    const points = screen.getByRole("radiogroup", { name: "Position" });
+    const hint = await hintOn(
+      within(points).getByRole("radio", { name: "Top right" })
+    );
+    expect(hint).toMatch(/^background-position: /);
+    expect(hint).toContain("right top");
+  });
+});
+
+describe("Inside its parent's hints", () => {
+  it("say what each Width choice writes", async () => {
+    mount();
+    openTab("Style");
+    openSection("inside-parent");
+    const width = screen.getByRole("radiogroup", { name: "Width" });
+    expect(
+      await hintOn(within(width).getByRole("radio", { name: "Fit" }))
+    ).toBe("width: fit-content");
+  });
 });
 
 describe("the tooltip on keyboard focus", () => {

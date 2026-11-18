@@ -39,7 +39,11 @@ describe("notCarried", () => {
 
   it("names a foreign key, and only the type for a plain column", () => {
     expect(
-      notCarried({ type: "uuid", indexes: [], foreignKey: "fk_dc_posts_author" })
+      notCarried({
+        type: "uuid",
+        indexes: [],
+        foreignKey: "fk_dc_posts_author",
+      })
     ).toEqual([
       { property: "type", value: "uuid" },
       { property: "foreign key", value: "fk_dc_posts_author" },
@@ -58,7 +62,7 @@ describe("notCarriedSentence", () => {
         { property: "index", value: "idx_dc_posts_title" },
       ])
     ).toBe(
-      'Moving Title into Meta keeps every value; not carried, since a JSON value has no place for them: type varchar(120), index idx_dc_posts_title.'
+      "Moving Title into Meta keeps every value; not carried, since a JSON value has no place for them: type varchar(120), index idx_dc_posts_title."
     );
   });
 });

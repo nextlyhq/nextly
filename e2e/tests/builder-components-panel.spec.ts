@@ -344,25 +344,29 @@ test.describe("the Components panel", () => {
     expect(await shape(page.request, id)).toEqual([`component:${component}`]);
   });
 
-  test("starts an empty page from the start card on it", async ({ page }) => {
+  test("starts an empty page from the start area on it", async ({ page }) => {
     const title = `Start ${stamp()}`;
     const component = await createComponent(page.request, title);
     const id = await createPage(page.request, true);
     await openBuilder(page, id);
 
-    await expect(page.getByText("Start your page")).toBeVisible();
-    await page.getByRole("button", { name: "Add section" }).click();
-    await page.getByRole("combobox", { name: "Insert a block" }).fill(title);
-    await tile(page, title).click();
+    const start = page.locator(".nx-page-start");
+    await expect(start.getByRole("heading")).toHaveText(/^Start building /);
+    await start.getByRole("button", { name: "Add a block" }).click();
+    // The in-place picker's search finds components too.
+    const picker = page.getByRole("dialog", { name: "Add a block" });
+    await picker.getByRole("combobox", { name: "Search blocks" }).fill(title);
+    await picker.getByRole("option", { name: new RegExp(title) }).click();
     await saveDraft(page);
 
     expect(await shape(page.request, id)).toEqual([`component:${component}`]);
-    await expect(page.locator(".nx-page-inserters__start")).toHaveCount(0);
+    await expect(start).toHaveCount(0);
   });
 
   test("takes a drag anywhere on an empty page", async ({ page }) => {
-    // The start card promises "drag one here": aimed low on the page, well
-    // clear of the card, the drop still lands, as the page's one section.
+    // The start area promises "or drag a block here": aimed low on the page,
+    // well clear of the area, the drop still lands, as the page's one
+    // section.
     const title = `Dropped ${stamp()}`;
     const component = await createComponent(page.request, title);
     const id = await createPage(page.request, true);
@@ -381,15 +385,19 @@ test.describe("the Components panel", () => {
     await page.mouse.move(x + 24, y, { steps: 4 });
     await page.mouse.move(x + 24, aimY, { steps: 8 });
     await page.mouse.move(to.x + to.width / 2, aimY, { steps: 12 });
-    // The start card goes while the drag is under way.
-    await expect(page.locator(".nx-page-inserters__start")).toHaveCount(0);
+    // The start area stays while the drag is under way, drawn as where it
+    // drops.
+    await expect(page.locator(".nx-page-start")).toHaveAttribute(
+      "data-drop-target",
+      ""
+    );
     await page.mouse.up();
     await saveDraft(page);
 
     expect(await shape(page.request, id)).toEqual([`component:${component}`]);
   });
 
-  test("adds a section in the gap between two from the + there", async ({
+  test("places a component in the gap between two from the + there", async ({
     page,
   }) => {
     const title = `Between ${stamp()}`;
@@ -400,7 +408,7 @@ test.describe("the Components panel", () => {
 
     // Near the gap below the heading, off to its side, the + there shows.
     const add = page.getByRole("button", {
-      name: "Add a section after Heading",
+      name: "Add a block between Heading and Section",
     });
     const spot = await add.boundingBox();
     if (spot === null) throw new Error("[e2e] the + is not laid out");
@@ -409,14 +417,18 @@ test.describe("the Components panel", () => {
       .poll(() => add.evaluate(element => getComputedStyle(element).opacity))
       .toBe("1");
     await add.hover();
-    await expect(page.getByRole("tooltip")).toHaveText("Add a section here");
+    await expect(page.getByRole("tooltip")).toHaveText(
+      "Add a block between Heading and Section"
+    );
     await add.click();
 
-    await expect(
-      page.locator(".nx-insert-panel__placement").first()
-    ).toHaveText("Adding between Heading and Section");
-    await page.getByRole("combobox", { name: "Insert a block" }).fill(title);
-    await tile(page, title).click();
+    // The in-place picker, aimed at the gap: its search finds components.
+    const picker = page.getByRole("dialog", { name: "Add a block" });
+    await expect(picker).toHaveAccessibleDescription(
+      "Adding between Heading and Section"
+    );
+    await picker.getByRole("combobox", { name: "Search blocks" }).fill(title);
+    await picker.getByRole("option", { name: new RegExp(title) }).click();
     await saveDraft(page);
 
     expect(await shape(page.request, id)).toEqual([
@@ -430,7 +442,7 @@ test.describe("the Components panel", () => {
     const id = await createPage(page.request);
     await openBuilder(page, id);
     const add = page.getByRole("button", {
-      name: "Add a section after Heading",
+      name: "Add a block between Heading and Section",
     });
     // Into the tab order from the control before it, by Tab, so the focus
     // is a keyboard focus and the + shows as one.
@@ -510,10 +522,14 @@ test.describe("the Components panel", () => {
       )
       .toBe("contents");
     await expect(
-      page.getByRole("button", { name: "Add a section after Heading" })
+      page.getByRole("button", {
+        name: "Add a block between Heading and Our team",
+      })
     ).toHaveCount(1);
     await expect(
-      page.getByRole("button", { name: "Add a section after Our team" })
+      page.getByRole("button", {
+        name: "Add a block between Our team and Contact",
+      })
     ).toHaveCount(1);
   });
 
@@ -524,23 +540,30 @@ test.describe("the Components panel", () => {
       page,
     }) => {
       // No pointer moves before a tap, so the + is shown and pressable from
-      // the start where the screen's pointer is coarse.
+      // the start where the screen's pointer is coarse, between blocks at
+      // least as deep as it: at full size here, so the heading is.
       const id = await createPage(page.request);
       await openBuilder(page, id);
       expect(
         await page.evaluate(() => matchMedia("(any-pointer: coarse)").matches),
         "the browser reports a coarse pointer"
       ).toBe(true);
+      const zoom = page.getByRole("button", { name: /^Canvas zoom:/ });
+      await zoom.click();
+      await page
+        .getByRole("menuitemradio", { name: "100%", exact: true })
+        .click();
+      await expect(zoom).toHaveAttribute("aria-label", "Canvas zoom: 100%");
       const add = page.getByRole("button", {
-        name: "Add a section after Heading",
+        name: "Add a block between Heading and Section",
       });
       await expect
         .poll(() => add.evaluate(element => getComputedStyle(element).opacity))
         .toBe("1");
       await add.tap();
       await expect(
-        page.locator(".nx-insert-panel__placement").first()
-      ).toHaveText("Adding between Heading and Section");
+        page.getByRole("dialog", { name: "Add a block" })
+      ).toHaveAccessibleDescription("Adding between Heading and Section");
     });
   });
 

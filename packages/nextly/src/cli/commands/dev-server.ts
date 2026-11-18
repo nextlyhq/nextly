@@ -298,23 +298,14 @@ export async function ensureCoreTables(
     const mayChangeSchema = options.autoSync !== false;
 
     if (dialect === "sqlite" && mayChangeSchema) {
-      await applyCoreStatements(
-        drizzleAdapter,
-        logger,
-        sqliteCoreStatementsFor({
-          registryTable: registryTable ?? STORAGE_FORMAT.registryTable,
-          // Not this replay's to create: its CREATE TABLE is a fixed string,
-          // and a rename landing beside it would restore the empty legacy
-          // table. A registry that is genuinely absent is created below,
-          // through the service that resolves the spelling first.
-          mayCreateRegistryTable: false,
-        })
-      );
-      // Under the exclusion, and only now: the service resolves the registry
-      // name and then creates it, with awaits in between, so a migration
-      // renaming the table between those two steps would put the empty legacy
-      // one back. The replay above has already run, so the lock's own table is
-      // available — which is why this could not wrap the replay itself.
+      // The lock first, then the replay, so a run refused on a held lock, or on a storage
+      // migration in flight, has added nothing: the replay creates whatever core table or index
+      // this database lacks, which is a write. The lock keeps its own table, creating it where
+      // it is missing, so it does not wait on the replay for one.
+      //
+      // The registry step runs under the same hold: the service resolves the registry name and
+      // then creates it, with awaits in between, so a migration renaming the table between
+      // those two steps would put the empty legacy one back.
       const repaired = await withMigrationExcluded(
         {
           adapter: drizzleAdapter,
@@ -329,7 +320,21 @@ export async function ensureCoreTables(
           // outcome, which is the trade a sync already makes.
           releaseOnInterrupt: true,
         },
-        () => ensureSystemTables(drizzleAdapter, logger)
+        async () => {
+          await applyCoreStatements(
+            drizzleAdapter,
+            logger,
+            sqliteCoreStatementsFor({
+              registryTable: registryTable ?? STORAGE_FORMAT.registryTable,
+              // Not this replay's to create: its CREATE TABLE is a fixed string,
+              // and a rename landing beside it would restore the empty legacy
+              // table. A registry that is genuinely absent is created just below,
+              // through the service that resolves the spelling first.
+              mayCreateRegistryTable: false,
+            })
+          );
+          return ensureSystemTables(drizzleAdapter, logger);
+        }
       );
 
       // Dropped as soon as the claim is: the resolver memoises per adapter for
@@ -473,16 +478,15 @@ export async function ensureCoreTables(
 }
 
 /**
- * What a sync does in production, where it never pushes schema: it refuses, naming them, when its
- * registry step found collections created or updated, and otherwise goes on without a push
- * (undefined). The one decision of it: the real sync acts on it, and its dry run names it.
+ * The refusal of `db:sync` in production, or undefined anywhere else. The one decision of it: the
+ * command asks it before it opens the database, promote and demote before they read anything, the
+ * push below as its own guard, and the dry runs to name what a real run does.
+ *
+ * Only `NODE_ENV=production` counts. With it unset, or set to anything else, a sync runs.
  */
-export function productionSyncRefusal(
-  sync: Pick<CollectionSyncResultWithValidation["sync"], "created" | "updated">
-): CliError | undefined {
-  const pendingCollections = [...sync.created, ...sync.updated];
-  return pendingCollections.length > 0
-    ? schemaSyncInProduction(pendingCollections)
+export function productionSyncRefusal(): CliError | undefined {
+  return process.env.NODE_ENV === "production"
+    ? schemaSyncInProduction()
     : undefined;
 }
 
@@ -736,13 +740,11 @@ export async function performAutoSync(
     );
   }
 
-  // Production guard: never auto-apply schema in production. Users must
-  // explicitly run `nextly migrate:create` + `nextly migrate`.
-  if (process.env.NODE_ENV === "production") {
-    const refusal = productionSyncRefusal(syncResult.sync);
-    if (refusal !== undefined) exitWithError(logger, refusal);
-    return;
-  }
+  // Production guard: never auto-apply schema in production. The command refuses before it
+  // opens the database, so this is reached only by a caller that skipped that check, and it
+  // refuses the same way rather than push.
+  const refusal = productionSyncRefusal();
+  if (refusal !== undefined) exitWithError(logger, refusal);
 
   const start = Date.now();
   const drizzleAdapter = adapter as unknown as DrizzleAdapter;

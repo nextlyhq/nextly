@@ -273,6 +273,14 @@ export interface GenerateArgs {
   singles: MinimalConfigEntity[];
   components: MinimalConfigEntity[];
   /**
+   * The latest snapshot as the caller already read it
+   * (`AppMigrationInputs.latest`), null where the folder has none. Given, the
+   * migration starts from it, so the caller's checks and the generator read
+   * one starting point: for a project made from a template, the tables the
+   * template's entities were taken as made with. Absent, the folder is read.
+   */
+  previous?: { data: SnapshotFile } | null;
+  /**
    * UI-built metadata-row upserts (spec §4.12.7), keyed by data-table name.
    * Each is appended to the generated SQL when an operation touches its table
    * or the entity's settings changed: the row is how a Builder entity's
@@ -820,7 +828,10 @@ export async function generateMigration(
   const now = scoped.now ?? new Date();
 
   // 1. Load previous state.
-  const previous = await loadLatestSnapshot(metaDir);
+  const previous =
+    scoped.previous === undefined
+      ? await loadLatestSnapshot(metaDir)
+      : scoped.previous;
 
   // Taken once, here, so the table diff and every companion planner below
   // see the same fields (`withKeptScopeFieldsOf`).

@@ -14,6 +14,7 @@ import {
   declarationsText,
   FULL_WIDTH_WRITES,
   heightShortcutWrites,
+  hideOnWrites,
   controlWrites,
   propWrites,
   sizeShortcutWrites,
@@ -87,6 +88,27 @@ describe("what a control writes", () => {
     expect(written.split("; ").length).toBeGreaterThan(1);
   });
 
+  it("says the animation an entrance effect writes, on hover", () => {
+    const written = controlWrites(
+      control("appear", ["effect"], "--nx-pb-appear-effect"),
+      "rise",
+      "--site-"
+    );
+    expect(written).toMatch(/^--nx-pb-appear-effect: rise; /);
+    expect(written).toContain("animation-name: ");
+    expect(written).toContain(
+      "animation-duration: calc(var(--nx-pb-appear-duration, 600) * 1ms)"
+    );
+    expect(written).toContain("animation-timeline: ");
+    expect(
+      controlWrites(
+        control("appear", ["start"], "--nx-pb-appear-start"),
+        "load",
+        "--site-"
+      )
+    ).toContain("--nx-pb-appear-timeline: auto");
+  });
+
   it("falls back to the property alone for a value the engine refuses", () => {
     expect(
       controlWrites(control("minHeight", [], "min-height"), "red", "--site-")
@@ -109,6 +131,19 @@ describe("what a control writes", () => {
       searchPreviews: "data-nosnippet",
     });
     expect(tagWrites("section")).toBe("<section>");
+  });
+
+  it("says Hide on's write at the device's own widths", () => {
+    expect(hideOnWrites({ from: 768, to: 1023 })).toBe(
+      "display: none at 768–1023px"
+    );
+    expect(hideOnWrites({ from: 1024 })).toBe(
+      "display: none at 1024px and wider"
+    );
+    expect(hideOnWrites({ to: 767 })).toBe(
+      "display: none at 767px and narrower"
+    );
+    expect(hideOnWrites({})).toBe("display: none");
   });
 });
 

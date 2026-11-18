@@ -827,7 +827,7 @@ describe("InsertPanel", () => {
       "Goes inside Columns, at the end."
     );
 
-    // The line names where the highlighted tile goes, before the click.
+    // The line names the highlighted tile and where it goes, before the click.
     const search = screen.getByRole("combobox", { name: "Insert a block" });
     const live = () =>
       document
@@ -836,14 +836,14 @@ describe("InsertPanel", () => {
     expect(live()).toBe("polite");
     fireEvent.keyDown(search, { key: "Home" });
     expect(popoverName()).toBe("Column");
-    expect(placementLine()).toBe("Adding inside Columns, at the end");
+    expect(placementLine()).toBe("Column goes inside Columns, at the end");
     // The tile's own description says it; the line is not announced twice.
     expect(live()).toBe("off");
     for (let step = 0; step < 6 && popoverName() !== "Text"; step++) {
       fireEvent.keyDown(search, { key: "ArrowDown" });
     }
     expect(popoverName()).toBe("Text");
-    expect(placementLine()).toBe("Adding after Columns");
+    expect(placementLine()).toBe("Text goes after Columns");
 
     fireEvent.click(tile("Column"));
     fireEvent.click(tile("Text"));
@@ -2506,6 +2506,29 @@ describe("the panel answering an add control", () => {
     // fade, and a rebuilt live region drops what it was about to say.
     expect(placement()).toBe(before);
     expect(placement()?.hasAttribute("data-flash")).toBe(true);
+  });
+
+  it("opens the Saved sections tab a press asks for, with its search ready", () => {
+    // "Insert a saved section" on an empty page: the panel goes to the tab
+    // that holds saved sections, and its search takes focus.
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        summoned={1}
+        summonedTab="sections"
+        onSummoned={() => undefined}
+      />
+    );
+    expect(
+      screen
+        .getByRole("tab", { name: "Saved sections" })
+        .getAttribute("aria-selected")
+    ).toBe("true");
+    expect(document.activeElement).toBe(screen.getByRole("combobox"));
   });
 
   it("answers a press even with nowhere to add, so it cannot replay later", () => {

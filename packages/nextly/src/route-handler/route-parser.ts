@@ -1521,6 +1521,28 @@ function parseSingleRoutes(
     };
   }
 
+  // POST /api/singles/[slug]/publish and /unpublish → publish or unpublish the
+  // parts of the Single the body chooses (@experimental). Admitted as an
+  // update, as a collection entry's are: the service asks each chosen part's
+  // own publish or unpublish rule. Nothing past the action names this route.
+  if (
+    id &&
+    (subresource === "publish" || subresource === "unpublish") &&
+    !subId &&
+    httpMethod === "POST"
+  ) {
+    routeParams.slug = id;
+    return {
+      service: "singles",
+      operation: "update",
+      method:
+        subresource === "publish"
+          ? "publishSingleParts"
+          : "unpublishSingleParts",
+      routeParams,
+    };
+  }
+
   // GET /api/singles/[slug]/schema → get Single schema/metadata
   if (id && subresource === "schema" && httpMethod === "GET") {
     routeParams.slug = id;

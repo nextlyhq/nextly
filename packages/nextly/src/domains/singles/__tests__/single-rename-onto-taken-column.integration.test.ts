@@ -392,7 +392,9 @@ describeEachDialect(
 
     // MySQL and SQLite compare column names without regard to case, so a column spelled
     // `HEADLINE` is the column a rename to `headline` would collide with. PostgreSQL keeps the two
-    // apart, and the rename goes through there.
+    // apart (the rule itself: rename-target.test.ts); there the hand-made `HEADLINE` column is one
+    // the save's own migration file finds the table holding beside its snapshot, so the save is
+    // refused as drift, with nothing changed.
     it("judges a column in the way by the database's rule for the case of a name", async () => {
       await hero(false);
       await query(
@@ -407,8 +409,9 @@ describeEachDialect(
       );
 
       if (dialect === "postgresql") {
-        expect(refused).toBeUndefined();
-        expect(await registeredFieldNames()).toEqual(["headline", "body"]);
+        expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+        expect(await registeredFieldNames()).toEqual(["heading", "body"]);
+        expect(await headingRead(false)).toBe("Kept");
         return;
       }
       expect(refused).toMatchObject({

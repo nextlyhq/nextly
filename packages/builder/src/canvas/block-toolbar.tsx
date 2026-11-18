@@ -52,23 +52,32 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
 import {
   ArrowDown,
   ArrowUp,
+  ClipboardCopy,
+  ClipboardPaste,
   Component,
   Copy,
   CopyPlus,
   CornerLeftUp,
   Ellipsis,
+  FileText,
+  Group,
+  Heading,
   LayoutTemplate,
   Lock,
   LockOpen,
   Palette,
   RefreshCw,
+  Scissors,
   SquarePen,
   Trash2,
+  Type,
+  Ungroup,
   Unlink,
   type LucideIcon,
 } from "lucide-react";
@@ -93,6 +102,7 @@ import { refusalAnnouncement } from "../move-refusal";
 import { layerLabel, pathTo } from "../panels/layers/layers";
 import { useSelectionActions } from "../selection-actions";
 import { blockActionRunners } from "../shell/builder-commands";
+import { isTurnIntoAction } from "../turn-into-verb";
 
 import {
   CANVAS_ROOT_CLASS,
@@ -104,6 +114,7 @@ import { BLOCK_TOOLBAR_CLASS } from "./canvas-chrome";
 import { useCanvasFrame, type CanvasFrame } from "./canvas-frame-context";
 import { watchScreenBand } from "./canvas-geometry-watch";
 import { useTabPost } from "./canvas-tab-places";
+import { FormatBar } from "./format-bar";
 import {
   canvasContentRect,
   canvasScroller,
@@ -466,6 +477,15 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   "move-up": ArrowUp,
   "move-down": ArrowDown,
   duplicate: Copy,
+  // The clipboard's own glyphs, as every editor's Edit menu draws them.
+  copy: ClipboardCopy,
+  cut: Scissors,
+  paste: ClipboardPaste,
+  // The marks the Add panel draws for the three blocks, so a verb shows what
+  // the block becomes.
+  "turn-into-text": Type,
+  "turn-into-rich-text": FileText,
+  "turn-into-heading": Heading,
   // A page outline rather than a bookmark or a star: what is stored is a piece
   // of layout, and the same glyph names the Patterns tier in the insert panel.
   "save-as-pattern": LayoutTemplate,
@@ -478,6 +498,9 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   "detach-component": Unlink,
   "duplicate-component": CopyPlus,
   "update-pattern": RefreshCw,
+  // The grouping marks: blocks gathered into one, and one let go.
+  "wrap-in-box": Group,
+  unwrap: Ungroup,
   delete: Trash2,
 };
 
@@ -869,7 +892,13 @@ export function BlockToolbar({
     [perform]
   );
 
-  if (hidden || actions.length === 0) return null;
+  if (hidden) return null;
+  /*
+   * The format bar for words being edited is drawn beside this bar, in the
+   * same layer, so the two are placed knowing of each other and never cover
+   * each other; it draws nothing while no passage it serves is open.
+   */
+  if (actions.length === 0) return <FormatBar />;
 
   // Faded while the pointer is over another block: the bar sits over the
   // block above the selection, which would otherwise be covered while the
@@ -882,96 +911,99 @@ export function BlockToolbar({
   });
 
   return (
-    <div
-      ref={bar}
-      className={BLOCK_TOOLBAR_CLASS}
-      // Marked as chrome so a press here is not read as a click on the page
-      // background, which would clear the very selection this bar acts on.
-      {...{ [CHROME_ATTRIBUTE]: "" }}
-      role="toolbar"
-      aria-orientation="horizontal"
-      aria-label="Block actions"
-      data-side={placement?.side}
-      {...faded}
-      {...typingMark(typingAside)}
-      // Kept out of sight rather than unmounted until the first measurement.
-      // The bar has to be in the DOM to be measured at all, and mounting it at
-      // a default position would show it in the wrong place for one frame.
-      style={
-        placement === null
-          ? { visibility: "hidden" }
-          : { left: placement.x, top: placement.y }
-      }
-      onKeyDown={onKeyDown}
-    >
-      <BarLockControl
-        lock={lock}
-        active={stop === 0}
-        onFocus={() => setActiveIndex(0)}
-        onUnlock={unlock}
-        onSelect={selectHolder}
-      />
-      {buttons.map((action, index) => {
-        const Icon = ICONS[action.id];
-        const describedBy =
-          action.reason === undefined
-            ? undefined
-            : `nx-toolbar-reason-${action.id}`;
-        return (
-          <button
-            key={action.id}
-            type="button"
-            className="nx-block-toolbar__button"
-            // The name is the verb alone. Voice control activates a control by
-            // its name, so folding the reason into it would make "click delete"
-            // stop matching the button called Delete.
-            aria-label={action.label}
-            aria-disabled={action.enabled ? undefined : true}
-            aria-describedby={describedBy}
-            /*
-             * The description twice over: `title` for a pointer, and a hidden
-             * span for anything that reads the accessible description. `title`
-             * alone never reaches a keyboard author, who is exactly the person
-             * the reason is for.
-             *
-             * No keystroke hint here yet. A binding spelled `mod` resolves to
-             * Command on Apple platforms and Control everywhere else, so any
-             * fixed string is wrong on one of them and "Ctrl+D" on a Mac
-             * teaches a keystroke that does nothing.
-             *
-             * That is answerable now — `detectApplePlatform` is on
-             * `@nextlyhq/ui`'s public entry, and `key-hint.ts` spells a binding
-             * for the platform in hand. What is missing is the other half: the
-             * bar knows an action id, and the id alone does not say which
-             * binding runs it. The moves come from one table and the rest from
-             * the keystroke registrations, so a hint here needs those joined
-             * without writing a third list that can disagree with both.
-             */
-            title={action.reason ?? action.label}
-            tabIndex={lead + index === stop ? 0 : -1}
-            onFocus={() => setActiveIndex(lead + index)}
-            onClick={() => run(action)}
-          >
-            <Icon size={16} aria-hidden="true" />
-            {describedBy === undefined ? null : (
-              <span id={describedBy} className="nx-sr-only">
-                {action.reason}
-              </span>
-            )}
-          </button>
-        );
-      })}
-      {menu.length === 0 ? null : (
-        <MoreMenu
-          editor={editor}
-          actions={menu}
-          index={lead + buttons.length}
-          activeIndex={stop}
-          onFocus={setActiveIndex}
-          run={run}
+    <>
+      <FormatBar />
+      <div
+        ref={bar}
+        className={BLOCK_TOOLBAR_CLASS}
+        // Marked as chrome so a press here is not read as a click on the page
+        // background, which would clear the very selection this bar acts on.
+        {...{ [CHROME_ATTRIBUTE]: "" }}
+        role="toolbar"
+        aria-orientation="horizontal"
+        aria-label="Block actions"
+        data-side={placement?.side}
+        {...faded}
+        {...typingMark(typingAside)}
+        // Kept out of sight rather than unmounted until the first measurement.
+        // The bar has to be in the DOM to be measured at all, and mounting it at
+        // a default position would show it in the wrong place for one frame.
+        style={
+          placement === null
+            ? { visibility: "hidden" }
+            : { left: placement.x, top: placement.y }
+        }
+        onKeyDown={onKeyDown}
+      >
+        <BarLockControl
+          lock={lock}
+          active={stop === 0}
+          onFocus={() => setActiveIndex(0)}
+          onUnlock={unlock}
+          onSelect={selectHolder}
         />
-      )}
-    </div>
+        {buttons.map((action, index) => {
+          const Icon = ICONS[action.id];
+          const describedBy =
+            action.reason === undefined
+              ? undefined
+              : `nx-toolbar-reason-${action.id}`;
+          return (
+            <button
+              key={action.id}
+              type="button"
+              className="nx-block-toolbar__button"
+              // The name is the verb alone. Voice control activates a control by
+              // its name, so folding the reason into it would make "click delete"
+              // stop matching the button called Delete.
+              aria-label={action.label}
+              aria-disabled={action.enabled ? undefined : true}
+              aria-describedby={describedBy}
+              /*
+               * The description twice over: `title` for a pointer, and a hidden
+               * span for anything that reads the accessible description. `title`
+               * alone never reaches a keyboard author, who is exactly the person
+               * the reason is for.
+               *
+               * No keystroke hint here yet. A binding spelled `mod` resolves to
+               * Command on Apple platforms and Control everywhere else, so any
+               * fixed string is wrong on one of them and "Ctrl+D" on a Mac
+               * teaches a keystroke that does nothing.
+               *
+               * That is answerable now — `detectApplePlatform` is on
+               * `@nextlyhq/ui`'s public entry, and `key-hint.ts` spells a binding
+               * for the platform in hand. What is missing is the other half: the
+               * bar knows an action id, and the id alone does not say which
+               * binding runs it. The moves come from one table and the rest from
+               * the keystroke registrations, so a hint here needs those joined
+               * without writing a third list that can disagree with both.
+               */
+              title={action.reason ?? action.label}
+              tabIndex={lead + index === stop ? 0 : -1}
+              onFocus={() => setActiveIndex(lead + index)}
+              onClick={() => run(action)}
+            >
+              <Icon size={16} aria-hidden="true" />
+              {describedBy === undefined ? null : (
+                <span id={describedBy} className="nx-sr-only">
+                  {action.reason}
+                </span>
+              )}
+            </button>
+          );
+        })}
+        {menu.length === 0 ? null : (
+          <MoreMenu
+            editor={editor}
+            actions={menu}
+            index={lead + buttons.length}
+            activeIndex={stop}
+            onFocus={setActiveIndex}
+            run={run}
+          />
+        )}
+      </div>
+    </>
   );
 }
 
@@ -1123,25 +1155,32 @@ function MoreMenuItems({
   );
   return (
     <>
-      {items.map(action => {
+      {items.map((action, index) => {
         const Icon = ICONS[action.id];
+        // "Turn into" Text, Rich text or Heading, drawn as a group of their
+        // own so they read apart from "Turn into component…".
+        const after = items[index - 1];
+        const parted =
+          after !== undefined &&
+          isTurnIntoAction(after.id) !== isTurnIntoAction(action.id);
+        const said = action.reason ?? action.note;
         return (
-          <DropdownMenuItem
-            key={action.id}
-            disabled={!action.enabled}
-            className="nx-block-toolbar__menu-item"
-            onSelect={() => run(action)}
-          >
-            <Icon size={16} aria-hidden="true" />
-            <span className="nx-block-toolbar__menu-text">
-              <span>{action.label}</span>
-              {action.reason === undefined ? null : (
-                <span className="nx-block-toolbar__menu-reason">
-                  {action.reason}
-                </span>
-              )}
-            </span>
-          </DropdownMenuItem>
+          <React.Fragment key={action.id}>
+            {parted ? <DropdownMenuSeparator /> : null}
+            <DropdownMenuItem
+              disabled={!action.enabled}
+              className="nx-block-toolbar__menu-item"
+              onSelect={() => run(action)}
+            >
+              <Icon size={16} aria-hidden="true" />
+              <span className="nx-block-toolbar__menu-text">
+                <span>{action.label}</span>
+                {said === undefined ? null : (
+                  <span className="nx-block-toolbar__menu-reason">{said}</span>
+                )}
+              </span>
+            </DropdownMenuItem>
+          </React.Fragment>
         );
       })}
     </>

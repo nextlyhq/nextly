@@ -28,6 +28,8 @@ import {
   type StillBrokenHosts,
   type UnjudgedHosts,
 } from "./blocks-composition";
+import { readStoredOfVia } from "../__tests__/stored-reads-of";
+
 import type { ListFieldsReader, TemplateTargets } from "./list-query-judgement";
 
 /** The site's block registry these tests seed and judge against. */
@@ -177,7 +179,7 @@ function storeOf(rows: Record<string, Record<string, Stored>>) {
     if (value === "not-ready") throw NextlyError.serviceUnavailable();
     return { kind: "value", value };
   };
-  return { readStored, asked };
+  return { readStored, readStoredOf: readStoredOfVia(readStored), asked };
 }
 
 /** A write to `slug`, with the stored id an update carries. */
@@ -193,6 +195,7 @@ function write(
     ...(id === undefined ? {} : { id }),
     inTransaction,
     readStored,
+    readStoredOf: readStoredOfVia(readStored),
   };
 }
 
@@ -2657,6 +2660,7 @@ describe("a placement's own values", () => {
       slug: "homepage",
       inTransaction: false,
       readStored,
+      readStoredOf: components.readStoredOf,
     };
     expect(
       codes(await judge(page([valued({ subtitle: "Hi", title: 7 })]), single))

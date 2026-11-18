@@ -29,7 +29,11 @@ import {
   isTokenRef,
 } from "./document";
 import type { MigrationSource } from "./migration";
-import { MAX_MIGRATION_STEPS, findMigrationGaps } from "./migration";
+import {
+  MAX_MIGRATION_STEPS,
+  findMigrationGaps,
+  migrationInfoOf,
+} from "./migration";
 import type { NestingSource } from "./nesting";
 import { isPlainRecord } from "./plain-record";
 import { isSlotLock } from "./slot-lock";
@@ -732,7 +736,7 @@ export function createBlockRegistry(): BlockRegistry {
       get: name => {
         const definition = get(name);
         if (!definition) return undefined;
-        return { version: definition.version, migrate: definition.migrate };
+        return migrationInfoOf(definition);
       },
     }),
   };

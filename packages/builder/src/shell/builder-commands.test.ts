@@ -39,6 +39,9 @@ function verbs(): CommandVerbs & Record<string, ReturnType<typeof vi.fn>> {
     move: vi.fn(),
     delete: vi.fn(),
     duplicate: vi.fn(),
+    copy: vi.fn(),
+    cut: vi.fn(),
+    paste: vi.fn(),
     selectParent: vi.fn(),
     saveAsPattern: vi.fn(),
     editComponent: vi.fn(),
@@ -46,7 +49,10 @@ function verbs(): CommandVerbs & Record<string, ReturnType<typeof vi.fn>> {
     detachComponent: vi.fn(),
     duplicateComponent: vi.fn(),
     updatePattern: vi.fn(),
+    wrapInBox: vi.fn(),
+    unwrap: vi.fn(),
     saveAsSharedStyle: vi.fn(),
+    turnInto: vi.fn(),
   } as unknown as CommandVerbs & Record<string, ReturnType<typeof vi.fn>>;
 }
 
@@ -87,8 +93,21 @@ function build(
 }
 
 describe("builderCommands", () => {
-  it("offers no block commands without a selection", () => {
-    expect(build({}, { selectedId: null }).map(c => c.id)).toEqual([]);
+  it("offers no block commands without a selection, but Paste", () => {
+    // Paste with nothing selected lands at the end of the page, so search
+    // offers it on a blank page too.
+    expect(build({}, { selectedId: null }).map(c => c.id)).toEqual([
+      "block.paste",
+    ]);
+  });
+
+  it("offers Paste once with a selection, and runs the paste verb", () => {
+    const run = verbs();
+    const commands = build({ verbs: run }, { selectedId: "a" });
+    const paste = commands.filter(command => command.id === "block.paste");
+    expect(paste).toHaveLength(1);
+    paste[0]?.run();
+    expect(run.paste).toHaveBeenCalledTimes(1);
   });
 
   it("omits a block verb the toolbar would show as unavailable", () => {
@@ -305,5 +324,33 @@ describe("the palette asks the question the toolbar asks", () => {
         offered: c.bar,
       });
     }
+  });
+});
+
+describe("Turn into, in the palette", () => {
+  it("names each turn with its block and runs the one verb with the type", () => {
+    const actions = toolbarActions(documentOf([node("a")]), "a").concat([
+      {
+        id: "turn-into-heading",
+        label: "Turn into Heading",
+        enabled: true,
+        inMenu: true,
+      },
+    ]);
+    const handed = verbs();
+    const commands = builderCommands({
+      actions,
+      verbs: handed,
+      undo: vi.fn(),
+      redo: vi.fn(),
+      canUndo: false,
+      canRedo: false,
+    });
+    const command = commands.find(c => c.id === "block.turn-into-heading");
+    expect(command?.label).toBe("Turn block into Heading");
+    command?.run();
+    expect(handed.turnInto).toHaveBeenCalledWith("core/heading");
+    blockActionRunners(handed)["turn-into-rich-text"]();
+    expect(handed.turnInto).toHaveBeenLastCalledWith("core/rich-text");
   });
 });

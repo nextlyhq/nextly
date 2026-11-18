@@ -2,16 +2,16 @@
  * The tables and columns the applied migrations made that the database no
  * longer holds: `nextly migrate` never reports such a database as up to date.
  *
- * It compares two end states: the newest applied app snapshot (the whole
- * schema the ledger says the database is at) with the live database. A table
+ * It compares two end states: the newest applied snapshot of a stream (the
+ * whole schema the ledger says that stream left) with the live database. A table
  * or column that snapshot records and the database lacks is named, with the
  * applied migration that last created it. A table or column a later applied
  * migration dropped is in no newest snapshot, so it is never named. What the
  * database holds beyond the snapshot, or holds with another type, is not this
  * check's: those are reported and repaired elsewhere.
  *
- * Read-only. The app's stream alone: a plugin's own migration modules carry
- * their own history, checked as they run.
+ * Read-only. The app's stream, and each declared plugin's: the newest module
+ * the ledger records applied for it says what that plugin's tables hold.
  *
  * **Runtime restriction (F11):** CLI and boot only; never import from runtime
  * code.
@@ -21,6 +21,8 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
 import type { CliError } from "../../../cli/errors";
 import { databaseBehindMigrations } from "../../../cli/errors/areas/migrations";
 import {
@@ -29,6 +31,13 @@ import {
   type SnapshotFile,
 } from "../migrate-create/snapshot-io";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
+
+import {
+  orderedMigrations,
+  qualifiedFilename,
+  type PluginMigration,
+} from "./plugin/plugin-migration";
+import { recordedContributions } from "./plugin/recorded-contributions";
 
 import { ledgerNameOfSnapshot, type IsAppliedFn } from "./snapshot-source";
 
@@ -51,6 +60,13 @@ export interface AppliedSnapshot {
    * whole, since such a table is its owner's to report.
    */
   foreign?: ReadonlySet<string>;
+  /**
+   * Those of `foreign` that Nextly makes again when they are missing, without
+   * the app's columns (its own tables, by the core reconcile). Missing whole,
+   * such a table is still not named, but each column the app added to it is:
+   * nothing else would bring those back.
+   */
+  remade?: ReadonlySet<string>;
 }
 
 /**
@@ -79,6 +95,47 @@ export function appOwnedTables(
     },
     foreign,
   };
+}
+
+/**
+ * One plugin's applied modules as applied snapshots, in run order: each
+ * module's own tables whole, and of the tables it contributed to, only the
+ * plugin's own columns as its applied modules leave them
+ * (`recordedContributions`).
+ */
+export function appliedPluginSnapshots(args: {
+  pluginName: string;
+  migrations: readonly PluginMigration[];
+  /** Whether the ledger records the module under this key as applied. */
+  isApplied: (ledgerKey: string) => boolean;
+  dialect: SupportedDialect;
+}): AppliedSnapshot[] {
+  const appliedSoFar: PluginMigration[] = [];
+  return orderedMigrations(args.migrations).flatMap(migration => {
+    const key = qualifiedFilename(args.pluginName, migration.name);
+    if (!args.isApplied(key)) return [];
+    appliedSoFar.push(migration);
+    // The plugin's elements once this module has run, by the one reading of
+    // them the generator and the runner share: stated by a module that
+    // records them, replayed from its two sides by one that does not.
+    const contributions = recordedContributions(appliedSoFar, args.dialect);
+    return [
+      {
+        migration: key,
+        ...appOwnedTables({
+          snapshot: {
+            tables: [
+              ...(migration.snapshot[args.dialect]?.tables ?? []),
+              ...(migration.contributed?.[args.dialect]?.tables ?? []).filter(
+                table => contributions[table.name] !== undefined
+              ),
+            ],
+          },
+          contributions,
+        }),
+      },
+    ];
+  });
 }
 
 /** Each table's columns, lower-cased, by lower-cased table name. */
@@ -121,7 +178,8 @@ function createdByOf(applied: readonly AppliedSnapshot[]): Map<string, string> {
 /**
  * What the newest of `applied` records and `live` lacks, each with the
  * applied migration that last created it. A table missing whole is named
- * once, not again for each of its columns. Pure.
+ * once, not again for each of its columns; a table Nextly makes again
+ * (`AppliedSnapshot.remade`) is named by the app's columns on it. Pure.
  */
 export function missingFromDatabase(
   applied: readonly AppliedSnapshot[],
@@ -134,12 +192,15 @@ export function missingFromDatabase(
   return newest.snapshot.tables.flatMap(table => {
     const liveColumns = live.get(keyOf(table.name));
     if (liveColumns === undefined) {
-      return newest.foreign?.has(table.name) === true
-        ? []
-        : [{ table: table.name, createdBy: by(keyOf(table.name)) }];
+      if (newest.foreign?.has(table.name) !== true) {
+        return [{ table: table.name, createdBy: by(keyOf(table.name)) }];
+      }
+      // Another owner's table: its owner's to report, unless that owner makes
+      // it again bare, which leaves the app's columns for this check to name.
+      if (newest.remade?.has(table.name) !== true) return [];
     }
     return table.columns
-      .filter(column => !liveColumns.has(column.name.toLowerCase()))
+      .filter(column => liveColumns?.has(column.name.toLowerCase()) !== true)
       .map(column => ({
         table: table.name,
         column: column.name,

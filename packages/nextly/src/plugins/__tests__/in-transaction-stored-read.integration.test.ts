@@ -8,7 +8,8 @@
  * - `fieldPaths` lists the written document's fields of the type, from its
  *   schema, at the top level and through named groups, and nothing else;
  * - `readStored` reads on the write's own transaction, so it sees the value
- *   the write has not committed yet;
+ *   the write has not committed yet, and so does `readStoredOf`, which reads
+ *   a field of several entries at once;
  * - a type the plugin does not contribute is refused;
  * - a read the handler started and did not await is waited for, and its
  *   failure fails the write, so no read outlives the transaction.
@@ -116,6 +117,42 @@ describeEachDialect("an in-transaction handler's stored reads", dialect => {
 
     expect([...paths].sort()).toEqual(["body", "hero.intro"]);
     expect(read).toEqual({ kind: "value", value: { written: "uncommitted" } });
+  });
+
+  it("reads a field of several entries on the write's transaction, the written one included", async () => {
+    const ctx = await boot(dialect);
+    // Written before the handler is registered, so its own write is not judged.
+    const committed = await nextly().create({
+      collection: "posts",
+      data: { title: "Before", body: { written: "committed" } },
+    });
+    const before = String((committed.item as { id: unknown }).id);
+    let read: ReadonlyMap<string, PluginStoredValue> | undefined;
+    let written = "";
+    ctx.hooks.onInTransaction("posts", async write => {
+      written = String(write.id);
+      read = await write.readStoredOf("doc", {
+        collection: "posts",
+        ids: [before, written, "no-such-entry"],
+        field: "body",
+        form: "published",
+      });
+    });
+
+    await nextly().create({
+      collection: "posts",
+      data: { title: "After", body: { written: "uncommitted" } },
+    });
+
+    expect(read?.get(before)).toEqual({
+      kind: "value",
+      value: { written: "committed" },
+    });
+    expect(read?.get(written)).toEqual({
+      kind: "value",
+      value: { written: "uncommitted" },
+    });
+    expect(read?.has("no-such-entry")).toBe(false);
   });
 
   it("refuses a field type the plugin does not contribute", async () => {

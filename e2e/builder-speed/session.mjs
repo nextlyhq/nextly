@@ -27,7 +27,12 @@ import {
   SHOW_LIMIT_MS,
   sleep,
 } from "./config.mjs";
-import { addButton, caretAtEnd, closeAddPanel } from "./editing.mjs";
+import {
+  addButton,
+  caretAtEnd,
+  closeAddPanel,
+  insertHeadingAndUndo,
+} from "./editing.mjs";
 
 /**
  * Makes one text edit, lets the editor's own autosave settle, then presses
@@ -158,7 +163,7 @@ export async function opens(page, cdp, watcher, id, count) {
     await page.goto(`${BASE}/admin/collections/pages/${id}`, {
       timeout: 120_000,
     });
-    const link = page.getByRole("link", { name: "Open Page Builder" });
+    const link = page.getByRole("link", { name: "Open in builder" });
     await link.waitFor({ timeout: SHOW_LIMIT_MS });
     await watcher.quiet();
     await slowNetwork(cdp, LATENCY_MS);
@@ -223,18 +228,7 @@ export async function heapGrowth(page, cdp, watcher) {
   const beforeInserts = await heapUsed(cdp);
   for (let i = 0; i < HEAP_INSERTS; i++) {
     await selectAndWait(page, HEADING, texts[HEADING]);
-    await page.getByRole("option", { name: "Heading", exact: true }).click();
-    await page.waitForFunction(
-      n => window.__builderSpeedChecks.canvasBlocks({ count: n }),
-      base + 1,
-      { timeout: SHOW_LIMIT_MS, polling: 100 }
-    );
-    await page.getByRole("button", { name: "Undo", exact: true }).click();
-    await page.waitForFunction(
-      n => window.__builderSpeedChecks.canvasBlocks({ count: n }),
-      base,
-      { timeout: SHOW_LIMIT_MS, polling: 100 }
-    );
+    await insertHeadingAndUndo(page, base);
   }
   await watcher.quiet();
   const afterInserts = await heapUsed(cdp);

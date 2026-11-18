@@ -89,6 +89,19 @@ const nextConfig: NextConfig = {
     ? { productionBrowserSourceMaps: true }
     : {}),
 
+  // The test-fixture switch the config reads, passed to the browser bundle
+  // too: the fixtures' admin modules register their components only with it
+  // on, and the block fixture's must, since the editor offers every block it
+  // is handed, declared or not.
+  // Read as the config reads it, so anything but "1" is off. Fixed when the
+  // build runs, in the server code Next.js compiles as well as the browser's:
+  // a production build follows the switch as it was set then, so build and
+  // start it with the same value.
+  env: {
+    NEXTLY_E2E_STYLE_FIXTURE:
+      process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? "1" : "",
+  },
+
   // The browser suite's own server turns Next.js's development indicator off.
   // In development the indicator's button is injected into every document the
   // app serves, the canvas's frame included, so a keyboard walk through the

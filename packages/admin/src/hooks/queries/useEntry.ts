@@ -28,11 +28,13 @@ import type {
   NoInfer,
   UseQueryResult,
 } from "@tanstack/react-query";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useIsKnownSingle } from "@admin/hooks/current-user-access";
 import { entryApi, entryKeys, type FindParams } from "@admin/services/entryApi";
 import type { Entry } from "@admin/types/collection";
+
+import { readCarryingStored, storedEntryKey } from "./stored-entry-seed";
 
 /**
  * Options for useEntry hook
@@ -57,6 +59,12 @@ export interface UseEntryOptions<T = Entry> {
   translationStatus?: boolean;
   /** Whether to include draft content */
   draft?: boolean;
+  /**
+   * Ask for the entry as stored in the same answer, and hand it to the depth-0
+   * read `useStoredEntry` keeps in the same language and view, so the edit
+   * page's two reads are one request. The entry is cached without it.
+   */
+  carriesStored?: boolean;
   /** Additional TanStack Query options */
   queryOptions?: Omit<
     UseQueryOptions<T, Error>,
@@ -171,8 +179,10 @@ export function useEntry<T = Entry>({
   fallbackLocale,
   draft,
   translationStatus,
+  carriesStored = false,
   queryOptions,
 }: UseEntryOptions<T>): UseQueryResult<NoInfer<T>, Error> {
+  const queryClient = useQueryClient();
   // Part of the key, so a read that answered 404 before the capabilities
   // answer named the slug a Single is asked again once it does. Only a known
   // Single's key carries it: a collection's key stays the one the mutation
@@ -219,13 +229,26 @@ export function useEntry<T = Entry>({
       // but we want to support generic entry types
       // A 404 is read again as a Single only for a slug the capabilities
       // answer names one; for any other slug it is the server's answer.
-      const result = await entryApi.findByID(
-        collectionSlug,
-        entryId,
-        Object.keys(options).length > 0 ? options : undefined,
-        { knownSingle }
-      );
-      return result as T;
+      const read = (stored: boolean) =>
+        entryApi.findByID(
+          collectionSlug,
+          entryId,
+          stored
+            ? { ...options, stored }
+            : Object.keys(options).length > 0
+              ? options
+              : undefined,
+          { knownSingle }
+        );
+      if (!carriesStored) return (await read(false)) as T;
+      const storedKey = storedEntryKey(collectionSlug, entryId, {
+        locale,
+        fallbackLocale,
+        draft,
+      });
+      return (await readCarryingStored(queryClient, storedKey, () =>
+        read(true)
+      )) as T;
     },
     enabled: enabled && !!collectionSlug && !!entryId,
     staleTime: 60_000, // 1 minute

@@ -27,6 +27,23 @@ export function allowanceToWire(
   return Math.max(0, Math.floor(allowance));
 }
 
+/**
+ * The site's page data limit as the admin's client config carries it: a
+ * whole number from 0, `null` for no limit, or `undefined` (the default)
+ * for anything else, as the plugin sends nothing else. The one reading of
+ * it, so the editor's meter, the canvas's draw and the canvas's bindings
+ * read count against the same limit.
+ */
+export function readPageDataLimit(
+  clientConfig: Readonly<Record<string, unknown>> | undefined
+): number | undefined {
+  const sent = clientConfig?.maxQueries;
+  if (sent === null) return Number.POSITIVE_INFINITY;
+  return typeof sent === "number" && Number.isInteger(sent) && sent >= 0
+    ? sent
+    : undefined;
+}
+
 /** An allowance as a route reads it: `null` is no limit. */
 export function allowanceFromWire(
   sent: number | null | undefined

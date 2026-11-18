@@ -106,6 +106,14 @@ function entries(t: TestNextly) {
   ).getEntryService();
 }
 
+/**
+ * The page builder on a site whose boot seeds an EMPTY set, as releases
+ * before the starter header and footer did: a site drawing its header and
+ * footer in code gets exactly that seed, so the pages trapped on it here are
+ * the pages an upgraded site holds.
+ */
+const olderSite = () => pageBuilder({ siteHeaderFooter: "code" });
+
 describe.each(getConfiguredTestDialects())(
   "pages on the empty seeded set (%s)",
   (dialect: TestDialect) => {
@@ -178,7 +186,7 @@ describe.each(getConfiguredTestDialects())(
       current = await createTestNextly({
         dialect,
         logger,
-        plugins: [pageBuilder(), probePlugin(probe)],
+        plugins: [olderSite(), probePlugin(probe)],
       });
       await settle(current);
       await forgetTheMove();
@@ -191,7 +199,7 @@ describe.each(getConfiguredTestDialects())(
       current = await createTestNextly({
         adapter: await adapterOn(on),
         logger,
-        plugins: [pageBuilder(), probePlugin(probe)],
+        plugins: [olderSite(), probePlugin(probe)],
       });
       await settle(current);
       return current;

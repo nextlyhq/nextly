@@ -45,6 +45,10 @@ import { useBuilderFieldActions } from "@admin/hooks/useBuilderFieldActions";
 import { useBuilderSettingsChange } from "@admin/hooks/useBuilderSettingsChange";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
+import {
+  useDiscardLetsGoOwned,
+  useFieldGroupsFirst,
+} from "@admin/hooks/useFieldGroupsFirst";
 import { useSchemaChangeConfirmation } from "@admin/hooks/useSchemaChangeConfirmation";
 import {
   displayLabel,
@@ -54,6 +58,7 @@ import {
 import { useUnsavedDiscard } from "@admin/hooks/useUnsavedDiscard";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { collectionCreatePayload } from "@admin/lib/builder/create-request";
+import { draftRenamesOf } from "@admin/lib/builder/rename-answers";
 import { collectionEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { hasPageBuilderField } from "@admin/lib/builder/starting-field";
 import {
@@ -194,8 +199,10 @@ export default function CollectionBuilderEditPage({
     resolver: zodResolver(collectionFormSchema),
     defaultValues: { singularName: "", pluralName: "" },
   });
-  const { handleDuplicateField, getValidatedFields } =
-    useBuilderFieldActions(builder);
+  const { handleDuplicateField, getValidatedFields } = useBuilderFieldActions(
+    builder,
+    "collection"
+  );
 
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
   const confirmation = useSchemaChangeConfirmation();
@@ -217,6 +224,7 @@ export default function CollectionBuilderEditPage({
     pinSettings,
     moveAddress,
   } = useBuilderEntityState({
+    kind: "collection",
     entity: collection,
     builder,
     toFields: getCollectionFields,
@@ -234,21 +242,25 @@ export default function CollectionBuilderEditPage({
 
   // A change of the settings is a step; an unsaved collection's address
   // moves it at once, outside the history.
-  const { onSettingsChange, unsavedAddress } = useBuilderSettingsChange({
-    kind: "collection",
-    unsaved,
-    settings,
-    setSettings,
-    moveAddress,
-    busy: confirmation.isBusy,
-    editRoute: address =>
-      buildRoute(ROUTES.BUILDER_COLLECTIONS_EDIT, { slug: address }),
-  });
+  const { onSettingsChange, unsavedAddress, saveHeld } =
+    useBuilderSettingsChange({
+      kind: "collection",
+      unsaved,
+      settings,
+      setSettings,
+      moveAddress,
+      busy: confirmation.isBusy,
+      editRoute: address =>
+        buildRoute(ROUTES.BUILDER_COLLECTIONS_EDIT, { slug: address }),
+    });
 
   const isLocked = collection?.locked === true;
   // Resolved once: the save hook refuses outright without a slug, so the
   // fallback below is only ever satisfying the type.
   const entitySlug = slug ?? "";
+  // The field groups not saved yet that this save creates first, and the ones this editor's
+  // picker made, which its save, Discard all and leave let go or release.
+  const groupsFirst = useFieldGroupsFirst("collection", slug, builder.fields);
   const localized = settings?.i18n === true;
   // The pending Draft/Published toggle rides with the fields, as `localized` does, so the save
   // refuses a field taking one of the lifecycle's names in the save that turns it on.
@@ -356,6 +368,8 @@ export default function CollectionBuilderEditPage({
             // Reset the settings dirty baseline so the Save button
             // disables again immediately after a successful save.
             pinSettings(settings);
+            // Landed: the groups this editor's picker made that no field uses go.
+            groupsFirst.letGoUnused();
             pinFields();
             // Mirror the settings change (notably Draft/Published) into the
             // committable ui-schema.json. Not awaited: the mutation callback
@@ -378,7 +392,7 @@ export default function CollectionBuilderEditPage({
         }
       );
     },
-    [slug, settings, updateCollection, pinFields, pinSettings]
+    [slug, settings, updateCollection, pinFields, pinSettings, groupsFirst]
   );
 
   // The first save of an unsaved collection is its create: reviewed from the
@@ -426,11 +440,13 @@ export default function CollectionBuilderEditPage({
     // Judged against the fields as last saved, so a draft that changes a
     // saved field's storage level is refused before it can lose values.
     getValidatedFields: () => getValidatedFields(pending.saved),
+    // Its renames of saved fields are the save's to answer, as renames.
+    pendingChanges: pending.changes,
     preview: fields =>
       unsaved
         ? Promise.resolve(createPreview(fields))
         : schemaApi.preview(entitySlug, fields, localized, drafts),
-    apply: (fields, version, resolutions, renames) =>
+    apply: (fields, version, resolutions, renames, acknowledged) =>
       unsaved
         ? createUnsaved(fields)
         : schemaApi.apply(
@@ -440,7 +456,8 @@ export default function CollectionBuilderEditPage({
             resolutions,
             renames,
             localized,
-            drafts
+            drafts,
+            acknowledged
           ),
     onNoChanges: saveSettingsOnly,
     onApplied: unsaved ? onCreated : onSchemaApplied,
@@ -448,16 +465,20 @@ export default function CollectionBuilderEditPage({
     // Each changed setting is reviewed with the save, and a save of the
     // settings alone is reviewed too.
     settingChanges: pending.settingChanges,
+    fieldGroupsFirst: groupsFirst.fieldGroupsFirst,
   });
 
   // Discard all on an unsaved collection discards the collection itself: it
   // leaves this tab, and the editor returns to the list.
-  const pendingChanges = useUnsavedDiscard(
-    pending,
-    unsaved !== undefined,
-    "collection",
-    entitySlug,
-    ROUTES.BUILDER_COLLECTIONS
+  const pendingChanges = useDiscardLetsGoOwned(
+    useUnsavedDiscard(
+      pending,
+      unsaved !== undefined,
+      "collection",
+      entitySlug,
+      ROUTES.BUILDER_COLLECTIONS
+    ),
+    groupsFirst.letGoOwned
   );
 
   // ----------------------------------------------------------------
@@ -502,11 +523,12 @@ export default function CollectionBuilderEditPage({
           ? buildRoute(ROUTES.COLLECTION_ENTRY_CREATE, { slug: entitySlug })
           : undefined
       }
-      onDiscard={
-        unsaved
-          ? () => removeUnsavedEntity("collection", entitySlug)
-          : undefined
-      }
+      onDiscard={() => {
+        // Left with its changes discarded: an unsaved entity goes, and the field groups its picker
+        // made stay as unsaved field groups of their own, which their own editor may open.
+        if (unsaved) removeUnsavedEntity("collection", entitySlug);
+        groupsFirst.release();
+      }}
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}
@@ -528,15 +550,19 @@ export default function CollectionBuilderEditPage({
         />
       }
       isSaving={isSaving || confirmation.isBusy}
+      // Save waits while an unsaved entity's new address is checked.
+      saveHeld={saveHeld}
       savingLabel="Saving collection changes…"
     >
       <BuilderSchemaChangeDialogs
+        draftRenames={draftRenamesOf(pending.changes)}
         confirmation={confirmation}
         kind={COLLECTION_BUILDER_CONFIG.kind}
         entityName={slug}
         onConfirm={confirmApply}
         creating={unsaved !== undefined}
         settingChanges={reviewedSettingChanges}
+        fieldGroupCreates={groupsFirst.creates}
       />
     </BuilderPageLayout>
   );

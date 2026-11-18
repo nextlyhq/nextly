@@ -39,6 +39,7 @@ import {
   type OpenRemovalReader,
 } from "../breakpoint-removal/lock-acceptance";
 import { formsChangedBy } from "../component-cycle-guard";
+import { pageCodeOf } from "../site-code/page-code";
 import { siteBreakpoints } from "../site-style";
 
 import { storedFormsFor } from "./added-undefined-ids";
@@ -62,6 +63,7 @@ import {
 } from "./layers-lock-judgement";
 import { newConditionIssues, newListQueryIssues } from "./list-query-judgement";
 import { readStoredForms } from "./lock-baselines";
+import { pageCodeBaseline, pageCodeIssues } from "./page-code-judgement";
 import { newTokenReferenceIssues } from "./token-reference-judgement";
 
 /** The engine's issue for a child of a contentOnly slot changed besides content. */
@@ -290,7 +292,7 @@ export function blocksFieldType(
    */
   blocks?: BlockRegistryReader
 ): PluginFieldType {
-  return {
+  return withPageCodeJudged(composition, {
     type: BLOCKS_TYPE,
     storage: "json",
     component: BLOCKS_FIELD_COMPONENT,
@@ -438,7 +440,10 @@ export function blocksFieldType(
           args,
           label,
           composition?.()?.onLayersLockUnjudged,
-          composition?.()?.openBreakpointRemoval
+          composition?.()?.openBreakpointRemoval,
+          // The site's blocks, so a block stored at an older version is
+          // judged upgraded, as the editor saves it.
+          blocks?.migrationSource()
         ).then(locks =>
           classes().then(found =>
             withLockIssues(
@@ -564,7 +569,7 @@ export function blocksFieldType(
         return `z.object({ formatVersion: z.literal(${DOCUMENT_FORMAT_VERSION}), kind: ${kindSchema}, nodes: z.array(z.unknown()) }).passthrough()`;
       },
     },
-  };
+  });
 }
 
 /**
@@ -575,3 +580,42 @@ export function blocksFieldType(
  * breakpoint-aware instance instead.
  */
 export const BLOCKS_FIELD_TYPE: PluginFieldType = blocksFieldType();
+
+/**
+ * The field type with a page's own code judged too, on any write that
+ * changes it, whatever the document's own rules answered, so one round fixes
+ * both: who may change it, what can't be stored, and what the site's
+ * declared policy would block unacknowledged (`page-code-judgement`).
+ */
+function withPageCodeJudged(
+  composition: (() => CompositionSetup | undefined) | undefined,
+  type: PluginFieldType
+): PluginFieldType {
+  const judged = type.validate;
+  if (judged === undefined) return type;
+  return {
+    ...type,
+    // Run on every write, whatever else is set up: with no write behind the
+    // value, code is refused as from nobody; before the setup is installed,
+    // a change to it is refused rather than let through unjudged.
+    validate: (value, args) => {
+      const answered = judged(value, args);
+      // No write and no code: nothing of the page's code to judge.
+      if (args.write === undefined && pageCodeOf(value) === null) {
+        return answered;
+      }
+      const pageCode = composition?.()?.pageCode;
+      const label =
+        typeof args.field.label === "string" ? args.field.label : args.path;
+      return Promise.resolve(answered).then(verdict =>
+        pageCodeIssues(
+          value,
+          args,
+          label,
+          pageCode,
+          pageCodeBaseline(args)
+        ).then(found => withLockIssues(verdict, found, args.path))
+      );
+    },
+  };
+}

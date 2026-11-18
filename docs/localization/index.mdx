@@ -203,6 +203,40 @@ A read can also say more about its values:
   is: field read rules and field `afterRead` hooks run per language, and the read rule is asked
   for every language. A field withheld from the document is withheld from both keys.
 
+### Saying where a translated value came from
+
+This is experimental. A save in a language other than the default can say, per field, where each
+translated value came from, under `_provenance`:
+
+```ts
+await nextly.update({
+  collection: "posts",
+  id,
+  locale: "es",
+  data: {
+    title: "Hola",
+    _provenance: {
+      title: { origin: "copy", sourceLocale: "en", sourceRevision: englishRead._rev },
+    },
+  },
+});
+```
+
+- **`{ origin: "machine", engine }`** is a machine translation, **`{ origin: "agent" }`** an
+  agent's (an API key or a plugin-defined person only), and **`{ origin: "original" }`** a value
+  written in its own language, which never falls out of date.
+- **`{ origin: "copy", sourceLocale, sourceRevision }`** is a copy from another of the site's
+  languages. `sourceRevision` is the document's `_rev` as the copy read the source language. A
+  copy whose source has changed since that version, or one that names no `sourceRevision`, reads
+  as out of date until it is copied or translated again from the source as it stands.
+- A claim the site can't accept is refused with `400` before anything is written: a copy from a
+  language the site doesn't have, or into the language being written, or a `sourceRevision` that
+  isn't a version.
+
+A translation read with `?translation-status=1` says, per field, where the value came from and
+whether its source has changed since (`outOfDate`). A field cleared in a language keeps no such
+record: that language reads the field from another, so it never puts the language out of date.
+
 ## Publishing one language at a time
 
 Per-locale publishing needs **two** flags, not one. `localized` gives you translations;

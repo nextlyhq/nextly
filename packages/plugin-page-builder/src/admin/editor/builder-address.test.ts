@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   bindingSourcePath,
   builderAddress,
+  claimOpenAfterSave,
   fieldBuilderAddress,
+  openBuilderAfterSave,
   openAtFromSearch,
   sectionAddress,
   sectionFromSearch,
@@ -28,7 +30,7 @@ describe("builderAddress", () => {
   it("is withheld from an entry never saved, which has no address", () => {
     expect(
       builderAddress({ kind: "collection", slug: "pages" }, "body")
-    ).toEqual({ unavailable: "Save this page to open the Page Builder." });
+    ).toEqual({ unsaved: true });
   });
 
   it("names a field inside a named group by its path", () => {
@@ -131,7 +133,7 @@ describe("builderAddress", () => {
         { kind: "collection", slug: "pages" },
         { unavailable: "unsavedRow" }
       )
-    ).toEqual({ unavailable: "Save this page to open the Page Builder." });
+    ).toEqual({ unsaved: true });
   });
 
   it("says it opens the default language when another one is on screen", () => {
@@ -310,5 +312,56 @@ describe("bindingSourcePath", () => {
       )
     ).toBeUndefined();
     expect(bindingSourcePath({ $bind: "title" }, null)).toBeUndefined();
+  });
+});
+
+describe("opening the builder after an entry's first save", () => {
+  const saved = {
+    kind: "collection" as const,
+    slug: "posts",
+    documentId: "p1",
+  };
+
+  it("is claimed once, by the field asked for on the entry just saved", () => {
+    openBuilderAfterSave("posts", "p1", "sections", 1_000);
+    expect(claimOpenAfterSave(saved, "sections", 2_000)).toBe(true);
+    // Once: a form drawn again later does not open the builder again.
+    expect(claimOpenAfterSave(saved, "sections", 3_000)).toBe(false);
+  });
+
+  it("is not claimed by another field, entry or collection, which leave it waiting", () => {
+    openBuilderAfterSave("posts", "p1", "sections", 1_000);
+    expect(claimOpenAfterSave(saved, "body", 2_000)).toBe(false);
+    expect(
+      claimOpenAfterSave({ ...saved, documentId: "p2" }, "sections", 2_000)
+    ).toBe(false);
+    expect(
+      claimOpenAfterSave({ ...saved, slug: "pages" }, "sections", 2_000)
+    ).toBe(false);
+    // Nor by the entry before it has an id, the create form itself.
+    expect(
+      claimOpenAfterSave(
+        { kind: "collection", slug: "posts" },
+        "sections",
+        2_000
+      )
+    ).toBe(false);
+    expect(claimOpenAfterSave(null, "sections", 2_000)).toBe(false);
+    expect(claimOpenAfterSave(saved, "sections", 2_000)).toBe(true);
+  });
+
+  it("lapses, so a form opened much later never moves on its own", () => {
+    openBuilderAfterSave("posts", "p1", "sections", 1_000);
+    expect(claimOpenAfterSave(saved, "sections", 1_000 + 60_001)).toBe(false);
+    expect(claimOpenAfterSave(saved, "sections", 1_000 + 60_002)).toBe(false);
+  });
+
+  it("keeps only the latest request", () => {
+    openBuilderAfterSave("posts", "p1", "sections", 1_000);
+    openBuilderAfterSave("posts", "p2", "sections", 1_500);
+    expect(claimOpenAfterSave(saved, "sections", 2_000)).toBe(false);
+    expect(
+      claimOpenAfterSave({ ...saved, documentId: "p2" }, "sections", 2_000)
+    ).toBe(true);
   });
 });

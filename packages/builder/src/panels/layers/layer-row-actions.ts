@@ -1,7 +1,8 @@
 /**
  * What a Layers row's own actions do: hide or show its block on the device
  * being edited, and the keystrokes that reach the row's actions from the
- * keyboard.
+ * keyboard; and where a block is hidden, device by device, as the row, Hide
+ * on and the panel's line say it.
  *
  * Pure, so the write each action makes is asserted without a DOM. The panel
  * draws the buttons and the menu; what they write is decided here, and the
@@ -11,6 +12,7 @@
  */
 
 import {
+  deviceVisibility,
   findNode,
   hiddenOnDevice,
   setDeviceVisibility,
@@ -18,7 +20,67 @@ import {
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
 
+import type { DeviceRange } from "../../code-hints";
 import type { BuilderOp } from "../../op-vocabulary";
+import {
+  deviceOptions,
+  type DeviceOption,
+} from "../../shell/breakpoint-switcher";
+
+/** A device the site defines, and whether a block is hidden there. */
+export interface DeviceState extends DeviceOption {
+  /** Whether a visitor on this device sees nothing of the block. */
+  readonly hidden: boolean;
+  /** The widths the device covers, which hiding it writes `display` at. */
+  readonly widths: DeviceRange;
+}
+
+/**
+ * Each device the site defines, widest first, with whether the block is
+ * hidden there: its RESOLVED state, read through the engine's cascade, so a
+ * device the block is hidden on through a wider one reads as hidden too.
+ */
+export function deviceStates(
+  visibility: unknown,
+  breakpoints: BreakpointSet | undefined
+): DeviceState[] {
+  const shown = new Map(
+    deviceVisibility(visibility, breakpoints).map(device => [
+      device.id,
+      device.visible,
+    ])
+  );
+  const options = deviceOptions(breakpoints);
+  return options.map((option, index) => {
+    // Desktop-first: a device covers from just above the next narrower one's
+    // bound up to its own, and the widest has no upper bound.
+    const narrower = options[index + 1]?.preview;
+    return {
+      ...option,
+      hidden: shown.get(option.id) === false,
+      widths: {
+        from: narrower === undefined ? undefined : narrower + 1,
+        to: index === 0 ? undefined : option.preview,
+      },
+    };
+  });
+}
+
+/** The names of the devices the block is hidden on, widest first. */
+export function hiddenDeviceNames(
+  visibility: unknown,
+  breakpoints: BreakpointSet | undefined
+): string[] {
+  return deviceStates(visibility, breakpoints)
+    .filter(device => device.hidden)
+    .map(device => device.label);
+}
+
+/** "Mobile", "Tablet and Mobile", "Desktop, Tablet and Mobile". */
+export function listedNames(names: readonly string[]): string {
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
 
 /** The device a row's eye acts on: the site's breakpoints and the one edited. */
 export interface EyeDevice {

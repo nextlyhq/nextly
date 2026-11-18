@@ -1,13 +1,15 @@
 /**
  * The class surface: the site's shared styles as the editor holds them, and
- * every write to them (add, change a style's styles, rename) through one
- * queue, each refused while a style undo or redo settles.
+ * every write to them (add, change a style's styles, rename, and the block
+ * styles' whole-list edits) through one queue, each refused while a style
+ * undo or redo settles.
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/site-style-class-surface
  */
 import type { NamedClass } from "@nextlyhq/blocks-engine";
 import {
   sharedStyleNameTaken,
+  type ClassListEdit,
   type ClassRenameOutcome,
   type SharedStyleChange,
 } from "@nextlyhq/builder/shell";
@@ -211,6 +213,14 @@ export type ClassSurface = {
     classId: string,
     name: { label: string; slug: string }
   ) => Promise<ClassRenameOutcome>;
+
+  /**
+   * Store the class list one block style action leaves (a new style, a copy,
+   * a rename, a hidden style, ★ moved), composed against the list the queue
+   * holds, as one history step. Resolves to the refusal in words, or
+   * `undefined` once stored.
+   */
+  edit: (compose: ClassListEdit) => Promise<string | undefined>;
 };
 
 export function useClassSurface(
@@ -330,6 +340,11 @@ export function useClassSurface(
     rename: useHeldWhileReplaying(
       useRenameClass(writes, configured, beginRename, endRename)
     ),
+    /*
+     * Withheld the same way: a list composed against one missing what a
+     * replay restored would take it away again.
+     */
+    edit: useRefusalWhileReplaying(useEditClasses(writes, configured)),
   };
 }
 
@@ -776,5 +791,57 @@ function useRenameClass(
       }
     },
     [writes, configured, reserve, reread, beginRename, endRename]
+  );
+}
+
+/**
+ * Store the class list one block style action leaves, composed against the
+ * list the queue holds, so it builds on every write queued before it. The
+ * history place is taken when the author acts, and the step is undone and
+ * redone as the whole section, as a rename is.
+ */
+function useEditClasses(
+  writes: ClassWrites,
+  configured: readonly NamedClass[] | undefined
+) {
+  const { reserve, reread } = useSaveSiteStyle();
+  return useCallback(
+    async (compose: ClassListEdit): Promise<string | undefined> => {
+      const slot = reserve("classes");
+      return writes.run<string | undefined>(async existing => {
+        if (existing === undefined) {
+          slot.cancel();
+          return {
+            result:
+              "This site's block styles could not be read, so none can be changed.",
+          };
+        }
+        const composed = compose(existing);
+        if ("reason" in composed) {
+          slot.cancel();
+          return { result: composed.reason };
+        }
+        const next = [...composed.classes];
+        // Merged from the list it was composed against, so a style saved
+        // elsewhere meanwhile is kept; a refused save withdraws its place.
+        const result = await slot.save(
+          classOverrideOf(configured, next),
+          undefined,
+          { base: classOverrideOf(configured, existing) }
+        );
+        toastSaveConflicts("classes", result, reread);
+        const refused = refusalOf(
+          result,
+          "This block style could not be saved."
+        );
+        return refused === undefined
+          ? {
+              result: undefined,
+              next: classesAfterSave(result, next, configured),
+            }
+          : { result: refused };
+      });
+    },
+    [writes, configured, reserve, reread]
   );
 }

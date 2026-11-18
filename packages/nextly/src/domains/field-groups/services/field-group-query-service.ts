@@ -35,6 +35,7 @@ import {
   localizationNow,
 } from "../../i18n/localization-source";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
+import { ALL_LOCALES_KEY } from "../../i18n/read-in-language";
 import {
   resolveLocaleChain,
   resolveRequestedLocale,
@@ -1250,6 +1251,81 @@ export class FieldGroupQueryService extends BaseService {
 
       return result;
     });
+  }
+
+  /**
+   * A read of every language (`translations: "all"`): each entry's field groups in every
+   * configured language, put beside the entry under `_allLocales` (`{ field: { code: value } }`),
+   * where its own translated fields' values already are. Each language holds its own value, read
+   * with no fallback, as the entry's own fields are read there. One batch read per language over
+   * every entry, so a page costs as many reads as there are languages, never one per entry. A
+   * language an entry's document is not published in (`skipLanguagesOf`) is not read for it and
+   * holds `null`, as the entry's own translated fields hold such a language. Only the field groups
+   * a populate of `fields` and `select` reads (`fieldGroupFieldsToPopulate`); none, or no
+   * localization, reads nothing.
+   */
+  async populateComponentDataBesideEntries(
+    params: Omit<
+      PopulateComponentDataManyParams,
+      "locale" | "fallbackLocale" | "access"
+    > & {
+      /** Who each language's related rows are read for, asked in that language. */
+      accessIn: (locale: string) => ComponentReadAccess;
+    }
+  ): Promise<void> {
+    const { entries, skipLanguagesOf } = params;
+    const localization = this.localization;
+    const names = fieldGroupFieldsToPopulate(params.fields, params.select).map(
+      field => field.name
+    );
+    if (!localization || names.length === 0 || entries.length === 0) return;
+    for (const { code } of localization.locales) {
+      // The entries published in this language: only theirs are read in it.
+      const readIn = entries.filter(
+        entry => skipLanguagesOf?.(String(entry.id))?.has(code) !== true
+      );
+      // Read into copies holding only the id, so the entries keep their own field groups.
+      const populated =
+        readIn.length === 0
+          ? []
+          : await this.populateComponentDataMany({
+              entries: readIn.map(entry => ({ id: entry.id })),
+              parentTable: params.parentTable,
+              fields: params.fields,
+              depth: params.depth,
+              currentDepth: params.currentDepth,
+              select: params.select,
+              locale: code,
+              fallbackLocale: false,
+              access: params.accessIn(code),
+              strict: params.strict,
+              executor: params.executor,
+            });
+      // In the order asked, as the batch read returns them.
+      const inLanguage = new Map(
+        readIn.map((entry, index) => [entry, populated[index]])
+      );
+      for (const entry of entries) {
+        const beside = entry[ALL_LOCALES_KEY];
+        const every: Record<string, unknown> =
+          beside !== null &&
+          typeof beside === "object" &&
+          !Array.isArray(beside)
+            ? (beside as Record<string, unknown>)
+            : {};
+        entry[ALL_LOCALES_KEY] = every;
+        const values = inLanguage.get(entry);
+        for (const name of names) {
+          const keyed = every[name];
+          const byLanguage: Record<string, unknown> =
+            keyed !== null && typeof keyed === "object" && !Array.isArray(keyed)
+              ? (keyed as Record<string, unknown>)
+              : {};
+          every[name] = byLanguage;
+          byLanguage[code] = values?.[name] ?? null;
+        }
+      }
+    }
   }
 
   /**

@@ -21,6 +21,7 @@ import {
   hasBlock,
   registerBlocks,
   type ComponentLookup,
+  type NamedClass,
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
@@ -41,6 +42,7 @@ import type { EditorState } from "../editor-state";
 import { BlockKeyboardActions } from "../keyboard-actions";
 import { depthMoveActions, toolbarActions } from "./toolbar-actions";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 
 afterEach(() => {
   cleanup();
@@ -102,16 +104,30 @@ function editorSpy(doc: BlockDocument, selectedId: string | null): EditorState {
     canRedo: false,
     undoDepth: 0,
     lockRefusalFor: () => undefined,
+    composed: () => undefined,
   } as unknown as EditorState;
 }
 
-function mount(editor: EditorState, definitions?: ComponentLookup) {
+function mount(
+  editor: EditorState,
+  definitions?: ComponentLookup,
+  library?: readonly NamedClass[]
+) {
   return render(
     <ShortcutProvider>
       <BlockKeyboardActions
         onSaveAsPattern={() => undefined}
         editor={editor}
         {...(definitions === undefined ? {} : { definitions })}
+        {...(library === undefined
+          ? {}
+          : {
+              sharedStyles: {
+                library,
+                mayChange: true,
+                onSaveAsSharedStyle: () => undefined,
+              },
+            })}
       >
         <BlockContextMenu editor={editor}>
           <Canvas
@@ -504,5 +520,113 @@ describe("the canvas's right-click menu", () => {
     const moveIn = screen.getByRole("menuitem", { name: /^Move in/ });
     expect(moveIn.getAttribute("data-disabled")).not.toBeNull();
     expect(moveIn.textContent).toContain("Leaf can't hold blocks.");
+  });
+});
+
+describe("Turn into, in the right-click menu", () => {
+  /** A Text with a bold word, beside another block. */
+  function textPage(): BlockDocument {
+    return {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "core/text",
+          version: 2,
+          props: {
+            text: {
+              root: {
+                type: "root",
+                children: [
+                  {
+                    type: "paragraph",
+                    children: [
+                      { type: "text", text: "Hello ", format: 0 },
+                      { type: "text", text: "there", format: 1 },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        },
+        { id: "b", type: "core/divider", version: 1, props: {} },
+      ],
+    } as BlockDocument;
+  }
+
+  it("offers Rich text and Heading in a group of their own, saying what Heading removes", () => {
+    registerBlocks(coreBlocks as never, { source: "core" });
+    const { container } = mount(editorSpy(textPage(), "a"));
+    fireEvent.contextMenu(blockElement(container));
+
+    const menu = screen.getByRole("menu");
+    const toRichText = screen.getByRole("menuitem", {
+      name: /^Turn into Rich text/,
+    });
+    const toHeading = screen.getByRole("menuitem", {
+      name: /^Turn into Heading/,
+    });
+    expect(toHeading.textContent).toContain("Bold and links are removed");
+    expect(toRichText.textContent).toBe("Turn into Rich text");
+
+    // A separator before the group and after it: the two read apart from
+    // the verbs around them, "Turn into component…" among them.
+    const children = [...menu.children];
+    const first = children.indexOf(toRichText);
+    const last = children.indexOf(toHeading);
+    expect(last).toBe(first + 1);
+    expect(children[first - 1]?.getAttribute("role")).toBe("separator");
+    expect(children[last + 1]?.getAttribute("role")).toBe("separator");
+  });
+
+  it("keeps the Text's block style as the Heading's own styles", () => {
+    registerBlocks(coreBlocks as never, { source: "core" });
+    const lead: NamedClass = {
+      id: "look-lead",
+      slug: "lead",
+      orderIndex: 0,
+      blockType: "core/text",
+      styles: { base: { desktop: { fontSize: "1.5rem" } } },
+    };
+    const page = textPage();
+    const first = page.nodes[0] as BlockNode;
+    first.classes = ["look-lead"];
+    const editor = editorSpy(page, "a");
+    const { container } = mount(editor, undefined, [lead]);
+    fireEvent.contextMenu(blockElement(container));
+    fireEvent.pointerUp(
+      screen.getByRole("menuitem", { name: /^Turn into Heading/ }),
+      { pointerType: "mouse", button: 0 }
+    );
+    expect(vi.mocked(editor.apply).mock.calls[0]?.[0]).toMatchObject({
+      kind: "turnInto",
+      node: {
+        type: "core/heading",
+        styles: { base: { desktop: { fontSize: "1.5rem" } } },
+      },
+    });
+    const turned = (
+      vi.mocked(editor.apply).mock.calls[0]?.[0] as { node: BlockNode }
+    ).node;
+    expect(turned.classes).toBeUndefined();
+  });
+
+  it("turns the block with one op when chosen", () => {
+    registerBlocks(coreBlocks as never, { source: "core" });
+    const editor = editorSpy(textPage(), "a");
+    const { container } = mount(editor);
+    fireEvent.contextMenu(blockElement(container));
+    fireEvent.pointerUp(
+      screen.getByRole("menuitem", { name: /^Turn into Heading/ }),
+      { pointerType: "mouse", button: 0 }
+    );
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(editor.apply).mock.calls[0]?.[0]).toMatchObject({
+      kind: "turnInto",
+      id: "a",
+      node: { type: "core/heading", props: { text: "Hello there" } },
+    });
   });
 });

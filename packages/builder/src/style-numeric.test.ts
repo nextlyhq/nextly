@@ -391,6 +391,24 @@ describe("a toggle is a projection of a keyword leaf", () => {
     expect(toggleOptionsFor(long)).toBeUndefined();
   });
 
+  it("measures the words the buttons show, not the keywords", () => {
+    // Two short keywords whose words are long: a row of two buttons reading
+    // "When scrolled into view" and "When the page loads" does not fit.
+    const start = {
+      kind: "keyword",
+      cssProperty: "--nx-pb-appear-start",
+      values: ["scroll", "load"],
+    } as unknown as StyleLeaf;
+    expect(toggleOptionsFor(start)).toBeUndefined();
+    // Words as short as the keywords still fit.
+    const style = {
+      kind: "keyword",
+      cssProperty: "font-style",
+      values: ["normal", "italic"],
+    } as unknown as StyleLeaf;
+    expect(toggleOptionsFor(style)).toEqual(["normal", "italic"]);
+  });
+
   it("declines a vocabulary of four, whatever its length", () => {
     const four = {
       kind: "keyword",

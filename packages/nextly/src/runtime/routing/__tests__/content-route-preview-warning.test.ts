@@ -20,6 +20,13 @@ const SECRET = "content-route-warning-secret-at-least-32ch!!";
 
 let cookieValue: string | undefined;
 
+/** How often the preview cookie was read, and what `draftMode()` answers. */
+const request = vi.hoisted(() => ({ cookieReads: 0, draftMode: false }));
+
+vi.mock("next/headers", () => ({
+  draftMode: async () => ({ isEnabled: request.draftMode }),
+}));
+
 vi.mock("../../preview/preview-route-defaults", () => ({
   // The link's own record. What it decides is covered by the integration
   // suite against real rows; here it allows, so these cases stay about the
@@ -30,16 +37,20 @@ vi.mock("../../preview/preview-route-defaults", () => ({
   },
   defaultSecret: () => SECRET,
   defaultGeneration: () => Promise.resolve(1),
-  defaultCookies: () =>
-    Promise.resolve({
+  defaultCookies: () => {
+    request.cookieReads += 1;
+    return Promise.resolve({
       get: (name: string) =>
         name === PREVIEW_SCOPE_COOKIE && cookieValue !== undefined
           ? { value: cookieValue }
           : undefined,
-    }),
+    });
+  },
 }));
 
-const { createContentRoute } = await import("../content-route");
+const { createContentRoute, createPublicContentRoute } = await import(
+  "../content-route"
+);
 
 /** A route with NO draft hook — the configuration this warning is about. */
 function routeWithoutGate() {
@@ -66,6 +77,8 @@ let warn: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   cookieValue = undefined;
+  request.cookieReads = 0;
+  request.draftMode = false;
   warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 });
 
@@ -145,5 +158,50 @@ describe("a preview credential meeting a route with no draft hook", () => {
       .catch(() => undefined);
 
     expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("a public route with no draft hook", () => {
+  /** The cached twin of the route above, as a public site serves pages. */
+  function publicRouteWithoutGate() {
+    return createPublicContentRoute({
+      collections: ["pages"],
+      render: (entry: unknown) => entry,
+      nextly: {
+        find: () => Promise.resolve({ items: [], meta: { hasNext: false } }),
+        findByID: () => Promise.resolve(null),
+      } as never,
+    });
+  }
+
+  // A public page renders with no Suspense boundary above it, where Next.js
+  // refuses a read of the request while it prerenders, even in development.
+  it("reads no cookie on an ordinary request, in development", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    await cookieFor("pages");
+
+    await publicRouteWithoutGate()
+      .ContentPage({ params: { slug: ["about"] } })
+      .catch(() => undefined);
+
+    expect(request.cookieReads).toBe(0);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  // A preview link turns draft mode on as it opens, so the request that
+  // carries its credential is a draft-mode one, and is still told.
+  it("still warns on a draft-mode request carrying a preview credential", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    await cookieFor("pages");
+    request.draftMode = true;
+
+    await publicRouteWithoutGate()
+      .ContentPage({ params: { slug: ["about"] } })
+      .catch(() => undefined);
+
+    expect(request.cookieReads).toBeGreaterThan(0);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("previewDraftGate")
+    );
   });
 });

@@ -51,8 +51,10 @@ import { assertMigrationSiblingFields } from "./sibling-fields";
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
+  type LatestSnapshot,
   type SnapshotFile,
 } from "./snapshot-io";
+import { templateStartFor } from "./template-start";
 
 /**
  * The parts of the app's config a migration is generated from: the code-first
@@ -126,8 +128,11 @@ export interface AppMigrationInputs {
   metadataUpserts: { tableName: string; sql: string }[];
   previousMetadataUpserts: { tableName: string; sql: string }[];
   appStream: AppStreamTables;
-  /** The latest snapshot file, or null where the folder has none. */
-  latest: { data: SnapshotFile } | null;
+  /**
+   * The latest snapshot file, or null where the folder has none. The one read
+   * of it: `generateMigration` is handed this (`GenerateArgs.previous`).
+   */
+  latest: LatestSnapshot | null;
   /** Whether there is nothing a migration could be generated from (`nothingToGenerate`). */
   nothing: boolean;
 }
@@ -193,7 +198,18 @@ export async function appMigrationInputs(
   // but extension schema. Taking that early return first meant an
   // extension-only configuration wrote no migration at all and production
   // never received the table.
-  const latest = await loadLatestSnapshot(resolve(input.migrationsDir, "meta"));
+  //
+  // A project made from a template starts from the template's older-format
+  // snapshot, read as the tables its listed entities were made with.
+  const latest = await loadLatestSnapshot(
+    resolve(input.migrationsDir, "meta"),
+    templateStartFor({
+      collections,
+      singles,
+      plugins: config.plugins,
+      dialect,
+    })
+  );
 
   // The definitions judged against that snapshot, as `migrate:check` judges
   // them: a Builder entity the file lost (the drop below would take its

@@ -54,6 +54,14 @@ export {
   // here than it does in a browser.
   decodeIdentifier,
   referencesCustomProperty,
+  // The custom properties a value reads through `var()`, by the same walk:
+  // what counts a site's variable as used where CSS text names it, as a
+  // shadow's colour does.
+  customPropertiesReferenced,
+  // A shadow's layers and their parts, as the token check reads them: the
+  // builder's shadow fields read a shadow the same way, so the fields and
+  // the check agree on what a part is.
+  shadowLayerParts,
   // The other direction, public for the same reason. A caller that decoded a
   // name to compare it has to escape it again before writing it back, or a name
   // holding a space or a quote is emitted as tokens the parser reads apart.
@@ -74,7 +82,25 @@ export {
   // contains stops reading where the compiler does.
   MAX_VALUE_LENGTH,
 } from "../style/css-value";
-export type { CssValueRejection, MayFetchUrl } from "../style/css-value";
+export {
+  collectStyleProperties,
+  collectStyleTokens,
+  documentTokenUsage,
+  forEachStyleValues,
+  onlySiteProperties,
+  onlyVariableIdentities,
+  styleEnvelopeProperties,
+  styleEnvelopeTokens,
+  styleSitePropertiesIn,
+  styleVariablesIn,
+  type TokenUsage,
+} from "../style/document-token-usage";
+export type {
+  CssValueRejection,
+  MayFetchUrl,
+  ShadowPart,
+  ShadowPartKind,
+} from "../style/css-value";
 export type { StyleValueOptions } from "../style/validate-style-value";
 export {
   validateStyleValues,
@@ -239,8 +265,19 @@ export {
 } from "../style/inline-style";
 export type {
   CompiledPageCss,
+  // A host's checker for author-written CSS, which the compile asks before it
+  // draws any; and the level a piece of it was written at. @experimental
+  CustomCssLevel,
+  CustomCssPolicy,
   StyleCompileContext,
 } from "../style/compile-page";
+// A block's custom CSS scoped to the block, so a host's checker can name the
+// lines that cannot be, as the compile would refuse them. @experimental
+export {
+  scopeBlockCss,
+  type CustomCssRefusal,
+  type ScopedBlockCss,
+} from "../style/custom-css-scope";
 export {
   blockPartClassName,
   blockTypeClassName,
@@ -277,6 +314,14 @@ export {
   CONTENT_WIDTH_PROPERTY,
   contentWidthTokenOf,
 } from "../style/content-width";
+// A Section's padding preset: the prop the page compile reads it from, the
+// variables each preset pads from, and the ones a node's preset names.
+export {
+  PADDING_PRESET_PROP,
+  PADDING_PRESETS,
+  paddingPresetTokensOf,
+} from "../style/padding-preset";
+export type { PaddingPreset } from "../style/padding-preset";
 export {
   compileStyleValues,
   scaledTokenText,
@@ -297,6 +342,21 @@ export type { CompiledDeclarations, Declaration } from "../style/declarations";
  * @experimental
  */
 export { OVERLAY_COLOR, OVERLAY_STRENGTH } from "../style/overlay";
+/**
+ * "Animation when it appears": its parts' custom properties, for an editor
+ * naming and drawing their controls, and the page's two gates, which a surface
+ * that must show every block in its final state (the editor's canvas) closes.
+ *
+ * @experimental
+ */
+export {
+  APPEAR_DELAY_PROPERTY,
+  APPEAR_DURATION_PROPERTY,
+  APPEAR_EFFECT_PROPERTY,
+  APPEAR_LOAD_GATE,
+  APPEAR_SCROLL_GATE,
+  APPEAR_START_PROPERTY,
+} from "../style/appear";
 export {
   DISCLOSURE_ICON_PROPERTY,
   DISCLOSURE_ICONS,
@@ -315,6 +375,7 @@ export {
 export {
   migrateDocument,
   migrateProps,
+  migrationInfoOf,
   findMigrationGaps,
   nodeAtPointer,
 } from "../migration";
@@ -325,6 +386,7 @@ export type {
   MigrateResult,
   MigrationFailure,
   MigrationMap,
+  MigrationRenames,
   MigrationSource,
   PropsMigrationResult,
 } from "../migration";
@@ -341,6 +403,9 @@ export {
   isLook,
   isUsableNamedClass,
   ownLooksRead,
+  // Which style is each block type's ★ default, as the compiler reads it.
+  // `@experimental` until the Styles tab that moves ★ settles.
+  starredLooksOf,
   LOOK_CLASS_PREFIX,
   namedClassName,
   orderedNamedClasses,
@@ -361,6 +426,14 @@ export {
   namedClassesRead,
   NAMED_CLASS_PREFIX,
   NAMED_CLASS_SLUG_RE,
+  // Text styles: typography-only classes in their own tier, between block
+  // styles and shared styles. `@experimental` until the Type tab that makes
+  // them and the block picker that applies them ship.
+  isTextStyle,
+  nonTypographyProperties,
+  TEXT_STYLE_CLASS_PREFIX,
+  TEXT_STYLE_PROPERTIES,
+  textStylesOf,
 } from "../style/named-class";
 /**
  * @experimental A block type's looks (its named variants: a button's Outline), as the shared
@@ -411,3 +484,40 @@ export { BREAKPOINT_AXES } from "../style/breakpoint-axes";
  * author defined and in what order they apply.
  */
 export { authoredBreakpoints, inCascadeOrder } from "../style/breakpoint-set";
+
+/**
+ * The value a size made with Fluid… takes, for a site's fluid range. Public
+ * because both the editor that writes it and a save that merges two authors'
+ * edits must write the same value from the same sizes and range.
+ */
+export {
+  DEFAULT_FLUID_RANGE,
+  fluidValue,
+  type FluidRangeWidths,
+  type FluidSizes,
+} from "../style/fluid-value";
+
+/**
+ * Site text: the size and line height of body text, each heading level,
+ * links, buttons and captions, set once for every page of a site. Public
+ * because the block library compiles it, the plugin stores and judges it, and
+ * the editor draws its rows, and each must read one map the same way.
+ */
+export {
+  DEFAULT_SITE_TEXT,
+  resolveSiteText,
+  SITE_TEXT_LABELS,
+  SITE_TEXT_ROLES,
+  SITE_TEXT_ROOT,
+  SITE_TEXT_UNDERLINES,
+  siteTextElementBases,
+  siteTextIssues,
+  siteTextRoleOf,
+  siteTextStyles,
+  siteTextUses,
+  type ElementBaseKey,
+  type SiteTextEntry,
+  type SiteTextMap,
+  type SiteTextRole,
+  type SiteTextUnderline,
+} from "../style/site-text";

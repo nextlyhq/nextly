@@ -7,9 +7,11 @@
     "locked-areas",
     "layouts",
     "site-code",
+    "custom-css",
     "moving-between-sites",
     "compose-through-the-api",
     "named-queries",
-    "contributed-blocks"
+    "contributed-blocks",
+    "forms"
   ]
 }

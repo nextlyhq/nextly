@@ -7,11 +7,12 @@
  *
  * @module style-field-shell
  */
-import type {
-  BreakpointId,
-  SiteTokenSet,
-  StyleState,
-  StyleValue,
+import {
+  isTokenRef,
+  type BreakpointId,
+  type SiteTokenSet,
+  type StyleState,
+  type StyleValue,
 } from "@nextlyhq/blocks-engine";
 import { Label, TooltipProvider } from "@nextlyhq/ui";
 import { RotateCcw } from "lucide-react";
@@ -21,9 +22,11 @@ import { ChromeTooltip } from "./chrome-tooltip";
 import { controlWrites } from "./code-hints";
 import { CssHint, CssNamesLine, OptionWrites, FieldNamesId } from "./css-hint";
 import type { EditorState } from "./editor-state";
+import { FieldPathWrites } from "./field-path-writes";
 import { InheritedValue } from "./inherited-value";
 import { LabelScrubRow, useLabelScrubProps } from "./label-scrub";
-import { CompactSides, sideKeysFor } from "./spacing-box";
+import { CompactSides, fieldDescribedBy, sideKeysFor } from "./spacing-box";
+import { SpacingSide } from "./spacing-side";
 import { contrastObscuredAbove, contrastObscuredIn } from "./style-colour";
 import { commitsFor, partnerColour } from "./style-colour-field";
 import {
@@ -42,8 +45,10 @@ import {
 import { targetKey, useFieldTarget } from "./style-field-target";
 import type { BreakpointBadge, BreakpointSource } from "./style-provenance";
 import { SharedValueLine, ProvenanceDot } from "./style-provenance-indicators";
+import { editableText } from "./style-text-field";
 import { labelFocusOnly } from "./style-value-fields";
 import type { StyleAddress, StylePolicy } from "./style-values";
+import { lineHeightPairFor, TypeSizeLineHint } from "./type-size-pair";
 
 /** One editable position, drawn as the control its leaf kind resolves to. */
 /**
@@ -106,9 +111,9 @@ function StyleFieldLabel({
       {...(focusOnly && !readOnly
         ? {
             onClick: (event: React.MouseEvent<HTMLLabelElement>) =>
-              event.currentTarget.ownerDocument
-                .getElementById(htmlFor)
-                ?.focus(),
+              tabStopOf(
+                event.currentTarget.ownerDocument.getElementById(htmlFor)
+              )?.focus(),
           }
         : {})}
     >
@@ -121,6 +126,23 @@ function StyleFieldLabel({
     </Label>
   );
 }
+
+/**
+ * Where a label that only moves focus sends it: the control itself when it
+ * takes focus, else the tab stop inside it. A group of buttons is named by
+ * its container, which takes no focus, so focusing the container would do
+ * nothing; its tab stop is the button in force, or the first.
+ */
+function tabStopOf(control: HTMLElement | null): HTMLElement | null {
+  if (control === null) return null;
+  if (control.tabIndex >= 0 && control.matches(FOCUSABLE)) return control;
+  return control.querySelector<HTMLElement>(
+    '[tabindex="0"], button:not([tabindex="-1"]), input, select, textarea'
+  );
+}
+
+/** What takes focus by itself, as a label's target. */
+const FOCUSABLE = "button, input, select, textarea, [tabindex]";
 
 /**
  * What reaches a control from another tier, shown in it while nothing is set
@@ -210,7 +232,14 @@ export function StyleControlField({
     property: control.property,
     path: control.path,
   };
-  const writes = useFieldTarget({ editor, nodeId, address, policy });
+  const writes = useFieldTarget({
+    editor,
+    nodeId,
+    address,
+    policy,
+    // A type size picked here brings its line height where the block has none.
+    pairFor: lineHeightPairFor(address, tokens),
+  });
   const { target, nodeStyles, styles, stored, issue } = writes;
   const pairedColour = partnerColour(control.leaf, styles, address);
   // This node's own styles first, then every ancestor's. An ancestor's
@@ -230,9 +259,14 @@ export function StyleControlField({
   const answer = provenanceOf(control.leaf);
   const inherited = inheritedShown(stored, answer);
 
-  const readOnly = showsNoField(control, stored, clearOnly);
   // A spacing-box side resets by key: see `sideKeysFor`.
   const inBox = React.useContext(CompactSides);
+  const { asSide, readOnly } = fieldSurface(
+    inBox && side !== undefined,
+    control,
+    stored,
+    clearOnly
+  );
   const sideKeys = sideKeysFor(side, inBox, stored, readOnly, id, commit);
   const labelId = `${id}-label`;
   // Computed once and used by both the control and its message: two spellings
@@ -292,23 +326,43 @@ export function StyleControlField({
                 descendant={control.leaf.descendant}
               />
               <InheritedValue.Provider value={inherited}>
-                <ControlOrFont
-                  id={id}
-                  labelledBy={labelId}
-                  control={control}
-                  stored={stored}
-                  actionName={actionName}
-                  clearOnly={clearOnly}
-                  tokens={tokens}
-                  prefersDark={prefersDark}
-                  pairedColour={pairedColour}
-                  obscuredBy={obscuredBy}
-                  describedBy={describedBy}
-                  onCommit={commit}
-                />
+                {/* Several paths in one edit, for a control that sets more than its own. */}
+                <FieldPathWrites.Provider value={writes.commitPaths}>
+                  <FieldValue
+                    asSide={asSide}
+                    id={id}
+                    labelledBy={labelId}
+                    control={control}
+                    stored={stored}
+                    inherited={inherited}
+                    actionName={actionName}
+                    clearOnly={clearOnly}
+                    tokens={tokens}
+                    prefersDark={prefersDark}
+                    pairedColour={pairedColour}
+                    obscuredBy={obscuredBy}
+                    describedBy={describedBy}
+                    onCommit={commit}
+                    onCommitSides={writes.commitSides}
+                    refusal={issue}
+                  />
+                </FieldPathWrites.Provider>
               </InheritedValue.Provider>
             </LabelScrubRow>
             <CssNamesLine id={namesId} names={[control.leaf.cssProperty]} />
+            <TypeSizeLineHint
+              address={address}
+              styles={nodeStyles}
+              tokens={tokens}
+              // A shared style's line height is the style's own: the hint
+              // speaks of a block's.
+              onBlock={target.kind !== "shared"}
+              // A held variable draws no typed field, so the field's own
+              // read-only answer is not this one: only a withdrawn property
+              // is, and a lock refuses the write itself.
+              readOnly={clearOnly}
+              onCommit={commit}
+            />
             <BreakpointAction
               answer={answer}
               label={actionName}
@@ -316,7 +370,7 @@ export function StyleControlField({
               fieldId={id}
               onReset={() => commit(null)}
               stored={stored}
-              readOnly={readOnly}
+              readOnly={clearsItself(readOnly, stored)}
               resetByKey={sideKeys.resetByKey}
             />
             {sideKeys.hint}
@@ -335,6 +389,84 @@ export function StyleControlField({
       </FieldNamesId.Provider>
     </OptionWrites.Provider>
   );
+}
+
+/**
+ * A field's value: a spacing-box side's button, or the control its leaf
+ * resolves to.
+ */
+function FieldValue({
+  asSide,
+  inherited,
+  refusal,
+  onCommitSides,
+  ...control
+}: Parameters<typeof ControlOrFont>[0] & {
+  refusal: string | null;
+  /** Drawn as a side of the spacing box: see {@link drawnAsSide}. */
+  asSide: boolean;
+  inherited: string | undefined;
+  onCommitSides: React.ComponentProps<typeof SpacingSide>["onCommitSides"];
+}): React.JSX.Element {
+  if (!asSide) return <ControlOrFont {...control} />;
+  return (
+    <SpacingSide
+      id={control.id}
+      labelledBy={control.labelledBy}
+      name={control.actionName}
+      control={control.control}
+      stored={control.stored}
+      inherited={inherited}
+      tokens={control.tokens}
+      describedBy={fieldDescribedBy(control.describedBy, true, control.id)}
+      onCommit={control.onCommit}
+      onCommitSides={onCommitSides}
+      refusal={refusal}
+    />
+  );
+}
+
+/**
+ * How a field is drawn: in the spacing box, a side whose value it can show is
+ * a button that opens the side's popover, which edits a variable it holds as
+ * readily as a number; otherwise read-only where no field can show its value.
+ */
+function fieldSurface(
+  inSpacingBox: boolean,
+  control: StyleControl,
+  stored: StyleValue | undefined,
+  clearOnly: boolean
+): { asSide: boolean; readOnly: boolean } {
+  if (inSpacingBox && drawnAsSide(control, stored, clearOnly)) {
+    return { asSide: true, readOnly: false };
+  }
+  return { asSide: false, readOnly: showsNoField(control, stored, clearOnly) };
+}
+
+/**
+ * Whether a spacing-box side is drawn as its button: a length it can show,
+ * a number or a variable. A value it can only remove keeps its own surface.
+ */
+function drawnAsSide(
+  control: StyleControl,
+  stored: StyleValue | undefined,
+  clearOnly: boolean
+): boolean {
+  if (clearOnly || control.leaf.kind !== "dimension") return false;
+  return isTokenRef(stored) || editableText(control, stored) !== undefined;
+}
+
+/**
+ * Whether a field's own surface removes its value, so its row offers no Reset
+ * as well: a value shown only to be cleared, with a Clear of its own. A held
+ * variable's chip has none, its Unlink keeping the value instead, so its row
+ * offers Reset as any set row does.
+ */
+function clearsItself(
+  readOnly: boolean,
+  stored: StyleValue | undefined
+): boolean {
+  return readOnly && !isTokenRef(stored);
 }
 
 /** The id a field's refusal is said under, or none while nothing is refused. */

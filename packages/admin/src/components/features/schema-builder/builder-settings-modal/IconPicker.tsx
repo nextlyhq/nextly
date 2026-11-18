@@ -139,7 +139,13 @@ export function IconPicker({
   );
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    // Modal: the picker opens inside the create and settings dialogs, whose
+    // scroll lock refuses a wheel or touch scroll anywhere outside the dialog's
+    // own content — and the popover is portalled outside it, so the icon list
+    // would only move by dragging its scrollbar. A modal popover takes a lock
+    // of its own, and only the newest lock judges, so the list scrolls while
+    // the page behind stays still. It also keeps focus within the picker.
+    <Popover open={open} onOpenChange={setOpen} modal>
       <PopoverTrigger asChild>
         <Button
           type="button"

@@ -12,10 +12,12 @@
  *
  * ## Auto-Sync Mode (Development Only)
  *
- * In development mode (NODE_ENV !== 'production'), this command automatically
+ * Outside production (NODE_ENV !== 'production'), this command automatically
  * syncs schema changes to the database without creating migration files.
  * Dev databases are treated as sandboxes where schema changes are
- * auto-applied without migration files.
+ * auto-applied without migration files. In production it refuses, in every mode,
+ * before it opens the database: `migrate:create` and `nextly migrate` change a
+ * production schema.
  *
  * **WARNING:** Auto-sync may cause data loss when tables are recreated.
  * Use `--no-auto-sync` to disable this behavior and use migrations instead.
@@ -111,7 +113,7 @@ import {
   performPermissionSeeding,
   syncUserFields,
 } from "./dev-build";
-import { ensureCoreTables } from "./dev-server";
+import { ensureCoreTables, productionSyncRefusal } from "./dev-server";
 import { createDebouncedSync } from "./dev-watcher";
 import { syncSchemaInOrder } from "./sync-schema";
 
@@ -217,6 +219,31 @@ export interface ResolvedDevOptions extends DbSyncCommandOptions {
 // ============================================================================
 
 /**
+ * Stops a run in production, in every mode, before anything is read, locked or written: no
+ * database is opened, so no table is created and no registry row is written. True when the run
+ * is over; a real run does not return, it exits with the refusal.
+ *
+ * A dry run reports the same refusal as what a real run would do and ends without a failure,
+ * since it changes nothing wherever it runs.
+ */
+function stoppedInProduction(
+  dryRun: boolean,
+  logger: CommandContext["logger"]
+): boolean {
+  const refusal = productionSyncRefusal();
+  if (refusal === undefined) return false;
+  if (!dryRun) exitWithError(logger, refusal);
+  reportDryRun(logger, {
+    changes: [],
+    refusals: [`${refusal.what} ${refusal.why}`],
+    notes: [
+      "NODE_ENV is production: a real run refuses before it reads or changes anything (use nextly migrate:create and nextly migrate).",
+    ],
+  });
+  return true;
+}
+
+/**
  * Execute the dev command
  *
  * @param options - Combined global and command options
@@ -228,6 +255,10 @@ export async function runDbSync(
 ): Promise<void> {
   const { logger } = context;
   const startTime = Date.now();
+
+  // Before the database is opened or the configuration read. The command's action asks this
+  // first; asked here too, so a caller of this function gets the same refusal.
+  if (stoppedInProduction(options.dryRun === true, logger)) return;
 
   logger.header("Nextly Dev");
 
@@ -578,6 +609,10 @@ export async function dbSyncAction(
   if (cmdOptions.force) {
     exitWithError(context.logger, retiredForce());
   }
+
+  // Production refuses every mode of the command, promote and demote included, before anything
+  // is read or changed; their dry runs name that refusal.
+  if (stoppedInProduction(cmdOptions.dryRun === true, context.logger)) return;
 
   // Surface the flag as an env var so downstream modules (the
   // schema-change prompt, the auto-sync path) pick it up without

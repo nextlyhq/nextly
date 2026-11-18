@@ -118,7 +118,6 @@ interface RememberedRead {
 
 const globalForReads = globalThis as unknown as {
   __nextly_cache_reads?: Map<string, RememberedRead>;
-  __nextly_cache_reads_overflowed_at?: number;
 };
 
 /**
@@ -167,7 +166,6 @@ function rememberRead(key: string): RememberedRead | undefined {
     // Still full, of reads whose fills may be running: none is dropped, since
     // that fill would lose when it began. This read is not remembered, and
     // its fill is judged as one begun at the window's start (`fillBegan`).
-    globalForReads.__nextly_cache_reads_overflowed_at = now;
     return undefined;
   }
   remembered.set(key, read);
@@ -213,10 +211,17 @@ function markAnswer(
 }
 
 /**
- * When the fill being stored for `key` began: its read; else, while reads have
- * gone unremembered within the window, the window's start, so a fill whose
- * read was not kept is judged stale by any expiry it may have run across;
- * else now, for a fill no read began (a prerender, or one past the window).
+ * When the fill being stored for `key` began: its read; else the window's
+ * start, so a fill no kept read dates is judged stale by any expiry recorded
+ * within the window, which it may have run across.
+ *
+ * A fill with no read is not rare. Next.js serves a path no build listed from
+ * its route's fallback shell, then renders that path's own page in the
+ * background and stores it without asking for its key first. Dated when it
+ * was stored, a page drawn before a write that landed while it rendered was
+ * kept, and its previous version served. Dated at the window's start, such a
+ * page is kept only once no write to its tags is that recent; until then the
+ * next request renders it again.
  */
 function fillBegan(key: string): number {
   const remembered = reads();
@@ -224,11 +229,7 @@ function fillBegan(key: string): number {
   remembered.delete(key);
   const now = localNow();
   if (readAt !== undefined && now - readAt <= FILL_WINDOW_MS) return readAt;
-  const overflowedAt = globalForReads.__nextly_cache_reads_overflowed_at;
-  if (overflowedAt !== undefined && now - overflowedAt <= FILL_WINDOW_MS) {
-    return now - FILL_WINDOW_MS;
-  }
-  return now;
+  return now - FILL_WINDOW_MS;
 }
 
 /**

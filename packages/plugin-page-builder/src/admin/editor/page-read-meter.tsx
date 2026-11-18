@@ -513,21 +513,6 @@ function usePageReads(
   return { report: shown.report, retry: shown.failed ? retry : undefined };
 }
 
-/**
- * The site's page data limit as the admin's client config carries it:
- * a whole number from 0, `null` for no limit, or `undefined` (the default)
- * for anything else, as the plugin sends nothing else.
- */
-export function readPageDataLimit(
-  clientConfig: Readonly<Record<string, unknown>> | undefined
-): number | undefined {
-  const sent = clientConfig?.maxQueries;
-  if (sent === null) return Number.POSITIVE_INFINITY;
-  return typeof sent === "number" && Number.isInteger(sent) && sent >= 0
-    ? sent
-    : undefined;
-}
-
 /** The page's count, made once, for the top bar's meter and Page settings'. */
 export interface PageDataCount
   extends Pick<ReadBudgetMeterProps, "editor" | "componentTitle"> {

@@ -12,6 +12,7 @@
  * up to date." and exited 0, the edit reaching no database.
  */
 import {
+  cpSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -22,6 +23,7 @@ import {
 import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -30,7 +32,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { defineCollection, defineConfig, number, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { loadedDialect } from "../../../database/dialect-tables";
+import { buildExtensionSchema } from "../../../domains/schema/extension/build-extension-schema";
+import { col, defineTable } from "../../../domains/schema/extension/dsl";
+import { buildPluginMigration } from "../../../domains/schema/migrate-create/generate-plugin";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
+import { migrationChecksum } from "../../../domains/schema/migrate/plugin/plugin-migration";
 import { liveColumnNames } from "../../../domains/schema/pipeline/diff/introspect-live";
 import { definePlugin } from "../../../plugins/plugin-context";
 import {
@@ -39,6 +45,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { CORE_TABLE_NAMES } from "../../../schemas/index";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
@@ -457,6 +464,198 @@ describe.each(getConfiguredTestDialects())(
       expect((await columns(instance!, dialect))?.has("body")).toBe(false);
     });
 
+    it("a column the app's migration added to a core table, dropped by hand: named with the migration that made it", async () => {
+      // A schema hook's column on `users` travels in the app's migrations, and
+      // the core reconcile sets it aside rather than making it again.
+      const hinted = defineConfig({
+        collections: [defineCollection({ slug: SLUG, fields: [TITLE] })],
+        plugins: [
+          definePlugin({
+            name: PLUGIN,
+            version: "1.0.0",
+            nextly: ">=0.0.1",
+            contributes: {
+              schema: {
+                extend: [
+                  ({ schema }) => {
+                    schema.extendTable("users", {
+                      columns: { uwHint: col.text({ nullable: true }) },
+                    });
+                  },
+                ],
+              },
+            },
+          }),
+        ],
+        db: { migrationsDir: "./migrations" },
+      });
+      await migrateCreate(hinted, "create_posts_and_hint");
+      const applied = await migrate(hinted);
+      expect(applied.code, applied.said).toBeUndefined();
+      const db = (instance!.adapter as unknown as DrizzleAdapter).getDrizzle();
+      const usersColumns = async () =>
+        (await liveColumnNames(db, dialect, ["users"])).get("users");
+      expect((await usersColumns())?.has("uw_hint")).toBe(true);
+      const q = dialect === "mysql" ? "`" : '"';
+      await (
+        instance!.adapter as unknown as {
+          executeQuery(sql: string): Promise<unknown>;
+        }
+      ).executeQuery(`ALTER TABLE ${q}users${q} DROP COLUMN ${q}uw_hint${q}`);
+
+      const run = await migrate(hinted);
+
+      expect(run.code, run.said).toBe(1);
+      expect(run.said).toMatch(
+        /- column users\.uw_hint \(created by \d+_\d+_\d+_create_posts_and_hint\)/
+      );
+      // Only the app's column: none of Nextly's own columns on the table is named.
+      expect(run.said.match(/- column users\./g)).toHaveLength(1);
+      expect(run.said).not.toContain(UP_TO_DATE);
+      expect((await usersColumns())?.has("uw_hint")).toBe(false);
+    });
+
+    it("a table and a column a plugin's applied module made, dropped by hand: names both and the module that made each", async () => {
+      // The plugin's tables compiled for this dialect by the real builder,
+      // and its first module written by the real generator.
+      const OWNER = { name: PLUGIN, prefix: "uwp" };
+      const things = defineTable("things", {
+        id: col.id(),
+        label: col.shortText({ nullable: true }),
+      });
+      const extras = defineTable("extras", { id: col.id() });
+      const tablesByDialect = {} as Parameters<
+        typeof buildPluginMigration
+      >[0]["tablesByDialect"];
+      for (const each of ["postgresql", "mysql", "sqlite"] as const) {
+        tablesByDialect[each] = (
+          await buildExtensionSchema({
+            dialect: each,
+            coreTableNames: CORE_TABLE_NAMES,
+            entities: [],
+            pluginPrefixes: new Map([[OWNER.name, OWNER.prefix]]),
+            plugins: [
+              {
+                owner: { kind: "plugin", id: OWNER.name },
+                tables: [things, extras],
+              },
+            ],
+          })
+        ).specs;
+      }
+      const built = buildPluginMigration({
+        pluginName: OWNER.name,
+        schemaVersion: 1,
+        name: "things",
+        now: new Date(Date.UTC(2026, 10, 16, 10, 0, 0)),
+        tablesByDialect,
+        existing: [],
+      });
+      const withPlugin = defineConfig({
+        collections: [],
+        plugins: [
+          definePlugin({
+            name: OWNER.name,
+            version: "1.0.0",
+            nextly: ">=0.0.1",
+            schemaVersion: 1,
+            contributes: {
+              schema: {
+                prefix: OWNER.prefix,
+                tables: [things, extras],
+                migrations: [built!.module],
+              },
+            },
+          }),
+        ],
+        db: { migrationsDir: "./migrations" },
+      });
+      const db = instance!.adapter as unknown as {
+        executeQuery(sql: string): Promise<unknown>;
+      };
+      const q = dialect === "mysql" ? "`" : '"';
+      try {
+        const applied = await migrate(withPlugin);
+        expect(applied.code, applied.said).toBeUndefined();
+        const drizzle = (
+          instance!.adapter as unknown as DrizzleAdapter
+        ).getDrizzle();
+        const live = await liveColumnNames(drizzle, dialect, [
+          "uwp__things",
+          "uwp__extras",
+        ]);
+        expect(live.get("uwp__things")?.has("label")).toBe(true);
+        expect(live.get("uwp__extras")).toBeDefined();
+        await db.executeQuery(`DROP TABLE ${q}uwp__extras${q}`);
+        await db.executeQuery(
+          `ALTER TABLE ${q}uwp__things${q} DROP COLUMN ${q}label${q}`
+        );
+
+        const run = await migrate(withPlugin);
+
+        expect(run.code, run.said).toBe(1);
+        const module = `plugin:${OWNER.name}/${built!.module.name}`;
+        expect(run.said).toContain(
+          `- table uwp__extras (created by ${module})`
+        );
+        expect(run.said).toContain(
+          `- column uwp__things.label (created by ${module})`
+        );
+        expect(run.said).toContain("no longer matches its ledger");
+        expect(run.said).not.toContain(UP_TO_DATE);
+
+        // An applied module rewritten since, sealed again: its snapshot is
+        // not what ran, so the run refuses the changed history and names
+        // nothing from it as missing.
+        const { checksum: _sealed, ...content } = built!.module;
+        const rewritten = {
+          ...content,
+          snapshot: {
+            ...content.snapshot,
+            [dialect]: {
+              tables: [
+                ...content.snapshot[dialect].tables,
+                {
+                  ...content.snapshot[dialect].tables[0],
+                  name: "uwp__never_made",
+                },
+              ],
+            },
+          },
+        };
+        const edited = await migrate(
+          defineConfig({
+            collections: [],
+            plugins: [
+              definePlugin({
+                name: OWNER.name,
+                version: "1.0.1",
+                nextly: ">=0.0.1",
+                schemaVersion: 1,
+                contributes: {
+                  schema: {
+                    prefix: OWNER.prefix,
+                    tables: [things, extras],
+                    migrations: [
+                      { ...rewritten, checksum: migrationChecksum(rewritten) },
+                    ],
+                  },
+                },
+              }),
+            ],
+            db: { migrationsDir: "./migrations" },
+          })
+        );
+        expect(edited.code, edited.said).toBe(1);
+        expect(edited.said).not.toContain("uwp__never_made");
+        expect(edited.said).not.toContain("no longer matches its ledger");
+        expect(edited.said).toContain(built!.module.name);
+      } finally {
+        await db.executeQuery(`DROP TABLE IF EXISTS ${q}uwp__extras${q}`);
+        await db.executeQuery(`DROP TABLE IF EXISTS ${q}uwp__things${q}`);
+      }
+    });
+
     it("a table and a column a later migration dropped, with consent, are not missing", async () => {
       const both = (fields: Field[], tags: boolean) =>
         defineConfig({
@@ -523,6 +722,67 @@ describe.each(getConfiguredTestDialects())(
       const again = await migrate(config([TITLE, BODY]));
       expect(again.code, again.said).toBeUndefined();
       expect(again.said).toContain(UP_TO_DATE);
+    });
+
+    it("a fresh project made from the blog template with the Schema Builder approach: its migration is applied and nothing is named", async () => {
+      // As the scaffold makes it: the template's migrations folder beside a
+      // configuration that declares no collection and no Single.
+      const TEMPLATE_TABLES = [
+        "dc_posts_categories",
+        "dc_posts_tags",
+        "dc_posts",
+        "dc_categories",
+        "dc_tags",
+        "dc_authors",
+        "user_ext",
+        "single_site_settings",
+        "single_navigation",
+        "single_homepage",
+      ];
+      const db = instance!.adapter as unknown as {
+        executeQuery(sql: string): Promise<unknown>;
+      };
+      const q = dialect === "mysql" ? "`" : '"';
+      const dropTemplateTables = async () => {
+        for (const table of TEMPLATE_TABLES) {
+          await db.executeQuery(
+            `DROP TABLE IF EXISTS ${q}${table}${q}${dialect === "postgresql" ? " CASCADE" : ""}`
+          );
+        }
+      };
+      await dropTemplateTables();
+      cpSync(
+        fileURLToPath(
+          new URL(
+            "../../../../../../templates/blog/migrations",
+            import.meta.url
+          )
+        ),
+        join(dir, "migrations"),
+        { recursive: true }
+      );
+      const scaffolded = config([], { noPosts: true });
+      try {
+        const first = await migrate(scaffolded);
+
+        expect(first.code, first.said).toBeUndefined();
+        expect(first.said).not.toContain("with no migration");
+        const drizzle = (
+          instance!.adapter as unknown as DrizzleAdapter
+        ).getDrizzle();
+        const live = await liveColumnNames(drizzle, dialect, [
+          "dc_posts",
+          "single_homepage",
+        ]);
+        expect(live.get("dc_posts")?.has("title")).toBe(true);
+        expect(live.get("single_homepage")).toBeDefined();
+
+        const again = await migrate(scaffolded);
+        expect(again.code, again.said).toBeUndefined();
+        expect(again.said).toContain(UP_TO_DATE);
+      } finally {
+        await dropTemplateTables();
+      }
     });
 
     it("a database db:sync made, with no migration yet, is told migrate:baseline", async () => {

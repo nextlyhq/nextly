@@ -152,20 +152,6 @@ export function mediaPickChanges(
 /** What a screen reader is given for the image. */
 export type AltMode = "library" | "custom" | "decorative";
 
-/** The modes, in the order the menu offers them. */
-export const ALT_MODES: readonly AltMode[] = [
-  "library",
-  "custom",
-  "decorative",
-];
-
-/** What the author calls each mode. */
-export const ALT_MODE_LABELS: Readonly<Record<AltMode, string>> = {
-  library: "From library",
-  custom: "Custom",
-  decorative: "Decorative",
-};
-
 /**
  * Which mode the stored props are in, read as the block reads them:
  * decorative first, then an alt the page stores (an empty one included,
@@ -189,39 +175,44 @@ export function storedAlt(
 }
 
 /**
- * What choosing `mode` writes. Each write is the least that puts the props in
- * that mode, so a prop already as the mode needs it is not named, and a lock
- * on it does not refuse the choice.
+ * What committing the alt field's words writes. The field shows the words in
+ * use: the page's own, else the library's. So:
  *
- * - From library removes the page's alt and the decorative mark.
- * - Custom removes the mark and keeps the page's alt; where it stores none,
- *   it starts from the library's words (or none), which is what the image
- *   was already given, so the choice changes nothing a reader hears.
- * - Decorative sets the mark and keeps the alt, so switching back loses no
- *   words; the block ignores the alt while the image is decorative.
+ * - words other than those in use are stored as the page's own;
+ * - the words in use, committed unchanged, write nothing, so an image showing
+ *   the library's words keeps following the library;
+ * - an emptied field removes the page's own words, so the library's apply
+ *   again; "Decorative, no alt text" is how an author says "none".
  */
-export function altModeChanges(
+export function altTextChanges(
   group: ImageAltGroup,
-  mode: AltMode,
+  typed: string,
   values: Readonly<Record<string, unknown>>,
   libraryAlt: string | undefined
 ): ImageChanges {
-  // Only `true` marks an image decorative, as the block reads it; a stored
-  // `false` already means "not decorative", and naming it would refuse the
-  // choice wherever the mark may not change.
-  const marked = values[group.decorative] === true;
-  const unmark = marked ? { [group.decorative]: undefined } : {};
-  if (mode === "decorative") return { [group.decorative]: true };
-  if (mode === "library") {
-    return {
-      ...unmark,
-      ...(values[group.alt] === undefined ? {} : { [group.alt]: undefined }),
-    };
+  const words = typed.trim();
+  const own = values[group.alt];
+  if (words === "") {
+    return own === undefined ? {} : { [group.alt]: undefined };
   }
-  return {
-    ...unmark,
-    ...(isAuthoredText(values[group.alt])
-      ? {}
-      : { [group.alt]: libraryAlt ?? "" }),
-  };
+  const inUse = isAuthoredText(own) ? String(own).trim() : libraryAlt;
+  return words === inUse ? {} : { [group.alt]: words };
+}
+
+/**
+ * What ticking or clearing "Decorative, no alt text" writes: the mark alone,
+ * so the alt text is kept for when it is cleared; the block ignores it while
+ * the image is decorative. Only `true` marks an image decorative, as the
+ * block reads it, so clearing a mark that is not set names nothing, and a
+ * lock on it does not refuse the change.
+ */
+export function decorativeChanges(
+  group: ImageAltGroup,
+  on: boolean,
+  values: Readonly<Record<string, unknown>>
+): ImageChanges {
+  if (on) return { [group.decorative]: true };
+  return values[group.decorative] === true
+    ? { [group.decorative]: undefined }
+    : {};
 }
