@@ -763,6 +763,9 @@ describe("useDocumentSession: recovery point", () => {
     await waitFor(() => expect(api.saveAutosave).toHaveBeenCalledTimes(1));
     expect(api.saveAutosave.mock.calls[0]?.[1]).toMatchObject({
       title: "Second",
+      // Stamped with the version the save stored, which the next save sends,
+      // so work recovered after a crash is not refused as stale.
+      _rev: "v2",
     });
   });
 

@@ -519,14 +519,24 @@ interface SessionRecording {
   readonly discard: () => Promise<void>;
 }
 
-/** Record `snapshot` as the point, noting it as this recorder's once stored. */
+/**
+ * Record `edits` as the point, noting it as this recorder's once stored.
+ * Stamped as it is sent with the version the session's next write would
+ * send, the copy's: so edits recorded while a write was on its way carry the
+ * version that write stored, and a refresh read since moves nothing.
+ */
 async function recordSnapshot(
   scope: VersionScope | null,
-  snapshot: Record<string, unknown>,
+  edits: Record<string, unknown>,
+  version: string | undefined,
   locale: string | null,
   storedRef: MutableRefObject<Record<string, unknown> | null>
 ): ReturnType<typeof versionApi.saveAutosave> {
   if (scope === null) throw new Error("session: no document to record");
+  const snapshot =
+    version === undefined
+      ? edits
+      : { ...edits, [DOCUMENT_VERSION_KEY]: version };
   const result = await versionApi.saveAutosave(scope, snapshot, locale);
   storedRef.current = snapshot;
   return result;
@@ -562,7 +572,8 @@ async function stillOwnsThePoint({
  */
 function useSessionRecording(
   target: DocumentSessionTarget | null,
-  held: boolean
+  held: boolean,
+  versionRef: MutableRefObject<string | undefined>
 ): SessionRecording {
   const locale = target?.locale ?? null;
   const slug = target?.collection ?? "";
@@ -591,7 +602,14 @@ function useSessionRecording(
   const { schedule, cancel, lastSent } = useSnapshotAutosave({
     identity,
     document,
-    save: () => recordSnapshot(scope, snapshotRef.current, locale, storedRef),
+    save: () =>
+      recordSnapshot(
+        scope,
+        snapshotRef.current,
+        versionRef.current,
+        locale,
+        storedRef
+      ),
     enabled: held && writes.pending === 0,
     stillWanted: edits.unsettled,
   });
@@ -880,7 +898,7 @@ export function useDocumentSession(
   const versionRef = useCopyVersion(read.document, targetKey(target));
   const lock = useSessionLock(target, versionRef);
   const held = lock.status === "held";
-  const recording = useSessionRecording(target, held);
+  const recording = useSessionRecording(target, held, versionRef);
   const mayPublish = useMayPublishIn(target);
   const { saveDraft, publish } = useSessionWrite(
     target,
@@ -891,19 +909,11 @@ export function useDocumentSession(
   );
   const { document } = read;
   const { record: recordDocument, discard } = recording;
-  // Stamped with the version the edits began from, which writes send too:
-  // a recovery point restored later must be judged against that version, not
-  // the newer one a refresh read since.
   const record = useCallback(
     (changes: Readonly<Record<string, unknown>>) => {
-      if (document === undefined) return;
-      const version = versionRef.current;
-      recordDocument(document, {
-        ...changes,
-        ...(version === undefined ? {} : { [DOCUMENT_VERSION_KEY]: version }),
-      });
+      if (document !== undefined) recordDocument(document, changes);
     },
-    [document, recordDocument, versionRef]
+    [document, recordDocument]
   );
 
   return useMemo(
