@@ -278,6 +278,18 @@ function judgeRelation(
       readsAs: writingOf(value.items[0]),
     };
   }
+  // A value that is no list, becoming one link: a list column's legacy writing of one link (a JSON
+  // string, `"p1"`), which the many-to-one conversion unquotes, so it reads as that link.
+  if (to.relation?.kept === "one") {
+    return {
+      outcome: "changed",
+      reason: "new-form",
+      readsAs:
+        value.kind === "json" && typeof value.value === "string"
+          ? value.value
+          : writingOf(value),
+    };
+  }
   return {
     outcome: "changed",
     reason: "new-form",

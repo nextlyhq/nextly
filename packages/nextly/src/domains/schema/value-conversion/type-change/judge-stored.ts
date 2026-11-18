@@ -131,6 +131,14 @@ export async function collectTypeChange(
 }
 
 /**
+ * Whether the save's conversion writes `stored` as no value, trimmed as the databases' own `trim`
+ * trims it: spaces only, so a tab-padded `null` is not one of the empties the conversion clears.
+ */
+function writtenAsNone(read: StoredAsRead, stored: string): boolean {
+  return read.writtenAsNone?.includes(stored.replace(/^ +| +$/g, "")) === true;
+}
+
+/**
  * A verdict as the save's conversion leaves the value: a blank value the rules read as empty is
  * written as what the conversion writes for it (`blankAs`), and a stored empty list a list keeps
  * stays `[]`; either is then judged by the new field, as a required list refuses `[]`.
@@ -142,7 +150,7 @@ function asConverted(
 ): ValueVerdict {
   // A stored empty the conversion writes as no value is empty to the new type, however the old type
   // reads it: a one-link column's text `null` reads as a link, and the switch's guard clears it.
-  if (stored !== null && read.writtenAsNone?.includes(stored.trim()) === true) {
+  if (stored !== null && writtenAsNone(read, stored)) {
     return { outcome: "kept", reason: "empty" };
   }
   if (verdict.reason !== "empty" || stored === null) return verdict;
@@ -226,7 +234,7 @@ class TypeChangeTally {
   ): boolean {
     if (verdict.reason !== "empty" || stored === null) return false;
     if (this.read.emptyListHeld && stored.trim() === "[]") return false;
-    if (this.read.writtenAsNone?.includes(stored.trim()) === true) return false;
+    if (writtenAsNone(this.read, stored)) return false;
     this.note("needs-rewrite", key);
     return true;
   }

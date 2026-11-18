@@ -134,6 +134,44 @@ interface RefusalError {
   message: string;
 }
 
+/**
+ * The columns that refuse NULL once the apply has run, keyed `table.column` in lower case: those
+ * NOT NULL in the database now, and those the apply makes NOT NULL (`change_column_nullable`), as
+ * the required-column gate finds them. A conversion that writes a row as NULL breaks either, and
+ * the gate, counting the values as they stand before the conversion, never sees that row.
+ */
+function notNullAfter(
+  live: NextlySchemaSnapshot | undefined,
+  operations: readonly Operation[]
+): Set<string> {
+  const key = (table: string, column: string) =>
+    `${table.toLowerCase()}.${column.toLowerCase()}`;
+  return new Set([
+    ...(live?.tables ?? []).flatMap(table =>
+      table.columns
+        .filter(column => column.nullable === false)
+        .map(column => key(table.name, column.name))
+    ),
+    ...operations.flatMap(op =>
+      op.type === "change_column_nullable" && !op.toNullable
+        ? [key(op.tableName, op.columnName)]
+        : []
+    ),
+  ]);
+}
+
+/** Whether `op`'s column refuses NULL once the apply has run, by its name now or in the plan. */
+function refusesNull(
+  notNull: ReadonlySet<string>,
+  op: { tableName: string; columnName: string },
+  live: { table: string; column: string }
+): boolean {
+  return (
+    notNull.has(`${live.table.toLowerCase()}.${live.column.toLowerCase()}`) ||
+    notNull.has(`${op.tableName.toLowerCase()}.${op.columnName.toLowerCase()}`)
+  );
+}
+
 /** `rows` counted, as a refusal words it: "1 row holds", "3 rows hold". */
 export function rowsHold(rows: number): string {
   return rows === 1 ? "1 row holds" : `${String(rows)} rows hold`;
@@ -201,15 +239,8 @@ export async function refuseSeveralReferencesForOne(args: {
 }): Promise<void> {
   const errors: RefusalError[] = [];
   const renames = renamesOf(args.operations);
-  const notNull = new Set(
-    args.live.tables.flatMap(table =>
-      table.columns
-        .filter(column => column.nullable === false)
-        .map(
-          column => `${table.name.toLowerCase()}.${column.name.toLowerCase()}`
-        )
-    )
-  );
+  // Made required in this apply too: the conversion writes a row holding none as NULL first.
+  const notNull = notNullAfter(args.live, args.operations);
   for (const op of args.operations) {
     if (
       op.type !== "change_column_type" ||
@@ -221,9 +252,7 @@ export async function refuseSeveralReferencesForOne(args: {
     errors.push(
       ...(await oneReferenceRefusals(args, op, {
         ...live,
-        notNull: notNull.has(
-          `${live.table.toLowerCase()}.${live.column.toLowerCase()}`
-        ),
+        notNull: refusesNull(notNull, op, live),
       }))
     );
   }
@@ -251,11 +280,14 @@ export async function refuseTargetSwitchesOverValues(args: {
   db: unknown;
   dialect: SupportedDialect;
   desired: DesiredSchema;
+  /** The tables as they stand, for each column's nullability before the apply. */
+  live?: NextlySchemaSnapshot;
   /** The apply's operations: its guards, and its renames, which say where each column is now. */
   operations: readonly Operation[];
 }): Promise<void> {
   const renames = renamesOf(args.operations);
   const errors: RefusalError[] = [];
+  const notNull = notNullAfter(args.live, args.operations);
   for (const op of args.operations) {
     if (op.type !== "change_column_type" || op.conversion !== "requireEmpty") {
       continue;
@@ -267,12 +299,30 @@ export async function refuseTargetSwitchesOverValues(args: {
       rowsWhere(args.dialect, live.table, live.column, HOLDS_A_VALUE)
     );
     const rows = Number(row?.n ?? 0);
-    if (rows === 0) continue;
     const { label, field } = subjectOf(
       args.desired,
       op.tableName,
       op.columnName
     );
+    // The guard clears each row holding none to NULL, which a column that is or becomes NOT NULL
+    // refuses: counted as one switching to one reference counts it, before anything runs.
+    if (refusesNull(notNull, op, live)) {
+      const [empty] = await querySqlRows<{ n: number | string }>(
+        args.db,
+        args.dialect,
+        rowsWhere(args.dialect, live.table, live.column, NO_REFERENCES)
+      );
+      const none = Number(empty?.n ?? 0);
+      if (none > 0) {
+        const these = none === 1 ? "that row" : "those rows";
+        errors.push({
+          path: `fields.${field}`,
+          code: "RELATIONSHIP_REQUIRED_HOLDS_NONE",
+          message: `${label}: field '${field}' is required and cannot change how its related entries are stored while ${rowsHold(none)} none. The change needs the field empty on every row, which a required field cannot be: delete ${these} first, or make the field optional.`,
+        });
+      }
+    }
+    if (rows === 0) continue;
     const those = rows === 1 ? "that row" : "those rows";
     errors.push({
       path: `fields.${field}`,
