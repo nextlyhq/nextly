@@ -48,6 +48,7 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 
 import { useCanvasTokenModeAt } from "./canvas/prefers-dark";
+import { ColourCleanUp, type CleanUpColours } from "./colour-cleanup";
 import {
   ColourGroupHead,
   ColourGroupHostContext,
@@ -56,7 +57,7 @@ import {
   useColourGroupHost,
 } from "./colour-group-ui";
 import { colourGroups, inColourGroup } from "./colour-groups";
-import { useColourFilter } from "./colour-usage-filter";
+import { ColoursTabEnd, useColoursOfView } from "./colours-of-view";
 import {
   GroupToggle,
   OwnSearch,
@@ -201,6 +202,14 @@ export interface TokensPanelProps {
    * editor's document, so it follows unsaved edits. Absent: none.
    */
   usedOnPage?: ReadonlySet<string>;
+  /**
+   * Remove the colours the site made that nothing uses, each judged on its
+   * own: "Clean up unused…" under the Colours tab's filter. Absent: not
+   * offered.
+   *
+   * @experimental Settles with the Colours tab's clean-up.
+   */
+  onCleanUp?: CleanUpColours;
 }
 
 /**
@@ -330,15 +339,18 @@ function VariablesView({
   // search would hide it: added where the author is, it is not lost.
   const { shown: matched, held } = searched(groups, needle, fresh);
   const usage = useUsageOfRows(hosted, groups, issue);
-  // The Colours tab's usage filter, over what the search matched.
-  const colourFilter = useColourFilter({
+  // The Colours tab's usage filter, over what the search matched, without
+  // the built-in colours the site hides.
+  const colourFilter = useColoursOfView({
     shown: matched,
+    groups,
     tokens,
     usage,
+    builtIn: identity => suppliedFor(supplied, identity) !== undefined,
     usedOnPage: hosted.usedOnPage,
     openKey,
   });
-  const { shown } = colourFilter;
+  const { shown, hidden, marksBuiltIn } = colourFilter;
 
   if (tokens === undefined) {
     return <Unread absence={absence} />;
@@ -389,6 +401,15 @@ function VariablesView({
           readOnly={readOnly}
         />
         {colourFilter.control}
+        <ColourCleanUp
+          groups={groups}
+          tokens={tokens}
+          usage={usage}
+          usedOnPage={hosted.usedOnPage}
+          builtIn={identity => suppliedFor(supplied, identity) !== undefined}
+          readOnly={readOnly}
+          onCleanUp={hosted.onCleanUp}
+        />
         <VariableGroups
           shown={shown}
           searching={searching}
@@ -409,7 +430,15 @@ function VariablesView({
             forget,
             search,
             focus,
+            hidden,
+            marksBuiltIn,
           })}
+        />
+        <ColoursTabEnd
+          groups={groups}
+          tokens={tokens}
+          readOnly={readOnly}
+          onChange={commitFrom(BUILT_IN_COLOURS_KEY)}
         />
       </ViewBody>
     </div>
@@ -528,6 +557,10 @@ interface RowsHost {
   readonly fresh: string | null;
   /** Focuses a row once it is drawn, wherever it is drawn now. */
   readonly focus: (key: string) => void;
+  /** The built-in colours the site hides, left out with any group they empty. */
+  readonly hidden: ReadonlySet<string>;
+  /** Whether a built-in colour's row says so: while the site hides the rest. */
+  readonly marksBuiltIn: boolean;
 }
 
 /** The groups a search leaves, or that none match. */
@@ -565,7 +598,13 @@ function VariableGroups({
     >
       {shown
         .flatMap(group =>
-          sectionsOf(group, rows.tokens, searching, colours.pending)
+          sectionsOf(
+            group,
+            rows.tokens,
+            searching,
+            colours.pending,
+            rows.hidden
+          )
         )
         .map(section => (
           <React.Fragment key={section.key}>
@@ -599,6 +638,10 @@ function VariableGroups({
                   }
                   usage={rows.usage}
                   reach={rowReach(entry, rows.usage)}
+                  builtIn={
+                    rows.marksBuiltIn &&
+                    rows.suppliedOf(entry.row.identity) !== undefined
+                  }
                   onRemoved={() => rows.onRemoved(entry.row.key)}
                 />
               )}
@@ -628,6 +671,9 @@ function movedInto(
 
 /** What the Colours tab's group changes commit under: no row's editor. */
 const COLOUR_GROUPS_KEY = "colour-groups";
+
+/** What the built-in colours setting commits under: no row's editor. */
+const BUILT_IN_COLOURS_KEY = "built-in-colours";
 
 /** An add, with the named group of colours whose list its add row ends. */
 type OnAddTo = (
@@ -659,7 +705,9 @@ function sectionsOf(
   tokens: SiteTokenSet,
   searching: boolean,
   /** Groups made with "+ New group" that hold no colour yet. */
-  pending: readonly string[] = []
+  pending: readonly string[] = [],
+  /** The built-in colours the site hides: a group of only these is left out. */
+  hidden: ReadonlySet<string> = new Set()
 ): ListSection[] {
   const whole: ListSection = { ...group, key: group.group };
   if (group.group !== "colours" || group.entries.length === 0) return [whole];
@@ -669,13 +717,23 @@ function sectionsOf(
   const named = colourGroups(tokens)
     .map(colourGroup => ({
       name: colourGroup.name,
+      identities: colourGroup.identities,
       entries: colourGroup.identities.flatMap(identity => {
         const entry = byIdentity.get(identity);
         return entry === undefined ? [] : [entry];
       }),
     }))
     .filter(colourGroup => !searching || colourGroup.entries.length > 0)
-    .concat(searching ? [] : pending.map(name => ({ name, entries: [] })));
+    .filter(
+      colourGroup =>
+        colourGroup.identities.length === 0 ||
+        !colourGroup.identities.every(identity => hidden.has(identity))
+    )
+    .concat(
+      searching
+        ? []
+        : pending.map(name => ({ name, identities: [], entries: [] }))
+    );
   return named.map((colourGroup, at) => ({
     key: colourGroupFoldKey(colourGroup.name),
     group: group.group,

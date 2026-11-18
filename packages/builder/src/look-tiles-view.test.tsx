@@ -372,22 +372,223 @@ describe("a block style the block can't take", () => {
   });
 });
 
+/** The block's own props, set on a node `nodeOf` drew. */
+function withProps(node: BlockNode, props: Record<string, unknown>): BlockNode {
+  return { ...node, props: { ...node.props, ...props } } as BlockNode;
+}
+
+/**
+ * The panel on the Style tab over a canvas that draws the selected block as
+ * `drawn` (its picture, for an Image), as the builder's canvas would.
+ */
+function mountOverCanvas(
+  node: BlockNode,
+  drawn: string,
+  library: readonly NamedClass[] = LIBRARY
+): HTMLElement {
+  const canvasRoot = document.createElement("div");
+  canvasRoot.innerHTML = drawn;
+  document.body.append(canvasRoot);
+  render(
+    <NoticeSinkProvider raise={() => {}}>
+      <InspectorPanel
+        editor={editorFor(node)}
+        classLibrary={library}
+        canvasRoot={canvasRoot}
+        onEditBlockStyles={() => {}}
+      />
+    </NoticeSinkProvider>
+  );
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+  return screen.getByRole("tabpanel", { name: "Style" });
+}
+
+/** Each tile's sample of its block, by the tile's style name. */
+function samples(): Map<string, HTMLElement> {
+  return new Map(
+    within(tiles())
+      .getAllByRole("radio")
+      .map(radio => {
+        const name =
+          radio.querySelector(".nx-look-tile__name")?.firstChild?.textContent ??
+          "";
+        const sample = radio.querySelector<HTMLElement>(
+          ".nx-look-tile__specimen"
+        );
+        if (sample === null) throw new Error(`${name} draws no sample`);
+        return [name, sample];
+      })
+  );
+}
+
+/** One tile's sample, which must be there. */
+function sampleOf(name: string): HTMLElement {
+  const found = samples().get(name);
+  if (found === undefined) throw new Error(`no ${name} tile`);
+  return found;
+}
+
+/**
+ * The section as the inspector test per block reads it: first in the Style
+ * tab, one tile per block style in order, and "Edit block styles" under them.
+ */
+function expectBlockStylesFirst(tab: HTMLElement, names: string[]): void {
+  expect(headings(tab)[0]).toBe("Block style");
+  expect(tileNames()).toEqual(names);
+  expect(
+    within(tab).getByRole("button", { name: "Edit block styles" })
+  ).toBeTruthy();
+}
+
+describe("an Image's block styles, drawn as that Image", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("shows Square, Rounded and Circle as the Image's own picture in each shape", () => {
+    const tab = mountOverCanvas(
+      withProps(nodeOf("core/image"), { src: "/media/harbour.jpg" }),
+      '<figure data-nx-node="a"><img src="/media/harbour.jpg" alt=""></figure>'
+    );
+    expectBlockStylesFirst(tab, ["SquareDefault", "Rounded", "Circle"]);
+    // The picture the canvas shows, in every tile: not a swatch.
+    for (const sample of samples().values()) {
+      expect(sample.getAttribute("data-kind")).toBe("image");
+      expect(sample.querySelector("img")?.getAttribute("src")).toBe(
+        "/media/harbour.jpg"
+      );
+    }
+    // Each in its shape: Square as the picture is, Rounded's corners, and
+    // Circle's round square.
+    expect(sampleOf("Square").style.borderRadius).toBe("");
+    expect(sampleOf("Rounded").style.borderRadius).toBe("12px");
+    expect(sampleOf("Circle").style.borderRadius).toBe("9999px");
+    expect(sampleOf("Circle").style.aspectRatio).toBe("1 / 1");
+  });
+
+  it("fits the picture as each style fits it, cropping where none says", () => {
+    // A style of the site's own that fits the whole picture in: the tile's
+    // picture is fitted, not cropped as the others are.
+    const fit = {
+      id: "look:core/image:fit",
+      slug: "image-fit",
+      label: "Fit",
+      orderIndex: 9,
+      blockType: "core/image",
+      styles: { base: { base: { objectFit: "contain" } } },
+    } as unknown as NamedClass;
+    mountOverCanvas(
+      withProps(nodeOf("core/image"), { src: "/media/harbour.jpg" }),
+      '<figure data-nx-node="a"><img src="/media/harbour.jpg" alt=""></figure>',
+      [...LIBRARY, fit]
+    );
+    const fitOf = (name: string) =>
+      sampleOf(name).querySelector("img")?.style.objectFit;
+    expect(fitOf("Fit")).toBe("contain");
+    expect(fitOf("Circle")).toBe("cover");
+    expect(fitOf("Square")).toBe("cover");
+  });
+
+  it("draws a picture's outline in each shape while the Image has none", () => {
+    mountStyle(nodeOf("core/image"), () => {});
+    for (const sample of samples().values()) {
+      expect(sample.querySelector("img")).toBeNull();
+      expect(sample.querySelector(".nx-look-tile__placeholder")).not.toBeNull();
+    }
+    expect(sampleOf("Circle").style.aspectRatio).toBe("1 / 1");
+  });
+});
+
+describe("a Quote's block styles, drawn as that Quote", () => {
+  it("shows Line, Plain and Large as the Quote's own words in each style", () => {
+    const tab = mountStyle(
+      withProps(nodeOf("core/quote"), { text: "Well begun is half done." }),
+      () => {}
+    );
+    expectBlockStylesFirst(tab, ["LineDefault", "Plain", "Large"]);
+    for (const sample of samples().values()) {
+      expect(sample.getAttribute("data-kind")).toBe("quote");
+      expect(sample.textContent).toBe("Well begun is half done.");
+    }
+    // Line: the accent line at the start; Plain takes it away; Large is
+    // bigger, centred words with no line.
+    expect(sampleOf("Line").style.borderStyle).toBe("solid");
+    expect(sampleOf("Line").style.borderInlineStartWidth).toBe("4px");
+    expect(sampleOf("Line").style.paddingInlineStart).toBe("1.5em");
+    expect(sampleOf("Plain").style.borderStyle).toBe("none");
+    expect(sampleOf("Large").style.borderStyle).toBe("none");
+    expect(sampleOf("Large").style.fontSize).toBe("1.5em");
+    expect(sampleOf("Large").style.textAlign).toBe("center");
+  });
+
+  it("quotes the words the canvas shows, as a bound Quote's are", () => {
+    // Bound to an entry's field, the Quote's stored words are not what the
+    // page shows: the tiles quote what the canvas draws.
+    mountOverCanvas(
+      withProps(nodeOf("core/quote"), { text: "Stored words." }),
+      '<figure data-nx-node="a"><blockquote>Words from the entry.</blockquote><figcaption>Someone</figcaption></figure>'
+    );
+    for (const sample of samples().values()) {
+      expect(sample.textContent).toBe("Words from the entry.");
+    }
+  });
+
+  it("quotes the block's own sample words while the Quote has none", () => {
+    mountStyle(nodeOf("core/quote"), () => {});
+    expect(sampleOf("Line").textContent).toBe(
+      "Simplicity is the soul of efficiency."
+    );
+  });
+});
+
+describe("a Section's block styles, drawn as a section band", () => {
+  it("shows Plain and Hero as a band of the page in each style", () => {
+    const tab = mountStyle(nodeOf("core/section"), () => {});
+    expectBlockStylesFirst(tab, ["PlainDefault", "Hero"]);
+    for (const sample of samples().values()) {
+      expect(sample.getAttribute("data-kind")).toBe("band");
+      // A band holding a heading and its lines, not a word standing in.
+      expect(sample.textContent).toBe("");
+      expect(sample.querySelectorAll(".nx-look-tile__line")).toHaveLength(3);
+    }
+    // Plain is the section's own band; Hero a tall, centred, surfaced band,
+    // its height following the sample's frame as the page's screen. (The
+    // section's fluid padding, a `clamp()` jsdom does not keep, is read in
+    // `look-tiles.test.ts`.)
+    expect(sampleOf("Plain").style.textAlign).toBe("");
+    expect(sampleOf("Hero").style.textAlign).toBe("center");
+    expect(sampleOf("Hero").style.minHeight).toBe("60cqh");
+    expect(sampleOf("Hero").style.paddingBlockStart).toBe("6rem");
+    expect(sampleOf("Hero").style.backgroundColor).not.toBe("");
+  });
+});
+
 describe("the Style tab's words", () => {
   // A block style is never called a Look, nor a shared style a Class, in the
-  // panel: the words an author meets are "Block style" and "Shared style".
-  it.each(["core/section", "core/button", "core/image"])(
-    "never says Look or Classes on %s",
-    type => {
-      const tab = mountStyle(nodeOf(type), () => {});
-      const words = tab.textContent ?? "";
-      expect(words).toContain("Block style");
-      expect(words).not.toMatch(/\bLooks?\b/);
-      expect(words).not.toMatch(/\bClasses\b/i);
-      // Nor in what a reader hears for each control.
-      const names = [...tab.querySelectorAll("[aria-label]")].map(
-        each => each.getAttribute("aria-label") ?? ""
-      );
-      expect(names.join(" ")).not.toMatch(/\bLooks?\b|\bClasses\b/i);
+  // panel: the words an author meets are "Block style" and "Shared style",
+  // on each block with block styles, wearing its own style or another.
+  it.each([
+    ["core/section", "hero"],
+    ["core/button", "outline"],
+    ["core/image", "circle"],
+    ["core/quote", "large"],
+  ])(
+    "never says Look or Classes on %s, with its own style or %s",
+    (type, worn) => {
+      for (const classes of [undefined, [lookId(type, worn)]]) {
+        cleanup();
+        const tab = mountStyle(nodeOf(type, classes), () => {});
+        const words = tab.textContent ?? "";
+        expect(words).toContain("Block style");
+        expect(words).not.toMatch(/\bLooks?\b/i);
+        expect(words).not.toMatch(/\bClasses\b/i);
+        // Nor in what a reader hears for each control, or a tooltip says.
+        const names = [...tab.querySelectorAll("[aria-label], [title]")].map(
+          each =>
+            `${each.getAttribute("aria-label") ?? ""} ${each.getAttribute("title") ?? ""}`
+        );
+        expect(names.join(" ")).not.toMatch(/\bLooks?\b|\bClasses\b/i);
+      }
     }
   );
 });

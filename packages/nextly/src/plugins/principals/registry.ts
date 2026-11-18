@@ -9,11 +9,13 @@
  *
  * @module plugins/principals/registry
  */
+import { CHANGED_BY_PRINCIPAL_KIND_LENGTH } from "../../lib/system-columns";
 import {
   AUDIT_ACTOR_KIND_LENGTH,
   AUDIT_ACTOR_PRINCIPAL_KIND_LENGTH,
   AUDIT_TARGET_PRINCIPAL_KIND_LENGTH,
 } from "../../schemas/audit/widths";
+import { CONTENT_EVENT_ACTOR_PRINCIPAL_KIND_LENGTH } from "../../schemas/content-events/widths";
 import { EMAIL_DELIVERY_PRINCIPAL_KIND_LENGTH } from "../../schemas/email-deliveries/widths";
 import { TRANSLATION_PROVENANCE_PRINCIPAL_KIND_LENGTH } from "../../schemas/translation-provenance/table-name";
 import type { PluginDefinition } from "../plugin-context";
@@ -59,13 +61,14 @@ const ATTRIBUTE_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 
 /**
  * The longest full kind name (`<plugin slug>:<name>`) core accepts: the
- * narrowest column an audit row or an email delivery record stores one in.
+ * narrowest column any record stores one in.
  *
  * PostgreSQL and MySQL keep a kind in bounded varchars, and SQLite in text,
  * which holds anything, so the bounded declarations decide. A longer name
- * fails every audit write naming such a person, and audit writes are
- * fail-safe, so the failure would be a log line and the row would never
- * exist. The widths the columns' declarations are written with rather than
+ * would fail wherever such a person is written down: every save they make
+ * (a document names its last changer, and its history the event, in the same
+ * transaction), and every audit write naming them, which is fail-safe, so
+ * that failure would be a log line and the row would never exist. The widths the columns' declarations are written with rather than
  * restated, so a column narrowed later tightens the bound instead of
  * silently disagreeing with it.
  */
@@ -75,7 +78,10 @@ export const PRINCIPAL_KIND_MAX_LENGTH = Math.min(
   AUDIT_TARGET_PRINCIPAL_KIND_LENGTH,
   EMAIL_DELIVERY_PRINCIPAL_KIND_LENGTH,
   // Where a translated value's provenance keeps who wrote it.
-  TRANSLATION_PROVENANCE_PRINCIPAL_KIND_LENGTH
+  TRANSLATION_PROVENANCE_PRINCIPAL_KIND_LENGTH,
+  // Who last changed a document's row, and who acted in its history.
+  CHANGED_BY_PRINCIPAL_KIND_LENGTH,
+  CONTENT_EVENT_ACTOR_PRINCIPAL_KIND_LENGTH
 );
 
 const ATTRIBUTE_TYPES: ReadonlySet<string> = new Set<PrincipalAttributeType>([
@@ -187,7 +193,7 @@ function fullKindName(
   }
   const kind = principalKindName(pluginName, name);
   if (kind.length > PRINCIPAL_KIND_MAX_LENGTH) {
-    return `the full name ${JSON.stringify(kind)} is longer than the ${PRINCIPAL_KIND_MAX_LENGTH} characters an audit row stores a kind in`;
+    return `the full name ${JSON.stringify(kind)} is longer than the ${PRINCIPAL_KIND_MAX_LENGTH} characters a kind is stored in`;
   }
   return { kind };
 }

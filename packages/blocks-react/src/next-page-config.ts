@@ -10,6 +10,7 @@
  */
 import type {
   BlockSeoContribution,
+  CustomCssLevel,
   DocumentLimits,
   SiteSheetInput,
   StyleCompileContext,
@@ -61,6 +62,24 @@ export function isSiteStylesProvider(
     );
   }
   return typeof value === "object" && value !== null && "read" in value;
+}
+
+/**
+ * A host's checker for custom CSS, and a per-render read of the site's own,
+ * together with the Singles that read depends on (see
+ * {@link SiteStylesProvider.singles} for why they are required).
+ *
+ * @experimental
+ */
+export interface CustomCssSource {
+  /** Which checker this is: a stored sheet compiled under another recompiles. */
+  readonly id: string;
+  /** Whether this CSS may be drawn at this level. */
+  accepts(css: string, level: CustomCssLevel): boolean;
+  /** The site's own CSS, read once per render; `undefined` for none. */
+  readSite: () => string | undefined | Promise<string | undefined>;
+  /** The Single slugs `readSite` consults, so a write to one busts the page. */
+  readonly singles: readonly string[];
 }
 
 /**
@@ -224,6 +243,15 @@ export interface BlocksPageConfig
    * and their invalidation.
    */
   siteStyles?: SiteStylesInput | SiteStylesProvider;
+  /**
+   * The host's checker for author-written CSS, and where the site's own CSS is
+   * read. Without it the route draws no custom CSS at any level: the compile
+   * draws only what a checker accepts. A page builder provides one for its
+   * pages route.
+   *
+   * @experimental
+   */
+  customCss?: CustomCssSource;
   /**
    * A dynamic collection to resolve media ids against, for a site storing its
    * images in one of its own.

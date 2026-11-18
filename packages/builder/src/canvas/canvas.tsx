@@ -62,11 +62,7 @@ import { isElement } from "../dom-kind";
 import { usePreviewedCollection } from "../previewed-entry";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
-import {
-  conditionMarksOf,
-  entryContentMarksOf,
-  lockMarksOf,
-} from "./canvas-block-marks";
+import { conditionMarksOf, entryContentMarksOf } from "./canvas-block-marks";
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import {
   drawnBreakpoints,
@@ -74,6 +70,7 @@ import {
 } from "./canvas-device-hidden";
 import { useCanvasEnvironment, useDrawnPage } from "./canvas-drawn-page";
 import { drawnRefusal } from "./canvas-drop-refusal";
+import { useEditedRegionDrawing } from "./canvas-edited-region";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { RegionsAround } from "./canvas-layout-parts";
 import { guardCanvasNavigation } from "./canvas-link-guard";
@@ -284,8 +281,9 @@ export function Canvas({
   conditionsUnchecked,
   conditionsApplied,
   composed,
-  // The selected region and the way to select one, for the regions alone.
-  ...regionSelection
+  // The selected region, the ways to select and edit one, and the one edited
+  // in place, for the regions alone.
+  ...regionUse
 }: CanvasProps): JSX.Element {
   const root = useRef<HTMLDivElement | null>(null);
   usePublishedRoot(root, rootRef, onRoot);
@@ -342,6 +340,7 @@ export function Canvas({
     document: deviceHidden.document,
     environment,
     applied: conditionsApplied,
+    addressed: regionUse.editingRegion === undefined,
   });
 
   /*
@@ -350,7 +349,6 @@ export function Canvas({
    * rendered tree: `own` for a block locked itself, `inherited` for one inside
    * a locked block, which the lock covers too.
    */
-  const lockedIds = useMemo(() => lockMarksOf(document), [document]);
   const conditionMarks = useMemo(
     () =>
       conditionMarksOf(
@@ -387,6 +385,20 @@ export function Canvas({
     [shownDocument, previewedCollection, render?.limits]
   );
 
+  // The region edited in place, drawn as the page is, and the marks of the
+  // document the canvas edits: the region's then, else the page's.
+  const edited = useEditedRegionDrawing(
+    regionUse.editingRegion,
+    render,
+    siteStyles,
+    {
+      document,
+      conditions: conditionMarks,
+      entryContent: entryContentMarks,
+      deviceHidden: deviceHidden.marks,
+    }
+  );
+
   useCanvasMarkers(
     root,
     marked,
@@ -394,10 +406,10 @@ export function Canvas({
     page,
     forcedState,
     drag,
-    lockedIds,
-    conditionMarks,
-    entryContentMarks,
-    deviceHidden.marks
+    edited.marks.locks,
+    edited.marks.conditions,
+    edited.marks.entryContent,
+    edited.marks.deviceHidden
   );
 
   // The refusal the cursor shows, asked of the same rule the notice draws by.
@@ -473,7 +485,8 @@ export function Canvas({
         drawn={drawn}
         rendered={render}
         environment={environment}
-        selection={regionSelection}
+        selection={regionUse}
+        editing={edited.drawn}
       >
         {page}
       </RegionsAround>

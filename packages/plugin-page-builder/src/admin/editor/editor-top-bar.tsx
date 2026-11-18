@@ -7,6 +7,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-top-bar
  */
+import type { PageCheck } from "@nextlyhq/builder";
 import { BreakpointSwitcher, PageChecksChip } from "@nextlyhq/builder/shell";
 import { DocumentSaveAndPublish } from "@nextlyhq/plugin-sdk/admin";
 
@@ -74,6 +75,10 @@ export function editorTopBar(
     visitor: VisitorPreview;
     pageData: PageDataCount | null;
     openAsForm: (() => void) | undefined;
+    /** The checks the Page checks count runs: the builder's and plugins'. */
+    pageChecks: readonly PageCheck[];
+    /** Opens Page settings at a tab, for a plugin's fix found there. */
+    openSettingsTab: (tab: string) => void;
   }
 ): {
   topBar: React.JSX.Element;
@@ -86,6 +91,8 @@ export function editorTopBar(
     siteStyleError,
     editedBreakpoint,
     chooseDevice,
+    previewWidth,
+    setPreviewWidth,
     editor,
     inline,
   } = view;
@@ -148,6 +155,10 @@ export function editorTopBar(
           selected={editedBreakpoint}
           onSelect={chooseDevice}
           status={siteStyleStatus(siteStylePending, siteStyleError)}
+          // A width previewed in place of the device's own: shown, typed
+          // and reset here, dragged at the canvas frame's edges.
+          previewWidth={previewWidth}
+          onPreviewWidth={setPreviewWidth}
         />
         {/* Beside the devices: the whole site in its dark values, offered
             while some variable has one. */}
@@ -164,7 +175,29 @@ export function editorTopBar(
           attention, opening the list. Never a reason to hold Save or
           Publish back, which read nothing of it. */}
         {editor.document.kind === "page" ? (
-          <PageChecksChip editor={editor} canvas={page.canvas} />
+          <PageChecksChip
+            editor={editor}
+            canvas={page.canvas}
+            // The builder's checks and other plugins', in their own groups.
+            checks={page.pageChecks}
+            onOpenSettingsTab={page.openSettingsTab}
+            // The site's header and footer, read with the page, so their
+            // headings count in the page's order.
+            regions={view.canvasRegions}
+            // The components the canvas draws the page's placements with.
+            {...(canvasRender.definitions === undefined
+              ? {}
+              : { definitions: canvasRender.definitions })}
+            // The site's variables, light and dark, for the contrast check.
+            {...(view.siteTokens === undefined
+              ? {}
+              : { tokens: view.siteTokens })}
+            // The site's shared styles, its edits to block types' looks
+            // among them, which a block's colours are drawn with.
+            {...(canvasRender.styleContext.namedClasses === undefined
+              ? {}
+              : { namedClasses: canvasRender.styleContext.namedClasses })}
+          />
         ) : null}
         {/* Last, at the bar's far end where the header kept them: Save and
           Publish, which say themselves whether the work is saved and

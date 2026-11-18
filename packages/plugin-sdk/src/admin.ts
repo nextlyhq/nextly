@@ -633,6 +633,32 @@ export {
 } from "@nextlyhq/admin/kit/document";
 
 /**
+ * Work on a second document from inside the view of another
+ * (@experimental).
+ *
+ * For a document view that edits another document in place, such as a site
+ * header edited from the page it sits on, while the view's own document
+ * stays open. `useDocumentSession(target)` reads the target's latest
+ * version (its working draft where one is held), holds its lock, saves it as
+ * a draft or publishes it, and records a recovery point for it; naming no
+ * target, or unmounting, lets the lock go. Each is the admin's own lock, read,
+ * update and recording, so the server judges every write as the signed-in
+ * person, and a save sends the version the copy started from.
+ *
+ * A deliberate widening for a second document. Experimental until editing in
+ * place settles; the intent is to keep its name and these operations.
+ */
+export {
+  useDocumentSession,
+  type DocumentSession,
+  type DocumentSessionLock,
+  type DocumentSessionOpen,
+  type DocumentSessionOutcome,
+  type DocumentSessionRefusal,
+  type DocumentSessionTarget,
+} from "@nextlyhq/admin/kit/document";
+
+/**
  * Token-driven layout primitives (@experimental). Compose plugin admin UI from
  * these so it inherits the admin's design system with no plugin build step:
  * `Card` (+ its parts) for surfaces, `Stack`/`Grid` for layout, `Stat` for
@@ -1391,6 +1417,20 @@ export type {
   FieldSettingsTab,
   FieldTypeSettings,
   FixedFieldSetting,
+} from "@nextlyhq/admin/kit/field-ui";
+/**
+ * Whether a numeric validation bound can be kept as it stands — the rule the
+ * field settings panel says under each bound. A surface that saves what the
+ * panel edited asks this of every bound before it persists, so a bound the
+ * panel flags is never stored and read downstream as its own meaning (a max
+ * length of 0 as "no limit", a schema `.max(0)` refusing every value).
+ *
+ * @experimental
+ */
+export {
+  boundProblem,
+  NUMERIC_BOUND_RULES,
+  type NumericRule,
 } from "@nextlyhq/admin/kit/field-ui";
 
 /**

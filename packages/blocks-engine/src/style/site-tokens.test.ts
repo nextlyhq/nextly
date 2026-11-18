@@ -1239,6 +1239,23 @@ describe("resolveSiteTokens", () => {
     expect(resolveSiteTokens({ tokens: [] })).not.toHaveProperty("order");
   });
 
+  it("keeps whether the built-in colours are shown, a site-wide setting like the order", () => {
+    const resolved = resolveSiteTokens({
+      tokens: [],
+      builtInColoursShown: false,
+    });
+    expect(resolved.builtInColoursShown).toBe(false);
+    // Hidden, never removed: every built-in colour is still in the set.
+    expect(
+      resolved.tokens.filter(token => token.kind === "color").length
+    ).toBe(
+      resolveSiteTokens().tokens.filter(token => token.kind === "color").length
+    );
+    expect(resolveSiteTokens({ tokens: [] })).not.toHaveProperty(
+      "builtInColoursShown"
+    );
+  });
+
   it("names the built-in colours in words an author reads", () => {
     const labels = resolveSiteTokens()
       .tokens.filter(token => token.kind === "color")
@@ -1882,12 +1899,38 @@ describe("the default spacing", () => {
     ["space.stack", [16, 18, 20]],
     ["space.section-y", [48, 63, 80]],
     ["space.gutter", [16, 31, 32]],
+    // A Section's Compact and Roomy padding: tighter and airier above and
+    // below, the same beside.
+    ["space.section-y-compact", [24, 31, 40]],
+    ["space.gutter-compact", [16, 31, 32]],
+    ["space.section-y-roomy", [72, 94, 120]],
+    ["space.gutter-roomy", [16, 31, 32]],
     ["space.columns", [16, 23, 32]],
     ["space.card", [16, 20, 24]],
   ] as const)("resolves %s to %j px at 375, 768 and 1280", (name, px) => {
     expect(
       widths.map(width => Math.round(pixelsAt(valueOf(name), width)))
     ).toEqual(px);
+  });
+
+  it("names the Section padding presets' variables as an author reads them", () => {
+    const label = (name: string): string | undefined => {
+      const token = defaultSiteTokens().find(entry => entry.name === name);
+      return token === undefined ? undefined : tokenDisplayLabel(token);
+    };
+    expect(
+      [
+        "space.section-y-compact",
+        "space.gutter-compact",
+        "space.section-y-roomy",
+        "space.gutter-roomy",
+      ].map(label)
+    ).toEqual([
+      "Section padding, compact (top and bottom)",
+      "Section padding, compact (sides)",
+      "Section padding, roomy (top and bottom)",
+      "Section padding, roomy (sides)",
+    ]);
   });
 
   it("pads a button 12 by 20 at every width", () => {

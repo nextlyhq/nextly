@@ -10,6 +10,7 @@
  *
  * @module lib/status-transition
  */
+import { NextlyError } from "../errors";
 
 /** The publish-lifecycle operation a status change amounts to. */
 export type PublishTransition = "publish" | "unpublish";
@@ -32,6 +33,32 @@ export function isLifecycleStatus(
   value: unknown
 ): value is (typeof LIFECYCLE_STATUSES)[number] {
   return (LIFECYCLE_STATUSES as readonly unknown[]).includes(value);
+}
+
+/**
+ * Why a write's `status` is refused, or null where it is not: where a workflow governs the
+ * collection or Single (`governed`), a status the lifecycle does not hold is refused, since a value
+ * the workflow cannot place would otherwise be stored past it. Elsewhere any value is stored as
+ * before, and only `"published"` is ever served as published ({@link resolvePublishTransition}).
+ * A write that names no status is never refused here.
+ */
+export function unknownStatusRefusal(
+  data: Readonly<Record<string, unknown>>,
+  governed: boolean
+): NextlyError | null {
+  if (!governed || !("status" in data) || data.status === undefined) {
+    return null;
+  }
+  if (isLifecycleStatus(data.status)) return null;
+  return NextlyError.validation({
+    errors: [
+      {
+        path: "status",
+        code: "UNKNOWN_STATUS",
+        message: `A workflow decides when this is published, so its status is "draft" or "published"; ${JSON.stringify(data.status) ?? "that"} is neither.`,
+      },
+    ],
+  });
 }
 
 /**

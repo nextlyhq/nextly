@@ -125,15 +125,12 @@ export interface DocumentSettings {
    */
   code?: DocumentCode;
   /**
-   * Document-scoped custom CSS, as the author wrote it.
+   * The page's own custom CSS, as the author wrote it.
    *
-   * NOT sanitized, and nothing renders it. This said "sanitized" while no
-   * sanitizer existed, which is the most expensive kind of wrong comment: it
-   * reads as a guarantee to whoever adds the render call, and the render call
-   * is the change that would make it dangerous. A stylesheet needs its
-   * selectors scoped and its properties allow-listed before it reaches a page,
-   * which is a different job from the value-level checks the rich-text path
-   * performs.
+   * Drawn into the page's sheet after the site's custom CSS and before each
+   * block's, and only where the host's checker accepts it: the compile draws
+   * no custom CSS without one (`StyleCompileContext.customCss`). A value the
+   * checker refuses is kept here and not drawn.
    */
   customCss?: string;
 }
@@ -288,11 +285,14 @@ export interface BlockNode {
   /** Author-facing instance label, shown in the Layers panel. */
   name?: string;
   /**
-   * Per-node custom CSS, as the author wrote it.
+   * The block's own custom CSS, as the author wrote it, with `selector` where
+   * the block goes.
    *
-   * NOT sanitized or scoped: the style compiler never reads this key. The claim
-   * that it was compiled is the same wrong guarantee the document-level field
-   * carried, one level down.
+   * Kept with `selector` and scoped when the page is compiled, so a block
+   * copied, moved, saved as a section or exported carries CSS that scopes to
+   * wherever it lands. Drawn last, after the page's, and only where the host's
+   * checker accepts it and every rule starts from `selector`; otherwise kept
+   * here and not drawn.
    */
   customCss?: string;
   /** CSS id applied to the node's root element. */

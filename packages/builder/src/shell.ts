@@ -187,6 +187,31 @@ export {
   useRegionSelection,
   type RegionSelection,
 } from "./canvas/region-selection";
+/*
+ * A region of the page's layout edited in place: which document the editor
+ * edits and the second state that edits a region, the canvas's input for it,
+ * the bar for the strip above the canvas and the dim over the page.
+ * Experimental until editing a header or footer in place settles.
+ */
+export type { CanvasEditingRegion } from "./canvas/canvas-props";
+export {
+  RegionEditingScrim,
+  type RegionEditingScrimProps,
+} from "./canvas/region-editing-scrim";
+export {
+  canvasEditingOf,
+  regionEscape,
+  useEditingTarget,
+  type EditingTarget,
+  type EditingTargetState,
+  type RegionEditing,
+  type RegionEditingWords,
+  type RegionStateArgs,
+} from "./editing-target";
+export {
+  RegionEditingBar,
+  type RegionEditingBarProps,
+} from "./region-editing-bar";
 
 /**
  * The inserter, behind the same client banner as the shell it fills: it holds
@@ -493,6 +518,8 @@ export type { EmptyContainerAppendersProps } from "./canvas/empty-container-appe
  */
 export { ImageStates } from "./canvas/image-states";
 export type { ImageStatesProps } from "./canvas/image-states";
+export { EmbedStates } from "./canvas/embed-states";
+export type { EmbedStatesProps } from "./canvas/embed-states";
 /**
  * The chooser a block just added asks for, drawn over it on the canvas while
  * the editor's first-add step holds: the Columns layouts with Skip. A canvas
@@ -515,6 +542,12 @@ export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
  * a colour variable's, reads and adds to the one list.
  */
 export { RecentColoursStore } from "./recent-colours";
+/**
+ * @experimental The colours every colour picker in the builder leaves out
+ * while the site hides its unused built-in colours, provided once around
+ * the shell, and the read a host provides it from.
+ */
+export { HiddenColours, useHiddenColoursRead } from "./built-in-colours";
 /**
  * @experimental A template's document with an entry's own blocks composed
  * into its Entry content block, as the canvas draws it, for a host asking
@@ -730,10 +763,11 @@ export type {
  * document and ships from the root entry.
  */
 export { LayersPanel } from "./panels/layers/layers-panel";
+export type { LayersPanelProps } from "./panels/layers/layers-panel";
 export type {
-  LayersPanelProps,
+  LayersEditedRegion,
   LayersRegionRow,
-} from "./panels/layers/layers-panel";
+} from "./panels/layers/layers-regions";
 /*
  * The tokens studio. A host that mounts it owns the site style document and
  * decides when an edit is persisted; this exports the surface, not the save.
@@ -848,6 +882,7 @@ export type {
   SharedStylesPanelProps,
 } from "./shared-styles-panel";
 export type {
+  SharedStyleHereParts,
   SharedStyleKind,
   SharedStyleReach,
   SharedStyleRefusal,

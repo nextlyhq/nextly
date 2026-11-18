@@ -94,6 +94,12 @@ import {
   type StoredUse,
 } from "./shared-style-rescan";
 import {
+  readableHere,
+  usageOf,
+  type UsageHereReaders,
+} from "./shared-style-usage-here";
+import type { SiteStyleData } from "./site-style";
+import {
   collectionsTheBuilderOpens,
   siteLocales,
   singlesTheBuilderOpens,
@@ -104,7 +110,9 @@ import {
   SHARED_STYLE_LOCK_WRITE_CONTEXT,
   SITE_STYLE_SLUG,
   sharedStyleName,
+  siteTokensOverCode,
 } from "./site-style-storage";
+import { textStyleReasons } from "./site-text-uses";
 import { retryOnStale } from "./stale-retry";
 import { readStoredJson } from "./stored-json";
 import type { UncoveredPage } from "./uncovered-pages";
@@ -150,6 +158,12 @@ export const LOCK_SHARED_STYLES_PERMISSION: string = `${LOCK_SHARED_STYLES.actio
 export interface SharedStyleRead {
   /** As stored, unknown keys kept. */
   readonly entries: Record<string, unknown>[];
+  /**
+   * The same Single's stored variables section, whose Site text rows may
+   * follow a text style: read in the same read as the classes, so a removal
+   * judges the rows and the classes of one version.
+   */
+  readonly tokens?: unknown;
   /** The Single's version as read; absent from a server that issues none. */
   readonly rev: string | undefined;
 }
@@ -322,29 +336,6 @@ export const NOTHING_FOUND: DocumentsUsing = {
   complete: false,
 };
 
-const NO_KINDS: Readonly<Record<SharedStyleUsageKind, number>> = {
-  pages: 0,
-  components: 0,
-  patterns: 0,
-  layouts: 0,
-};
-
-/** One listing as a usage: its count, the same documents by kind. */
-export function usageOf(
-  found: DocumentsUsing,
-  kindOf: (collection: string) => SharedStyleUsageKind
-): SharedStyleUsage {
-  const byKind = { ...NO_KINDS };
-  for (const entry of found.collections) {
-    byKind[kindOf(entry.collection)] += entry.documents.length;
-  }
-  return {
-    documents: documentCountOf(found),
-    byKind,
-    complete: found.complete,
-  };
-}
-
 /**
  * How widely each named shared style is used, with the index's health and
  * whether this caller may lock styles.
@@ -355,9 +346,18 @@ export function usageOf(
 export async function readSharedStyleUsage(
   req: Request,
   ctx: Pick<PluginRouteContext, "caller" | "self">,
-  usage: SharedStyleUsageSource
+  usage: SharedStyleUsageSource,
+  /**
+   * Whether the caller may read the document the editor names, and the
+   * site's default language. Without them no document's share is reported.
+   */
+  readers?: UsageHereReaders
 ): Promise<SharedStylesUsageResponse> {
   const ids = usageIds(req.url);
+  // What the editor has open, whose saved share is reported apart: only for
+  // a document the caller may read, checked before the index is read.
+  const here =
+    readers === undefined ? undefined : await readableHere(req.url, readers);
   const health = await usage.health();
   // One read for the whole page of styles, not one per style.
   const found = await usage.documentsUsingEach(ids, health);
@@ -366,8 +366,10 @@ export async function readSharedStyleUsage(
   const styles: Record<string, SharedStyleUsage> = Object.fromEntries(
     ids.map(id => [
       id,
-      usageOf(found.get(id) ?? NOTHING_FOUND, collection =>
-        usage.kindOf(collection)
+      usageOf(
+        found.get(id) ?? NOTHING_FOUND,
+        collection => usage.kindOf(collection),
+        here
       ),
     ])
   );
@@ -894,7 +896,9 @@ export async function removeSharedStyles(
   store: SharedStyleStore,
   usage: SharedStyleUsageSource,
   configClassIds: ReadonlySet<string>,
-  stillUsed: StillUsedCheck
+  stillUsed: StillUsedCheck,
+  /** The site's code-supplied style, whose Site text rows count too. */
+  defaults?: SiteStyleData
 ): Promise<Response> {
   const parsed = RemoveBody.safeParse(await jsonBody(req));
   if (!parsed.success) {
@@ -914,6 +918,14 @@ export async function removeSharedStyles(
         ids,
         classes,
         configClassIds
+      );
+      // A Site text row following a text style, the code's rows included,
+      // from the Single in hand: asked before the index, as it reads nothing.
+      reasons.push(
+        ...textStyleReasons(
+          removable,
+          siteTokensOverCode(defaults, read.tokens)
+        )
       );
       // Read just before the write, never taken from what the panel showed.
       reasons.push(
@@ -981,13 +993,18 @@ export function siteStyleClassStore(
         doc !== null && typeof doc === "object"
           ? readStoredJson((doc as Record<string, unknown>).classes)
           : undefined;
-      if (!Array.isArray(raw)) return { entries: [], rev };
+      const tokens =
+        doc !== null && typeof doc === "object"
+          ? readStoredJson((doc as Record<string, unknown>).tokens)
+          : undefined;
+      if (!Array.isArray(raw)) return { entries: [], rev, tokens };
       return {
         entries: raw.filter(
           (entry): entry is Record<string, unknown> =>
             entry !== null && typeof entry === "object" && !Array.isArray(entry)
         ),
         rev,
+        tokens,
       };
     },
     write: async (classes, context, from) => {
@@ -1342,6 +1359,16 @@ export async function countSharedStyleUsage(
   );
 }
 
+/**
+ * The site's default language by code, as the usage index files it: the
+ * configured default, else the first language, else none.
+ */
+function siteDefaultLocale(ctx: Pick<PluginRouteContext, "config">): string {
+  return (
+    ctx.config.localization?.defaultLocale || siteLocales(ctx.config)[0] || ""
+  );
+}
+
 /** Refuse a caller who may not read shared styles' usage, before any read. */
 async function admitUsageReader(
   ctx: Pick<PluginRouteContext, "caller" | "self">
@@ -1357,6 +1384,8 @@ async function admitUsageReader(
 export interface SharedStyleRouteSetup {
   /** The ids of the classes the site's code supplies. */
   readonly configClassIds: ReadonlySet<string>;
+  /** The site's code-supplied style, whose Site text rows may follow a text style. */
+  readonly defaults?: SiteStyleData;
   /** The usage index for this request. */
   readonly usage: (ctx: PluginRouteContext) => SharedStyleUsageSource;
   /** The site's document limits, the bounds the stored documents are walked under. */
@@ -1402,7 +1431,11 @@ export function sharedStyleRoutes(setup: SharedStyleRouteSetup): {
       handler: async (req, ctx) => {
         await admitUsageReader(ctx);
         return respondDoc(
-          await readSharedStyleUsage(req, ctx, setup.usage(ctx))
+          await readSharedStyleUsage(req, ctx, setup.usage(ctx), {
+            named: namedDocumentsReader(ctx),
+            single: namedSingleReader(ctx),
+            defaultLocale: () => siteDefaultLocale(ctx),
+          })
         );
       },
     },
@@ -1457,7 +1490,8 @@ export function sharedStyleRoutes(setup: SharedStyleRouteSetup): {
                 readNamed,
                 async slug => (await ctx.caller?.can("read", slug)) ?? false
               ),
-          }
+          },
+          setup.defaults
         );
       },
     },
