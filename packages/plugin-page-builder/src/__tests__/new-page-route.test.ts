@@ -369,6 +369,72 @@ describe("creating from the New page dialog", () => {
     );
   });
 
+  describe("where another field must be unique too", () => {
+    /** Pages with a unique `code` beside the address. */
+    const CODED: PageCollection = { ...PAGES, uncopyable: true };
+    const clash = () =>
+      NextlyError.duplicate({ logContext: { field: "unknown" } });
+
+    it("passes core's refusal through when no page it can see holds the typed address", async () => {
+      const original = clash();
+      const create = vi.fn(async () => {
+        throw original;
+      });
+      const error = await refused(() =>
+        createPage(
+          {
+            collection: "pages",
+            title: "Beta",
+            slug: "beta",
+            fields: { code: "X1" },
+          },
+          readsOver({ create }, [CODED])
+        )
+      );
+      expect(error).toBe(original);
+      expect(create).toHaveBeenCalledTimes(1);
+    });
+
+    it("names the page that took the typed address meanwhile", async () => {
+      // Free when checked; held by the time core refused the write.
+      let held = false;
+      const find = vi.fn(async (args: { where: Record<string, unknown> }) =>
+        held ? holding({ beta: "Beta launch" })(args) : listed([])
+      );
+      const create = vi.fn(async () => {
+        held = true;
+        throw clash();
+      });
+      const error = await refused(() =>
+        createPage(
+          { collection: "pages", title: "Beta", slug: "beta" },
+          readsOver({ create, find }, [CODED])
+        )
+      );
+      expect(issuesOf(error)).toEqual([
+        expect.objectContaining({
+          path: "slug",
+          message: "That address is used by Beta launch",
+        }),
+      ]);
+    });
+
+    it("passes core's refusal through, trying no other address, when the title's address is free to it", async () => {
+      const original = clash();
+      const create = vi.fn(async () => {
+        throw original;
+      });
+      const error = await refused(() =>
+        createPage(
+          { collection: "pages", title: "Beta", fields: { code: "X1" } },
+          readsOver({ create }, [CODED])
+        )
+      );
+      expect(error).toBe(original);
+      expect(create).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("moves an address made from the title on to the first free one", async () => {
     const reads = readsOver({ find: holding({ pricing: "Pricing" }) });
     await createPage({ collection: "pages", title: "Pricing" }, reads);

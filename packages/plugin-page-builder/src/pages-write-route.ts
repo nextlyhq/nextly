@@ -351,6 +351,27 @@ function parentOf(
 export interface SlugTarget {
   readonly slug: string;
   readonly slugField?: { readonly name: string; readonly unique: boolean };
+  /**
+   * Whether another top-level field must be unique too, so core's DUPLICATE
+   * on a write may be that field's rather than the address's.
+   */
+  readonly uncopyable?: true;
+}
+
+/**
+ * Whether core's DUPLICATE on a write at `slug` is the address's. Core names
+ * no field in it, so: always, where no other field must be unique; else only
+ * where a page the caller can read holds the address now. A clash on another
+ * field is core's to word, and is passed through as it came.
+ */
+async function duplicateIsAddress(
+  source: SlugTarget,
+  field: string,
+  slug: string,
+  writes: Pick<PagesWrites, "find">
+): Promise<boolean> {
+  if (source.uncopyable !== true) return true;
+  return (await freeSlugs(source, field, slug, writes))[0] !== slug;
 }
 
 /**
@@ -380,6 +401,9 @@ export async function writeWithSlug(
       return await write({ [field.name]: slug });
     } catch (error) {
       if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
+      if (!(await duplicateIsAddress(source, field.name, slug, writes))) {
+        throw error;
+      }
     }
   }
   throw NextlyError.conflict({
@@ -495,8 +519,14 @@ async function writeAtTyped(
   try {
     return await write({ [field.name]: typed });
   } catch (error) {
-    if (NextlyError.isCode(error, "DUPLICATE")) throw addressTaken(undefined);
-    throw error;
+    // An address that need not be unique is never what core found taken.
+    if (!NextlyError.isCode(error, "DUPLICATE") || !field.unique) throw error;
+    if (source.uncopyable !== true) throw addressTaken(undefined);
+    // Another field must be unique too: the address's only where a page the
+    // caller can read holds it now, named.
+    const holder = await holderOf(source, field.name, typed, writes);
+    if (holder === undefined) throw error;
+    throw addressTaken(holder);
   }
 }
 

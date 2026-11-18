@@ -64,6 +64,8 @@ const notes = defineCollection({
     text({ name: "title" }),
     text({ name: "slug", unique: true }),
     { name: "content", type: BLOCKS_TYPE } as never,
+    // Unique beside the address, so a clash on it is not the address's.
+    text({ name: "code", unique: true }),
   ],
   // A filter: the author may update the entries it matches, which no
   // yes-or-no without an entry can say.
@@ -465,6 +467,34 @@ describe.each(getConfiguredTestDialects())(
           item.id
         );
       }
+    });
+
+    it("passes a clash on another unique field through, never calling it the address's", async () => {
+      await created(
+        await ask("POST", PAGES_ROUTE_PATH, editor, {
+          collection: NOTES,
+          title: "Alpha",
+          slug: "alpha",
+          fields: { code: "X1" },
+        })
+      );
+      for (const body of [
+        {
+          collection: NOTES,
+          title: "Beta",
+          slug: "beta",
+          fields: { code: "X1" },
+        },
+        { collection: NOTES, title: "Gamma", fields: { code: "X1" } },
+      ]) {
+        const response = await ask("POST", PAGES_ROUTE_PATH, editor, body);
+        const text = await response.text();
+        expect(response.status, text).toBe(409);
+        expect(text, body.title).not.toContain("address");
+        expect(text, body.title).not.toContain("slug this title");
+      }
+      expect(await storedAt(NOTES, "beta")).toHaveLength(0);
+      expect(await storedAt(NOTES, "gamma")).toHaveLength(0);
     });
 
     it("answers that an author whose update rule is a row filter may change the page they made", async () => {
