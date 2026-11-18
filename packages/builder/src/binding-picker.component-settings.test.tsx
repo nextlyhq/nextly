@@ -26,7 +26,9 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { boundField } from "./binding-bound-names";
 import type { BindingFieldSource } from "./binding-services";
+import { settingBoundFrom, settingSource } from "./binding-setting-source";
 import type { ComponentFieldsHost } from "./component-fields";
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
@@ -367,5 +369,42 @@ describe("the picker in a component's own view", () => {
     await within(list).findByRole("group", { name: "Homepage" });
     expect(groupNames(list)).toEqual(["Homepage", "Site"]);
     expect(screen.queryByText(/places it/)).toBeNull();
+  });
+});
+
+describe("a bound setting's field, as the chip and the image controls read it", () => {
+  const card = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "component",
+    nodes: [
+      block("title", "Apply now"),
+      block("pic", undefined),
+      block("h", ""),
+    ],
+    exposed: [...SETTINGS],
+  } as BlockDocument;
+
+  it("keeps an image setting's type, as the picker lists it", () => {
+    const binding = { $bind: "picture", source: "setting" } as const;
+    const from = settingBoundFrom(binding, card);
+    const listed = settingSource(
+      card,
+      "h",
+      {
+        name: "media",
+        schema: { type: "media", label: "Image", role: "content" },
+        value: undefined,
+        supported: true,
+        options: [],
+        offered: true,
+        readOnly: false,
+      },
+      undefined
+    )?.fields.find(field => field.name === "picture");
+    // The image controls read a file's own alt text only from a file field.
+    expect(
+      boundField(binding, from ?? { name: undefined, fields: undefined })?.type
+    ).toBe("upload");
+    expect(listed?.type).toBe("upload");
   });
 });

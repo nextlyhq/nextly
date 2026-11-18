@@ -86,13 +86,41 @@ function settingChoice(
   setting: ExposedProperty
 ): BindingFieldChoice {
   return {
-    name: setting.id,
-    label: setting.label,
-    type: READ_AS[setting.type],
+    ...settingField(setting),
     // A setting is the component's own, shown wherever it is placed.
     public: true,
     ...shownDefault(defaultOf(document, setting)),
   };
+}
+
+/**
+ * A setting as a field: its id, its label and the type its value is read as.
+ * The one description the picker's row and a bound prop's chip and controls
+ * share, so an image setting is read as a file by both.
+ */
+function settingField(
+  setting: Pick<ExposedProperty, "id" | "label" | "type">
+): { name: string; label: string; type: string } {
+  return {
+    name: setting.id,
+    label: setting.label,
+    type: READ_AS[setting.type],
+  };
+}
+
+/** A stored setting, read only where its id, label and type are usable. */
+function readableSetting(
+  entry: unknown
+): Pick<ExposedProperty, "id" | "label" | "type"> | undefined {
+  if (!isPlainRecord(entry)) return undefined;
+  const { id, label, type } = entry;
+  if (typeof id !== "string" || typeof label !== "string") return undefined;
+  return isSettingType(type) ? { id, label, type } : undefined;
+}
+
+/** Whether a stored value names a kind of setting this editor reads. */
+function isSettingType(type: unknown): type is ExposedProperty["type"] {
+  return typeof type === "string" && Object.hasOwn(READ_AS, type);
 }
 
 /** The setting's default: the value on its own block, at its path. */
@@ -136,12 +164,10 @@ export function settingBoundFrom(
   if (binding.source !== "setting") return undefined;
   const exposed: unknown = isPlainRecord(document) ? document.exposed : [];
   const fields = (Array.isArray(exposed) ? (exposed as unknown[]) : []).flatMap(
-    entry =>
-      isPlainRecord(entry) &&
-      typeof entry.id === "string" &&
-      typeof entry.label === "string"
-        ? [{ name: entry.id, type: "text", label: entry.label }]
-        : []
+    entry => {
+      const setting = readableSetting(entry);
+      return setting === undefined ? [] : [settingField(setting)];
+    }
   );
   return { name: COMPONENT_SETTINGS_SOURCE, fields };
 }
