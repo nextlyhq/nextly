@@ -23,7 +23,10 @@ vi.mock("../../../route-handler/schema-version", () => ({
   },
 }));
 
-import { afterEnclosingCommit } from "../applied-fields-row";
+import {
+  afterEnclosingCommit,
+  registryInFileTransaction,
+} from "../applied-fields-row";
 
 /** An adapter inside a transaction or not, holding each effect `afterCommit` is given. */
 function adapterThat(inTransaction: boolean) {
@@ -68,5 +71,24 @@ describe("a registry write's signals once the transaction it joined commits", ()
 
     expect(afterCommit).not.toHaveBeenCalled();
     expect(signals).toEqual({ cleared: 0, bumped: 0 });
+  });
+});
+
+// Where the translations table is reconciled after the file, the apply writes the registry row
+// after that step, not in the file's transaction, so the row never records a change the step
+// failed to make.
+describe("where a Builder apply writes its registry row", () => {
+  it("writes it in the file's transaction for an entity keeping no translations", () => {
+    expect(
+      registryInFileTransaction({ wasStored: false, isStored: false })
+    ).toBe(true);
+  });
+
+  it.each([
+    ["kept them before the save", { wasStored: true, isStored: false }],
+    ["keeps them after it", { wasStored: false, isStored: true }],
+    ["keeps them throughout", { wasStored: true, isStored: true }],
+  ])("writes it after the translations step for one that %s", (_, layout) => {
+    expect(registryInFileTransaction(layout)).toBe(false);
   });
 });
