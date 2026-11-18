@@ -604,6 +604,56 @@ describe("a block style, which belongs to one block type", () => {
     expect(plan.lookTrimmed).toBe(true);
   });
 
+  it("keeps the sides of a value the block's own value never touched, in another state", () => {
+    // The look pads the bottom while hovered; the block pads its own top.
+    // Different sides are different CSS, so both stay.
+    const hoverPad: NamedClass = {
+      id: "look-hover-pad",
+      slug: "hover-pad",
+      orderIndex: 0,
+      blockType: "test/words",
+      styles: { hover: { desktop: { padding: { blockEnd: "16px" } } } },
+    };
+    const own = {
+      ...WORDS,
+      classes: ["look-hover-pad"],
+      styles: { base: { desktop: { padding: { blockStart: "8px" } } } },
+    };
+    const plan = planTurnInto(page(own), "w1", "test/passage", lookup, [
+      hoverPad,
+    ]);
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.op.node.styles).toEqual({
+      base: { desktop: { padding: { blockStart: "8px" } } },
+      hover: { desktop: { padding: { blockEnd: "16px" } } },
+    });
+    expect(plan.lookTrimmed).toBeUndefined();
+  });
+
+  it("orders two worn looks as the stylesheet does, by id when their places tie", () => {
+    // Both at place 0: the stylesheet writes "a" then "z", so "z" wins.
+    const z: NamedClass = {
+      id: "z",
+      slug: "zed",
+      orderIndex: 0,
+      blockType: "test/words",
+      styles: { base: { desktop: { color: "#f00" } } },
+    };
+    const a: NamedClass = {
+      id: "a",
+      slug: "ay",
+      orderIndex: 0,
+      blockType: "test/words",
+      styles: { base: { desktop: { color: "#00f" } } },
+    };
+    const worn = { ...WORDS, classes: ["z", "a"], styles: undefined };
+    const plan = planTurnInto(page(worn), "w1", "test/passage", lookup, [z, a]);
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.op.node.styles).toEqual({
+      base: { desktop: { color: "#f00" } },
+    });
+  });
+
   it("folds only a look the block was drawn with", () => {
     // A look of a third type was never drawn on this block, so nothing of it
     // comes along.

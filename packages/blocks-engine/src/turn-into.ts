@@ -36,7 +36,11 @@ import {
 import type { BuilderOp } from "./ops-vocabulary";
 import { getBlock } from "./registry";
 import { STYLE_CATALOG } from "./style/catalog";
-import { isLook, type NamedClass } from "./style/named-class";
+import {
+  isLook,
+  orderedNamedClasses,
+  type NamedClass,
+} from "./style/named-class";
 import { overlaidStyles } from "./style/overlaid-styles";
 import { supportsAllowStyleProperty } from "./style/supports-map";
 import { findNode } from "./tree";
@@ -236,9 +240,8 @@ function lookOf(
   const drawn = library.filter(
     cls => worn.has(cls.id) && (!isLook(cls) || cls.blockType === node.type)
   );
-  const looks = drawn
-    .filter(isLook)
-    .sort((a, b) => a.orderIndex - b.orderIndex);
+  // In the order the stylesheet writes them, which decides between them.
+  const looks = orderedNamedClasses(drawn.filter(isLook));
   if (looks.length === 0) return {};
   const gone = new Set(looks.map(look => look.id));
   const kept = drawn.filter(cls => !gone.has(cls.id)).map(cls => cls.styles);
@@ -278,13 +281,22 @@ function stateOrder(state: string): number {
 
 /** `value` without what `taken` sets: the sides of a composite, or all. */
 function minus(value: StyleValue, taken: StyleValue): StyleValue | undefined {
-  const isSides = (each: StyleValue): each is Record<string, StyleValue> =>
-    typeof each === "object" && each !== null && !isTokenRef(each);
   if (!isSides(value) || !isSides(taken)) return undefined;
   const left = Object.entries(value).filter(
     ([side]) => !Object.hasOwn(taken, side)
   );
   return left.length === 0 ? undefined : Object.fromEntries(left);
+}
+
+/** Whether a stored value holds named sides (a token reference does not). */
+function isSides(each: StyleValue): each is Record<string, StyleValue> {
+  return typeof each === "object" && each !== null && !isTokenRef(each);
+}
+
+/** Whether taking `taken` out of `value` removes anything from it. */
+function overlaps(value: StyleValue, taken: StyleValue): boolean {
+  if (!isSides(value) || !isSides(taken)) return true;
+  return Object.keys(value).some(side => Object.hasOwn(taken, side));
 }
 
 /** Whether two places are one state at one width. */
@@ -313,17 +325,19 @@ function leftOf(
   beaters: readonly Placed[],
   own: readonly Placed[]
 ): { value?: StyleValue; trimmed: boolean } {
-  const lost =
-    beaters.some(each => !samePlace(each, at)) ||
-    own.some(each => ownWouldLose(at, each));
-  if (lost) return { trimmed: true };
+  // What beat it before and would not now: a kept class or later look
+  // anywhere, the block's own value where the look's would now come after it.
+  // Only the sides they set go; at the look's own place a class's sides go
+  // quietly, as they always won there.
+  const winners = [...beaters, ...own.filter(each => ownWouldLose(at, each))];
   let left: StyleValue | undefined = value;
-  for (const each of beaters) {
-    if (left !== undefined) left = minus(left, each.value);
+  let trimmed = false;
+  for (const each of winners) {
+    if (left === undefined) break;
+    if (!samePlace(each, at) && overlaps(left, each.value)) trimmed = true;
+    left = minus(left, each.value);
   }
-  return left === undefined
-    ? { trimmed: false }
-    : { value: left, trimmed: false };
+  return left === undefined ? { trimmed } : { value: left, trimmed };
 }
 
 /** A look's values that what beat it does not overturn. */
