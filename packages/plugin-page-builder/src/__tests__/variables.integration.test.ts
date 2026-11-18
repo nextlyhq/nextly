@@ -918,6 +918,42 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
+    it("hides the built-in colours for a Design manager, and refuses it to a role that may read Design but not change it", async () => {
+      const { t } = await boot();
+      const reader = await holding(t, "read-site-style");
+      const designer = await holding(t, ...DESIGN);
+      const tokens = [accent, styled, spare];
+      const hidden = {
+        tokens: { tokens, builtInColoursShown: false },
+        _overwrite: true,
+      };
+      const before = await storedSection(t);
+      const refused = await call("PATCH", SINGLE, reader, hidden);
+      expect(refused.status).toBe(403);
+      expect(await storedSection(t)).toBe(before);
+      // CONTROL: the same save by a Design manager is stored, so the refusal
+      // above is about who asked and not about the setting.
+      const accepted = await call("PATCH", SINGLE, designer, hidden);
+      expect(accepted.status).toBe(200);
+      expect(JSON.parse(await storedSection(t))).toEqual({
+        tokens,
+        builtInColoursShown: false,
+      });
+      // Shown again: the reader is refused that too.
+      const shown = { tokens: { tokens }, _overwrite: true };
+      const shownRefused = await call("PATCH", SINGLE, reader, shown);
+      expect(shownRefused.status).toBe(403);
+      expect(JSON.parse(await storedSection(t))).toMatchObject({
+        builtInColoursShown: false,
+      });
+      // Read by every author who may read Design, so all of them see it.
+      const read = await call("GET", SINGLE, reader);
+      expect(read.status).toBe(200);
+      expect(JSON.stringify(read.body)).toMatch(
+        /\\?"builtInColoursShown\\?":false/
+      );
+    });
+
     it("refuses the clean-up to a role that may read Design but not change it", async () => {
       const { t } = await boot();
       const reader = await holding(t, "read-site-style");
