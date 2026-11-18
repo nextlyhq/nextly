@@ -16,6 +16,7 @@
  */
 import { NextlyError } from "../../../errors/nextly-error";
 import { busyTableLeftNothing } from "../busy-table/report";
+import type { PromptDispatcher } from "../pipeline/pushschema-pipeline-interfaces";
 
 type Dialect = "postgresql" | "mysql" | "sqlite";
 
@@ -73,6 +74,46 @@ export function landingPush<A extends unknown[], R extends PushOutcome>(
     },
     landed: () => landed,
   };
+}
+
+/**
+ * Whether a push stopped at its first question, for `landingPush`'s `stoppedBeforeAnyStatement`:
+ * the pipeline asks it in planning, before the push runs any statement, and a later try of the
+ * same push asks only questions not asked yet, so a refusal there (an answer not to proceed, or a
+ * throw) means nothing of the push ran. A refusal at a later question may follow statements an
+ * earlier try kept, so it is never answered for. The push's prompt dispatcher is handed to the
+ * pipeline through `watching`; `starting` begins each push afresh.
+ */
+export class FirstQuestionWatch {
+  private asked = 0;
+  private refusedFirst = false;
+
+  starting(): void {
+    this.asked = 0;
+    this.refusedFirst = false;
+  }
+
+  stopped(): boolean {
+    return this.refusedFirst;
+  }
+
+  /** `inner`, noting a refusal at the first question it is asked. */
+  watching(inner: PromptDispatcher): PromptDispatcher {
+    return {
+      dispatch: async args => {
+        const first = this.asked === 0;
+        this.asked += 1;
+        try {
+          const result = await inner.dispatch(args);
+          if (first && !result.proceed) this.refusedFirst = true;
+          return result;
+        } catch (error) {
+          if (first) this.refusedFirst = true;
+          throw error;
+        }
+      },
+    };
+  }
 }
 
 /**
@@ -166,14 +207,17 @@ function withKeptFiles(
  * What to run once the database holds part of a change `keptFiles` describe, in run order. Each
  * file's snapshot is the database as that file leaves it, so with several only the last describes
  * the finished change: the earlier ones are recorded without the comparison, and the last is
- * compared with the database. Reversed, the files run again from the start.
+ * compared with the database. Recording them changes no registry row, and the save stopped before
+ * writing its own, so `nextly migrate` follows: it brings the registry in step with the newest
+ * applied snapshot on every run, with no file left to apply. Reversed, the files run again from
+ * the start, by the same command.
  */
 function nextSteps(keptFiles: readonly string[]): string {
   const last = keptFiles[keptFiles.length - 1];
-  const finish =
+  const record =
     keptFiles.length === 1
-      ? `Finish the change by hand and run \`nextly migrate:resolve --applied ${last}\``
-      : `Finish the change by hand, then record the files in order: ${keptFiles
+      ? `Finish the change by hand, run \`nextly migrate:resolve --applied ${last}\``
+      : `Finish the change by hand, record the files in order: ${keptFiles
           .slice(0, -1)
           .map(
             file => `\`nextly migrate:resolve --applied ${file} --skip-verify\``
@@ -181,7 +225,7 @@ function nextSteps(keptFiles: readonly string[]): string {
           .join(
             ", "
           )}, then \`nextly migrate:resolve --applied ${last}\`, which checks the database against the last`;
-  return `${finish}${keptFiles.length === 1 ? "," : ";"} or reverse what of it ran and run \`nextly migrate\`, which runs ${keptFiles.length === 1 ? "it" : "them"} from the start.`;
+  return `${record}; then run \`nextly migrate\`, which brings the registry in step with the recorded ${keptFiles.length === 1 ? "file" : "files"}. Or reverse what of it ran and run \`nextly migrate\`, which runs ${keptFiles.length === 1 ? "it" : "them"} from the start.`;
 }
 
 /**

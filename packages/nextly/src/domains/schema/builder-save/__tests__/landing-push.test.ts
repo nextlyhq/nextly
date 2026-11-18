@@ -10,7 +10,7 @@ import { tableBusyError } from "../../busy-table/report";
 import type { BusyTableOutcome, BusyTableStop } from "../../busy-table/types";
 import type { PipelineResult } from "../../pipeline/pushschema-pipeline";
 import { NextlyError } from "../../../../errors/nextly-error";
-import { landingPush, partWayPush } from "../landing-push";
+import { FirstQuestionWatch, landingPush, partWayPush } from "../landing-push";
 
 const answered = (success: boolean) => (): Promise<PipelineResult> =>
   Promise.resolve({ success, statementsExecuted: 0, renamesApplied: 0 });
@@ -170,8 +170,9 @@ describe("partWayPush", () => {
     expect((thrown as NextlyError).publicMessage).toBe(
       "The index could not be created. The database now holds part of this change, so its " +
         "migration file 0002_posts.sql was kept and not recorded as applied. Finish the change " +
-        "by hand and run `nextly migrate:resolve --applied 0002_posts.sql`, or reverse what of " +
-        "it ran and run `nextly migrate`, which runs it from the start."
+        "by hand, run `nextly migrate:resolve --applied 0002_posts.sql`; then run " +
+        "`nextly migrate`, which brings the registry in step with the recorded file. Or " +
+        "reverse what of it ran and run `nextly migrate`, which runs it from the start."
     );
   });
 
@@ -195,11 +196,14 @@ describe("partWayPush", () => {
     );
     // Each file's snapshot is the database as that file leaves it, so only the last is compared:
     // the earlier ones are recorded without the comparison, in run order.
+    // Recording the files writes no registry row, so `nextly migrate` follows: it brings the
+    // registry in step with the newest applied snapshot.
     expect(thrown?.publicMessage).toContain(
-      "Finish the change by hand, then record the files in order: " +
+      "Finish the change by hand, record the files in order: " +
         "`nextly migrate:resolve --applied 0002_a.sql --skip-verify`, then " +
         "`nextly migrate:resolve --applied 0003_b.sql`, which checks the database against the last; " +
-        "or reverse what of it ran and run `nextly migrate`, which runs them from the start."
+        "then run `nextly migrate`, which brings the registry in step with the recorded files. " +
+        "Or reverse what of it ran and run `nextly migrate`, which runs them from the start."
     );
     expect(thrown?.publicMessage).not.toContain("secret");
     expect(thrown?.logMessage).toContain("secret");
@@ -258,5 +262,62 @@ describe("landingPush, a push refused at its first question", () => {
     await tracked.push();
     await tracked.push();
     expect(watched.starts).toBe(2);
+  });
+});
+
+// The watch a push's prompt dispatcher is handed through: a refusal at the first question it is
+// asked says the push ran nothing; one at a later question says nothing.
+describe("FirstQuestionWatch", () => {
+  const asked = {
+    candidates: [],
+    events: [],
+    classification: "safe",
+    channel: "browser",
+  } as unknown as Parameters<
+    ReturnType<FirstQuestionWatch["watching"]>["dispatch"]
+  >[0];
+  const answering = (...proceeds: (boolean | "throw")[]) => ({
+    dispatch: () => {
+      const next = proceeds.shift();
+      if (next === "throw") return Promise.reject(new Error("refused"));
+      return Promise.resolve({
+        proceed: next ?? true,
+        confirmedRenames: [],
+        resolutions: [],
+      });
+    },
+  });
+
+  it("notes a refusal at the first question, answered or thrown", async () => {
+    const answered = new FirstQuestionWatch();
+    await answered.watching(answering(false)).dispatch(asked);
+    expect(answered.stopped()).toBe(true);
+
+    const thrown = new FirstQuestionWatch();
+    await expect(
+      thrown.watching(answering("throw")).dispatch(asked)
+    ).rejects.toThrow("refused");
+    expect(thrown.stopped()).toBe(true);
+  });
+
+  it("notes nothing for a refusal after the first question", async () => {
+    const watch = new FirstQuestionWatch();
+    const dispatcher = watch.watching(answering(true, false));
+    await dispatcher.dispatch(asked);
+    await dispatcher.dispatch(asked);
+    expect(watch.stopped()).toBe(false);
+  });
+
+  it("starts afresh for each push", async () => {
+    const watch = new FirstQuestionWatch();
+    const dispatcher = watch.watching(answering(false, true, false));
+    await dispatcher.dispatch(asked);
+    expect(watch.stopped()).toBe(true);
+    watch.starting();
+    expect(watch.stopped()).toBe(false);
+    // The first question of the next push is answered: a refusal after it notes nothing.
+    await dispatcher.dispatch(asked);
+    await dispatcher.dispatch(asked);
+    expect(watch.stopped()).toBe(false);
   });
 });

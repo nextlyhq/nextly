@@ -46,6 +46,7 @@ import { readTableDefinition } from "../../__tests__/helpers/table-definition";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { setNonInteractive } from "../../migrate/can-prompt";
 import { NO_CONSENT } from "../../migrate/data-loss-consent";
+import { RealPreCleanupExecutor } from "../../pipeline/pre-cleanup/executor";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
 
 const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
@@ -61,6 +62,25 @@ vi.mock("../../../../cli/utils/config-loader", async importOriginal => ({
   >()),
   loadConfig: async () => ({ config: loaded.config, dependencies: [] }),
 }));
+// The test's seam on the pipeline's pre-resolution phase, which runs its statements on the
+// transaction itself rather than through the statement executor: each call is counted, and runs
+// as it would.
+const preResolution = vi.hoisted(() => ({ calls: 0 }));
+vi.mock("../../pipeline/pre-resolution/executor", async importOriginal => {
+  const original =
+    await importOriginal<
+      typeof import("../../pipeline/pre-resolution/executor")
+    >();
+  return {
+    ...original,
+    executePreResolutionOps: (
+      ...args: Parameters<typeof original.executePreResolutionOps>
+    ) => {
+      preResolution.calls += 1;
+      return original.executePreResolutionOps(...args);
+    },
+  };
+});
 
 function createQuietLogger() {
   const none = () => {};
@@ -930,6 +950,61 @@ describe.each(getConfiguredTestDialects())(
             );
             for (const file of kept) expect(message).toContain(file);
             expect(message).toContain("nextly migrate:resolve --applied");
+          },
+          60_000
+        );
+
+        // A push refused at its first question ran nothing, and keeps nothing: a column on the
+        // table that no field describes, beside the field the save adds, reads as a rename the
+        // save never answered, and the dialog's prompt refuses the apply rather than drop it. The
+        // type change keeps the save on the push. MySQL and SQLite keep what a push ran, so this
+        // one counts as having changed nothing only because it stopped at that first question.
+        it.runIf(kind.name !== "a Single's settings save")(
+          "leaves nothing when the push refuses at its first question",
+          async () => {
+            const t = await boot();
+            await kind.create([text("heading")]);
+            const q = (name: string) =>
+              dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+            await (
+              adapterOf(t) as unknown as {
+                executeQuery<R>(sql: string): Promise<R[]>;
+              }
+            ).executeQuery(
+              `ALTER TABLE ${q(kind.table)} ADD COLUMN ${q("legacy_notes")} text`
+            );
+            const before = await standing(t, kind);
+            const filesBefore = migrationFiles();
+            const sent = vi.spyOn(
+              DrizzleStatementExecutor.prototype,
+              "executeStatements"
+            );
+            const cleanup = vi.spyOn(
+              RealPreCleanupExecutor.prototype,
+              "execute"
+            );
+            preResolution.calls = 0;
+
+            const refused: unknown = await kind
+              .change(t, [{ name: "heading", type: "number" }, text("body")])
+              .then(
+                () => undefined,
+                (error: unknown) => error
+              );
+            // What the rule rests on: the first question comes before any statement. No phase
+            // that runs one was reached.
+            expect(sent).not.toHaveBeenCalled();
+            expect(cleanup).not.toHaveBeenCalled();
+            expect(preResolution.calls).toBe(0);
+            sent.mockRestore();
+            cleanup.mockRestore();
+
+            expect(refused).toBeInstanceOf(Error);
+            expect(
+              (refused as { publicMessage?: string }).publicMessage
+            ).not.toContain("The database now holds part of this change");
+            expect(migrationFiles()).toEqual(filesBefore);
+            expect(await standing(t, kind)).toEqual(before);
           },
           60_000
         );
