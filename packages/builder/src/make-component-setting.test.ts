@@ -124,6 +124,26 @@ describe("the props a placement may make a setting of its component", () => {
     ]);
   });
 
+  it("withholds an address an entry link shows in its place", () => {
+    // The renderer follows the entry before the address, so a setting of
+    // the address would change nothing a visitor sees.
+    const linked = card();
+    const box = linked.nodes[0];
+    const title = box?.slots?.children?.[0];
+    if (title === undefined) throw new Error("fixture");
+    title.props = {
+      ...title.props,
+      entryCollection: "posts",
+      entryId: "p1",
+    };
+    linked.exposed = [];
+    expect(
+      settingCandidates(linked)
+        .filter(each => each.nodeId === "t")
+        .map(each => each.propPath)
+    ).toEqual(["text", "picture"]);
+  });
+
   it("carries each prop's current value", () => {
     const first = settingCandidates(card())[0];
     expect(first?.value).toBe("Card title");

@@ -114,10 +114,28 @@ function offered(
   if (schema.role !== "content" || ENTRY_LINK_NAMES.has(propPath)) {
     return false;
   }
+  if (propPath === LINK_ADDRESS_PROP && linksToEntry(node.props)) return false;
   if (taken.has(`${node.id}\u0000${propPath}`)) return false;
   return !(
     isPlainRecord(node.bindings) && Object.hasOwn(node.bindings, propPath)
   );
+}
+
+/** The prop a link's typed address is stored in, which `linkFor` reads. */
+const LINK_ADDRESS_PROP = "href";
+
+/**
+ * Whether a block links to an entry, which the renderer follows before its
+ * typed address: a setting of that address would change nothing a visitor
+ * sees while the entry link stands.
+ */
+function linksToEntry(props: unknown): boolean {
+  if (!isPlainRecord(props)) return false;
+  const named = (key: string): boolean => {
+    const value = props[key];
+    return typeof value === "string" && value.trim() !== "";
+  };
+  return named(ENTRY_LINK_PROPS.collection) && named(ENTRY_LINK_PROPS.id);
 }
 
 /** One block's props a placement may make a setting, in declared order. */

@@ -278,9 +278,13 @@ function settingsCase(input: {
   const draftsAsked: string[][] = [];
   const store: ReadinessReads = {
     published: async ids =>
-      new Map(ids.filter(id => id === "card").map(id => [id, card(input.live)])),
+      new Map(
+        ids.filter(id => id === "card").map(id => [id, card(input.live)])
+      ),
     stored: async ids =>
-      new Map(ids.filter(id => id === "card").map(id => [id, card(input.live)])),
+      new Map(
+        ids.filter(id => id === "card").map(id => [id, card(input.live)])
+      ),
     drafts: async ids => {
       draftsAsked.push([...ids]);
       return new Map(
@@ -422,6 +426,63 @@ describe("a live component whose new setting the page uses", () => {
       );
       expect(plan.components).toEqual(aLive ? ["b"] : ["b", "a"]);
     }
+  });
+
+  it("names nothing for a setting bound only in slot content the render discards", async () => {
+    // Live A exposes no slot, so what its placement holds in one is never
+    // drawn, and B's setting there is no setting the page uses.
+    const placed: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "pa",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "a" },
+          slots: {
+            body: [
+              {
+                id: "pb",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "b" },
+                bindings: {
+                  "overrides.title": { $bind: "title", source: "entry" },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const live = (exposed: readonly string[]): BlockDocument =>
+      ({
+        ...component(),
+        exposed: exposed.map(id => ({
+          id,
+          label: id,
+          nodeId: "text",
+          propPath: "text",
+          type: "text",
+        })),
+      }) as BlockDocument;
+    const store: ReadinessReads = {
+      published: async ids =>
+        new Map(
+          ids.filter(id => id === "a" || id === "b").map(id => [id, live([])])
+        ),
+      stored: async () => new Map(),
+      drafts: async ids =>
+        new Map(ids.filter(id => id === "b").map(id => [id, live(["title"])])),
+      layout: async () => null,
+      limits: LIMITS,
+    };
+    const plan = await planPublishReadiness(
+      { documents: [placed], layout: null },
+      store
+    );
+    expect(plan.components).toEqual([]);
   });
 
   it("names nothing when the working draft lacks the setting too", async () => {

@@ -306,6 +306,62 @@ describe("a page edited in a language", () => {
   });
 });
 
+describe("a setting made while the page's Save is writing", () => {
+  it("is written by that Save too, before it ends", async () => {
+    // Both placements bind their component's new setting.
+    const both = (cardBound: boolean, badgeBound: boolean): BlockDocument =>
+      ({
+        ...pageWith(cardBound ? BOUND : undefined),
+        nodes: [
+          ...pageWith(cardBound ? BOUND : undefined).nodes,
+          {
+            id: "q",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "badge" },
+            ...(badgeBound ? { bindings: BOUND } : {}),
+          },
+        ],
+      }) as BlockDocument;
+    answers("ok");
+    const planned = route.answer;
+    let release: () => void = () => undefined;
+    const slow = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const mounted = mount(both(false, false));
+    await act(async () => {
+      await mounted.hook.result.current.makeComponentSetting(ASK);
+    });
+    mounted.editor.document = both(true, false);
+    mounted.hook.rerender({ doc: both(true, false) });
+    // The card's write is slow; meanwhile the badge gets a setting.
+    route.answer = body =>
+      body.dryRun === true ? planned(body) : slow.then(() => planned(body));
+    let saving: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      saving = Promise.resolve(form.before?.("save", settled));
+      await mounted.hook.result.current.makeComponentSetting({
+        ...ASK,
+        componentId: "badge",
+      });
+    });
+    mounted.editor.document = both(true, true);
+    mounted.hook.rerender({ doc: both(true, true) });
+    release();
+    await act(async () => {
+      await saving;
+    });
+    const written = route.sent
+      .filter(sent => sent.body.dryRun !== true)
+      .map(sent => sent.path);
+    expect(written).toEqual([
+      "/components/card/definition",
+      "/components/badge/definition",
+    ]);
+  });
+});
+
 describe("a plan still being made", () => {
   it("refuses a second setting of the same component until the first is planned", async () => {
     let release: () => void = () => undefined;

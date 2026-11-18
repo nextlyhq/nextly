@@ -209,7 +209,12 @@ async function unpublishedComponents(
     if (await planAsked(documents, source, reads, planned, gone)) continue;
     // Then the live components whose new settings the documents use, each
     // supplied from its draft for the next round, which may place more.
-    const drafted = await settingsOnlyDrafted(documents, planned, reads);
+    const drafted = await settingsOnlyDrafted(
+      documents,
+      planned,
+      reads,
+      source
+    );
     if (drafted.size === 0) break;
     for (const [id, draft] of drafted) {
       planned.set(id, draft);
@@ -266,7 +271,9 @@ async function planAsked(
 async function settingsOnlyDrafted(
   documents: readonly BlockDocument[],
   planned: ReadonlyMap<string, unknown>,
-  reads: ReadinessReads
+  reads: ReadinessReads,
+  /** The definitions the render would compose with, the planned ones over the live. */
+  source: ComponentSource
 ): Promise<Map<string, unknown>> {
   const found = new Map<string, unknown>();
   if (reads.drafts === undefined) return found;
@@ -291,7 +298,10 @@ async function settingsOnlyDrafted(
   for (const [id, missing] of lacking) {
     const draft = drafts.get(id);
     const draftHas = settingIdsOf(draft);
-    if (missing.some(setting => draftHas.has(setting))) found.set(id, draft);
+    if (!missing.some(setting => draftHas.has(setting))) continue;
+    if (await composes(documents, id, source, reads.limits)) {
+      found.set(id, draft);
+    }
   }
   return found;
 }
@@ -329,6 +339,34 @@ async function composedFrom(
     frontier = unseen(live);
   }
   return all;
+}
+
+/**
+ * Whether the render composing the documents reaches component `id`, asked
+ * of the render's own discovery with `id` withheld: it names a component it
+ * reached and was not given. The walk that found the setting reads stored
+ * trees, slot content a definition discards included; this is what decides
+ * whether a visitor meets the component at all.
+ */
+async function composes(
+  documents: readonly BlockDocument[],
+  id: string,
+  source: ComponentSource,
+  limits: DocumentLimits
+): Promise<boolean> {
+  const withheld: ComponentSource = async ids => {
+    const found = new Map(await source(ids.filter(each => each !== id)));
+    found.delete(id);
+    return found;
+  };
+  for (const document of documents) {
+    if (
+      (await unsuppliedComponentIds(document, withheld, limits)).includes(id)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Each placement's component, with the settings it binds or sets, into `used`. */

@@ -342,20 +342,23 @@ export function useComponentSettingHold(
   );
 
   /**
-   * Write each live hold, stopping at the first refused: its binding is
-   * taken off the page as one edit, and the words saying so are answered.
+   * Write each live hold, made before or during the writing, stopping at the
+   * first refused: its binding is taken off the page as one edit, and the
+   * words saying so are answered.
    */
   const writeLive = useCallback(async (): Promise<
     { readonly words: string; readonly reason: string } | undefined
   > => {
-    const pending = liveSettingHolds(
-      now.current.editor.document,
-      now.current.held
-    );
-    if (pending.length === 0) return undefined;
+    const next = (): HeldComponentSetting | undefined =>
+      liveSettingHolds(now.current.editor.document, now.current.held)[0];
+    if (next() === undefined) return undefined;
     const read = now.current.library;
     try {
-      for (const hold of pending) {
+      // Asked again after each write rather than listed once: a setting made
+      // while one is being written is bound by the page this Save stores, so
+      // it is written before the Save goes on. Each written hold is dropped,
+      // so this ends once no new one is made.
+      for (let hold = next(); hold !== undefined; hold = next()) {
         const refused = await writeHeld(hold);
         drop(hold.componentId);
         if (refused === undefined) continue;
