@@ -327,6 +327,47 @@ describeEachDialect("a collection's Builder save", dialect => {
     expect(await liveItems()).toBe(before);
   }, 120_000);
 
+  it("refuses a field type change that would clear values, telling the admin the field and why, with nothing changed", async () => {
+    // Each entry's code ("a-1", "b-2") is no number, so turning the field into one would clear it:
+    // the push refuses before anything runs, and the refusal reaches the admin by field and code.
+    await seeded();
+    const before = await liveItems();
+    const [row] = await query<{ fields: unknown }>(
+      `SELECT ${q("fields")} AS fields FROM ${q("dynamic_collections")} WHERE ${q("slug")} = 'items'`
+    );
+    const recorded = (
+      typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields
+    ) as FieldDefinition[];
+
+    await expect(
+      applyCollectionSchemaChange({
+        slug: "items",
+        collection: { tableName: "dc_items", fields: recorded },
+        fields: recorded.map(field =>
+          field.name === "code"
+            ? ({ ...field, type: "number" } as FieldDefinition)
+            : field
+        ),
+        wasLocalized: false,
+        isLocalized: false,
+        status: false,
+        wasStatus: false,
+        renameResolutions: [],
+        eventResolutions: [],
+      })
+    ).rejects.toMatchObject({
+      code: "NEXTLY_MIGRATION_APPLY_FAILED",
+      publicMessage: expect.stringContaining(
+        "Collection 'items': field 'code' cannot change from text to number"
+      ) as unknown,
+      publicData: {
+        errors: [{ path: "fields.code", code: "TYPE_CHANGE_LOSES_VALUES" }],
+      },
+    });
+
+    expect(await liveItems()).toBe(before);
+  }, 120_000);
+
   /** The items table's columns, by name. */
   async function itemColumns(): Promise<string[]> {
     const snapshot = await introspectLiveSnapshot(

@@ -14,6 +14,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
 import type { PluginCollectionView } from "@nextlyhq/plugin-sdk";
+import type { StarterPageDefinition } from "@nextlyhq/plugin-sdk/blocks";
 import type { PreviewViewportsDeclaration } from "nextly/config";
 
 import { DELETE_COMPONENT_REPLACEMENT_COMPONENT } from "../builder-view";
@@ -250,6 +251,25 @@ export interface PageBuilderOptions {
    * @experimental
    */
   namedQueries?: readonly NamedQueryDefinition[];
+  /**
+   * The site's starter pages: ready-made page bodies an author can start a
+   * new page from, in the New page dialog and on an empty page, made with
+   * `defineStarterPage` from `@nextlyhq/plugin-sdk/blocks`. Listed beside
+   * the page builder's own and the ones plugins declare, and checked at
+   * start-up: one that names a block the site doesn't have, or fails
+   * validation, stops the start with a message naming it.
+   *
+   * @experimental
+   */
+  starterPages?: readonly StarterPageDefinition[];
+  /**
+   * Whether the page builder's own starter pages are listed beside the
+   * site's and its plugins'. Default true; `false` lists only the ones
+   * registered in code.
+   *
+   * @experimental
+   */
+  builtInStarterPages?: boolean;
   /**
    * Where component definitions live: what publishing a page checks when it
    * warns that some are not live, and what the EDITOR reads to draw them.

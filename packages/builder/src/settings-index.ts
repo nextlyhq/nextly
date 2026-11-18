@@ -74,6 +74,8 @@ const SYNONYMS: readonly (readonly string[])[] = [
   ["padding", "spacing"],
   ["margin", "spacing"],
   ["font", "typeface"],
+  // A block's own CSS is the code an author writes for it.
+  ["code", "custom css"],
 ];
 
 /**

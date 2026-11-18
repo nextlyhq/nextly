@@ -314,6 +314,39 @@ function outcomeOfFailure(error: unknown): {
     : { refused: false, status: "error" };
 }
 
+/**
+ * The parts of one pending recording: asking for it, dropping it once the
+ * work it would record is no longer at risk, and making it at once.
+ */
+function pendingRecording(
+  refs: {
+    timerRef: MutableRefObject<ReturnType<typeof setTimeout> | null>;
+    pendingRef: MutableRefObject<boolean>;
+    heldRef: MutableRefObject<string | null>;
+  },
+  flush: () => Promise<void>,
+  debounceMs: number
+): Pick<UseSnapshotAutosaveResult, "schedule" | "cancel" | "flushPending"> {
+  const { timerRef, pendingRef, heldRef } = refs;
+  return {
+    schedule: () => {
+      clearTimer(timerRef);
+      timerRef.current = setTimeout(() => {
+        void flush();
+      }, debounceMs);
+    },
+    cancel: () => {
+      dropRecording(timerRef, pendingRef);
+      heldRef.current = null;
+    },
+    flushPending: () => {
+      if (timerRef.current === null) return;
+      clearTimer(timerRef);
+      void flush();
+    },
+  };
+}
+
 export interface UseSnapshotAutosaveOptions {
   /**
    * What this recording is keyed by, or `null` when recording must stay off.
@@ -375,6 +408,14 @@ export interface UseSnapshotAutosaveResult {
    * would record has been saved, or undone, since.
    */
   cancel: () => void;
+  /**
+   * Make a recording asked for and not yet made now, rather than once the
+   * debounce has elapsed: for a recorder going away with work it was asked
+   * to record, whose timer would otherwise be cleared with it. Nothing is
+   * made when none was asked for, and the same rules apply as at the end of
+   * the wait.
+   */
+  flushPending: () => void;
   /**
    * The number of this recorder's own latest recording (see
    * `recordingsSent`), or null before it has sent one: with
@@ -508,21 +549,11 @@ export function useSnapshotAutosave({
    * recording one of them had already allowed. Scheduling a timer that flush
    * then declines costs a cleared timeout.
    */
-  // Built together, as the two halves of one pending recording: asking for
-  // it, and dropping it once the work it would record is no longer at risk.
-  const { schedule, cancel } = useMemo(
-    () => ({
-      schedule: () => {
-        clearTimer(timerRef);
-        timerRef.current = setTimeout(() => {
-          void flush();
-        }, debounceMs);
-      },
-      cancel: () => {
-        dropRecording(timerRef, pendingRef);
-        heldRef.current = null;
-      },
-    }),
+  // Built together, as the parts of one pending recording: see
+  // `pendingRecording`.
+  const { schedule, cancel, flushPending } = useMemo(
+    () =>
+      pendingRecording({ timerRef, pendingRef, heldRef }, flush, debounceMs),
     [flush, debounceMs]
   );
 
@@ -551,5 +582,5 @@ export function useSnapshotAutosave({
   }, [identity]);
 
   const lastSent = useCallback(() => lastSentRef.current, []);
-  return { status, lastSavedAt, schedule, cancel, lastSent };
+  return { status, lastSavedAt, schedule, cancel, flushPending, lastSent };
 }
