@@ -69,6 +69,7 @@ import { reconcileRetired } from "../retired-history";
 import { retiredPins } from "../retired-pins";
 import { allRetired, retiredStore } from "../retired-store";
 import { savePatternRoute } from "../save-pattern-route";
+import { appOrigin } from "../site-code/page-code";
 import { siteLocales as siteLocalesOf } from "../site-style-route";
 import { readEntryBlocksFields } from "../templates/entry-content-fields";
 import { templateTargets } from "../templates/template-guard";
@@ -329,7 +330,7 @@ export function installComposition(
     // origin as the app knows it.
     pageCode: {
       options: opts.siteCode,
-      siteOrigin: () => process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost",
+      siteOrigin: () => appOrigin(process.env.NEXT_PUBLIC_APP_URL),
     },
     hostsOf: indexHostFinder({
       rows: () => usageTableRows(ctx.db, usageTableOf(componentUsageIndex)),

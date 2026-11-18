@@ -111,6 +111,7 @@ import {
   BREAKPOINT_REMOVAL_UNDONE_AUDIT,
   BREAKPOINT_REMOVAL_UNDONE_METADATA,
 } from "./site-breakpoint-undo";
+import { appOrigin } from "./site-code/page-code";
 import {
   PAGE_CODE_SAVED_AUDIT,
   PAGE_CODE_SAVED_METADATA,
@@ -355,7 +356,7 @@ export const pageBuilder = (
         mayHoldBlocks: collection =>
           def.state.writeReach.mayHoldBlocks(collection),
         options: opts.siteCode,
-        siteOrigin: () => process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost",
+        siteOrigin: () => appOrigin(process.env.NEXT_PUBLIC_APP_URL),
       });
       installBreakpointRemoval(
         ctx,

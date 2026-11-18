@@ -1467,6 +1467,14 @@ export interface SiteCodeRequest {
     readonly policy: string;
     readonly reportOnly: boolean;
   };
+  /**
+   * What a dry run checks the code as: the site's (the default), or one
+   * page's own, whose end of body is started by a loader of its own. A save
+   * is always the site's.
+   *
+   * @experimental Settles with page code.
+   */
+  readonly scope?: "site" | "page";
 }
 
 /** What one place's code came to: why it can't be stored, and what changed. */

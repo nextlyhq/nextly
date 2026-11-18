@@ -14,11 +14,16 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { ServiceContainer } from "nextly";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { pageBuilderContent } from "../page-content";
 import { pageBuilder } from "../plugin";
-import { PageCode } from "../site";
 import { PAGE_CODE_SAVED_AUDIT } from "../site-code/page-code-audit";
+
+// No request here, so no draft mode: the published page as a visitor gets it.
+vi.mock("next/headers", () => ({
+  draftMode: async () => ({ isEnabled: false }),
+}));
 
 /** What the page adds to its own head: harmless, and easy to find. */
 const CODE = { head: "<script>window.pageCodeTest = 1</script>", body: "" };
@@ -124,8 +129,12 @@ describe.each(getConfiguredTestDialects())(
     /** What the published page carries in its head, as `<PageCode>` writes it. */
     async function liveHead(t: TestNextly, id: string): Promise<string> {
       const document = await contentOf(t, id, false);
-      const written = PageCode({ slot: "head", document });
-      return written === null ? "" : renderToStaticMarkup(written);
+      // As the published route draws it: what `pageBuilderContent()` puts
+      // around the page.
+      const { before, after } = await pageBuilderContent().around({ document });
+      expect(after ?? null).toBeNull();
+      const written = before ?? null;
+      return written === null ? "" : renderToStaticMarkup(written as never);
     }
 
     /** A write's refusal, or "saved". */

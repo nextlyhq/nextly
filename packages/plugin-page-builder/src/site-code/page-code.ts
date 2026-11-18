@@ -53,3 +53,17 @@ export function samePageCode(
   if (a === null || b === null) return a === b;
   return a.head === b.head && a.body === b.body;
 }
+
+/**
+ * The site's own origin from the app's configured address (such as
+ * `NEXT_PUBLIC_APP_URL`), which may carry a path or a trailing slash: what
+ * `'self'` and the site's paths stand for when page code is judged on a
+ * write, as the request's origin stands for them in the editor's check.
+ */
+export function appOrigin(address: string | undefined): string {
+  try {
+    return new URL(address ?? "http://localhost").origin;
+  } catch {
+    return "http://localhost";
+  }
+}

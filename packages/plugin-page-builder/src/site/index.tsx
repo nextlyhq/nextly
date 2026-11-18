@@ -30,6 +30,7 @@ import type { JSX } from "react";
 
 import {
   isGatedSiteCode,
+  PAGE_CODE_BODY_BOOTSTRAP,
   SITE_CODE_BOOTSTRAP,
   SITE_CODE_DATA_ATTRIBUTE,
 } from "../site-code/bootstrap";
@@ -277,11 +278,14 @@ function CodeOutput({
   entries,
   skip,
   nonce,
+  loader = SITE_CODE_BOOTSTRAP,
 }: {
   readonly slot: SiteCodeSlot;
   readonly entries: readonly SiteCodeEntry[];
   readonly skip: readonly string[];
   readonly nonce?: string;
+  /** The loader that starts the gated code: site code's, by default. */
+  readonly loader?: string;
 }): JSX.Element {
   const gated = entries.filter(isGatedSiteCode);
   return (
@@ -302,7 +306,7 @@ function CodeOutput({
       {gated.length === 0 ? null : (
         <script
           {...(nonce === undefined ? {} : { nonce })}
-          dangerouslySetInnerHTML={{ __html: SITE_CODE_BOOTSTRAP }}
+          dangerouslySetInnerHTML={{ __html: loader }}
         />
       )}
     </>
@@ -330,15 +334,23 @@ export interface PageCodeProps {
  * `<PageCode>`: the code a page adds to itself in its Page settings, for one
  * place, written and guarded exactly as `<SiteCode>` writes the site's.
  *
- * Render it after the `<SiteCode>` of the same place, with the page's
- * published document, so the page's code comes after the site's. What is
- * stored was judged when it was saved; it is sanitised again here, so a
- * value edited in the database is held to the same rules, and what fails is
- * left out. The builder's canvas never renders it.
+ * The published route draws it around the page (`pageBuilderContent()`'s
+ * `around`), the head's before the page and the end of the body's after it.
+ * It runs after the site's code in each place: the head's loader is site
+ * code's own, which queues after the site's head, and the end of the body's
+ * starts one task later (`PAGE_CODE_BODY_BOOTSTRAP`), after the site's end
+ * of body. Nothing under draft mode, as `<SiteCode>`. What is stored was
+ * judged when it was saved; it is sanitised again here, so a value edited in
+ * the database is held to the same rules, and what fails is left out. The
+ * builder's canvas never renders it.
  *
  * @experimental Settles with page code.
  */
-export function PageCode(props: PageCodeProps): JSX.Element | null {
+export async function PageCode(
+  props: PageCodeProps
+): Promise<JSX.Element | null> {
+  // The preview pane shows drafts in draft mode, as for site code.
+  if ((await draftMode()).isEnabled) return null;
   const code = pageCodeOf(props.document);
   const text = code?.[props.slot] ?? "";
   if (text === "") return null;
@@ -347,6 +359,9 @@ export function PageCode(props: PageCodeProps): JSX.Element | null {
       slot={props.slot}
       entries={sanitiseSiteCode(text, props.slot).entries}
       skip={skippedPaths(props)}
+      loader={
+        props.slot === "body" ? PAGE_CODE_BODY_BOOTSTRAP : SITE_CODE_BOOTSTRAP
+      }
       {...(props.nonce === undefined ? {} : { nonce: props.nonce })}
     />
   );

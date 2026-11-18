@@ -42,15 +42,17 @@ export interface PageCodeJudgeDeps {
 
 /**
  * Whether the write changes the page's code: whether it holds code other than
- * what either stored form holds. A stored value that can't be read counts as
- * a change, so the code is judged rather than let through.
+ * what either stored form holds. Where the stored value can't be read (a
+ * blocks field in a repeater's row, which no stored read can address), code
+ * the write holds counts as a change, so it is judged rather than let
+ * through; a write holding none adds no code to run, and is not asked about.
  */
 async function changesCode(
   written: HeldPageCode | null,
   stored: () => Promise<StoredForms>
 ): Promise<boolean> {
   const forms = await stored();
-  if (!forms.readable) return true;
+  if (!forms.readable) return written !== null;
   const held = forms.forms.map(form => pageCodeOf(form));
   // A new page holds nothing yet: no code is no change.
   if (held.length === 0) return written !== null;
@@ -105,7 +107,10 @@ export async function pageCodeIssues(
   const judged = await judgeCode(
     { head: written.head, body: written.body },
     deps.siteOrigin(),
-    deps.options
+    deps.options,
+    // Checked as the page's own, started by its own loader at the end of
+    // the body, as the Code tab checks it.
+    "page"
   );
   const issues = [
     ...judged.checked.head.refusals.map(message =>

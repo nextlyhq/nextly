@@ -79,7 +79,7 @@ async function declaredKey(text: {
   head: string;
   body: string;
 }): Promise<string | null> {
-  return (await checkSiteCode(text)).cspKey;
+  return (await checkSiteCode({ ...text, scope: "page" })).cspKey;
 }
 
 /** The tab's state: the text, where it stands, and what can be done. */
@@ -101,6 +101,7 @@ function usePageCodeFlow({ value, set }: PageCodeTabProps) {
     const livePolicy = await readLivePolicy();
     const draft: SiteCodeDraft = {
       ...text,
+      scope: "page",
       ...(livePolicy === undefined ? {} : { livePolicy }),
     };
     const next = stepAfter(await checkSiteCode(draft), draft);

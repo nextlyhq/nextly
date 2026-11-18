@@ -10,7 +10,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SITE_CODE_BOOTSTRAP } from "../site-code/bootstrap";
+import {
+  PAGE_CODE_BODY_BOOTSTRAP,
+  SITE_CODE_BOOTSTRAP,
+} from "../site-code/bootstrap";
 import { SITE_CODE_SLUG } from "../site-code/storage";
 
 let draft = false;
@@ -53,7 +56,7 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
   getCachedNextly: async () => ({ findSingle }),
 }));
 
-const { SiteCode } = await import("./index");
+const { PageCode, SiteCode } = await import("./index");
 const { nextlySingleTags } = await import("nextly/runtime");
 
 /** A stored site code document holding `head` and `body`. */
@@ -299,5 +302,49 @@ describe("<SiteCode> reading the stored code itself", () => {
     expect(nextlySingleTags(SITE_CODE_SLUG)).toEqual([
       `nextly:single:${SITE_CODE_SLUG}`,
     ]);
+  });
+});
+
+describe("<PageCode>", () => {
+  /** A page whose own code has a script in each place. */
+  const page = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [],
+    settings: {
+      code: {
+        head: "<script>window.pageHead = 1</script>",
+        body: "<script>window.pageBody = 1</script>",
+      },
+    },
+  };
+  const pageHtml = async (slot: "head" | "body") => {
+    const element = await PageCode({ slot, document: page });
+    return element === null ? "" : renderToStaticMarkup(element);
+  };
+
+  it("writes each place's code with its loader: site code's in the head, the page's own at the end of the body", async () => {
+    const head = await pageHtml("head");
+    expect(head).toContain("window.pageHead = 1");
+    expect(head).toContain(SITE_CODE_BOOTSTRAP.slice(0, 40));
+    expect(head).not.toContain("setTimeout(start, 0)");
+    const body = await pageHtml("body");
+    expect(body).toContain("window.pageBody = 1");
+    expect(body).toContain("setTimeout(start, 0)");
+    expect(PAGE_CODE_BODY_BOOTSTRAP).toContain("setTimeout(start, 0)");
+  });
+
+  it("writes nothing under draft mode, as site code", async () => {
+    draft = true;
+    expect(await pageHtml("head")).toBe("");
+    expect(await pageHtml("body")).toBe("");
+  });
+
+  it("writes nothing for a page with no code of its own", async () => {
+    const element = await PageCode({
+      slot: "head",
+      document: { formatVersion: 1, kind: "page", nodes: [] },
+    });
+    expect(element).toBeNull();
   });
 });

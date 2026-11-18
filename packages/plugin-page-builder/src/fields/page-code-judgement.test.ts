@@ -116,7 +116,14 @@ describe("a page's own code, judged on every write that changes it", () => {
     ).toEqual([]);
     expect(await issuesOf(pageWith(), editor)).toEqual([]);
     expect(editor.asked).toEqual([]);
-    // A stored value that can't be read is no proof it is unchanged.
+    // Where the stored value can't be read (a blocks field in a repeater's
+    // row), a write holding no code adds none, and is not asked about.
+    expect(
+      await pageCodeIssues(pageWith(), writeAs(editor), "Content", DEPS, () =>
+        Promise.resolve({ forms: [], readable: false })
+      )
+    ).toEqual([]);
+    // A stored value that can't be read is no proof code it holds is unchanged.
     expect(
       await pageCodeIssues(
         pageWith(HARMLESS),

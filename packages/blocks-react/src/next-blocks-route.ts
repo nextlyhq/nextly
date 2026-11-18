@@ -23,7 +23,7 @@ import type {
   ContentRouteConfig,
   RenderContext,
 } from "nextly/runtime";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { createElement, Fragment } from "react";
 
 import { listEntryCount, listPagesOf, listWillRead } from "./blocks/list-read";
@@ -838,31 +838,40 @@ export function blocksRouteConfig(
         ...(page.prepared === null ? {} : { prepared: page.prepared }),
       };
 
+      // What the route draws around the page (the page's own code, from
+      // the page builder), asked of the page's own stored value.
+      const surroundings = await surroundingsOf(config, entry, field, context);
       // The structured data the route worked out for this page, from the
       // same answer as its head, placed with the page it describes.
       if (regions.length === 0) {
-        return withStructuredData(
-          createElement(PageRenderer, {
-            ...pageProps,
-            ...(siteStyles === undefined ? {} : { siteStyles }),
-          }),
-          context.structuredData
+        return withSurroundings(
+          withStructuredData(
+            createElement(PageRenderer, {
+              ...pageProps,
+              ...(siteStyles === undefined ? {} : { siteStyles }),
+            }),
+            context.structuredData
+          ),
+          surroundings
         );
       }
-      return withStructuredData(
-        createElement(
-          Fragment,
-          null,
-          ...drawWithRegions({
-            regions,
-            page: pageProps,
-            shared,
-            siteStyles,
-            definitions: regionDefinitions,
-            formsFor: forms?.region,
-          })
+      return withSurroundings(
+        withStructuredData(
+          createElement(
+            Fragment,
+            null,
+            ...drawWithRegions({
+              regions,
+              page: pageProps,
+              shared,
+              siteStyles,
+              definitions: regionDefinitions,
+              formsFor: forms?.region,
+            })
+          ),
+          context.structuredData
         ),
-        context.structuredData
+        surroundings
       );
     },
   };
@@ -918,4 +927,34 @@ function withStructuredData(
     }),
     page
   );
+}
+
+/** What `config.around` draws around the page, or nothing where it is unset. */
+async function surroundingsOf(
+  config: BlocksPageConfig,
+  entry: ContentEntry,
+  field: string,
+  context: RenderContext
+): Promise<
+  { readonly before?: ReactNode; readonly after?: ReactNode } | undefined
+> {
+  if (config.around === undefined) return undefined;
+  return config.around({ entry, field, document: entry[field], context });
+}
+
+/**
+ * The page with what the route draws around it: `before` ahead of it and
+ * `after` behind it, as `BlocksPageConfig.around` answered; the page as it is
+ * where it answered nothing.
+ */
+function withSurroundings(
+  page: ReactElement,
+  surroundings:
+    | { readonly before?: ReactNode; readonly after?: ReactNode }
+    | undefined
+): ReactElement {
+  if (surroundings === undefined) return page;
+  const { before, after } = surroundings;
+  if (before === undefined && after === undefined) return page;
+  return createElement(Fragment, null, before ?? null, page, after ?? null);
 }

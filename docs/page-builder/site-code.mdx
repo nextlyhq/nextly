@@ -85,14 +85,18 @@ site's declared policy would block only where the author acknowledged exactly th
 findings. Each committed change writes an audit row with the page, the field, and the
 code's hashes, sizes and counts, never the code.
 
-Render it on your published pages with `<PageCode>`, after `<SiteCode>` for the same
-place, handing it the page's published blocks value:
+Published pages carry it with no change of your own where the route spreads
+`pageBuilderContent()` into `createPublicContentPage` or `createContentPage`: the route draws
+the page's head code before the page and its end-of-body code after it, from the page's own
+document. It runs after the site's code in each place: the site's head, then the page's head,
+then the site's end of body, then the page's end of body. Nothing runs under draft mode, as
+for site code. A route of your own can draw it with `<PageCode slot="head" document={...} />`
+from `@nextlyhq/plugin-page-builder/site`.
 
-```tsx
-import { PageCode } from "@nextlyhq/plugin-page-builder/site";
-
-<PageCode slot="head" document={entry.content} />;
-```
+The page's head code is started by the same loader as site code. Its end-of-body code is
+started by a loader of its own, which waits until the site's code has started. A site whose
+Content Security Policy allows loaders by hash allows that loader's hash too, and the Code
+tab's check names it.
 
 The builder's canvas never runs page code.
 

@@ -41,6 +41,11 @@ import {
 import { sha256Hex } from "../sha256-hex";
 
 import {
+  isGatedSiteCode,
+  PAGE_CODE_BODY_BOOTSTRAP,
+  SITE_CODE_BOOTSTRAP,
+} from "./bootstrap";
+import {
   checkSiteCodeAgainstCsp,
   cspHash,
   parsePolicies,
@@ -54,6 +59,7 @@ import {
   SITE_CODE_LIMITS,
   siteCodeScriptKind,
   type SiteCodeEntry,
+  type SiteCodeSlot,
 } from "./rules";
 import { sanitiseSiteCode, type SanitisedSiteCode } from "./sanitise";
 import {
@@ -162,6 +168,7 @@ const SiteCodeBody = z.strictObject({
       reportOnly: z.boolean(),
     })
     .optional(),
+  scope: z.enum(["site", "page"]).optional(),
 });
 type SiteCodeBodyValue = z.infer<typeof SiteCodeBody>;
 
@@ -271,7 +278,8 @@ async function policyChecked(
   known: KnownPolicy,
   entries: { head: SiteCodeEntry[]; body: SiteCodeEntry[] },
   facts: SiteCodeFacts,
-  siteNonce: boolean
+  siteNonce: boolean,
+  scope: CodeScope
 ): Promise<SiteCodePolicyChecked> {
   const check: CspCheck = await checkSiteCodeAgainstCsp(
     {
@@ -279,6 +287,7 @@ async function policyChecked(
       reportOnly: known.reportOnly,
       siteOrigin: facts.siteOrigin,
       siteNonce,
+      loaders: LOADERS[scope],
     },
     entries
   );
@@ -295,17 +304,45 @@ async function policyChecked(
   };
 }
 
+/** Whose code is judged: the site's, or one page's own. */
+export type CodeScope = "site" | "page";
+
+/**
+ * The loader that starts each place's code: site code's own in both places,
+ * and for a page's own code site code's in the head (it already runs after
+ * the site's head) and the page's own at the end of the body, which starts
+ * after the site's end of body.
+ */
+const LOADERS: Readonly<
+  Record<CodeScope, Readonly<Record<SiteCodeSlot, string>>>
+> = {
+  site: { head: SITE_CODE_BOOTSTRAP, body: SITE_CODE_BOOTSTRAP },
+  page: { head: SITE_CODE_BOOTSTRAP, body: PAGE_CODE_BODY_BOOTSTRAP },
+};
+
+/** The loaders that start the gated code of `entries`, by their text. */
+function loadersFor(
+  entries: { head: SiteCodeEntry[]; body: SiteCodeEntry[] },
+  scope: CodeScope
+): string[] {
+  return (["head", "body"] as const).flatMap(slot =>
+    entries[slot].some(isGatedSiteCode) ? [LOADERS[scope][slot]] : []
+  );
+}
+
 /** The checks against each policy known: the declared one, and the live one. */
 async function policyChecks(
   entries: { head: SiteCodeEntry[]; body: SiteCodeEntry[] },
   body: { readonly livePolicy?: { policy: string; reportOnly: boolean } },
   siteOrigin: string,
-  options: PageBuilderSiteCodeOptions | undefined
+  options: PageBuilderSiteCodeOptions | undefined,
+  scope: CodeScope
 ): Promise<SiteCodePolicyChecked[]> {
   const siteNonce = options?.siteNonce === true;
   const facts = await siteCodeFacts(
     [...entries.head, ...entries.body],
-    siteOrigin
+    siteOrigin,
+    loadersFor(entries, scope)
   );
   const known: KnownPolicy[] = [
     {
@@ -322,7 +359,7 @@ async function policyChecks(
     });
   }
   return Promise.all(
-    known.map(policy => policyChecked(policy, entries, facts, siteNonce))
+    known.map(policy => policyChecked(policy, entries, facts, siteNonce, scope))
   );
 }
 
@@ -363,7 +400,9 @@ async function judge(
   req: Request,
   options: PageBuilderSiteCodeOptions | undefined
 ): Promise<Judged> {
-  return judgeCode(body, siteOriginOf(req), options);
+  // A dry run may check one page's own code; a save is the site's.
+  const scope = body.dryRun === true && body.scope === "page" ? "page" : "site";
+  return judgeCode(body, siteOriginOf(req), options, scope);
 }
 
 /**
@@ -378,12 +417,13 @@ export async function judgeCode(
     readonly livePolicy?: { policy: string; reportOnly: boolean };
   },
   siteOrigin: string,
-  options: PageBuilderSiteCodeOptions | undefined
+  options: PageBuilderSiteCodeOptions | undefined,
+  scope: CodeScope = "site"
 ): Promise<Judged> {
   const head = sanitiseSiteCode(body.head, "head");
   const bodyEnd = sanitiseSiteCode(body.body, "body");
   const entries = { head: [...head.entries], body: [...bodyEnd.entries] };
-  const csp = await policyChecks(entries, body, siteOrigin, options);
+  const csp = await policyChecks(entries, body, siteOrigin, options, scope);
   const findings = findingsOf(csp);
   return {
     checked: {

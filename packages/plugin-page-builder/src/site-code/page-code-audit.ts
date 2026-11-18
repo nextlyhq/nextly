@@ -70,18 +70,74 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-/** The top-level fields whose page code differs between the two documents. */
+/** Whether a value is a blocks document, stored as a record or as its JSON. */
+function isBlocksDocument(value: unknown): boolean {
+  if (typeof value === "string") {
+    if (!value.startsWith("{")) return false;
+    try {
+      return isBlocksDocument(JSON.parse(value));
+    } catch {
+      return false;
+    }
+  }
+  const record = recordOf(value);
+  return (
+    record !== undefined &&
+    Array.isArray(record.nodes) &&
+    "formatVersion" in record
+  );
+}
+
+/**
+ * The page code each blocks document in `value` holds, by its path: at the
+ * top level, inside named groups and inside repeaters' rows (`hero.body`,
+ * `sections[1].body`), as the write's validation addresses them. A document
+ * is not looked inside: its blocks are its own.
+ */
+function codeByPath(
+  value: unknown,
+  path: string,
+  found: Map<string, HeldPageCode | null>,
+  depth = 0
+): void {
+  if (depth > 32) return;
+  if (path !== "" && isBlocksDocument(value)) {
+    found.set(path, pageCodeOf(value));
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      codeByPath(item, `${path}[${index}]`, found, depth + 1)
+    );
+    return;
+  }
+  const record = recordOf(value);
+  if (record === undefined) return;
+  for (const [key, inner] of Object.entries(record)) {
+    codeByPath(inner, path === "" ? key : `${path}.${key}`, found, depth + 1);
+  }
+}
+
+/**
+ * The blocks documents, by path, whose page code differs between the two
+ * versions of the entry. Only what the write sent is judged: a top-level
+ * field it left out is not changed by it.
+ */
 function pageCodeChanges(
   before: Record<string, unknown> | undefined,
   after: Record<string, unknown>
 ): CodeChange[] {
-  const fields = new Set([...Object.keys(after), ...Object.keys(before ?? {})]);
-  return [...fields].flatMap(field => {
-    // A field the write did not send is not changed by it.
-    if (!Object.hasOwn(after, field)) return [];
-    const was = pageCodeOf(before?.[field]);
-    const now = pageCodeOf(after[field]);
-    return samePageCode(was, now) ? [] : [{ field, before: was, after: now }];
+  const was = new Map<string, HeldPageCode | null>();
+  const now = new Map<string, HeldPageCode | null>();
+  for (const field of Object.keys(after)) {
+    codeByPath(before?.[field], field, was);
+    codeByPath(after[field], field, now);
+  }
+  const paths = new Set([...was.keys(), ...now.keys()]);
+  return [...paths].flatMap(field => {
+    const a = was.get(field) ?? null;
+    const b = now.get(field) ?? null;
+    return samePageCode(a, b) ? [] : [{ field, before: a, after: b }];
   });
 }
 
@@ -97,7 +153,12 @@ async function writeRow(
   where: { collection: string; id: string; actor: string | null }
 ): Promise<void> {
   const after = textsOf(change.after);
-  const judged = await judgeCode(after, args.siteOrigin(), args.options);
+  const judged = await judgeCode(
+    after,
+    args.siteOrigin(),
+    args.options,
+    "page"
+  );
   await args.ctx.audit?.write({
     kind: PAGE_CODE_SAVED_AUDIT,
     actorUserId: where.actor,

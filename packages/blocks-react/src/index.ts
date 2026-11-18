@@ -228,6 +228,7 @@ export type {
   ConditionDayStart,
   ConditionDemand,
   ConditionSubject,
+  DocumentCode,
   DocumentSeo,
   EntryContentIssueCode,
   ImageValue,

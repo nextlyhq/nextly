@@ -11,6 +11,8 @@
  *
  * @module page-content
  */
+import type { ReactNode } from "react";
+
 import {
   CONTENT_ADDRESS_SERVICE,
   type ContentAddressHolder,
@@ -75,6 +77,18 @@ export interface PageBuilderContentTemplate {
  * is marked stable.
  */
 export interface PageBuilderContentProvider {
+  /**
+   * What the route draws around every page and entry it serves: the page's
+   * own code (`<PageCode>`), its head's before the page and its end of
+   * body's after it, from the page's own stored document. Restated rather
+   * than imported, so this plugin's root never depends on the route's
+   * package.
+   *
+   * @experimental Settles with page code.
+   */
+  readonly around: (args: {
+    readonly document: unknown;
+  }) => Promise<{ readonly before?: ReactNode; readonly after?: ReactNode }>;
   readonly resolveAddress: (
     locale: string | undefined,
     path: string
@@ -174,6 +188,16 @@ export function pageBuilderContent(
   const service = async (): Promise<ContentAddressService> =>
     addressServiceOf(await nextly());
   return {
+    around: async ({ document }) => {
+      // Imported at call time: this module is reached from the package
+      // root, which a browser bundle imports, and `<PageCode>` reads the
+      // request's draft mode.
+      const { PageCode } = await import("./site");
+      return {
+        before: await PageCode({ slot: "head", document }),
+        after: await PageCode({ slot: "body", document }),
+      };
+    },
     resolveAddress: async (locale, path) =>
       (await service()).holderAt(locale, path),
     addresses: async (locale, limit, under) => {
