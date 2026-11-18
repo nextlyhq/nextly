@@ -44,6 +44,7 @@ import {
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
+import { landingPush } from "../../domains/schema/builder-save/landing-push";
 import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
 import {
   renamedFieldsOf,
@@ -82,7 +83,6 @@ import {
   builderSaveDeps,
   checkBuilderSaveHistory,
   reviewBuilderSchemaChange,
-  landingPush,
   writeBuilderSchemaChange,
 } from "../helpers/builder-save-change";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
