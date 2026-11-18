@@ -43,8 +43,11 @@ const RESOURCE = "fwcaller-site";
 interface Told {
   kind: PluginFieldWriteCaller["kind"] | "none";
   may: boolean;
-  /** Whether the value sat in a field-group instance. */
-  inFieldGroup: boolean;
+  /**
+   * The write's `inFieldGroup` as the validator was handed it, kept only
+   * where the write carries the key, so a plain write's absence is seen.
+   */
+  inFieldGroup?: boolean;
 }
 let told: Told[] = [];
 let current: TestNextly | undefined;
@@ -74,7 +77,9 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
                 told.push({
                   kind: caller?.kind ?? "none",
                   may: (await caller?.can(ACTION, RESOURCE)) ?? false,
-                  inFieldGroup: args.write?.inFieldGroup === true,
+                  ...(args.write !== undefined && "inFieldGroup" in args.write
+                    ? { inFieldGroup: args.write.inFieldGroup }
+                    : {}),
                 });
                 return true as const;
               },
@@ -183,7 +188,8 @@ describeEachDialect("the caller a field validator is told", dialect => {
     await grantTo(t, "plain", "update", [PAGES, HOME]);
     const handler = t.getService("collectionsHandler");
     /** What the instance's own validator was told, on its last run. */
-    const inInstance = () => told.filter(entry => entry.inFieldGroup).at(-1);
+    const inInstance = () =>
+      told.filter(entry => entry.inFieldGroup === true).at(-1);
 
     // A create, as each kind of caller.
     const create = async (params: Record<string, unknown>) => {
@@ -225,8 +231,11 @@ describeEachDialect("the caller a field validator is told", dialect => {
       may: false,
       inFieldGroup: true,
     });
-    // The entry's own top-level field is not in one.
-    expect(told.find(entry => !entry.inFieldGroup)?.inFieldGroup).toBe(false);
+    // The entry's own top-level field is not in one: its write leaves the
+    // key out rather than saying false, as only core sets it.
+    const plain = told.find(entry => entry.inFieldGroup !== true);
+    expect(plain).toBeDefined();
+    expect(plain).not.toHaveProperty("inFieldGroup");
 
     // An update of the same entry.
     const id = (made as { data?: { id?: string } }).data?.id;
