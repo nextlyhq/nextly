@@ -568,6 +568,27 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
       });
       const id = String(live.item.id);
+      await tick();
+      const reader = await holding(t, "read-site-style", "read-pages");
+      const ask = async (here: Omit<SharedStyleUsageHere, "document">) =>
+        (
+          await call(
+            "GET",
+            usageAsked({ document: { collection: "pages", id }, ...here }),
+            reader
+          )
+        ).body;
+      // Published, no draft yet: the live page keeps its 3 beside the edit.
+      expect(
+        await ask({ field: "content", variant: "published", keepsSaved: true })
+      ).toMatchObject({
+        styles: {
+          "c-hero": {
+            blocks: 3,
+            here: { saved: 3, alongside: 0, elsewhere: 3, kind: "pages" },
+          },
+        },
+      });
       // An edit saved without publishing: a pending draft over the live row.
       await t.nextly.update({
         collection: "pages",
@@ -576,19 +597,8 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
       });
       await t.events.settle();
-      await tick();
-      const reader = await holding(t, "read-site-style", "read-pages");
-      const answer = await call(
-        "GET",
-        usageAsked({
-          document: { collection: "pages", id },
-          field: "content",
-          variant: "draft",
-        }),
-        reader
-      );
       // The draft open: whatever it holds live, the published page keeps 3.
-      expect(answer.body).toMatchObject({
+      expect(await ask({ field: "content", variant: "draft" })).toMatchObject({
         styles: {
           "c-hero": {
             documents: 1,

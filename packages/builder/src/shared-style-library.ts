@@ -60,7 +60,8 @@ export interface SharedStyleReach {
  * field's saved rows set aside: `alongside` is the largest saved copy the
  * open field is part of (its language, or each language for a field they
  * all share), `elsewhere` the largest of the document's other copies (its
- * other languages, its other stored form), so with the field's live blocks
+ * other languages, its other stored form, and the open copy as saved where
+ * that stays live until the edit is published), so with the live blocks
  * the document counts `max(alongside + live, elsewhere)`. `saved` is what
  * the document adds to `SharedStyleReach.blocks` as saved, 0 when it holds
  * none. `null` where a count is not known.
@@ -701,11 +702,7 @@ function pageAndPlacesSentence(
   blocks: BlocksOnThisPage | undefined,
   reach: SharedStyleReach
 ): string {
-  const parts: string[] = [];
-  if (blocks !== undefined && blocks.count > 0) {
-    const count = counted(blocks.count, ["block", "blocks"]);
-    parts.push(`${blocks.complete ? "" : "at least "}${count} on this page`);
-  }
+  const parts = onThisPage(blocks);
   const kinds = placesIn(reach.byKind);
   if (kinds.length > 0) {
     parts.push(`on ${reach.complete ? "" : "at least "}${listedWords(kinds)}`);
@@ -716,6 +713,13 @@ function pageAndPlacesSentence(
   }
   const exact = reach.complete && (blocks?.complete ?? true);
   return exact ? "Not used anywhere" : "No uses counted yet";
+}
+
+/** The open page's blocks, "3 blocks on this page", or nothing when none. */
+function onThisPage(blocks: BlocksOnThisPage | undefined): string[] {
+  if (blocks === undefined || blocks.count === 0) return [];
+  const count = counted(blocks.count, ["block", "blocks"]);
+  return [`${blocks.complete ? "" : "at least "}${count} on this page`];
 }
 
 /** Each kind of place that holds the style, counted: "4 pages", "1 component". */

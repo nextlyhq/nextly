@@ -30,7 +30,18 @@ import type { SavedComponent, SavedPattern } from "@nextlyhq/builder";
 import type { HookWarning } from "nextly/config";
 
 import type { RemovalDryRun } from "./breakpoint-removal/dry-run";
+import type {
+  SharedStyleUsageHere,
+  SharedStyleUsageHereParts,
+  SharedStyleUsageKind,
+} from "./shared-style-usage-contract";
 import type { CspAddition, CspCheck } from "./site-code/csp";
+
+export type {
+  SharedStyleUsageHere,
+  SharedStyleUsageHereParts,
+  SharedStyleUsageKind,
+} from "./shared-style-usage-contract";
 
 /**
  * The name this plugin registers under, which is also how its routes are
@@ -1031,16 +1042,6 @@ export const SHARED_STYLE_ID_PARAM = "id";
 /** The most shared styles one usage read answers for: one page of rows. */
 export const SHARED_STYLE_USAGE_IDS_MAX = 50;
 
-/**
- * The kinds of document a shared style is counted on. Every collection with a
- * page builder field other than the composition stores holds pages.
- */
-export type SharedStyleUsageKind =
-  | "pages"
-  | "components"
-  | "patterns"
-  | "layouts";
-
 /** How widely one shared style is used, from the class usage index. */
 export interface SharedStyleUsage {
   /** How many documents apply it, gated and hidden content included. */
@@ -1129,53 +1130,14 @@ export const SHARED_STYLE_WHERE_USED_PAGES_MAX = 250;
  * The query parameters naming what the editor has open, whose saved share of
  * each style's usage the route reports apart (`SharedStyleUsage.here`): the
  * document as `<collection>/<id>` or `single:<slug>`, the blocks field, the
- * language by code (absent for the site's default), and the stored form the
- * editor edits.
+ * language by code (absent for the site's default), the stored form the
+ * editor edits, and whether that copy stays live as saved (`keepsSaved`).
  */
 export const SHARED_STYLE_HERE_PARAM = "here";
 export const SHARED_STYLE_HERE_FIELD_PARAM = "hereField";
 export const SHARED_STYLE_HERE_LOCALE_PARAM = "hereLocale";
 export const SHARED_STYLE_HERE_VARIANT_PARAM = "hereVariant";
-
-/** The stored forms of a document: its main row, and a pending working draft. */
-export type SharedStyleUsageVariant = "published" | "draft";
-
-/**
- * What the editor has open, as the usage route is told of it: a saved
- * document (an entry of a collection by its id, or a Single, which has one),
- * the blocks field the editor is bound to, the language and the stored form.
- */
-export interface SharedStyleUsageHere {
-  readonly document:
-    | { readonly collection: string; readonly id: string }
-    | { readonly single: string };
-  readonly field: string;
-  /** The language by code; absent for the site's default language. */
-  readonly locale?: string;
-  /**
-   * `draft` while the editor holds a published document's pending working
-   * draft, which is stored apart; `published` for the main row.
-   */
-  readonly variant: SharedStyleUsageVariant;
-}
-
-/**
- * The open document's saved blocks wearing a style, in the parts the editor
- * replaces with its live field: with the open field's rows set aside,
- * `alongside` is the largest copy the open field is part of (the language
- * being edited, or each language for a field they all share) and `elsewhere`
- * the largest of the document's other copies, so the document counts
- * `max(alongside + live, elsewhere)`. `saved` is what the document adds to
- * `SharedStyleUsage.blocks`, 0 when it holds none. `null` where a count is
- * unknown (a row stored before counts were kept, or a field whose place
- * among the copies the rows cannot say).
- */
-export interface SharedStyleUsageHereParts {
-  readonly saved: number | null;
-  readonly alongside: number | null;
-  readonly elsewhere: number | null;
-  readonly kind: SharedStyleUsageKind;
-}
+export const SHARED_STYLE_HERE_KEEPS_SAVED_PARAM = "hereKeepsSaved";
 
 /**
  * The usage route's path for some shared styles, each named by its own `id`
@@ -1201,6 +1163,9 @@ export function sharedStyleUsagePath(
       params.set(SHARED_STYLE_HERE_LOCALE_PARAM, here.locale);
     }
     params.set(SHARED_STYLE_HERE_VARIANT_PARAM, here.variant);
+    if (here.keepsSaved === true) {
+      params.set(SHARED_STYLE_HERE_KEEPS_SAVED_PARAM, "1");
+    }
   }
   return `${SHARED_STYLE_USAGE_ROUTE_PATH}?${params.toString()}`;
 }

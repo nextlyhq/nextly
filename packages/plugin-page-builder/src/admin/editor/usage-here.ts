@@ -26,12 +26,17 @@ export const UsageHereField: Context<string | undefined> = createContext<
  * What the editor has open, or `undefined` outside an editor or before the
  * document is saved once, when no saved count holds it yet. The form is the
  * pending working draft where the document has one, since that is what the
- * editor opens and saves; else the main row.
+ * editor opens and saves; else the main row, which stays live as saved while
+ * it is published (`keepsSaved`).
  */
 export function useUsageHere(): SharedStyleUsageHere | undefined {
   const identity = useDocumentIdentity();
   const locale = useDocumentLocale()?.code ?? undefined;
-  const drafting = useDocumentStatus()?.hasWorkingDraft === true;
+  const status = useDocumentStatus();
+  const drafting = status?.hasWorkingDraft === true;
+  // Published with no pending draft: the page stays live as saved until this
+  // edit is published, so its saved blocks still count.
+  const keepsSaved = !drafting && status?.status === "published";
   const field = useContext(UsageHereField);
   if (identity === null || field === undefined) return undefined;
   const document =
@@ -46,5 +51,6 @@ export function useUsageHere(): SharedStyleUsageHere | undefined {
     field,
     ...(locale === undefined ? {} : { locale }),
     variant: drafting ? "draft" : "published",
+    ...(keepsSaved ? { keepsSaved: true as const } : {}),
   };
 }

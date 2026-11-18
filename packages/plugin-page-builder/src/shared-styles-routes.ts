@@ -94,6 +94,11 @@ import {
   type StoredUse,
 } from "./shared-style-rescan";
 import {
+  readableHere,
+  usageOf,
+  type UsageHereReaders,
+} from "./shared-style-usage-here";
+import {
   collectionsTheBuilderOpens,
   siteLocales,
   singlesTheBuilderOpens,
@@ -105,11 +110,6 @@ import {
   SITE_STYLE_SLUG,
   sharedStyleName,
 } from "./site-style-storage";
-import {
-  readableHere,
-  usageOf,
-  type UsageHereReaders,
-} from "./shared-style-usage-here";
 import { retryOnStale } from "./stale-retry";
 import { readStoredJson } from "./stored-json";
 import type { UncoveredPage } from "./uncovered-pages";
@@ -1340,9 +1340,8 @@ export async function countSharedStyleUsage(
  * configured default, else the first language, else none.
  */
 function siteDefaultLocale(ctx: Pick<PluginRouteContext, "config">): string {
-  const localization = ctx.config.localization;
   return (
-    localization?.defaultLocale || localization?.locales[0]?.code || ""
+    ctx.config.localization?.defaultLocale || siteLocales(ctx.config)[0] || ""
   );
 }
 

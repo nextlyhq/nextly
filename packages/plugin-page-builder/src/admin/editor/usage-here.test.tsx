@@ -83,7 +83,7 @@ describe("what the editor has open", () => {
   it("names the document, the field, the language and the main row", () => {
     document.identity = { kind: "collection", slug: "pages", documentId: "p1" };
     document.locale = { code: "fr" };
-    document.status = { status: "published", hasWorkingDraft: false };
+    document.status = { status: "draft", hasWorkingDraft: false };
     const { result } = renderHook(() => useUsageHere(), {
       wrapper: boundTo("content"),
     });
@@ -92,6 +92,20 @@ describe("what the editor has open", () => {
       field: "content",
       locale: "fr",
       variant: "published",
+    });
+  });
+
+  it("keeps a published page's saved copy while it has no pending draft", () => {
+    document.identity = { kind: "collection", slug: "pages", documentId: "p1" };
+    document.status = { status: "published", hasWorkingDraft: false };
+    const { result } = renderHook(() => useUsageHere(), {
+      wrapper: boundTo("content"),
+    });
+    expect(result.current).toEqual({
+      document: { collection: "pages", id: "p1" },
+      field: "content",
+      variant: "published",
+      keepsSaved: true,
     });
   });
 

@@ -171,69 +171,76 @@ function listingFrom(
   readCut: boolean,
   health: UsageIndexHealth
 ): Map<string, DocumentsUsing> {
-  const byId = new Map<
-    string,
-    {
-      collections: Map<
-        string,
-        {
-          collection: string;
-          single: boolean;
-          documents: Set<string | null>;
-          shares: Map<string | null, (BlockShare | undefined)[]>;
-        }
-      >;
-      placeable: boolean;
-    }
-  >();
+  const byId = new Map<string, FoundForId>();
   for (const id of referenceIds) {
     byId.set(id, { collections: new Map(), placeable: true });
   }
   for (const reference of found) {
     const entry = byId.get(reference.referenceId);
-    if (entry === undefined) continue;
-    const collection = reference.collection;
-    if (collection === null) {
-      entry.placeable = false;
-      continue;
-    }
-    const key = groupKey({ ...reference, collection });
-    const group = entry.collections.get(key) ?? {
-      collection,
-      single: reference.single === true,
-      documents: new Set<string | null>(),
-      shares: new Map<string | null, (BlockShare | undefined)[]>(),
-    };
-    group.documents.add(reference.document);
-    const shares = group.shares.get(reference.document) ?? [];
-    shares.push(reference.share);
-    group.shares.set(reference.document, shares);
-    entry.collections.set(key, group);
+    if (entry !== undefined) addReference(entry, reference);
   }
   const whole = indexIsWhole(health);
   const listings = new Map<string, DocumentsUsing>();
   for (const [id, entry] of byId) {
     listings.set(id, {
-      collections: [...entry.collections.values()].map(group => {
-        const documents = [...group.documents];
-        const shares = documents.map(document =>
-          sharesRead(group.shares.get(document) ?? [])
-        );
-        return {
-          collection: group.collection,
-          documents,
-          // Only where every document's rows were read: the grouped read
-          // finds documents without their rows.
-          ...(shares.every(read => read !== undefined)
-            ? { shares: shares as BlockShare[][] }
-            : {}),
-          ...(group.single ? { single: true as const } : {}),
-        };
-      }),
+      collections: [...entry.collections.values()].map(collectionListed),
       complete: !readCut && entry.placeable && whole,
     });
   }
   return listings;
+}
+
+/** One collection's references to an id, gathered by document. */
+interface FoundInCollection {
+  collection: string;
+  single: boolean;
+  documents: Set<string | null>;
+  shares: Map<string | null, (BlockShare | undefined)[]>;
+}
+
+/** Everything found for one id, and whether each reference could be placed. */
+interface FoundForId {
+  collections: Map<string, FoundInCollection>;
+  placeable: boolean;
+}
+
+/** File one reference under its collection and document. */
+function addReference(entry: FoundForId, reference: FoundReference): void {
+  const collection = reference.collection;
+  if (collection === null) {
+    entry.placeable = false;
+    return;
+  }
+  const key = groupKey({ ...reference, collection });
+  const group = entry.collections.get(key) ?? {
+    collection,
+    single: reference.single === true,
+    documents: new Set<string | null>(),
+    shares: new Map<string | null, (BlockShare | undefined)[]>(),
+  };
+  group.documents.add(reference.document);
+  const shares = group.shares.get(reference.document) ?? [];
+  shares.push(reference.share);
+  group.shares.set(reference.document, shares);
+  entry.collections.set(key, group);
+}
+
+/** One collection's documents as a listing names them, with their shares. */
+function collectionListed(
+  group: FoundInCollection
+): DocumentsUsing["collections"][number] {
+  const documents = [...group.documents];
+  const shares = documents.map(document =>
+    sharesRead(group.shares.get(document) ?? [])
+  );
+  return {
+    collection: group.collection,
+    documents,
+    // Only where every document's rows were read: the grouped read finds
+    // documents without their rows.
+    ...(shares.every(read => read !== undefined) ? { shares } : {}),
+    ...(group.single ? { single: true as const } : {}),
+  };
 }
 
 /** A document's shares, or `undefined` when any of its rows was read without one. */
@@ -269,7 +276,8 @@ function fieldsByCopy(
   const byVariant = new Map<string, Map<string, Map<string, number | null>>>();
   for (const share of shares) {
     const locales = byVariant.get(share.variant) ?? new Map();
-    const fields = locales.get(share.locale) ?? new Map<string, number | null>();
+    const fields =
+      locales.get(share.locale) ?? new Map<string, number | null>();
     const before = fields.get(share.field);
     fields.set(
       share.field,

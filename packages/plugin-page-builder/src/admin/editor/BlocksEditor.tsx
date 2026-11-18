@@ -98,6 +98,7 @@ import {
   useDrawnTemplate,
   useTemplatePreviewState,
 } from "./template-preview-strip";
+import { UsageHereField } from "./usage-here";
 import { useComponentView, type ComponentView } from "./use-component-view";
 import { useEditorMount, type EditorMount } from "./use-editor-mount";
 import {
@@ -112,7 +113,6 @@ import {
   useCanvasInputs,
   useSiteStyleInputs,
 } from "./use-render-inputs";
-import { UsageHereField } from "./usage-here";
 import {
   drawnNodesOf,
   useFollowApplied,
@@ -222,19 +222,19 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
                 live blocks in place of its saved ones.
               */}
               <UsageHereField.Provider value={props.name}>
-              {/*
+                {/*
                 A template is drawn with an entry of the collection it names,
                 chosen in the strip above its canvas: read around the editor,
                 so the canvas, the inspector and the strip all read the one
                 answer. Any other document is drawn as itself.
               */}
-              {isTemplate ? (
-                <TemplatePreviewScope control={props.control}>
+                {isTemplate ? (
+                  <TemplatePreviewScope control={props.control}>
+                    <EditorBody {...props} place={fieldPlace(props)} />
+                  </TemplatePreviewScope>
+                ) : (
                   <EditorBody {...props} place={fieldPlace(props)} />
-                </TemplatePreviewScope>
-              ) : (
-                <EditorBody {...props} place={fieldPlace(props)} />
-              )}
+                )}
               </UsageHereField.Provider>
             </CanvasFrameProvider>
           </ConnectStyleHistoryContext.Provider>

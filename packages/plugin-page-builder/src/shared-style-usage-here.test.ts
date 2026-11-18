@@ -78,9 +78,9 @@ describe("a style's usage", () => {
   it("reports the open field's document in parts, its other fields kept", () => {
     // p1 holds 2 in `content` and 1 in `sidebar`: with `content` open, the
     // sidebar's 1 stays beside whatever the editor holds live.
-    expect(usageOf(found, kindOf, open({ collection: "pages", id: "p1" })).here).toEqual(
-      { saved: 3, alongside: 1, elsewhere: 0, kind: "pages" }
-    );
+    expect(
+      usageOf(found, kindOf, open({ collection: "pages", id: "p1" })).here
+    ).toEqual({ saved: 3, alongside: 1, elsewhere: 0, kind: "pages" });
     expect(
       usageOf(found, kindOf, open({ collection: "components", id: "k1" })).here
     ).toEqual({ saved: 3, alongside: 0, elsewhere: 0, kind: "components" });
@@ -174,6 +174,21 @@ describe("the open document's parts", () => {
     });
   });
 
+  it("keeps a published page's saved copy beside an edit not yet published", () => {
+    // Published with no pending draft: a save makes a draft beside it, and
+    // the live page keeps its 3 blocks until the edit is published.
+    const shares = [share("content", 3), share("sidebar", 1)];
+    expect(
+      hereParts(shares, { ...editing("content"), keepsSaved: true })
+    ).toEqual({ saved: 4, alongside: 1, elsewhere: 4 });
+    // Not kept: the edit replaces it.
+    expect(hereParts(shares, editing("content"))).toEqual({
+      saved: 4,
+      alongside: 1,
+      elsewhere: 0,
+    });
+  });
+
   it("swaps only the edited language of a translated field", () => {
     // English `content` 2, French `content` 3, and a `sidebar` every
     // language shares holding 1: English is 3, French 4.
@@ -235,11 +250,28 @@ describe("what the editor has open, as the usage read names it", () => {
     `https://site.test/x?here=${encodeURIComponent(here)}${extra}`;
 
   it("reads a document, its field, its language and its stored form", () => {
-    expect(usageHereOf(url("pages/p1", "&hereField=content&hereLocale=fr&hereVariant=draft"))).toEqual({
+    expect(
+      usageHereOf(
+        url("pages/p1", "&hereField=content&hereLocale=fr&hereVariant=draft")
+      )
+    ).toEqual({
       document: { collection: "pages", id: "p1" },
       field: "content",
       locale: "fr",
       variant: "draft",
+    });
+    expect(
+      usageHereOf(
+        url(
+          "pages/p1",
+          "&hereField=content&hereVariant=published&hereKeepsSaved=1"
+        )
+      )
+    ).toEqual({
+      document: { collection: "pages", id: "p1" },
+      field: "content",
+      variant: "published",
+      keepsSaved: true,
     });
     expect(usageHereOf(url("pages/a/b"))?.document).toEqual({
       collection: "pages",
@@ -269,6 +301,7 @@ describe("what the editor has open, as the usage read names it", () => {
       field: "content",
       locale: "fr",
       variant: "published",
+      keepsSaved: true,
     });
     expect(path.startsWith(`${SHARED_STYLE_USAGE_ROUTE_PATH}?`)).toBe(true);
     expect(usageHereOf(`https://site.test/${path}`)).toEqual({
@@ -276,6 +309,7 @@ describe("what the editor has open, as the usage read names it", () => {
       field: "content",
       locale: "fr",
       variant: "published",
+      keepsSaved: true,
     });
   });
 });
@@ -309,6 +343,16 @@ describe("the open document, only as far as the caller may read it", () => {
     const mayNot = readers(false);
     expect(await readableHere(asked("pages/p1"), mayNot)).toBeUndefined();
     expect(await readableHere(asked("single:home"), mayNot)).toBeUndefined();
+    // A read that fails (an id the database cannot take) names nothing,
+    // rather than failing the whole usage read.
+    expect(
+      await readableHere(asked("pages/not-an-id"), {
+        ...mayNot,
+        named: async () => {
+          throw new Error("invalid input syntax for type uuid");
+        },
+      })
+    ).toBeUndefined();
     // Read, but another document answered: not the one named.
     expect(
       await readableHere(asked("pages/p1"), {

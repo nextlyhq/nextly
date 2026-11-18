@@ -8,6 +8,7 @@
  */
 import {
   SHARED_STYLE_HERE_FIELD_PARAM,
+  SHARED_STYLE_HERE_KEEPS_SAVED_PARAM,
   SHARED_STYLE_HERE_LOCALE_PARAM,
   SHARED_STYLE_HERE_PARAM,
   SHARED_STYLE_HERE_VARIANT_PARAM,
@@ -48,6 +49,9 @@ export function usageHereOf(url: string): SharedStyleUsageHere | undefined {
     field,
     ...(locale === null || locale === "" ? {} : { locale }),
     variant,
+    ...(params.get(SHARED_STYLE_HERE_KEEPS_SAVED_PARAM) === "1"
+      ? { keepsSaved: true as const }
+      : {}),
   };
 }
 
@@ -91,6 +95,8 @@ export interface ResolvedHere {
   /** The language by code, or empty on a site that keeps no languages. */
   readonly locale: string;
   readonly variant: SharedStyleUsageHere["variant"];
+  /** Whether the open copy stays live as saved; see `SharedStyleUsageHere`. */
+  readonly keepsSaved?: true;
 }
 
 /**
@@ -105,20 +111,34 @@ export async function readableHere(
 ): Promise<ResolvedHere | undefined> {
   const here = usageHereOf(url);
   if (here === undefined) return undefined;
-  const { document } = here;
-  const readable =
-    "single" in document
-      ? (await readers.single(document.single)) !== null
-      : ((await readers.named(document.collection, [document.id])) ?? []).some(
-          row => row.id === document.id
-        );
-  if (!readable) return undefined;
+  if (!(await mayRead(here.document, readers))) return undefined;
   return {
-    document,
+    document: here.document,
     field: here.field,
     locale: here.locale ?? readers.defaultLocale(),
     variant: here.variant,
+    ...(here.keepsSaved === true ? { keepsSaved: true as const } : {}),
   };
+}
+
+/**
+ * Whether the caller may read a named document. A read that fails (an id the
+ * database cannot take, say: it is the caller's own input) says no, so a bad
+ * name drops the open document's share rather than the whole usage read.
+ */
+async function mayRead(
+  document: SharedStyleUsageHere["document"],
+  readers: UsageHereReaders
+): Promise<boolean> {
+  try {
+    if ("single" in document) {
+      return (await readers.single(document.single)) !== null;
+    }
+    const rows = await readers.named(document.collection, [document.id]);
+    return (rows ?? []).some(row => row.id === document.id);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -194,7 +214,7 @@ function sharesOf(
  */
 export function hereParts(
   shares: readonly BlockShare[],
-  open: Pick<ResolvedHere, "field" | "locale" | "variant">
+  open: Pick<ResolvedHere, "field" | "locale" | "variant" | "keepsSaved">
 ): Omit<SharedStyleUsageHereParts, "kind"> {
   const copies = copiesOf(shares);
   const sameForm = copies
@@ -221,6 +241,14 @@ export function hereParts(
     edited.map(locale => copyBlocks(rest, { variant: open.variant, locale }))
   );
   const others = copies.filter(copy => !isEdited(copy));
+  // A copy live as saved until the edit is published still holds its saved
+  // blocks beside the edit: counted with the other copies, whole.
+  const kept =
+    open.keepsSaved === true
+      ? edited.map(locale =>
+          copyBlocks(shares, { variant: open.variant, locale })
+        )
+      : [];
   return {
     saved: documentBlocks(shares),
     alongside:
@@ -229,7 +257,10 @@ export function hereParts(
       outgrows(rest, others, open.variant, alongside)
         ? null
         : alongside,
-    elsewhere: largestOf(others.map(copy => copyBlocks(rest, copy))),
+    elsewhere: largestOf([
+      ...others.map(copy => copyBlocks(rest, copy)),
+      ...kept,
+    ]),
   };
 }
 

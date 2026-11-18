@@ -362,9 +362,7 @@ describe("the blocks a listing counts", () => {
     expect(listing.collections.map(entry => entry.documents)).toEqual([
       ["p1", "p2"],
     ]);
-    expect(listing.collections[0]?.shares?.map(documentBlocks)).toEqual([
-      4, 5,
-    ]);
+    expect(listing.collections[0]?.shares?.map(documentBlocks)).toEqual([4, 5]);
     expect(blockCountOf(listing)).toEqual({ blocks: 9, complete: true });
   });
 
