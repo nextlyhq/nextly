@@ -167,6 +167,20 @@ describe("describing a picked form for the canvas", () => {
     expect(forms.describe).toHaveBeenCalledWith("7", { access: AS_AUTHOR });
   });
 
+  it("refuses a description that doesn't read as a form", async () => {
+    const broken = { ...QUOTE, fields: [null] } as never;
+    const forms = provider([
+      {
+        listing: { ref: "7", title: "Quote", state: "published" },
+        asAuthor: broken,
+        asVisitor: broken,
+      },
+    ]);
+    // A provider's answer is outside input: one the canvas can't draw is
+    // refused here, and the route answers that the form couldn't be read.
+    await expect(ask(registered(forms))).rejects.toThrow(/description/);
+  });
+
   it("draws a draft, which only its author can read, and says it is one", async () => {
     const forms = provider([
       {

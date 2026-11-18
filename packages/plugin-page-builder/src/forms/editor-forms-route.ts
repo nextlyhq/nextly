@@ -19,6 +19,7 @@
 import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import type {
   FormAccess,
+  FormDescription,
   FormListing,
   FormProvider,
 } from "@nextlyhq/plugin-sdk/blocks";
@@ -78,6 +79,68 @@ function parsedListings(listed: unknown): FormListing[] {
     const read = FORM_LISTING.safeParse(entry);
     return read.success ? [read.data] : [];
   });
+}
+
+/**
+ * A provider's description of one form, as the canvas draws it. Outside
+ * input like a listing: one that doesn't read as a form is refused before
+ * the editor is handed it, and the route answers that the form couldn't be
+ * read rather than draw something broken.
+ */
+const FORM_FIELD_DRAWING = z.object({
+  name: z.string().min(1).max(200),
+  label: z.string().max(500),
+  kind: z.enum([
+    "text",
+    "email",
+    "tel",
+    "number",
+    "url",
+    "date",
+    "time",
+    "textarea",
+    "select",
+    "checkbox",
+    "radio",
+    "file",
+    "hidden",
+  ]),
+  required: z.boolean().optional(),
+  help: z.string().max(2000).optional(),
+  placeholder: z.string().max(500).optional(),
+  options: z
+    .array(z.object({ value: z.string().max(500), label: z.string().max(500) }))
+    .max(500)
+    .optional(),
+  accept: z.string().max(500).optional(),
+  min: z.number().optional(),
+  max: z.number().optional(),
+  pattern: z.string().max(2000).optional(),
+  provider: z.record(z.string(), z.string()).optional(),
+});
+
+const FORM_DRAWING = z.object({
+  ref: z.string().min(1).max(200),
+  title: z.string().max(500),
+  fields: z.array(FORM_FIELD_DRAWING).max(500),
+  submitText: z.string().max(200),
+  afterSending: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("message"), message: z.string().max(5000) }),
+    z.object({ kind: z.literal("page"), href: z.string().max(2048) }),
+  ]),
+  encoding: z.enum(["urlencoded", "multipart"]),
+  script: z
+    .object({ module: z.string().max(2048), reason: z.string().max(500) })
+    .optional(),
+});
+
+/** `drawing` as the canvas may draw it; throws where it doesn't read as one. */
+function drawingOf(drawing: unknown): FormDescription {
+  const read = FORM_DRAWING.safeParse(drawing);
+  if (!read.success) {
+    throw new Error("The provider's description doesn't read as a form.");
+  }
+  return read.data;
 }
 
 /** One provider's forms for `access`; none where its listing fails. */
@@ -149,12 +212,14 @@ export async function describeEditorForm(
     access: { as: "public" },
     ...locale,
   });
+  // Parsed once here, the one boundary both answers below hand on.
+  const drawing = drawingOf(asAuthor);
   if (!("unavailable" in asVisitor)) {
-    return { state: "published", drawing: asAuthor };
+    return { state: "published", drawing };
   }
   return asVisitor.unavailable === "closed"
     ? closed(asVisitor.message)
-    : { state: "draft", drawing: asAuthor };
+    : { state: "draft", drawing };
 }
 
 /** A closed form's answer, with a visitor's words where it has some. */
