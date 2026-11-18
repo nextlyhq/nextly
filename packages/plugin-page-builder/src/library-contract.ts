@@ -29,6 +29,7 @@ import type {
 import type { SavedComponent, SavedPattern } from "@nextlyhq/builder";
 import type { HookWarning } from "nextly/config";
 
+import type { LayoutArea } from "./collections/areas";
 import type { RemovalDryRun } from "./breakpoint-removal/dry-run";
 import type { CspAddition, CspCheck } from "./site-code/csp";
 
@@ -234,6 +235,8 @@ export interface LibraryComponent extends SavedComponent {
    * which a missing key cannot say.
    */
   readonly document: ComponentDocument | null;
+  /** Its "Use as" area, if any, telling a placed header or footer apart. */
+  readonly area?: LayoutArea;
 }
 
 /**
