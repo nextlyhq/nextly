@@ -905,6 +905,33 @@ const SPACING_DEFAULTS: readonly SpacingDefault[] = [
     value: { min: "1rem", preferred: "4vw", max: "2rem" },
     description: "A section's padding beside its content.",
   },
+  // A Section's Compact and Roomy padding (`padding-preset.ts`), each a pair
+  // like the two above, which are Normal's. Tighter and airier above and
+  // below; beside the content they start as Normal's.
+  {
+    name: "space.section-y-compact",
+    label: "Section padding, compact (top and bottom)",
+    value: { min: "1.5rem", preferred: "1rem + 2vw", max: "2.5rem" },
+    description: "A Compact section's padding above and below its content.",
+  },
+  {
+    name: "space.gutter-compact",
+    label: "Section padding, compact (sides)",
+    value: { min: "1rem", preferred: "4vw", max: "2rem" },
+    description: "A Compact section's padding beside its content.",
+  },
+  {
+    name: "space.section-y-roomy",
+    label: "Section padding, roomy (top and bottom)",
+    value: { min: "4.5rem", preferred: "3rem + 6vw", max: "7.5rem" },
+    description: "A Roomy section's padding above and below its content.",
+  },
+  {
+    name: "space.gutter-roomy",
+    label: "Section padding, roomy (sides)",
+    value: { min: "1rem", preferred: "4vw", max: "2rem" },
+    description: "A Roomy section's padding beside its content.",
+  },
   {
     name: "space.columns",
     label: "Space between columns",
