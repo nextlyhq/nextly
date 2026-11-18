@@ -18,9 +18,13 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const toastError = vi.hoisted(() => vi.fn());
+const toastWarning = vi.hoisted(() => vi.fn());
 vi.mock("@nextlyhq/ui", async importOriginal => {
   const actual = await importOriginal<typeof import("@nextlyhq/ui")>();
-  return { ...actual, toast: { ...actual.toast, error: toastError } };
+  return {
+    ...actual,
+    toast: { ...actual.toast, error: toastError, warning: toastWarning },
+  };
 });
 
 /** The route's answers, as the test sets them, and what was sent. */
@@ -75,6 +79,7 @@ afterEach(() => {
   form.run.mockClear();
   form.locale = null;
   toastError.mockClear();
+  toastWarning.mockClear();
 });
 
 const CARD: ComponentDocument = {
@@ -535,6 +540,48 @@ describe("the page's Save", () => {
     });
     expect(route.sent).toEqual([]);
     expect(hook.result.current.library.definitions.get("card")).toBe(CARD);
+    // Written here, so not taken for a setting that was never made while the
+    // library reads the component again.
+    expect(toastWarning).not.toHaveBeenCalled();
+  });
+
+  it("keeps the hold, and says so, when the binding can't be taken off", async () => {
+    // The placement was locked while the write was out.
+    const { editor } = await heldAndBound("conflict");
+    editor.applyAll.mockImplementation(() => null as never);
+    let refused: unknown;
+    await act(async () => {
+      try {
+        await form.before?.("save", settled);
+      } catch (error) {
+        refused = error;
+      }
+    });
+    expect(refused).toBeInstanceOf(Error);
+    const [words] = toastError.mock.calls[0] as [string];
+    expect(words).toContain("couldn't be taken off");
+    // Still owed: the next Save tries the component again.
+    route.sent.length = 0;
+    await act(async () => {
+      await form.before?.("save", settled).catch(() => undefined);
+    });
+    expect(route.sent.filter(sent => sent.body.dryRun !== true)).toHaveLength(
+      1
+    );
+  });
+
+  it("takes off a binding to a setting the component doesn't have, nothing held", async () => {
+    // A page recovered after a reload holds the binding and not the plan.
+    const { editor } = mount(
+      pageWith({ "overrides.ghost": { $bind: "title", source: "entry" } })
+    );
+    await act(async () => {
+      await form.before?.("save", settled);
+    });
+    expect(editor.document.nodes[0]?.bindings).toBeUndefined();
+    const [words] = toastWarning.mock.calls[0] as [string];
+    expect(words).toContain("Card doesn't have");
+    expect(route.sent).toEqual([]);
   });
 
   it("writes the setting to the component's draft with a page's Publish too", async () => {
