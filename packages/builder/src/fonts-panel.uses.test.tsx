@@ -387,6 +387,33 @@ describe("using a font once it is added", () => {
     expect(undone.siteText).toEqual(initial.siteText);
   });
 
+  it("closes the upload editor once a role is chosen, so the toast and the canvas are in reach", async () => {
+    // The editor holds the rest of the screen, and the toast, inert while open.
+    render(<Writable onWrite={vi.fn()} />);
+    await upload("Brand");
+    expect(
+      screen.getByRole("dialog", { name: "Upload a font file" })
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Headings" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Upload a font file" })
+      ).toBeNull()
+    );
+  });
+
+  it("keeps the upload editor open for the next file on Not now", async () => {
+    render(<Writable onWrite={vi.fn()} />);
+    await upload("Brand");
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: "Use Brand for:" })).toBeNull()
+    );
+    expect(
+      screen.getByRole("dialog", { name: "Upload a font file" })
+    ).toBeTruthy();
+  });
+
   it("stops asking about a font once it is removed", async () => {
     const onWrite = vi.fn();
     render(<Writable onWrite={onWrite} />);

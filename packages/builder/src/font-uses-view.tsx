@@ -263,6 +263,11 @@ export interface UseForHost {
   readonly onTokensChange: ((tokens: SiteTokenSet) => void) | undefined;
   /** The Site text rows the site's code supplies, which a role change keeps. */
   readonly suppliedText: SiteTextMap | undefined;
+  /**
+   * Told once a role is chosen, so the upload editor the question sits in
+   * closes: open, it holds the toast's Undo and the canvas out of reach.
+   */
+  readonly onChosen?: () => void;
 }
 
 /**
@@ -304,6 +309,7 @@ export function useUseFor(host: UseForHost): {
       now
     );
     onTokensChange(set);
+    host.onChosen?.();
     toast.success(nowYourFontWords(asked.family, roles), {
       action: {
         label: "Undo",

@@ -235,6 +235,9 @@ export function FontsPanel({
   suppliedText,
 }: FontsPanelProps): React.JSX.Element {
   const [view, setView] = React.useState<View>({ kind: "list" });
+  // The upload editor, open or not: held here so choosing a role for a font
+  // just uploaded closes it.
+  const [uploading, setUploading] = React.useState(false);
   const addButton = React.useRef<HTMLButtonElement>(null);
   const families = React.useMemo(
     () => (faces === undefined ? [] : siteFamilies(faces, codeFaces)),
@@ -249,6 +252,7 @@ export function FontsPanel({
     readOnly,
     onTokensChange,
     suppliedText,
+    onChosen: () => setUploading(false),
   });
   const question = (
     <UseForQuestion asked={useFor.asked} onAnswer={useFor.answer} />
@@ -275,6 +279,8 @@ export function FontsPanel({
     <FontsList
       families={families}
       question={question}
+      uploading={uploading}
+      setUploading={setUploading}
       faces={faces}
       tokens={tokens}
       readOnly={readOnly}
@@ -362,6 +368,8 @@ function FontsList({
   onOpenRole,
   usesOf,
   question,
+  uploading,
+  setUploading,
   onRemoveFamily,
   onBrowse,
   upload,
@@ -373,6 +381,9 @@ function FontsList({
    * top of the list.
    */
   question: React.ReactNode;
+  /** Whether the upload editor is open, held by the panel. */
+  uploading: boolean;
+  setUploading: (open: boolean) => void;
   faces: readonly FontFaceDef[];
   tokens: SiteTokenSet | undefined;
   readOnly: boolean;
@@ -386,7 +397,6 @@ function FontsList({
   upload: ListUpload | undefined;
 }): React.JSX.Element {
   const [query, setQuery] = React.useState("");
-  const [uploading, setUploading] = React.useState(false);
   const search = React.useRef<HTMLInputElement>(null);
   const needle = query.trim().toLowerCase();
   const shownFamilies = families.filter(family =>
