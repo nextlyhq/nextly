@@ -649,7 +649,9 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot();
         await path.create([text("heading")]);
         const definitionBefore = definitionText();
-        // A file where the folder goes: the marker's folder cannot be made.
+        // A file where the folder goes (the create's own record made the folder, so it goes
+        // first): the marker's folder cannot be made.
+        rmSync(join(basePath, ".nextly"), { recursive: true, force: true });
         writeFileSync(join(basePath, ".nextly"), "");
 
         const answer = await path
