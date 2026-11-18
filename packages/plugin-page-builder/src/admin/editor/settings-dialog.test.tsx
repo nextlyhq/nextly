@@ -301,6 +301,7 @@ interface Shown {
   address?: SettingsAddress | null;
   place?: SettingsPlace | null;
   openAsForm?: () => void;
+  fieldName?: string;
 }
 
 function show({
@@ -310,6 +311,7 @@ function show({
   address = null,
   place = PAGE_PLACE,
   openAsForm,
+  fieldName = "layout",
 }: Shown = {}) {
   // Built afresh each time: React skips a child whose element is unchanged,
   // so re-rendering the same tree would never ask the dialog again.
@@ -322,7 +324,7 @@ function show({
         returnFocus={() => null}
         kind={kind}
         pageTitle="Pricing"
-        fieldName="layout"
+        fieldName={fieldName}
         headerFooter={
           kind === "page" ? <HeaderFooterMenu control={{} as never} /> : null
         }
@@ -456,6 +458,19 @@ describe("Page settings", () => {
     // A page with no code of its own says nothing of it.
     show();
     expect(screen.queryByText(/This page adds its own code/)).toBeNull();
+  });
+
+  it("offers no Code tab where the builder's field isn't a page's own top-level field, which the server refuses code on", () => {
+    delivered = [placeTab("acme-reviews.tab", "Reviews")];
+    for (const fieldName of ["hero.body", "sections[0].body"]) {
+      show({ fieldName });
+      expect(tabNames()).not.toContain("Code");
+      expect(screen.queryByText(/This page adds its own code/)).toBeNull();
+      cleanup();
+    }
+    // CONTROL: the page's own top-level field offers it.
+    show({ fieldName: "body" });
+    expect(tabNames()).toContain("Code");
   });
 
   it("offers Site settings apart from the tabs, only to a role that may manage the site", () => {

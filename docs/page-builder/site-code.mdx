@@ -76,7 +76,9 @@ People who may change the site's settings can also add code to **one page**, fro
 the same rules and the same Content Security Policy check, and kept in the page's own
 document (`settings.code`), in the site's default language: it is saved in the page's
 draft, goes live when the page is published, is kept in the page's history, and comes
-back when an older version is restored.
+back when an older version is restored. Only a page's own Page Builder field, at the top
+of the page, keeps code: a field inside a group, a list or a field group offers no Code tab,
+and the server refuses code there.
 
 The server judges it again on every write that changes it, however the write was made:
 it refuses the change from anyone without the **Manage page builder site settings**
@@ -91,7 +93,14 @@ the page's head code before the page and its end-of-body code after it, from the
 document. It runs after the site's code in each place: the site's head, then the page's head,
 then the site's end of body, then the page's end of body. Nothing runs under draft mode, as
 for site code. A route of your own can draw it with `<PageCode slot="head" document={...} />`
-from `@nextlyhq/plugin-page-builder/site`.
+from `@nextlyhq/plugin-page-builder/site`. On a site with a nonce-only policy, give the route's
+`pageBuilderContent({ nonce: () => ... })` the request's nonce, as you give it to
+`<SiteCode nonce={nonce} />`; both places of the page's code carry it.
+
+A page whose code starts scripts or styles is loaded, and left, as a whole document. Reached
+from another page by a link the site follows without a full load, it loads again so its code
+starts; left that way, the next page loads in full, so none of its scripts or styles stay
+behind on other pages.
 
 The page's head code is started by the same loader as site code. Its end-of-body code is
 started by a loader of its own, which waits until the site's code has started. A site whose

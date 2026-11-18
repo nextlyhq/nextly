@@ -31,6 +31,8 @@ import { describeEachDialect } from "./helpers/dialect-matrix";
 // Suite-local slugs: integration files share fixed system-table names.
 const PAGES = "fwcaller_pages";
 const HOME = "fwcaller_home";
+/** A field group holding the guarded type, placed in both. */
+const HERO = "fwcaller_hero";
 /** The field type whose validator records what it is told. */
 const GUARDED = "guarded";
 /** The permission the validator asks about. */
@@ -41,6 +43,8 @@ const RESOURCE = "fwcaller-site";
 interface Told {
   kind: PluginFieldWriteCaller["kind"] | "none";
   may: boolean;
+  /** Whether the value sat in a field-group instance. */
+  inFieldGroup: boolean;
 }
 let told: Told[] = [];
 let current: TestNextly | undefined;
@@ -70,6 +74,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
                 told.push({
                   kind: caller?.kind ?? "none",
                   may: (await caller?.can(ACTION, RESOURCE)) ?? false,
+                  inFieldGroup: args.write?.inFieldGroup === true,
                 });
                 return true as const;
               },
@@ -79,6 +84,9 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
     ],
     // Raw configs: the type is registered by the plugin at boot.
+    fieldGroups: [
+      { slug: HERO, fields: [{ name: "body", type: GUARDED }] } as never,
+    ],
     collections: [
       {
         slug: PAGES,
@@ -91,6 +99,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         fields: [
           { name: "title", type: "text" },
           { name: "body", type: GUARDED },
+          { name: "hero", type: "component", component: HERO },
         ],
       } as unknown as CollectionConfig,
     ],
@@ -98,7 +107,10 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       {
         slug: HOME,
         access: { read: () => true, update: () => true },
-        fields: [{ name: "body", type: GUARDED }],
+        fields: [
+          { name: "body", type: GUARDED },
+          { name: "hero", type: "component", component: HERO },
+        ],
       } as never,
     ],
   });
@@ -126,11 +138,11 @@ describeEachDialect("the caller a field validator is told", dialect => {
     };
 
     // A signed-in user who holds the permission, and one who does not.
-    expect(await write({ userId: "permitted" })).toEqual({
+    expect(await write({ userId: "permitted" })).toMatchObject({
       kind: "user",
       may: true,
     });
-    expect(await write({ userId: "plain" })).toEqual({
+    expect(await write({ userId: "plain" })).toMatchObject({
       kind: "user",
       may: false,
     });
@@ -144,7 +156,7 @@ describeEachDialect("the caller a field validator is told", dialect => {
           permissions: [`create-${PAGES}`],
         },
       })
-    ).toEqual({ kind: "apiKey", may: false });
+    ).toMatchObject({ kind: "apiKey", may: false });
     // A key whose scope holds it.
     expect(
       await write({
@@ -154,11 +166,98 @@ describeEachDialect("the caller a field validator is told", dialect => {
           permissions: [`create-${PAGES}`, `${ACTION}-${RESOURCE}`],
         },
       })
-    ).toEqual({ kind: "apiKey", may: true });
+    ).toMatchObject({ kind: "apiKey", may: true });
     // Trusted code.
-    expect(await write({ overrideAccess: true })).toEqual({
+    expect(await write({ overrideAccess: true })).toMatchObject({
       kind: "system",
       may: true,
+    });
+  });
+
+  it("tells a validator inside a field-group instance the same caller, and that it sits in one", async () => {
+    const t = await boot(dialect);
+    await userWhoMay(t, "permitted", ACTION, [RESOURCE]);
+    await grantTo(t, "permitted", "create", [PAGES]);
+    await grantTo(t, "permitted", "update", [PAGES]);
+    await userWhoMay(t, "plain", "create", [PAGES]);
+    await grantTo(t, "plain", "update", [PAGES, HOME]);
+    const handler = t.getService("collectionsHandler");
+    /** What the instance's own validator was told, on its last run. */
+    const inInstance = () => told.filter(entry => entry.inFieldGroup).at(-1);
+
+    // A create, as each kind of caller.
+    const create = async (params: Record<string, unknown>) => {
+      told = [];
+      const made = await handler.createEntry(
+        { collectionName: PAGES, ...params },
+        { title: "t", body: { v: 0 }, hero: { body: { v: 1 } } }
+      );
+      expect(made.success, JSON.stringify(made)).toBe(true);
+      return made;
+    };
+    const made = await create({ userId: "permitted" });
+    expect(inInstance()).toEqual({
+      kind: "user",
+      may: true,
+      inFieldGroup: true,
+    });
+    await create({ userId: "plain" });
+    expect(inInstance()).toEqual({
+      kind: "user",
+      may: false,
+      inFieldGroup: true,
+    });
+    await create({ overrideAccess: true });
+    expect(inInstance()).toEqual({
+      kind: "system",
+      may: true,
+      inFieldGroup: true,
+    });
+    await create({
+      userId: "permitted",
+      authenticatedScope: {
+        actorType: "apiKey",
+        permissions: [`create-${PAGES}`],
+      },
+    });
+    expect(inInstance()).toEqual({
+      kind: "apiKey",
+      may: false,
+      inFieldGroup: true,
+    });
+    // The entry's own top-level field is not in one.
+    expect(told.find(entry => !entry.inFieldGroup)?.inFieldGroup).toBe(false);
+
+    // An update of the same entry.
+    const id = (made as { data?: { id?: string } }).data?.id;
+    expect(typeof id).toBe("string");
+    told = [];
+    const updated = await handler.updateEntry(
+      { collectionName: PAGES, entryId: id as string, userId: "permitted" },
+      { hero: { body: { v: 2 } }, _overwrite: true }
+    );
+    expect(updated.success, JSON.stringify(updated)).toBe(true);
+    expect(inInstance()).toEqual({
+      kind: "user",
+      may: true,
+      inFieldGroup: true,
+    });
+
+    // A Single's field-group write.
+    const direct = t.nextly as unknown as {
+      updateSingle(args: Record<string, unknown>): Promise<unknown>;
+    };
+    told = [];
+    await direct.updateSingle({
+      slug: HOME,
+      data: { hero: { body: { v: 3 } }, _overwrite: true },
+      overrideAccess: false,
+      user: { id: "plain" },
+    });
+    expect(inInstance()).toEqual({
+      kind: "user",
+      may: false,
+      inFieldGroup: true,
     });
   });
 
@@ -177,7 +276,7 @@ describeEachDialect("the caller a field validator is told", dialect => {
       overrideAccess: false,
       user: { id: "plain" },
     });
-    expect(told.at(-1)).toEqual({ kind: "user", may: false });
+    expect(told.at(-1)).toMatchObject({ kind: "user", may: false });
 
     told = [];
     await direct.updateSingle({
@@ -185,7 +284,7 @@ describeEachDialect("the caller a field validator is told", dialect => {
       data: { body: { v: 2 }, _overwrite: true },
       overrideAccess: true,
     });
-    expect(told.at(-1)).toEqual({ kind: "system", may: true });
+    expect(told.at(-1)).toMatchObject({ kind: "system", may: true });
 
     // A super-admin holds every permission, as the route gate answers.
     told = [];
@@ -195,6 +294,6 @@ describeEachDialect("the caller a field validator is told", dialect => {
       overrideAccess: false,
       user: { id: "admin" },
     });
-    expect(told.at(-1)).toEqual({ kind: "user", may: true });
+    expect(told.at(-1)).toMatchObject({ kind: "user", may: true });
   });
 });

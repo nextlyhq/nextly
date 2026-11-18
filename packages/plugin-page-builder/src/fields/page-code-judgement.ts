@@ -58,9 +58,13 @@ async function changesCode(
   return !held.some(code => samePageCode(code, written));
 }
 
-/** Whether a field's path names a top-level field: no group, no row. */
-function isTopLevel(path: string): boolean {
-  return !path.includes(".") && !path.includes("[");
+/**
+ * Whether the field is a page's own top-level field: no group, no row, and
+ * not a field-group instance's, which is judged at the top of the instance.
+ */
+function isTopLevel(args: JudgedField): boolean {
+  if (args.write?.inFieldGroup === true) return false;
+  return !args.path.includes(".") && !args.path.includes("[");
 }
 
 /** A refusal, at the field's path. */
@@ -103,16 +107,17 @@ export async function pageCodeIssues(
   stored: () => Promise<StoredForms>
 ): Promise<PluginFieldIssue[]> {
   const written = pageCodeOf(value);
-  // Only a page's own top-level blocks field keeps code: one inside a group
-  // or a repeater's row could lose it to a write that clears the group or
-  // drops the row, which no check of this field sees, so none may hold any.
-  if (!isTopLevel(args.path)) {
+  // Only a page's own top-level blocks field keeps code: one inside a group,
+  // a repeater's row or a field-group instance could lose it to a write that
+  // clears the group or drops the row or the instance, which no check of
+  // this field sees, so none may hold any.
+  if (!isTopLevel(args)) {
     return written === null
       ? []
       : [
           refusal(
             args,
-            `${label}: page code is kept only on a page's own Page Builder field, at the top of the page, not inside a group or a list.`
+            `${label}: page code is kept only on a page's own Page Builder field, at the top of the page, not inside a group, a list or a field group.`
           ),
         ];
   }

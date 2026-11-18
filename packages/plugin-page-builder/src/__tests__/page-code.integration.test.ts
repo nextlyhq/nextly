@@ -236,14 +236,18 @@ describe.each(getConfiguredTestDialects())(
       // the code.
       const rows = await auditRows(t);
       expect(rows.length).toBeGreaterThanOrEqual(2);
-      expect(rows[0]).toMatchObject({
+      // The rows come back in no set order (by id on MySQL): the save's is
+      // the one holding the code, the restore's the one removing it.
+      const saved = rows.find(row => row.headChars === CODE.head.length);
+      expect(saved).toMatchObject({
         collection: "pages",
         entryId: id,
         field: "content",
         headChars: CODE.head.length,
         inlineScripts: 1,
       });
-      expect(rows[0]?.headSha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(saved?.headSha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(rows.some(row => row.headChars === 0)).toBe(true);
       expect(JSON.stringify(rows)).not.toContain("pageCodeTest");
     });
 

@@ -144,11 +144,37 @@ describe("a page's own code, judged on every write that changes it", () => {
     for (const path of ["hero.body", "sections[0].body"]) {
       // Even someone who may change the site's settings can't add it there.
       expect(await judge(pageWith(HARMLESS), path)).toEqual([
-        "Body: page code is kept only on a page's own Page Builder field, at the top of the page, not inside a group or a list.",
+        "Body: page code is kept only on a page's own Page Builder field, at the top of the page, not inside a group, a list or a field group.",
       ]);
       // A code-free write there is an ordinary edit, asked nothing.
       expect(await judge(pageWith(), path)).toEqual([]);
     }
+    // Nor in a field-group instance, whose field is judged at the top of
+    // the instance: dropping the instance runs no check of it either.
+    const manager = writeAs(caller("user", true));
+    const inInstance: JudgedField = {
+      ...manager,
+      path: "body",
+      ...(manager.write === undefined
+        ? {}
+        : { write: { ...manager.write, inFieldGroup: true } }),
+    };
+    expect(
+      (
+        await pageCodeIssues(
+          pageWith(HARMLESS),
+          inInstance,
+          "Body",
+          DEPS,
+          stored(pageWith())
+        )
+      ).map(issue => issue.message)
+    ).toEqual([
+      "Body: page code is kept only on a page's own Page Builder field, at the top of the page, not inside a group, a list or a field group.",
+    ]);
+    expect(
+      await pageCodeIssues(pageWith(), inInstance, "Body", DEPS, stored())
+    ).toEqual([]);
   });
 
   it("refuses what the site code rules can't store, by name, in its place", async () => {

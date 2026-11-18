@@ -661,6 +661,14 @@ export interface PluginFieldWrite {
    * does not say, which a validator that needs it treats as a refusal.
    */
   readonly caller?: PluginFieldWriteCaller;
+  /**
+   * @experimental True where the value sits in a field-group instance, which
+   * is validated on its own, a level below the entry: {@link readStored}
+   * answers nothing stored for the instance's own fields, and removing the
+   * instance runs no validator of it. A validator that must see every change
+   * to its stored value, a removal included, refuses a value here.
+   */
+  readonly inFieldGroup?: boolean;
 }
 
 /**

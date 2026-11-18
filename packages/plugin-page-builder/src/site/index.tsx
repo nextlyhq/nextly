@@ -44,6 +44,8 @@ import {
 import { sanitiseSiteCode } from "../site-code/sanitise";
 import { SITE_CODE_SLUG, storedSiteCodeEntries } from "../site-code/storage";
 
+import { PageCodeBoundary } from "./page-code-boundary";
+
 /** What `<SiteCode>` is given. */
 export interface SiteCodeProps {
   /** The place on the page: the head, or the end of the body. */
@@ -339,7 +341,10 @@ export interface PageCodeProps {
  * It runs after the site's code in each place: the head's loader is site
  * code's own, which queues after the site's head, and the end of the body's
  * starts one task later (`PAGE_CODE_BODY_BOOTSTRAP`), after the site's end
- * of body. Nothing under draft mode, as `<SiteCode>`. What is stored was
+ * of body. A page whose code the loader starts is loaded, and left, as a
+ * whole document (`PageCodeBoundary`), since client-side navigation would
+ * neither start that code nor take it away. Nothing under draft mode, as
+ * `<SiteCode>`. What is stored was
  * judged when it was saved; it is sanitised again here, so a value edited in
  * the database is held to the same rules, and what fails is left out. The
  * builder's canvas never renders it.
@@ -354,15 +359,21 @@ export async function PageCode(
   const code = pageCodeOf(props.document);
   const text = code?.[props.slot] ?? "";
   if (text === "") return null;
+  const { entries } = sanitiseSiteCode(text, props.slot);
   return (
-    <CodeOutput
-      slot={props.slot}
-      entries={sanitiseSiteCode(text, props.slot).entries}
-      skip={skippedPaths(props)}
-      loader={
-        props.slot === "body" ? PAGE_CODE_BODY_BOOTSTRAP : SITE_CODE_BOOTSTRAP
-      }
-      {...(props.nonce === undefined ? {} : { nonce: props.nonce })}
-    />
+    <>
+      <CodeOutput
+        slot={props.slot}
+        entries={entries}
+        skip={skippedPaths(props)}
+        loader={
+          props.slot === "body" ? PAGE_CODE_BODY_BOOTSTRAP : SITE_CODE_BOOTSTRAP
+        }
+        {...(props.nonce === undefined ? {} : { nonce: props.nonce })}
+      />
+      {/* What the loader starts is outside React, so the page is reached and
+          left as a whole document (`PageCodeBoundary`). */}
+      {entries.some(isGatedSiteCode) ? <PageCodeBoundary /> : null}
+    </>
   );
 }

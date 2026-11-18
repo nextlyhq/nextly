@@ -7,7 +7,7 @@
  *
  * @module site/index.test
  */
-import type { ReactElement } from "react";
+import { isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -350,6 +350,30 @@ describe("<PageCode>", () => {
       const html = renderToStaticMarkup(drawn as ReactElement);
       expect(html).toContain('nonce="n0nce"');
     }
+  });
+
+  it("makes a page whose code its loader starts a full-document boundary, and no other", async () => {
+    const { PageCodeBoundary } = await import("./page-code-boundary");
+    /** Whether the drawn tree holds the boundary. */
+    const bounded = (node: unknown): boolean => {
+      if (Array.isArray(node)) return node.some(bounded);
+      if (!isValidElement(node)) return false;
+      if (node.type === PageCodeBoundary) return true;
+      return bounded((node.props as { children?: unknown }).children);
+    };
+    for (const slot of ["head", "body"] as const) {
+      expect(bounded(await PageCode({ slot, document: page }))).toBe(true);
+    }
+    // Code written as is, which React adds and takes away with the page.
+    const inert = await PageCode({
+      slot: "head",
+      document: {
+        ...page,
+        settings: { code: { head: '<meta name="a" content="b">' } },
+      },
+    });
+    expect(inert).not.toBeNull();
+    expect(bounded(inert)).toBe(false);
   });
 
   it("writes nothing for a page with no code of its own", async () => {

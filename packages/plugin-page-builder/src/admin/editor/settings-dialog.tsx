@@ -71,6 +71,7 @@ import { PAGE_BUILDER_SETTINGS_PLACE } from "../../settings-place-contract";
 import { lazyPart } from "../lazy-part";
 
 import { ManageSetsContext } from "./manage-sets";
+import { holdsPageCode, pageCodeShown } from "./page-code-shown";
 import type { SettingsAddress } from "./settings-address";
 import type { PageCodeTab as PageCodeTabPart } from "./settings-code";
 import { PageFieldsTab, usePageFields } from "./settings-fields";
@@ -238,6 +239,7 @@ export function SettingsDialog({
   const site = useSiteSettingsEntry(open);
   const { showsCode, holdsHiddenCode, codeBody } = usePageCode(
     page,
+    fieldName,
     place,
     site.read
   );
@@ -704,28 +706,30 @@ function PageCodeTabBody({
 /**
  * The page's own code in Page settings: its tab, last, for someone who may
  * change the site's settings, whose permission the server holds every change
- * to; and, for anyone else, whether General says the page adds code.
+ * to; and, for anyone else, whether General says the page adds code. Only a
+ * page's own top-level field holds code (`holdsPageCode`).
  */
 function usePageCode(
   page: boolean,
+  fieldName: string,
   place: SettingsPlace | null,
   site: SiteSettingsQuery
 ): { showsCode: boolean; holdsHiddenCode: boolean; codeBody: ReactNode } {
-  const pageCode = page && place !== null ? place.pageCode : null;
-  if (pageCode === null || site.data === undefined) {
-    return { showsCode: false, holdsHiddenCode: false, codeBody: null };
-  }
-  if (site.data.mayManageSite) {
-    return {
-      showsCode: true,
-      holdsHiddenCode: false,
-      codeBody: <PageCodeTabBody pageCode={pageCode} />,
-    };
-  }
-  const held = pageCode.value;
+  const pageCode =
+    page && place !== null && holdsPageCode(fieldName) ? place.pageCode : null;
+  const shown =
+    pageCode === null || site.data === undefined
+      ? "none"
+      : pageCodeShown({
+          held: pageCode.value,
+          mayManageSite: site.data.mayManageSite,
+        });
   return {
-    showsCode: false,
-    holdsHiddenCode: (held?.head ?? "") !== "" || (held?.body ?? "") !== "",
-    codeBody: null,
+    showsCode: shown === "tab",
+    holdsHiddenCode: shown === "line",
+    codeBody:
+      shown === "tab" && pageCode !== null ? (
+        <PageCodeTabBody pageCode={pageCode} />
+      ) : null,
   };
 }
