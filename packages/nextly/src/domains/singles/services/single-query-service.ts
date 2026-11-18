@@ -168,6 +168,7 @@ import {
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
+  companionWriteVia,
   splitLocalizedWrite,
   upsertCompanionRow,
   type CompanionSchema,
@@ -2823,13 +2824,9 @@ export class SingleQueryService extends BaseService {
     const companionStatus = companion.hasStatus
       ? (status ?? "draft")
       : undefined;
-    const writeAdapter = {
-      dialect: this.adapter.dialect,
-      executeQuery: <T = unknown>(sql: string, params?: unknown[]) =>
-        tx.execute<T>(sql, params),
-    };
     await upsertCompanionRow(
-      writeAdapter,
+      // The transaction's own connection, through the one adapter for it.
+      companionWriteVia(tx, this.adapter.dialect),
       companion.companionTableName,
       parentId,
       this.localization.defaultLocale,

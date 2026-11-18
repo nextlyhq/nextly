@@ -3825,6 +3825,8 @@ export class CollectionMutationService extends BaseService {
     // parent so the read-shape snapshot carries this locale's translatable
     // values instead of dropping them.
     localizedFieldValues: Record<string, unknown>;
+    // Which of those values are JSON, which some databases hand back as text.
+    jsonFields: string[];
     // Whether the companion carries a per-locale `_status` column. Reading that
     // column on a collection without it fails the whole write, so every read of
     // it must be gated on this.
