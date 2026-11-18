@@ -124,6 +124,25 @@ describe("the offending line of a configuration that does not parse", () => {
     expect(report, report).not.toContain("Pv8-not-a-real-one");
   });
 
+  // The unfinished string ends with an escaped quote, which does not close it: it is masked
+  // from the quote that opened it, not from the escaped one.
+  it("masks an unfinished string from its opening quote, past an escaped one", async () => {
+    const report = await reportFor(
+      [
+        "export default {",
+        "  db: {",
+        "    password:",
+        '      "Rt6-not-a-real-one\\"',
+        "  },",
+        "};",
+        "",
+      ].join("\n")
+    );
+
+    expect(report, report).toContain("nextly.config.ts:");
+    expect(report, report).not.toContain("Rt6-not-a-real-one");
+  });
+
   // A control character on the line would act on the terminal or the CI log it is written to
   // (an escape sequence can clear the screen); it is shown escaped, as text.
   it("shows a control character on the line escaped, never raw", async () => {

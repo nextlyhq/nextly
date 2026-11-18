@@ -82,8 +82,31 @@ const EXCERPT_REACH = 60;
 /** A quoted string on a line: single, double or backtick quotes, a quote escaped inside it kept. */
 const STRING_LITERAL = /(["'`])(?:\\.|(?!\1)[^\\])*\1/g;
 
-/** A quote with nothing closing it before the line ends: a string the line does not finish. */
-const UNFINISHED_STRING = /(["'`])[^"'`]*$/;
+/** The quotes a string can open with. */
+const QUOTES: ReadonlySet<string> = new Set(['"', "'", "`"]);
+
+/**
+ * Where in `text` a string opens that `text` never closes, or -1. A quote preceded by a
+ * backslash inside a string does not close it, so a string ending in an escaped quote is still
+ * found open at its first quote.
+ */
+function unclosedQuoteAt(text: string): number {
+  let at = 0;
+  while (at < text.length) {
+    const quote = text[at];
+    if (!QUOTES.has(quote)) {
+      at += 1;
+      continue;
+    }
+    let close = at + 1;
+    while (close < text.length && text[close] !== quote) {
+      close += text[close] === "\\" ? 2 : 1;
+    }
+    if (close >= text.length) return at;
+    at = close + 1;
+  }
+  return -1;
+}
 
 /**
  * Whether `code` is a C0 or C1 control character, or DEL: each acts on a terminal or a log rather
@@ -129,11 +152,11 @@ function maskedStrings(
     else if (start < index) inside = start - shrunk + 1;
     last = end;
   }
-  // Only the text after the last whole string can open one the line does not finish: a masked
-  // string's own closing quote is not an opening one.
-  masked += lineText
-    .slice(last)
-    .replace(UNFINISHED_STRING, (_, quote: string) => `${quote}…`);
+  // Only the text after the last whole string can open one the line does not finish (a masked
+  // string's own closing quote opens nothing); from that quote on, the line is masked.
+  const tail = lineText.slice(last);
+  const open = unclosedQuoteAt(tail);
+  masked += open < 0 ? tail : `${tail.slice(0, open + 1)}…`;
   return {
     masked,
     index: Math.min(masked.length, inside ?? index - shrunk),
