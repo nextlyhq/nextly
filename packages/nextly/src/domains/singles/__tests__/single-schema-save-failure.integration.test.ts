@@ -6,7 +6,9 @@
  *
  * The change adds a required field stating a default to a Single holding its row, which fills that
  * row and so carries values: the save runs the service's own statements rather than its migration
- * file. The statement adding the column fails, so nothing has committed on any dialect.
+ * file. Outside development the save writes its files, then runs those statements
+ * (`appliedAfter`). The statement adding the column fails, so nothing has committed on any
+ * dialect. (In development the same failure is already thrown, with the files withdrawn.)
  */
 // Set before the harness boots (env validation reads it once).
 process.env.NEXTLY_SECRET =
@@ -129,6 +131,8 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
   it("answers that it failed, with the reason, and records nothing of the shape it asked for", async () => {
     const before = await recorded();
     const failed = failTableStatement();
+    // Outside development: the save writes its files, then runs its own statements.
+    vi.stubEnv("NODE_ENV", "test");
 
     let answer: unknown;
     let thrown: unknown;
