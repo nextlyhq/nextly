@@ -255,14 +255,34 @@ export function useVariablesTransfer({
       refuse(result.error, result.skipped);
       return;
     }
-    latest.current.onChange(result.tokens);
     const edit = latest.current.onEditClasses;
     if (result.classes !== undefined && edit !== undefined) {
-      void edit(result.classes).then(refusal => {
-        if (refusal !== undefined) {
-          refuse("The text styles weren't imported.", [refusal]);
+      // The text styles are stored first, and the variables and Site text
+      // once that write settles, so the rows following a text style are the
+      // newer step of the history: Undo takes them back before the text
+      // styles, which the site won't remove while a row still follows one.
+      // Laid over the variables as they are then, so an edit made meanwhile
+      // isn't lost.
+      const storeTokens = (): void => {
+        const now = latest.current.currentTokens() ?? into;
+        const again = applyImport(plan, now, choices);
+        // Not ok only where the site already holds all of it by now.
+        if (again.ok) latest.current.onChange(again.tokens);
+      };
+      void edit(result.classes).then(
+        refusal => {
+          if (refusal !== undefined) {
+            refuse("The text styles weren't imported.", [refusal]);
+          }
+          storeTokens();
+        },
+        () => {
+          refuse("The text styles weren't imported.");
+          storeTokens();
         }
-      });
+      );
+    } else {
+      latest.current.onChange(result.tokens);
     }
     const imported = importedWords(result.imported, result.textStyles ?? 0);
     if (result.skipped.length === 0) {

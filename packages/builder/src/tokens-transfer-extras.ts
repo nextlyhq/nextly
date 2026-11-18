@@ -21,6 +21,7 @@ import {
   sameJsonValue,
   SITE_TEXT_LABELS,
   SITE_TEXT_ROLES,
+  tokenCustomProperty,
   type DtcgSiteData,
   type FontFaceDef,
   type ModesRead,
@@ -78,18 +79,39 @@ export interface ImportContext {
 }
 
 /**
+ * The file's tokens that merge into a site variable under its id rather
+ * than their own (a variable renamed here to the code name the file uses):
+ * each one's identity in the file to the id it takes, and the site's
+ * prefix, which a `var()` naming one is written with.
+ */
+export interface Adoption {
+  readonly ids: ReadonlyMap<string, string>;
+  readonly prefix: string;
+}
+
+/**
  * What an import carries beyond the variables, planned against the site:
  * its site data, its text styles and the fonts it names that the site
  * lacks. Text styles are stored by the host's class writer; where there is
  * none (`context.textStyles` absent) the file's are not imported, and that
- * is said in `refused` rather than counted as imported and dropped.
+ * is said in `refused` rather than counted as imported and dropped. What
+ * they and the Site text rows name follows the variables they merge into
+ * (`adoption`), and a row following a text style that isn't imported keeps
+ * the site's own.
  */
 export function importExtras(
   read: Pick<ModesRead, "tokens" | "textStyles" | "site">,
   context: ImportContext,
-  refused: string[]
+  refused: string[],
+  adoption?: Adoption
 ): ImportExtras {
-  const fileStyles = read.textStyles ?? [];
+  const fileStyles = (read.textStyles ?? []).map(style =>
+    followingAdoption(style, adoption)
+  );
+  const fileSite =
+    read.site === undefined
+      ? undefined
+      : followingAdoption(read.site, adoption);
   if (context.textStyles === undefined && fileStyles.length > 0) {
     refused.push(
       fileStyles.length === 1
@@ -97,19 +119,104 @@ export function importExtras(
         : `The file's ${String(fileStyles.length)} text styles weren't imported: text styles can only be imported from the editor's Design panel.`
     );
   }
+  const textStyles = planTextStyles(
+    context.textStyles === undefined ? undefined : fileStyles,
+    context.textStyles ?? [],
+    refused,
+    context.breakpoints
+  );
+  const site = withRowsItCanFollow(fileSite, fileStyles, {
+    library: context.textStyles ?? [],
+    plan: textStyles,
+    refused,
+  });
   return {
-    ...(read.site === undefined ? {} : { site: read.site }),
-    textStyles: planTextStyles(
-      context.textStyles === undefined ? undefined : fileStyles,
-      context.textStyles ?? [],
-      refused,
-      context.breakpoints
-    ),
+    ...(site === undefined ? {} : { site }),
+    textStyles,
     missingFonts:
       context.faces === undefined
         ? []
-        : missingFonts(read.tokens, fileStyles, read.site, context.faces),
+        : missingFonts(read.tokens, fileStyles, fileSite, context.faces),
   };
+}
+
+/**
+ * A file's text style or site data with each variable it names by an
+ * adopted identity, by `$token` or through `var()` of its custom property,
+ * pointed at the id that variable takes here.
+ */
+function followingAdoption<T>(value: T, adoption: Adoption | undefined): T {
+  if (adoption === undefined || adoption.ids.size === 0) return value;
+  const properties = [...adoption.ids].map(([from, to]) => [
+    `var(${tokenCustomProperty(from, adoption.prefix)}`,
+    `var(${tokenCustomProperty(to, adoption.prefix)}`,
+  ]);
+  const walk = (node: unknown): unknown => {
+    if (typeof node === "string") {
+      return properties.reduce(
+        (text, [from = "", to = ""]) => text.split(from).join(to),
+        node
+      );
+    }
+    if (Array.isArray(node)) return node.map(walk);
+    if (node === null || typeof node !== "object") return node;
+    return Object.fromEntries(
+      Object.entries(node).map(([key, entry]) => [
+        key,
+        key === "$token" && typeof entry === "string"
+          ? (adoption.ids.get(entry) ?? entry)
+          : walk(entry),
+      ])
+    );
+  };
+  return walk(value) as T;
+}
+
+/**
+ * The file's site data without the Site text rows that follow one of its
+ * text styles the import doesn't store and the site doesn't have: such a
+ * row would follow nothing, so the site's own row is kept, and `refused`
+ * names it.
+ */
+function withRowsItCanFollow(
+  site: DtcgSiteData | undefined,
+  fileStyles: readonly NamedClass[],
+  against: {
+    library: readonly NamedClass[];
+    plan: TextStylesPlan;
+    refused: string[];
+  }
+): DtcgSiteData | undefined {
+  if (site?.siteText === undefined) return site;
+  const { plan } = against;
+  const held = new Set(
+    [
+      ...against.library.filter(isTextStyle),
+      ...plan.added,
+      ...plan.updated,
+      ...plan.unchanged,
+    ].map(style => style.id)
+  );
+  const missing = new Map(
+    fileStyles
+      .filter(style => !held.has(style.id))
+      .map(style => [style.id, sharedStyleName(style)])
+  );
+  if (missing.size === 0) return site;
+  const rows: Record<string, unknown> = { ...site.siteText };
+  for (const role of SITE_TEXT_ROLES) {
+    const followed = site.siteText[role]?.textStyle;
+    const name = followed === undefined ? undefined : missing.get(followed);
+    if (name === undefined) continue;
+    delete rows[role];
+    against.refused.push(
+      `Site text: ${SITE_TEXT_LABELS[role]} kept this site's own settings, because the text style it follows in the file, “${name}”, wasn't imported.`
+    );
+  }
+  const { siteText: _all, ...rest } = site;
+  return Object.keys(rows).length === 0
+    ? rest
+    : { ...rest, siteText: rows };
 }
 
 /** A file's text styles sorted against the site's, with what is refused. */

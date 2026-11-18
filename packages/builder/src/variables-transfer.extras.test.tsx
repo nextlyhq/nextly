@@ -214,7 +214,8 @@ describe("importing a file with text styles and the site's design data", () => {
     );
 
     fireEvent.click(within(preview).getByRole("button", { name: "Import" }));
-    expect(onChange).toHaveBeenCalledTimes(1);
+    // The variables follow once the text styles are stored.
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
     const tokens = onChange.mock.calls[0]?.[0] as SiteTokenSet;
     expect(tokens.siteText).toEqual(SOURCE.siteText);
     expect(tokens.fluidRange).toEqual(SOURCE.fluidRange);
@@ -223,6 +224,42 @@ describe("importing a file with text styles and the site's design data", () => {
     expect(
       await screen.findByText("Imported 3 variables and 1 text style.")
     ).toBeDefined();
+  });
+
+  it("stores the text styles before the variables and Site text that follow them, so Undo takes the rows back first", async () => {
+    // The class write is a step of the history, and so is the variables
+    // write. Stored text styles first, the rows following them land as the
+    // newer step: Undo then takes the rows back before the text styles, which
+    // the site refuses to remove while a row still follows one.
+    const onChange = vi.fn();
+    let finish: (refusal: string | undefined) => void = () => undefined;
+    const onEditClasses = vi.fn<EditClasses>(
+      () =>
+        new Promise<string | undefined>(resolve => {
+          finish = resolve;
+        })
+    );
+    render(
+      <WithFonts
+        tokens={{ tokens: [] }}
+        onChange={onChange}
+        onEditClasses={onEditClasses}
+      />
+    );
+    await chooseFile("variables.tokens.json", exported());
+    const preview = await screen.findByRole("dialog", {
+      name: "Import variables",
+    });
+    fireEvent.click(within(preview).getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(onEditClasses).toHaveBeenCalledTimes(1));
+    expect(onChange).not.toHaveBeenCalled();
+    await act(async () => {
+      finish(undefined);
+    });
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect((onChange.mock.calls[0]?.[0] as SiteTokenSet).siteText).toEqual(
+      SOURCE.siteText
+    );
   });
 
   it("lists the fonts the site lacks, offering Google Fonts for one the catalogue has", async () => {

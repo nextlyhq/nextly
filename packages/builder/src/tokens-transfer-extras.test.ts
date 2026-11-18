@@ -287,6 +287,61 @@ describe("an import carrying the site's own design data", () => {
     expect(applied.ok).toBe(false);
   });
 
+  it("points the file's text styles and Site text at the variable this site holds under a name the file uses", () => {
+    // This site renamed its own variable to the code name the file uses, so
+    // the import merges into it under the site's id: what the file's text
+    // styles and rows name by that code name follows it there.
+    const mine: SiteTokenSet = {
+      tokens: [
+        {
+          id: "t-own-h2",
+          name: "font-size.h2",
+          kind: "dimension",
+          values: { light: "2rem" },
+        },
+      ],
+    };
+    const source: SiteTokenSet = {
+      ...SITE,
+      siteText: {
+        h2: { fontSize: { $token: "font-size.h2" } },
+        h3: { fontSize: "var(--site-font-size-h2)" },
+      },
+    };
+    const plan = ready(
+      planImport(files(source, [eyebrow]), mine, { textStyles: [] })
+    );
+    expect(plan.extras.textStyles.added[0]?.styles).toEqual({
+      base: {
+        base: { fontSize: { $token: "t-own-h2" }, textTransform: "uppercase" },
+      },
+    });
+    expect(plan.extras.site?.siteText).toEqual({
+      h2: { fontSize: { $token: "t-own-h2" } },
+      h3: { fontSize: "var(--site-t-own-h2)" },
+    });
+  });
+
+  it("keeps this site's Site text row where the file's follows a text style that wasn't imported, saying so", () => {
+    const mine: NamedClass = { ...eyebrow, id: "ts-mine" };
+    const into: SiteTokenSet = {
+      tokens: [],
+      siteText: { h2: { fontSize: "2rem" } },
+    };
+    const plan = ready(
+      planImport(files(SITE, [eyebrow]), into, { textStyles: [mine] })
+    );
+    expect(plan.extras.site?.siteText).toEqual({
+      body: SITE.siteText?.body,
+    });
+    expect(plan.skipped).toContain(
+      "Site text: Heading 2 kept this site's own settings, because the text style it follows in the file, “Eyebrow”, wasn't imported."
+    );
+    const applied = applyImport(plan, into, new Map());
+    if (!applied.ok) throw new Error(applied.error);
+    expect(applied.tokens.siteText?.h2).toEqual({ fontSize: "2rem" });
+  });
+
   it("imports a text style locked on its own site unlocked, since a lock is set on each site", () => {
     const locked: NamedClass = { ...eyebrow, locked: true };
     const plan = ready(

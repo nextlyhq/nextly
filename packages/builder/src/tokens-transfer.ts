@@ -39,6 +39,7 @@ import {
   modeFilesToTokens,
   NEXTLY_EXTENSION,
   resolverToTokens,
+  resolveTokenPrefix,
   sameSiteToken,
   tokensToFigma,
   tokensToResolver,
@@ -266,7 +267,11 @@ export function planImport(
   }
   const skipped = read.issues.map(entry => entry.message);
   const refusedStyles: string[] = [];
-  const extras = importExtras(read, context, refusedStyles);
+  const adopted = adoptedIds(read.tokens, into);
+  const extras = importExtras(read, context, refusedStyles, {
+    ids: adopted,
+    prefix: resolveTokenPrefix(into.prefix).prefix,
+  });
   const { textStyles } = extras;
   const carriesMore =
     read.site !== undefined ||
@@ -287,7 +292,7 @@ export function planImport(
   // the first reported.
   const dropped: string[] = [];
   const unique = [
-    ...oneEach(withStoredIds(read.tokens, into), dropped).values(),
+    ...oneEach(withStoredIds(read.tokens, adopted), dropped).values(),
   ];
   return {
     ok: true,
@@ -448,15 +453,33 @@ function keptOptional(
  */
 function withStoredIds(
   incoming: readonly SiteToken[],
-  into: SiteTokenSet
+  adopted: ReadonlyMap<string, string>
 ): SiteToken[] {
+  return incoming.map(token => {
+    const id = token.id === undefined ? adopted.get(token.name) : undefined;
+    return id === undefined ? token : { ...token, id };
+  });
+}
+
+/**
+ * Which of the file's tokens take a site variable's id (see
+ * {@link withStoredIds}): each one's identity in the file, its name, to the
+ * id it takes here. What the file's text styles and Site text name by that
+ * identity follows the same map, so they reach the variable it merged into.
+ */
+function adoptedIds(
+  incoming: readonly SiteToken[],
+  into: SiteTokenSet
+): Map<string, string> {
   const identities = new Set(into.tokens.map(tokenIdentity));
   const byName = new Map(into.tokens.map(token => [token.name, token]));
-  return incoming.map(token => {
-    if (token.id !== undefined || identities.has(token.name)) return token;
-    const held = byName.get(token.name);
-    return held?.id === undefined ? token : { ...token, id: held.id };
-  });
+  const adopted = new Map<string, string>();
+  for (const token of incoming) {
+    if (token.id !== undefined || identities.has(token.name)) continue;
+    const held = byName.get(token.name)?.id;
+    if (held !== undefined) adopted.set(token.name, held);
+  }
+  return adopted;
 }
 
 /** Whether both sides state something and the statements differ. */
