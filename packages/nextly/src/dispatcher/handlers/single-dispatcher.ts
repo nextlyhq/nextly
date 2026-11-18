@@ -59,6 +59,7 @@ import { assertLanguageStatesAgreeWithEntry } from "../../domains/i18n/runtime/l
 import {
   FirstQuestionWatch,
   landingPush,
+  nextSteps,
 } from "../../domains/schema/builder-save/landing-push";
 import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
 import {
@@ -244,6 +245,29 @@ const SINGLE_SLUG_FIELD: SingleField = {
     message: "Slug must be lowercase with hyphens only (e.g., my-entry-slug)",
   },
 };
+
+/**
+ * A Single's schema save whose migration failed past its main change: its row was written, so a
+ * retry has one describing the table, and the admin is told why it failed and what to do. Where
+ * the writer kept the save's files, recorded applied nowhere, the steps that finish the change
+ * (`nextSteps`); else the save tried again.
+ */
+function failedSingleMigration(
+  slug: string,
+  failure: { reason: string; keptFiles: readonly string[]; next?: string }
+): NextlyError {
+  const { reason, keptFiles, next: instead } = failure;
+  const one = keptFiles.length === 1;
+  const next =
+    keptFiles.length === 0
+      ? (instead ?? "Save it again to retry.")
+      : `Its migration ${one ? "file" : "files"} ${keptFiles.join(", ")} ${one ? "was" : "were"} kept and not recorded applied. ${nextSteps(keptFiles)}`;
+  return new NextlyError({
+    code: "NEXTLY_MIGRATION_APPLY_FAILED",
+    publicMessage: `Single "${slug}" was saved, but its migration failed: ${reason}. ${next}`,
+    logContext: { op: "updateSingleSchema", slug, keptFiles: [...keptFiles] },
+  });
+}
 
 /**
  * Inject synthetic title/slug fields into UI-created Singles so the
@@ -1298,6 +1322,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         record: updated,
         migrationStatus,
         refusedSettings,
+        failure,
       } = await svc.metadata.updateSingleSchema({
         slug,
         existing,
@@ -1320,12 +1345,17 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // Leaving settings the database refused: the admin is told which setting on which field.
       refuseRefusedLeavingSettings(slug, refusedSettings);
 
-      // Migration status drives the toast copy so admins see "applied"
-      // vs "pending" immediately.
+      // This save's migration failed past its main change: told as a failure, never as pending.
+      if (failure) throw failedSingleMigration(slug, failure);
+
+      // Migration status drives the toast copy so admins see "applied" vs "pending" immediately. A
+      // save asking nothing of the schema keeps the status the last migration reached.
       const message =
         migrationStatus === "applied"
           ? `Single "${slug}" schema updated and migration applied successfully`
-          : `Single "${slug}" schema updated. Migration pending - run migrations to apply changes.`;
+          : migrationStatus === "failed"
+            ? `Single "${slug}" updated. Its last schema change is still recorded as failed.`
+            : `Single "${slug}" schema updated. Migration pending - run migrations to apply changes.`;
       return respondMutation(message, updated);
     },
   },
