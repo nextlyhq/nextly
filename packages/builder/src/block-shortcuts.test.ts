@@ -15,8 +15,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   fullWidthOf,
   heightOf,
+  iconSizeOf,
   planFullWidth,
   planHeight,
+  planIconSize,
   planSize,
   reachingBeneath,
   sizeOf,
@@ -46,6 +48,9 @@ beforeAll(() => {
     [
       block("core/section"),
       block("core/button", { baseStyles: { base: { base: { padding } } } }),
+      block("core/icon", {
+        baseStyles: { base: { base: { fontSize: "1.5rem" } } },
+      }),
     ] as never,
     { source: "block-shortcuts-test" }
   );
@@ -358,5 +363,41 @@ describe("a scaled token reaching from elsewhere, matched exactly", () => {
     expect(
       sizeOf(button, { ...mobile, tokenPrefix: "--site-" }, reading(other))
     ).toBeUndefined();
+  });
+});
+
+describe("an Icon's size", () => {
+  const reaching =
+    (values: Record<string, string>) =>
+    (cssProperty: string): string | undefined =>
+      values[cssProperty];
+
+  it("is Medium at its own font size, Small and Large writing theirs", () => {
+    const icon = node("core/icon");
+    expect(iconSizeOf(icon, at)).toBe("medium");
+    const small = applied(icon, planIconSize(icon, "small", at));
+    expect(small.styles).toEqual({ base: { base: { fontSize: "1rem" } } });
+    expect(iconSizeOf(small, at)).toBe("small");
+    const large = applied(icon, planIconSize(icon, "large", at));
+    expect(iconSizeOf(large, at)).toBe("large");
+    // Medium clears what Small wrote, back to the icon's own.
+    const cleared = applied(small, planIconSize(small, "medium", at));
+    expect(cleared.styles?.base?.base?.fontSize).toBeUndefined();
+    expect(iconSizeOf(cleared, at)).toBe("medium");
+  });
+
+  it("reads as none of the three for a font size set another way", () => {
+    const icon = node("core/icon", { base: { base: { fontSize: "3rem" } } });
+    expect(iconSizeOf(icon, at)).toBeUndefined();
+  });
+
+  it("reads a size reaching from a wider device, and Medium writes its own over it", () => {
+    const icon = node("core/icon");
+    const large = reaching({ "font-size": "2rem" });
+    expect(iconSizeOf(icon, mobile, large)).toBe("large");
+    // A clear would leave the wider device's 2rem in force.
+    expect(
+      applied(icon, planIconSize(icon, "medium", mobile, large)).styles
+    ).toEqual({ base: { sm: { fontSize: "1.5rem" } } });
   });
 });

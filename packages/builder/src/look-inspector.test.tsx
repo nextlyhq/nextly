@@ -3,6 +3,7 @@
 import {
   BASE_BREAKPOINT,
   clearBlocks,
+  compilePageCss,
   registerBlocks,
   type BlockDocument,
   type NamedClass,
@@ -28,6 +29,7 @@ import {
 } from "vitest";
 
 import type { EditorState } from "./editor-state";
+import type { StyleStateBinding } from "./inspector-panel-types";
 import { InspectorPanel } from "./inspector-panel";
 import { siteOrientationOf } from "./side-orientation";
 import type { SharedStyleChange } from "./shared-style-target";
@@ -49,6 +51,26 @@ beforeAll(() => {
         editor: { label: "Box" },
         props: {},
         supports: { effects: true },
+        render: () => null,
+      },
+      {
+        name: "acme/button",
+        version: 1,
+        description: "A button.",
+        example: { props: {} },
+        editor: { label: "Button" },
+        props: {},
+        supports: { typography: true, color: true },
+        render: () => null,
+      },
+      {
+        name: "acme/hero",
+        version: 1,
+        description: "A hero with a background image.",
+        example: { props: {} },
+        editor: { label: "Hero" },
+        props: {},
+        supports: { background: { image: true } },
         render: () => null,
       },
       {
@@ -293,9 +315,12 @@ describe("editing a look with no block selected", () => {
     expect(screen.getByRole("tab", { name: "Style" })).toBeDefined();
   });
 
-  it("says to select a block when the look is no longer on the site", () => {
+  it("shows the panel for nothing selected when the look is no longer on the site", () => {
     mount("look:acme/box:gone");
-    expect(screen.getByText("Select a block to edit it.")).toBeDefined();
+    expect(screen.queryByRole("group", { name: /^Editing/ })).toBeNull();
+    expect(
+      document.querySelector('[data-empty="no-selection"]')
+    ).not.toBeNull();
   });
 });
 
@@ -520,5 +545,269 @@ describe("a look's sides, named by the site's direction", () => {
     mountOnSite(undefined);
     expect(sideOf("Padding left")).toBe("inlineStart");
     expect(screen.queryByText("Block start")).toBeNull();
+  });
+});
+
+/** A site with no breakpoints of its own, for the page's compile. */
+const NO_BREAKPOINTS = { viewport: [], container: [] };
+
+describe("a block style's states and devices, in the style editor", () => {
+  const ghost: NamedClass = {
+    id: "look:acme/button:ghost",
+    slug: "button-ghost",
+    label: "Ghost",
+    orderIndex: 0,
+    blockType: "acme/button",
+    styles: {},
+  };
+
+  /**
+   * The look editor as the page builder's host draws it: no block is
+   * selected while a look is edited, so the host's own state choice, which
+   * the selected block shows on the canvas, answers Normal whatever is asked.
+   */
+  const STAYS_NORMAL: StyleStateBinding = {
+    state: "base",
+    onChange: () => {},
+  };
+  function Host({
+    writeStyles,
+    lookId = ghost.id,
+    library = [ghost],
+  }: {
+    writeStyles: SharedStylesHost["writeStyles"];
+    lookId?: string;
+    library?: NamedClass[];
+  }): React.JSX.Element {
+    return (
+      <InspectorPanel
+        editor={editorFor(null)}
+        classLibrary={library}
+        sharedStyles={{ mayChange: true, writeStyles }}
+        lookEditing={{
+          look: { id: lookId, blockType: "acme/button" },
+          onExit: () => {},
+        }}
+        styleState={STAYS_NORMAL}
+      />
+    );
+  }
+
+  /** Choose a state from the bar's State switch. */
+  async function chooseState(name: string): Promise<void> {
+    const bar = screen.getByRole("group", { name: "Editing Ghost" });
+    fireEvent.pointerDown(
+      within(bar).getByRole("button", { name: /^State: / }),
+      { button: 0, pointerType: "mouse" }
+    );
+    fireEvent.click(
+      await screen.findByRole("menuitemradio", { name: new RegExp(`^${name}`) })
+    );
+  }
+
+  it("says what an edit to a block style changes, in the decided words", () => {
+    render(<Host writeStyles={vi.fn()} />);
+    expect(
+      screen
+        .getByRole("group", { name: "Editing Ghost" })
+        .querySelector(".nx-look-bar__note")?.textContent
+    ).toBe("Changes every Button using Ghost on every page");
+  });
+
+  it("offers Normal, Hover, Focus and Pressed, and names the device the top bar edits", async () => {
+    render(<Host writeStyles={vi.fn()} />);
+    const bar = screen.getByRole("group", { name: "Editing Ghost" });
+    expect(
+      within(bar).getByRole("button", { name: /^State: Normal/ })
+    ).toBeTruthy();
+    expect(bar.querySelector(".nx-look-bar__device")?.textContent).toBe(
+      "Desktop"
+    );
+    fireEvent.pointerDown(
+      within(bar).getByRole("button", { name: /^State: / }),
+      { button: 0, pointerType: "mouse" }
+    );
+    const items = await screen.findAllByRole("menuitemradio");
+    expect(items.map(item => item.textContent)).toEqual([
+      expect.stringContaining("Normal"),
+      expect.stringContaining("Hover"),
+      expect.stringContaining("Focus"),
+      expect.stringContaining("Pressed"),
+    ]);
+  });
+
+  it("offers the switch with no state choice from the host at all", () => {
+    render(
+      <InspectorPanel
+        editor={editorFor(null)}
+        classLibrary={[ghost]}
+        sharedStyles={{ mayChange: true, writeStyles: vi.fn() }}
+        lookEditing={{
+          look: { id: ghost.id, blockType: "acme/button" },
+          onExit: () => {},
+        }}
+      />
+    );
+    expect(screen.getByRole("button", { name: /^State: Normal/ })).toBeTruthy();
+  });
+
+  it("starts another look at Normal, and says the state beside the controls", async () => {
+    const other: NamedClass = {
+      ...ghost,
+      id: "look:acme/button:soft",
+      slug: "button-soft",
+      label: "Soft",
+      orderIndex: 1,
+    };
+    const view = render(
+      <Host writeStyles={vi.fn()} library={[ghost, other]} />
+    );
+    await chooseState("Hover");
+    expect(
+      screen.getByText("You are editing the Hover look. Normal stays as it is.")
+    ).toBeTruthy();
+    view.rerender(
+      <Host writeStyles={vi.fn()} library={[ghost, other]} lookId={other.id} />
+    );
+    expect(
+      within(screen.getByRole("group", { name: "Editing Soft" })).getByRole(
+        "button",
+        { name: /^State: Normal/ }
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText(/You are editing the Hover look/)).toBeNull();
+    // Back on the first look, it opens at Normal again, not the Hover it
+    // was left at.
+    view.rerender(<Host writeStyles={vi.fn()} library={[ghost, other]} />);
+    expect(
+      within(screen.getByRole("group", { name: "Editing Ghost" })).getByRole(
+        "button",
+        { name: /^State: Normal/ }
+      )
+    ).toBeTruthy();
+  });
+
+  it("writes a hover colour set while Hover is chosen under :hover on the page", async () => {
+    const writeStyles = vi.fn(
+      async (_id: string, _change: SharedStyleChange) =>
+        undefined as string | undefined
+    );
+    render(
+      <Host
+        writeStyles={writeStyles as unknown as SharedStylesHost["writeStyles"]}
+      />
+    );
+    await chooseState("Hover");
+    expect(
+      within(screen.getByRole("group", { name: "Editing Ghost" })).getByRole(
+        "button",
+        { name: /^State: Hover/ }
+      )
+    ).toBeTruthy();
+    const text = screen.getByRole("button", { name: /^Text/ });
+    if (text.getAttribute("aria-expanded") !== "true") fireEvent.click(text);
+    const colour = screen.getByRole("textbox", { name: /^Colour( |$)/ });
+    fireEvent.change(colour, { target: { value: "#ff0000" } });
+    fireEvent.blur(colour);
+    await waitFor(() => expect(writeStyles).toHaveBeenCalled());
+    const [id, change] = writeStyles.mock.calls.at(-1) ?? [];
+    expect(id).toBe(ghost.id);
+    const out = (change as SharedStyleChange)(ghost.styles);
+    if (out.kind !== "write") throw new Error(`no write: ${out.kind}`);
+    // Stored under the hover state, and nothing at Normal.
+    expect(out.styles.base).toBeUndefined();
+    // On the page, a button wearing the style takes the colour on hover.
+    const { css } = compilePageCss(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "b",
+            type: "acme/button",
+            version: 1,
+            props: {},
+            classes: [ghost.id],
+          },
+        ],
+      } as unknown as BlockDocument,
+      {
+        breakpoints: NO_BREAKPOINTS,
+        namedClasses: [{ ...ghost, styles: out.styles }],
+      }
+    );
+    expect(css).toMatch(/:hover\)? \{ color: #ff0000 \}/);
+    // The control: the same colour at Normal is written with no state.
+    const { css: normal } = compilePageCss(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "b",
+            type: "acme/button",
+            version: 1,
+            props: {},
+            classes: [ghost.id],
+          },
+        ],
+      } as unknown as BlockDocument,
+      {
+        breakpoints: NO_BREAKPOINTS,
+        namedClasses: [
+          {
+            ...ghost,
+            styles: { base: { [BASE_BREAKPOINT]: { color: "#ff0000" } } },
+          },
+        ],
+      }
+    );
+    expect(normal).not.toMatch(/:hover/);
+    expect(normal).toContain("color: #ff0000");
+  });
+});
+
+describe("a look's background image", () => {
+  it("reaches the host's Media library, as a block's Style tab does", () => {
+    // Without the host's services here, a look offers only a link: the
+    // Choose button is the services reaching the look's controls.
+    const heroLook: NamedClass = {
+      id: "look:acme/hero:plain",
+      slug: "hero-plain",
+      label: "Plain",
+      orderIndex: 0,
+      blockType: "acme/hero",
+      isDefault: true,
+      styles: {},
+    };
+    const MediaPicker = () => null;
+    render(
+      <InspectorPanel
+        editor={editorFor(null)}
+        classLibrary={[heroLook]}
+        sharedStyles={{
+          mayChange: true,
+          writeStyles: vi.fn(
+            async () => undefined
+          ) as unknown as SharedStylesHost["writeStyles"],
+        }}
+        contentServices={{ MediaPicker } as never}
+        lookEditing={{
+          look: { id: heroLook.id, blockType: "acme/hero" },
+          onExit: vi.fn(),
+        }}
+      />
+    );
+    // The section's own trigger, opened unless it already is.
+    for (const trigger of document.querySelectorAll<HTMLElement>(
+      '[data-slot="accordion-trigger"][aria-expanded="false"]'
+    )) {
+      if (trigger.textContent?.startsWith("Background")) {
+        fireEvent.click(trigger);
+      }
+    }
+    expect(
+      screen.getByRole("button", { name: "Choose Background image" })
+    ).toBeTruthy();
   });
 });

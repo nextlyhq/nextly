@@ -44,6 +44,7 @@ import {
   versionChangesOf,
   type NoChanges,
 } from "../version-changes";
+import { baselineLabel } from "../version-pairing";
 import { changeAnchorId } from "../VersionChangesForm";
 
 import {
@@ -77,8 +78,18 @@ export interface VersionDiffViewProps {
    * and `null` once it no longer is. Told only from here, where the fields
    * are drawn, so a host that marks what the reader has seen cannot mark a
    * comparison it decided was showing while something else filled the space.
+   * The report carries the language the comparison's answer names, which is
+   * authoritative where the host's own address names none.
    */
-  onShown?: (pair: { from: number; to: number } | null) => void;
+  onShown?: (
+    pair: { from: number; to: number; locale: string | null } | null
+  ) => void;
+  /**
+   * The baseline whose answer already holds this pair's comparison, when the
+   * host drew it from one: the pair is then not asked for again (see
+   * `useVersionDiff`).
+   */
+  seededBy?: string;
 }
 
 function DiffSkeleton() {
@@ -190,8 +201,7 @@ function BaselineNote({
 }): JSX.Element | null {
   const baseline = diff?.baseline;
   if (!baseline) return null;
-  const words = baseline.name.replace(/-/g, " ");
-  const name = words.charAt(0).toUpperCase() + words.slice(1);
+  const name = baselineLabel(baseline.name);
   // A baseline whose version retention removed names the one standing in for it.
   const which =
     baseline.replaces === undefined
@@ -211,6 +221,7 @@ export function VersionDiffView({
   view,
   onViewChange,
   onShown,
+  seededBy,
 }: VersionDiffViewProps): JSX.Element {
   const [remembered, remember] = useChangesLayoutPreference();
   // The address's view wins over the remembered one, so a shared link opens
@@ -222,7 +233,13 @@ export function VersionDiffView({
   const [showSystem, setShowSystem] = useState(false);
   // Every field, so the count and the fold are of the whole document: the
   // unchanged ones are folded here rather than left out by the server.
-  const diff = useVersionDiff({ scope, from, to, modifiedOnly: false });
+  const diff = useVersionDiff({
+    scope,
+    from,
+    to,
+    modifiedOnly: false,
+    ...(seededBy !== undefined ? { seededBy } : {}),
+  });
   const arranged = arrangeFields(diff.data?.fields ?? []);
   const changes = diff.data ? versionChangesOf(diff.data) : null;
   const order = arranged.changed.map(node => node.name);
@@ -255,11 +272,13 @@ export function VersionDiffView({
   // not report the same showing again.
   const onShownRef = useRef(onShown);
   onShownRef.current = onShown;
+  // The drawn comparison's own language, read once it is drawn.
+  const drawnLocale = drawn ? (diff.data?.locale ?? null) : null;
   useEffect(() => {
     if (!drawn) return;
-    onShownRef.current?.({ from, to });
+    onShownRef.current?.({ from, to, locale: drawnLocale });
     return () => onShownRef.current?.(null);
-  }, [drawn, from, to]);
+  }, [drawn, from, to, drawnLocale]);
 
   return (
     // The container the field rows query. Their columns are a function of the

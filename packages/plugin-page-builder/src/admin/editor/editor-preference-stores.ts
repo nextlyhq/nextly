@@ -55,3 +55,43 @@ export function designFoldsStoreFor(
     ? undefined
     : devicePreferenceStore(`nx-pb-design-folds:${userId}`);
 }
+
+/**
+ * Where the Pages panel's folded groups are kept: under the author's own
+ * key, as the Design panel's are, so "Pages", "Header & footer" and
+ * "Collection templates" open as that author left them on this site.
+ */
+export function pagesFoldsStoreFor(
+  userId: string | null
+): PreferenceStore | undefined {
+  return userId === null
+    ? undefined
+    : devicePreferenceStore(`nx-pb-pages-folds:${userId}`);
+}
+
+/**
+ * Where the author's dismissals of the two-headers notice are kept: under
+ * the author's own key, so a notice one author dismisses on a page stays
+ * dismissed for them and still shows for another.
+ */
+export function twoRegionsStoreFor(
+  userId: string | null
+): PreferenceStore | undefined {
+  return userId === null
+    ? undefined
+    : devicePreferenceStore(`nx-pb-two-regions:${userId}`);
+}
+
+/**
+ * Where the author's insert counts are kept, which the in-place picker reads
+ * its six most used blocks from: under the author's own key, so one person's
+ * habits are what "most used" means to them. With no author known there is
+ * none, and the picker shows the default six.
+ */
+export function insertCountsStoreFor(
+  userId: string | null
+): PreferenceStore | undefined {
+  return userId === null
+    ? undefined
+    : devicePreferenceStore(`nx-pb-insert-counts:${userId}`);
+}

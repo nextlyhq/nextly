@@ -9,9 +9,9 @@ published like a component: its draft can change without the site seeing it unti
 publish.
 
 <Callout type="warn">
-  Header & footer sets are experimental: the fields, the default's rules and the route option
-  may still change before they are marked stable. A page route draws header & footer sets
-  once it turns them on; see [Draw pages inside their
+  Header & footer sets are experimental: the fields, the default's rules and the
+  route option may still change before they are marked stable. A page route
+  draws header & footer sets once it turns them on; see [Draw pages inside their
   header and footer](#draw-pages-inside-their-header-and-footer).
 </Callout>
 
@@ -33,28 +33,40 @@ page; it is experimental.
 
 ### Choose a page's header & footer set
 
-Both settings are one choice, made in one place. The **Header & footer** picker sits at the top
-of the editor's **Settings** and on the page's Page Builder card in the entry form. It
-offers:
+Both settings are one choice, made in one place. The **Header & footer** menu sits in the
+editor's **Settings**, in the page settings beside the canvas, and on the page's Page Builder card
+in the entry form, and reads the same in each. Every item has a small picture of the set, its
+header above its footer, drawn from the published set as a visitor gets it, then its name and a
+short note. It offers, in order:
 
-- **Site default**, with the default header & footer set's name beside it in grey, such as
-  "Main". It reads **Site default (none set)** when the site has no published default.
-- Each published header & footer set, by its title.
-- Each header & footer set that is not published yet, marked "(not published: the site default
-  shows until it is)".
-- **No header or footer**.
+- **Site default**, with the default set's name, such as **Site default (Main)**, and the note
+  "Follows the site if the default changes". It reads **Site default (none set)** when the site has
+  no published default. The default set is not listed again under its own name.
+- Each other published set, noted "Header and footer", "Header only" or "Footer only". A set that
+  holds no header and no footer is not offered: choose **None** instead.
+- Each set that is not published yet, noted "Not published: the site default shows until it is"
+  (or "…no header or footer shows…" when the site has no usable default).
+- **None**, noted "No header or footer".
+- **Manage headers & footers**: in the editor's Page settings, it closes Settings and
+  opens the **Pages** panel on its **Header & footer** sets. On an entry's own form it
+  opens the list of sets in a new tab.
 
-The line under the picker says which header & footer set is in effect and why, for example "Follows
+A page that already names a set the menu would not offer, such as the default set by its own name
+or an empty set, keeps it shown and selected. With more than ten sets, the menu has a **Search
+headers & footers** field above the list, matched by the database as the site's own search is.
+
+The line under the menu says which header & footer set is in effect and why, for example "Follows
 the site default, Main, because this page doesn't choose its own header & footer set." or "Landing
-(not published, so the site default shows)". A page whose
-header & footer set was deleted shows "Site default (the chosen header & footer set was deleted)". An author who
-may not read header & footer sets sees the choice but cannot change it.
+(not published, so the site default shows)". A page naming a set the author cannot see, or one that
+was deleted, says so. When the sets can't be loaded the menu says "Couldn't load headers & footers"
+with **Try again**. An author who may not read header & footer sets sees the choice but cannot
+change it.
 
 ### The header & footer set's regions in the editor
 
 The editor draws the header and footer of the header & footer set in effect around the page, as a
 visitor gets them: the published header & footer set and the published versions of its components.
-Changing the picker redraws them at once, before you save.
+Changing the menu redraws them at once, and the choice is stored with the page's next save.
 
 The regions are locked. A click selects nothing and shows where the region comes
 from, such as "Header, from header & footer set Main". If you may edit header & footer sets, **Edit header & footer set ↗**
@@ -75,14 +87,36 @@ afterwards, the same way a page is told.
 ## The default header & footer set
 
 Your site always has exactly one default header & footer set. On a new site the plugin creates a
-published header & footer set called **Site layout**, with no areas filled in, and makes it the
-default. Fill in its areas, or make another header & footer set the default. A site set up on an
-earlier version keeps the name it was given then, **Default (site)**; the plugin never
-renames it.
+published header & footer set called **Main** and makes it the default. Main holds a plain
+**Starter header** and **Starter footer**, two published components (one used as the header, one
+as the footer), so the first page anyone opens already looks like a website:
 
-If you already have a header & footer set called "Site layout", or one at the address `site-layout`,
-the plugin never takes it over. It gives its own header & footer set the next free name or address
-instead, such as "Site layout 2" or `site-layout-2`.
+- the header shows the site's name from site settings (**Your site name** until you set one),
+  linking to the home page, links to up to five of your pages (oldest first), and a **Contact us**
+  button linking to `/contact`;
+- the footer shows the site's name, a **Pages** column with links to up to four pages, and
+  `© <current year> <site name>`.
+
+The starter header and footer are built only from core blocks, and their colours and spacing come
+from your design variables, so they follow your site's light and dark colours. Edit them like any
+component, or replace them. In the builder it is tagged **Starter header · edit or replace** and **Starter
+footer** until you publish a change to them. The **Contact us** button goes to your site's 404 page
+until you add a `/contact` page or change its link.
+
+The starter header and footer are created once, on a new site only. A site that already had a
+default when it upgraded keeps it, and gets no starter header and footer. If the default is lost later and the plugin re-creates it,
+the new set is empty. A site that draws its header and footer in code
+(`pageBuilder({ siteHeaderFooter: "code" })`) gets an empty Main and no starter header and footer.
+So does a site that keeps its components in a collection of its own
+(`componentReadiness.collection`): the plugin writes nothing into a collection it doesn't own.
+
+A site set up on an earlier version keeps the name it was given then, such as **Site layout** or
+**Default (site)**; the plugin never renames it.
+
+If you already have a header & footer set called "Main", or one at the address `main`, the plugin
+never takes it over. It gives its own header & footer set the next free name or address instead,
+such as "Main 2" or `main-2`. The starter header and footer do the same with "Starter header 2" and
+`starter-header-2`.
 
 ### Make another header & footer set the default
 
@@ -98,9 +132,15 @@ Only a published header & footer set can be the default. The caller needs three 
 - **update** on header & footer sets, and
 - **publish** on header & footer sets.
 
-In the editor, choose it under **Settings**, **Site**, **Default header & footer set**. If the
-header & footer set's header or footer is a component that isn't published, you're asked first:
-**Make default anyway**, or publish it, then make the header & footer set the default.
+In the admin, open **Page Builder → Header & footer** and choose **Make site default** from a set's
+row actions. It is offered on each published set except the current default, and only to someone
+with the three permissions above. If the set's header or footer is a component that isn't
+published, you're asked first: **Make default anyway**, or **Publish it, then make default**. A set
+that isn't published offers **Publish it, then make default** instead, which publishes the set and
+the parts of it you may publish, then makes it the default. This list is the one place the default
+is chosen: the editor's **Site settings** names it, with **Change in Pages ▸ Header & footer**,
+and a write to the page builder's settings that doesn't go through the route is refused with "The
+site default is set from the Header & footer list, with Make site default."
 
 The default changes every page that names no header & footer set, so it is treated like publishing.
 Send `{ "dryRun": true }` to see what would change without changing it. The answer is
@@ -117,8 +157,8 @@ the API with access checks turned off.
 
 If the default disappears another way, such as an import that skips hooks, the plugin
 repairs it. A background job checks the default every time the jobs runner runs, and
-points the default back at the header & footer set the plugin created (**Site layout**), creating it
-again if needed.
+points the default back at the header & footer set the plugin created (**Main**), creating it
+again, empty, if needed.
 
 ### Components a header & footer set uses are protected
 
@@ -347,3 +387,43 @@ pass the new names, or the route reads the old ones:
 `pageBuilderLayouts({ layoutsCollection: "frames", settingsSingle: "site-settings" })`.
 For a route that reads through its own Nextly instance, pass that reader as
 `nextly`. The option is not offered on a Single's route.
+
+## A site that draws its header and footer in code
+
+Some sites already draw their header and footer in their own layout, around the page
+route, and never pass it the `layouts` option above. [rext.ai](https://rext.ai) and
+[nextlyhq.com](https://nextlyhq.com) both work this way. Tell the plugin so with its
+`siteHeaderFooter` option:
+
+```ts title="nextly.config.ts"
+import { pageBuilder } from "@nextlyhq/plugin-page-builder";
+import { defineConfig } from "nextly";
+
+export default defineConfig({
+  plugins: [
+    pageBuilder({
+      siteHeaderFooter: "code",
+    }),
+  ],
+});
+```
+
+| Value                          | Who draws the header and footer                                                           |
+| ------------------------------ | ----------------------------------------------------------------------------------------- |
+| `"page-builder"` (the default) | The header & footer sets authors build, drawn by a page route given the `layouts` option. |
+| `"code"`                       | Your site's own layout, around its page route.                                            |
+
+The option says who draws them; your page route decides what visitors get. A route
+draws a header & footer set only when it is given the `layouts` option, so on a site
+whose code draws its own, leave that option off the route as well. Otherwise visitors
+get both headers whatever the option says.
+
+The option is read when the server starts, and any other value stops it with an
+error that names the option.
+
+When the editor's canvas shows your site's own header or footer around the page
+(through the [canvas route](/docs/page-builder#draw-the-canvas-in-your-sites-layout))
+and a header & footer set draws one too, the editor says so once a session, above the
+canvas: visitors may see two. Either let your code draw them (set
+`siteHeaderFooter: "code"` and take the `layouts` option off your page route), or
+remove the header from your site's layout and let the sets draw it.

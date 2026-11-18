@@ -198,13 +198,13 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
   });
 
   // Not on SQLite, whose unique index is created `IF NOT EXISTS`: a name already taken is skipped
-  // there rather than refused, so the save cannot be made to fail part-way the same way.
+  // there rather than refused.
   it.skipIf(dialect === "sqlite")(
-    "fails a save the database refuses part-way with the reason, and a later save finishes it",
+    "refuses as drift a save over a hand-made index in its table, changing nothing, and saves once it is gone",
     async () => {
-      // Something no precondition foresees: an index already holding the name the new unique
-      // index takes. PostgreSQL rolls the whole save back; MySQL has added the column by then,
-      // since it commits each schema statement, and the next save has to finish from there.
+      // A hand-made index in the Single's table, holding the name the new unique index takes. The
+      // save runs its own migration file, which finds the table differing from its snapshot, so it
+      // is refused as drift before anything runs, on every dialect.
       await heroWith([{ name: "heading", type: "text" }], { heading: "One" });
       const blocking = uniqueIndexNameForColumn("single_hero", "code");
       await query(
@@ -218,18 +218,9 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
 
       const refused = await refusal(save(fields));
 
-      expect(refused).toMatchObject({
-        code: "NEXTLY_MIGRATION_APPLY_FAILED",
-        publicMessage: expect.stringMatching(
-          dialect === "mysql"
-            ? /^The database refused statement \d+ of \d+ of this schema change\. The \d+ before it were applied/
-            : /^The database refused this schema change, so nothing was changed\./
-        ),
-      });
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
       expect((await registeredFields()).map(f => f.name)).toEqual(["heading"]);
-      if (dialect === "postgresql") {
-        expect(await columnsOf("single_hero")).not.toContain("code");
-      }
+      expect(await columnsOf("single_hero")).not.toContain("code");
 
       await query(
         dialect === "mysql"
@@ -245,10 +236,12 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
       ]);
     }
   );
-  // MySQL only: it commits each schema statement, so a rename can land before a later statement
-  // of the same save is refused. PostgreSQL rolls the whole save back, and SQLite skips the name.
+  // MySQL only, where it commits each schema statement. A hand-made index in the Single's table
+  // holds the name the save's unique index takes: the save's own migration file finds the table
+  // differing from its snapshot and is refused as drift before its rename runs, so nothing lands
+  // part-way, and the save goes through once the hand-made index is gone.
   it.skipIf(dialect !== "mysql")(
-    "finishes a save whose rename landed before a later statement was refused",
+    "refuses as drift a rename beside a hand-made index, changing nothing, and saves it once the index is gone",
     async () => {
       await heroWith(
         [
@@ -269,8 +262,8 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
       ];
 
       const refused = await refusal(save(fields));
-      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
-      expect(await columnsOf("single_hero")).toContain("headline");
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+      expect(await columnsOf("single_hero")).not.toContain("headline");
 
       await query(`DROP INDEX ${q(blocking)} ON ${q("single_hero")}`);
       await save(fields);
@@ -286,11 +279,11 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
     }
   );
 
-  // MySQL only, as above. The index this save adds is refused after the rename lands and before
-  // the unique index is dropped; the retry has to find that index on the renamed column, where it
-  // keeps the name it was created under.
+  // MySQL only, as above: a hand-made index holding the name the save's index takes refuses the
+  // save as drift before its rename runs. Once it is gone, the save renames the column and takes
+  // its Unique off, the index found on the renamed column under the name it was created with.
   it.skipIf(dialect !== "mysql")(
-    "turns Unique off on the retry of a save whose rename landed before a later statement was refused",
+    "refuses as drift a rename turning Unique off beside a hand-made index, then turns it off once the index is gone",
     async () => {
       await heroWith(
         [
@@ -311,8 +304,8 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
       ];
 
       const refused = await refusal(save(fields));
-      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
-      expect(await columnsOf("single_hero")).toContain("sku");
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+      expect(await columnsOf("single_hero")).not.toContain("sku");
 
       await query(`DROP INDEX ${q(blocking)} ON ${q("single_hero")}`);
       await save(fields);
@@ -330,6 +323,68 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
           `AND COLUMN_NAME = 'sku'`
       );
       expect(indexes).toEqual([]);
+    }
+  );
+
+  // MySQL only: a unique text field is kept in a bounded column, since MySQL cannot index a whole
+  // TEXT, so turning Unique on narrows the column. The save judges the stored value against the
+  // new width before it writes or runs anything, as a shortened length is judged.
+  it.skipIf(dialect !== "mysql")(
+    "refuses turning Unique on for a text field whose value the bounded column cannot hold, changing nothing",
+    async () => {
+      const long = "x".repeat(300);
+      await heroWith([{ name: "heading", type: "text" }], { heading: long });
+      const fieldsBefore = await registeredFields();
+      const typeOf = async () =>
+        (
+          await query<{ type: string }>(
+            `SELECT COLUMN_TYPE AS type FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'single_hero' AND COLUMN_NAME = 'heading'`
+          )
+        )[0]?.type;
+      const typeBefore = await typeOf();
+
+      const refused = await refusal(
+        save([{ name: "heading", type: "text", unique: true }])
+      );
+
+      expect(refused).toMatchObject({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "LENGTH_BELOW_VALUES",
+              path: "fields.heading",
+              message: expect.stringMatching(
+                /^1 entry holds a heading longer than 255 characters, the new length\./
+              ),
+            }),
+          ],
+        },
+      });
+      expect(await registeredFields()).toEqual(fieldsBefore);
+      expect(await typeOf()).toBe(typeBefore);
+      const [row] = await query<{ heading: string }>(
+        `SELECT ${q("heading")} AS heading FROM ${q("single_hero")}`
+      );
+      expect(row?.heading).toBe(long);
+    }
+  );
+
+  // PostgreSQL only, where a column's type changes only through a cast: a Single's text holding a
+  // whole number becomes a number field through its settings save, and its value is converted.
+  it.skipIf(dialect !== "postgresql")(
+    "turns a Single's text holding a whole number into a number field, its value converted",
+    async () => {
+      await heroWith([{ name: "heading", type: "text" }], { heading: "12" });
+
+      await save([{ name: "heading", type: "number" }]);
+
+      expect(await registeredFields()).toEqual([
+        expect.objectContaining({ name: "heading", type: "number" }),
+      ]);
+      const [row] = await query<{ heading: unknown }>(
+        `SELECT ${q("heading")} AS heading FROM ${q("single_hero")}`
+      );
+      expect(Number(row?.heading)).toBe(12);
     }
   );
 

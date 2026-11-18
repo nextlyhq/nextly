@@ -73,7 +73,7 @@ export const UNDETERMINED_CLASS_ID: string = `undetermined:${"-".repeat(
  * the day it is written: a column added to the row would silently not be part
  * of a subject, so derivation would go on producing rows missing it.
  */
-export type ClassUsageSubject = Omit<ClassUsageRow, "classId">;
+export type ClassUsageSubject = Omit<ClassUsageRow, "classId" | "blocks">;
 
 /**
  * The columns that identify a subject, as values rather than as types.
@@ -173,6 +173,18 @@ export function deriveClassUsageRows(
 }
 
 /**
+ * A stored row's block count, or `null` when it holds none it can be read as:
+ * a row written before the count existed, or a value no count could be. A
+ * driver may hand an integer back as text, so a whole number in text reads too.
+ */
+function storedBlocks(value: unknown): number | null {
+  const count = typeof value === "string" ? Number(value) : value;
+  return typeof count === "number" && Number.isSafeInteger(count) && count > 0
+    ? count
+    : null;
+}
+
+/**
  * The class index, as the shared machinery sees it.
  *
  * Named `classUsageIndex` rather than inlined so the one place a class row is
@@ -182,12 +194,20 @@ export function deriveClassUsageRows(
  */
 export const classUsageIndex: UsageIndex<ClassUsageRow> = {
   readOwn: item =>
-    typeof item.classId === "string" ? { classId: item.classId } : null,
-  // The class row carries nothing beside its reference, so the key IS the id.
-  reconcileKeyOf: row => row.classId,
-  rowFor: (subject, referenceId) => ({ ...subject, classId: referenceId }),
-  // The class row carries nothing beside its reference, so naming the class is
-  // the whole question. Its marker is disjoint by LENGTH — longer than a class
+    typeof item.classId === "string"
+      ? { classId: item.classId, blocks: storedBlocks(item.blocks) }
+      : null,
+  // The count is part of the record: a document whose blocks wearing a class
+  // went from 3 to 2 has a row that no longer describes it, so it is
+  // replaced like any other row the document stopped matching. A row written
+  // before the count existed holds none and is replaced the same way.
+  reconcileKeyOf: row => `${row.classId}\u0000${row.blocks ?? ""}`,
+  rowFor: (subject, referenceId, derived) => ({
+    ...subject,
+    classId: referenceId,
+    blocks: derived.blocks?.get(referenceId) ?? null,
+  }),
+  // The count is not part of the question: naming the class is all of it. Its marker is disjoint by LENGTH — longer than a class
   // id may be — so it cannot be matched by an id a caller could ask about.
   whereReferencing: referenceId => ({ classId: { equals: referenceId } }),
   whereReferencingAny: referenceIds => ({
@@ -198,9 +218,14 @@ export const classUsageIndex: UsageIndex<ClassUsageRow> = {
   // about a real class: `UNDETERMINED_CLASS_ID` is longer than a class id may
   // be, which is the same property that lets the marker share the column.
   whereUndetermined: () => ({ classId: { equals: UNDETERMINED_CLASS_ID } }),
-  markerFor: subject => ({ ...subject, classId: UNDETERMINED_CLASS_ID }),
+  markerFor: subject => ({
+    ...subject,
+    classId: UNDETERMINED_CLASS_ID,
+    blocks: null,
+  }),
   isMarker: row => row.classId === UNDETERMINED_CLASS_ID,
   derive: (document, limits) => classUsageOf(document, limits),
+  blocksOf: own => own.blocks ?? null,
 };
 
 /**
@@ -227,7 +252,9 @@ export function deriveUsageRows<TRow extends UsageSubject>(
   }
   return {
     complete: true,
-    rows: usage.ids.map(referenceId => index.rowFor(subject, referenceId)),
+    rows: usage.ids.map(referenceId =>
+      index.rowFor(subject, referenceId, usage)
+    ),
   };
 }
 

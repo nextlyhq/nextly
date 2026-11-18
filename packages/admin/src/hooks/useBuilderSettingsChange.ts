@@ -12,7 +12,7 @@
  *
  * @module hooks/useBuilderSettingsChange
  */
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import type { BuilderKind } from "@admin/components/features/schema-builder/builder-config";
 import type { BuilderSettingsValues } from "@admin/components/features/schema-builder/BuilderSettingsModal";
@@ -63,7 +63,16 @@ export interface BuilderSettingsChange {
   ) => void;
   /** For an unsaved entity, what its address is checked against. */
   unsavedAddress?: { otherAddresses: readonly PendingAddress[] };
+  /**
+   * Why Save waits, while an unsaved entity's address is being moved; absent
+   * otherwise. A first save started then would create the entity under the
+   * address it is leaving, while the move takes the editor to the new one.
+   */
+  saveHeld?: string;
 }
+
+/** What the editor says while Save waits for an address move. */
+const SAVE_HELD_WHILE_MOVING = "Save waits while the new address is checked.";
 
 export function useBuilderSettingsChange({
   kind,
@@ -146,8 +155,11 @@ export function useBuilderSettingsChange({
   );
 
   // A move under way: one at a time, and no other change meanwhile, so the
-  // move, finishing later, never writes over a change made after it.
+  // move, finishing later, never writes over a change made after it. The ref
+  // answers at once, within the same event; the state holds Save, which the
+  // page reads as it renders.
   const moving = useRef(false);
+  const [moveUnderWay, setMoveUnderWay] = useState(false);
 
   const onSettingsChange = useCallback(
     (next: BuilderSettingsValues, leaveWithoutWarning?: () => void) => {
@@ -171,6 +183,7 @@ export function useBuilderSettingsChange({
         return;
       }
       moving.current = true;
+      setMoveUnderWay(true);
       void moveTo(unsaved.address, next.slug, leaveWithoutWarning)
         .then(moved =>
           moved
@@ -179,6 +192,7 @@ export function useBuilderSettingsChange({
         )
         .finally(() => {
           moving.current = false;
+          setMoveUnderWay(false);
         });
     },
     [unsaved, settings, busy, kind, moveTo, recordRest]
@@ -187,5 +201,6 @@ export function useBuilderSettingsChange({
   return {
     onSettingsChange,
     unsavedAddress: unsaved ? { otherAddresses } : undefined,
+    saveHeld: moveUnderWay ? SAVE_HELD_WHILE_MOVING : undefined,
   };
 }

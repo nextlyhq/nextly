@@ -949,6 +949,239 @@ describe("removing unused shared styles", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
+  describe("naming where a used style is", () => {
+    /** Titles for the documents the caller may open: p1 and p2, not p3. */
+    const titled: StillUsedCheck = {
+      ...NOT_STILL_USED,
+      titles: async found =>
+        found.collections
+          .flatMap(entry => entry.documents)
+          .flatMap(doc =>
+            doc === "p1" ? ["Home"] : doc === "p2" ? ["About"] : []
+          ),
+    };
+
+    it("names each document the caller may open, then counts the rest", async () => {
+      const { store, write } = storeOf([card, hero]);
+      const { source } = usageOf(WHOLE, {
+        "c-card": [{ collection: "pages", documents: ["p1", "p2"] }],
+        "c-hero": [{ collection: "pages", documents: ["p1", "p3"] }],
+      });
+      expect(
+        await refusal(
+          removeSharedStyles(
+            post({ ids: ["c-card", "c-hero"] }),
+            store,
+            source,
+            new Set(),
+            titled
+          )
+        )
+      ).toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            {
+              code: SHARED_STYLE_IN_USE_CODE,
+              message:
+                "Nothing was removed. Card is used on 2 documents: Home and About. hero is used on 2 documents: Home and 1 more.",
+            },
+          ],
+        },
+      });
+      expect(write).not.toHaveBeenCalled();
+    });
+
+    it("names at most three, and counts a use the caller may not open", async () => {
+      const many: StillUsedCheck = {
+        ...NOT_STILL_USED,
+        titles: async () => ["A", "B", "C", "D"],
+      };
+      const { store } = storeOf([card]);
+      const { source } = usageOf(WHOLE, {
+        "c-card": [
+          { collection: "pages", documents: ["1", "2", "3", "4", "5"] },
+        ],
+      });
+      expect(
+        await refusal(
+          removeSharedStyles(
+            post({ ids: ["c-card"] }),
+            store,
+            source,
+            new Set(),
+            many
+          )
+        )
+      ).toMatchObject({
+        publicData: {
+          errors: [
+            {
+              message:
+                "Nothing was removed. Card is used on 5 documents: A, B, C and 2 more.",
+            },
+          ],
+        },
+      });
+    });
+
+    it("counts only where the caller may open none of them", async () => {
+      const { store } = storeOf([card]);
+      const { source } = usageOf(WHOLE, {
+        "c-card": [{ collection: "pages", documents: ["p3"] }],
+      });
+      expect(
+        await refusal(
+          removeSharedStyles(
+            post({ ids: ["c-card"] }),
+            store,
+            source,
+            new Set(),
+            titled
+          )
+        )
+      ).toMatchObject({
+        publicData: {
+          errors: [
+            { message: "Nothing was removed. Card is used on 1 document." },
+          ],
+        },
+      });
+    });
+
+    it("counts and names from one read, so the two agree", async () => {
+      // The index's first read finds one document; the next, two.
+      let reads = 0;
+      const { store } = storeOf([card]);
+      const { source } = usageOf(WHOLE);
+      const growing: SharedStyleUsageSource = {
+        ...source,
+        documentsUsingEach: async ids => {
+          reads += 1;
+          const documents = reads === 1 ? ["p1"] : ["p1", "p2"];
+          return new Map(
+            ids.map(id => [
+              id,
+              {
+                collections: [{ collection: "pages", documents }],
+                complete: true,
+              },
+            ])
+          );
+        },
+      };
+      expect(
+        await refusal(
+          removeSharedStyles(
+            post({ ids: ["c-card"] }),
+            store,
+            growing,
+            new Set(),
+            titled
+          )
+        )
+      ).toMatchObject({
+        publicData: {
+          errors: [
+            {
+              message:
+                "Nothing was removed. Card is used on 2 documents: Home and About.",
+            },
+          ],
+        },
+      });
+    });
+
+    it("keeps the counted refusal when a title can't be read", async () => {
+      const { store } = storeOf([card]);
+      const { source } = usageOf(WHOLE, {
+        "c-card": [{ collection: "pages", documents: ["p1"] }],
+      });
+      expect(
+        await refusal(
+          removeSharedStyles(
+            post({ ids: ["c-card"] }),
+            store,
+            source,
+            new Set(),
+            {
+              ...NOT_STILL_USED,
+              titles: async () => {
+                throw new Error("the pages could not be read");
+              },
+            }
+          )
+        )
+      ).toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            {
+              code: SHARED_STYLE_IN_USE_CODE,
+              message: "Nothing was removed. Card is used on 1 document.",
+            },
+          ],
+        },
+      });
+    });
+
+    it("bounds the names' reads, the index's health among them, by the removal's time", async () => {
+      vi.useFakeTimers();
+      try {
+        const { store } = storeOf([card]);
+        const { source } = usageOf(WHOLE, {
+          "c-card": [{ collection: "pages", documents: ["p1"] }],
+        });
+        let healthReads = 0;
+        const stalling: SharedStyleUsageSource = {
+          ...source,
+          // The removal's own read answers; the naming's never does.
+          health: async () => {
+            healthReads += 1;
+            return healthReads === 1 ? WHOLE : new Promise(() => undefined);
+          },
+        };
+        const answered = refusal(
+          removeSharedStyles(
+            post({ ids: ["c-card"] }),
+            store,
+            stalling,
+            new Set(),
+            titled
+          )
+        );
+        await vi.advanceTimersByTimeAsync(REMOVAL_COUNT_MS + 1);
+        expect(await answered).toMatchObject({
+          publicData: {
+            errors: [
+              { message: "Nothing was removed. Card is used on 1 document." },
+            ],
+          },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("names nothing on a refusal that is not a use", async () => {
+      const titles = vi.fn(async () => ["Home"]);
+      const { store } = storeOf([{ ...card, locked: true }]);
+      const { source } = usageOf(WHOLE);
+      expect(
+        await refusal(
+          removeSharedStyles(
+            post({ ids: ["c-card"] }),
+            store,
+            source,
+            new Set(),
+            { ...NOT_STILL_USED, titles }
+          )
+        )
+      ).toMatchObject({ code: "CONFLICT" });
+      expect(titles).not.toHaveBeenCalled();
+    });
+  });
+
   it("refuses a lock alone as a conflict, saying nothing of use", async () => {
     const { store } = storeOf([{ ...card, locked: true }]);
     const { source } = usageOf(WHOLE);

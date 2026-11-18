@@ -22,9 +22,13 @@
  * @module blocks/library/container
  */
 
-import { CONTENT_WIDTH_CLASS } from "@nextlyhq/blocks-engine";
+import {
+  CONTENT_WIDTH_CLASS,
+  CONTENT_WIDTH_PROPERTY,
+} from "@nextlyhq/blocks-engine";
 import type {
   ContentModel,
+  PropSchema,
   RemotePatternInput,
   TokenRef,
 } from "@nextlyhq/blocks-engine";
@@ -39,7 +43,16 @@ import {
   sizedFirstBackground,
 } from "../image-sources";
 
-import { url } from "./props";
+import {
+  canLink,
+  LINK_PROPS,
+  linkFor,
+  readClaimOf,
+  relFor,
+  text,
+  url,
+  type LinkAttributes,
+} from "./props";
 
 /** What both presets store. */
 export interface ContainerProps {
@@ -50,11 +63,19 @@ export interface ContainerProps {
    */
   as?: "section" | "div" | "article" | "aside" | "header" | "footer" | "main";
   /**
-   * Whether the content is held to the site's content width. The width itself
-   * is a site setting rather than a per-instance value, so a site-wide change
-   * moves every page instead of none of them.
+   * Whether the content is held to a content width (Boxed) or runs edge to
+   * edge (Full width). The block's background runs edge to edge either way.
    */
   contained?: boolean;
+  /**
+   * The width this container holds its content to while it is Boxed, in
+   * place of the site's: a length or a percentage (`"1400px"`), or a site
+   * variable. Left out, the site's content width, so a site-wide change still
+   * moves every container that states none. The page compile writes it on
+   * the container alone: a Boxed container inside this one boxes to the
+   * site's width.
+   */
+  contentWidth?: string | TokenRef;
   /**
    * Where the whole block links to. Only the presets that declare it (Box and
    * Card) render it: linked, the root element is an `<a>` instead of the `as`
@@ -62,6 +83,14 @@ export interface ContainerProps {
    * anything interactive inside it.
    */
   link?: string;
+  /** The entry a linkable preset links to, with `entryId`; beats `link`. */
+  entryCollection?: string;
+  /** The linked entry's id, used with `entryCollection`. */
+  entryId?: string;
+  /** How a linkable preset's link opens: this tab, or a new one. */
+  target?: "_self" | "_blank";
+  /** A linkable preset's link relationship tokens (`nofollow`, …). */
+  rel?: string;
 }
 
 /**
@@ -105,6 +134,54 @@ export type ContainerTag = (typeof CONTAINER_TAGS)[number];
 export { CONTENT_WIDTH_CLASS };
 
 /**
+ * A container's Content width settings, drawn in Style › Layout: whether its
+ * content is Boxed or runs Full width, and the width it boxes to where it
+ * states one of its own. Declared once and spread into every container's
+ * props, for the reason {@link CONTAINER_SUPPORTS} is: nine copies would let a
+ * label or a place drift on some containers and not others.
+ *
+ * Settings rather than styles. A style has a device, a state and a shared
+ * style it can come from; whether a container is boxed has none of those, so
+ * it is the block's own, and one value on every device.
+ *
+ * The width's key is the engine's `CONTENT_WIDTH_PROP`, which the page
+ * compile reads; a test holds the two to one spelling.
+ */
+export const CONTENT_WIDTH_PROPS: {
+  readonly contained: PropSchema;
+  readonly contentWidth: PropSchema;
+} = {
+  contained: {
+    label: "Content width",
+    type: "checkbox",
+    group: "style",
+    section: "layout",
+    code: `class="${CONTENT_WIDTH_CLASS}"`,
+  },
+  contentWidth: {
+    label: "Width for this section",
+    type: "length",
+    group: "style",
+    section: "layout",
+    code: `${CONTENT_WIDTH_PROPERTY}: <width>`,
+  },
+};
+
+/**
+ * The root's classes with the content-width opt-in where the container is
+ * Boxed. One function for every container, including the ones that render
+ * their own root (Collection list, Entry content).
+ */
+export function withContentWidth(
+  className: string,
+  props: { readonly contained?: unknown }
+): string {
+  return props.contained === true
+    ? `${className} ${CONTENT_WIDTH_CLASS}`
+    : className;
+}
+
+/**
  * The style capabilities every container preset opts into.
  *
  * Declared ONCE and shared, because a preset differs from its siblings in what
@@ -120,9 +197,16 @@ export const CONTAINER_SUPPORTS = {
   dimensions: true,
   background: true,
   border: true,
+  // A card or a panel often casts one: Style › Effects › Shadow.
+  shadow: true,
   effects: true,
   position: true,
   container: true,
+  // Style › Text: a colour and type set once on the container, which every
+  // block inside inherits unless it sets its own. The page compile makes the
+  // links inside take the colour too, while the site's Links row sets none.
+  typography: true,
+  color: true,
 } as const;
 
 /** Whether a stored value is a tag a container may render. */
@@ -157,12 +241,57 @@ export function containerContentModel(props: ContainerProps): ContentModel {
 }
 
 /**
- * The link a linkable preset renders, or undefined when it renders none.
- * The renderer and the content model both ask this, so a link the renderer
- * would drop never makes the block count as interactive, and the reverse.
+ * A linkable preset's link settings: where it links (`link`, an address, or
+ * an entry), how it opens, and its relationship. Declared once, as
+ * {@link CONTENT_WIDTH_PROPS} is, so Box and Card cannot drift apart in what
+ * they store or where each setting is edited. The address keeps its stored
+ * name, `link`; the entry, the new tab and the relationship are the names
+ * every linking block stores them under (`LINK_PROPS`), which the editor's
+ * link control groups and the renderer follows.
+ *
+ * Content › Link for where it goes and how it opens; the relationship is
+ * HTML a visitor never reads, so Advanced › HTML.
  */
-function linkOf(props: { readonly link?: unknown }): string | undefined {
-  return url(props.link);
+export function containerLinkProps(
+  hint?: string
+): Readonly<
+  Record<"link" | "entryCollection" | "entryId" | "target" | "rel", PropSchema>
+> {
+  return {
+    link: {
+      label: "Link",
+      role: "content",
+      type: "url",
+      section: "Link",
+      ...(hint === undefined ? {} : { hint }),
+    },
+    entryCollection: { ...LINK_PROPS.entryCollection, section: "Link" },
+    entryId: { ...LINK_PROPS.entryId, section: "Link" },
+    target: { ...LINK_PROPS.target, section: "Link" },
+    rel: { ...LINK_PROPS.rel, group: "advanced" },
+  };
+}
+
+/** A linkable preset's link, read as every linking block reads one. */
+function linkPropsOf(props: ContainerProps) {
+  return {
+    href: props.link,
+    entryCollection: props.entryCollection,
+    entryId: props.entryId,
+    target: props.target,
+    rel: props.rel,
+  };
+}
+
+/**
+ * Whether a linkable preset renders a link: an address `url` follows, or an
+ * entry. The renderer and the content model both ask this, so a link the
+ * renderer would drop never makes the block count as interactive, and the
+ * reverse. An entry that then fails to resolve draws no link where
+ * interactive content was allowed, which refuses nothing it should not.
+ */
+function isLinked(props: ContainerProps): boolean {
+  return canLink(linkPropsOf(props));
 }
 
 /**
@@ -170,15 +299,15 @@ function linkOf(props: { readonly link?: unknown }): string | undefined {
  * while it is linked, else its tag, and `div` for a tag it may not render.
  * The render functions below draw it, and an editor asks it, through
  * `containerRootTag`, to say what the page will hold, so the two never
- * disagree; whether a preset is linked is `linkOf`'s answer, the one the
+ * disagree; whether a preset is linked is `isLinked`'s answer, the one the
  * renderer and the content model use. Read from stored props, which may
  * hold anything.
  */
 export function rootTagOf(
-  props: { readonly as?: unknown; readonly link?: unknown },
+  props: ContainerProps,
   linkable: boolean
 ): ContainerTag | "a" {
-  if (linkable && linkOf(props) !== undefined) return "a";
+  if (linkable && isLinked(props)) return "a";
   return isContainerTag(props.as) ? props.as : "div";
 }
 
@@ -188,7 +317,7 @@ export function rootTagOf(
  * otherwise what its tag makes it.
  */
 export function linkableContentModel(props: ContainerProps): ContentModel {
-  if (linkOf(props) === undefined) return containerContentModel(props);
+  if (!isLinked(props)) return containerContentModel(props);
   return {
     is: ["flow", "interactive"],
     accepts: { without: ["interactive", "main"] },
@@ -275,20 +404,48 @@ function firstBackground({
   );
 }
 
-/** Render a linkable preset: an `<a>` while linked, its tag otherwise. */
+/**
+ * Render a linkable preset: an `<a>` while linked, its tag otherwise. Where
+ * it links is read as every linking block reads it: an entry beats a typed
+ * address, and a new tab adds its `rel` safety tokens. Only a link to an
+ * entry waits, for the entry's address; a typed one renders at once, as it
+ * always did, so a page linking by address streams as it did before.
+ */
 export function renderLinkableContainer(
   args: BlockRenderArgs<ContainerProps>
+): ReactElement | Promise<ReactElement> {
+  const link = linkPropsOf(args.props);
+  if (text(link.entryCollection) !== "" && text(link.entryId) !== "") {
+    return linkFor(link, (collection, id) =>
+      args.ctx.resolveEntryPath(collection, id, readClaimOf(args.node))
+    ).then(resolved => drawLinked(args, resolved));
+  }
+  const href = url(link.href);
+  const rel = relFor(link.target, link.rel);
+  return drawLinked(
+    args,
+    href === undefined
+      ? undefined
+      : {
+          href,
+          ...(link.target === "_blank" ? { target: "_blank" as const } : {}),
+          ...(rel === undefined ? {} : { rel }),
+        }
+  );
+}
+
+/** A linkable preset drawn with its link's attributes, or unlinked with none. */
+function drawLinked(
+  args: BlockRenderArgs<ContainerProps>,
+  link: LinkAttributes | undefined
 ): ReactElement {
-  const href = linkOf(args.props);
-  if (href === undefined) return renderContainer(args);
+  if (link === undefined) return renderContainer(args);
   const classes = withRevision(
-    args.props.contained === true
-      ? `${args.className} ${CONTENT_WIDTH_CLASS}`
-      : args.className,
+    withContentWidth(args.className, args.props),
     args
   );
   return (
-    <a className={classes} href={href}>
+    <a className={classes} {...link}>
       {firstBackground(args)}
       {args.renderSlot("children", childImageContext(args.ctx, args.node))}
     </a>
@@ -313,12 +470,7 @@ export function renderContainer(
   // handed children and throw, taking the page with it, so an unknown tag falls
   // back to the one every container can safely be.
   const Tag = rootTagOf(props, false);
-  const classes = withRevision(
-    props.contained === true
-      ? `${className} ${CONTENT_WIDTH_CLASS}`
-      : className,
-    args
-  );
+  const classes = withRevision(withContentWidth(className, props), args);
   // The children's images are sized to the width this container leaves them.
   return (
     <Tag className={classes}>

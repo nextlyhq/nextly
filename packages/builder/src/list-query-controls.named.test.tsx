@@ -79,8 +79,8 @@ function register(): void {
           relation: { type: "object", display: "listRelation" },
           filters: { type: "array", display: "listFilters" },
           sort: { type: "text", display: "sort", collectionProp: "collection" },
-          limit: { label: "Number of items", type: "number" },
-          offset: { label: "Skip the first", type: "number" },
+          limit: { label: "How many", type: "number" },
+          offset: { label: "Skip", type: "number" },
           namedQuery: { type: "object", display: "listNamedQuery" },
         },
         slots: { children: {}, empty: {} },
@@ -217,7 +217,7 @@ function writes(editor: { apply: ReturnType<typeof vi.fn> }): object[] {
 
 async function openSource(name: string): Promise<void> {
   fireEvent.click(
-    await screen.findByRole("button", { name: `Source ${name}` })
+    await screen.findByRole("button", { name: `Show entries from ${name}` })
   );
   // The custom sources arrive with their own read.
   await screen.findByRole("group", { name: "Custom sources" });
@@ -284,7 +284,7 @@ describe("choosing a custom source", () => {
     // Chosen on screen, nothing written: the list still stores Posts.
     expect(editor.apply).not.toHaveBeenCalled();
     expect(
-      screen.getByRole("button", { name: "Source Upcoming events" })
+      screen.getByRole("button", { name: "Show entries from Upcoming events" })
     ).toBeDefined();
     expect(
       screen.getByText(
@@ -364,7 +364,7 @@ describe("a list whose source is a custom one", () => {
     ).toBeDefined();
     expect(
       screen
-        .getByRole("button", { name: "Source Most read this month" })
+        .getByRole("button", { name: "Show entries from Most read this month" })
         .getAttribute("aria-invalid")
     ).toBeNull();
   });
@@ -373,7 +373,7 @@ describe("a list whose source is a custom one", () => {
     mount({ namedQuery: { name: "events.gone", params: { city: "lahore" } } });
     expect(
       await screen.findByRole("button", {
-        name: "Source events.gone · not available",
+        name: "Show entries from events.gone · not available",
       })
     ).toBeDefined();
     expect(

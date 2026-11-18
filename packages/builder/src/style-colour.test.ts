@@ -1003,3 +1003,20 @@ describe("a malformed document does not take the panel down with it", () => {
     expect(contrastObscuredIn(styles as never)).toBe("opacity");
   });
 });
+
+describe("a colour picker's order", () => {
+  it("lists colours in the site's order, the one the Design panel shows", () => {
+    const set: SiteTokenSet = {
+      tokens: [
+        { name: "color.a", kind: "color", values: { light: "#111111" } },
+        { name: "color.b", kind: "color", values: { light: "#222222" } },
+        { name: "color.c", kind: "color", values: { light: "#333333" } },
+      ],
+      order: ["color.c", "color.a"],
+    };
+    const names = variablesFor(COLOR, set)
+      .map(variable => variable.name)
+      .filter(name => ["color.a", "color.b", "color.c"].includes(name));
+    expect(names).toEqual(["color.c", "color.a", "color.b"]);
+  });
+});

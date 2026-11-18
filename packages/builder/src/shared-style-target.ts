@@ -135,7 +135,8 @@ export function saveAsSharedStyleRefusal(
   );
   if (worn !== undefined) return `This block already uses ${worn.name}.`;
   if (!hasOwnStyles(node.styles)) {
-    return "This block has no styles of its own yet.";
+    // Said as what to do next: a value changed is what makes a save useful.
+    return "Change a style first, then save it to reuse it.";
   }
   // The page's per-block limit, asked of the one rule that owns it.
   if (!withClassApplied(node.classes ?? [], "").ok) {
@@ -747,17 +748,58 @@ export function sharedStyleChange(
   value: StyleValue | null,
   policy?: StylePolicy
 ): SharedStyleChange {
+  return sharedStyleChanges([{ address, value }], policy);
+}
+
+/** One address of a {@link sharedStyleChanges} change, and its value or `null`. */
+export interface SharedStyleSet {
+  readonly address: StyleAddress;
+  readonly value: StyleValue | null;
+}
+
+/**
+ * The change that sets (or clears) several addresses as one: the sides of a
+ * margin set together in a shared style, stored by the host as one change and
+ * so undone as one. Each write is judged on its own leaf, folded onto the
+ * last, and the first refusal refuses the whole; its inverse puts back every
+ * address's previous value at once.
+ */
+export function sharedStyleChanges(
+  sets: readonly SharedStyleSet[],
+  policy?: StylePolicy
+): SharedStyleChange {
   return Object.assign(
-    (styles: NodeStyles) => sharedStyleWrite(styles, address, value, policy),
+    (styles: NodeStyles): SharedStyleWrite => foldSets(styles, sets, policy),
     {
       invert: (before: NodeStyles) =>
-        sharedStyleChange(
-          address,
-          readStyleValue(before, address) ?? null,
+        sharedStyleChanges(
+          sets.map(set => ({
+            address: set.address,
+            value: readStyleValue(before, set.address) ?? null,
+          })),
           policy
         ),
     }
   );
+}
+
+/** Several writes folded onto one style's styles, each onto the last. */
+function foldSets(
+  styles: NodeStyles,
+  sets: readonly SharedStyleSet[],
+  policy: StylePolicy | undefined
+): SharedStyleWrite {
+  let current = styles;
+  let changed = false;
+  for (const set of sets) {
+    const write = sharedStyleWrite(current, set.address, set.value, policy);
+    if (write.kind === "refused") return write;
+    if (write.kind === "write") {
+      current = write.styles;
+      changed = true;
+    }
+  }
+  return changed ? { kind: "write", styles: current } : { kind: "unchanged" };
 }
 
 /** A style write's answer: the styles to store, no change, or the refusal. */

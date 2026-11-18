@@ -27,11 +27,18 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
   fill it in for an icon that says something on its own. A linked icon is named by its
   label, or by the icon's name when there is none. The page stores the icon's id
   (`lucide:star`); an id the set no longer draws renders nothing, and the editor says so.
-- **Accordion titles and icons.** An accordion's **Titles as** (Content tab) draws each
-  section's title as text or as a heading from level 2 to 6, and its **Icon** and
-  **Position** (Style tab) choose a chevron, a plus, no icon or the browser's own triangle,
-  before or after the title. Some screen readers announce a section title as the button's
+- **Accordion titles and icons.** An accordion's **Titles as** (Content tab, Behaviour)
+  draws each section's title as plain text or as a heading from level 2 to 6, and its
+  **Icon** and **Icon position** (Style tab) choose a chevron, a plus, no icon or the
+  browser's own triangle, before or after the title. Some screen readers announce a section title as the button's
   text rather than as a heading; the section still opens and closes as normal.
+- **Columns, sections and linked containers.** A Columns block picks its columns in its
+  Content tab: 2 equal, 3 equal, 4 equal, Wide left, Wide right or Wide middle, adding or
+  removing empty columns to match, and **Stack on** puts the columns one under another on
+  tablets and phones, on phones only, or never. A Section's **Height** (Style tab, Size) is
+  Fit content or Full screen. A Box or a Card can link as a whole to a page on this site or
+  to an address, opening in a new tab if you choose; its link relationship is under
+  Advanced, HTML.
 - **Your own blocks**, defined in code, which the page renderer takes beside the
   built-in ones.
 - **Per-breakpoint styling.** Style a block separately for each breakpoint: the Style tab
@@ -147,8 +154,6 @@ anything it is drawn from, refreshes it.
 
 ```tsx
 // src/app/(frontend)/[...slug]/page.tsx
-import { createBlockResolver } from "@nextlyhq/blocks-react";
-import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createPublicBlocksPage } from "@nextlyhq/blocks-react/next";
 import { getNextly } from "nextly";
 import type {
@@ -185,7 +190,6 @@ const route = createPublicBlocksPage({
   collections: ["pages"],
   field: "content",
   nextly: reader,
-  blocks: createBlockResolver(coreBlocks),
   styleContext: {
     breakpoints: {
       viewport: [
@@ -214,6 +218,13 @@ export default route.ContentPage;
   them, and pages come out structurally correct and visually bare. Declare at
   least a `base` breakpoint.
 </Callout>
+
+The route draws the blocks your site registered, the core set and every block a plugin adds,
+custom ones included, with nothing passed: it reads them from the page builder of the site the
+process serves. A visitor reaching a page before anyone has opened the admin sees the same
+blocks. To draw a page with a set of your own, pass it as `blocks`
+(`createBlockResolver([...coreBlocks, myBlock])` from `@nextlyhq/blocks-react`); a resolver
+passed there is always the one used.
 
 ### Images sized to where they appear
 
@@ -297,6 +308,19 @@ filters use. A process serving several sites, each through an instance of its ow
 route its own `nextly`, and each page shows its own site. Only a route given no `nextly` reads the
 process's registered instance.
 
+Bind each of those routes to its site's blocks too, with `blocks: blocksOf(builder)` from
+`@nextlyhq/plugin-page-builder`, where `builder` is that site's `pageBuilder()`. A route given
+no `blocks` reads the blocks of the process's registered instance. The same goes for
+`loadSiteStyle`, which takes the same `blocks`. One limit remains: a plugin that adds blocks in
+code from its `init` (`blockRegistry(ctx).register`) reaches the page builder whose site started
+last, because a process keeps one set of plugin services. Blocks a plugin declares under
+`contributes.declarations` reach each site's own page builder. And while two sites run at once,
+a save is judged by the field rules of the site that started last, for the same reason: a
+process keeps one set of field types. In a production build each route holds its own copy of
+the plugin, which never starts, so `blocksOf(builder)` and `namedQueriesOf(builder)` read the
+started site's through the instance there; on a process running two sites at once, that is the
+site that started last.
+
 Give each of those routes its own `cacheScope` too, such as the site's id. Every public read a
 route makes, its site settings among them, is cached under it, and two routes over different
 instances with the same scope, or none, share their cached reads.
@@ -370,9 +394,10 @@ breakpoint has a `maxWidth`, and the values a block is given for it apply at tha
 and below, as an `@media (max-width: …)` rule.
 
 In the editor, the device buttons choose which breakpoint you are styling. The base
-breakpoint is named **Desktop**. The chosen device shows the width the canvas lays the
-page out at: Desktop at 1280px (or one pixel past your widest breakpoint, if that is
-wider), and every other breakpoint at its own `maxWidth`, so "Tablet · 1024px". The Style
+breakpoint is named **Desktop**. The width the canvas lays the page out at is shown beside
+the buttons: Desktop at 1280px (or one pixel past your widest breakpoint, if that is
+wider), and every other breakpoint at its own `maxWidth`, so "1024px" for a Tablet at
+1024px. Each button's tooltip names its device with that width and the widths it styles. The Style
 tab edits the values for that breakpoint. The breakpoint manager beside the buttons adds,
 changes and removes the site's breakpoints.
 
@@ -412,8 +437,6 @@ published page would never show them. Styles a page already held there still sav
 
 ```tsx
 // src/app/(frontend)/[...slug]/page.tsx, serving the breakpoints the editor saved
-import { createBlockResolver } from "@nextlyhq/blocks-react";
-import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { loadSiteStyle, SITE_STYLE_SLUG } from "@nextlyhq/plugin-page-builder";
 import { getNextly } from "nextly";
@@ -448,7 +471,6 @@ const { ContentPage, generateMetadata } = createBlocksPage({
   collections: ["pages"],
   field: "content",
   nextly: reader,
-  blocks: createBlockResolver(coreBlocks),
   siteStyles: {
     read: () => loadSiteStyle({ nextly: reader }),
     // Named so that saving the site style refreshes cached pages.
@@ -705,9 +727,9 @@ collections and repeats its child blocks once per entry — a post list, a team 
 product row — without anyone writing a query. The developer decides which collections are
 available to it; the editor decides which entries it shows and what each one looks like.
 
-In the editor, the list's Content tab edits its query:
+In the editor, the list's Content tab edits its query, under **Entries**:
 
-- **Source**: a collection, or a to-many relation of the page's entry (on a collection's
+- **Show entries from**: a collection, or a to-many relation of the page's entry (on a collection's
   entry) or of each item of the list around it, such as a post's categories.
 - **Filters**: rows an entry must all meet, each read as one sentence, for example
   Title contains "build" or Published is on or after 1 Sept 2026. Only fields visitors can
@@ -715,13 +737,15 @@ In the editor, the list's Content tab edits its query:
 - **Sort**: one row per key, each with its direction in words (Newest first, A–Z, Highest
   first). Entries with the same values keep a fixed order, and entries with no value come
   last.
-- **How many**: Number of items (1 to 100), Skip the first, and Split into pages. Under
-  Number of items the selected list says how many entries match and how many show, for
+- **Entries shown**: How many (1 to 100), Skip, and Split into pages. Under How many the
+  selected list says how many entries match and how many show, for
   example "4 entries match, so 3 show.", counted as you read them on the canvas. Under
   Split into pages, while it is on, it says how many pages that makes, for example "24
   entries match, so 3 pages of 10." See [Splitting a list into pages](#splitting-a-list-into-pages).
-- **When nothing matches**: Canvas shows Entries or When empty, to design the list's empty
-  state, which visitors see when no entry matches.
+- **When nothing matches**: Preview the empty message, to design the list's empty state,
+  which visitors see when no entry matches.
+
+The list's HTML tag (Advanced, HTML) renders it as a generic box, a section or an article.
 
 A prop bound to the page's own entry or to a Single shows, on the canvas, the value you could
 see in the admin, your drafts included, read with your own access; one you may not read shows
@@ -741,7 +765,7 @@ set through the API with [`set-list-query`](/docs/page-builder/compose-through-t
 
 ### Splitting a list into pages
 
-Turn on **Split into pages** and the list shows Number of items entries on each page, each
+Turn on **Split into pages** and the list shows How many entries on each page, each
 page at its own address: the list on `/news` shows its first page there, the second at
 `/news/page/2`, the third at `/news/page/3`, and so on. Under its entries the list draws
 links to the previous and next pages and the page numbers, as ordinary links a visitor can
@@ -749,7 +773,7 @@ share and a search engine can follow. The links are parts of the list (Pages, Pa
 Current page and Page gap), so the Style tab styles them as it styles the list; by default
 they are outlined boxes, with the current page filled in the site's primary colour.
 
-- Skip the first is applied once, before paging: with 25 entries, 10 skipped and 10 on a
+- Skip is applied once, before paging: with 25 entries, 10 skipped and 10 on a
   page, page 1 shows entries 11 to 20 and page 2 entries 21 to 25, the last.
 - `/news/page/1` redirects permanently to `/news`, so the first page has one address. A
   number past the last page, or written any other way (`/page/0`, `/page/02`,
@@ -869,6 +893,20 @@ its own entry's fields. A binding with no value shows its fallback, or the text 
 was given in the editor. See [Block document
 format](/docs/api-reference/block-document-format).
 
+### A quote
+
+The **Quote** block (stored as `core/quote`) holds the quoted words, **Who said it**
+and the **Source** it comes from. Its **Source link** is the same link every block
+uses: an address, or a page or entry of your site, opened in a new tab if you like,
+with its relationship in Advanced. On the page, the link becomes the quotation's
+`cite` and links the source's title. The dash before the person's name is drawn by
+the page's styles, so it is never part of the words a reader copies.
+
+A Quote has three block styles: **Line**, its own, a line beside the words in your
+site's accent colour; **Plain**, with no line; and **Large**, bigger centred words.
+They look the same in the editor and on the live page. A Quote saved before its source
+was a link keeps that address as its Source link.
+
 ### A table of contents
 
 The **Table of contents** block (stored as `core/table-of-contents`) lists the headings
@@ -876,19 +914,27 @@ of a passage of rich text, each linking to its heading. On a collection's templa
 bind its **Content** to the same field as the article's Rich text block, and every
 entry gets contents drawn from its own body:
 
-- **Headings listed**: H2 only, H2 and H3 (the default), or H2 to H4. An H1 is the
+- **Headings**: H2 only, H2 and H3 (the default), or H2 to H4. An H1 is the
   page's title and is never listed. Each heading sits inside the heading above it, in a
   nested list, so a screen reader announces the structure as well as the words.
 - **Title**: the label above the list (On this page by default), which also names the
   block's navigation landmark.
-- **Can be folded away**: on by default, so the list starts open under its title and a
+- **Can be folded**: on by default, so the list starts open under its title and a
   reader can close it, with no script.
 
-Every heading a Rich text block draws carries an id, made from its words: lower-cased,
-punctuation dropped, spaces as hyphens (`Getting started` is `#getting-started`), with a
-repeated heading numbered (`#notes`, `#notes-2`). The ids are unique within one passage.
-Two Rich text blocks on one page that share a heading give it the same id, and a link to
-it reaches the first.
+Every heading on a page carries an id, so a link can reach its section: each Heading
+block, and each heading inside a Rich text block, in the header and footer too. The id is
+the heading's own **Anchor (ID)** when you set one in Advanced; otherwise it is made from
+its words: lower-cased, punctuation dropped, spaces as hyphens, letters in any script kept
+(`Getting started` is `#getting-started`, `Über uns` is `#über-uns`). Ids are unique on
+the whole page: a repeated heading is numbered in page order (`#notes`, `#notes-2`,
+`#notes-3`), whichever blocks it is in, and a made id never takes one you gave any block.
+A heading inside a Collection list is drawn once per entry, so each copy of a made id
+adds its entry's place (`#title--0`, `#title--1`).
+
+Any heading can be left out of a table of contents: select it, and in **Advanced ›
+Visibility** turn on **Leave out of table of contents**. It keeps its id, so a link
+written by hand still reaches it.
 
 A visitor sees nothing when there are no headings to list, so an entry without any shows
 no empty box. On the canvas the block keeps its frame and says why it is empty.

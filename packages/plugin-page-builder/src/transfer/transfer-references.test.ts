@@ -1,7 +1,6 @@
 import {
   COMPONENT_INSTANCE_TYPE,
-  hasBlock,
-  registerBlocks,
+  createBlockRegistry,
   type BlockDocument,
   type ComponentDocument,
 } from "@nextlyhq/blocks-engine";
@@ -69,6 +68,59 @@ describe("collectDocumentReferences", () => {
     expect(sorted(into.media)).toEqual(["m-1"]);
     expect(sorted(into.blockTypes)).toEqual(["core/box", "core/image"]);
     expect(into.components.size).toBe(0);
+  });
+
+  it("reads the variable a container names as its own content width", () => {
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "pattern",
+      nodes: [
+        {
+          id: "band",
+          type: "core/section",
+          version: 1,
+          props: { contained: true, contentWidth: { $token: "content.wide" } },
+        },
+        {
+          id: "typed",
+          type: "core/section",
+          version: 1,
+          props: { contained: true, contentWidth: "1400px" },
+        },
+      ],
+    };
+    const into = emptyReferences();
+    collectDocumentReferences(document, into, { mediaProps });
+    expect(sorted(into.tokens)).toEqual(["content.wide"]);
+  });
+
+  it("carries the variables `$token` names and no var() in a value's CSS text", () => {
+    // A shadow keeps its colour as `var()` of the colour's custom property.
+    // An export's variables are the ones `$token` names; the usage index's
+    // key for a property never reaches its list.
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "pattern",
+      nodes: [
+        {
+          id: "card",
+          type: "core/box",
+          version: 1,
+          props: {},
+          styles: {
+            base: {
+              base: {
+                boxShadow: "0 1px 2px var(--site-color-ink)",
+                color: { $token: "color.brand" },
+              },
+            },
+          },
+        },
+      ],
+    };
+    const into = emptyReferences();
+    collectDocumentReferences(document, into, { mediaProps });
+    expect(sorted(into.tokens)).toEqual(["color.brand"]);
   });
 
   it("reads a placement's component, its image values and its own slot content, never its type", () => {
@@ -280,12 +332,14 @@ describe("mediaIdOf", () => {
 
 describe("registryMediaProps", () => {
   const CARD = "test/transfer-card";
+  /** The site's block registry the card is registered in. */
+  const blocks = createBlockRegistry();
 
   it("lists a block's media and upload props alike, and no other", () => {
     // An `upload` prop holds a media id as a `media` prop does, so its value
     // and its binding's fallback must be carried by a transfer too.
-    if (!hasBlock(CARD)) {
-      registerBlocks(
+    if (!blocks.has(CARD)) {
+      blocks.register(
         [
           {
             name: CARD,
@@ -305,7 +359,10 @@ describe("registryMediaProps", () => {
       );
     }
 
-    expect([...registryMediaProps(CARD)].sort()).toEqual(["cover", "photo"]);
-    expect(registryMediaProps("test/not-registered")).toEqual([]);
+    expect([...registryMediaProps(blocks, CARD)].sort()).toEqual([
+      "cover",
+      "photo",
+    ]);
+    expect(registryMediaProps(blocks, "test/not-registered")).toEqual([]);
   });
 });

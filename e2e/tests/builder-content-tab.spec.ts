@@ -5,12 +5,18 @@
  * unsupported), every visible label names a field that is there, axe finds
  * nothing at WCAG 2.2 AA in the inspector, and one prop is edited, saved, read
  * back from the stored page and shown again after a reload. A block with no
- * props shows no controls at all.
+ * props shows no controls at all, and a container whose every setting is in
+ * Style or Advanced has no Content tab.
  *
  * Each test makes its own page, named uniquely, so no lock is needed.
  */
 import AxeBuilder from "@axe-core/playwright";
-import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import {
+  expect,
+  type APIRequestContext,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 
 import { pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
@@ -48,7 +54,22 @@ type Edit =
       value: string;
       stored: unknown;
     }
-  | { kind: "check"; label: string; prop: string; stored: boolean }
+  | {
+      kind: "check";
+      label: string;
+      prop: string;
+      stored: unknown;
+      /** Whether the switch or box shows as on after the edit. */
+      checked: boolean;
+    }
+  | {
+      kind: "choose";
+      label: string;
+      /** The option's words, as the menu shows them. */
+      option: string;
+      prop: string;
+      stored: unknown;
+    }
   | { kind: "richText"; label: string; prop: string; text: string };
 
 interface Case {
@@ -59,7 +80,14 @@ interface Case {
   /** The block it must sit in, with that block's own props. */
   readonly parent?: { type: string; props: Record<string, unknown> };
   readonly slots?: boolean;
-  /** Absent for a block that declares no props. */
+  /** The Content section the edit's control is in, opened before the edit. */
+  readonly section?: string;
+  /**
+   * What the Content tab holds where no prop is edited there: nothing (no
+   * tab at all), or only a section the builder draws itself.
+   */
+  readonly content?: "none" | { readonly builderSection: string };
+  /** Absent for a block that declares no props, or none in Content. */
   readonly edit?: Edit;
 }
 
@@ -75,35 +103,41 @@ const RICH_TEXT = {
   },
 };
 
-const CONTAINED = (stored: boolean): Edit => ({
+/** A linked Box or Card opening its link in a new tab. */
+const NEW_TAB: Edit = {
   kind: "check",
-  label: "Constrain content width",
-  prop: "contained",
-  stored,
-});
+  label: "Open in a new tab",
+  prop: "target",
+  stored: "_blank",
+  checked: true,
+};
 
 /** Every core block, with the props it is stored with and one edit. */
 const CASES: readonly Case[] = [
   {
+    // Its tag is in Advanced and its content width in Style.
     type: "core/section",
     label: "Section",
     props: { as: "section", contained: true },
     slots: true,
-    edit: CONTAINED(false),
+    content: "none",
   },
   {
     type: "core/box",
     label: "Box",
-    props: { as: "div" },
+    props: { as: "div", link: "/pricing" },
     slots: true,
-    edit: CONTAINED(true),
+    section: "Link",
+    edit: NEW_TAB,
   },
   {
+    // Layout and Stack on write the row's styles, not a prop: the builder
+    // draws them, and builder-columns-layout.spec.ts edits them.
     type: "core/columns",
     label: "Columns",
     props: { as: "div" },
     slots: true,
-    edit: CONTAINED(true),
+    content: { builderSection: "Columns" },
   },
   {
     type: "core/column",
@@ -111,21 +145,29 @@ const CASES: readonly Case[] = [
     props: { as: "div" },
     slots: true,
     parent: { type: "core/columns", props: { as: "div" } },
-    edit: CONTAINED(true),
+    content: "none",
   },
   {
     type: "core/card",
     label: "Card",
-    props: { as: "div" },
+    props: { as: "div", link: "https://example.com" },
     slots: true,
-    edit: CONTAINED(true),
+    section: "Link",
+    edit: NEW_TAB,
   },
   {
     type: "core/accordion",
     label: "Accordion",
     props: { as: "div" },
     slots: true,
-    edit: CONTAINED(true),
+    section: "Behaviour",
+    edit: {
+      kind: "choose",
+      label: "Titles as",
+      option: "Heading 3",
+      prop: "titlesAs",
+      stored: "h3",
+    },
   },
   {
     type: "core/accordion-item",
@@ -161,12 +203,13 @@ const CASES: readonly Case[] = [
     type: "core/text",
     label: "Text",
     props: { text: "A paragraph of text." },
+    // One paragraph of words with bold, italic and links, edited with the
+    // shared rich-text editor held to that, and stored as editor content.
     edit: {
-      kind: "type",
+      kind: "richText",
       label: "Text",
       prop: "text",
-      value: "An edited paragraph.",
-      stored: "An edited paragraph.",
+      text: " Edited.",
     },
   },
   {
@@ -175,7 +218,7 @@ const CASES: readonly Case[] = [
     props: { content: RICH_TEXT },
     edit: {
       kind: "richText",
-      label: "Content",
+      label: "Text",
       prop: "content",
       text: " More.",
     },
@@ -183,10 +226,11 @@ const CASES: readonly Case[] = [
   {
     type: "core/list",
     label: "List",
-    props: { kind: "unordered", items: ["First", "Second"] },
+    // Numbered, since only a numbered list offers the number it starts at.
+    props: { kind: "ordered", items: ["First", "Second"] },
     edit: {
       kind: "type",
-      label: "Start number",
+      label: "Start at",
       prop: "start",
       value: "3",
       stored: 3,
@@ -198,8 +242,8 @@ const CASES: readonly Case[] = [
     props: { src: "/example.jpg", alt: "An example image" },
     edit: {
       kind: "type",
-      // The image stores its own alt text, so the field is the Custom one.
-      label: "Custom alt text",
+      // The image stores its own alt text, which the field holds.
+      label: "Alt text",
       prop: "alt",
       value: "An edited description",
       stored: "An edited description",
@@ -238,7 +282,7 @@ const CASES: readonly Case[] = [
     label: "Gallery",
     props: { as: "div" },
     slots: true,
-    edit: CONTAINED(true),
+    content: "none",
   },
   { type: "core/divider", label: "Divider", props: {} },
   {
@@ -250,7 +294,7 @@ const CASES: readonly Case[] = [
     },
     edit: {
       kind: "type",
-      label: "Attribution",
+      label: "Who said it",
       prop: "attribution",
       value: "R. Austin Freeman",
       stored: "R. Austin Freeman",
@@ -262,7 +306,7 @@ const CASES: readonly Case[] = [
     props: { src: "https://example.com/player", title: "A product demo" },
     edit: {
       kind: "type",
-      label: "Title for screen readers",
+      label: "Screen reader label",
       prop: "title",
       value: "An edited demo",
       stored: "An edited demo",
@@ -275,7 +319,7 @@ const CASES: readonly Case[] = [
     slots: true,
     edit: {
       kind: "type",
-      label: "Number of items",
+      label: "How many",
       prop: "limit",
       value: "5",
       stored: 5,
@@ -450,6 +494,26 @@ async function axe(page: Page): Promise<unknown[]> {
   }));
 }
 
+/**
+ * A Content section's heading, by the section's name: the name alone, or with
+ * the dot's "has changes" while it holds a value.
+ */
+function contentSection(page: Page, section: string): Locator {
+  return page
+    .getByTestId("inspector")
+    .getByRole("tabpanel", { name: "Content" })
+    .getByRole("button", { name: new RegExp(`^${section}( has changes)?$`) });
+}
+
+/** Open a Content section by its heading, unless it is open already. */
+async function openSection(page: Page, section: string): Promise<void> {
+  const heading = contentSection(page, section);
+  if ((await heading.getAttribute("aria-expanded")) !== "true") {
+    await heading.click();
+  }
+  await expect(heading).toHaveAttribute("aria-expanded", "true");
+}
+
 /** Make the case's edit through its control, committed by leaving the field. */
 async function makeEdit(page: Page, edit: Edit): Promise<void> {
   const field = page
@@ -457,6 +521,14 @@ async function makeEdit(page: Page, edit: Edit): Promise<void> {
     .getByLabel(edit.label, { exact: true });
   if (edit.kind === "check") {
     await field.click();
+    return;
+  }
+  if (edit.kind === "choose") {
+    await page
+      .locator(".nx-inspector")
+      .getByRole("combobox", { name: edit.label })
+      .click();
+    await page.getByRole("option", { name: edit.option }).click();
     return;
   }
   if (edit.kind === "richText") {
@@ -483,8 +555,12 @@ async function expectShown(page: Page, edit: Edit): Promise<void> {
   if (edit.kind === "check") {
     await expect(field).toHaveAttribute(
       "data-state",
-      edit.stored ? "checked" : "unchecked"
+      edit.checked ? "checked" : "unchecked"
     );
+  } else if (edit.kind === "choose") {
+    await expect(
+      page.locator(".nx-inspector").getByRole("combobox", { name: edit.label })
+    ).toContainText(edit.option);
   } else if (edit.kind === "richText") {
     await expect(
       page.locator(".nx-inspector").getByRole("textbox", { name: edit.label })
@@ -520,13 +596,38 @@ test.describe("the Content tab over every core block", () => {
         expect(await axe(page)).toEqual([]);
 
         const edit = each.edit;
-        if (edit === undefined) {
-          // A block that declares no props draws no content controls.
-          await expect(inspector.locator("[data-content-control]")).toHaveCount(
-            0
-          );
+        const contentTab = page
+          .getByTestId("inspector")
+          .getByRole("tab", { name: "Content" });
+        if (each.content === "none") {
+          // Every setting it has is in Style or Advanced.
+          await expect(contentTab).toHaveCount(0);
           return;
         }
+        if (edit === undefined) {
+          if (each.content === undefined) {
+            // A block that declares no props draws no content controls.
+            await expect(
+              inspector.locator("[data-content-control]")
+            ).toHaveCount(0);
+            return;
+          }
+          // Its Content tab holds only the section the builder draws.
+          await contentTab.click();
+          await expect(
+            contentSection(page, each.content.builderSection)
+          ).toBeVisible();
+          await expect(
+            page
+              .getByTestId("inspector")
+              .getByRole("tabpanel", { name: "Content" })
+              .locator("[data-content-control]")
+          ).toHaveCount(0);
+          return;
+        }
+        // A block with Content settings opens on Content; clicking keeps it.
+        await contentTab.click();
+        if (each.section !== undefined) await openSection(page, each.section);
         // The positive control for the unsupported check above: controls drew.
         await expect(
           inspector.locator("[data-content-control]").first()
@@ -543,6 +644,7 @@ test.describe("the Content tab over every core block", () => {
 
         // Opened afresh, so what shows is what was stored.
         await openAndSelect(page, id, each.label);
+        if (each.section !== undefined) await openSection(page, each.section);
         await expectShown(page, edit);
       });
     });

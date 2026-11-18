@@ -20,7 +20,7 @@ import {
   DialogTitle,
   PageHeader,
 } from "@nextlyhq/ui";
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useId, useMemo, useRef } from "react";
 import type { JSX } from "react";
 
 import { Code, Plus } from "@admin/components/icons";
@@ -31,7 +31,6 @@ import { TargetSlot } from "@admin/components/shared/target-slot";
 import { usePlaceContributions } from "@admin/components/shared/target-slot/usePlaceContributions";
 import { useListColumns } from "@admin/components/ui/table/list-view";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
-import { LOCALE_PARAM } from "@admin/constants/search-params";
 import {
   useBranding,
   useBrandingStatus,
@@ -51,6 +50,10 @@ import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ListResponse } from "@admin/lib/api/response-types";
 import { revsFor } from "@admin/lib/document-version";
 import { navigateTo } from "@admin/lib/navigation";
+import {
+  useDocumentAddress,
+  useRowWaysIn,
+} from "@admin/lib/navigation/useDocumentAddress";
 import {
   hasComponent,
   type InjectionPointProps,
@@ -99,6 +102,7 @@ import { useDeclaredBulkActions } from "./useDeclaredBulkActions";
 import { useDeclaredRowActions } from "./useDeclaredRowActions";
 import { useEntryBulkActions } from "./useEntryBulkActions";
 import type { EntryRow, EntryVersions } from "./useEntrySelection";
+import { useListCreateDialog } from "./useListCreateDialog";
 
 // ============================================================================
 // Types
@@ -151,6 +155,57 @@ function toTablePaginationState(
 
 /** The list's order until the person or their link chooses one: newest entries first. */
 const DEFAULT_SORT = "-createdAt";
+
+/**
+ * Above this many characters the collection's description under its name is
+ * clamped to two lines. About two lines at the header's width on a desktop
+ * screen; shorter text wraps to at most a few lines on a phone, which the page
+ * can afford.
+ */
+const DESCRIPTION_CLAMP_LENGTH = 160;
+
+/**
+ * The collection's description under its name, held to two lines when it is
+ * long, with a control to read the rest.
+ *
+ * The builder keeps new descriptions short, but one set in code, or saved
+ * before that limit, can be any length, and drawn whole it pushed the list
+ * itself off the screen.
+ *
+ * Whether to clamp is judged by LENGTH rather than by measuring the drawn text,
+ * as the jobs table's error cell does: below the threshold the text is shown
+ * whole and offers no control, so nothing is ever cut without a way to read
+ * it. The clamp is visual only — the whole text stays in the page, so it is
+ * read in full by assistive technology either way.
+ */
+function ListDescription({ text }: { text: string }): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const textId = useId();
+
+  if (text.length <= DESCRIPTION_CLAMP_LENGTH) {
+    return <span className="break-words">{text}</span>;
+  }
+
+  return (
+    <>
+      <span
+        id={textId}
+        className={expanded ? "block break-words" : "line-clamp-2 break-words"}
+      >
+        {text}
+      </span>
+      <button
+        type="button"
+        className="mt-1 text-sm font-medium text-foreground underline underline-offset-2 hover:no-underline"
+        aria-expanded={expanded}
+        aria-controls={textId}
+        onClick={() => setExpanded(current => !current)}
+      >
+        {expanded ? "Show less" : "Show more"}
+      </button>
+    </>
+  );
+}
 
 /**
  * Entry list container with pagination, sorting, search, and bulk operations.
@@ -505,22 +560,39 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // Handlers
   // ---------------------------------------------------------------------------
 
+  // Where a row opens, by the one rule every "open this document" link uses,
+  // read from this list's own copy of the collection.
+  const addressOf = useDocumentAddress();
+  const entryHref = useCallback(
+    (entryId: string, locale?: string) =>
+      addressOf(
+        { kind: "collection", slug: collectionSlug, id: entryId },
+        {
+          ...(collection === undefined ? {} : { collection }),
+          // The language rides in the URL because that is where the editor
+          // reads it. Opening a row "in Arabic" from the list is the same act
+          // as being sent a link to the Arabic copy, and both arrive the same
+          // way; the rule opens the form for any language but the default.
+          ...(locale ? { locale } : {}),
+        }
+      ),
+    [addressOf, collectionSlug, collection]
+  );
   const handleEdit = useCallback(
-    (entryId: string, locale?: string) => {
-      const path = buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
-        slug: collectionSlug,
-        id: entryId,
-      });
-      // The language rides in the URL because that is where the editor reads
-      // it. Opening a row "in Arabic" from the list is the same act as being
-      // sent a link to the Arabic copy, and both arrive the same way.
-      navigateTo(
-        locale
-          ? `${path}?${new URLSearchParams({ [LOCALE_PARAM]: locale }).toString()}`
-          : path
-      );
-    },
-    [collectionSlug]
+    (entryId: string, locale?: string) =>
+      navigateTo(entryHref(entryId, locale)),
+    [entryHref]
+  );
+  // The other ways into a row's entry its menu offers, by the same rule and
+  // the same copy of the collection as the row's own link.
+  const waysInOf = useRowWaysIn();
+  const rowWaysIn = useCallback(
+    (entryId: string) =>
+      waysInOf(
+        { kind: "collection", slug: collectionSlug, id: entryId },
+        collection === undefined ? {} : { collection }
+      ),
+    [waysInOf, collectionSlug, collection]
   );
 
   const handleDelete = useCallback((entryId: string) => {
@@ -654,12 +726,20 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // The bulk actions offered here, which the table's checkboxes and bar
   // follow too, so the Delete shortcut opens nothing they would not.
   const offeredBulk = useEntryBulkActions(collectionForColumns);
+  // The dialog the view this collection's entries open in declares for
+  // "+ New", opened in place of the create form where there is one.
+  const createDialog = useListCreateDialog({
+    slug: collectionSlug,
+    collection,
+    labels,
+    entryHref,
+  });
   const handleCreateClick = useCallback(() => {
-    if (!createAllowed) return;
+    if (!createAllowed || createDialog.open()) return;
     navigateTo(
       buildRoute(ROUTES.COLLECTION_ENTRY_CREATE, { slug: collectionSlug })
     );
-  }, [collectionSlug, createAllowed]);
+  }, [collectionSlug, createAllowed, createDialog]);
 
   const handleApiPlaygroundClick = useCallback(() => {
     navigateTo(
@@ -789,7 +869,11 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
               <PageHeader
                 className="m-0"
                 title={labels.plural}
-                description={collection?.description || undefined}
+                description={
+                  collection?.description ? (
+                    <ListDescription text={collection.description} />
+                  ) : undefined
+                }
                 actions={
                   <div className="flex items-center gap-2 w-full sm:w-auto">
                     <Button
@@ -880,6 +964,8 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
                     onSortChange={handleSortChange}
                     onSearchChange={handleSearchChange}
                     onEdit={handleEdit}
+                    entryHref={entryHref}
+                    rowWaysIn={rowWaysIn}
                     onDelete={handleDelete}
                     onBulkDelete={handleBulkDelete}
                     onBulkPublish={handleBulkPublish}
@@ -927,6 +1013,8 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
         onConfirm={handleConfirmDelete}
         isLoading={bulkDelete.isPending}
       />
+
+      {createDialog.dialog}
 
       {/* A declared action that opens its plugin's component, with its rows */}
       <Dialog

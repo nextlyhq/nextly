@@ -46,6 +46,7 @@ import {
   type ColumnOrigin,
   kindAndSizes,
   systemColumnsForFields,
+  relationHoldsReferenceList,
   relationshipStoresJson,
   relationStorageShape,
 } from "../../services/field-column-descriptor";
@@ -538,7 +539,9 @@ export function buildDesiredTableFromFields(
     fieldIsUnique: field =>
       options.builtBy === "collection"
         ? builderColumnIsUnique(field)
-        : field.unique === true,
+        : // A code-first list relation marked unique is refused at start; asked here too, so a
+          // table that still carries one is never described as keeping it.
+          field.unique === true && !relationHoldsReferenceList(field),
     localizedNames,
     columnNameFor: field =>
       getColumnDescriptor(
@@ -896,8 +899,10 @@ export function buildDesiredTableFromComponentFields(
           columns.find(c => c.name === col)?.type ?? "",
           dialect
         ),
-      // The field-group creator makes a column unique on the flag alone, a relationship included.
-      fieldIsUnique: field => field.unique === true,
+      // The field-group creator makes a column unique on the flag alone, a relationship included,
+      // but never a relation holding a list, which no index can keep unique.
+      fieldIsUnique: field =>
+        field.unique === true && !relationHoldsReferenceList(field),
       // Components have no slug column; created_at is present when the
       // component carries timestamps.
       hasSlugColumn: false,

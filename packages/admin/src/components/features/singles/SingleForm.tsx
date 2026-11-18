@@ -28,6 +28,7 @@ import { useEffect, useMemo, useCallback, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
+import { copiedValuesFor } from "@admin/components/features/entries/copied-values";
 import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFromLanguageScope";
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
 import { pluginDocumentLock } from "@admin/components/features/entries/EntryForm/document-lock-affordances";
@@ -162,7 +163,12 @@ import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
 import { useAfterRecordings } from "@admin/hooks/useSnapshotAutosave";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
-import { versionForLanguage, versionOf } from "@admin/lib/document-version";
+import {
+  versionForLanguage,
+  versionOf,
+  type ShownCopy,
+  type ShownCopyHandle,
+} from "@admin/lib/document-version";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
 import {
@@ -177,6 +183,7 @@ import type { SingleAdminOptions } from "@admin/types/entities";
 import type { RemovedFromCodeMark } from "@admin/types/removed-from-code";
 
 import { relaxIdentityRequired } from "./identity-fields";
+import { useSinglePanel, type SinglePanelProps } from "./useSinglePanel";
 import { useSinglePreviewLink } from "./useSinglePreviewLink";
 import { useSinglePreviewPane } from "./useSinglePreviewPane";
 
@@ -337,6 +344,11 @@ export interface SingleFormProps {
   revealWaiting?: boolean;
   /** Additional CSS classes */
   className?: string;
+  /**
+   * Filled with how to read the copy this editor shows, for an action the page draws outside it
+   * (publishing chosen parts) that must be refused when the Single changed since it opened.
+   */
+  shownCopy?: ShownCopyHandle;
 }
 
 // ============================================================================
@@ -603,6 +615,7 @@ function SingleFormRail({
   panel,
   panelOrder,
   placedSectionProps,
+  about,
 }: {
   actionsDisabled: boolean;
   navigationDisabled: boolean;
@@ -621,6 +634,8 @@ function SingleFormRail({
   panelOrder: PanelOrderEntry[] | undefined;
   /** What each section plugins declared at the Single's page is handed. */
   placedSectionProps: SidebarSectionProps | undefined;
+  /** What the panel says about the Single itself (`useSinglePanel`). */
+  about: SinglePanelProps;
 }) {
   const documentId = entry?.id === undefined ? "" : String(entry.id);
   return (
@@ -631,6 +646,7 @@ function SingleFormRail({
     >
       <EntryFormSidebar
         mode="edit"
+        {...about}
         {...(panelOrder === undefined ? {} : { panelOrder })}
         {...(placedSectionProps === undefined ? {} : { placedSectionProps })}
         entry={entry}
@@ -718,6 +734,7 @@ export function SingleForm({
   latest,
   revealOutline,
   revealWaiting = false,
+  shownCopy,
 }: SingleFormProps): React.JSX.Element {
   // Generate Zod schema from field configurations. Singles render title/slug
   // read-only from config, so relax their required rule — submitting must not
@@ -860,6 +877,9 @@ export function SingleForm({
       lastResetPlaceRef.current = place;
       adoptRead(document);
       form.reset(defaultValuesRef.current);
+      // The refused edits are kept as a recovery point; the form itself starts afresh, holding
+      // nothing a copy put into it.
+      copiedValuesFor(form.control).clear();
       return;
     } else if (versionPinned()) {
       // A refused save holds the form: the newer version that follows the
@@ -891,6 +911,9 @@ export function SingleForm({
     // echo of this author's own save keeps the version that save answered.
     if (!echoOfOwnSave) adoptRead(document);
     form.reset(defaultValuesRef.current, { keepDirtyValues: echoOfOwnSave });
+    // Another document or language, or a version not this author's, starts afresh: nothing a
+    // copy put into the form is in it any more. An echo of their own save keeps unsaved work.
+    if (!echoOfOwnSave) copiedValuesFor(form.control).clear();
   }, [
     document,
     locale,
@@ -1408,6 +1431,7 @@ export function SingleForm({
         version.release();
         version.adoptRead(current);
         form.reset(defaultValuesRef.current);
+        copiedValuesFor(form.control).clear();
         return;
       }
       // The read that brings the current version is still on its way.
@@ -1546,15 +1570,30 @@ export function SingleForm({
   // availability rule through the locale context. A Single is addressed by its
   // slug alone, so it supplies its own action exactly as it supplies its own
   // source read.
+  // The copy on screen, read as the editor reads it, so a publish of every
+  // language, or of chosen parts from the page, is refused when that language
+  // changed since it opened, and waits for the copy's recordings on their way.
+  const startedFrom = version.startedFrom;
+  const readsDraft = schema.draftsEnabled === true;
+  const shownCopyOf = useCallback(
+    (): ShownCopy => ({
+      version: startedFrom(),
+      locale,
+      draft: readsDraft,
+      recordings: recordingsFor,
+    }),
+    [startedFrom, locale, readsDraft, recordingsFor]
+  );
+  useEffect(() => {
+    if (!shownCopy) return undefined;
+    shownCopy.current = shownCopyOf;
+    return () => {
+      shownCopy.current = null;
+    };
+  }, [shownCopy, shownCopyOf]);
   const publishAllSingleLanguages = usePublishAllSingleLocales({
     slug: schema.slug,
-    // The copy on screen, read as the editor reads it, so a publish of every
-    // language is refused when that language changed since it opened.
-    shown: () => ({
-      version: version.startedFrom(),
-      locale,
-      draft: schema.draftsEnabled === true,
-    }),
+    shown: shownCopyOf,
   });
   // Publishing every language waits for the Single's recordings in flight.
   const afterRecordings = useAfterRecordings(
@@ -1615,6 +1654,13 @@ export function SingleForm({
   // collection entry's page.
   const { panelOrder, sectionsAboveForm, placedSectionProps } =
     useDocumentPanelParts(documentPlace, panel.mode === "sheet");
+  // What the panel says about the Single: what it is, its last change and
+  // who made it, its API address, and its history.
+  const singlePanel = useSinglePanel({
+    schema,
+    documentId: document.id ? String(document.id) : undefined,
+    locale,
+  });
 
   const localeCtx = useEntryLocaleContext({
     locale,
@@ -2109,6 +2155,7 @@ export function SingleForm({
                                   panel={panel}
                                   panelOrder={panelOrder}
                                   placedSectionProps={placedSectionProps}
+                                  about={singlePanel}
                                   {...(locale === undefined ? {} : { locale })}
                                   {...(switchLocale === undefined
                                     ? {}

@@ -5,8 +5,8 @@
  * - pointing at a row outlines its block on the canvas, and choosing a row
  *   selects its block and scrolls the canvas to it;
  * - a row's eye hides its block on the device being edited only, on the
- *   canvas and on the published page, and a hidden block chosen in Layers is
- *   drawn while selected, its ring tagged as hidden;
+ *   published page; the canvas draws it striped and tagged at that device
+ *   and plain at the others, and its row names the device;
  * - a row renames by F2, by double-click and from its menu, and the name
  *   never reaches the published page;
  * - a row's padlock locks its block, a locked row refuses a rename and says
@@ -184,43 +184,125 @@ test("pointing at a row outlines its block, and choosing one scrolls to it", asy
   await expect(await block(page, LAST)).toBeInViewport();
 });
 
-test("the eye hides a block on the device being edited only, and selecting it shows it", async ({
+test("the eye hides a block on the device being edited only, and the canvas draws it striped there", async ({
   page,
   browser,
 }) => {
   const { id, slug } = await createPage(page);
   await openBuilder(page, id);
   await chooseDevice(page, /^Tablet/);
+  const TAG = "Hidden on Tablet · still here in the builder";
   try {
     const eye = await rowAction(page, LAST, "toggle-hidden");
     await expect(eye).toHaveAttribute("title", "Hide on Tablet");
     await eye.click();
     await expect(notice(page)).toHaveText("Hidden on Tablet.");
     await expect(layerRow(page, LAST)).toContainText("Hidden");
-    // Hidden on the canvas, which shows the tablet.
-    await expect(await block(page, LAST)).toBeHidden();
+    await expect(
+      layerRow(page, LAST).locator(".nx-layer-row__hidden")
+    ).toHaveAttribute("title", "Hidden on Tablet");
 
-    // Chosen in Layers, it is drawn while selected, its ring tagged.
+    // Still drawn on the canvas, which shows the tablet: edged by the canvas
+    // frame's own sheet, striped and tagged by the editor's marks over it.
+    const last = await block(page, LAST);
+    await expect(last).toBeVisible();
+    await expect(last).toHaveAttribute("data-nx-device-hidden", TAG);
+    const stripes = canvasLayer(page).locator(
+      '.nx-canvas-mark[data-mark="device-hidden"]'
+    );
+    await expect(stripes).toHaveCount(1);
+    await expect(stripes).toHaveAttribute("data-device-tag", TAG);
+    const drawn = await stripes.evaluate(mark => ({
+      background: getComputedStyle(mark).backgroundImage,
+      tag: getComputedStyle(mark, "::after").content,
+    }));
+    expect(drawn).toEqual({
+      background: expect.stringContaining("repeating-linear-gradient"),
+      tag: `"${TAG}"`,
+    });
+    // Over the block's own box, to within a pixel of rounding.
+    const [over, own] = await Promise.all([
+      stripes.boundingBox(),
+      last.boundingBox(),
+    ]);
+    expect(over).not.toBeNull();
+    expect(own).not.toBeNull();
+    for (const side of ["x", "y", "width", "height"] as const) {
+      expect(
+        Math.abs((over?.[side] ?? 0) - (own?.[side] ?? -9))
+      ).toBeLessThanOrEqual(1);
+    }
+    // Inside the page, only an edge: nothing that would make the block the
+    // box its fixed or absolutely placed blocks are laid out against.
+    const inside = await last.evaluate(element => ({
+      outline: getComputedStyle(element).outlineStyle,
+      after: getComputedStyle(element, "::after").content,
+      willChange: getComputedStyle(element).willChange,
+    }));
+    expect(inside).toEqual({
+      outline: "dashed",
+      after: "none",
+      willChange: "auto",
+    });
+    // CONTROL: a block shown on the tablet is drawn plain.
+    await expect(await block(page, TITLE)).not.toHaveAttribute(
+      "data-nx-device-hidden"
+    );
+
+    // Chosen in Layers, its ring is tagged as well.
     await layerRow(page, LAST).locator(`[data-nx-layer="${LAST}"]`).click();
     await expect(await block(page, LAST)).toBeVisible();
+    // Selecting it keeps its stripes and tag: the selection lifts no hiding.
+    await expect(await block(page, LAST)).toHaveAttribute(
+      "data-nx-device-hidden",
+      TAG
+    );
     await expect(
       canvasLayer(page).locator(
         '.nx-canvas-mark[data-mark="selected"][data-hidden]'
       )
     ).toHaveAttribute("data-label", "Hidden on Tablet");
-    // "Visible on" says the same, device by device.
-    await expect(page.getByRole("group", { name: "Visible on" })).toBeVisible();
+    // "Hide on", on the Advanced tab, says the same, device by device, and
+    // the tab says it at its top.
+    await page.getByRole("tab", { name: "Advanced" }).click();
+    await expect(page.getByRole("group", { name: "Hide on" })).toBeVisible();
+    for (const [device, hidden] of [
+      ["Desktop", "false"],
+      ["Tablet", "true"],
+      ["Mobile", "false"],
+    ] as const) {
+      await expect(
+        page.getByRole("button", { name: `Hide on ${device}`, exact: true }),
+        device
+      ).toHaveAttribute("aria-pressed", hidden);
+    }
     await expect(
-      page.getByRole("button", { name: "Tablet", exact: true })
-    ).toHaveAttribute("aria-pressed", "false");
-    await expect(
-      page.getByRole("button", { name: "Mobile", exact: true })
-    ).toHaveAttribute("aria-pressed", "true");
+      page
+        .getByRole("tabpanel", { name: "Advanced" })
+        .locator(".nx-hidden-status")
+    ).toHaveText("Hidden on Tablet. Visitors on that device won't see it.");
+
+    // At the devices it shows on, the canvas draws it plain, and its row
+    // carries the eye-slash naming the device it is hidden on.
+    for (const device of [/^Desktop/, /^Mobile/]) {
+      await chooseDevice(page, device);
+      const drawn = await block(page, LAST);
+      await expect(drawn, String(device)).toBeVisible();
+      await expect(drawn, String(device)).not.toHaveAttribute(
+        "data-nx-device-hidden"
+      );
+      await expect(
+        layerRow(page, LAST).locator(
+          '.nx-layer-row__badge[title="Hidden on Tablet"]'
+        ),
+        String(device)
+      ).toHaveCount(1);
+    }
 
     await saveAndPublish(page, id);
 
     // The published page, per device: shown on desktop and mobile, hidden on
-    // the tablet alone.
+    // the tablet alone, and nothing of the stripe at any width.
     const visitor = await browser.newPage();
     try {
       for (const [width, shown] of [
@@ -237,6 +319,13 @@ test("the eye hides a block on the device being edited only, and selecting it sh
         const text = visitor.getByText("Last heading text");
         if (shown) await expect(text, `at ${width}px`).toBeVisible();
         else await expect(text, `at ${width}px`).toBeHidden();
+        await expect(
+          visitor.locator("[data-nx-device-hidden]"),
+          `at ${width}px`
+        ).toHaveCount(0);
+        expect(await visitor.content(), `at ${width}px`).not.toContain(
+          "still here in the builder"
+        );
       }
     } finally {
       await visitor.close();

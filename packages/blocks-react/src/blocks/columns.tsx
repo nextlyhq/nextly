@@ -56,8 +56,9 @@ import type { PageContext } from "../context";
 import { LAYOUT } from "./categories";
 import { COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
 import {
-  CONTAINER_SUPPORTS,
   containerContentModel,
+  CONTAINER_SUPPORTS,
+  CONTENT_WIDTH_PROPS,
   renderContainer,
 } from "./container";
 import type { ContainerProps } from "./container";
@@ -124,7 +125,7 @@ export const columns: BlockDefinition<ContainerProps, PageContext> =
     },
     props: {
       as: htmlTagProp(["div", "section", "article"]),
-      contained: { label: "Constrain content width", type: "checkbox" },
+      ...CONTENT_WIDTH_PROPS,
     },
     defaultProps: { as: "div", contained: false },
     example: { props: { as: "div" } },

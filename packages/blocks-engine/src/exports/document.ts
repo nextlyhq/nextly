@@ -151,3 +151,16 @@ export {
 } from "../limits";
 export type { DocumentLimits } from "../limits";
 export type { DocumentSurvey, SurveyLimits } from "../measure-bytes";
+// A block's own CSS class names: the one rule for which names a block may
+// carry, asked by the save, the renderers and the editor's field alike.
+export {
+  RESERVED_CLASS_PREFIX,
+  checkCssClassNames,
+  cssClassNameRefusal,
+  renderedCssClassNames,
+} from "../css-class-names";
+export type {
+  CheckedCssClassNames,
+  CssClassNameProblem,
+  RefusedCssClassName,
+} from "../css-class-names";

@@ -40,6 +40,9 @@ const NAMED_AT_MOST = 2;
 const SETTING_LABELS: Readonly<Record<string, string>> = {
   prefix: "the variable prefix",
   darkMode: "the dark mode setting",
+  fluidRange: "the fluid range",
+  siteText: "Site text",
+  order: "the colour order",
 };
 
 /**

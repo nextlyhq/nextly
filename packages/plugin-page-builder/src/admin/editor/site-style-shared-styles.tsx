@@ -11,19 +11,25 @@ import type {
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import {
+  SharedStylesHostSearch,
   SharedStylesPanel,
   type PageClassBlocks,
 } from "@nextlyhq/builder/shell";
 import { useCan } from "@nextlyhq/plugin-sdk/client";
+import { useMemo } from "react";
 
 import { useSharedStylesClient } from "../shared-styles-client";
 
+import { useDesignBrowse } from "./design-panel";
 import type { ClassSurface } from "./site-style-class-surface";
 import { useStyleToOpen } from "./site-style-tokens-studio";
+import { useUsageHere, useUsageReadKey } from "./usage-here";
 
 /**
- * The Shared styles tab, with the class surface's rename and the shared-style
- * routes' reads, lock and removal.
+ * The Styles tab, with the class surface's rename and whole-list edits (the
+ * Block styles section's new, copied, renamed and hidden styles and its ★)
+ * and the shared-style routes' reads, lock and removal, which a block style's
+ * removal goes through too.
  *
  * Shown read-only to a role without `update-site-style`, which the server
  * would refuse anyway; locking is its own permission, which the usage read
@@ -47,23 +53,44 @@ export function SharedStylesStudio({
   looks?: React.ComponentProps<typeof SharedStylesPanel>["looks"];
 }): React.JSX.Element {
   const mayChange = useCan("update-site-style");
-  const access = useSharedStylesClient();
+  // Named with what the editor has open, as the inspector's read is: the
+  // rows count the open page from `pageBlocks`, in place of its saved share.
+  const here = useUsageHere();
+  const readKey = useUsageReadKey(here);
+  const access = useSharedStylesClient(here, readKey);
   const initialOpenId = useStyleToOpen();
+  const { search, setSearch, searchRef, folds } = useDesignBrowse();
+  // The Design panel's one search, across its tabs, and its box, where focus
+  // goes once a style is removed.
+  const hostSearch = useMemo(
+    () => ({ query: search, onQuery: setSearch, searchRef }),
+    [search, setSearch, searchRef]
+  );
   return (
-    <SharedStylesPanel
-      library={classes.library}
-      absence={classes.absence}
-      suppliedClassIds={suppliedClassIds}
-      styleContext={styleContext}
-      tokens={tokens}
-      pageBlocks={pageBlocks}
-      readOnly={!mayChange}
-      access={access}
-      onRename={classes.rename}
-      currentRenameAttempt={classes.currentRenameAttempt}
-      pendingNames={classes.pendingNames}
-      {...(looks === undefined ? {} : { looks })}
-      {...(initialOpenId === undefined ? {} : { initialOpenId })}
-    />
+    <SharedStylesHostSearch.Provider value={hostSearch}>
+      <SharedStylesPanel
+        // Drawn again when what the editor has open changes (a publish, a
+        // first draft, another language) or the document is stored: the
+        // rows keep each style's usage once read, and the open document's
+        // parts in it would then describe another copy, or one the save
+        // replaced, and count blocks the page no longer holds.
+        key={readKey}
+        library={classes.library}
+        absence={classes.absence}
+        suppliedClassIds={suppliedClassIds}
+        styleContext={styleContext}
+        tokens={tokens}
+        pageBlocks={pageBlocks}
+        readOnly={!mayChange}
+        access={access}
+        onRename={classes.rename}
+        currentRenameAttempt={classes.currentRenameAttempt}
+        pendingNames={classes.pendingNames}
+        onEditClasses={classes.edit}
+        {...(folds === undefined ? {} : { folds })}
+        {...(looks === undefined ? {} : { looks })}
+        {...(initialOpenId === undefined ? {} : { initialOpenId })}
+      />
+    </SharedStylesHostSearch.Provider>
   );
 }

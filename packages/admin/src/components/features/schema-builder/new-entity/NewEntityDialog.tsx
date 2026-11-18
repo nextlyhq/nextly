@@ -2,12 +2,14 @@
  * One short dialog that creates a collection, Single or field group.
  *
  * What editors will make comes first, where a plugin such as the Page Builder
- * offers a choice; then the icon beside the name, suggested from the name until
- * one is picked; the plural (for a collection) and the API address, derived
+ * offers a choice; then the icon beside the name, the picked template's or
+ * suggested from the name until one is picked; the plural (for a collection) and the API address, derived
  * from the name and editable; and the further options folded under one control
  * that says which are on. The address is checked by the server's own rule as
  * it is typed, so Create is never offered for an address the create refuses.
  * A Single has no plural, and a field group no icon or publishing options.
+ * A template, quick or from the gallery, adds its fields to the new entity;
+ * one with a field it cannot add holds Create until that field is left out.
  *
  * @module components/features/schema-builder/new-entity/NewEntityDialog
  */
@@ -21,7 +23,6 @@ import {
   DialogTitle,
   Input,
   Label,
-  Textarea,
 } from "@nextlyhq/ui";
 import { type JSX, useId, useState } from "react";
 
@@ -33,6 +34,7 @@ import {
   hasStartingFieldChoice,
 } from "@admin/lib/builder/starting-field";
 import { useUnsavedAddresses } from "@admin/lib/builder/unsaved-entities";
+import type { FieldDefinition } from "@admin/types/collection";
 
 import { BUILDER_KIND_NOUN, type BuilderConfig } from "../builder-config";
 import {
@@ -40,6 +42,11 @@ import {
   isSwitchOn,
 } from "../builder-settings-modal/advanced-switches";
 import { AdvancedTab } from "../builder-settings-modal/AdvancedTab";
+import {
+  DescriptionField,
+  descriptionTooLong,
+  RequiredMark,
+} from "../builder-settings-modal/BasicsTab";
 import {
   ICON_PICKER_ICONS,
   IconPicker,
@@ -51,13 +58,16 @@ import {
 } from "../BuilderSettingsModal";
 
 import { EntryKindQuestion } from "./EntryKindQuestion";
+import { TemplateChoice } from "./TemplateChoice";
 import { useAddressCheck, type AddressCheckState } from "./useAddressCheck";
+import { useTemplatePick } from "./useTemplatePick";
 
 type Props = {
   open: boolean;
   config: BuilderConfig;
   onCancel: () => void;
-  onCreate: (values: BuilderSettingsValues) => void;
+  /** Create, with the fields the template picked adds (none without one). */
+  onCreate: (values: BuilderSettingsValues, fields: FieldDefinition[]) => void;
   /**
    * A create is on its way: Create waits for it, so a second click sends no
    * second entity.
@@ -69,7 +79,9 @@ type Props = {
 function createBlockedBy(
   values: BuilderSettingsValues,
   hasPlural: boolean,
-  check: AddressCheckState
+  check: AddressCheckState,
+  // Why the template picked holds Create, once nothing above does.
+  templateBlockedBy: string | null
 ): string | null {
   if (values.singularName.trim() === "") return "Add a name.";
   if (hasPlural && (values.pluralName ?? "").trim() === "") {
@@ -80,7 +92,12 @@ function createBlockedBy(
   if (values.slug.trim() === "") return "Add an API address.";
   if (check.status === "checking") return "Checking the address…";
   if (check.status === "refused") return "Choose another address.";
-  return null;
+  // After the names and address: the description is optional, and folded
+  // under More options.
+  if (descriptionTooLong(values.description)) {
+    return "Shorten the description.";
+  }
+  return templateBlockedBy;
 }
 
 /** The fold's accessible name: which of the options it holds are on. */
@@ -117,7 +134,7 @@ export function NewEntityDialog({
   const [values, setValues] = useState<BuilderSettingsValues>(() =>
     createDefaults(config)
   );
-  // Until the person picks an icon, the name suggests one.
+  // Until the person picks an icon, the template or the name suggests one.
   const [pickedIcon, setPickedIcon] = useState<string | null>(null);
 
   const pluginEntries = usePluginFieldTypeEntries("entries");
@@ -129,7 +146,6 @@ export function NewEntityDialog({
   // Each kind whose settings hold an icon picks it here; a field group's shows
   // in its list and the navigation, as a collection's and a Single's do.
   const hasIcon = config.basicsFields.includes("icon");
-  const icon = pickedIcon ?? suggestIcon(values.singularName);
 
   // Entities created in this tab and not saved yet hold their addresses too,
   // so the server counts them as used. The address is asked about as Create
@@ -138,7 +154,14 @@ export function NewEntityDialog({
   const check = useAddressCheck(kind, values.slug.trim(), unsaved);
   // Nothing typed yet is not a refusal to show.
   const typed = values.singularName !== "" || values.slug !== "";
-  const blockedBy = createBlockedBy(values, hasPlural, check);
+  const pick = useTemplatePick(config, values);
+  // An icon picked here wins; else the picked template's, which says what the
+  // entity is better than its name may; else the name's suggestion.
+  const icon =
+    pickedIcon ??
+    pick.picked?.template.icon ??
+    suggestIcon(values.singularName);
+  const blockedBy = createBlockedBy(values, hasPlural, check, pick.blockedBy);
 
   const set = <K extends keyof BuilderSettingsValues>(
     key: K,
@@ -156,7 +179,8 @@ export function NewEntityDialog({
         pluralName: hasPlural ? values.pluralName?.trim() : undefined,
         slug: values.slug.trim(),
         icon: hasIcon ? icon : "",
-      })
+      }),
+      pick.fields()
     );
   };
 
@@ -196,7 +220,10 @@ export function NewEntityDialog({
 
           {hasPlural && (
             <div className="space-y-1">
-              <Label htmlFor={`${ids}-plural`}>Plural name</Label>
+              <Label htmlFor={`${ids}-plural`}>
+                Plural name
+                <RequiredMark />
+              </Label>
               <Input
                 id={`${ids}-plural`}
                 required
@@ -212,6 +239,8 @@ export function NewEntityDialog({
             note={addressNoteOf(check, typed)}
             onChange={next => set("slug", next)}
           />
+
+          <TemplateChoice ids={ids} pick={pick} />
 
           <MoreOptions
             ids={ids}
@@ -279,7 +308,10 @@ function NameRow({
         </div>
       )}
       <div className="min-w-0 flex-1 space-y-1">
-        <Label htmlFor={`${ids}-name`}>Name</Label>
+        <Label htmlFor={`${ids}-name`}>
+          Name
+          <RequiredMark />
+        </Label>
         <Input
           id={`${ids}-name`}
           required
@@ -305,9 +337,15 @@ function AddressField({
 }): JSX.Element {
   return (
     <div className="space-y-1">
-      <Label htmlFor={`${ids}-address`}>API address</Label>
+      <Label htmlFor={`${ids}-address`}>
+        API address
+        <RequiredMark />
+      </Label>
+      {/* Required like the names: Create is held while it is blank
+          (`createBlockedBy`), even though the name normally fills it. */}
       <Input
         id={`${ids}-address`}
+        required
         className="font-mono"
         value={value}
         aria-invalid={note.refused}
@@ -362,17 +400,11 @@ function MoreOptions({
       </Button>
       {open && (
         <div className="space-y-4 rounded-md border border-border p-3">
-          <div className="space-y-1">
-            <Label htmlFor={`${ids}-description`}>Description</Label>
-            <Textarea
-              id={`${ids}-description`}
-              rows={2}
-              value={values.description ?? ""}
-              onChange={e =>
-                onChange({ ...values, description: e.target.value })
-              }
-            />
-          </div>
+          <DescriptionField
+            id={`${ids}-description`}
+            value={values.description ?? ""}
+            onChange={next => onChange({ ...values, description: next })}
+          />
           <AdvancedTab
             fields={config.advancedFields.filter(
               field => field !== "showSystemFields"

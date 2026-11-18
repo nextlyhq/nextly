@@ -36,7 +36,12 @@ const RING_OUTSIDE = 4;
 // The canvas reads the site's tokens, which the Site Style single holds.
 test.describe.configure({ lock: [LOCK.homepage, LOCK.siteStyle] });
 
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
+/**
+ * The Page Builder card on the form, whose way in is named as the document
+ * bar's is, so a lookup by that name is scoped to the card.
+ */
+const PAGE_BUILDER_CARD = '[data-slot="page-builder-card"]';
 const HOMEPAGE_API = "/admin/api/singles/homepage";
 const HEADING = "Canvas colours";
 const PARAGRAPH = "The canvas draws this page the way a visitor sees it.";
@@ -170,7 +175,10 @@ function canvasText(page: Page): Locator {
 async function openBuilder(page: Page, theme: Theme): Promise<void> {
   await seed(page);
   await gotoAdmin(page, "/singles/homepage", theme);
-  await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+  await page
+    .locator(PAGE_BUILDER_CARD)
+    .getByRole("link", { name: OPEN_BUILDER_ACTION })
+    .click();
   await expect(canvasText(page)).toBeVisible({ timeout: 30_000 });
 }
 
@@ -379,15 +387,15 @@ for (const theme of ["dark", "light"] as const) {
 }
 
 test.describe("with the system in dark mode", () => {
-  test("the canvas page follows the site's own dark mode, not the admin's light one", async ({
+  test("the canvas page follows the site's own dark mode once previewed dark, not the admin's light one", async ({
     page,
     context,
   }) => {
     /*
      * The playground's site darkens with the system (its strategy is `media`),
-     * while the admin here is pinned to LIGHT. The canvas is drawn inside the
-     * site's own page, so it goes dark exactly as the published page does:
-     * the same ground and the same colour scheme, never the admin's.
+     * while the admin here is pinned to LIGHT. Once the top bar previews dark,
+     * the canvas is drawn as the published page is on a dark system: the same
+     * ground and the same colour scheme, never the admin's.
      */
     test.slow();
     await page.emulateMedia({ colorScheme: "dark" });
@@ -402,13 +410,23 @@ test.describe("with the system in dark mode", () => {
 
     await openBuilder(page, "light");
     const canvas = canvasFrame(page).locator(".nx-canvas");
-    expect(
-      await canvas.evaluate(element => getComputedStyle(element).colorScheme)
-    ).toBe(site.colorScheme);
-    const ground = await toRgb(page, await groundBehind(canvasPage(page)));
-    expect(ground, "the canvas ground is the published page's").toEqual(
-      site.ground
-    );
+    const scheme = () =>
+      canvas.evaluate(element => getComputedStyle(element).colorScheme);
+    const groundNow = async () =>
+      toRgb(page, await groundBehind(canvasPage(page)));
+    // The preview starts light; the site's own stylesheet, which reads the
+    // device's preference itself, is the site's to follow.
+    const darkPreview = page.getByRole("button", {
+      name: "Preview in dark mode",
+    });
+    await expect(darkPreview).toHaveAttribute("aria-pressed", "false");
+
+    await darkPreview.click();
+    await expect.poll(scheme).toBe(site.colorScheme);
+    await expect
+      .poll(groundNow, { message: "the canvas ground is the published page's" })
+      .toEqual(site.ground);
+    const ground = await groundNow();
     const pageText = await toRgb(
       page,
       await canvasText(page).evaluate(
@@ -714,7 +732,10 @@ test.describe("a page's own background", () => {
     });
     expect(stored.ok(), `seeding the page: ${stored.status()}`).toBe(true);
     await gotoAdmin(page, "/singles/homepage", "light");
-    await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+    await page
+      .locator(PAGE_BUILDER_CARD)
+      .getByRole("link", { name: OPEN_BUILDER_ACTION })
+      .click();
     await expect(canvasText(page)).toBeVisible({ timeout: 30_000 });
     // The fallback is in play: the default site ground is opaque.
     await expect(canvasFrame(page).locator(".nx-canvas")).toHaveAttribute(

@@ -25,7 +25,12 @@
  * @module keyboard-actions
  */
 
-import { registryNestingSource } from "@nextlyhq/blocks-engine";
+import {
+  registryNestingSource,
+  type BlockDocument,
+  type NamedClass,
+  type NestingSource,
+} from "@nextlyhq/blocks-engine";
 import { useIsomorphicLayoutEffect, useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -37,15 +42,27 @@ import {
   ToolbarFocusContext,
   type ToolbarFocusSlot,
 } from "./block-actions-context";
-import { blockActionRunners } from "./builder-commands";
+import {
+  BlockClipboardEvents,
+  CLIPBOARD_KEY_HELP,
+} from "./block-clipboard-events";
+import { useBlockClipboardVerbs } from "./block-clipboard-verbs";
 import {
   CANVAS_ESCAPE_PRIORITY,
   escapeOutcome,
   modalIsOpen,
   pressOrigin,
   returnFocusToCanvas,
-} from "./canvas-escape";
-import { useCanvasFrame } from "./canvas-frame-context";
+} from "./canvas/canvas-escape";
+import { useCanvasFrame } from "./canvas/canvas-frame-context";
+import {
+  patternSaveRefusal,
+  SAVE_PATTERN_GRANT_REFUSAL,
+  toolbarActions,
+  turnIntoChoice,
+  type MoveJudge,
+  type MovePosition,
+} from "./canvas/toolbar-actions";
 import type { EditorState } from "./editor-state";
 import { lockViewOf } from "./inspector";
 import { placedComponentId } from "./instance-inspector";
@@ -65,7 +82,6 @@ import {
   UNDO_KEYS_SPOKEN,
 } from "./keyboard-announcements";
 import { keyboardMovePosition, type MoveDirection } from "./keyboard-move";
-import { pathTo } from "./layers";
 import { lockedBlockWording, lockRefusalWording } from "./lock-refusal";
 import { lockBlockingMove } from "./locking";
 import {
@@ -73,6 +89,8 @@ import {
   refusalAnnouncement,
   unmovedAnnouncement,
 } from "./move-refusal";
+import { pathTo } from "./panels/layers/layers";
+import { usePreviewedCollection } from "./previewed-entry";
 import { offerSignal, useSelectionOffer } from "./selection-offer";
 import {
   isRefusal,
@@ -80,14 +98,9 @@ import {
   selectionDuplication,
   selectionMove,
 } from "./selection-ops";
-import {
-  patternSaveRefusal,
-  SAVE_PATTERN_GRANT_REFUSAL,
-  toolbarActions,
-  turnIntoChoice,
-  type MoveJudge,
-  type MovePosition,
-} from "./toolbar-actions";
+import { blockActionRunners } from "./shell/builder-commands";
+import { useNoticeSink } from "./shell/builder-notices";
+import { runTurnInto, turnIntoOffers } from "./turn-into-verb";
 
 // The keys and what is announced, the contexts the toolbar and menus read,
 // and what the hook takes and returns live in modules of their own beside
@@ -137,10 +150,15 @@ export function useBlockKeyboardActions({
   components,
   sharedStyles,
   onEscapeWithoutSelection,
+  onAddBlockHere,
+  selectedRegion,
 }: BlockKeyboardActionsOptions): BlockKeyboardActionsResult {
   // Read when the key lands, so a host's newest callback is the one called.
   const escapeWithoutSelection = React.useRef(onEscapeWithoutSelection);
   escapeWithoutSelection.current = onEscapeWithoutSelection;
+  // The header or footer selected, read when Delete lands for the same reason.
+  const latestRegion = React.useRef(selectedRegion);
+  latestRegion.current = selectedRegion;
   /*
    * The same rule source the pointer route asks, defaulted the way the insert
    * panel defaults it. Taken as an option rather than resolved here only so a
@@ -186,6 +204,13 @@ export function useBlockKeyboardActions({
 
   const deleteSelected = React.useCallback(() => {
     const editorNow = latest.current;
+    // A header or footer selected: nothing of the page's is, so nothing is
+    // removed, and the host's words say where it is changed instead.
+    const region = latestRegion.current;
+    if (editorNow.selectedId === null && region !== undefined) {
+      announce(region.refusal);
+      return;
+    }
     const plan = selectionDeletion(editorNow.document, editorNow.selection.ids);
     // `null` means there is nothing to delete — no selection, or ids an undo
     // has since removed. Nothing is applied and nothing is said, because there
@@ -217,6 +242,27 @@ export function useBlockKeyboardActions({
     editorNow.select(plan.nextSelection);
     announce(deletionAnnouncement(plan.subject, plan.descendants));
   }, [announce]);
+
+  /*
+   * Copy, Cut and Paste, through the clipboard. A refused paste is shown as
+   * a notice as well as said, since a paste from the keys has no control to
+   * dim beside it and nothing on the page says why nothing arrived.
+   */
+  const notify = useNoticeSink();
+  // In a template, the fields a pasted Entry content block may name.
+  const blocksFields = usePreviewedCollection()?.blocksFields;
+  const entryFields = React.useMemo(
+    () => blocksFields?.map(field => field.name),
+    [blocksFields]
+  );
+  const clipboard = useBlockClipboardVerbs({
+    latest,
+    announce,
+    notify,
+    nesting: nestingSource,
+    components: definitions,
+    entryFields,
+  });
 
   const duplicateSelected = React.useCallback(() => {
     const editorNow = latest.current;
@@ -456,6 +502,13 @@ export function useBlockKeyboardActions({
     [moveSelected]
   );
 
+  // Whether Delete has a subject: a block, or a header or footer, which it
+  // refuses aloud.
+  const deletes = React.useCallback(
+    (): boolean =>
+      latest.current.selectedId !== null || latestRegion.current !== undefined,
+    []
+  );
   const editing = React.useMemo(
     () => [
       {
@@ -464,7 +517,7 @@ export function useBlockKeyboardActions({
         // key that does nothing.
         keys: "Delete",
         description: "Delete the selected block",
-        when: () => latest.current.selectedId !== null,
+        when: () => deletes(),
         // Not while typing, and for a sharper reason than the moves: alt+Arrow
         // in a field is caret movement, but Backspace is the most destructive
         // key a text field has. A binding that fired there would eat the
@@ -493,7 +546,7 @@ export function useBlockKeyboardActions({
       {
         keys: "Backspace",
         description: "Delete the selected block",
-        when: () => latest.current.selectedId !== null,
+        when: () => deletes(),
         whenTyping: false,
         run: () => deleteSelected(),
       },
@@ -574,7 +627,7 @@ export function useBlockKeyboardActions({
         },
       },
     ],
-    [announce, deleteSelected, duplicateSelected]
+    [announce, deleteSelected, deletes, duplicateSelected]
   );
 
   /*
@@ -609,10 +662,46 @@ export function useBlockKeyboardActions({
     [onEditText]
   );
 
-  useShortcuts([...bindings, ...editing, ...inlineEditing], {
-    name: "builder-block-actions",
-    enabled,
-  });
+  /*
+   * "/" opens the host's in-place picker where the author is, the key Notion
+   * and Gutenberg taught for adding a block. Registered only when the host
+   * has a picker, so Help lists it only then.
+   *
+   * Not while typing: in a block's text or a field, "/" is a character. With
+   * or without a selection, since nothing selected adds at the end of the
+   * page. Read through a ref so the host's newest callback is the one run.
+   */
+  const addBlockHere = React.useRef(onAddBlockHere);
+  addBlockHere.current = onAddBlockHere;
+  const hasAddBlockHere = onAddBlockHere !== undefined;
+  const adding = React.useMemo(
+    () =>
+      hasAddBlockHere
+        ? [
+            {
+              keys: "/",
+              description: "Add a block here",
+              whenTyping: false,
+              run: () => addBlockHere.current?.(),
+            },
+          ]
+        : [],
+    [hasAddBlockHere]
+  );
+
+  useShortcuts(
+    [
+      ...bindings,
+      ...editing,
+      ...inlineEditing,
+      ...adding,
+      ...CLIPBOARD_KEY_HELP,
+    ],
+    {
+      name: "builder-block-actions",
+      enabled,
+    }
+  );
 
   /*
    * Escape, claimed for the editor and registered as its OWN layer.
@@ -830,6 +919,7 @@ export function useBlockKeyboardActions({
     sharedStyles: sharedStyleOffer,
     movePosition,
     placementRefusal,
+    limits: editor.limits,
   });
   const selectionActions = offer.actions;
   /*
@@ -849,12 +939,27 @@ export function useBlockKeyboardActions({
     onSaveAsSharedStyle?.();
   }, [selectionActions, onSaveAsSharedStyle, announce]);
   const editSelectedComponent = useEditComponentVerb(editor, onEditComponent);
+  const turnVerbs = useTurnIntoVerbs(
+    editor,
+    nestingSource,
+    sharedLibrary,
+    announce
+  );
 
   const actions = React.useMemo<BlockActions>(
     () => ({
       move: moveSelected,
       delete: deleteSelected,
       duplicate: duplicateSelected,
+      // Run from a menu, where no clipboard event is under way: Copy and Cut
+      // write to the system clipboard themselves.
+      copy: () => {
+        clipboard.copy();
+      },
+      cut: () => {
+        clipboard.cut();
+      },
+      paste: clipboard.paste,
       selectParent,
       saveAsPattern: saveSelectionAsPattern,
       editComponent: editSelectedComponent,
@@ -863,12 +968,15 @@ export function useBlockKeyboardActions({
       duplicateComponent: () => runComponentVerb("duplicate-component"),
       updatePattern: () => runComponentVerb("update-pattern"),
       saveAsSharedStyle,
+      ...turnVerbs,
     }),
     [
       saveAsSharedStyle,
+      turnVerbs,
       moveSelected,
       deleteSelected,
       duplicateSelected,
+      clipboard,
       selectParent,
       saveSelectionAsPattern,
       editSelectedComponent,
@@ -885,6 +993,7 @@ export function useBlockKeyboardActions({
     depthMoves: offer.depthMoves,
     toolbarFocus,
     canvasFrame: latestFrame,
+    clipboard,
   };
 }
 
@@ -904,6 +1013,61 @@ function CanvasFrameReader({ into }: { into: CanvasFrameSlot }): null {
     };
   }, [into, frame]);
   return null;
+}
+
+/**
+ * The "Turn into" verbs: the one selected block turned into another type as
+ * one undo step, saying what it removed or why it could not (`runTurnInto`),
+ * and the same for a block in a page a caller holds (the format bar's). Each
+ * is judged with the site's styles, so a block style the new type cannot wear
+ * is kept as its own styles. Silent for a selection of more than one block,
+ * which is offered no turn.
+ */
+function useTurnIntoVerbs(
+  editor: EditorState,
+  nesting: NestingSource,
+  library: readonly NamedClass[] | undefined,
+  announce: (words: string) => void
+): Pick<BlockActions, "turnInto" | "turnIntoIn"> {
+  const { document, selectedId, selection, apply, lockRefusalFor, limits } =
+    editor;
+  const turnIntoIn = React.useMemo(() => {
+    // Judged as the editor's own apply judges: its placement rules, its size
+    // limits, and the site's styles for a block style that cannot come along.
+    const judging = {
+      nesting,
+      limits,
+      ...(library === undefined ? {} : { library }),
+    };
+    return {
+      choices: (page: BlockDocument, id: string) =>
+        turnIntoOffers(page, id, {
+          ...judging,
+          ask: lockRefusalFor,
+          planned: true,
+        }),
+      run: (page: BlockDocument, id: string, to: string) => {
+        runTurnInto(
+          { document: page, apply, lockRefusalFor },
+          id,
+          to,
+          announce,
+          judging
+        );
+      },
+    };
+  }, [apply, lockRefusalFor, nesting, limits, library, announce]);
+  const turnInto = React.useCallback(
+    (to: string) => {
+      if (selectedId === null || selection.ids.length !== 1) return;
+      turnIntoIn.run(document, selectedId, to);
+    },
+    [document, selectedId, selection.ids, turnIntoIn]
+  );
+  return React.useMemo(
+    () => ({ turnInto, turnIntoIn }),
+    [turnInto, turnIntoIn]
+  );
 }
 
 /**
@@ -974,6 +1138,7 @@ export function BlockKeyboardActions({
     offer,
     toolbarFocus,
     canvasFrame,
+    clipboard,
   } = useBlockKeyboardActions(options);
 
   /*
@@ -1032,6 +1197,10 @@ export function BlockKeyboardActions({
         <BlockActionsContext.Provider value={actions}>
           <ToolbarFocusContext.Provider value={toolbarFocus}>
             <CanvasFrameReader into={canvasFrame} />
+            <BlockClipboardEvents
+              verbs={clipboard}
+              enabled={options.enabled ?? true}
+            />
             <p aria-live="polite" role="status" className="nx-sr-only">
               {announcement}
             </p>

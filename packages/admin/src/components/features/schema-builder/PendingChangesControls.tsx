@@ -41,7 +41,26 @@ type Props = {
    * would not stop the save, which could still keep the discarded values.
    */
   saving?: boolean;
+  /**
+   * The fields the save would refuse, by id, in the outline's order
+   * (`builderFieldErrors`): counted here, each reached in turn.
+   */
+  errorIds?: readonly string[];
+  /** Brings a field into view and opens it, as a click on its row does. */
+  onShowError?: (fieldId: string) => void;
+  /**
+   * Undo, Redo and Discard all wait, by button and by key: an unsaved entity's
+   * address move, still being checked, records its settings when it ends, and
+   * would write over a step taken meanwhile; a discard meanwhile would let the
+   * entity go before the move renames it.
+   */
+  held?: boolean;
 };
+
+/** "1 error", "3 errors". */
+function errorWords(count: number): string {
+  return `${count} ${count === 1 ? "error" : "errors"}`;
+}
 
 /**
  * Whether a modal dialog is open over the builder. While one is, the keys are
@@ -72,8 +91,20 @@ export function PendingChangesControls({
   count,
   locked = false,
   saving = false,
+  errorIds = [],
+  onShowError,
+  held = false,
 }: Props): JSX.Element | null {
   const [announcement, setAnnouncement] = useState("");
+  // The error a press shows next: each press moves to the one after, back to the first after the
+  // last, so every error is reached from here.
+  const [nextError, setNextError] = useState(0);
+  const showNextError = () => {
+    if (errorIds.length === 0) return;
+    const at = nextError % errorIds.length;
+    onShowError?.(errorIds[at]);
+    setNextError(at + 1);
+  };
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   // Inside the leave guard: a Discard all that leaves the editor has already
   // answered the guard's question.
@@ -92,7 +123,9 @@ export function PendingChangesControls({
     if (said) announce(said);
   };
 
-  const noDialog = () => !dialogOpen();
+  // Not while a dialog is open over the builder, nor while the page holds
+  // Undo and Redo.
+  const noDialog = () => !held && !dialogOpen();
   // Not while typing: inside a text input these keys undo the text, which is
   // what a person typing expects them to do.
   useKeyboardShortcuts(
@@ -141,12 +174,24 @@ export function PendingChangesControls({
       >
         {count}
       </span>
+      {/* What keeps Save from saving, and the way to each field it names. */}
+      {errorIds.length > 0 && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-destructive"
+          aria-label={`${errorWords(errorIds.length)}: show the next`}
+          onClick={showNextError}
+        >
+          {errorWords(errorIds.length)}
+        </Button>
+      )}
       <Button
         variant="ghost"
         size="icon-sm"
         aria-label="Undo"
         title="Undo"
-        disabled={!pending.canUndo}
+        disabled={held || !pending.canUndo}
         onClick={undo}
       >
         <Undo className="h-4 w-4" />
@@ -156,7 +201,7 @@ export function PendingChangesControls({
         size="icon-sm"
         aria-label="Redo"
         title="Redo"
-        disabled={!pending.canRedo}
+        disabled={held || !pending.canRedo}
         onClick={redo}
       >
         <Redo className="h-4 w-4" />
@@ -165,7 +210,7 @@ export function PendingChangesControls({
         variant="ghost"
         size="sm"
         aria-label="Discard all changes"
-        disabled={count === 0 || saving}
+        disabled={count === 0 || saving || held}
         onClick={() => setConfirmingDiscard(true)}
       >
         <RotateCcw className="h-4 w-4 sm:hidden" />

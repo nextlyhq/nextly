@@ -45,6 +45,16 @@ const RETIRED = ["accounts", "sessions"];
 
 function deps(over: Record<string, unknown> = {}) {
   const executed: string[] = [];
+  // `needsApply`: the live database lacks the core tables until the core apply has run, and has
+  // them once it has, as a real apply leaves it. The apply then checks the core schema is complete
+  // by introspecting again, so a live snapshot that stays empty would read as an apply that did
+  // nothing.
+  const { needsApply, ...rest } = over;
+  let applied = false;
+  const applyCore = (rest.applyCore ??
+    (() => Promise.resolve({ statementsExecuted: [] as string[] }))) as (
+    ...args: unknown[]
+  ) => Promise<unknown>;
   return {
     executed,
     args: {
@@ -69,13 +79,22 @@ function deps(over: Record<string, unknown> = {}) {
       // one where the cleanup used to be skipped. Returning an empty snapshot
       // instead would diff as "create every core table" and run the apply
       // path, which is a different branch and would not test this at all.
-      introspect: () => Promise.resolve(getCoreSchema("postgresql", {})),
-      applyCore: () => Promise.resolve({ statementsExecuted: [] as string[] }),
+      introspect: () =>
+        Promise.resolve(
+          needsApply === true && !applied
+            ? { tables: [] }
+            : getCoreSchema("postgresql", {})
+        ),
       // No database behind `db` here, and no row to fill in: the drop is the
       // only thing these cases change.
       markUnrecordedVerifications: () => Promise.resolve(0),
       bindIssuedTokens: () => Promise.resolve({ bound: 0, removed: 0 }),
-      ...over,
+      ...rest,
+      applyCore: async (...args: unknown[]) => {
+        const result = await applyCore(...args);
+        applied = true;
+        return result;
+      },
     },
   };
 }
@@ -231,15 +250,15 @@ describe("a retired-table drop the operator asked for", () => {
       expect(executed).toHaveLength(2);
       expect(ledger.markApplied).not.toHaveBeenCalled();
       expect(warned.join(" ")).toMatch(
-        /Dropped retired auth table accounts, but could not record it in the schema ledger: ledger unavailable/
+        /Dropped retired accounts, but could not record it in the schema ledger: ledger unavailable/
       );
     });
   });
 
   describe("when the core schema also needs changing", () => {
     // An empty live snapshot diffs as "create every core table", so these take
-    // the apply path rather than the "up to date" one above.
-    const needsApply = { introspect: () => Promise.resolve({ tables: [] }) };
+    // the apply path rather than the "up to date" one above (`deps`' `needsApply`).
+    const needsApply = { needsApply: true };
 
     it("drops only after the core apply has run", async () => {
       const order: string[] = [];

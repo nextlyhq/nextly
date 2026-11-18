@@ -14,6 +14,7 @@ import {
   resolvePageLayout,
   type LayoutRegion,
   type LayoutSite,
+  type RegionArea,
 } from "@nextlyhq/blocks-engine";
 
 import type {
@@ -53,12 +54,20 @@ export interface StoredLayoutChoice {
   readonly noHeaderFooter: boolean;
 }
 
-/** One option in the picker. */
+/** One option in the menu. */
 export interface PickerOption {
   readonly value: string;
+  /** Its name, in bold. */
   readonly label: string;
-  /** A short reason, shown muted after the label. */
+  /** A short note, muted under the name: what it holds, or why not offered. */
   readonly note?: string;
+  /**
+   * What its picture draws, header first: the set's PUBLISHED regions, the
+   * default set's for the site default. None for "None", a set with nothing
+   * published, or one the author cannot be told of, which draw the
+   * empty-frame icon.
+   */
+  readonly picture: readonly LayoutRegion[];
   /** The whole reason, as the option's tooltip and accessible description. */
   readonly description?: string;
   /** Shown but not offered: a Layout behind Remove Layout's fence. */
@@ -91,32 +100,42 @@ export interface LayoutPickerView {
   readonly effective: EffectiveLayout | null;
 }
 
+/** The note saying which areas a set fills. */
+function areasNote(areas: readonly RegionArea[]): string {
+  const header = areas.includes("header");
+  const footer = areas.includes("footer");
+  if (header && footer) return "Header and footer";
+  if (header) return "Header only";
+  if (footer) return "Footer only";
+  return "Empty: no header or footer shows";
+}
+
 /**
- * The words for one Layout's option. An unpublished one says what a page
- * naming it is drawn inside meanwhile, asked of the rule itself: the site
- * default where one is usable, and otherwise no header or footer.
+ * The note for one set's option: which areas it fills, or, for one not
+ * published, what a page naming it is drawn inside meanwhile, asked of the
+ * rule itself: the site default where one is usable, and otherwise no header
+ * or footer. A set behind Remove Layout's fence says why instead
+ * (`fencedOption`).
  */
-function optionLabel(item: LayoutChoice, site: LayoutSite): string {
-  // A Layout behind Remove Layout's fence goes by its name; its reason is the
-  // option's note (`fencedOption`).
-  if (item.removal !== undefined || item.published) return item.title;
+function optionNote(item: LayoutChoice, site: LayoutSite): string {
+  if (item.published) return areasNote(item.areasFilled);
   const meanwhile = resolvePageLayout(
     { layout: item.id, noHeaderFooter: false },
     site
   );
   return meanwhile.kind === "layout"
-    ? `${item.title} (not published: the site default shows until it is)`
-    : `${item.title} (not published: no header or footer shows until it is)`;
+    ? "Not published: the site default shows until it is"
+    : "Not published: no header or footer shows until it is";
 }
 
 /**
  * The picker's view of `stored`, given where the choices read stands.
  *
  * Every state, in the words the editor uses:
- * - the default: "Site default", with the default Layout's name as its note
- *   ("Main"), or "Site default (none set)" when the site has no published
- *   default;
+ * - the default: "Site default (Main)", or "Site default (none set)" when the
+ *   site has no published default;
  * - a published Layout by its title; an unpublished one marked as such;
+ *   neither the default set nor an empty one, unless the page names it;
  * - a Layout the answer does not hold, hidden from the author or deleted:
  *   "A Layout you can't view, or one that was deleted";
  * - "No header or footer";
@@ -135,7 +154,9 @@ export function layoutPickerView(
 /** The option for "no header or footer", the same in every state. */
 const NONE_OPTION: PickerOption = {
   value: NO_HEADER_FOOTER_VALUE,
-  label: "No header or footer",
+  label: "None",
+  note: "No header or footer",
+  picture: [],
 };
 
 /**
@@ -153,10 +174,10 @@ function viewWithoutList(
     ? UNREADABLE_LAYOUT
     : "The chosen header & footer set";
   const options: PickerOption[] = [
-    { value: SITE_DEFAULT_VALUE, label: "Site default" },
+    { value: SITE_DEFAULT_VALUE, label: "Site default", picture: [] },
     ...(named === null || switchedOff
       ? []
-      : [{ value: layoutValue(named), label: namedLabel }]),
+      : [{ value: layoutValue(named), label: namedLabel, picture: [] }]),
     NONE_OPTION,
   ];
   return {
@@ -252,6 +273,23 @@ function fencedOption(
   };
 }
 
+/**
+ * Whether a set is offered by its own name. Two never are: the site default,
+ * which is offered once, as "Site default (<name>)", and a set that holds no
+ * header and no footer, which would mean the same as "No header or footer"
+ * under a name that hides it. A page that picked either by name would stay on
+ * it when the site default changes. The page's own stored choice is always
+ * offered, so what the page names stays selected and shown.
+ */
+function offeredByName(
+  item: LayoutChoice,
+  defaultLayout: string | null,
+  selected: string | null
+): boolean {
+  if (item.id === selected) return true;
+  return item.id !== defaultLayout && item.areasFilled.length > 0;
+}
+
 /** The options: the default, published Layouts, unpublished ones, then none. */
 function choiceOptions(
   items: readonly LayoutChoice[],
@@ -264,15 +302,20 @@ function choiceOptions(
   // own choice stays selectable, since keeping it is allowed.
   const toOption = (item: LayoutChoice): PickerOption => ({
     value: layoutValue(item.id),
-    label: optionLabel(item, site),
+    label: item.title,
+    note: optionNote(item, site),
+    picture: item.regions,
     ...(item.removal === undefined
       ? {}
       : fencedOption(item.removal, item.id === selected)),
   });
+  const offered = items.filter(item =>
+    offeredByName(item, meta.defaultLayout, selected)
+  );
   return [
     { value: SITE_DEFAULT_VALUE, ...defaultWords(meta, items) },
-    ...items.filter(item => item.published).map(toOption),
-    ...items.filter(item => !item.published).map(toOption),
+    ...offered.filter(item => item.published).map(toOption),
+    ...offered.filter(item => !item.published).map(toOption),
     NONE_OPTION,
   ];
 }
@@ -296,7 +339,7 @@ function unknownLayoutView(
   return {
     options: [
       ...options.slice(0, -1),
-      { value: layoutValue(named), label: UNKNOWN_LAYOUT },
+      { value: layoutValue(named), label: UNKNOWN_LAYOUT, picture: [] },
       NONE_OPTION,
     ],
     value: layoutValue(named),
@@ -308,26 +351,33 @@ function unknownLayoutView(
   };
 }
 
+/** The note under the site default, saying what choosing it means. */
+const SITE_DEFAULT_NOTE = "Follows the site if the default changes";
+
 /**
- * The default option's words: which Layout it is, or why it is not one. The
- * Layout's name is the option's note, muted beside "Site default", rather than
- * part of its label: a default named "Default (site)" would otherwise read
- * "Site default (Default (site))".
+ * The default option's words: which set it is, by name, or why it is not one.
+ * The set is not listed again by its own name, so this label is where its
+ * name is read.
  */
 function defaultWords(
   meta: LayoutChoicesResponse["meta"],
   items: readonly LayoutChoice[]
-): Pick<PickerOption, "label" | "note"> {
+): Pick<PickerOption, "label" | "note" | "picture"> {
   if (meta.defaultUnreadable) {
     return {
       label:
         "Site default (a header & footer set you can't view, or one that was deleted)",
+      picture: [],
     };
   }
   const usable = items.find(item => item.id === meta.defaultLayout);
   return usable?.published === true
-    ? { label: "Site default", note: usable.title }
-    : { label: "Site default (none set)" };
+    ? {
+        label: `Site default (${usable.title})`,
+        note: SITE_DEFAULT_NOTE,
+        picture: usable.regions,
+      }
+    : { label: "Site default (none set)", picture: [] };
 }
 
 /** The Layout the page is drawn inside, from its listed row. */

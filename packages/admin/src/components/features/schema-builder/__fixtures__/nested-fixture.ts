@@ -213,9 +213,7 @@ export function nestedFixtureBlockCatalogsAllMatched(): Map<
   return blockCatalogsMatching(["core/heading", "acme/hero"]);
 }
 
-function blockCatalogsMatching(
-  matchedBy: string[]
-): Map<string, BlockCatalog> {
+function blockCatalogsMatching(matchedBy: string[]): Map<string, BlockCatalog> {
   return new Map([
     [
       blockCatalogKey(["core/heading", "acme/hero"]),

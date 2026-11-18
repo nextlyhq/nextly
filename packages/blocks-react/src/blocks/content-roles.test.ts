@@ -14,11 +14,11 @@ import { coreBlocks } from "./index";
 
 /** The content props of each core block that has any. */
 const CONTENT: Record<string, readonly string[]> = {
-  "core/heading": ["text", "href"],
+  "core/heading": ["text", "href", "entryCollection", "entryId"],
   // A whole-block link is content: where the block leads is what an editor
   // changes, as on Heading and Button.
-  "core/box": ["link"],
-  "core/card": ["link"],
+  "core/box": ["link", "entryCollection", "entryId"],
+  "core/card": ["link", "entryCollection", "entryId"],
   "core/text": ["text"],
   "core/rich-text": ["content"],
   "core/table-of-contents": ["title"],
@@ -30,14 +30,23 @@ const CONTENT: Record<string, readonly string[]> = {
     "href",
     "entryCollection",
     "entryId",
+    // Whether a click follows the link: chosen where the link is.
+    "whenClicked",
   ],
   "core/button": ["label", "href", "entryCollection", "entryId", "ariaLabel"],
   "core/icon": ["icon", "label", "href", "entryCollection", "entryId"],
-  "core/quote": ["text", "attribution", "source", "citeUrl"],
+  "core/quote": [
+    "text",
+    "attribution",
+    "source",
+    "href",
+    "entryCollection",
+    "entryId",
+  ],
   "core/list": ["items"],
   "core/embed": ["src", "title"],
   "core/accordion-item": ["title"],
-  "core/form": ["submitText"],
+  "core/form": ["entryCollection", "entryId", "href", "message", "submitText"],
 };
 
 function contentPropsOf(block: (typeof coreBlocks)[number]): string[] {

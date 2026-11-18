@@ -130,7 +130,15 @@ export interface BlocksPageConfig
    * site settings are cached under it, as every public read of the route is.
    */
   nextly?: NextlyContentReader & Partial<PublicSiteSettingsSource>;
-  /** Where block definitions come from. Defaults to the process registry. */
+  /**
+   * Where block definitions come from. Defaults to the blocks of the site
+   * the process serves, read from its page builder on each render, so a
+   * page draws its registered blocks, custom ones included, with nothing
+   * passed. A process serving two sites binds each route to its own with
+   * `blocks: blocksOf(builder)` from `@nextlyhq/plugin-page-builder`, since
+   * an instance's services are kept once per process. A resolver passed here
+   * is always the one used.
+   */
   blocks?: BlockResolver;
   /**
    * The stylesheet compiled when this entry was saved.
@@ -267,7 +275,11 @@ export interface BlocksPageConfig
   /**
    * How many reads one page render may perform, shared by the whole page.
    *
-   * Defaults to {@link DEFAULT_MAX_QUERIES}. A budget is not optional here the
+   * Defaults to the site's page data limit, `pageBuilder({ maxQueries })`,
+   * which the editor's page data meter counts against too, and without one
+   * to {@link DEFAULT_MAX_QUERIES}. A value set here is this route's alone:
+   * the editor's meter does not know it, so set the limit on `pageBuilder()`
+   * instead where the meter should agree. A budget is not optional here the
    * way it is on a hand-built context: depth in a document becomes
    * MULTIPLICATION in reads, so three nested `core/collection-loop` blocks over
    * a hundred entries each is a million reads from one page view — and a route
@@ -290,7 +302,12 @@ export interface BlocksPageConfig
    * standalone renderer was given.
    */
   hostPolicy?: BlockHostPolicy;
-  /** Shown in place of an asynchronous block until its output arrives. */
+  /**
+   * Shown in place of an asynchronous block until its output arrives. Given,
+   * each asynchronous block streams in a boundary of its own, which a visitor
+   * without JavaScript never sees revealed; absent, the page waits for its
+   * blocks and its HTML holds them (`PageRendererProps.blockFallback`).
+   */
   blockFallback?: ReactNode;
   /**
    * The time zone a bound date-time is shown in, as an IANA name such as

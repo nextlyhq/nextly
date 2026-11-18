@@ -7,6 +7,7 @@
  */
 import * as React from "react";
 
+import { CssHint } from "./css-hint";
 import { radioGroupStep } from "./roving-radios";
 
 /**
@@ -52,36 +53,40 @@ export function SegmentChoices<T extends string>({
   labels,
   labelId,
   onChoose,
+  writes,
 }: {
   options: readonly T[];
   /** The chosen one, or none while what is stored is no choice's value. */
   on: T | undefined;
-  labels: Readonly<Record<T, string>>;
+  labels: Readonly<Record<T, React.ReactNode>>;
   labelId: string;
   onChoose: (on: T) => void;
+  /** What each choice writes, for its tooltip, where the caller knows. */
+  writes?: Readonly<Record<T, string>> | undefined;
 }): React.JSX.Element {
   const allowed = options.map(() => true);
   const stop = on === undefined ? options[0] : on;
   return (
     <div role="radiogroup" aria-labelledby={labelId} className="nx-segment">
       {options.map((option, index) => (
-        <button
-          key={option}
-          type="button"
-          role="radio"
-          aria-checked={on === option}
-          tabIndex={stop === option ? 0 : -1}
-          className="nx-segment__option"
-          onKeyDown={event =>
-            arrowTo(event, index, allowed, next => {
-              const target = options[next];
-              if (target !== undefined) onChoose(target);
-            })
-          }
-          onClick={() => onChoose(option)}
-        >
-          {labels[option]}
-        </button>
+        <CssHint key={option} writes={writes?.[option]}>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={on === option}
+            tabIndex={stop === option ? 0 : -1}
+            className="nx-segment__option"
+            onKeyDown={event =>
+              arrowTo(event, index, allowed, next => {
+                const target = options[next];
+                if (target !== undefined) onChoose(target);
+              })
+            }
+            onClick={() => onChoose(option)}
+          >
+            {labels[option]}
+          </button>
+        </CssHint>
       ))}
     </div>
   );

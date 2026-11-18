@@ -110,16 +110,20 @@ test("a type size picked for a heading is stored as a reference, and follows the
     // Named by its label, which also carries where the value comes from.
     const fontSize = inspector.getByRole("textbox", { name: /^Font size/ });
     if (!(await fontSize.isVisible())) {
-      await inspector.getByRole("button", { name: /^Typography/ }).click();
+      await inspector
+        .getByRole("button", { name: /^Text(\s?has changes)?$/ })
+        .click();
     }
     await expect(fontSize).toBeVisible();
 
-    // An empty field shows its ◇ at rest, the sign that a variable can be
-    // chosen, and Tab reaches it from the field.
-    const choose = inspector.getByRole("button", {
-      name: "Variables for Font size",
+    // The variables are in the field's own unit menu, first, and no ◇ is
+    // drawn beside it; Tab reaches the menu from the field.
+    await expect(
+      inspector.getByRole("button", { name: "Variables for Font size" })
+    ).toHaveCount(0);
+    const choose = inspector.getByRole("combobox", {
+      name: "Unit for Font size",
     });
-    await expect(choose).toHaveCSS("opacity", "1");
     await fontSize.focus();
     for (let step = 0; step < 3; step += 1) {
       if (await choose.evaluate(element => element === document.activeElement))
@@ -127,18 +131,33 @@ test("a type size picked for a heading is stored as a reference, and follows the
       await page.keyboard.press("Tab");
     }
     await expect(choose).toBeFocused();
-    await expect(choose).toHaveCSS("opacity", "1");
 
-    // Enter opens the list on the type size, named as Design names it, and
-    // only once: its line height is not offered for a font size.
+    // Enter opens the menu on "Your sizes", the type size named as Design
+    // names it, and only once: its line height is not offered for a font
+    // size. The units follow.
     await page.keyboard.press("Enter");
-    const list = page.getByRole("listbox", { name: "Variables" });
+    const list = page.getByRole("listbox");
     await expect(list).toBeVisible();
-    await expect(list.getByRole("option", { name: /^Display/ })).toHaveCount(1);
-    const display = list.getByRole("option", { name: "Display 48px" });
+    const sizes = list.getByRole("group", { name: "Your sizes" });
+    await expect(sizes.getByRole("option", { name: /^Display/ })).toHaveCount(
+      1
+    );
+    const display = sizes.getByRole("option", { name: "Display 48px" });
     await expect(display).toBeVisible();
+    const options = await list.getByRole("option").allTextContents();
+    expect(options.indexOf("Display 48px")).toBeLessThan(options.indexOf("px"));
+    // Judged once the menu has finished opening: mid zoom its text is
+    // drawn translucent, which reads as low contrast.
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('[data-slot="select-content"]')
+          ?.getAnimations({ subtree: true }).length === 0
+    );
+    // The variables this menu now lists first. The units below are the
+    // shared select's own rows, judged where that select is.
     await expectNoAxeViolations(page, {
-      include: '[data-slot="popover-content"]',
+      include: '[data-slot="select-content"] [role="group"]',
     });
     await display.click();
     await expect(list).toHaveCount(0);
@@ -195,6 +214,39 @@ test("a type size picked for a heading is stored as a reference, and follows the
     await written;
     await page.keyboard.press("Escape");
     await expect.poll(() => headingSize(page)).toBe("40px");
+
+    // Back on the heading, the chip is green, says what the variable is,
+    // and Unlink keeps its size as a plain one: the heading does not move.
+    await clickBlock(page, HEADING);
+    await expect.poll(() => selection(page)).toEqual([HEADING]);
+    await inspector.getByRole("tab", { name: "Style" }).click();
+    const held = inspector.getByRole("group", { name: /^Font size/ });
+    await expect(held).toHaveCSS(
+      "background-color",
+      await page.evaluate(() => {
+        const probe = document.createElement("span");
+        probe.style.backgroundColor = "var(--nx-builder-target-shared-ground)";
+        document.querySelector('[data-testid="inspector"]')?.append(probe);
+        const colour = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        return colour;
+      })
+    );
+    const name = held.getByRole("button", {
+      name: "Variables for Font size: Display",
+    });
+    // Pointed at, as an author does: its tooltip says what it is.
+    await name.hover();
+    await expect(
+      page.getByRole("tooltip", { name: /^Type size variable/ })
+    ).toHaveText(
+      /^Type size variable Display · 40px · --[a-z-]+font-size-display$/
+    );
+    await held.getByRole("button", { name: "Unlink Font size" }).click();
+    await expect(
+      inspector.getByRole("textbox", { name: /^Font size/ })
+    ).toHaveValue("40");
+    await expect.poll(() => headingSize(page)).toBe("40px");
   } finally {
     // Off the homepage first: a variable still in use cannot be removed.
     await emptyHomepage(page);
@@ -240,10 +292,11 @@ test("Escape closes an open picker and leaves the selection, the next returns to
     const inspector = page.getByTestId("inspector");
     const pickers = [
       {
-        open: inspector.getByRole("button", {
-          name: "Variables for Font size",
+        // A size field's variables are in its unit menu.
+        open: inspector.getByRole("combobox", {
+          name: "Unit for Font size",
         }),
-        list: page.getByRole("listbox", { name: "Variables" }),
+        list: page.getByRole("listbox"),
       },
       {
         open: inspector.getByRole("button", { name: /^Colour for Colou?r/ }),
@@ -256,7 +309,9 @@ test("Escape closes an open picker and leaves the selection, the next returns to
       await inspector.getByRole("tab", { name: "Style" }).click();
       // Opened by its own state rather than by what is visible this instant:
       // a section read while the inspector redraws would be toggled shut.
-      const typography = inspector.getByRole("button", { name: /^Typography/ });
+      const typography = inspector.getByRole("button", {
+        name: /^Text(\s?has changes)?$/,
+      });
       if ((await typography.getAttribute("aria-expanded")) !== "true") {
         await typography.click();
       }

@@ -1,8 +1,8 @@
 /**
  * System Table Service
  *
- * Manages Nextly's internal system tables (`dynamic_collections`, `nextly_migrations`)
- * across all database dialects. Provides automatic table creation in development mode
+ * Manages Nextly's internal system tables (`dynamic_collections` and the
+ * field-group registry) across all database dialects. Provides automatic table creation in development mode
  * and migration template generation for production deployments.
  *
  * ## Behavior by Environment
@@ -54,7 +54,12 @@ export interface SystemTableStatus {
   dynamicCollectionsExists: boolean;
   /** Whether dynamic_components table exists */
   dynamicComponentsExists: boolean;
-  /** Whether nextly_migrations table exists */
+  /**
+   * Whether `nextly_migrations` exists: the table an earlier release kept its
+   * migration records in, which `nextly upgrade` moves into
+   * `nextly_schema_events` and drops. Not a system table this release needs,
+   * so it takes no part in `allReady`.
+   */
   nextlyMigrationsExists: boolean;
   /** Whether all system tables are ready */
   allReady: boolean;
@@ -124,22 +129,6 @@ const POSTGRES_SQL = {
     CREATE INDEX IF NOT EXISTS "dynamic_collections_created_by_idx" ON "dynamic_collections" ("created_by");
     CREATE INDEX IF NOT EXISTS "dynamic_collections_created_at_idx" ON "dynamic_collections" ("created_at");
     CREATE INDEX IF NOT EXISTS "dynamic_collections_updated_at_idx" ON "dynamic_collections" ("updated_at");
-  `,
-
-  createNextlyMigrations: `
-    CREATE TABLE IF NOT EXISTS "nextly_migrations" (
-      "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      "name" VARCHAR(255) NOT NULL UNIQUE,
-      "batch" INTEGER NOT NULL,
-      "checksum" VARCHAR(64) NOT NULL,
-      "status" VARCHAR(20) NOT NULL DEFAULT 'pending',
-      "error_message" TEXT,
-      "executed_at" TIMESTAMP NOT NULL DEFAULT NOW()
-    );
-
-    CREATE INDEX IF NOT EXISTS "nextly_migrations_batch_idx" ON "nextly_migrations" ("batch");
-    CREATE INDEX IF NOT EXISTS "nextly_migrations_status_idx" ON "nextly_migrations" ("status");
-    CREATE INDEX IF NOT EXISTS "nextly_migrations_executed_at_idx" ON "nextly_migrations" ("executed_at");
   `,
 
   createDynamicComponents: `
@@ -226,21 +215,6 @@ const MYSQL_SQL = {
     );
   `,
 
-  createNextlyMigrations: `
-    CREATE TABLE IF NOT EXISTS \`nextly_migrations\` (
-      \`id\` VARCHAR(36) PRIMARY KEY,
-      \`name\` VARCHAR(255) NOT NULL UNIQUE,
-      \`batch\` INTEGER NOT NULL,
-      \`checksum\` VARCHAR(64) NOT NULL,
-      \`status\` VARCHAR(20) NOT NULL DEFAULT 'pending',
-      \`error_message\` TEXT,
-      \`executed_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      INDEX \`nextly_migrations_batch_idx\` (\`batch\`),
-      INDEX \`nextly_migrations_status_idx\` (\`status\`),
-      INDEX \`nextly_migrations_executed_at_idx\` (\`executed_at\`)
-    );
-  `,
-
   createDynamicComponents: `
     CREATE TABLE IF NOT EXISTS \`${STORAGE_FORMAT.registryTable}\` (
       \`id\` VARCHAR(36) PRIMARY KEY,
@@ -324,22 +298,6 @@ const SQLITE_SQL = {
     CREATE INDEX IF NOT EXISTS "dynamic_collections_created_by_idx" ON "dynamic_collections" ("created_by");
     CREATE INDEX IF NOT EXISTS "dynamic_collections_created_at_idx" ON "dynamic_collections" ("created_at");
     CREATE INDEX IF NOT EXISTS "dynamic_collections_updated_at_idx" ON "dynamic_collections" ("updated_at");
-  `,
-
-  createNextlyMigrations: `
-    CREATE TABLE IF NOT EXISTS "nextly_migrations" (
-      "id" TEXT PRIMARY KEY,
-      "name" TEXT NOT NULL UNIQUE,
-      "batch" INTEGER NOT NULL,
-      "checksum" TEXT NOT NULL,
-      "status" TEXT NOT NULL DEFAULT 'pending',
-      "error_message" TEXT,
-      "executed_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
-    );
-
-    CREATE INDEX IF NOT EXISTS "nextly_migrations_batch_idx" ON "nextly_migrations" ("batch");
-    CREATE INDEX IF NOT EXISTS "nextly_migrations_status_idx" ON "nextly_migrations" ("status");
-    CREATE INDEX IF NOT EXISTS "nextly_migrations_executed_at_idx" ON "nextly_migrations" ("executed_at");
   `,
 
   createDynamicComponents: `
@@ -437,10 +395,7 @@ export class SystemTableService extends BaseService {
       dynamicCollectionsExists,
       dynamicComponentsExists,
       nextlyMigrationsExists,
-      allReady:
-        dynamicCollectionsExists &&
-        dynamicComponentsExists &&
-        nextlyMigrationsExists,
+      allReady: dynamicCollectionsExists && dynamicComponentsExists,
     };
   }
 
@@ -504,15 +459,11 @@ export class SystemTableService extends BaseService {
         this.logger.info(`Created system table '${registryTable}'`);
       }
 
-      const nmExists = await this.tableExists("nextly_migrations");
-      if (nmExists) {
-        existing.push("nextly_migrations");
-        this.logger.info("System table 'nextly_migrations' already exists");
-      } else {
-        await this.createNextlyMigrationsTable();
-        created.push("nextly_migrations");
-        this.logger.info("Created system table 'nextly_migrations'");
-      }
+      // `nextly_migrations` is not created. It is where an earlier release kept
+      // its migration records, and `nextly migrate` refuses a database holding
+      // it until `nextly upgrade` has moved them into `nextly_schema_events`:
+      // created here, every `nextly db:sync` would put back the table the
+      // upgrade removed, and the next `nextly migrate` would refuse again.
 
       return { created, existing, success: true };
     } catch (error) {
@@ -556,15 +507,9 @@ export class SystemTableService extends BaseService {
       "",
       `-- Create ${STORAGE_FORMAT.registryTable} table`,
       sql.createDynamicComponents.trim(),
-      "",
-      "-- Create nextly_migrations table",
-      sql.createNextlyMigrations.trim(),
     ].join("\n");
 
     const down = [
-      "-- Drop nextly_migrations table",
-      sql.dropNextlyMigrations.trim(),
-      "",
       `-- Drop ${STORAGE_FORMAT.registryTable} table`,
       sql.dropDynamicComponents.trim(),
       "",
@@ -675,11 +620,6 @@ export class SystemTableService extends BaseService {
   private async createDynamicComponentsTable(): Promise<void> {
     const sql = this.getSQLTemplates();
     await this.executeSQL(sql.createDynamicComponents);
-  }
-
-  private async createNextlyMigrationsTable(): Promise<void> {
-    const sql = this.getSQLTemplates();
-    await this.executeSQL(sql.createNextlyMigrations);
   }
 
   private async executeSQL(sql: string): Promise<void> {

@@ -381,3 +381,103 @@ describe("the core block library", () => {
     expect((coreBlocks as AnyBlockDefinition[]).length).toBeGreaterThan(10);
   });
 });
+
+describe("a form on a page", () => {
+  /** The page's markup with one form drawn under `forms`. */
+  async function drawnWith(
+    props: Record<string, unknown>,
+    script?: { module: string; reason: string }
+  ): Promise<string> {
+    const { createElement } = await import("react");
+    const { PageRenderer } = await import("./page-renderer");
+    const { createStandaloneContext } = await import("./context");
+    const element = createElement(PageRenderer, {
+      document: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [{ id: "f", type: "core/form", version: 2, props }],
+      } as never,
+      blocks: createBlockResolver(coreBlocks as AnyBlockDefinition[]),
+      context: createStandaloneContext({
+        forms: {
+          action: "/send",
+          document: "page:p",
+          returnTo: "/",
+          describe: () =>
+            Promise.resolve({
+              ref: "r",
+              title: "R",
+              fields: [{ name: "email", label: "Email", kind: "email" }],
+              submitText: "Send",
+              afterSending: { kind: "message", message: "Thanks." },
+              encoding: "urlencoded",
+              ...(script === undefined ? {} : { script }),
+            }),
+        },
+      }),
+    });
+    // A server render that awaits the async blocks, as a route's does.
+    const { renderToReadableStream } = await import("react-dom/server");
+    const stream = await renderToReadableStream(element);
+    await stream.allReady;
+    return await new Response(stream).text();
+  }
+
+  it("adds no script of the library's own, simple or picked", async () => {
+    expect(await drawnWith({ fields: [{ label: "Name" }] })).not.toContain(
+      "<script"
+    );
+    expect(
+      await drawnWith({ form: { provider: "acme", ref: "r" } })
+    ).not.toContain("<script");
+  });
+
+  it("adds the provider's own script where its form needs one, and only there", async () => {
+    const out = await drawnWith(
+      { form: { provider: "acme", ref: "r" } },
+      { module: "/acme/check.js", reason: "bot check" }
+    );
+    expect(out).toMatch(/<script[^>]*src="\/acme\/check.js"/);
+    // Must-be-found: the form itself was drawn.
+    expect(out).toContain('name="email"');
+  });
+});
+
+describe("a picture a click enlarges", () => {
+  it("opens with the browser's own popover and adds no script", async () => {
+    const { createElement } = await import("react");
+    const { PageRenderer } = await import("./page-renderer");
+    const { createStandaloneContext } = await import("./context");
+    const element = createElement(PageRenderer, {
+      document: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "i",
+            type: "core/image",
+            version: 1,
+            props: {
+              src: "https://example.test/team.png",
+              alt: "The team",
+              caption: "Our team",
+              whenClicked: "enlarge",
+            },
+          },
+        ],
+      } as never,
+      blocks: createBlockResolver(coreBlocks as AnyBlockDefinition[]),
+      context: createStandaloneContext({}),
+    });
+    const { renderToReadableStream } = await import("react-dom/server");
+    const stream = await renderToReadableStream(element);
+    await stream.allReady;
+    const out = await new Response(stream).text();
+    expect(out).not.toContain("<script");
+    // Must-be-found: the lightbox and the button that opens it were drawn.
+    expect(out).toMatch(/<div[^>]*popover="auto"/);
+    // Attribute names are case-insensitive in HTML, and React writes this
+    // one in camel case.
+    expect(out).toMatch(/<button[^>]*popovertarget="/i);
+  });
+});

@@ -186,6 +186,7 @@ const SURFACE: ClassSurface = {
   pendingNames: {},
   currentRenameAttempt: () => 0,
   rename: async () => ({ ok: true }),
+  edit: async () => undefined,
 };
 
 /**
@@ -275,6 +276,35 @@ describe("the Variables studio's usage", () => {
       expect(tab("Styles").getAttribute("aria-selected")).toBe("true")
     );
     expect(await screen.findByRole("dialog", { name: "Card" })).toBeTruthy();
+  });
+
+  it("opens the shared style it was sent to past a search that would hide it", async () => {
+    render(<Studio />);
+    // A search the variable's name matches and the style does not.
+    fireEvent.change(screen.getByRole("searchbox", { name: /^Search/ }), {
+      target: { value: "Bra" },
+    });
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^Brand.*Used in 2 places$/ })
+    );
+    const editor = await screen.findByRole("dialog", { name: "Edit Brand" });
+    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    fireEvent.click(
+      await within(editor).findByRole("button", { name: "Card" })
+    );
+    await waitFor(() =>
+      expect(tab("Styles").getAttribute("aria-selected")).toBe("true")
+    );
+    expect(await screen.findByRole("dialog", { name: "Card" })).toBeTruthy();
+    // The search was put away for the trip, so the list shows whole.
+    expect(
+      (
+        screen.getByRole("searchbox", {
+          name: /^Search/,
+          hidden: true,
+        }) as HTMLInputElement
+      ).value
+    ).toBe("");
   });
 
   it("opens Shared styles on its list when chosen again later", async () => {

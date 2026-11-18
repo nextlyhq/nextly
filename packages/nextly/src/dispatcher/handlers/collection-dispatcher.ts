@@ -107,6 +107,7 @@ import {
   getLoggerFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
+import { entryWithStored } from "../helpers/entry-with-stored";
 import { readRequestLocalized } from "../helpers/request-localized";
 import {
   paginatedResponseToMeta,
@@ -137,6 +138,7 @@ import type { MethodHandler, Params } from "../types";
 
 import { respondAddressCheck } from "./address-check-route";
 import { readListOwner, slugListsForOwner } from "./list-owner";
+import { PublishPartsBody } from "./publish-parts-body";
 import { readAccessCallerForDispatch } from "./read-access-caller";
 // Shared guard that centralizes required + stale schema-version validation for
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
@@ -251,22 +253,6 @@ function allLocalesLifecycle(
 }
 
 /**
- * The body of a publish or unpublish of an entry's chosen parts: the languages, or `"all"`, whether
- * the shared part is chosen too, and whether to only say what it would do. The version fields
- * (`_rev`, `_overwrite`) are read beside it, as for every lifecycle move.
- */
-const PublishPartsBody = z
-  .object({
-    locales: z.union([
-      z.literal("all"),
-      z.array(z.string().min(1).max(64)).max(500),
-    ]),
-    shared: z.boolean().optional(),
-    describe: z.boolean().optional(),
-  })
-  .passthrough();
-
-/**
  * Publishing or unpublishing the parts of one entry the body chooses (@experimental). Forwarded as
  * the every-language moves forward theirs: the caller's identity and scope, `routeAuthorized`
  * false, and the version the move was made from.
@@ -296,6 +282,9 @@ function partsLifecycle(
           routeAuthorized: false,
           authenticatedScope: readAuthenticatedScope(),
           data: versionInputOf(body),
+          ...(parts.withoutReview === undefined
+            ? {}
+            : { withoutReview: parts.withoutReview }),
         },
         {
           direction,
@@ -1563,8 +1552,9 @@ const COLLECTIONS_METHODS: Record<
       // path where a missing user matters most: without it the gate falls
       // through to the permission-less default on a direct read.
       const user = readAuthenticatedUser();
-
-      const result = await svc.getEntry({
+      // Who reads, which entry, and in which language and view: shared by the
+      // entry's read and, with `?stored=1`, its stored read.
+      const scope = {
         // The request this operation's hooks are told about.
         request,
         collectionName: p.collectionName,
@@ -1575,12 +1565,6 @@ const COLLECTIONS_METHODS: Record<
         // permissions of the user that owns it, matching listEntries, countEntries
         // and the publish gate.
         authenticatedScope: readAuthenticatedScope(),
-        depth:
-          p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,
-        select: parseSelectParam(p.select),
-        richTextFormat: parseRichTextFormat(p.richTextFormat),
-        // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
-        richTextStyles: parseRichTextStyles(p.richTextStyles),
         status,
         // `?draft=true` overlays the pending working draft in place of the live
         // row (draft/published split), matching Payload's read-side `draft`
@@ -1594,18 +1578,42 @@ const COLLECTIONS_METHODS: Record<
         // `?fallback=document`: answer in the first published language of the
         // chain where the entry is not published in the requested one.
         wholeDocumentFallback: parseFallbackParam(p.fallback),
+      };
+      const read = async (params: Parameters<typeof svc.getEntry>[0]) =>
+        unwrapServiceResult(await svc.getEntry(params), {
+          collectionName: p.collectionName,
+          entryId: p.entryId,
+        });
+
+      const entry = read({
+        ...scope,
+        depth:
+          p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,
+        select: parseSelectParam(p.select),
+        richTextFormat: parseRichTextFormat(p.richTextFormat),
+        // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
+        richTextStyles: parseRichTextStyles(p.richTextStyles),
         // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
         translationStatus: isTruthyParam(p["translation-status"]),
         // `?source-locales=1` attaches `_sources`, each translatable value's language.
         sourceLocales: isTruthyParam(p["source-locales"]),
         // `?translations=all` attaches every language's values (`_allLocales`).
         translations: parseTranslationsParam(p.translations),
+        // `?details=1` attaches `_details` (address, who made and changed it),
+        // only for a signed-in admin user: anyone else gets the plain entry.
+        details:
+          isTruthyParam(p.details) && readAuthenticatedActor()?.type === "user",
       });
-      const entry = unwrapServiceResult(result, {
-        collectionName: p.collectionName,
-        entryId: p.entryId,
-      });
-      return respondDoc(entry);
+      if (!isTruthyParam(p.stored)) return respondDoc(await entry);
+      // `?stored=1` attaches `_stored`: the entry as a depth-0 read in the
+      // same language and view gives it, every link as stored, read beside
+      // the entry's own read as the same caller. Either failing fails both.
+      return respondDoc(
+        await entryWithStored(
+          entry as Promise<object>,
+          read({ ...scope, depth: 0 })
+        )
+      );
     },
   },
   updateEntry: {

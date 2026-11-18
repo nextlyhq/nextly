@@ -28,13 +28,13 @@ import {
   offeredIn,
   withEntryContentField,
 } from "./entry-content-rules";
-import { InsertPanel } from "./insert-panel";
+import { InsertPanel } from "./panels/add/insert-panel";
 import {
   PreviewedEntryProvider,
   type PreviewedCollection,
 } from "./previewed-entry";
 import { EMPTY_SELECTION } from "./selection";
-import { toolbarActions, type ToolbarAction } from "./toolbar-actions";
+import { toolbarActions, type ToolbarAction } from "./canvas/toolbar-actions";
 
 beforeAll(() => {
   globalThis.ResizeObserver ??= class {
