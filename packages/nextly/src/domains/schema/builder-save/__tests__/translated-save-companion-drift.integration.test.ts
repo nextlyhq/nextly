@@ -3,7 +3,8 @@
  * history, and its translations table is planned from what that history records of it. Where the
  * live translations table is not what the history records, the save is refused before anything
  * changes, with the error `nextly migrate` gives for a database that matches neither end of a
- * migration (`NEXTLY_MIGRATION_DRIFT`), on every dialect, for a Single and a field group alike.
+ * migration (`NEXTLY_MIGRATION_DRIFT`), on every dialect, for a Single and a field group alike. So
+ * is one whose main table already holds a column the history records as translated.
  */
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -39,8 +40,8 @@ interface Kind {
   name: string;
   table: string;
   create(): Promise<unknown>;
-  /** The Builder's schema dialog, saving `fields` with translation kept on. */
-  save(t: TestNextly, fields: Field[]): Promise<unknown>;
+  /** The Builder's schema dialog, saving `fields`, translation kept on unless `localized` says. */
+  save(t: TestNextly, fields: Field[], localized?: boolean): Promise<unknown>;
 }
 
 const KINDS: Kind[] = [
@@ -53,14 +54,14 @@ const KINDS: Kind[] = [
         {},
         { slug: "tale", label: "Tale", localized: true, fields: FIELDS }
       ),
-    save: async (t, fields) =>
+    save: async (t, fields, localized = true) =>
       dispatchSingles(
         "applySingleSchemaChanges",
         { slug: "tale" },
         {
           fields,
           confirmed: true,
-          localized: true,
+          localized,
           schemaVersion: (
             await t.getService("singleRegistryService").getSingle("tale")
           ).schemaVersion,
@@ -76,14 +77,14 @@ const KINDS: Kind[] = [
         {},
         { slug: "band", label: "Band", localized: true, fields: FIELDS }
       ),
-    save: async (t, fields) =>
+    save: async (t, fields, localized = true) =>
       dispatchComponents(
         "applyComponentSchemaChanges",
         { slug: "band" },
         {
           fields,
           confirmed: true,
-          localized: true,
+          localized,
           schemaVersion: (
             await t.getService("fieldGroupRegistryService").getComponent("band")
           ).schemaVersion,
@@ -144,6 +145,25 @@ for (const dialect of getConfiguredTestDialects()) {
             { name: "note", type: "text", localized: false },
           ])
         ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+
+        expect(await definitionOf(kind.table)).toEqual(main);
+        expect(await definitionOf(companion)).toEqual(translations);
+      });
+
+      // Turning translation off brings each translated column home to the main table. One the
+      // main table already holds, which the history records on the translations table, is drift
+      // too: the file would add it again.
+      it("is refused as drift before anything changes, when translation is turned off over a main table already holding a translated column", async () => {
+        const companion = `${kind.table}_locales`;
+        await exec(
+          `ALTER TABLE ${q(kind.table)} ADD COLUMN ${q("title")} text`
+        );
+        const main = await definitionOf(kind.table);
+        const translations = await definitionOf(companion);
+
+        await expect(kind.save(t, FIELDS, false)).rejects.toMatchObject({
+          code: "NEXTLY_MIGRATION_DRIFT",
+        });
 
         expect(await definitionOf(kind.table)).toEqual(main);
         expect(await definitionOf(companion)).toEqual(translations);

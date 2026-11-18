@@ -58,7 +58,10 @@ import { COMPANION_STRUCTURAL_COLUMNS } from "../../i18n/companion-columns";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
 import { mainTableFields } from "../../i18n/per-language-storage";
-import { companionColumnNames } from "../../i18n/runtime/companion-io";
+import {
+  companionColumnNames,
+  liveColumnsOf,
+} from "../../i18n/runtime/companion-io";
 import { busyTableBounds, type BusyTableBounds } from "../busy-table/bounds";
 import { runUnitInTries } from "../busy-table/run-unit";
 import { boundedStopRecord } from "../busy-table/stopped-record";
@@ -1169,7 +1172,10 @@ function collectionOf(save: CollectionSave): UiSchemaEntity {
  * table it would fail part way or translate the wrong columns. The refusal is
  * the one `nextly migrate` gives a database that matches neither end of a
  * migration (`NEXTLY_MIGRATION_DRIFT`), naming each column the database has
- * that the history does not (`+`) and each it lacks (`-`).
+ * that the history does not (`+`) and each it lacks (`-`). A translated
+ * column the main table holds as well, which the history records on the
+ * translations table alone, is drift too: turning translation off would add
+ * it to the main table again.
  *
  * Judged only for a save that is translated before or after, and only where
  * the newest snapshot records the table and says which of its tables were
@@ -1204,6 +1210,17 @@ async function refuseCompanionDrift(
       column => !COMPANION_STRUCTURAL_COLUMNS.has(column)
     )
   );
+  // A translated column the main table holds too, where the history records it on the
+  // translations table alone: turning translation off would add it to the main table again.
+  const recordedOnMain = new Set(recordedTable.columns.map(c => c.name));
+  const onMain =
+    recorded.size === 0
+      ? []
+      : (await liveColumnsOf(deps.adapter, table))
+          .map(c => c.name)
+          .filter(
+            column => recorded.has(column) && !recordedOnMain.has(column)
+          );
   const companion = `${table}_locales`;
   const driftItems: DriftItem[] = [
     ...[...live]
@@ -1218,6 +1235,10 @@ async function refuseCompanionDrift(
         kind: "-" as const,
         detail: `${companion}.${column} absent from DB`,
       })),
+    ...onMain.map(column => ({
+      kind: "+" as const,
+      detail: `${table}.${column} present in DB`,
+    })),
   ];
   if (driftItems.length === 0) return;
   const migration = latest.filename.replace(/\.snapshot\.json$/, "");
