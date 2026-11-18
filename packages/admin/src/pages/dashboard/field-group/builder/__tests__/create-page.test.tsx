@@ -7,10 +7,15 @@ import { render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BuilderSettingsValues } from "@admin/components/features/schema-builder/BuilderSettingsModal";
+import type { UnsavedEntity } from "@admin/lib/builder/unsaved-entities";
 import type { FieldDefinition } from "@admin/types/collection";
 
 let submit:
-  | ((values: BuilderSettingsValues, templateFields: FieldDefinition[]) => void)
+  | ((
+      values: BuilderSettingsValues,
+      templateFields: FieldDefinition[],
+      needed: Omit<UnsavedEntity, "token">[]
+    ) => void)
   | undefined;
 vi.mock(
   "@admin/components/features/schema-builder/new-entity/NewEntityDialog",
@@ -18,7 +23,8 @@ vi.mock(
     NewEntityDialog: (props: {
       onCreate: (
         values: BuilderSettingsValues,
-        templateFields: FieldDefinition[]
+        templateFields: FieldDefinition[],
+        needed: Omit<UnsavedEntity, "token">[]
       ) => void;
     }) => {
       submit = props.onCreate;
@@ -64,7 +70,7 @@ afterEach(() => removeUnsavedEntity("field-group", "hero_banner"));
 describe("Field group create page", () => {
   it("keeps the field group unsaved, with no fields yet", () => {
     render(<FieldGroupBuilderPage />);
-    submit?.(VALUES, []);
+    submit?.(VALUES, [], []);
 
     expect(unsavedEntity("field-group", "hero_banner")).toEqual({
       // The store gives each entity a token of its own.
@@ -82,7 +88,7 @@ describe("Field group create page", () => {
 
   it("keeps a template's fields as its fields", () => {
     render(<FieldGroupBuilderPage />);
-    submit?.(VALUES, [{ name: "street", type: "text" }]);
+    submit?.(VALUES, [{ name: "street", type: "text" }], []);
 
     expect(unsavedEntity("field-group", "hero_banner")?.fields).toEqual([
       { name: "street", type: "text" },
@@ -91,7 +97,7 @@ describe("Field group create page", () => {
 
   it("creates nothing on the server, and opens the field group's editor", () => {
     render(<FieldGroupBuilderPage />);
-    submit?.(VALUES, []);
+    submit?.(VALUES, [], []);
 
     expect(mockCreate).not.toHaveBeenCalled();
     expect(mockNavigate).toHaveBeenCalledWith(

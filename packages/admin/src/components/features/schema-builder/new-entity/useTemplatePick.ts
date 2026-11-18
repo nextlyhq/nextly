@@ -22,12 +22,16 @@ import {
 import {
   checkTemplate,
   type TemplateFailure,
+  type TemplateNeed,
 } from "@admin/lib/builder/template-check";
 import { templateFieldsToAdd } from "@admin/lib/builder/template-fields";
 import type { FieldDefinition } from "@admin/types/collection";
 
 import type { BuilderConfig, BuilderKind } from "../builder-config";
 import type { BuilderSettingsValues } from "../BuilderSettingsModal";
+
+/** None needed, as one value, so a reader's memo keeps it between renders. */
+const NO_NEEDS: readonly TemplateNeed[] = [];
 
 /** How many templates the dialog offers before "Browse all templates". */
 const QUICK_COUNT = 3;
@@ -50,10 +54,58 @@ export interface TemplatePick {
   toggleLeftOut: (key: string) => void;
   /** Each rule a field kept breaks. */
   failures: readonly TemplateFailure[];
+  /** What the fields kept need to exist, read from them. */
+  needs: readonly TemplateNeed[];
   /** Why Create waits, for the template, or null. */
   blockedBy: string | null;
   /** The fields Create hands over: the picked template's, less those left out. */
   fields: () => FieldDefinition[];
+}
+
+/** `set` with `key` added, or taken out when it holds it. */
+function toggled(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
+  const next = new Set(set);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  return next;
+}
+
+/**
+ * The picked template checked against what the kind's picker offers, the
+ * plugins installed, the entity's drafts, the fields left out and the fields
+ * it starts with: once per change to any of them, so what it needs is one
+ * value between renders for the readers that ask about it.
+ */
+function useCheckedTemplate(
+  current: OfferedTemplate | null,
+  config: BuilderConfig,
+  pluginEntries: Parameters<typeof builderOfferedTypes>[1],
+  lifecycleEnabled: boolean,
+  leftOut: ReadonlySet<string>,
+  starting: readonly { name: string }[]
+): ReturnType<typeof checkTemplate> | null {
+  // What the kind's picker offers, so a template adds nothing it would not.
+  const offeredTypes = useMemo(
+    () => builderOfferedTypes(config, pluginEntries),
+    [config, pluginEntries]
+  );
+  const installedTypes = useMemo(
+    () => new Set(pluginEntries.map(entry => entry.type)),
+    [pluginEntries]
+  );
+  return useMemo(
+    () =>
+      current
+        ? checkTemplate(current.template, {
+            offeredTypes,
+            installedTypes,
+            lifecycleEnabled,
+            leftOut,
+            startingFieldNames: starting.map(field => field.name),
+          })
+        : null,
+    [current, offeredTypes, installedTypes, lifecycleEnabled, leftOut, starting]
+  );
 }
 
 export function useTemplatePick(
@@ -76,15 +128,6 @@ export function useTemplatePick(
   );
   const [picked, setPicked] = useState<OfferedTemplate | null>(null);
   const [leftOut, setLeftOut] = useState<ReadonlySet<string>>(new Set());
-  // What the kind's picker offers, so a template adds nothing it would not.
-  const offeredTypes = useMemo(
-    () => builderOfferedTypes(config, pluginEntries),
-    [config, pluginEntries]
-  );
-  const installedTypes = useMemo(
-    () => new Set(pluginEntries.map(entry => entry.type)),
-    [pluginEntries]
-  );
   // A template picked for the other answer to "what will editors make" is no
   // longer offered, so it is dropped with the fields left out of it: answering
   // back starts with no template, never the old one brought back. Reset while
@@ -94,15 +137,15 @@ export function useTemplatePick(
     setLeftOut(new Set());
   }
   const current = picked && templates.includes(picked) ? picked : null;
-  const failures = current
-    ? checkTemplate(current.template, {
-        offeredTypes,
-        installedTypes,
-        lifecycleEnabled: values.status === true,
-        leftOut,
-        startingFieldNames: starting.map(field => field.name),
-      }).failures
-    : [];
+  const checked = useCheckedTemplate(
+    current,
+    config,
+    pluginEntries,
+    values.status === true,
+    leftOut,
+    starting
+  );
+  const failures = checked?.failures ?? [];
   return {
     templates,
     quick: templates.slice(0, QUICK_COUNT),
@@ -112,14 +155,9 @@ export function useTemplatePick(
       setLeftOut(new Set());
     },
     leftOut,
-    toggleLeftOut: key =>
-      setLeftOut(prev => {
-        const next = new Set(prev);
-        if (next.has(key)) next.delete(key);
-        else next.add(key);
-        return next;
-      }),
+    toggleLeftOut: key => setLeftOut(prev => toggled(prev, key)),
     failures,
+    needs: checked?.needs ?? NO_NEEDS,
     blockedBy:
       failures.length > 0
         ? "Leave out the fields this template cannot add, or choose another template."
