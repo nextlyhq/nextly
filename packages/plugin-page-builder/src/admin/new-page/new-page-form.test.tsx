@@ -282,6 +282,33 @@ describe("what the dialog shows", () => {
     );
   });
 
+  it("keeps a starter whose id is blank apart from Blank", async () => {
+    facts = query =>
+      pagesFacts(query, {
+        starters: [starter("blank", "Plain", "One heading and nothing else.")],
+      });
+    createPage.mockResolvedValue(made());
+    mount();
+    const row = await screen.findByRole("group", { name: "Start from" });
+    await userEvent.type(screen.getByRole("textbox", { name: "Title" }), "Hi");
+    // Its tile, as a person clicks it: the starter is chosen, not Blank.
+    await userEvent.click(within(row).getByText("Plain"));
+    expect(
+      (within(row).getByRole("radio", { name: "Plain" }) as HTMLInputElement)
+        .checked
+    ).toBe(true);
+    expect(
+      (within(row).getByRole("radio", { name: "Blank" }) as HTMLInputElement)
+        .checked
+    ).toBe(false);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Create and open builder" })
+    );
+    expect(createPage).toHaveBeenCalledWith(
+      expect.objectContaining({ starter: "blank" })
+    );
+  });
+
   it("keeps Create and open builder disabled while the title is empty, saying why", async () => {
     mount();
     const create = await screen.findByRole("button", {

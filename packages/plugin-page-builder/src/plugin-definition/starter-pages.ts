@@ -37,8 +37,8 @@ export function installStarterPages(ctx: InitContext, def: Definition): void {
 }
 
 /**
- * The starters the site offers now: this boot's, less any needing a block
- * or a variable the site no longer has. The variables are read per call,
+ * The starters the site offers now: this boot's, less any needing a block,
+ * a variable or a shared style the site no longer has. Those are read per call,
  * through the same reading every write is judged by, so a variable removed
  * a moment ago leaves its starters out of the next list.
  */
@@ -46,9 +46,13 @@ export function starterPagesOf(def: Definition): StarterPagesSource {
   return starterPagesSource({
     registered: () => def.state.starterPages,
     blocks: def.blocks,
-    variables: async () => {
+    defined: async () => {
       const read = def.state.composition?.siteDefinitions;
-      return read === undefined ? new Set() : (await read()).tokenIds;
+      if (read === undefined) {
+        return { variables: new Set(), sharedStyles: new Set() };
+      }
+      const site = await read();
+      return { variables: site.tokenIds, sharedStyles: site.classIds };
     },
     ...(def.opts.limits === undefined ? {} : { limits: def.opts.limits }),
   });

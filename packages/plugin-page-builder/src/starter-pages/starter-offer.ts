@@ -2,7 +2,8 @@
  * Which starter pages a site offers now, and the page body one gives a new
  * page.
  *
- * **Offered.** A starter whose blocks or variables the site no longer has
+ * **Offered.** A starter whose blocks, variables or shared styles the site
+ * no longer has
  * is left out of the list rather than offered half-drawn: a variable an
  * author removed in Design, or a block a plugin that was turned off
  * supplied. What a starter needs is read by the walk an export carries a
@@ -45,6 +46,8 @@ export interface StarterSite {
   readonly blocks: BlockRegistryReader;
   /** The identities of every variable the site defines now. */
   readonly variables: ReadonlySet<string>;
+  /** The ids of every shared style the site defines now. */
+  readonly sharedStyles: ReadonlySet<string>;
 }
 
 /** A starter's blocks as a page document, the shape a page stores them in. */
@@ -56,7 +59,11 @@ function starterDocument(starter: StarterPageDefinition): BlockDocument {
   };
 }
 
-/** Whether the site still has every block and variable `starter` names. */
+/**
+ * Whether the site still has every block, variable and shared style
+ * `starter` names: a page naming a shared style the site doesn't define is
+ * refused at save, so a starter naming one could never be made.
+ */
 function siteHasWhatStarterNeeds(
   starter: StarterPageDefinition,
   site: StarterSite
@@ -67,7 +74,8 @@ function siteHasWhatStarterNeeds(
   });
   return (
     [...needs.blockTypes].every(type => site.blocks.has(type)) &&
-    [...needs.tokens].every(token => site.variables.has(token))
+    [...needs.tokens].every(token => site.variables.has(token)) &&
+    [...needs.classes].every(style => site.sharedStyles.has(style))
   );
 }
 

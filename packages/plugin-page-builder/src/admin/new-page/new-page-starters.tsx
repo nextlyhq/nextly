@@ -80,7 +80,12 @@ function StarterChoices({
       </legend>
       <div className="grid grid-cols-4 gap-2 max-sm:grid-cols-3">
         {options.map(option => {
-          const optionId = `${id}-${option.id ?? "blank"}`;
+          // Blank and the starters in namespaces of their own, so a
+          // starter whose id is `blank` is never taken for Blank.
+          const optionId =
+            option.id === undefined
+              ? `${id}-blank`
+              : `${id}-starter-${option.id}`;
           const describedBy = `${optionId}-description`;
           const on = option.id === chosen;
           return (
@@ -88,7 +93,9 @@ function StarterChoices({
               <label
                 htmlFor={optionId}
                 title={option.description}
-                data-starter={option.id ?? "blank"}
+                {...(option.id === undefined
+                  ? { "data-blank": "" }
+                  : { "data-starter": option.id })}
                 className={`grid cursor-pointer gap-1 rounded-lg border p-1.5 text-xs transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring ${
                   on
                     ? "border-primary ring-1 ring-primary"

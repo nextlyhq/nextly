@@ -25,6 +25,7 @@ import {
   starterItem,
   starterPageCopy,
   takesPages,
+  type StarterSite,
 } from "./starter-offer";
 import type { RegisteredStarterPage } from "./starter-pages";
 import { STARTER_PAGES_ROUTE_PATH } from "./starter-pages-contract";
@@ -49,8 +50,13 @@ export interface StarterPagesDeps {
   readonly registered: () => readonly RegisteredStarterPage[];
   /** The site's block registry. */
   readonly blocks: BlockRegistryReader;
-  /** The identities of every variable the site defines now, read per call. */
-  readonly variables: () => Promise<ReadonlySet<string>>;
+  /**
+   * What the site defines now, read per call: the identities of its
+   * variables and the ids of its shared styles.
+   */
+  readonly defined: () => Promise<
+    Pick<StarterSite, "variables" | "sharedStyles">
+  >;
   /** The bounds a page's document is held to. */
   readonly limits?: DocumentLimits;
 }
@@ -67,7 +73,7 @@ export function starterPagesSource(deps: StarterPagesDeps): StarterPagesSource {
     if (registered.length === 0) return [];
     return offeredStarterPages(registered, {
       blocks: deps.blocks,
-      variables: await deps.variables(),
+      ...(await deps.defined()),
     });
   };
   return {
