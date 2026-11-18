@@ -36,15 +36,32 @@ const FAILURE_TITLES: Record<DeliveryFailureKind, string> = {
   unknown: "it may have arrived",
 };
 
-/** What to do about each kind of failure. */
-const FAILURE_TODO: Record<DeliveryFailureKind, string> = {
-  retryable:
-    "Usually nothing: a queued email tries again by itself, waiting longer each time. A direct send isn’t retried, so send it again if it matters.",
+/** What to do about a refused or unknown failure, wherever it happened. */
+const FAILURE_TODO: Record<"refused" | "unknown", string> = {
   refused:
     "Check the recipient’s address and the provider’s settings. Sending again won’t help until one of them changes.",
   unknown:
-    "The provider may have taken it before the answer was lost. Look it up in the provider’s log by its message id before sending again.",
+    "The provider may have taken it before the answer was lost. Check the provider’s own log before sending it again.",
 };
+
+/**
+ * What to do about a failure the provider might not repeat, which depends on
+ * whether anything will try again: only a queued email that is still
+ * retrying will. One out of attempts has failed for good, and a direct send
+ * is never retried.
+ */
+function retryableTodo(
+  source: "delivery" | "queued",
+  outcome: DeliveryOutcome | QueuedEmailState
+): string {
+  if (source === "queued" && outcome === "retrying") {
+    return "Usually nothing: it tries again by itself, waiting longer each time.";
+  }
+  if (source === "queued") {
+    return "It won’t be tried again by itself: it ran out of attempts. Check the provider, then send it again if it still matters.";
+  }
+  return "A direct send isn’t retried, so send it again if it matters.";
+}
 
 /** Core's sentence, with the provider's status beside it when there is one. */
 function reasonOf(
@@ -55,8 +72,23 @@ function reasonOf(
   return status ? `${reason} (status ${status})` : reason;
 }
 
-/** A sheet's state: what happened first, then why, then what to do. */
+/** The states that say what happened and need no reason or advice. */
+const PLAIN_STATES: Partial<Record<string, string>> = {
+  sent: "Sent",
+  waiting: "Waiting for its first attempt",
+  sending: "With the provider now",
+};
+
+/**
+ * A sheet's state: what happened first, then why, then what to do.
+ *
+ * A failure the template caused (it failed to render, or set a Reply-To that
+ * isn't an address) happens before any provider is asked, so it is never
+ * worded as the provider's, and its way out is fixing the template.
+ */
 export function detailState(input: {
+  source: "delivery" | "queued";
+  templateCaused: boolean;
   outcome: DeliveryOutcome | QueuedEmailState;
   failureKind: DeliveryFailureKind | null;
   failureStatus?: number | null;
@@ -73,23 +105,26 @@ export function detailState(input: {
         }
       : { title: "Cancelled", todo: null };
   }
-  if (outcome === "sent") return { title: "Sent", todo: null };
-  if (outcome === "waiting")
-    return { title: "Waiting for its first attempt", todo: null };
-  if (outcome === "sending")
-    return { title: "With the provider now", todo: null };
+  const plain = PLAIN_STATES[outcome];
+  if (plain) return { title: plain, todo: null };
   const reason = reasonOf(failureReason, input.failureStatus);
+  const why = reason ? { reason } : {};
+  const lead = outcome === "retrying" ? "Retrying" : "Failed";
+  if (input.templateCaused) {
+    return {
+      title: `${lead}: the template couldn’t be used`,
+      ...why,
+      todo: "Fix the template, then send it again: sending it unchanged fails the same way.",
+    };
+  }
   const kind = failureKind ?? "retryable";
-  const lead =
-    outcome === "retrying"
-      ? "Retrying"
-      : kind === "unknown"
-        ? "Unknown"
-        : "Failed";
   return {
-    title: `${lead}: ${FAILURE_TITLES[kind]}`,
-    ...(reason ? { reason } : {}),
-    todo: FAILURE_TODO[kind],
+    title: `${kind === "unknown" && lead === "Failed" ? "Unknown" : lead}: ${FAILURE_TITLES[kind]}`,
+    ...why,
+    todo:
+      kind === "retryable"
+        ? retryableTodo(input.source, outcome)
+        : FAILURE_TODO[kind],
   };
 }
 
@@ -132,8 +167,6 @@ export function attemptText(attempt: DeliveryAttempt): {
       );
     }
     if (attempt.failureReason) parts.push(attempt.failureReason);
-  } else if (attempt.providerMessageId) {
-    parts.push(`message id ${attempt.providerMessageId}`);
   }
   return {
     outcome: attempt.outcome === "sent" ? "Sent" : "Failed",

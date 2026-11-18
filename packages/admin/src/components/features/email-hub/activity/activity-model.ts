@@ -42,7 +42,7 @@ export type ActivityRow =
       id: string;
       at: Date;
       state: QueuedEmailState;
-      attempts: number;
+      attempts: number | null;
       nextAttemptAt: Date | null;
       lastFailureReason: string | null;
       messageHeld: boolean;

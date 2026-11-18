@@ -71,8 +71,11 @@ export interface QueuedEmailActivity {
   /** When it was sent, failed for good, or was cancelled. */
   settledAt: string | null;
   state: QueuedEmailState;
-  /** Attempts made so far, the one in flight included. */
-  attempts: number;
+  /**
+   * Attempts made so far, the one in flight included; null when the job that
+   * counted them has since been pruned, so the count is no longer known.
+   */
+  attempts: number | null;
   /** When the next attempt is due, while one is to follow. */
   nextAttemptAt: string | null;
   lastFailure: EmailFailure | null;
@@ -114,8 +117,6 @@ export interface DeliveryAttempt {
   failureStatus: number | null;
   /** Core's sentence for the failure, with anything address-shaped removed. */
   failureReason: string | null;
-  /** The provider's own id for the message, when it gave one. */
-  providerMessageId: string | null;
   templateVersion: TemplateVersion;
   erased: boolean;
 }
@@ -127,7 +128,6 @@ export interface DeliveryDetail extends DeliveryActivity {
   templateVersion: TemplateVersion;
   failureKind: DeliveryFailureKind | null;
   failureStatus: number | null;
-  providerMessageId: string | null;
   /** Every attempt of its queued email, or itself alone. */
   timeline: DeliveryAttempt[];
   /** Whether the timeline stopped at its limit, its oldest left out. */

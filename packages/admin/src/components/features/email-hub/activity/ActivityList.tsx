@@ -116,7 +116,7 @@ function recipientOf(row: ActivityRow): string {
 
 /** Which attempt a queued email is on, once it has made one. */
 function attemptOf(row: ActivityRow): string | null {
-  return row.source === "queued" && row.attempts > 0
+  return row.source === "queued" && row.attempts !== null && row.attempts > 0
     ? `Attempt ${row.attempts}`
     : null;
 }

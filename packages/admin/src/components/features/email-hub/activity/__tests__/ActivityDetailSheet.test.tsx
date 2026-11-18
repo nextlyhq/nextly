@@ -39,7 +39,6 @@ const ATTEMPT: DeliveryAttempt = {
   failureKind: "refused",
   failureStatus: null,
   failureReason: "The Reply-To set by the template wasn't a valid address.",
-  providerMessageId: null,
   templateVersion: { owner: "site", overridden: false, digest: "7aa2c510ab" },
   erased: false,
 };
@@ -64,7 +63,9 @@ function queuedDetail(over: Partial<QueuedEmailDetail> = {}): ActivityDetail {
       queuedBy: "plugin:form-builder",
       templateCaused: true,
       templateVersion: ATTEMPT.templateVersion,
-      timeline: [ATTEMPT],
+      // A template failure happens before any provider is asked, so the
+      // server answers it with no attempt at all.
+      timeline: [],
       timelineTruncated: false,
       ...over,
     },
@@ -96,18 +97,50 @@ function renderSheet(
 }
 
 describe("the detail sheet", () => {
-  it("puts the state first, why it failed and what to do, then the details and attempts", () => {
+  it("puts a template's failure first as the template's, never the provider's", () => {
     showing(queuedDetail());
     renderSheet();
     const state = screen.getByRole("status");
-    expect(state.textContent).toContain("Failed: the provider refused it");
+    expect(state.textContent).toContain(
+      "Failed: the template couldn’t be used"
+    );
+    expect(state.textContent).not.toMatch(/provider/i);
     expect(state.textContent).toContain("wasn't a valid address");
-    expect(state.textContent).toContain("What to do.");
+    expect(state.textContent).toMatch(/Fix the template/);
     expect(screen.getByText("Owner’s default")).toBeTruthy();
     expect(screen.getByText("Version 7aa2c510")).toBeTruthy();
     expect(screen.getByText("The form-builder plugin")).toBeTruthy();
+    expect(screen.getByText("No attempt yet.")).toBeTruthy();
+  });
+
+  it("names each attempt's provider answer, after the state", () => {
+    showing(queuedDetail({ templateCaused: false, timeline: [ATTEMPT] }));
+    renderSheet();
+    expect(screen.getByRole("status").textContent).toContain(
+      "Failed: the provider refused it"
+    );
     const attempts = screen.getByRole("region", { name: "Attempts" });
     expect(attempts.textContent).toContain("smtp · To · refused");
+  });
+
+  it("says the attempt count isn't recorded once its job was pruned", () => {
+    showing(queuedDetail({ attempts: null }));
+    renderSheet();
+    expect(screen.getByText("Not recorded")).toBeTruthy();
+  });
+
+  it("draws only the newest attempts of a long timeline, and counts the rest", () => {
+    const timeline = Array.from({ length: 150 }, (_, i) => ({
+      ...ATTEMPT,
+      id: `d${i}`,
+    }));
+    showing(queuedDetail({ templateCaused: false, timeline }));
+    renderSheet();
+    const attempts = screen.getByRole("region", { name: "Attempts" });
+    expect(attempts.querySelectorAll("li")).toHaveLength(100);
+    expect(attempts.textContent).toContain(
+      "The newest 100 are shown; 50 earlier attempts aren’t."
+    );
   });
 
   it("offers Fix template for a failure from the template, opening it in the workbench", () => {
@@ -139,7 +172,7 @@ describe("the detail sheet", () => {
   });
 
   it("says when older attempts aren't shown", () => {
-    showing(queuedDetail({ timelineTruncated: true }));
+    showing(queuedDetail({ timelineTruncated: true, timeline: [ATTEMPT] }));
     renderSheet();
     expect(screen.getByText("Older attempts aren’t shown.")).toBeTruthy();
   });

@@ -16,14 +16,23 @@ import {
 } from "../activity-detail-model";
 
 describe("detailState", () => {
+  const delivery = { source: "delivery" as const, templateCaused: false };
+  const queued = { source: "queued" as const, templateCaused: false };
+
   it("says a sent email was sent, with nothing to do", () => {
     expect(
-      detailState({ outcome: "sent", failureKind: null, failureReason: null })
+      detailState({
+        ...delivery,
+        outcome: "sent",
+        failureKind: null,
+        failureReason: null,
+      })
     ).toEqual({ title: "Sent", todo: null });
   });
 
   it("says why a send failed, and what to do for each kind of failure", () => {
     const retryable = detailState({
+      ...delivery,
       outcome: "failed",
       failureKind: "retryable",
       failureStatus: 503,
@@ -31,9 +40,10 @@ describe("detailState", () => {
     });
     expect(retryable.title).toBe("Failed: the provider couldn’t take it then");
     expect(retryable.reason).toBe("Resend answered 503 (status 503)");
-    expect(retryable.todo).toMatch(/tries again|send it again/i);
+    expect(retryable.todo).toMatch(/isn’t retried.*send it again/i);
 
     const refused = detailState({
+      ...delivery,
       outcome: "failed",
       failureKind: "refused",
       failureReason: "Mailbox unavailable",
@@ -42,17 +52,58 @@ describe("detailState", () => {
     expect(refused.todo).toMatch(/address|provider/i);
 
     const unknown = detailState({
+      ...delivery,
       outcome: "failed",
       failureKind: "unknown",
       failureReason: "Timed out",
     });
     expect(unknown.title).toBe("Unknown: it may have arrived");
-    expect(unknown.todo).toMatch(/message id|provider’s log/i);
+    // The detail carries no message id, so the advice never promises one.
+    expect(unknown.todo).toMatch(/provider’s own log/i);
+    expect(unknown.todo).not.toMatch(/message id/i);
+  });
+
+  it("promises another try only while a queued email will still make one", () => {
+    const retrying = detailState({
+      ...queued,
+      outcome: "retrying",
+      failureKind: "retryable",
+      failureReason: "Resend answered 503",
+    });
+    expect(retrying.todo).toMatch(/tries again by itself/i);
+
+    // Out of attempts: failed for good, even though its last failure was retryable.
+    const exhausted = detailState({
+      ...queued,
+      outcome: "failed",
+      failureKind: "retryable",
+      failureReason: "Resend answered 503",
+    });
+    expect(exhausted.todo).not.toMatch(/tries again by itself/i);
+    expect(exhausted.todo).toMatch(/won’t be tried again/i);
+  });
+
+  it("blames the template, not the provider, for a failure the template caused", () => {
+    // Rendering failed before any provider was asked: no attempt, no kind.
+    const state = detailState({
+      ...queued,
+      templateCaused: true,
+      outcome: "failed",
+      failureKind: null,
+      failureReason: "The Reply-To set by the template wasn't a valid address.",
+    });
+    expect(state.title).toBe("Failed: the template couldn’t be used");
+    expect(state.reason).toBe(
+      "The Reply-To set by the template wasn't a valid address."
+    );
+    expect(state.todo).toMatch(/fix the template/i);
+    expect(state.title).not.toMatch(/provider/i);
   });
 
   it("puts a cancelled email's state first and keeps its last failure", () => {
     expect(
       detailState({
+        ...queued,
         outcome: "cancelled",
         failureKind: "retryable",
         failureReason: "Internal server error",
@@ -110,7 +161,6 @@ describe("attemptText", () => {
     failureKind: "retryable",
     failureStatus: 503,
     failureReason: "Resend answered 503",
-    providerMessageId: null,
     templateVersion: "none",
     erased: false,
     ...over,
@@ -128,9 +178,8 @@ describe("attemptText", () => {
           failureKind: null,
           failureStatus: null,
           failureReason: null,
-          providerMessageId: "6c0d9a52",
         })
       )
-    ).toEqual({ outcome: "Sent", detail: "resend · To · message id 6c0d9a52" });
+    ).toEqual({ outcome: "Sent", detail: "resend · To" });
   });
 });

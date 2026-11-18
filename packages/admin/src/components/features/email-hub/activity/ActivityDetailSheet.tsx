@@ -41,6 +41,9 @@ export interface ActivityDetailSheetProps {
   fixTemplateHref: (slug: string) => string | undefined;
 }
 
+/** How many attempts the sheet draws, the newest; the rest are counted. */
+export const TIMELINE_SHOWN = 100;
+
 /** A time in the site's zone, as every admin date is written. */
 function timeText(iso: string): string {
   return formatDateWithAdminTimezone(
@@ -71,6 +74,10 @@ function stateInput(data: ActivityDetail): Parameters<typeof detailState>[0] {
   if (data.source === "delivery") {
     const d = data.detail;
     return {
+      source: "delivery",
+      // Only a queued email knows its failure came from its template; a
+      // delivery is a provider's answer.
+      templateCaused: false,
       outcome: d.outcome,
       failureKind: d.failureKind,
       failureStatus: d.failureStatus,
@@ -79,6 +86,8 @@ function stateInput(data: ActivityDetail): Parameters<typeof detailState>[0] {
   }
   const d = data.detail;
   return {
+    source: "queued",
+    templateCaused: d.templateCaused,
     outcome: d.state,
     // The latest attempt's structured answer: the queued email's own failure
     // carries no kind of its own.
@@ -112,21 +121,28 @@ function StateBox({ data }: { data: ActivityDetail }): JSX.Element {
 /** Every attempt, oldest first, with each provider's structured answer. */
 function Timeline({ data }: { data: ActivityDetail }): JSX.Element {
   const { timeline, timelineTruncated } = data.detail;
+  // The server answers up to ten thousand attempts for an email sent to many
+  // people; the newest are drawn, and the rest are counted, so opening the
+  // sheet never builds a page that large.
+  const shown = timeline.slice(-TIMELINE_SHOWN);
+  const hidden = timeline.length - shown.length;
   return (
     <section aria-label="Attempts" className="space-y-2">
       <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
         Attempts
       </h3>
-      {timelineTruncated && (
+      {(timelineTruncated || hidden > 0) && (
         <p className="text-xs text-muted-foreground">
-          Older attempts aren’t shown.
+          {hidden > 0
+            ? `The newest ${shown.length} are shown; ${hidden}${timelineTruncated ? "+" : ""} earlier ${hidden === 1 ? "attempt isn’t" : "attempts aren’t"}.`
+            : "Older attempts aren’t shown."}
         </p>
       )}
       {timeline.length === 0 ? (
         <p className="text-sm text-muted-foreground">No attempt yet.</p>
       ) : (
         <ol className="space-y-3 border-l border-border pl-4">
-          {timeline.map(attempt => {
+          {shown.map(attempt => {
             const text = attemptText(attempt);
             return (
               <li key={attempt.id} className="space-y-0.5">
@@ -163,7 +179,7 @@ function queuedByText(queuedBy: string): string {
     : queuedBy;
 }
 
-/** A delivery's own details: its provider, recipient, person and message id. */
+/** A delivery's own details: its provider, recipient and person. */
 function DeliveryDetails({
   data,
   names,
@@ -187,11 +203,6 @@ function DeliveryDetails({
         {RECIPIENT_KIND_LABELS[d.recipientKind]} · address not kept
       </Detail>
       <Detail term="Person">{person}</Detail>
-      {d.providerMessageId && (
-        <Detail term="Provider’s message id">
-          <span className="font-mono text-xs">{d.providerMessageId}</span>
-        </Detail>
-      )}
     </>
   );
 }
@@ -207,7 +218,7 @@ function QueuedDetails({
   const d = data.detail;
   return (
     <>
-      <Detail term="Attempts">{d.attempts}</Detail>
+      <Detail term="Attempts">{d.attempts ?? "Not recorded"}</Detail>
       {d.nextAttemptAt && (
         <Detail term="Next attempt">
           {dueText(new Date(d.nextAttemptAt), now, "Due")}
