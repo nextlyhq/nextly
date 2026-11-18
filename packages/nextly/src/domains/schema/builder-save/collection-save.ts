@@ -727,7 +727,10 @@ async function adoptionFor(
           placed("collections"),
           placed("singles"),
           placed("components"),
-          dialect
+          dialect,
+          // A field group's table is declared with the type column it has: one the storage
+          // migration moved carries `_field_group_type` under any name, which no name tells.
+          kind.manifest === "components" ? { tables: [live] } : undefined
         ).tables.find(t => t.name === table);
   return {
     table: live,
