@@ -7,10 +7,11 @@
  * writer, the fonts the site lacks with "Add from Google Fonts", and the
  * Figma export naming the text styles it leaves to Figma.
  */
-import type {
-  FontFaceDef,
-  NamedClass,
-  SiteTokenSet,
+import {
+  fluidValue,
+  type FontFaceDef,
+  type NamedClass,
+  type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import { Toaster } from "@nextlyhq/ui";
 import {
@@ -337,6 +338,37 @@ describe("importing a file with text styles and the site's design data", () => {
       h1: { fontSize: "5rem" },
       ...SOURCE.siteText,
     });
+  });
+
+  it("stores this site's own fluid rows remade across the file's fluid range in the first write", async () => {
+    const sizes = { small: 32, large: 48 };
+    const storeNow = vi.fn(async (_tokens: SiteTokenSet) => true);
+    render(
+      <WithFonts
+        tokens={{
+          tokens: [],
+          fluidRange: { min: 360, max: 1280 },
+          siteText: {
+            h1: {
+              fontSize: fluidValue(sizes, { min: 360, max: 1280 }),
+              fluid: sizes,
+            },
+          },
+        }}
+        onEditClasses={async () => undefined}
+        storeNow={storeNow}
+      />
+    );
+    await chooseFile("variables.tokens.json", exported());
+    const preview = await screen.findByRole("dialog", {
+      name: "Import variables",
+    });
+    fireEvent.click(within(preview).getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(storeNow).toHaveBeenCalledTimes(1));
+    // The file changes the range to 320–1440 and doesn't state Heading 1.
+    expect(storeNow.mock.calls[0]?.[0].siteText?.h1?.fontSize).toBe(
+      fluidValue(sizes, { min: 320, max: 1440 })
+    );
   });
 
   it("counts only what was stored: refused text styles, and the rows following them, are said", async () => {

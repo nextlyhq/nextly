@@ -487,6 +487,80 @@ describe("an import carrying the site's own design data", () => {
     expect(performance.now() - started).toBeLessThan(1500);
   });
 
+  it("remaps a text style's values, never its name", () => {
+    const named: NamedClass = {
+      ...eyebrow,
+      label: "Heading var(--site-font-size-h2)",
+      styles: { base: { base: { fontSize: "var(--site-font-size-h2)" } } },
+    };
+    const plan = ready(
+      planImport(
+        files(SITE, [named]),
+        { tokens: [], prefix: "--brand-" },
+        {
+          textStyles: [],
+        }
+      )
+    );
+    expect(plan.extras.textStyles.added[0]?.label).toBe(
+      "Heading var(--site-font-size-h2)"
+    );
+    expect(plan.extras.textStyles.added[0]?.styles).toEqual({
+      base: { base: { fontSize: "var(--brand-font-size-h2)" } },
+    });
+  });
+
+  it("still stores a text style it updates when another editor removed it meanwhile", () => {
+    const older = {
+      ...eyebrow,
+      styles: { base: { base: { fontSize: "1rem" } } },
+    };
+    const plan = ready(
+      planImport(files(SITE, [eyebrow]), fresh, { textStyles: [older] })
+    );
+    const applied = applyImport(plan, fresh, new Map());
+    if (!applied.ok) throw new Error(applied.error);
+    // The class list as it is when the write is made: the style is gone.
+    expect(applied.classes?.([])).toEqual({ classes: [eyebrow] });
+  });
+
+  it("leaves out a text style naming a refused variable's property that a variable here also writes", () => {
+    // The file's `t.size` and this site's `t-size` both write
+    // `--site-t-size`; the file's is refused for its name, so a style
+    // reading that property would read this site's value instead.
+    const into: SiteTokenSet = {
+      tokens: [
+        {
+          id: "t-size",
+          name: "font-size.custom",
+          kind: "dimension",
+          values: { light: "2rem" },
+        },
+      ],
+    };
+    const source: SiteTokenSet = {
+      tokens: [
+        {
+          id: "t.size",
+          name: "font-size.custom",
+          kind: "dimension",
+          values: { light: "1rem" },
+        },
+      ],
+    };
+    const reading: NamedClass = {
+      ...eyebrow,
+      styles: { base: { base: { fontSize: "var(--site-t-size)" } } },
+    };
+    const plan = ready(
+      planImport(files(source, [reading]), into, { textStyles: [] })
+    );
+    expect(plan.extras.textStyles.added).toEqual([]);
+    expect(plan.skipped).toContain(
+      "“Eyebrow” was not imported: a variable it uses, “font-size.custom”, wasn't imported."
+    );
+  });
+
   it("follows only the whole custom property of a merged variable, never one it begins", () => {
     const mine: SiteTokenSet = {
       tokens: [
