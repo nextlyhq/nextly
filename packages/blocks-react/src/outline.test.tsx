@@ -592,6 +592,37 @@ describe("a heading drawn once per entry of a Collection list", () => {
     expect(headingIds(html)).toEqual(["notes", "notes-2--0", "notes-2--0--p2"]);
   });
 
+  it("tells apart passages entries give Rich text blocks in two lists", async () => {
+    const empty: RichTextValue = {
+      root: { type: "root", children: [{ type: "paragraph", children: [] }] },
+    };
+    const list = (id: string): BlockNode => ({
+      id,
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "posts", limit: 10 },
+      slots: {
+        children: [
+          {
+            ...richText(empty),
+            bindings: { content: { $bind: "body", source: "item" } },
+          },
+        ],
+      },
+    });
+    const find = vi.fn(() =>
+      Promise.resolve({
+        items: [{ id: "a", body: passage(["h2", "Notes"]) }],
+        total: 1,
+      })
+    );
+    const html = await drawn(page(heading("Notes"), list("one"), list("two")), {
+      context: createStandaloneContext({ data: { find } }),
+      bindings: {},
+    });
+    expect(headingIds(html)).toEqual(["notes", "notes-2--0", "notes-2--0--p2"]);
+  });
+
   it("never draws an entry's id an author gave another block", async () => {
     const find = vi.fn(() =>
       Promise.resolve({ items: [{ id: "a" }, { id: "b" }], total: 2 })

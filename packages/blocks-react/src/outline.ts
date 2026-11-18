@@ -162,7 +162,7 @@ interface OutlineRecord {
   readonly drawn: ReadonlySet<string>;
   /**
    * Each Rich text block inside a Collection list, by node id: its place
-   * among the Rich text blocks of the nearest list holding it, from 1.
+   * among every such block on the page, from 1, in page order.
    */
   readonly passageInList: ReadonlyMap<string, number>;
 }
@@ -188,7 +188,6 @@ export function pageOutline(parts: readonly OutlinePart[]): PageOutline {
   const byPart = new Map<OutlineArea, Map<string, string[]>>();
   const firstById = new Map<string, string[]>();
   const passageInList = new Map<string, number>();
-  const passagesPerList = new Map<BlockNode, number>();
   for (const part of parts) {
     // The nearest Collection list holding each node, if any.
     const listOf = new Map<BlockNode, BlockNode>();
@@ -213,9 +212,9 @@ export function pageOutline(parts: readonly OutlinePart[]): PageOutline {
         node.type === RICH_TEXT_BLOCK &&
         !passageInList.has(node.id)
       ) {
-        const place = (passagesPerList.get(list) ?? 0) + 1;
-        passagesPerList.set(list, place);
-        passageInList.set(node.id, place);
+        // Counted over the whole page, not per list: two lists' entries
+        // share their places (`0`, `1`), so only this tells them apart.
+        passageInList.set(node.id, passageInList.size + 1);
       }
       const found = headingsOfBlock(node);
       if (found.length === 0) return;
@@ -311,8 +310,9 @@ function entryId(id: string, taken: ReadonlySet<string> | undefined): string {
  * anchors are then made from the passage drawn: by the same slug rules,
  * never an id the page's headings are drawn with, with the entry's place
  * after each (`notes-2--0`), and, for the second and later Rich text block
- * of the list, the block's place among them (`notes-2--0--p2`), since each
- * passage is drawn alone and two could make the same id.
+ * inside any list on the page, the block's place among them
+ * (`notes-2--0--p2`), since each passage is drawn alone and two could make
+ * the same id.
  *
  * @experimental
  */
