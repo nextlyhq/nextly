@@ -423,8 +423,17 @@ describe.each(getConfiguredTestDialects())(
       }, 180_000);
 
       it("comes back by migrate:down with its table and an empty translations table", async () => {
-        const { deleted, deployed } = await deleteOnTheDeployedDatabase(kind);
+        const {
+          deleted,
+          after: gone,
+          deployed,
+        } = await deleteOnTheDeployedDatabase(kind);
         expect(deleted.code, deleted.said).toBeUndefined();
+        // The delete took both tables, so whatever stands after the DOWN is the DOWN's.
+        expect(gone, deleted.said).toMatchObject({
+          table: false,
+          translationsTable: false,
+        });
 
         const down = await migrateDown();
         const after = await leftOf(deployed.adapter, dialect, kind.table);
@@ -439,20 +448,20 @@ describe.each(getConfiguredTestDialects())(
       }, 180_000);
     });
 
-    it("lists a collection's translations table, with its rows, right after its table", async () => {
+    it("lists a collection's translations table right after its table", async () => {
       const notes = KINDS[0]!;
       const { before, deleted } = await deleteOnTheDeployedDatabase(notes);
       // Positive control: the translations table held the two languages' rows.
       expect(before.translations).toBe(2);
       expect(deleted.code, deleted.said).toBeUndefined();
 
-      const lines = deleted.said.split("\n");
-      const at = lines.findIndex(line =>
-        new RegExp(`- table ${notes.table} \\(`).test(line)
-      );
+      // The file drops the translations table first; the listing reads it beside its table.
+      // `nextly migrate` lists a file's drops without counting their rows.
+      const lines = deleted.said.split("\n").map(line => line.trim());
+      const at = lines.indexOf(`- table ${notes.table}`);
       expect(at, deleted.said).toBeGreaterThanOrEqual(0);
-      expect(lines[at + 1], deleted.said).toMatch(
-        new RegExp(`- table ${notes.table}_locales \\(2 rows\\)`)
+      expect(lines[at + 1], deleted.said).toBe(
+        `- table ${notes.table}_locales`
       );
     }, 180_000);
 
