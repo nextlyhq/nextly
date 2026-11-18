@@ -15,6 +15,7 @@
  */
 import {
   TargetSlot,
+  useDocumentIdentity,
   useDocumentLocale,
   usePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -69,7 +70,10 @@ function blockPropsOf(
 /**
  * The page's search result where the builder shows it: a plugin's block at
  * the Settings place, or, where none is added, `plain`, the builder's own.
- * A document that offers no place (a component, a Layout) shows `plain`.
+ * A document that offers no place (a component, a Layout), or one the place
+ * does not take (a Single, whose context the place cannot name), shows
+ * `plain`; a collection entry whose context is still being read shows
+ * nothing until it is known.
  */
 export function SearchPlace({
   place,
@@ -81,7 +85,10 @@ export function SearchPlace({
   plain: ReactNode;
 }): ReactNode {
   const typePlural = useTypePlural(place?.context?.collection);
-  if (place === null) return plain;
+  // The place names collection entries only: a Single's context never
+  // arrives, so it keeps the builder's own rather than waiting for one.
+  const taken = useDocumentIdentity()?.kind === "collection";
+  if (place === null || !taken) return plain;
   return (
     <TargetSlot
       place={PAGE_BUILDER_SETTINGS_PLACE}

@@ -279,6 +279,14 @@ describe("a page's settings in the right panel", () => {
     expect(screen.queryByText(/Built from the page/)).toBeNull();
   });
 
+  it("keeps its own search result on a Single's page, which the place does not take", () => {
+    // The place names collection entries only, so a Single's context stays
+    // null; that is not the place still loading, and the page keeps its own.
+    live.identity = "single";
+    mount("page", { place: { ...PLACE, context: null } });
+    expect(screen.getByRole("region", { name: "Search result" })).toBeTruthy();
+  });
+
   it("holds its fields while the page takes no edits", () => {
     live.writable = false;
     mount("page");
