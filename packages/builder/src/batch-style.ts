@@ -28,11 +28,20 @@
  * @module batch-style
  */
 
-import type {
-  BlockNode,
-  StyleValue,
-  TokenKind,
-  ValidationIssue,
+import {
+  getBlock,
+  isLook,
+  isTextStyle,
+  STYLE_CATALOG,
+  stylePropertiesForSupports,
+  TEXT_STYLE_PROPERTIES,
+  type AnyBlockDefinition,
+  type BlockNode,
+  type NamedClass,
+  type NodeStyles,
+  type StyleValue,
+  type TokenKind,
+  type ValidationIssue,
 } from "@nextlyhq/blocks-engine";
 
 import { sameStyleValue, type BuilderOp } from "./op-vocabulary";
@@ -331,4 +340,183 @@ function collect(
     if (result.op !== null) ops.push(result.op);
   }
   return { ops, refused: undefined, warnings: [...warnings.values()] };
+}
+
+/**
+ * One block's look as "Copy style" takes it: its own values, every state and
+ * device, and the classes it wears (its block style, its text style and its
+ * shared styles), as the class list holds them.
+ */
+export interface StyleSource {
+  readonly styles: NodeStyles | undefined;
+  readonly classes: readonly string[];
+}
+
+/** What a paste reads besides the blocks. */
+export interface StylePasteOptions {
+  /**
+   * The site's styles, to tell a block style and a text style from a shared
+   * style. Unread, every class is pasted as it is.
+   */
+  readonly library?: readonly NamedClass[] | undefined;
+  /** Where block definitions are read: the registry, unless told. */
+  readonly definitions?: (type: string) => AnyBlockDefinition | undefined;
+}
+
+/** How many of the source's settings one target had no place for. */
+export interface SkippedSettings {
+  readonly nodeId: string;
+  readonly type: string;
+  readonly count: number;
+}
+
+/** What a paste would do: the ops as one group, and what each target skips. */
+export interface BatchStylePaste {
+  /** One op per target that changes, in selection order; empty when none does. */
+  readonly ops: readonly BuilderOp[];
+  /** The targets that skip something, in selection order. */
+  readonly skipped: readonly SkippedSettings[];
+}
+
+/** Every property the catalog knows, so another kind of entry is carried. */
+const CATALOG_PROPERTIES: ReadonlySet<string> = new Set(
+  STYLE_CATALOG.map(entry => entry.property)
+);
+
+/**
+ * The ops that give each block the source's look: the source's own values in
+ * place of the block's, and the source's classes in place of the ones it
+ * wears. The block's words, images and links are not touched.
+ *
+ * Each op updates a block's own `styles` and `classes` and nothing else, so a
+ * paste never writes into a shared style, whatever the editing bar targets.
+ *
+ * A block keeps only what it can show, as "Turn into" does: a value its type
+ * does not support, a block style of another type, and a text style on a
+ * block with no text settings are skipped and counted, one per value at each
+ * state and device, so the author can be told how many.
+ */
+export function batchStylePasteOps(
+  nodes: readonly BlockNode[],
+  source: StyleSource,
+  options: StylePasteOptions = {}
+): BatchStylePaste {
+  const definitionOf = options.definitions ?? getBlock;
+  const ops: BuilderOp[] = [];
+  const skipped: SkippedSettings[] = [];
+  for (const node of nodes) {
+    const supported = new Set(
+      stylePropertiesForSupports(definitionOf(node.type)?.supports).map(
+        entry => entry.property
+      )
+    );
+    const styles = keptStyles(source.styles, supported);
+    const classes = keptClasses(
+      source.classes,
+      node.type,
+      supported,
+      options.library
+    );
+    const count = styles.skipped + classes.skipped;
+    if (count > 0) skipped.push({ nodeId: node.id, type: node.type, count });
+    const op = pasteOp(node, styles.kept, classes.kept);
+    if (op !== null) ops.push(op);
+  }
+  return { ops, skipped };
+}
+
+/**
+ * The source's values a block can take, and how many it can't: a catalog
+ * property its type does not support is left out at every state and device.
+ * A state or device left empty goes with it.
+ */
+function keptStyles(
+  styles: NodeStyles | undefined,
+  supported: ReadonlySet<string>
+): { kept: NodeStyles | undefined; skipped: number } {
+  if (styles === undefined) return { kept: undefined, skipped: 0 };
+  const kept: Record<string, Record<string, Record<string, unknown>>> = {};
+  let skipped = 0;
+  for (const [state, byDevice] of Object.entries(styles)) {
+    const keptDevices: Record<string, Record<string, unknown>> = {};
+    for (const [device, values] of Object.entries(byDevice ?? {})) {
+      const keptValues: Record<string, unknown> = {};
+      for (const [property, value] of Object.entries(values ?? {})) {
+        if (CATALOG_PROPERTIES.has(property) && !supported.has(property)) {
+          skipped += 1;
+        } else {
+          keptValues[property] = structuredClone(value);
+        }
+      }
+      if (Object.keys(keptValues).length > 0) keptDevices[device] = keptValues;
+    }
+    if (Object.keys(keptDevices).length > 0) kept[state] = keptDevices;
+  }
+  return {
+    kept: Object.keys(kept).length === 0 ? undefined : kept,
+    skipped,
+  };
+}
+
+/**
+ * The source's classes a block can wear, and how many it can't: a block
+ * style belongs to one block type, and a text style is offered only on a
+ * block with text settings. A shared style, and a class the site doesn't
+ * name, are worn as they are.
+ */
+function keptClasses(
+  classes: readonly string[],
+  type: string,
+  supported: ReadonlySet<string>,
+  library: readonly NamedClass[] | undefined
+): { kept: string[]; skipped: number } {
+  const takesText = [...TEXT_STYLE_PROPERTIES].some(property =>
+    supported.has(property)
+  );
+  const kept: string[] = [];
+  let skipped = 0;
+  for (const id of classes) {
+    const entry = library?.find(each => each.id === id);
+    const fits =
+      entry === undefined ||
+      (isLook(entry)
+        ? entry.blockType === type
+        : !isTextStyle(entry) || takesText);
+    if (fits) kept.push(id);
+    else skipped += 1;
+  }
+  return { kept, skipped };
+}
+
+/**
+ * The one op that leaves a block with these values and classes, or `null`
+ * when it already has them. A field left empty is removed by name, as every
+ * style op removes one.
+ */
+function pasteOp(
+  node: BlockNode,
+  styles: NodeStyles | undefined,
+  classes: readonly string[]
+): BuilderOp | null {
+  const patch: { styles?: NodeStyles; classes?: string[] } = {};
+  const unset: ("styles" | "classes")[] = [];
+  if (!sameStyleValue(node.styles ?? {}, styles ?? {})) {
+    if (styles === undefined) unset.push("styles");
+    else patch.styles = styles;
+  }
+  const worn = node.classes ?? [];
+  const sameClasses =
+    worn.length === classes.length &&
+    worn.every((id, index) => id === classes[index]);
+  if (!sameClasses) {
+    if (classes.length === 0) unset.push("classes");
+    else patch.classes = [...classes];
+  }
+  if (Object.keys(patch).length === 0 && unset.length === 0) return null;
+  return {
+    kind: "update",
+    id: node.id,
+    patch,
+    ...(unset.length === 0 ? {} : { unset }),
+  };
 }
