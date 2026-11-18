@@ -147,28 +147,44 @@ export function RichTextFullEditor({
     held?.session.detach();
   }, []);
 
-  /** Write the words, answering whether the dialog may close. */
-  const keep = (): boolean => {
+  /**
+   * Write the words. Answers the document the write produced, `null` when
+   * there was nothing to write, or `false` when the page refused it, which
+   * keeps the dialog open.
+   */
+  const keep = (): BlockDocument | null | false => {
     const held = live.current;
-    if (held === null) return true;
+    if (held === null) return null;
     const words = held.session.read();
-    if (!richTextChanged(held.baseline, words)) return true;
-    if (onCommit(words) === null) {
+    if (!richTextChanged(held.baseline, words)) return null;
+    const written = onCommit(words);
+    if (written === null) {
       // Refused (a size cap, a lock that arrived): the words stay here, held
       // against anything else taking the editor, until shortened or let go.
       held.session.hold();
       setNote("refused");
       return false;
     }
-    return true;
+    return written ?? null;
   };
-  const latestKeep = React.useRef(keep);
-  latestKeep.current = keep;
 
-  const done = (): void => {
-    if (!keep()) return;
+  /**
+   * Finish as Done does: write, let the editor go and close, answering the
+   * document written, or `null` for none or for a refusal that keeps it open.
+   */
+  const finish = (): BlockDocument | null => {
+    const written = keep();
+    if (written === false) return null;
     letGo();
     onClose();
+    return written;
+  };
+  // Read by the open passages' hold, which outlives this render.
+  const latestFinish = React.useRef(finish);
+  latestFinish.current = finish;
+
+  const done = (): void => {
+    finish();
   };
   const cancel = (): void => {
     letGo();
@@ -206,11 +222,11 @@ export function RichTextFullEditor({
         }
         const session = attachment.session;
         live.current = { session, baseline: session.read() };
-        // Held while open, so a Save finishes it as Done does.
+        // Held while open, so a Save finishes it as Done does, and is handed
+        // the document the write produced to store, as every open passage's
+        // finish hands it.
         release.current =
-          host?.openPassages?.hold(() => {
-            if (latestKeep.current()) letGo();
-          }) ?? null;
+          host?.openPassages?.hold(() => latestFinish.current()) ?? null;
         setReady(session);
         session.focus();
       },

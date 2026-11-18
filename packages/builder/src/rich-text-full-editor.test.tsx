@@ -326,4 +326,65 @@ describe("the full editor", () => {
     expect(panel.editor.sessions[0]?.hold).toHaveBeenCalled();
     expect(panel.editor.sessions[0]?.detach).not.toHaveBeenCalled();
   });
+
+  describe("finished by a save while open", () => {
+    // What the canvas's own commit asks of every open passage before the page
+    // is stored: the passage's words written, and the document that write
+    // produced handed back, so the save stores the page with them in it.
+    it("writes the words and answers the document the write produced", async () => {
+      const stored = { formatVersion: 1, kind: "page", nodes: [] };
+      const { editor, onCommit, openPassages } = drawPanel({
+        onCommit: () => stored,
+      });
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: FULL_EDITOR_WORDS.open })
+        );
+      });
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Heading 2" }));
+      });
+      let answered: unknown;
+      act(() => {
+        answered = openPassages.finishAll();
+      });
+      expect(onCommit).toHaveBeenCalledWith("content", heading("Hello"));
+      expect(answered).toBe(stored);
+      // Finished as Done finishes it: let go, and closed.
+      expect(editor.sessions[0]?.detach).toHaveBeenCalled();
+      expect(openPassages.isOpen()).toBe(false);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("answers nothing written when nothing changed", async () => {
+      const { onCommit, openPassages } = await openFullEditor();
+      let answered: unknown = "unset";
+      act(() => {
+        answered = openPassages.finishAll();
+      });
+      expect(answered).toBeNull();
+      expect(onCommit).not.toHaveBeenCalled();
+    });
+
+    it("stays open with the words, answering nothing, when the write is refused", async () => {
+      const { editor, openPassages } = drawPanel({ onCommit: () => null });
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: FULL_EDITOR_WORDS.open })
+        );
+      });
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Heading 2" }));
+      });
+      let answered: unknown = "unset";
+      act(() => {
+        answered = openPassages.finishAll();
+      });
+      expect(answered).toBeNull();
+      expect(screen.getByRole("dialog")).not.toBeNull();
+      expect(screen.getByText(FULL_EDITOR_WORDS.refused)).not.toBeNull();
+      expect(editor.sessions[0]?.detach).not.toHaveBeenCalled();
+      expect(openPassages.isOpen()).toBe(true);
+    });
+  });
 });
