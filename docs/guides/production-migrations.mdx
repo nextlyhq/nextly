@@ -1294,6 +1294,8 @@ The steps rewrite stored values in place, so the run needs a backup confirmed wh
 
 An instance still running the earlier release can store a password as it was written after the step has passed its row. If earlier instances were still serving while `nextly migrate` ran, run it again after the last one has stopped; a run that finds nothing left changes nothing.
 
+A development database that has no migrations gets the same three steps from `nextly db:sync`, once it has synced, with the same backup confirmation: `nextly db:sync --backup-confirmed`, or a yes at a terminal. With no terminal and no flag it stops with `DATA_STEPS_BACKUP_NOT_CONFIRMED` before the sync changes anything, and `nextly db:sync --dry-run` lists each step with work. With `--watch`, the steps are taken once, after the first sync.
+
 Earlier releases did this work in `nextly upgrade`. That command now changes nothing without `--reconcile-core` and exits 1 with `UPGRADE_WORK_MOVED`, so replace it with `nextly migrate` in a deploy script.
 
 ### Translated date fields on PostgreSQL

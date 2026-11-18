@@ -524,7 +524,9 @@ describe.each(getConfiguredTestDialects())(
       it("is named once at each start, with the command that converts it", async () => {
         const warned = (await startupWarnings()).join("\n");
         expect(warned.split("planted-manager").length - 1).toBe(1);
+        // Both commands that convert it: the deploy's, and development's.
         expect(warned).toContain("`nextly migrate`");
+        expect(warned).toContain("`nextly db:sync`");
         // Said as it is: until converted, the role has no access from it.
         expect(warned).toContain("no longer gives any access");
         expect(warned).not.toContain("planted-jobs");
