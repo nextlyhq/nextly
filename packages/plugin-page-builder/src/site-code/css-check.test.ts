@@ -74,6 +74,21 @@ describe.each(LEVELS)("custom CSS at the %s level", level => {
     expect(problems[0]?.reason).toMatch(/tracker\.example/);
   });
 
+  it("names the line each fetch is on, not where its address first appears", () => {
+    // A comment holding the same address comes first, and the address is used
+    // twice: each refusal names the rule it is in.
+    const url = "https://tracker.example/p";
+    const css = [
+      `/* ${url} */`,
+      "",
+      at(level, `background: url(${url});`),
+      at(level, `border-image: url(${url}) 30;`),
+    ].join("\n");
+    expect(checkCustomCss(css, level).map(problem => problem.line)).toEqual([
+      3, 4,
+    ]);
+  });
+
   it("refuses CSS that would end the style element, naming its line", () => {
     expect(
       checkCustomCss(

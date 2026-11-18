@@ -31,6 +31,20 @@ export interface CssFetch {
   readonly url: string;
 }
 
+/** A fetch, and the line of the text it is written on, from 1. */
+export interface LocatedCssFetch extends CssFetch {
+  readonly line: number;
+}
+
+/** The line an offset into text is on, counting from `first`. */
+function lineOf(text: string, offset: number, first: number): number {
+  let line = first;
+  for (let i = 0; i < offset && i < text.length; i++) {
+    if (text.charCodeAt(i) === 10) line += 1;
+  }
+  return line;
+}
+
 /** The functions whose plain strings are image URLs. */
 const IMAGE_SET = new Set(["image-set", "-webkit-image-set"]);
 
@@ -57,27 +71,39 @@ function viaOf(context: WalkContext): CssFetch["via"] {
  * besides, each URL once. In an `@import` prelude a leading string is the
  * target too.
  */
-function rawFetches(text: string, via: CssFetch["via"]): CssFetch[] {
-  const urls = new Set<string>();
+function rawFetches(
+  text: string,
+  via: CssFetch["via"],
+  firstLine = 1
+): LocatedCssFetch[] {
+  // Each URL once, at the first line it is read on.
+  const urls = new Map<string, number>();
+  const add = (url: string, line: number) => {
+    if (!urls.has(url)) urls.set(url, line);
+  };
   if (via === "import") {
     const leading = LEADING_STRING.exec(text);
     const target = leading?.[1] ?? leading?.[2];
-    if (target !== undefined) urls.add(target);
+    if (target !== undefined) add(target, firstLine);
   }
   try {
-    walk(parse(text, { context: "value" }), {
+    walk(parse(text, { context: "value", positions: true }), {
       enter(this: WalkContext, node: CssNode) {
-        if (node.type === "Url") urls.add(node.value);
-        if (node.type === "String" && inImageSet(this)) urls.add(node.value);
+        const line = firstLine + (node.loc?.start.line ?? 1) - 1;
+        if (node.type === "Url") add(node.value, line);
+        if (node.type === "String" && inImageSet(this)) add(node.value, line);
       },
     });
   } catch {
     // Text that is no value at all: the scan below still reads it.
   }
   for (const match of text.matchAll(URL_TOKEN)) {
-    urls.add(match[1] ?? match[2] ?? match[3] ?? "");
+    add(
+      match[1] ?? match[2] ?? match[3] ?? "",
+      lineOf(text, match.index, firstLine)
+    );
   }
-  return [...urls].map(url => ({ via, url }));
+  return [...urls].map(([url, line]) => ({ via, url, line }));
 }
 
 /** Whether a node sits in an `image-set()`, whose strings are images. */
@@ -96,18 +122,19 @@ function nodeFetches(
   node: CssNode,
   context: WalkContext,
   imported: Set<CssNode>
-): CssFetch[] {
+): LocatedCssFetch[] {
   const via = viaOf(context);
-  if (node.type === "Url") return [{ via, url: node.value }];
-  if (node.type === "Raw") return rawFetches(node.value, via);
+  const line = node.loc?.start.line ?? 1;
+  if (node.type === "Url") return [{ via, url: node.value, line }];
+  if (node.type === "Raw") return rawFetches(node.value, via, line);
   if (node.type !== "String") return [];
-  if (inImageSet(context)) return [{ via: "image", url: node.value }];
+  if (inImageSet(context)) return [{ via: "image", url: node.value, line }];
   const atrule = context.atrule;
   return via === "import" &&
     context.function === null &&
     atrule !== null &&
     !imported.has(atrule)
-    ? [{ via, url: node.value }]
+    ? [{ via, url: node.value, line }]
     : [];
 }
 
@@ -119,10 +146,24 @@ export function cssFetches(
   text: string,
   context: "stylesheet" | "declarationList" = "stylesheet"
 ): CssFetch[] {
-  const fetches: CssFetch[] = [];
+  return cssFetchLocations(text, context).map(({ via, url }) => ({
+    via,
+    url,
+  }));
+}
+
+/**
+ * {@link cssFetches}, each with the line it is written on, so a refusal can
+ * name the rule to change.
+ */
+export function cssFetchLocations(
+  text: string,
+  context: "stylesheet" | "declarationList" = "stylesheet"
+): LocatedCssFetch[] {
+  const fetches: LocatedCssFetch[] = [];
   let ast: CssNode;
   try {
-    ast = parse(text, { context });
+    ast = parse(text, { context, positions: true });
   } catch {
     // Not CSS the parser can read at all: every `url(` in it is still read.
     return rawFetches(text, "image");

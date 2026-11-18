@@ -46,7 +46,7 @@ import {
   siteSizesBlocks,
   type ImageCopies,
 } from "./image-slot";
-import { routeStyleContext } from "./next-custom-css";
+import { routeCustomCss } from "./next-custom-css";
 import { drawnDocumentOf, fittedFor } from "./next-documents";
 import {
   listPageSlug,
@@ -724,13 +724,9 @@ export function blocksRouteConfig(
         isPublic,
         listWindow
       );
-      // The page's compile context with the host's custom CSS checker and the
-      // site's CSS, read for this render; the route's own without a source.
-      const pageStyleContext = await routeStyleContext(
-        config,
-        isPublic,
-        listWindow
-      );
+      // The host's custom CSS checker and the site's CSS, read for this
+      // render; none without a source.
+      const customCss = await routeCustomCss(config, isPublic, listWindow);
       // Derived ONCE, from the breakpoints the site already stated. A second
       // answer to "what are this site's breakpoints" is how the shared sheet
       // and the page sheet come to disagree about which at-rules a tier is
@@ -823,7 +819,8 @@ export function blocksRouteConfig(
           ),
         },
         blocks: resolver,
-        styleContext: pageStyleContext,
+        styleContext,
+        ...(customCss === undefined ? {} : { customCss }),
         blockFallback,
         limits,
         // Spread conditionally: `PageRenderer` distinguishes an absent policy

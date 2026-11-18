@@ -12,7 +12,7 @@
  *
  * @module next-custom-css
  */
-import { hashId, type StyleCompileContext } from "@nextlyhq/blocks-engine";
+import { hashId, type CustomCssPolicy } from "@nextlyhq/blocks-engine";
 import {
   cachedFind,
   nextlySingleTags,
@@ -22,30 +22,27 @@ import {
 import type { BlocksPageConfig, CustomCssSource } from "./next-page-config";
 
 /**
- * The compile context a route's pages are drawn with: its own, with the
- * custom CSS checker and the site's CSS when it names a source. `undefined`
- * where the route states no context, which compiles nothing to draw CSS into.
+ * The custom CSS checker a route's pages are drawn with, with the site's CSS
+ * read for this render, or `undefined` when the route names no source. Handed
+ * to the renderer on its own rather than joined to the route's context, so it
+ * reaches whichever context the page compiles with: the route's, or the one
+ * the site's styles supply.
  */
-export async function routeStyleContext(
+export async function routeCustomCss(
   config: Pick<
     BlocksPageConfig,
-    "styleContext" | "customCss" | "collections" | "field" | "cacheScope"
+    "customCss" | "collections" | "field" | "cacheScope"
   >,
   isPublic: boolean,
   window: number | false | undefined
-): Promise<StyleCompileContext | undefined> {
-  const { styleContext, customCss } = config;
-  if (styleContext === undefined || customCss === undefined) {
-    return styleContext;
-  }
+): Promise<CustomCssPolicy | undefined> {
+  const { customCss } = config;
+  if (customCss === undefined) return undefined;
   const site = await siteCssOf(config, customCss, isPublic, window);
   return {
-    ...styleContext,
-    customCss: {
-      id: customCss.id,
-      accepts: (css, level) => customCss.accepts(css, level),
-      ...(site === undefined ? {} : { site }),
-    },
+    id: customCss.id,
+    accepts: (css, level) => customCss.accepts(css, level),
+    ...(site === undefined ? {} : { site }),
   };
 }
 
