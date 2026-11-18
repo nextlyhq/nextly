@@ -27,7 +27,19 @@ export interface StoredAsRead {
    * becoming a list writes a blank link as the empty list `[]`, which the new field then judges.
    */
   blankAs?: string;
+  /**
+   * The stored texts, trimmed, that the save's conversion writes as no value, so each is the new
+   * type's empty as it stands: a list of links becoming one link writes `[]` as no link, and a
+   * switch to or from naming several collections clears every stored empty its guard passes.
+   */
+  writtenAsNone?: readonly string[];
 }
+
+/**
+ * The stored empties a switch to or from naming several collections passes and clears to NULL,
+ * as its guard reads them (`requireEmpty` in `pipeline/reference-list-conversion`).
+ */
+const CLEARED_BY_REQUIRE_EMPTY: readonly string[] = ["", "[]", "null"];
 
 const NONE: StoredAsRead = { value: () => false, emptyListHeld: false };
 
@@ -39,6 +51,21 @@ export function storedAsRead(
   // One link becoming a list of links: every road's reference-list conversion writes the list.
   if (from.relation?.kept === "one" && keepsLinkList(to)) {
     return { value: () => true, emptyListHeld: true, blankAs: "[]" };
+  }
+  // A list of links becoming one link: every road's many-to-one conversion (`referenceScalar`)
+  // writes a one-link list as its link and an empty list as no link. A list of several is blocked
+  // before this is asked (`judgeRelation`), and the switch's own refusal counts it too.
+  if (from.relation?.kept === "list" && to.relation?.kept === "one") {
+    return { value: () => true, emptyListHeld: false, writtenAsNone: ["[]"] };
+  }
+  // A switch to or from naming several collections: no conversion carries a link across it, so a
+  // held link blocks it, and its guard clears each stored empty to no value.
+  if (switchesNamingCollections(from, to)) {
+    return {
+      value: () => false,
+      emptyListHeld: false,
+      writtenAsNone: CLEARED_BY_REQUIRE_EMPTY,
+    };
   }
   if (keepsJson(to)) {
     return {
@@ -72,6 +99,23 @@ function numberStored(
   if (outcome === "changed") return stored.trim() === readsAs;
   const exact = exactNumber(stored);
   return exact !== null && exact === exactNumber(readsAs);
+}
+
+/**
+ * Whether a relationship's change moves between links to one collection and references naming
+ * theirs, which every road plans as `requireEmpty` (`conversionBetweenShapes`). A join table is
+ * neither: its links are not on the row.
+ */
+function switchesNamingCollections(
+  from: FieldTypeOnDialect,
+  to: FieldTypeOnDialect
+): boolean {
+  const a = from.relation?.kept;
+  const b = to.relation?.kept;
+  if (a === undefined || b === undefined || a === b) return false;
+  if (a === "join" || b === "join") return false;
+  const names = (kept: string) => kept === "targets" || kept === "targetList";
+  return names(a) || names(b);
 }
 
 function keepsLinkList(to: FieldTypeOnDialect): boolean {

@@ -79,6 +79,7 @@ const REPORTED_AS: Record<
   object: "object",
   "kind-never-held": "kind-never-held",
   "pair-blocked": "pair-blocked",
+  "link-not-carried": "link-not-carried",
   "column-refuses": "column-refuses",
   "field-refuses": "field-refuses",
 };
@@ -95,8 +96,11 @@ export async function collectTypeChange(
   accepts?: (readsAs: string) => Promise<boolean>,
   options: CollectOptions = {}
 ): Promise<StoredTypeChangeJudgement> {
-  // A pair blocked whatever its values hold is one reason of the types, with no rows.
-  if (pairBlocked(from, to) !== null) {
+  // A pair blocked whatever its values hold is one reason of the types, with no rows. A
+  // relationship's change is judged by its rows instead: one holding no link has nothing for the
+  // change to carry, so only the rows holding one block it, each counted (`link-not-carried`).
+  const blocked = pairBlocked(from, to);
+  if (blocked !== null && blocked !== "relationship") {
     return {
       judgement: {
         class: "blocked",
@@ -136,6 +140,11 @@ function asConverted(
   stored: string | null,
   read: StoredAsRead
 ): ValueVerdict {
+  // A stored empty the conversion writes as no value is empty to the new type, however the old type
+  // reads it: a one-link column's text `null` reads as a link, and the switch's guard clears it.
+  if (stored !== null && read.writtenAsNone?.includes(stored.trim()) === true) {
+    return { outcome: "kept", reason: "empty" };
+  }
   if (verdict.reason !== "empty" || stored === null) return verdict;
   if (read.blankAs !== undefined) {
     return { outcome: "changed", reason: "new-form", readsAs: read.blankAs };
@@ -217,6 +226,7 @@ class TypeChangeTally {
   ): boolean {
     if (verdict.reason !== "empty" || stored === null) return false;
     if (this.read.emptyListHeld && stored.trim() === "[]") return false;
+    if (this.read.writtenAsNone?.includes(stored.trim()) === true) return false;
     this.note("needs-rewrite", key);
     return true;
   }
