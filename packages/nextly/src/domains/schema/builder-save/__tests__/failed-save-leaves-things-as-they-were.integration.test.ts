@@ -98,9 +98,9 @@ interface SavePath {
    */
   pushRoad: boolean;
   /**
-   * The steps whose failure this path does not yet leave as it was: each runs expecting its
-   * failure (`it.fails`), shown, not skipped, so the one a change makes hold fails here until it
-   * is taken off the list.
+   * The steps whose failure this path does not yet leave as it was. Their probes and controls are
+   * asserted as every case's are; only the check that things are as they were is expected to fail,
+   * and a step it passes for fails the case until it is taken off the list.
    */
   notKeptYet?: readonly Step[];
   create(fields: BuilderField[], translated: boolean): Promise<void>;
@@ -520,9 +520,36 @@ describe.each(getConfiguredTestDialects())(
     }
 
     describe.each(PATHS)("$name", path => {
-      /** The case as this path holds it: expected to fail while its step is not kept yet. */
-      const holds = (step: Step) =>
-        path.notKeptYet?.includes(step) === true ? it.fails : it;
+      const notKept = (step: Step) => path.notKeptYet?.includes(step) === true;
+
+      /**
+       * Whether the save left things as they were (`check`'s assertions): thrown where `step` is
+       * kept, and answered false rather than thrown where it is not kept yet.
+       */
+      async function asItWas(
+        step: Step,
+        check: () => Promise<void>
+      ): Promise<boolean> {
+        if (!notKept(step)) {
+          await check();
+          return true;
+        }
+        try {
+          await check();
+          return true;
+        } catch {
+          return false;
+        }
+      }
+
+      /** A step listed as not kept yet that every failure left as it was: the list is stale. */
+      function expectStillNotKept(step: Step, kept: boolean) {
+        if (!notKept(step)) return;
+        expect(
+          kept,
+          `${step}: left as it was, so it is kept now: take it off notKeptYet`
+        ).toBe(false);
+      }
 
       it.skipIf(path.pushRoad)(
         "fails at the change to its own table",
@@ -551,9 +578,7 @@ describe.each(getConfiguredTestDialects())(
 
       // MySQL commits each schema statement as it runs, so every later step
       // fails after one has committed: the part-way rule, not this one.
-      (dialect === "mysql" || !path.translatable
-        ? it.skip
-        : holds("translations"))(
+      (dialect === "mysql" || !path.translatable ? it.skip : it)(
         "fails at the change to its translations table",
         async () => {
           const t = await boot(path, true);
@@ -571,20 +596,32 @@ describe.each(getConfiguredTestDialects())(
             failed(),
             "no statement adding the translated field was met"
           ).toBe(1);
-          await expectFailedAndAsItWas(
-            t,
-            path,
-            true,
-            before,
-            outcome,
-            "its translations table"
+          // Whatever the translations step leaves, a path whose registry write is kept never
+          // records the change in the registry while the translations table does not hold it.
+          if (!notKept("registry")) {
+            clearRegistryRowCache();
+            expect(
+              (await stateOf(t, path)).registry,
+              "its translations table: the registry row"
+            ).toEqual(before.registry);
+          }
+          const kept = await asItWas("translations", () =>
+            expectFailedAndAsItWas(
+              t,
+              path,
+              true,
+              before,
+              outcome,
+              "its translations table"
+            )
           );
+          expectStillNotKept("translations", kept);
         },
         180_000
       );
 
       for (const watched of ["registry", "ledger"] as const) {
-        (dialect === "mysql" ? it.skip : holds(watched))(
+        (dialect === "mysql" ? it.skip : it)(
           `fails at each of its ${watched} writes in turn`,
           async () => {
             // Counted first, on a save without a failure.
@@ -603,6 +640,7 @@ describe.each(getConfiguredTestDialects())(
               `no ${watched} write of the save was counted`
             ).toBeGreaterThan(0);
 
+            let everyKept = true;
             for (let k = 1; k <= writes; k += 1) {
               const t = await boot(path, false);
               const before = await stateOf(t, path);
@@ -611,16 +649,20 @@ describe.each(getConfiguredTestDialects())(
               const outcome = await outcomeOf(path.save(t, savedFields(false)));
               await trigger.remove();
 
-              await expectFailedAndAsItWas(
-                t,
-                path,
-                false,
-                before,
-                outcome,
-                `${watched} write ${k} of ${writes}`
+              const kept = await asItWas(watched, () =>
+                expectFailedAndAsItWas(
+                  t,
+                  path,
+                  false,
+                  before,
+                  outcome,
+                  `${watched} write ${k} of ${writes}`
+                )
               );
+              everyKept &&= kept;
               await shutDown();
             }
+            expectStillNotKept(watched, everyKept);
           },
           600_000
         );
