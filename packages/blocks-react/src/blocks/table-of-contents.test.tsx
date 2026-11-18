@@ -322,6 +322,38 @@ describe("headings a table of contents leaves out", () => {
     ]);
   });
 
+  it("reads devices by the breakpoints a page drawn inside its Layout is drawn with", async () => {
+    const breakpoints = {
+      viewport: [{ id: "mobile", label: "Mobile", maxWidth: 640 }],
+      container: [],
+    };
+    const shared = {
+      context: createStandaloneContext({}),
+      blocks: resolver,
+      styleContext: { breakpoints, namedClasses: [] },
+    };
+    const html = await settled(
+      <>
+        {drawWithRegions({
+          regions: [],
+          page: {
+            ...shared,
+            document: page(
+              contents(),
+              heading("Phones only", "h2", {
+                visibility: { devices: { base: false, mobile: true } },
+              })
+            ),
+          },
+          shared,
+          siteStyles: undefined,
+          definitions: new Map(),
+        })}
+      </>
+    );
+    expect(links(html)).toEqual([["phones-only", "Phones only"]]);
+  });
+
   it("leaves out the Layout's header and footer, listing the page's own", async () => {
     const region = (area: "header" | "footer", nodes: BlockNode[]) => ({
       region: { area, componentId: `${area}-component` },
