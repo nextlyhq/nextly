@@ -46,6 +46,13 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
     label: "Width for this section",
   },
   {
+    block: "core/section",
+    setting: "paddingPreset",
+    tab: "style",
+    section: "Spacing",
+    label: "Padding",
+  },
+  {
     block: "core/box",
     setting: "link",
     tab: "content",

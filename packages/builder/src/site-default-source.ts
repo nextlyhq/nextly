@@ -1,8 +1,8 @@
 /**
  * Where a block's default value comes from when it is one of the site's own
  * settings: a Section's padding, which reads the site's section spacing
- * variables, says "Site default: Section spacing" rather than "From block
- * defaults".
+ * variables (its Normal pair, or its Compact or Roomy one), says "Site
+ * default: Section spacing" rather than "From block defaults".
  *
  * @module site-default-source
  */
@@ -14,11 +14,16 @@ import {
 
 /**
  * The site settings a block's defaults read, by the variable they read, in
- * the words the Style tab names them by.
+ * the words the Style tab names them by. A Section's Compact and Roomy pairs
+ * are its section spacing too, as Normal's pair is.
  */
 const SITE_DEFAULTS: Readonly<Record<string, string>> = {
   "space.section-y": "Section spacing",
   "space.gutter": "Section spacing",
+  "space.section-y-compact": "Section spacing",
+  "space.gutter-compact": "Section spacing",
+  "space.section-y-roomy": "Section spacing",
+  "space.gutter-roomy": "Section spacing",
 };
 
 /** The variable a written value reads whole, `var(--site-space-gutter)`. */
