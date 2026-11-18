@@ -244,40 +244,65 @@ export async function previewDataSteps(
     | "warn"
   >
 ): Promise<DryRunPlan> {
+  const { withWork, refusal: countRefusal } = await countForPreview(deps);
+  const [first] = withWork;
+  // A step whose count refused is the run's refusal, before any question.
+  const outlook =
+    first !== undefined && countRefusal === undefined
+      ? backupOutlook(deps, first)
+      : {};
+  const refusal = countRefusal ?? outlook.refusal;
+  return {
+    changes: withWork.map(stepChange),
+    ...(refusal !== undefined ? { refusals: [refusal] } : {}),
+    notes: [
+      ...(first !== undefined
+        ? [
+            "Each count is taken before any step runs; a real run counts each step once the steps before it have run.",
+          ]
+        : []),
+      ...(outlook.note !== undefined ? [outlook.note] : []),
+    ],
+  };
+}
+
+/**
+ * Each step's count for a dry run, in order. A step whose count refuses
+ * stops the counting there, as it stops the run, and is the refusal named.
+ */
+async function countForPreview(
+  deps: Pick<DataStepsDeps, "adapter" | "steps" | "log" | "warn">
+): Promise<{ withWork: PendingDataStep[]; refusal?: string }> {
   const context = stepContext(deps);
   const withWork: PendingDataStep[] = [];
-  const notes: string[] = [];
-  let refusal: string | undefined;
   for (const step of deps.steps) {
     let pending: number;
     try {
       pending = await step.pending(context);
     } catch (error) {
-      // A step whose count refuses stops the plan there, as it stops the run.
-      refusal = dryRunRefusalOf(error);
+      const refusal = dryRunRefusalOf(error);
       if (refusal === undefined) throw error;
-      break;
+      return { withWork, refusal };
     }
     if (pending > 0) withWork.push({ step, pending });
   }
-  const [first] = withWork;
-  if (first !== undefined) {
-    notes.push(
-      "Each count is taken before any step runs; a real run counts each step once the steps before it have run."
-    );
-    if (!deps.backupConfirmed && refusal === undefined) {
-      if (deps.interactive) {
-        notes.push(
-          "A real run first asks whether the database is backed up; pass --backup-confirmed to confirm it without being asked."
-        );
-      } else {
-        refusal = backupNotConfirmed(deps.command, first).publicMessage;
-      }
-    }
+  return { withWork };
+}
+
+/**
+ * What a real run with work does about the backup, as a dry run says it:
+ * nothing to say once it is confirmed, a note where it would ask, and the
+ * refusal where nobody could be asked.
+ */
+function backupOutlook(
+  deps: Pick<DataStepsDeps, "command" | "backupConfirmed" | "interactive">,
+  first: PendingDataStep
+): { note?: string; refusal?: string } {
+  if (deps.backupConfirmed) return {};
+  if (!deps.interactive) {
+    return { refusal: backupNotConfirmed(deps.command, first).publicMessage };
   }
   return {
-    changes: withWork.map(stepChange),
-    ...(refusal !== undefined ? { refusals: [refusal] } : {}),
-    notes,
+    note: "A real run first asks whether the database is backed up; pass --backup-confirmed to confirm it without being asked.",
   };
 }

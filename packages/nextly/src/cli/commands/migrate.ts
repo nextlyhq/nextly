@@ -37,7 +37,6 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { container } from "../../di/container";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
-import { countPasswordsStoredAsGiven } from "../../domains/field-groups/stored-plain-passwords";
 import {
   isLocalizationIntentRefusal,
   parseLocalizationIntent,
@@ -302,34 +301,19 @@ import {
   readMigrationFolder,
   type DeclaredNames,
 } from "../utils/migration-discovery";
-import { askYesInTerminal } from "../utils/prompt-cancelled";
 import { installRegistryResolver } from "../utils/registry-resolver";
 
 import {
   plainTextPasswordCleanup,
   plainTextPasswordNotice,
 } from "./clear-plaintext-passwords";
-import {
-  confirmDataStepsBackup,
-  firstDataStepWithWork,
-  isDataStepsBackupRefusal,
-  previewDataSteps,
-  runDataSteps,
-  type DataStepsDeps,
-} from "./data-steps";
 import { runPluginsOnMigrate } from "./migrate-hooks";
+import { migrateStoredData } from "./migrate-stored-data";
 import {
   CORE_UPGRADE_LABEL,
   coreUpgradeSource,
   judgeCoreDeletions,
 } from "./upgrade-steps/core-upgrade-consent";
-import { MIGRATE_DATA_STEPS } from "./upgrade-steps";
-import {
-  storedPasswordsNotice,
-  storedPasswordsOn,
-  storedPasswordTotal,
-} from "./upgrade-steps/stored-passwords";
-
 // Re-exported for the callers that import it from this command. Other
 // commands import it from cli/utils, which does not pull this one in.
 export { installRegistryResolver };
@@ -626,48 +610,6 @@ async function moveEarlierRecords(args: {
 }
 
 /**
- * `nextly migrate --dry-run`: what the run would change in the data an
- * earlier release stored (`previewDataSteps`), read-only. Nothing is said
- * when no step has work and none refuses. A count that cannot be read, on a database whose
- * tables the pending migrations create, is said so rather than guessed.
- */
-async function previewStoredData(
-  steps: DataStepsDeps,
-  logger: CommandContext["logger"],
-  /** Whether the run is limited by `--step`, and so may stop before the steps. */
-  stepped: boolean
-): Promise<void> {
-  let plan: Awaited<ReturnType<typeof previewDataSteps>>;
-  try {
-    plan = await previewDataSteps(steps);
-  } catch (error) {
-    logger.info(
-      `  Data stored by an earlier release could not be counted: ${describeError(error)}`
-    );
-    return;
-  }
-  const refusals = plan.refusals ?? [];
-  if (plan.changes.length === 0 && refusals.length === 0) return;
-  logger.newline();
-  logger.info("Data stored by an earlier release, once the migrations apply:");
-  for (const { action, target } of plan.changes) {
-    logger.info(`  • would ${action} ${target}`);
-  }
-  if (stepped) {
-    // A run with `--step` takes the steps only when it applies the last
-    // pending migration, so what it would refuse for them is not said here.
-    logger.info(
-      "  A run with --step takes these only when it leaves no migration pending."
-    );
-    return;
-  }
-  for (const refusal of refusals) {
-    logger.info(`  ✖ a real run would refuse: ${refusal}`);
-  }
-  for (const note of plan.notes ?? []) logger.info(`  ${note}`);
-}
-
-/**
  * Execute the migrate command
  *
  * @param options - Combined global and command options
@@ -772,28 +714,12 @@ export async function runMigrate(
     const clearStaleLock = oncePerRun(() =>
       maybeForceUnlock(options, db, dialect)
     );
-    // The run's backup: stated by `--backup-confirmed`, or by a yes at a
-    // terminal, which holds for the rest of the run so nobody is asked twice.
-    const backup = { confirmed: options.backupConfirmed === true };
-    const askBackedUp = async () => {
-      const yes = await askYesInTerminal(
-        "Have you backed up your database? [y/N]: "
-      );
-      if (yes) backup.confirmed = true;
-      return yes;
-    };
-    // What the steps bringing an earlier release's stored data up to date
-    // are run with, once the migrations have applied.
-    const dataSteps = (afterMigrations = false): DataStepsDeps => ({
-      afterMigrations,
-      adapter: adapter as unknown as DataStepsDeps["adapter"],
-      command: "nextly migrate",
-      steps: MIGRATE_DATA_STEPS,
-      backupConfirmed: backup.confirmed,
-      interactive: canPrompt(),
-      askBackedUp,
-      log: message => logger.info(message),
-      warn: message => logger.warn(message),
+    // What the run does with data an earlier release stored, and its one
+    // backup question, shared with the move below so nobody is asked twice.
+    const storedData = migrateStoredData({
+      adapter: adapter as unknown as DrizzleAdapter,
+      logger,
+      backupConfirmed: options.backupConfirmed === true,
       lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
     });
 
@@ -803,7 +729,7 @@ export async function runMigrate(
       bounds,
       options,
       clearStaleLock,
-      askBackedUp,
+      askBackedUp: storedData.askBackedUp,
       lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
       logger,
     });
@@ -874,33 +800,18 @@ export async function runMigrate(
         serverConstructs,
         extensionSchema,
       });
-      await previewStoredData(dataSteps(), logger, options.step !== undefined);
+      await storedData.preview(options.step !== undefined);
       logger.success("Dry run complete (no changes made).");
       return;
     }
 
     // Data an earlier release stored is brought up to date once the
-    // migrations have applied, and only with a backup confirmed. Asked here,
-    // before anything changes, so a run that would be refused for it leaves
-    // the migrations unapplied too. Not under `--step`, which may stop
-    // before the steps run. A count that cannot be read yet, on a database
-    // whose tables the migrations below create, is taken again after them;
-    // a refusal made then says that the migrations had applied.
-    if (options.step === undefined) {
-      try {
-        const steps = dataSteps();
-        await confirmDataStepsBackup(
-          steps,
-          await firstDataStepWithWork(steps).catch(() => undefined)
-        );
-      } catch (error) {
-        fail(error);
-      } finally {
-        // The count registers the tables it reads as they stand before the
-        // migrations. The run goes on with the resolver it started with, so
-        // nothing below reads a table in the shape it had before them.
-        installRegistryResolver(adapter as unknown as DrizzleAdapter);
-      }
+    // migrations have applied, and only with a backup confirmed: work whose
+    // backup nobody confirmed is refused here, before anything changes.
+    try {
+      await storedData.confirmBeforeMigrations(options.step);
+    } catch (error) {
+      fail(error);
     }
 
     // The retired-table cleanup has flags of its own: removing those tables
@@ -935,10 +846,6 @@ export async function runMigrate(
     // done, and the failure a hook of theirs ends the command with.
     let appliedThisRun = 0;
     let hooksFailed: NextlyError | null = null;
-    // Whether the run took its data steps, and the backup refusal they ended
-    // with once the migrations had applied.
-    let dataStepsTaken = false;
-    let dataStepsRefused: NextlyError | null = null;
     try {
       const { applied, pluginModulesApplied, metadata } = await migrateCore({
         extensionSchema,
@@ -1118,17 +1025,7 @@ export async function runMigrate(
         // schema lock: with every migration applied, since each step reads
         // the tables as this release keeps them, and after the permissions
         // the run seeded, which a role's conversion gives.
-        // A backup nobody confirmed is refused here only where the check
-        // before the migrations could not see the work. The migrations have
-        // applied, so the plugins' deploy work below still runs, and the run
-        // ends with the refusal after it.
-        try {
-          await runDataSteps(dataSteps(true));
-          dataStepsTaken = true;
-        } catch (error) {
-          if (!isDataStepsBackupRefusal(error)) throw error;
-          dataStepsRefused = error;
-        }
+        await storedData.takeAfterMigrations();
         // The plugins' own deploy work, last, once every step above has
         // left the schema in step (`migrate-hooks`). Not where migrations
         // are still pending, as none of the steps above are.
@@ -1195,28 +1092,12 @@ export async function runMigrate(
     }
 
     // Read-only too: passwords an earlier release kept as given inside a
-    // container are counted, and the run that hashes them is named. Only
-    // where this run did not take its data steps, since migrations are still
-    // pending: one that took them has just hashed every one it found.
-    if (!dataStepsTaken && dataStepsRefused === null) {
-      try {
-        const notice = storedPasswordsNotice(
-          storedPasswordTotal(
-            await countPasswordsStoredAsGiven(
-              storedPasswordsOn(adapter as unknown as DrizzleAdapter)
-            )
-          )
-        );
-        if (notice) logger.warn(notice);
-      } catch (err) {
-        logger.warn(
-          `Could not check for passwords stored before this release: ${describeError(err)}`
-        );
-      }
-    }
+    // container, where this run did not reach the step that hashes them.
+    await storedData.warnOfPasswordsLeft();
 
     // The data steps' backup refusal, made after the migrations applied.
-    if (dataStepsRefused !== null) fail(dataStepsRefused);
+    const storedDataRefused = storedData.refusal();
+    if (storedDataRefused !== null) fail(storedDataRefused);
 
     // Last, once the read-only notices above have run.
     endIfHooksFailed(hooksFailed, fail);

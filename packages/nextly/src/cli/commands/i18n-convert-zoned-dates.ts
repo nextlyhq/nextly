@@ -86,7 +86,7 @@ export async function runConvertZonedDates(
  * would convert, read-only, with no backup question and no lock, and the
  * refusal a real run would make.
  */
-export async function previewConvertZonedDates(
+async function previewConvertZonedDates(
   deps: Pick<
     ConvertZonedDatesDeps,
     "adapter" | "backupConfirmed" | "interactive" | "log" | "warn" | "steps"
