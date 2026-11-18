@@ -161,6 +161,8 @@ export function routesForSiteStyle(
     // the class usage index the installed host maintains.
     sharedStyles: sharedStyleRoutes({
       configClassIds,
+      // The code's Site text rows, which may follow a text style too.
+      defaults: configStyle,
       usage: ctx =>
         usageSourceOf(ctx.self.collections, classUsageIndex, ctx.services.jobs),
       // The bounds the class index and the renderer read a page under.
