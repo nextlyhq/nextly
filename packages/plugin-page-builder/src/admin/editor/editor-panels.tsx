@@ -37,10 +37,7 @@ import {
   useMiniatureSession,
   blockStyleFoldId,
 } from "@nextlyhq/builder/shell";
-import {
-  useDocumentIdentity,
-  useEntryFieldsPanel,
-} from "@nextlyhq/plugin-sdk/admin";
+import { useDocumentIdentity } from "@nextlyhq/plugin-sdk/admin";
 import {
   useCallback,
   useEffect,
@@ -90,6 +87,7 @@ import {
   type SectionPictureInputs,
 } from "./section-pictures";
 import { usePageRegions, type SelectedRegion } from "./selected-region";
+import type { FontRolesTab as FontRolesTabPart } from "./site-font-roles-tab";
 import type { FontsPanelWithUpload as FontsPanelWithUploadPart } from "./site-style-fonts";
 import {
   offerableFaces,
@@ -111,6 +109,14 @@ import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
  */
 const FontsPanelWithUpload: typeof FontsPanelWithUploadPart = lazyPart(() =>
   import("./site-style-fonts").then(m => m.FontsPanelWithUpload)
+);
+
+/**
+ * The Type tab's Body and Headings fonts, fetched with the fonts panel: they
+ * read the font catalogue for "Add Bold".
+ */
+const FontRolesTab: typeof FontRolesTabPart = lazyPart(() =>
+  import("./site-font-roles-tab").then(m => m.FontRolesTab)
 );
 
 /** A key for the document the editor has open, from its identity. */
@@ -558,7 +564,6 @@ function useDrawnLook(siteTokens: SiteTokenSet | undefined): {
  */
 export function useEditorPanels<TFieldValues extends FieldValues>(
   mount: EditorMount,
-  name: string,
   /**
    * The entry's form, and the canvas the Layout's regions are scrolled to.
    * The page's Layout regions are rows in Layers, drawn on the canvas beside
@@ -573,8 +578,8 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   }
 ): EditorPanels {
   const { editor, clientConfig } = mount;
-  // The Layout section for the Settings dialog's "This page" tab, or null for
-  // a form that is not a page's.
+  // The page's header & footer section, or null for a form that is not a
+  // page's: Page settings draws its menu on General where it is not null.
   const pageLayout = usePageLayoutSettings(page.control);
   // From the form's unsaved values, so a change of Layout redraws at once,
   // with the header or footer selected on the canvas or in Layers.
@@ -584,18 +589,6 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     editor,
     useLookEditing(editor)
   );
-  /*
-   * The entry's other fields, ALREADY DRAWN, or null when there are none.
-   *
-   * One value feeds both the rail's availability and the panel's body below,
-   * so the two cannot disagree about whether there is anything to show. Asking
-   * separately is what put an empty Settings panel on the rail: every entry
-   * form has a renderer, so a gate on the renderer's existence is true even for
-   * a collection whose only fields are its title, its slug and this one.
-   */
-  // Flat, for the Settings dialog that frames them: no section cards, the
-  // slug read as the page's address.
-  const entryFields = useEntryFieldsPanel(name, { presentation: "dialog" });
 
   /*
    * The getting-started card, and the host's switch for it.
@@ -637,7 +630,6 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   const { lookEditing } = layoutRegions;
   const { previewMode, pictureSession } = useDrawnLook(page.siteTokens);
   return {
-    entryFields,
     lookEditing,
     previewMode,
     pictureSession,
@@ -645,8 +637,8 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     pages,
     checklist,
     designFolds,
-    // Settings is a dialog, not a panel: the entry's fields are drawn in its
-    // "This page" tab.
+    // Settings is a dialog, not a panel: the entry's fields are drawn in Page
+    // settings' General and Fields tabs.
     availablePanels: AVAILABLE_PANELS,
     pageLayout,
     canvasRegions: layoutRegions.canvas,
@@ -806,7 +798,6 @@ function PickerPatternRead({
  */
 export type EditorPanels = OfferedLibrary &
   PanelRequests & {
-    entryFields: ReactNode;
     checklist: UseBuilderChecklistResult;
     /** Where the author's folded Design groups are kept, once they are known. */
     designFolds: PreferenceStore | undefined;
@@ -1130,10 +1121,11 @@ export function editorPanelRenderer({
                 limits={documentLimits}
               />
             ),
-            // Type: the site's fonts, then the type sizes and the font and
-            // weight variables.
+            // Type: the Body and Headings fonts, the site's fonts, then the
+            // type sizes and the font and weight variables.
             type: () => (
               <>
+                <FontRolesTab />
                 <DesignGroup
                   id={SITE_FONTS_GROUP}
                   heading={EDITOR_WORDS.fonts}

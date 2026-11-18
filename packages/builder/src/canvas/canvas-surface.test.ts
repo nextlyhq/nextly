@@ -257,9 +257,11 @@ describe("the canvas surface is the site's, not the admin's", () => {
     }
   });
 
-  it("sets the page in the site's body font, not the admin's face", () => {
+  it("sets the page in a plain base face, neither the admin's nor a site variable", () => {
+    // The site's Body font is the page sheet's rule on the page root, on
+    // every surface, so the blank frame reads no font variable of its own.
     const family = declared(canvasRule(), "font-family");
-    expect(family).toBe("var(--nx-canvas-site-font, system-ui), sans-serif");
+    expect(family).toBe("system-ui, sans-serif");
     expect(family?.includes("--font-sans"), "the admin's own face").toBe(false);
   });
 

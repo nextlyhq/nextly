@@ -176,24 +176,42 @@ function rowPair(
   line: string | undefined
 ): string {
   if (siteTextStyles(role, entry) === undefined) return SITE_OWN_WORDS;
-  return role === "link" ? "Set" : pairWords(size, line);
+  if (role === "link") return "Set";
+  // A row holding only the Body or Headings font says nothing of its size.
+  return size === undefined && line === undefined
+    ? SITE_OWN_WORDS
+    : pairWords(size, line);
 }
 
 /**
  * The set with one row as given, or, given `undefined`, with the site's own
  * row left out, so the built-in one stands again.
+ *
+ * The row keeps its font: the font is the Body and Headings fonts' to set
+ * (`site-font-roles-model`), so a change of a row's size, or a Reset, leaves
+ * it where it was.
  */
 export function withSiteTextRow(
   tokens: SiteTokenSet,
   role: SiteTextRole,
   entry: SiteTextEntry | undefined
 ): SiteTokenSet {
+  const font = resolveSiteText(tokens.siteText)[role]?.fontFamily;
   const rest: Partial<Record<SiteTextRole, SiteTextEntry>> = {
     ...tokens.siteText,
   };
   delete rest[role];
+  // The row's size as given, with the font it holds now, never the given one.
+  const { fontFamily: _given, ...sized } =
+    entry ?? resolveSiteText(undefined)[role] ?? {};
+  const next =
+    font !== undefined
+      ? { ...sized, fontFamily: font }
+      : entry === undefined
+        ? undefined
+        : sized;
   const siteText: SiteTextMap =
-    entry === undefined ? rest : { ...rest, [role]: entry };
+    next === undefined ? rest : { ...rest, [role]: next };
   return { ...tokens, siteText };
 }
 
