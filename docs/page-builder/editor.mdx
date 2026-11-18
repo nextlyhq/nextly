@@ -407,6 +407,14 @@ Hover already chosen, it opens on Style.
 
 ### Editing a field
 
+The canvas follows what you type in the **Content** and **Style** fields, letter by
+letter, without waiting for you to leave the field. While a value isn't complete yet,
+such as `12p` on the way to `12px`, half a hex colour or an emptied number, the canvas
+keeps the last value that worked. A Style field says what's wrong; a Content number
+quietly goes back to its last value when you leave it. Some fields save only when you
+leave them or press Enter: the **Advanced** tab's, such as **Anchor (ID)**, and a shared
+style's, because a shared style changes every page that uses it.
+
 One edit to a field is one step to undo, however many keys it takes: a sentence typed
 into a Text's words, or a value dragged on a number field's label, comes back whole with
 one **Undo**. Two separate edits are two steps. An edit ends when you leave the field,
@@ -1148,7 +1156,7 @@ it beats Site text.
 Blocks have no outer margin of their own. The space between two blocks is the gap of
 the container holding them, set per container or by the spacing variables:
 
-- **Section, Box, Card, Column**, an accordion item and a Collection list put a gap above
+- **Section, Box, Card, Column**, an accordion's question and a Collection list put a gap above
   every block after the first. Set the container to flex or grid and the same gap
   becomes its `gap`.
 - **Columns** and **Gallery** space their columns and images with a wider gap.
@@ -1327,13 +1335,15 @@ tabs with the arrow keys.
 - Tabs other plugins add, such as the [SEO plugin](/docs/plugins/seo#in-the-page-builder)'s,
   follow, in the order the plugins declare them. A tab shows only on the pages it applies
   to: the SEO tab is there exactly where the page's own edit page shows its SEO tab.
-- **Code**, last, holds code added to this page only: a **Head** box and an **End of body**
-  box. You see it only if you may change the site's settings. **Check and keep** checks the
-  code exactly as [site code](/docs/page-builder/site-code#page-code) is checked, then keeps
-  it with the page, so it is saved in the draft on **Save**, goes live on **Publish**, and
-  comes back with an older version you restore. Anyone else sees one line on General, "This
-  page adds its own code. Only people who can change site settings can see or edit it.",
-  and never the code.
+- **Code**, last, holds code and CSS added to this page only: a **CSS** box, then a **Head**
+  box and an **End of body** box. You see it only if you may change the site's settings.
+  **Check and keep** checks the code exactly as
+  [site code](/docs/page-builder/site-code#page-code) is checked, and **Check and keep CSS**
+  checks the CSS as [custom CSS](/docs/page-builder/custom-css#a-pages-css) is checked; each
+  then keeps it with the page, so it is saved in the draft on **Save**, goes live on
+  **Publish**, and comes back with an older version you restore. Anyone else sees one line
+  on General, "This page adds its own code or CSS. Only people who can change site settings
+  can see or edit it.", and never the code or the CSS.
 
 If a **Save** or **Publish** is refused for a field shown in Page settings, the message names
 the field with **Show me**, which opens Page settings on that field's tab with the field
