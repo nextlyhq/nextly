@@ -65,6 +65,7 @@ import {
   type RegionMarkPlacement,
 } from "./canvas-region-placement";
 import {
+  boxInFrameViewport,
   canvasContentRect,
   canvasRootFrom,
   onScreenBandOf,
@@ -559,9 +560,12 @@ export function EmptyRegionBand({
   // The button's box in the frame, mapped corner by corner to the editor's
   // coordinates, as a context menu opened in the frame is.
   const anchorOf = (element: HTMLElement): EmptyRegionAnchor => {
-    const box = element.getBoundingClientRect();
-    const start = canvas.toHost({ x: box.left, y: box.top });
-    const end = canvas.toHost({ x: box.right, y: box.bottom });
+    const box = boxInFrameViewport(element);
+    const start = canvas.toHost({ x: box.x, y: box.y });
+    const end = canvas.toHost({
+      x: box.x + box.width,
+      y: box.y + box.height,
+    });
     return {
       x: start.x,
       y: start.y,

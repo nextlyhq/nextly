@@ -785,7 +785,7 @@ ${EMPTY_LIST}[data-nx-list-visitors]:not([data-nx-list-still])::before {
 
 .nx-canvas-region-empty__actions > button:focus-visible {
   outline: 2px solid var(--nx-builder-select, Highlight);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 
 .nx-canvas-region-empty__actions > button:disabled {
