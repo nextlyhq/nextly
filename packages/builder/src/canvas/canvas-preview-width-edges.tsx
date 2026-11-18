@@ -90,7 +90,13 @@ interface Drag {
    * drag ends: the host draws the settled width over them where it differs,
    * and a fitted box the same width before and after is not drawn again.
    */
-  readonly drawn: { readonly box: string; readonly page: string };
+  readonly drawn: {
+    readonly box: string;
+    readonly page: string;
+    readonly stage: string;
+  };
+  /** The stage around the box, held at the box's width while it overflows. */
+  readonly stage: HTMLElement | null;
   width: number;
   frameRequest: number | null;
 }
@@ -98,6 +104,7 @@ interface Drag {
 /** The box and its page as the host drew them, before a drag wrote over them. */
 function giveBack(held: Drag): void {
   if (held.box !== null) held.box.style.width = held.drawn.box;
+  if (held.stage !== null) held.stage.style.minWidth = held.drawn.stage;
   if (held.page !== null) {
     held.page.style.width = held.drawn.page;
     held.page.style.pointerEvents = "";
@@ -194,7 +201,11 @@ function Edges({
     ) {
       return;
     }
-    const sizes = new view.ResizeObserver(() => placeHandles(element));
+    // Not mid-drag: a handle that moved between beside and inside the frame
+    // would leave the pointer that holds it.
+    const sizes = new view.ResizeObserver(() => {
+      if (drag.current === null) placeHandles(element);
+    });
     sizes.observe(box);
     if (box.parentElement !== null) sizes.observe(box.parentElement);
     return () => sizes.disconnect();
@@ -258,7 +269,6 @@ function Edges({
       readout.current.textContent = `${String(shown)}px`;
       readout.current.style.left = `calc(50% + ${String((shown * held.scale) / 2)}px)`;
     }
-    placeHandles(root.current);
   };
 
   const onPointerDown = (
@@ -277,24 +287,37 @@ function Edges({
     const page = box?.querySelector<HTMLElement>(FRAME_PAGE_SELECTOR) ?? null;
     // The page takes no pointer while the handle is dragged across it.
     if (page !== null) page.style.pointerEvents = "none";
+    const stage = box?.parentElement ?? null;
+    // The well's own width: the stage grows past it with a frame wider than
+    // it, so the canvas region around it is what the frame centres in. The
+    // stage's where the frame is drawn outside the shell.
+    const region =
+      (box?.closest(".nx-canvas-scroller") ?? stage)?.clientWidth ?? 0;
+    const painted = width * scale;
     drag.current = {
       pointerId: event.pointerId,
       side,
       startX: event.clientX,
       startWidth: width,
       scale,
-      // The well's own width: the stage grows past it with a frame wider
-      // than it, so the canvas region around it is what the frame centres
-      // in. The stage's where the frame is drawn outside the shell.
-      region:
-        (box?.closest(".nx-canvas-scroller") ?? box?.parentElement)
-          ?.clientWidth ?? 0,
+      region,
       box,
       page,
+      stage,
+      drawn: {
+        box: box?.style.width ?? "",
+        page: page?.style.width ?? "",
+        stage: stage?.style.minWidth ?? "",
+      },
       width,
-      drawn: { box: box?.style.width ?? "", page: page?.style.width ?? "" },
       frameRequest: null,
     };
+    // A frame wider than the region keeps its stage at its width for the
+    // drag, so it narrows centred in it and the region's scroll stays put
+    // under the pointer rather than being clamped as the frame narrows.
+    if (stage !== null && region > 0 && painted > region) {
+      stage.style.minWidth = `${String(painted)}px`;
+    }
     setDragging(true);
     onDragging?.(true);
   };

@@ -205,12 +205,18 @@ test("at a zoom that overflows the canvas, the dragged edge follows the pointer"
   const y = box.y + box.height / 2;
   await page.mouse.move(x, y);
   await page.mouse.down();
-  // The frame starts at the region's left edge, so its right edge moves by
-  // the pointer's travel alone: 100 screen pixels at 100% is 100px.
+  // The region's scroll holds while the frame narrows, so the handle stays
+  // under the pointer: 100 screen pixels in at 100% is 200px narrower.
   await page.mouse.move(x - 100, y, { steps: 8 });
+  await expect
+    .poll(async () => {
+      const moved = await grip.boundingBox();
+      return moved === null ? Number.NaN : moved.x + moved.width / 2;
+    })
+    .toBeCloseTo(x - 100, -1);
   await page.mouse.up();
-  await expect.poll(() => layoutWidth(page)).toBeGreaterThanOrEqual(1179);
-  expect(await layoutWidth(page)).toBeLessThanOrEqual(1181);
+  await expect.poll(() => layoutWidth(page)).toBeGreaterThanOrEqual(1079);
+  expect(await layoutWidth(page)).toBeLessThanOrEqual(1081);
 });
 
 test("a font size changed at 900px is stored for Desktop, and none for Tablet", async ({

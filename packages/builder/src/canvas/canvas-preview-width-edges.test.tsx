@@ -230,6 +230,63 @@ describe("dragging a handle", () => {
   });
 });
 
+describe("an overflowing frame", () => {
+  it("holds the stage at the frame's width while dragging, then lets it go", () => {
+    // A frame painted 1280 wide in an 800px canvas region, at 100%.
+    function Overflowing(): React.JSX.Element {
+      const [override, setOverride] = React.useState<number | null>(null);
+      const width = override ?? 1280;
+      return (
+        <div className="nx-canvas-scroller">
+          <div className="nx-canvas-stage">
+            <div {...{ [CANVAS_FRAME_BOX_ATTRIBUTE]: "" }} style={{ width }}>
+              <iframe
+                className="nx-canvas-frame__page"
+                title="Page"
+                style={{ width }}
+              />
+              <PreviewWidthEdges
+                width={width}
+                scale={1}
+                control={{
+                  breakpoints: SITE,
+                  edited: BASE_BREAKPOINT,
+                  deviceWidth: 1280,
+                  override,
+                  onChange: next => {
+                    told.push(next);
+                    setOverride(next);
+                  },
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      );
+    }
+    render(<Overflowing />);
+    const scroller = document.querySelector<HTMLElement>(".nx-canvas-scroller");
+    const stage = document.querySelector<HTMLElement>(".nx-canvas-stage");
+    if (scroller === null || stage === null) throw new Error("no region");
+    Object.defineProperty(scroller, "clientWidth", { get: () => 800 });
+    const right = handle("right");
+    act(() => {
+      fireEvent.pointerDown(right, { button: 0, pointerId: 1, clientX: 0 });
+    });
+    // Held, so the region's scroll is not clamped as the frame narrows.
+    expect(stage.style.minWidth).toBe("1280px");
+    act(() => {
+      fireEvent.pointerMove(right, { pointerId: 1, clientX: -100 });
+    });
+    act(() => {
+      fireEvent.pointerUp(right, { pointerId: 1, clientX: -100 });
+    });
+    // Centred in the held stage, the right edge 100px in: 200px narrower.
+    expect(told).toEqual([1080]);
+    expect(stage.style.minWidth).toBe("");
+  });
+});
+
 describe("handing the frame back on release", () => {
   it("leaves the frame's box as the host draws it, when the host's width for it is unchanged", () => {
     vi.spyOn(window, "requestAnimationFrame").mockImplementation(step => {

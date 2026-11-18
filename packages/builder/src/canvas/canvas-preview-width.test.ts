@@ -183,24 +183,29 @@ describe("the painted width a dragged edge asks for", () => {
     ).toBe(700);
   });
 
-  it("follows the right edge alone while the frame overflows the region", () => {
-    // 1280 painted in an 800 region: the frame starts at the region's left
-    // edge, so its right edge moves by the pointer's travel alone.
+  it("centres an overflowing frame in the width it started at, both edges moving", () => {
+    // 1280 painted in an 800 region: the stage is held at 1280 for the drag,
+    // so the frame is centred in it and the right edge follows the pointer.
     expect(
       draggedPaintedWidth({ side: 1, start: 1280, region: 800, travel: -100 })
-    ).toBe(1180);
-    // Past the region's width the frame centres again, both edges moving.
+    ).toBe(1080);
     expect(
-      draggedPaintedWidth({ side: 1, start: 1280, region: 800, travel: -580 })
-    ).toBe(600);
+      draggedPaintedWidth({ side: -1, start: 1280, region: 800, travel: 100 })
+    ).toBe(1080);
   });
 
-  it("puts the left edge at the pointer once it leaves the region's start", () => {
-    // The overflowing frame's left edge is the region's; moved 50px in, the
-    // frame is centred with that edge at 50.
+  it("changes an overflowing frame smoothly from its first pixel, either way", () => {
+    // No jump to the region's width on the first move.
     expect(
-      draggedPaintedWidth({ side: -1, start: 1280, region: 800, travel: 50 })
-    ).toBe(700);
+      draggedPaintedWidth({ side: -1, start: 1280, region: 800, travel: 1 })
+    ).toBe(1278);
+    expect(
+      draggedPaintedWidth({ side: -1, start: 1280, region: 800, travel: -1 })
+    ).toBe(1282);
+    // Outward past the width it started at, the right edge moves alone.
+    expect(
+      draggedPaintedWidth({ side: 1, start: 1280, region: 800, travel: 30 })
+    ).toBe(1310);
   });
 
   it("moves both edges together where the region is not measured", () => {

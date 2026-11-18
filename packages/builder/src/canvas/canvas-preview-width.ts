@@ -123,12 +123,13 @@ export function snappedPreviewWidth(
  * it, in screen pixels, from the painted width the drag `start`ed at, the
  * `region`'s width and the pointer's `travel` since.
  *
- * The frame is centred while it is narrower than the region, so both edges
- * move together and the width changes by twice the travel. A frame wider
- * than the region starts at the region's left edge instead: there its right
- * edge moves by the travel alone, and a left edge moved in from the
- * region's start is one of a centred frame again. A region not measured is
- * taken as roomy enough to centre.
+ * The frame is centred in its stage, so both edges move together and the
+ * width changes by twice the travel. The stage is the region, or the width
+ * the frame started at where that is wider: an overflowing frame's stage is
+ * held at that width for the drag (`canvas-preview-width-edges.tsx`), so the
+ * region's scroll is never clamped under the pointer. Past that width the
+ * stage grows with the frame from its left edge, and the right edge moves by
+ * the travel alone. A region not measured is taken as roomy enough.
  *
  * @experimental
  */
@@ -145,13 +146,13 @@ export function draggedPaintedWidth({
   readonly travel: number;
 }): number {
   if (!(region > 0)) return start + side * 2 * travel;
-  const overflowing = start >= region;
+  const stage = Math.max(region, start);
   if (side === 1) {
-    const edge = (overflowing ? start : (region + start) / 2) + travel;
-    return edge >= region ? edge : 2 * edge - region;
+    const edge = (stage + start) / 2 + travel;
+    return edge >= stage ? edge : 2 * edge - stage;
   }
-  const edge = (overflowing ? 0 : (region - start) / 2) + travel;
-  return region - 2 * edge;
+  const edge = (stage - start) / 2 + travel;
+  return stage - 2 * edge;
 }
 
 /**
