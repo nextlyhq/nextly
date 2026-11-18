@@ -210,9 +210,13 @@ export interface PublishQuestion {
   /**
    * Ask about the unpublished parts `documents` place, publishing those the
    * author chooses with them. Throws when the author calls the publish off,
-   * so nothing goes live.
+   * so nothing goes live, and, when `stillMay` says the document may no
+   * longer be written once the author answered, before any part is published.
    */
-  readonly offer: (documents: readonly unknown[]) => Promise<void>;
+  readonly offer: (
+    documents: readonly unknown[],
+    stillMay?: () => boolean
+  ) => Promise<void>;
   /** The question, to be drawn anywhere inside the editor. */
   readonly dialog: JSX.Element;
 }
@@ -224,9 +228,19 @@ export interface PublishQuestion {
 export function usePublishQuestion(subject: PublishSubject): PublishQuestion {
   const { ask, dialog } = usePublishAsk(subject);
   const offer = useCallback(
-    async (documents: readonly unknown[]): Promise<void> => {
+    async (
+      documents: readonly unknown[],
+      stillMay?: () => boolean
+    ): Promise<void> => {
       const readiness = await askReadiness({ documents, layout: null });
       const choice = await ask(readiness);
+      // Its parts go live only with it: a document no longer to be written
+      // (its lock taken meanwhile) takes none of them live.
+      if (stillMay !== undefined && !stillMay()) {
+        throw new Error(
+          `This ${subject} can no longer be published from here, so nothing it uses was published either.`
+        );
+      }
       if (choice?.kind === "with" && readiness !== null) {
         const result = await publishChosen(choice.dependencies);
         reportLeftUnpublished(result, readiness, subject);

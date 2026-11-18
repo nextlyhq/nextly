@@ -102,6 +102,7 @@ import type { RegionCardFacts } from "../page-layout";
 
 import { offeredSelfOf } from "./offered-library";
 import {
+  inspectedBindingsOf,
   pageInlineOf,
   useRegionEditing,
   useRegionsAsEdited,
@@ -625,6 +626,52 @@ describe("saving the header", () => {
     expect(publish).toHaveBeenCalledTimes(1);
   });
 
+  it("asks nothing and publishes nothing once a colleague holds the header", async () => {
+    const publish = vi.fn(() => Promise.resolve(STORED));
+    hoisted.session = sessionWith({ publish });
+    const { rerender } = render(<Host />);
+    await enterHeader();
+    editHeader();
+    hoisted.session = sessionWith({
+      publish,
+      lock: { status: "held-by-other", holder: "Ana Diaz" },
+    });
+    rerender(<Host />);
+
+    act(() => current().host.topBar?.publish());
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Publish header" })
+    );
+
+    await waitFor(() =>
+      expect(hoisted.toastError).toHaveBeenCalledWith(
+        "Ana Diaz is editing this header. Try again when they're done."
+      )
+    );
+    expect(hoisted.offer).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("hands the parts question a check of the header's lock as it is then", async () => {
+    const { rerender } = render(<Host />);
+    await enterHeader();
+    editHeader();
+
+    act(() => current().host.topBar?.publish());
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Publish header" })
+    );
+    await waitFor(() => expect(hoisted.offer).toHaveBeenCalledTimes(1));
+    const stillMay = hoisted.offer.mock.calls[0]?.[1] as () => boolean;
+    expect(stillMay()).toBe(true);
+
+    hoisted.session = sessionWith({
+      lock: { status: "held-by-other", holder: "Ana Diaz" },
+    });
+    rerender(<Host />);
+    expect(stillMay()).toBe(false);
+  });
+
   it("saves the header, not the page, when the page is stored meanwhile", async () => {
     const saveDraft = vi.fn(() => Promise.resolve(STORED));
     hoisted.session = sessionWith({ saveDraft });
@@ -799,6 +846,23 @@ describe("what Add offers while a header is edited", () => {
     expect(offeredSelfOf(target, CARDS, page)).toEqual({
       document: HEADER,
       identity: { documentId: "h1" },
+    });
+  });
+});
+
+describe("the inspector's bindings while a header is edited", () => {
+  it("belong to no page: no entry offered, no unbind planned against it, lists judged as a component's", () => {
+    const page = {
+      entryCollection: "pages",
+      bindingEntry: { kind: "collection", slug: "pages", documentId: "p1" },
+      editedDocument: { documentId: "p1" },
+    };
+
+    expect(inspectedBindingsOf(undefined, page)).toBe(page);
+    expect(inspectedBindingsOf("header", page)).toEqual({
+      entryCollection: undefined,
+      bindingEntry: null,
+      editedDocument: null,
     });
   });
 });

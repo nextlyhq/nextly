@@ -87,6 +87,7 @@ import { useReadBack } from "./read-back";
 import { recentColoursStore } from "./recent-colours-store";
 import { regionRefusal } from "./region-card";
 import {
+  inspectedBindingsOf,
   pageInlineOf,
   useRegionEditing,
   useRegionsAsEdited,
@@ -657,12 +658,15 @@ function EditorBody<TFieldValues extends FieldValues>({
     preview: componentView.preview,
     // The stored document's kind too: a component's lists relate to the
     // entries of the pages placing it, as its save judges them.
-    entryCollection,
     // A component has no entry of its own: its bindings read each placing
     // page's, so the picker lists no entry for it and it plans no unbind of
-    // one, as its lists and its save already judge it.
-    bindingEntry: isComponentDocument ? null : identity,
-    editedDocument: isComponentDocument ? null : editedDocument,
+    // one, as its lists and its save already judge it. So with a header
+    // edited in place; the canvas is still drawn as the page's entry.
+    ...inspectedBindingsOf(regionEditing.area, {
+      entryCollection,
+      bindingEntry: isComponentDocument ? null : identity,
+      editedDocument: isComponentDocument ? null : editedDocument,
+    }),
     canvasEntry: identity,
     conditionsUnchecked,
     conditionsApplied: conditions.applied,

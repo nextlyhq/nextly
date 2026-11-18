@@ -333,6 +333,46 @@ function unpublishedFromOf(session: DocumentSession): string | undefined {
   return published && unpublishedChanges ? (changedAt ?? undefined) : undefined;
 }
 
+/** A publish the region's lock refuses, in the author's words. */
+function lockRefusal(
+  area: RegionArea,
+  session: Pick<DocumentSession, "lock">
+): string {
+  return session.lock.status === "held-by-other"
+    ? lockedBy(area, session.lock.holder)
+    : saveFailed(area, "publish", null);
+}
+
+/**
+ * The inspector's binding identities: the page's own, or, while a header or
+ * footer is edited in place, a component's: no entry of its own, since its
+ * bindings read each placing page's, so none is offered and no unbind is
+ * planned against the page, and its lists judged as a component's.
+ */
+export function inspectedBindingsOf<
+  T extends {
+    readonly entryCollection: string | null | undefined;
+    readonly bindingEntry: unknown;
+    readonly editedDocument: unknown;
+  },
+>(
+  area: RegionArea | undefined,
+  page: T
+):
+  | T
+  | {
+      readonly entryCollection: undefined;
+      readonly bindingEntry: null;
+      readonly editedDocument: null;
+    } {
+  if (area === undefined) return page;
+  return {
+    entryCollection: undefined,
+    bindingEntry: null,
+    editedDocument: null,
+  };
+}
+
 /** A refusal of a save or publish, in the author's words. */
 function refusalWords(
   area: RegionArea,
@@ -472,6 +512,9 @@ function useRegionStore({
   const latest = useRef<RegionStore["store"]>(() => Promise.resolve(false));
   const editedNow = useRef<Opening | null>(null);
   editedNow.current = area === undefined ? null : removal.opening;
+  // The session as it is now, whose lock a publish asks about as it goes.
+  const sessionNow = useRef(session);
+  sessionNow.current = session;
   const store = useCallback(
     async (intent: "save" | "publish"): Promise<boolean> => {
       if (area === undefined || field === undefined) return false;
@@ -480,7 +523,10 @@ function useRegionStore({
       setBusy(true);
       const ready =
         intent !== "publish" ||
-        (await readyToPublish(removal, finished.document));
+        (await readyToPublish(removal, finished.document, {
+          held: () => sessionNow.current.lock.status === "held",
+          refusal: () => lockRefusal(area, sessionNow.current),
+        }));
       if (!ready) {
         setBusy(false);
         return false;
@@ -537,11 +583,22 @@ function useRegionStore({
  */
 async function readyToPublish(
   removal: RegionRemoval,
-  document: BlockDocument
+  document: BlockDocument,
+  lock: {
+    /** Whether the session holds the component's lock now. */
+    readonly held: () => boolean;
+    /** What is said when it does not. */
+    readonly refusal: () => string;
+  }
 ): Promise<boolean> {
   if (removal.componentId === undefined) return false;
+  // Nothing is asked or put live for a publish the lock already refuses.
+  if (!lock.held()) {
+    toast.error(lock.refusal());
+    return false;
+  }
   try {
-    await removal.offer([document]);
+    await removal.offer([document], lock.held);
     await removal.hold(removal.componentId, () => document, removal.locale);
     return true;
   } catch (error) {
