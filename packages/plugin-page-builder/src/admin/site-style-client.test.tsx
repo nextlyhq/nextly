@@ -1003,6 +1003,47 @@ describe("a save inside the editor, as a step of its history", () => {
       expect(writes.at(-1)).toMatchObject({ tokens: after });
     });
 
+    it("undoes a save queued behind the route to the route's after, where the site gives no versions", async () => {
+      // No versions: the save is written whole, with nothing read back, so
+      // what it replaced is only what the route said the section holds.
+      readAnswer = { data: { tokens: before }, isPending: false, error: null };
+      const { steps, wrapper } = editorHistory();
+      const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+      let answer: (halves: {
+        before: unknown;
+        after: unknown;
+      }) => void = () => {};
+      const routed = new Promise<{ before: unknown; after: unknown }>(
+        resolve => {
+          answer = resolve;
+        }
+      );
+      const edited = {
+        tokens: [colour("t-kept", "#ff0000")],
+        order: ["t-kept"],
+      };
+      let cleaned: Promise<void> | undefined;
+      let saved: Promise<unknown> | undefined;
+      await act(async () => {
+        cleaned = result.current.changeThrough("tokens", () => routed);
+        await Promise.resolve();
+        saved = result.current.save("tokens", edited);
+        await new Promise(resolve => setTimeout(resolve, 20));
+      });
+      await act(async () => {
+        answer({ before, after });
+        await cleaned;
+        await saved;
+      });
+      expect(writes).toEqual([{ tokens: edited }]);
+      expect(steps).toHaveLength(2);
+      await act(async () => {
+        await steps[1]?.undo();
+      });
+      // Back to what the route left, not to the spare colour it took out.
+      expect(writes.at(-1)).toEqual({ tokens: after });
+    });
+
     it("keeps no step when the route stored nothing, or refused", async () => {
       readAnswer = { data: { tokens: before }, isPending: false, error: null };
       const { steps, wrapper } = editorHistory();
