@@ -324,11 +324,17 @@ async function recordRow(
 
 const MARKERS = () => join(basePath, ".nextly", "save-in-progress");
 
-/** Every marker of the entity in the project's `.nextly/` folder, one file per record. */
+/**
+ * Every marker of the entity in the project's `.nextly/` folder, one file per record: the `.json`
+ * files, as the commands read them, not a temporary copy beside one.
+ */
 function entityMarkers(path: SavePath): Array<Record<string, unknown>> {
   if (!existsSync(MARKERS())) return [];
   return readdirSync(MARKERS())
-    .filter(name => name.startsWith(`${path.kind}-${path.slug}-`))
+    .filter(
+      name =>
+        name.startsWith(`${path.kind}-${path.slug}-`) && name.endsWith(".json")
+    )
     .map(
       name =>
         JSON.parse(readFileSync(join(MARKERS(), name), "utf-8")) as Record<

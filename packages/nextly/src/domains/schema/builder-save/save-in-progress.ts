@@ -261,8 +261,11 @@ export async function recordSaveStarted(args: {
     // save the commands with no database cannot see, so it goes too and the save is refused. A
     // marker the failure came after (its temporary copy not removed, say) goes first.
     made.splice(made.indexOf(entry), 1);
-    await removeMarker(markerPath(args.projectRoot, record), record);
-    await meta.delete(key);
+    try {
+      await removeMarker(markerPath(args.projectRoot, record), record);
+    } finally {
+      await meta.delete(key);
+    }
     throw error;
   }
   return {
@@ -318,7 +321,9 @@ async function removeMarker(
   try {
     standing = JSON.parse(await readFile(path, "utf-8"));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    // No marker there: none was placed, or its folder could not be made (a file in its way).
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return;
     throw error;
   }
   if ((standing as { id?: unknown } | null)?.id === record.id) {
