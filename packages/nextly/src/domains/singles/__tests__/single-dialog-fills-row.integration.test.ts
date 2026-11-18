@@ -248,6 +248,43 @@ describeEachDialect(
       expect(body.hasDestructiveChanges).toBe(false);
     });
 
+    // A save that adds a required field stating a default and changes another field's type takes
+    // the push road, which judges the type change by the values the column holds: nothing is asked,
+    // the row takes the default, and the other column changes type.
+    it("fills a required field's default on a save that also changes another field's type", async () => {
+      await save([BODY, { name: "count", type: "text" }]);
+      const fields: Field[] = [
+        BODY,
+        { name: "count", type: "number" },
+        {
+          name: "tagline",
+          type: "text",
+          required: true,
+          defaultValue: "Draft",
+        },
+      ];
+      const answer = await dispatchSingles(
+        "previewSingleSchemaChanges",
+        { slug: "sdf_home" },
+        { fields }
+      );
+      const preview = (
+        answer instanceof Response ? await answer.json() : answer
+      ) as { data?: unknown } & Record<string, unknown>;
+      const body = (preview.data ?? preview) as {
+        interactiveFields?: { name: string }[];
+      };
+      expect((body.interactiveFields ?? []).map(field => field.name)).toEqual(
+        []
+      );
+
+      await save(fields);
+      const filled = await row();
+      expect(filled.tagline).toBe("Draft");
+      expect(filled.body).toBe("kept");
+      expect(await nullable("tagline")).toBe(false);
+    });
+
     // A save that also changes a column's type takes the push road, which offers no default for
     // a unique column: the review asks about a required unique field there, as it did before the
     // row was filled, and the person's answer is what the save applies.
