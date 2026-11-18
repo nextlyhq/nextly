@@ -87,7 +87,7 @@ interface SavePath {
   create(fields: BuilderField[]): Promise<void>;
   save(t: TestNextly, fields: BuilderField[]): Promise<unknown>;
   /** Store an entry holding `values`, where the entity has entries of its own. */
-  store?(t: TestNextly, values: Record<string, string>): Promise<void>;
+  store?(t: TestNextly, values: Record<string, string | number>): Promise<void>;
   /** Read the entry back through the Direct API. */
   read?(t: TestNextly): Promise<Record<string, unknown>>;
 }
