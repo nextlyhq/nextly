@@ -90,9 +90,9 @@ import {
 } from "../../domains/schema/migrate-create/generate-plugin";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
 import {
+  prepareWhole,
   publishHeld,
   withMigrationWriterHold,
-  writeWhole,
 } from "../../domains/schema/migrate-create/writer-hold";
 import type {
   ContributedElements,
@@ -982,11 +982,10 @@ async function runBlankPath(
     reportDryRun(logger, { changes: [{ action: "write", target: sqlFile }] });
     return;
   }
-  // As the folder's holder, checked before the file and again after it, and
-  // whole or not at all for a reader.
-  await publishHeld(migrationsDir, [sqlPath], async () => {
+  // As the folder's holder (`publishHeld`), and whole or not at all for a reader.
+  await publishHeld(migrationsDir, async () => {
     await mkdir(migrationsDir, { recursive: true });
-    await writeWhole(sqlPath, content);
+    return [await prepareWhole(sqlPath, content)];
   });
 
   // F11 PR 3: blank migrations don't get a paired snapshot file. The

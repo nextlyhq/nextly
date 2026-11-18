@@ -37,7 +37,7 @@ import {
   isEntitySettingsRecord,
   type EntitySettingsRecord,
 } from "./entity-settings";
-import { writeWhole } from "./writer-hold";
+import { prepareWhole, type PreparedFile } from "./writer-hold";
 
 export interface SnapshotFile {
   version: 1;
@@ -432,6 +432,25 @@ export function snapshotPathOf(metaDir: string, baseName: string): string {
  * `migrate:check` can verify integrity offline (no DB connection).
  */
 export async function writeSnapshot(
+  ...args: Parameters<typeof prepareSnapshot>
+): Promise<string> {
+  const file = await prepareSnapshot(...args);
+  try {
+    // Whole or not at all: a reader of the folder never finds half a snapshot.
+    await file.place();
+  } catch (error) {
+    await file.discard();
+    throw error;
+  }
+  return file.path;
+}
+
+/**
+ * `writeSnapshot`, stopped before the file is put at its name: written in
+ * full beside it, for a writer that places it with its migration file once
+ * it has made its last check (`publishHeld`).
+ */
+export async function prepareSnapshot(
   metaDir: string,
   baseName: string,
   snapshot: NextlySchemaSnapshot,
@@ -441,7 +460,7 @@ export async function writeSnapshot(
   entities?: EntitySettingsRecord,
   /** Every declared permission, by owner; omitted only by a caller that knows none. */
   permissions?: PermissionRecord
-): Promise<string> {
+): Promise<PreparedFile> {
   await mkdir(metaDir, { recursive: true });
   const byName = (a: { name: string }, b: { name: string }) =>
     a.name.localeCompare(b.name);
@@ -521,10 +540,7 @@ export async function writeSnapshot(
     },
   };
   const json = JSON.stringify(file, sortedKeysReplacer, 2);
-  const path = snapshotPathOf(metaDir, baseName);
-  // Whole or not at all: a reader of the folder never finds half a snapshot.
-  await writeWhole(path, json + "\n");
-  return path;
+  return prepareWhole(snapshotPathOf(metaDir, baseName), json + "\n");
 }
 
 /** Structural check of a snapshot file's `contributions`. */

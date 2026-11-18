@@ -37,6 +37,8 @@ A migration's snapshot and `.sql` file now each appear whole, the snapshot first
 
 A snapshot counts as the newest only once its migration file is beside it. One left alone, by a writer killed between the two files, is passed over, so the next `nextly migrate:create` still writes the change; `nextly migrate:check` names the leftover snapshot to delete.
 
-A command stopped by a held folder ends with `MIGRATIONS_WRITER_BUSY`, and one that another writer overtook with `MIGRATIONS_WRITER_OVERTAKEN`.
+A command stopped by a held folder ends with `MIGRATIONS_WRITER_BUSY`, and one that another writer overtook with `MIGRATIONS_WRITER_OVERTAKEN`. A writer overtaken before its last check puts nothing in place. One that finds out only after its files went in, having stopped for longer than its lease at that moment, leaves them, names them, and says to compare the newest migrations: a writer never deletes a migration file once it is in the folder.
+
+A hold's lease is counted on the clock of the file system the folder is on, so machines sharing a project folder agree on when it lapses.
 
 Add `.nextly-writer.lock` to a project's `.gitignore`: it is left in the migration folder only when a writer is killed, and the next writer removes it.

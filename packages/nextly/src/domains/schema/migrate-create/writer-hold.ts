@@ -39,7 +39,7 @@ import {
   type FileHandle,
 } from "node:fs/promises";
 import { hostname } from "node:os";
-import { resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { describeHolder } from "../pipeline/schema-lock";
@@ -142,6 +142,20 @@ export function isWriterHoldLost(error: unknown): error is NextlyError {
   );
 }
 
+/**
+ * Whether `error` is the refusal of a writer another overtook: one that lost
+ * its hold, or found a migration written after the snapshot it started from.
+ * Such a writer has put nothing of its own in the folder, and what is new
+ * there is the other writer's.
+ */
+export function isWriterOvertaken(error: unknown): boolean {
+  return (
+    NextlyError.is(error) &&
+    (error.logContext?.reason === WRITER_HOLD_LOST_REASON ||
+      error.logContext?.reason === WRITER_START_MOVED_REASON)
+  );
+}
+
 /** The hold's file in `migrationsDir`. */
 function lockPathOf(migrationsDir: string): string {
   return resolve(migrationsDir, WRITER_LOCK_FILE);
@@ -196,11 +210,13 @@ async function holdIn(handle: FileHandle): Promise<HoldReading> {
 /** `work` over the file at `path`, opened once; undefined where there is none. */
 async function withFileAt<T>(
   path: string,
-  work: (handle: FileHandle) => Promise<T>
+  work: (handle: FileHandle) => Promise<T>,
+  /** `"r+"` where `work` writes to the file. */
+  mode: "r" | "r+" = "r"
 ): Promise<T | undefined> {
   let handle: FileHandle;
   try {
-    handle = await open(path, "r");
+    handle = await open(path, mode);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
@@ -215,6 +231,30 @@ async function withFileAt<T>(
 /** The hold on `path`, or undefined where nothing holds it. */
 function readHold(path: string): Promise<HoldReading | undefined> {
   return withFileAt(path, holdIn);
+}
+
+/**
+ * The time by the clock of the file system `dir` is on, in epoch
+ * milliseconds: the modification time it gives a file written there now.
+ *
+ * A hold's lease is counted on this clock alone. Its file's time is set by
+ * the file system when the holder writes to it (`renewOwn`), and read here
+ * the same way, so two machines sharing the folder agree on when a hold
+ * lapses whatever their own clocks say.
+ */
+async function folderNow(dir: string): Promise<number> {
+  const probe = resolve(dir, `${WRITER_LOCK_FILE}.${randomUUID()}.now`);
+  try {
+    await writeFile(probe, "", { flag: "wx" });
+    return (await stat(probe)).mtimeMs;
+  } finally {
+    await rm(probe, { force: true });
+  }
+}
+
+/** Whether the hold read at `path` has lapsed, by the folder's clock. */
+async function hasLapsed(path: string, hold: HoldReading): Promise<boolean> {
+  return hold.lapsesAt <= (await folderNow(dirname(path)));
 }
 
 /** Whether `error` says the file is already there. */
@@ -233,7 +273,7 @@ function alreadyThere(error: unknown): boolean {
  */
 async function takeFromPath(
   path: string,
-  wanted: (moved: HoldReading) => boolean
+  wanted: (moved: HoldReading) => boolean | Promise<boolean>
 ): Promise<boolean> {
   const aside = `${path}.${randomUUID()}.aside`;
   try {
@@ -243,7 +283,7 @@ async function takeFromPath(
     throw error;
   }
   const moved = await readHold(aside);
-  const take = moved !== undefined && wanted(moved);
+  const take = moved !== undefined && (await wanted(moved));
   if (!take) {
     await link(aside, path).catch((error: unknown) => {
       if (!alreadyThere(error)) throw error;
@@ -261,9 +301,9 @@ async function takeFromPath(
 function setLapsedAside(path: string, lapsed: HoldReading): Promise<boolean> {
   return takeFromPath(
     path,
-    moved =>
+    async moved =>
       moved.record?.token === lapsed.record?.token &&
-      moved.lapsesAt <= Date.now()
+      (await hasLapsed(path, moved))
   );
 }
 
@@ -284,16 +324,21 @@ async function renewOwn(
   token: string
 ): Promise<true | HoldRecord | undefined> {
   const other = () => readHold(path).then(now => now?.record);
-  const renewed = await withFileAt(path, async handle => {
-    const held = await holdIn(handle);
-    if (held.record?.token !== token) return held.record;
-    const at = new Date();
-    await handle.utimes(at, at);
-    const there = await stat(path).catch(() => undefined);
-    return there?.ino === held.file.ino && there.dev === held.file.dev
-      ? true
-      : other();
-  });
+  const renewed = await withFileAt(
+    path,
+    async handle => {
+      const held = await holdIn(handle);
+      if (held.record?.token !== token) return held.record;
+      // Its first character written again: the file system sets the file's
+      // time itself, by its own clock, as it does for every writer's.
+      await handle.write("{", 0);
+      const there = await stat(path).catch(() => undefined);
+      return there?.ino === held.file.ino && there.dev === held.file.dev
+        ? true
+        : other();
+    },
+    "r+"
+  );
   return renewed;
 }
 
@@ -350,13 +395,14 @@ export function writerHeldError(args: {
   });
 }
 
-/** `writerHeldError`, for the hold as its file was read. */
-function heldError(
+/** `writerHeldError`, for the hold as its file at `path` was read. */
+async function heldError(
+  path: string,
   command: string,
   whenHeld: WhenHeld,
   held: HoldReading,
   waitedMs: number
-): NextlyError {
+): Promise<NextlyError> {
   const now = Date.now();
   const started = Date.parse(held.record?.startedAt ?? "");
   return writerHeldError({
@@ -368,7 +414,10 @@ function heldError(
       heldForSeconds: Number.isNaN(started)
         ? null
         : Math.max(0, Math.round((now - started) / 1000)),
-      lapsesInSeconds: Math.round((held.lapsesAt - now) / 1000),
+      // What is left of its lease, counted on the folder's clock.
+      lapsesInSeconds: Math.round(
+        (held.lapsesAt - (await folderNow(dirname(path)))) / 1000
+      ),
     },
     waitedMs,
     now,
@@ -425,6 +474,28 @@ function releaseOnExit(): void {
   });
 }
 
+/** The error codes of a file system that has no hard links. */
+const NO_LINKS = new Set(["EPERM", "ENOTSUP", "ENOSYS", "EOPNOTSUPP"]);
+
+/**
+ * Puts the hold's file at `path`, where nothing is: written in full under a
+ * name of its own, then linked into place, so the path never names half a
+ * record and the step either takes the path or finds it taken (`EEXIST`).
+ * On a file system with no hard links it is created at the path itself.
+ */
+async function placeHold(path: string, text: string): Promise<void> {
+  const whole = `${path}.${randomUUID()}.new`;
+  try {
+    await writeFile(whole, text, { encoding: "utf-8", flag: "wx" });
+    await link(whole, path);
+  } catch (error) {
+    if (!NO_LINKS.has((error as NodeJS.ErrnoException).code ?? "")) throw error;
+    await writeFile(path, text, { encoding: "utf-8", flag: "wx" });
+  } finally {
+    await rm(whole, { force: true });
+  }
+}
+
 /**
  * Take the hold on `migrationsDir` for `command`, waiting for a held folder or
  * refusing at once as `whenHeld` says. The folder is created where there is
@@ -448,13 +519,14 @@ export async function acquireWriterHold(args: {
   };
   const started = Date.now();
   const deadline = started + (args.whenHeld === "wait" ? bounds.waitMs : 0);
+  const text = JSON.stringify(record, null, 2) + "\n";
   for (;;) {
     try {
-      await writeFile(path, JSON.stringify(record, null, 2) + "\n", {
-        encoding: "utf-8",
-        flag: "wx",
-      });
-      break;
+      await placeHold(path, text);
+      // Its own only once the path is seen to name it: a writer stopped
+      // between placing the file and here may find another's in its place.
+      if ((await readHold(path))?.record?.token === record.token) break;
+      continue;
     } catch (error) {
       // The folder went with the holder that had made it: made again here.
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -466,13 +538,14 @@ export async function acquireWriterHold(args: {
     }
     const reading = await readHold(path);
     if (reading === undefined) continue;
-    if (reading.lapsesAt <= Date.now()) {
+    if (await hasLapsed(path, reading)) {
       await setLapsedAside(path, reading);
       continue;
     }
     if (Date.now() >= deadline) {
       if (createdFolder) await rmdir(migrationsDir).catch(() => undefined);
-      throw heldError(
+      throw await heldError(
+        path,
         args.command,
         args.whenHeld,
         reading,
@@ -674,45 +747,121 @@ export async function assertWriterHold(migrationsDir: string): Promise<void> {
   await scope.getStore()?.holds.get(resolve(migrationsDir))?.assertHeld();
 }
 
+/** A file written in full under another name, waiting to be put at its own. */
+export interface PreparedFile {
+  /** Where the file goes. */
+  readonly path: string;
+  /** Moves it to its own name, in one step. */
+  place(): Promise<void>;
+  /** Removes it where it was never placed. */
+  discard(): Promise<void>;
+}
+
 /**
- * Publish a migration's files, `write`, as the writer that holds
- * `migrationsDir`: the hold is checked before anything is written, and again
- * once the files are in place. A writer that stopped past its lease between
- * the two (a suspended process, a paused machine) may have written beside
- * another that took the folder meanwhile, so where the hold is no longer its
- * own, or the write failed part-way, `files` are withdrawn in the order
- * given and the refusal travels: nothing of the run is left for a reader.
- *
- * The check after cannot undo what another writer read in between; that
- * writer finds the newest snapshot changed before it publishes
- * (`startMovedError`), and writes nothing either.
+ * Write `text` in full under a name beside `path`, to be moved there with
+ * `place`: a reader then finds the whole file at `path` or none.
  */
-export async function publishHeld(
-  migrationsDir: string,
-  files: readonly string[],
-  write: () => Promise<void>
-): Promise<void> {
-  await assertWriterHold(migrationsDir);
+export async function prepareWhole(
+  path: string,
+  text: string
+): Promise<PreparedFile> {
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  await writeFile(temporary, text, { encoding: "utf-8", flag: "wx" });
+  return {
+    path,
+    place: () => rename(temporary, path),
+    discard: () => rm(temporary, { force: true }),
+  };
+}
+
+/** Write `text` at `path` so a reader finds the whole file or none. */
+export async function writeWhole(path: string, text: string): Promise<void> {
+  const file = await prepareWhole(path, text);
   try {
-    await write();
-    await assertWriterHold(migrationsDir);
+    await file.place();
   } catch (error) {
-    for (const file of files) await rm(file, { force: true });
+    await file.discard();
     throw error;
   }
 }
 
 /**
- * Write `text` at `path` so a reader finds the whole file or none: under
- * another name first, then moved into place in one step.
+ * The refusal of a writer that found itself overtaken once its files were in
+ * place. They are left: a migration file in the folder may already be
+ * applied, and a writer never removes one. The developer is told which, and
+ * to compare it with what the other writer wrote.
  */
-export async function writeWhole(path: string, text: string): Promise<void> {
-  const temporary = `${path}.${randomUUID()}.tmp`;
+function leftInPlaceError(
+  command: string,
+  files: readonly string[]
+): NextlyError {
+  const named = files.map(file => basename(file)).join(", ");
+  return NextlyError.serviceUnavailable({
+    publicMessage:
+      `\`${command}\` lost its hold on this project's migration files as it wrote ${named}. ` +
+      "It stopped for longer than its lease, so another run may have written a migration " +
+      "from the same snapshot. What it wrote was left in place, since a migration file may " +
+      "already be applied. Run it again once the newest migrations are compared: where two " +
+      "make the same change, delete the one `nextly migrate:status` does not show applied.",
+    logContext: { reason: WRITER_HOLD_LOST_REASON, command, left: files },
+  });
+}
+
+/**
+ * Publish a migration's files as the writer that holds `migrationsDir`.
+ *
+ * `prepare` writes each file in full under another name. The hold is checked
+ * before that, and again with `stillCurrent` (the caller's own last check)
+ * immediately before the files are put in place, in the order given, with
+ * `alongside` (files written straight to their names, which it answers)
+ * right after: a writer overtaken at any point before that puts nothing in
+ * place.
+ *
+ * What is left is a writer stopped past its lease between that last check
+ * and its files. The hold is checked once more after them, and a writer
+ * overtaken by then stops and names what it wrote (`leftInPlaceError`). It
+ * removes none of it: a migration file in the folder may already be applied
+ * and recorded, and a writer never deletes one.
+ *
+ * Only a snapshot whose migration file then failed to follow it is
+ * withdrawn: no reader counts it, and left it would describe a migration
+ * that does not exist.
+ */
+export async function publishHeld(
+  migrationsDir: string,
+  prepare: () => Promise<readonly PreparedFile[]>,
+  options: {
+    stillCurrent?: () => Promise<void>;
+    alongside?: () => readonly string[];
+  } = {}
+): Promise<void> {
+  await assertWriterHold(migrationsDir);
+  const files = await prepare();
+  const placed: string[] = [];
   try {
-    await writeFile(temporary, text, { encoding: "utf-8", flag: "wx" });
-    await rename(temporary, path);
+    await assertWriterHold(migrationsDir);
+    await options.stillCurrent?.();
+    for (const file of files) {
+      await file.place();
+      placed.push(file.path);
+    }
+    placed.push(...(options.alongside?.() ?? []));
   } catch (error) {
-    await rm(temporary, { force: true });
+    for (const file of files) await file.discard();
+    // A snapshot whose migration file did not follow it. Once that file is
+    // in place nothing is removed, the snapshot beside it included.
+    if (!placed.some(path => path.endsWith(".sql"))) {
+      for (const path of placed) await rm(path, { force: true });
+    }
     throw error;
+  }
+  try {
+    await assertWriterHold(migrationsDir);
+  } catch (error) {
+    if (!isWriterHoldLost(error)) throw error;
+    throw leftInPlaceError(
+      scope.getStore()?.command ?? "migrate:create",
+      placed.filter(path => path.endsWith(".sql"))
+    );
   }
 }

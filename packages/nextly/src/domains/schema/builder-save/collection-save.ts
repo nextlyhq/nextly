@@ -85,6 +85,7 @@ import {
   type GenerateArgs,
 } from "../migrate-create/generate";
 import { loadLatestSnapshot } from "../migrate-create/snapshot-io";
+import { isWriterOvertaken } from "../migrate-create/writer-hold";
 import { countRowsBreakingNotNull } from "../pipeline/classifier/count-helpers";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
@@ -1353,7 +1354,9 @@ async function generateFor(
   try {
     result = await generated;
   } catch (error) {
-    await removeWritten();
+    // Overtaken by another writer, the generation put nothing of its own in
+    // the folder, and what is new there is that writer's: it stays.
+    if (!isWriterOvertaken(error)) await removeWritten();
     throw error;
   }
   if (result === null) return [];

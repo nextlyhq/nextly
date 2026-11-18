@@ -12,6 +12,7 @@ A writer of migration files holds the project's migration folder while it reads 
 ## Fix
 
 - Run the command again. It reads the newest snapshot as it is now, and writes only what that snapshot does not hold.
+- Where the message names a migration file it left in place, the command stopped for longer than its lease just as it put its files in, and found out only afterwards. It removes nothing then, since a migration file in the folder may already be applied. Compare the newest migrations: where two make the same change, delete the one `nextly migrate:status` does not show applied, then run the command again.
 
 ## Example
 

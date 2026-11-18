@@ -180,16 +180,16 @@ import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
   newestSnapshotName,
+  prepareSnapshot,
   snapshotPathOf,
-  writeSnapshot,
   type SnapshotFile,
 } from "./snapshot-io";
 import {
   assertWriterHold,
+  prepareWhole,
   publishHeld,
   startMovedError,
   underWriterHold,
-  writeWhole,
 } from "./writer-hold";
 
 /**
@@ -1517,6 +1517,10 @@ async function generateHeld(
 
   const { sqlPath, snapshotPath } = await writeMigrationPair(args, {
     startedFrom: startOf(previous),
+    companions: () =>
+      companionFiles.map(({ spec, opts }) =>
+        writeCompanionMigrationFile(args.migrationsDir, spec, opts)
+      ),
     metaDir,
     now,
     sqlContent,
@@ -1525,12 +1529,6 @@ async function generateHeld(
     entities: settingsRecord,
     permissions: permissionRecord,
   });
-
-  if (args.dryRun !== true) {
-    for (const { spec, opts } of companionFiles) {
-      writeCompanionMigrationFile(args.migrationsDir, spec, opts);
-    }
-  }
 
   return {
     sqlPath,
@@ -1813,11 +1811,16 @@ async function recordSnapshot(
 interface MigrationPair {
   /** The snapshot file the run started from (`startOf`), checked again as it writes. */
   startedFrom: string | undefined | null;
+  /**
+   * Writes the run's companion migration files, once its own file is in
+   * place, and answers their paths. Absent where the run has none.
+   */
+  companions?: () => string[];
   sqlContent: string;
   written: NextlySchemaSnapshot;
-  contributions: Parameters<typeof writeSnapshot>[4];
-  entities: Parameters<typeof writeSnapshot>[5];
-  permissions: Parameters<typeof writeSnapshot>[6];
+  contributions: Parameters<typeof prepareSnapshot>[4];
+  entities: Parameters<typeof prepareSnapshot>[5];
+  permissions: Parameters<typeof prepareSnapshot>[6];
   metaDir: string;
   now: Date;
 }
@@ -1836,27 +1839,35 @@ async function writeMigrationPair(
   // Where `writeSnapshot` puts it, by the writer's own rule.
   const snapshotPath = snapshotPathOf(pair.metaDir, baseName);
   if (args.dryRun === true) return { sqlPath, snapshotPath };
-  // As the folder's holder, checked before the files and again after them: a
-  // run that lost its hold on the way withdraws both, the file first, since
-  // a snapshot counts only while its file is there.
-  await publishHeld(args.migrationsDir, [sqlPath, snapshotPath], async () => {
-    // Still from the newest snapshot: one written since would make this a
-    // second migration from the one it started at.
-    await refuseMovedFrom(args.migrationsDir, pair.startedFrom);
-    await mkdir(args.migrationsDir, { recursive: true });
-    // The snapshot first, each file whole: a reader counts a migration from
-    // its `.sql`, so it never finds one whose snapshot is still to come.
-    await writeSnapshot(
-      pair.metaDir,
-      baseName,
-      pair.written,
-      pair.sqlContent,
-      pair.contributions,
-      pair.entities,
-      pair.permissions
-    );
-    await writeWhole(sqlPath, pair.sqlContent);
-  });
+  // As the folder's holder (`publishHeld`): both files written in full
+  // aside, the last checks made, then the snapshot put in place and the file
+  // after it, since a reader counts a migration from its `.sql` and so never
+  // finds one whose snapshot is still to come. The companions follow in the
+  // same step, so an overtaken writer adds none after its successor.
+  await publishHeld(
+    args.migrationsDir,
+    async () => {
+      await mkdir(args.migrationsDir, { recursive: true });
+      return [
+        await prepareSnapshot(
+          pair.metaDir,
+          baseName,
+          pair.written,
+          pair.sqlContent,
+          pair.contributions,
+          pair.entities,
+          pair.permissions
+        ),
+        await prepareWhole(sqlPath, pair.sqlContent),
+      ];
+    },
+    {
+      // Still from the newest snapshot: one written since would make this a
+      // second migration from the one it started at.
+      stillCurrent: () => refuseMovedFrom(args.migrationsDir, pair.startedFrom),
+      ...(pair.companions === undefined ? {} : { alongside: pair.companions }),
+    }
+  );
   return { sqlPath, snapshotPath };
 }
 

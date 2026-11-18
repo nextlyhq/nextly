@@ -80,13 +80,13 @@ import {
 } from "../../domains/schema/migrate-create/format-file";
 import {
   loadLatestSnapshot,
+  prepareSnapshot,
   snapshotPathOf,
-  writeSnapshot,
 } from "../../domains/schema/migrate-create/snapshot-io";
 import {
+  prepareWhole,
   publishHeld,
   withMigrationWriterHold,
-  writeWhole,
 } from "../../domains/schema/migrate-create/writer-hold";
 import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
@@ -1036,23 +1036,25 @@ async function adopt(deps: BaselineCoreDeps): Promise<BaselineCoreResult> {
 
       // Where `writeSnapshot` puts it, by the writer's own rule.
       const snapshotPath = snapshotPathOf(planned.metaDir, baseName);
-      // As the folder's holder, checked before the files and again after
-      // them: a run that lost its hold on the way withdraws both, the file
-      // first, and records nothing.
-      await publishHeld(migrationsDir, [sqlPath, snapshotPath], async () => {
+      // As the folder's holder (`publishHeld`): both files written in full
+      // aside, the hold checked, then the snapshot put in place and the file
+      // after it, as `migrate:create` writes them. A run overtaken before
+      // that writes neither, and records nothing.
+      await publishHeld(migrationsDir, async () => {
         await mkdir(migrationsDir, { recursive: true });
-        // The snapshot first, each file whole, as `migrate:create` writes them.
-        await writeSnapshot(
-          planned.metaDir,
-          baseName,
-          planned.snapshot,
-          sqlContent,
-          // What the app contributed to other owners' tables, as every snapshot
-          // writer records it, so the next diff can tell the app's elements from
-          // the owner's own after this file becomes the latest snapshot.
-          planned.contributions
-        );
-        await writeWhole(sqlPath, sqlContent);
+        return [
+          await prepareSnapshot(
+            planned.metaDir,
+            baseName,
+            planned.snapshot,
+            sqlContent,
+            // What the app contributed to other owners' tables, as every snapshot
+            // writer records it, so the next diff can tell the app's elements from
+            // the owner's own after this file becomes the latest snapshot.
+            planned.contributions
+          ),
+          await prepareWhole(sqlPath, sqlContent),
+        ];
       });
 
       // The ledger is bootstrapped out of band by `migrate`, which has never

@@ -86,6 +86,7 @@ const stops = vi.hoisted(() => ({
   aroundSnapshot: undefined as
     | ((migration: string) => Promise<void>)
     | undefined,
+  beforePrepared: undefined as (() => Promise<void>) | undefined,
 }));
 vi.mock(
   "../../../domains/schema/migrate-create/app-migration-inputs",
@@ -117,16 +118,25 @@ vi.mock(
       >();
     return {
       ...original,
-      writeSnapshot: async (
-        ...args: Parameters<typeof original.writeSnapshot>
+      prepareSnapshot: async (
+        ...args: Parameters<typeof original.prepareSnapshot>
       ) => {
+        const stop = stops.beforePrepared;
+        stops.beforePrepared = undefined;
+        await stop?.();
+        const file = await original.prepareSnapshot(...args);
         const look = stops.aroundSnapshot;
         stops.aroundSnapshot = undefined;
-        // The migration's base name, as the snapshot is written for it.
-        await look?.(args[1]);
-        const path = await original.writeSnapshot(...args);
-        await look?.(args[1]);
-        return path;
+        if (look === undefined) return file;
+        return {
+          ...file,
+          // The migration's base name, as the snapshot is written for it.
+          place: async () => {
+            await look(args[1]);
+            await file.place();
+            await look(args[1]);
+          },
+        };
       },
     };
   }
@@ -181,6 +191,7 @@ afterEach(async () => {
   restoreBounds();
   stops.afterInputs = undefined;
   stops.aroundSnapshot = undefined;
+  stops.beforePrepared = undefined;
   await instance?.destroy();
   instance = undefined;
   if (previousDialect === undefined) delete process.env.DB_DIALECT;
@@ -596,7 +607,41 @@ describe.each(getConfiguredTestDialects())(
       expect(await adapter.tableExists(table(PAGES))).toBe(true);
     }, 120_000);
 
-    it("a writer suspended between its check and its files, past its lease, leaves none of them", async () => {
+    it("a Builder save overtaken while it writes leaves the other writer's migration where it is", async () => {
+      restoreBounds();
+      restoreBounds = setWriterHoldBounds({
+        waitMs: 30_000,
+        leaseSeconds: 1,
+        // Never inside the case: the save is stopped, not renewing.
+        renewMs: 600_000,
+      });
+      let created: Ended | undefined;
+      // The save holds the folder, has listed what is in it, and is about to
+      // write its files. Stopped there past its lease, it resumes after
+      // `migrate:create` has taken the folder and written.
+      stops.beforePrepared = async () => {
+        await pause(1_200);
+        created = await migrateCreate(WITH_PAGES, "pages");
+      };
+
+      const saved = await builderCreate();
+
+      expect(created?.code, created?.said).toBeUndefined();
+      // The save is refused as overtaken, having written nothing of its own,
+      // and the command's migration and snapshot are still there.
+      expect(saved.code, saved.said).toBe(-1);
+      expect(sqlFiles().map(f => f.replace(/^[\d_]+/, ""))).toEqual([
+        "base.sql",
+        "pages.sql",
+      ]);
+      // Still one line, each file with its snapshot. The command wrote from
+      // the folder as it found it, the stalled save's definition included.
+      expect(oneLine().flat()).toEqual(
+        expect.arrayContaining([table(POSTS), table(PAGES)])
+      );
+    }, 120_000);
+
+    it("a writer suspended between its last check and its files, past its lease, says what it wrote and deletes nothing", async () => {
       restoreBounds();
       restoreBounds = setWriterHoldBounds({
         waitMs: 30_000,
@@ -606,9 +651,9 @@ describe.each(getConfiguredTestDialects())(
       });
       let second: Ended | undefined;
       let looks = 0;
-      // The first writer has checked its hold and is about to write its
-      // snapshot. Stopped there past its lease, it resumes after a second
-      // writer has taken the folder and written.
+      // The first writer has made its last check and is about to put its
+      // snapshot in place. Stopped there past its lease, it resumes after a
+      // second writer has taken the folder and written.
       stops.aroundSnapshot = async () => {
         looks += 1;
         if (looks > 1) return;
@@ -619,15 +664,23 @@ describe.each(getConfiguredTestDialects())(
       const first = await migrateCreate(WITH_PAGES, "first");
 
       expect(second?.code, second?.said).toBeUndefined();
-      // It wrote its files and then found the folder no longer its own: both
-      // are withdrawn, and it ends as a writer another overtook.
+      // The known limit of a hold kept in a file: both wrote. The first
+      // finds it out, ends as a writer another overtook, and names its file.
       expect(first.code, first.said).toBe(1);
-      expect(printed.join("\n")).toMatch(/MIGRATIONS_WRITER_OVERTAKEN/);
-      expect(sqlFiles().map(f => f.replace(/^[\d_]+/, ""))).toEqual([
-        "base.sql",
-        "second.sql",
-      ]);
-      expect(oneLine()).toEqual([[table(POSTS)], [table(PAGES)]]);
+      const refusal = printed.join("\n");
+      expect(refusal).toMatch(/MIGRATIONS_WRITER_OVERTAKEN/);
+      expect(refusal).toMatch(/as it wrote \S*_first\.sql/);
+      expect(refusal).toMatch(/left in place/);
+      // Neither writer's files were removed: a migration file in the folder
+      // may already be applied.
+      expect(
+        sqlFiles()
+          .map(f => f.replace(/^[\d_]+/, ""))
+          .sort()
+      ).toEqual(["base.sql", "first.sql", "second.sql"]);
+      for (const file of sqlFiles()) {
+        expect(snapshotTables(file), file).toContain(table(POSTS));
+      }
     }, 120_000);
 
     it("a migration appears to nextly migrate with both its files or not at all", async () => {
