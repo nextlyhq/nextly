@@ -8,11 +8,20 @@
  * `finally` of the save runs, as none would in a process that was killed there. Each write point
  * of the save in turn: the definition file, a migration file, a statement of the file run, the
  * ledger's record of it and the registry row. After each, the row and the marker are there and
- * describe the save. A save that ends, written or refused, leaves neither.
+ * describe the save. A save that ends, written or withdrawn whole, leaves neither; one that ends
+ * with part of it kept and nothing recording what (a MySQL save stopped part-way) keeps both. A
+ * record already standing, from a process that stopped, stays as it was through a later save.
  *
  * The kill is released once the case has looked, so the instance's connections can close.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -188,16 +197,23 @@ const PATHS: readonly SavePath[] = [
 ];
 
 /**
- * Offer every statement, once it has run on the adapter or a transaction, as a kill point named
- * `statement:<its text>`.
+ * Watch every statement run on the adapter or a transaction: `before` may throw to refuse it,
+ * `after` runs once it has run.
  */
-function stopAtStatement(t: TestNextly): void {
+function watchStatements(
+  t: TestNextly,
+  watch: {
+    before?(statement: string): void;
+    after?(statement: string): Promise<void>;
+  }
+): void {
   const adapter = t.adapter;
   const executeQuery = adapter.executeQuery.bind(adapter);
   vi.spyOn(adapter, "executeQuery").mockImplementation(
     async (statement, params) => {
+      watch.before?.(statement);
       const result = await executeQuery(statement, params);
-      await stopHere(`statement:${statement}`);
+      await watch.after?.(statement);
       return result;
     }
   );
@@ -213,8 +229,9 @@ function stopAtStatement(t: TestNextly): void {
                   statement: string,
                   params?: Parameters<TransactionContext["execute"]>[1]
                 ) => {
+                  watch.before?.(statement);
                   const result = await target.execute(statement, params);
-                  await stopHere(`statement:${statement}`);
+                  await watch.after?.(statement);
                   return result;
                 };
               }
@@ -228,14 +245,43 @@ function stopAtStatement(t: TestNextly): void {
   );
 }
 
-/** Stop once the ledger has recorded a file of the save applied. */
-function stopAtLedger(): void {
-  const markApplied = SchemaEventsRepository.prototype.markApplied;
-  vi.spyOn(SchemaEventsRepository.prototype, "markApplied").mockImplementation(
-    async function (this: SchemaEventsRepository, ...args) {
-      const marked = await markApplied.apply(this, args);
-      await stopHere("ledger");
-      return marked;
+/** Offer every statement, once it has run, as a kill point named `statement:<its text>`. */
+function stopAtStatement(t: TestNextly): void {
+  watchStatements(t, {
+    after: statement => stopHere(`statement:${statement}`),
+  });
+}
+
+/** A statement adding `column`, in any dialect's quoting. */
+const adding = (column: string) =>
+  new RegExp(`ADD (COLUMN )?["\`]${column}["\`]`);
+
+/** Refuse the first statement adding `column`, before it runs. Returns how many it refused. */
+function refuseAdding(t: TestNextly, column: string): () => number {
+  let refused = 0;
+  watchStatements(t, {
+    before: statement => {
+      if (refused > 0 || !adding(column).test(statement)) return;
+      refused += 1;
+      throw new Error(`injected failure: ${statement}`);
+    },
+  });
+  return () => refused;
+}
+
+/** Stop once the ledger has recorded a file of the save applied, or (`markFailed`) failed. */
+function stopAtLedger(
+  method: "markApplied" | "markFailed" = "markApplied"
+): void {
+  const real = SchemaEventsRepository.prototype[method] as (
+    this: SchemaEventsRepository,
+    ...args: unknown[]
+  ) => Promise<unknown>;
+  vi.spyOn(SchemaEventsRepository.prototype, method).mockImplementation(
+    async function (this: SchemaEventsRepository, ...args: unknown[]) {
+      const marked = await real.apply(this, args);
+      await stopHere(`ledger:${method}`);
+      return marked as never;
     }
   );
 }
@@ -261,6 +307,30 @@ function recordMarker(path: SavePath): Record<string, unknown> | undefined {
   );
   if (!existsSync(marker)) return undefined;
   return JSON.parse(readFileSync(marker, "utf-8")) as Record<string, unknown>;
+}
+
+/** A record as a process stopped on `host` would have left it. */
+function stoppedRecord(path: SavePath, host: string): Record<string, unknown> {
+  return {
+    id: `stopped-on-${host}`,
+    kind: path.kind,
+    slug: path.slug,
+    startedAt: "2026-01-01T00:00:00.000Z",
+    host,
+    database: "0".repeat(32),
+    definitionFile: "schema/builder.json",
+    definitionBefore: `the definition as the save on ${host} found it`,
+  };
+}
+
+/** Put `record` in place as the entity's marker. */
+function writeMarker(path: SavePath, record: Record<string, unknown>): void {
+  const folder = join(basePath, ".nextly", "save-in-progress");
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(
+    join(folder, `${path.kind}-${path.slug}.json`),
+    JSON.stringify(record)
+  );
 }
 
 /** The definition file's text, or null where there is none yet. */
@@ -301,14 +371,15 @@ const KILL_POINTS: ReadonlyArray<{
     name: "a statement of the file run",
     arm: t => {
       stopAtStatement(t);
-      return point => /^statement:.*ADD (COLUMN )?["`]alpha["`]/s.test(point);
+      return point =>
+        point.startsWith("statement:") && adding("alpha").test(point);
     },
   },
   {
     name: "the ledger's record of the file",
     arm: () => {
       stopAtLedger();
-      return point => point === "ledger";
+      return point => point === "ledger:markApplied";
     },
   },
   {
@@ -381,61 +452,116 @@ describe.each(getConfiguredTestDialects())(
         expect(recordMarker(path)).toBeUndefined();
       }, 300_000);
 
-      it("a save refused part-way through its run leaves neither the row nor the marker", async () => {
+      it("a save refused at its statement, withdrawn whole, leaves neither the row nor the marker", async () => {
         const t = await boot();
         await path.create([text("heading")]);
-        const adapter = t.adapter;
-        const transaction = adapter.transaction.bind(adapter);
-        const executeQuery = adapter.executeQuery.bind(adapter);
-        let refused = 0;
-        const refuse = (statement: string) => {
-          if (refused > 0 || !/ADD (COLUMN )?["`]alpha["`]/.test(statement))
-            return;
-          refused += 1;
-          throw new Error(`injected failure: ${statement}`);
-        };
-        vi.spyOn(adapter, "executeQuery").mockImplementation(
-          async (statement, params) => {
-            refuse(statement);
-            return executeQuery(statement, params);
-          }
-        );
-        vi.spyOn(adapter, "transaction").mockImplementation((work, options) =>
-          transaction(
-            tx =>
-              work(
-                new Proxy(tx, {
-                  get(target, key) {
-                    if (key === "execute") {
-                      return async (
-                        statement: string,
-                        params?: Parameters<TransactionContext["execute"]>[1]
-                      ) => {
-                        refuse(statement);
-                        return target.execute(statement, params);
-                      };
-                    }
-                    const value: unknown = Reflect.get(target, key);
-                    return typeof value === "function"
-                      ? value.bind(target)
-                      : value;
-                  },
-                })
-              ),
-            options
-          )
-        );
+        const refused = refuseAdding(t, "alpha");
 
         const answer = await path
           .save(t, [text("heading"), text("alpha")])
           .catch((error: unknown) => error);
-        expect(refused, "no statement adding `alpha` was met").toBe(1);
+        expect(refused(), "no statement adding `alpha` was met").toBe(1);
         expect(
           answer instanceof Response ? answer.ok : !(answer instanceof Error),
           "the save was not refused"
         ).toBe(false);
         expect(await recordRow(t, path)).toBeUndefined();
         expect(recordMarker(path)).toBeUndefined();
+      }, 300_000);
+
+      // MySQL commits each statement as it runs, so a save refused at its second addition keeps
+      // the first, and its files are kept recorded applied nowhere: nothing records what committed,
+      // so the record stays for the next start to settle.
+      it.runIf(dialect === "mysql")(
+        "a save stopped part-way on MySQL, its files kept unrecorded, keeps the row and the marker",
+        async () => {
+          const t = await boot();
+          await path.create([text("heading")]);
+          const definitionBefore = definitionText();
+          const refused = refuseAdding(t, "beta");
+
+          const answer = await path
+            .save(t, [text("heading"), text("alpha"), text("beta")])
+            .catch((error: unknown) => error);
+          expect(refused(), "no statement adding `beta` was met").toBe(1);
+          expect(
+            answer instanceof Response ? answer.ok : !(answer instanceof Error),
+            "the save was not refused"
+          ).toBe(false);
+
+          const row = await recordRow(t, path);
+          expect(row, "the record's row").toBeDefined();
+          expect(recordMarker(path), "the record's marker").toEqual(row);
+          expect(row).toMatchObject({
+            kind: path.kind,
+            slug: path.slug,
+            definitionBefore,
+          });
+        },
+        300_000
+      );
+
+      it.runIf(dialect === "mysql")(
+        "a kill in the ledger's record of a part-way stop on MySQL leaves the row and the marker",
+        async () => {
+          const t = await boot();
+          await path.create([text("heading")]);
+          const refused = refuseAdding(t, "beta");
+          stopAtLedger("markFailed");
+          const reached = new Promise<void>(resolve => {
+            kill.reached = resolve;
+          });
+          kill.at = point => point === "ledger:markFailed";
+          stopped = path
+            .save(t, [text("heading"), text("alpha"), text("beta")])
+            .catch((error: unknown) => error);
+
+          expect(
+            await within(reached, 120_000),
+            "the save never recorded its failure in the ledger"
+          ).toBe(true);
+          expect(refused(), "no statement adding `beta` was met").toBe(1);
+          const row = await recordRow(t, path);
+          expect(row, "the record's row").toBeDefined();
+          expect(recordMarker(path), "the record's marker").toEqual(row);
+        },
+        300_000
+      );
+
+      // Nothing settles a record yet, so a later save leaves one it finds as it was: the stopped
+      // save's record, its definition text included, is what settling it reads.
+      it("a record left by a stopped process stays as it was through a later save", async () => {
+        const t = await boot();
+        await path.create([text("heading")]);
+        const left = stoppedRecord(path, "a-stopped-host");
+        await new MetaService(t.adapter, consoleLogger).set(
+          `${RECORD_KEY_PREFIX}${path.kind}:${path.slug}`,
+          left
+        );
+        writeMarker(path, left);
+
+        const answer = await path.save(t, [text("heading"), text("alpha")]);
+        expect(answer instanceof Response ? answer.ok : true, "the save").toBe(
+          true
+        );
+        expect(await recordRow(t, path)).toEqual(left);
+        expect(recordMarker(path)).toEqual(left);
+      }, 300_000);
+
+      // A project that commits `.nextly/` carries markers from other machines, whose records are
+      // in their own databases: a save here leaves such a marker as it was.
+      it("a marker from another machine, with no row here, stays as it was through a later save", async () => {
+        const t = await boot();
+        await path.create([text("heading")]);
+        const theirs = stoppedRecord(path, "another-machine");
+        writeMarker(path, theirs);
+
+        const answer = await path.save(t, [text("heading"), text("alpha")]);
+        expect(answer instanceof Response ? answer.ok : true, "the save").toBe(
+          true
+        );
+        expect(recordMarker(path)).toEqual(theirs);
+        expect(await recordRow(t, path)).toBeUndefined();
       }, 300_000);
     });
   }
