@@ -124,12 +124,17 @@ async function drawn(element: Locator): Promise<{
   });
 }
 
-async function showSettings(page: Page): Promise<Locator> {
+/** Open Site settings, which Page settings opens over itself. */
+async function showSiteSettings(page: Page): Promise<Locator> {
   await page
     .getByRole("navigation", { name: "Editor panels" })
     .getByRole("button", { name: "Settings" })
     .click();
-  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await page
+    .getByRole("dialog", { name: /^Page settings · / })
+    .getByRole("button", { name: "Site settings" })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "Site settings" });
   await expect(dialog).toBeVisible();
   return dialog;
 }
@@ -186,9 +191,7 @@ test("the prefix changes to --brand- in Settings, and the canvas and the publish
   const canvasBefore = await drawn(text);
   expect(canvasBefore.color).toBe(before.color);
 
-  const dialog = await showSettings(page);
-  await dialog.getByRole("tab", { name: "Site" }).click();
-  const site = dialog.getByRole("tabpanel", { name: "Site" });
+  const site = await showSiteSettings(page);
   await expect(site.getByRole("heading", { name: "Advanced" })).toBeVisible();
   const field = site.getByLabel("CSS variable prefix");
   await expect(field).toHaveValue("--site-");
@@ -243,7 +246,11 @@ test("the prefix changes to --brand- in Settings, and the canvas and the publish
     )
   ).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(dialog).toBeHidden();
+  await expect(site).toBeHidden();
+  // Page settings, which Site settings opened over, closes too.
+  const pageSettings = page.getByRole("dialog", { name: /^Page settings · / });
+  if (await pageSettings.isVisible()) await page.keyboard.press("Escape");
+  await expect(pageSettings).toBeHidden();
 
   // The canvas: written under --brand- at once, and drawn the same.
   await expect
@@ -262,7 +269,9 @@ test("the prefix changes to --brand- in Settings, and the canvas and the publish
       .click();
   }
   await panel.getByRole("tab", { name: /^Colours/ }).click();
-  await panel.getByRole("button", { name: /^Brand/ }).click();
+  // The variable's own row, by its key: colours sit in named groups, and a
+  // group's heading can share the variable's name.
+  await panel.locator('[data-variable-key="color.brand"]').click();
   await expect(
     page.locator(".nx-vars-editor .nx-vars-editor__code code")
   ).toHaveText("--brand-color-brand");
