@@ -418,8 +418,10 @@ Each request below is a `POST` to the route named, and each can be sent with
 4. **Fill them with data**: `set-list-query` on the list
    (`{ "collection": "posts", "sort": "-publishedAt", "limit": 6 }`); `bind-prop` on the
    heading (`{ "$bind": "title" }`) and on a block inside the list
-   (`{ "$bind": "title", "source": "item" }`); `set-conditions` on a block shown only to
-   some entries (`[[{ "field": "featured", "op": "is_true" }]]`).
+   (`{ "$bind": "title", "source": "item" }`), adding `"list": <list id>` to read an
+   enclosing list further out, for a block in a list inside another; `set-conditions`
+   on a block shown only to some entries
+   (`[[{ "field": "featured", "op": "is_true" }]]`).
 5. **Publish it**: `{ "action": { "kind": "publish-template", "id": <template id> } }`.
    Each entry with an address is now served drawn with it.
 6. **Give one entry its own design**, if it needs one: `give-entry-design` with
