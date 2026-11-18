@@ -148,6 +148,16 @@ export const NO_CONSENT: DataLossConsent = {
 };
 
 /**
+ * Whether a list of targets can spell `name`, a table's or a column's: the
+ * list is cut at commas and each target at its dot, and whitespace is taken
+ * for a mistyped list, so a name holding any of them cannot be given. The one
+ * rule for reading a list and for naming a deletion in one.
+ */
+function spellable(name: string): boolean {
+  return name !== "" && !/[\s,.]/.test(name);
+}
+
+/**
  * The tables and columns a consent's list names, or `all` for the values
  * that mean "every deletion" (`1`, `true`). The environment's `0`, `false`
  * and empty value mean no consent, as an unset variable does.
@@ -177,9 +187,7 @@ function parseTargets(
   for (const item of items) {
     const parts = item.split(".");
     const wellFormed =
-      item !== "" &&
-      parts.length <= 2 &&
-      parts.every(part => part !== "" && !/\s/.test(part));
+      item !== "" && parts.length <= 2 && parts.every(spellable);
     if (!wellFormed) {
       throw NextlyError.invalidInput({
         message:
@@ -296,11 +304,15 @@ export function deletionKey(deletion: Deletion): string {
  */
 /**
  * Whether only the consent without targets covers `deletion`: one its
- * command cannot name, or one on a schema-qualified table, which a target
- * list cannot tell from a `table.column`.
+ * command cannot name, or one whose table or column a list of targets cannot
+ * spell ({@link spellable}): a schema-qualified table, which a list cannot
+ * tell from a `table.column`, among them. A refusal then asks for the consent
+ * without targets, never for a list the consent would refuse to read.
  */
 function onlyBlanketCovers(deletion: Deletion): boolean {
-  return deletion.kind === "unnamed" || deletion.table.includes(".");
+  if (deletion.kind === "unnamed") return true;
+  if (!spellable(deletion.table)) return true;
+  return deletion.kind === "column" && !spellable(deletion.column);
 }
 
 export function consentCovers(
@@ -521,7 +533,7 @@ export async function judgeDataLoss(args: {
   const targets = consent.given?.targets;
   if (targets !== undefined && targets !== "all") {
     const unnamedNote = uncovered.some(onlyBlanketCovers)
-      ? " A deletion its command cannot name, or one on a schema-qualified table, is covered only by the consent without targets."
+      ? " A deletion its command cannot name, one on a schema-qualified table, or one whose table or column name holds a space, a comma or a dot, is covered only by the consent without targets."
       : "";
     return {
       kind: "refused",

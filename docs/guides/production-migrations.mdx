@@ -60,6 +60,8 @@ names only.
 - With no terminal (CI, `--non-interactive`), it writes nothing and exits 1 unless
   `--accept-data-loss` (or `NEXTLY_ACCEPT_DATA_LOSS`) covers every deletion. Give it alone to
   cover them all, or name tables and columns: `--accept-data-loss=dc_posts,dc_pages.summary`.
+  A table or column whose name holds a space, a comma or a dot cannot be named in the list:
+  only the consent given alone covers it, and a refusal asks for that.
 
 The file it writes is marked in its header, so the deletion is visible in review:
 

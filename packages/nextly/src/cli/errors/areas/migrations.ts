@@ -106,10 +106,12 @@ export function dataLossParts(message: string): CliErrorParts {
   const lines = message.split("\n");
   const header = lines[0] ?? message;
   const CONSENT = /\s(To consent|To delete this too): /;
-  // The line the consent is on: the message's last, or the one before what a run says after it
-  // of the database's event triggers.
-  const consentAt = lines.findLastIndex(
-    (line, at) => at > 0 && CONSENT.test(line)
+  // The line the consent is on, known by how the verdict opens it, "Nothing was changed.": the
+  // first such line, since each deletion above it is indented. What a run says after it of the
+  // database's event triggers names them as the database does, so no later line is read for it.
+  // A message with no such line ends on its consent.
+  const consentAt = lines.findIndex(
+    (line, at) => at > 0 && line.startsWith("Nothing was changed.")
   );
   const lastAt = consentAt === -1 ? lines.length - 1 : consentAt;
   const last = lines.length > 1 ? lines[lastAt] : "";

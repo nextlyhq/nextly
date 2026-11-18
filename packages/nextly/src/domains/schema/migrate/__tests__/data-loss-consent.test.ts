@@ -564,25 +564,71 @@ describe("a refusal, for a production start that ran the migrations itself", () 
     );
   });
 
+  /**
+   * The consent a start's refusal ends on, read back as the start and the
+   * command would be given it: the variable's value, and the flag's (`true`
+   * for the flag alone).
+   */
+  function consentNamed(message: string): {
+    env: string;
+    flag: string | true;
+  } {
+    const named =
+      /start with NEXTLY_ACCEPT_DATA_LOSS=(.*), or run "nextly migrate --accept-data-loss(?:=(.*))?"\.$/.exec(
+        message
+      );
+    if (named === null) throw new Error("the message names no consent");
+    return { env: named[1], flag: named[2] ?? true };
+  }
+
   it.each([
-    ["a closing parenthesis", "notes (old)"],
-    ["a space", "old notes"],
-    ["the words between the two spellings", "a (or b)"],
-  ])("does so for a table whose name holds %s", async (_what, table) => {
-    const message = await refused([
-      { kind: "column", table, column: "summary" },
-    ]);
-    const target = `${table}.summary`;
-    // The control: the consent check names the target as it is.
-    expect(message).toContain(
-      `To consent: --accept-data-loss=${target} (or NEXTLY_ACCEPT_DATA_LOSS=${target}).`
+    ["a plain name", "notes", "summary", "notes.summary"],
+    ["a closing parenthesis", "notes(old)", "summary", "notes(old).summary"],
+    ["a space in the table's name", "old notes", "summary", undefined],
+    ["a space in the column's name", "notes", "old summary", undefined],
+    ["the words between the two spellings", "a (or b)", "summary", undefined],
+    ["a comma", "notes,drafts", "summary", undefined],
+    ["a dot in the column's name", "notes", "a.b", undefined],
+  ])(
+    "ends on a consent that, given back, covers the deletion: %s",
+    async (_what, table, column, target) => {
+      const deletion = { kind: "column", table, column } as const;
+      const message = refusalForStart(await refused([deletion]));
+      const named = consentNamed(message);
+
+      // A name a list of targets can spell is named; any other is covered
+      // only by the consent without targets, which is then what is asked for.
+      expect(named).toEqual(
+        target === undefined
+          ? { env: "1", flag: true }
+          : { env: target, flag: target }
+      );
+      const fromEnv = resolveDataLossConsent({
+        env: { NEXTLY_ACCEPT_DATA_LOSS: named.env },
+      });
+      const fromFlag = resolveDataLossConsent({ flag: named.flag, env: {} });
+      expect(consentCovers(fromEnv, deletion)).toBe(true);
+      expect(consentCovers(fromFlag, deletion)).toBe(true);
+    }
+  );
+
+  it("says that only the consent without targets covers a name a list cannot spell, to a consent that names others", async () => {
+    const message = await refused(
+      [{ kind: "column", table: "old notes", column: "summary" }],
+      {
+        ...NO_CONSENT,
+        given: {
+          from: "env",
+          targets: { tables: new Set(["drafts"]), columns: new Set() },
+        },
+      }
     );
 
-    expect(refusalForStart(message)).toBe(
-      message.replace(
-        `To consent: --accept-data-loss=${target} (or NEXTLY_ACCEPT_DATA_LOSS=${target}).`,
-        `To consent: start with NEXTLY_ACCEPT_DATA_LOSS=${target}, or run "nextly migrate --accept-data-loss=${target}".`
-      )
+    expect(message).toContain(
+      "whose table or column name holds a space, a comma or a dot"
+    );
+    expect(refusalForStart(message)).toContain(
+      'To delete this too: start with NEXTLY_ACCEPT_DATA_LOSS=1, or run "nextly migrate --accept-data-loss".'
     );
   });
 

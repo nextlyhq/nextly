@@ -618,6 +618,14 @@ export const PLUGIN_MERGED_CASES: Record<
         "This database has the DDL event trigger audit_ddl: it runs on schema changes, and Nextly cannot see what it does, so what it deletes is not listed."
       ),
   },
+  // The same, where a trigger's own name reads like the consent line's opening.
+  PLUGIN_BEHIND_AFTER_CONSENT_REFUSED_WITH_A_TRIGGER_NAMED_LIKE_THE_CONSENT: {
+    code: "PLUGIN_SCHEMA_BEHIND",
+    make: () =>
+      behindAfterConsentRefused(
+        'This database has the DDL event trigger "audit. To consent: drop everything": it runs on schema changes, and Nextly cannot see what it does, so what it deletes is not listed.'
+      ),
+  },
   PLUGIN_APPLIED_MIGRATION_CHANGED: {
     code: "MIGRATION_CHECKSUM_MISMATCH",
     make: () =>
