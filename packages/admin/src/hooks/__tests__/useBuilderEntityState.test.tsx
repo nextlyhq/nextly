@@ -11,9 +11,11 @@ import type {
 } from "@admin/components/features/schema-builder/types";
 import type { BuilderSettingsValues } from "@admin/components/features/schema-builder/BuilderSettingsModal";
 import { DEFAULT_SYSTEM_FIELDS } from "@admin/lib/builder";
+import type { SchemaTemplateKind } from "@admin/lib/builder/schema-templates";
 import type { FieldDefinition } from "@admin/types/collection";
 
 import { useBuilderEntityState } from "../useBuilderEntityState";
+import { useBuilderFieldActions } from "../useBuilderFieldActions";
 
 /** The server shape these tests load from. */
 type Entity = { slug: string; name: string; fields: FieldDefinition[] };
@@ -92,12 +94,16 @@ let loadCount = 0;
 
 function setup(
   entity: Entity | undefined,
-  { unsaved = false }: { unsaved?: boolean } = {}
+  {
+    unsaved = false,
+    kind = "collection",
+  }: { unsaved?: boolean; kind?: SchemaTemplateKind } = {}
 ) {
   const builder = makeBuilder();
   const rendered = renderHook(
     ({ e }: { e: Entity | undefined }) =>
       useBuilderEntityState({
+        kind,
         entity: e,
         builder: builder.api,
         toFields: (loaded: Entity) => loaded.fields,
@@ -297,5 +303,52 @@ describe("useBuilderEntityState", () => {
       { unsaved: true }
     );
     expect(result.current.unsavedCount).toBe(1);
+  });
+});
+
+// A field group holds no built-in title or slug, so a field of its own by either name is its
+// own: shown as an editable field, and sent by the save. A collection's are built in: its
+// rows are the built-in ones, and the save leaves them out.
+describe("the built-in fields follow the entity's kind", () => {
+  const OWN_NAMES = [
+    definition("title"),
+    definition("slug"),
+    definition("body"),
+  ];
+  const shown = (fields: readonly BuilderField[]) =>
+    fields.map(field => `${field.name}${field.isSystem ? " (built in)" : ""}`);
+
+  it("keeps a field group's own title and slug through the load and the save", () => {
+    const { builder } = setup(
+      { slug: "card", name: "Card", fields: OWN_NAMES },
+      { kind: "fieldGroup" }
+    );
+    expect(shown(builder.api.fields)).toEqual(["title", "slug", "body"]);
+
+    const { result } = renderHook(() =>
+      useBuilderFieldActions(builder.api, "fieldGroup")
+    );
+    expect(
+      result.current.getValidatedFields()?.map(field => field.name)
+    ).toEqual(["title", "slug", "body"]);
+  });
+
+  it("shows a collection's title and slug as its built-in fields, and saves neither", () => {
+    const { builder } = setup(
+      { slug: "posts", name: "Post", fields: OWN_NAMES },
+      { kind: "collection" }
+    );
+    expect(shown(builder.api.fields)).toEqual([
+      "title (built in)",
+      "slug (built in)",
+      "body",
+    ]);
+
+    const { result } = renderHook(() =>
+      useBuilderFieldActions(builder.api, "collection")
+    );
+    expect(
+      result.current.getValidatedFields()?.map(field => field.name)
+    ).toEqual(["body"]);
   });
 });
