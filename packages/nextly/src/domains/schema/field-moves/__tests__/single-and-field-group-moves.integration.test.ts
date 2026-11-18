@@ -354,7 +354,8 @@ describe.each(getConfiguredTestDialects())(
         type: "text",
         localized: false,
       });
-      const box = (fields: Field[]) => group("box", fields, { localized: false });
+      const box = (fields: Field[]) =>
+        group("box", fields, { localized: false });
       const notes = (localized: boolean): Field => ({
         name: "notes",
         type: "text",

@@ -835,32 +835,34 @@ export const COMPONENTS_METHODS: Record<
           let pushAnswer: Promise<boolean> | undefined;
           const pushes = () =>
             (pushAnswer ??= pushCarriesValues({
-                  oldFields: (component.fields ??
-                    []) as unknown as FieldDefinition[],
-                  newFields: fields as unknown as FieldDefinition[],
-                  wasStored,
-                  isStored,
-                  renamed: companionRename,
-                  liveTable: async () =>
-                    (
-                await introspectLiveSnapshot(adapter.getDrizzle(), adapter.dialect, [
-                  tableName,
-                ])
-              )
-                      .tables[0],
-                  columnOf: field =>
-                    getComponentRowColumnDescriptor(
-                      field,
-                      adapter.dialect,
-                      "fieldGroup"
-                    ),
-                  renames: renamedFieldsOf(renameResolutions ?? []),
-                  moved: moves,
-                }));
+              oldFields: (component.fields ??
+                []) as unknown as FieldDefinition[],
+              newFields: fields as unknown as FieldDefinition[],
+              wasStored,
+              isStored,
+              renamed: companionRename,
+              liveTable: async () =>
+                (
+                  await introspectLiveSnapshot(
+                    adapter.getDrizzle(),
+                    adapter.dialect,
+                    [tableName]
+                  )
+                ).tables[0],
+              columnOf: field =>
+                getComponentRowColumnDescriptor(
+                  field,
+                  adapter.dialect,
+                  "fieldGroup"
+                ),
+              renames: renamedFieldsOf(renameResolutions ?? []),
+              moved: moves,
+            }));
           await refuseMovesOffTheFile({
             moves,
             writes: builderSave !== undefined,
-            pushReason: async () => ((await pushes()) ? "carries-values" : null),
+            pushReason: async () =>
+              (await pushes()) ? "carries-values" : null,
           });
           // A field leaving translation has preconditions of its own, asked before the apply
           // alters anything.

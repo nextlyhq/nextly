@@ -1564,29 +1564,35 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           let pushAnswer: Promise<boolean> | undefined;
           const pushes = () =>
             (pushAnswer ??= pushCarriesValues({
-                  oldFields: single.fields as unknown as FieldDefinition[],
-                  newFields: fields as unknown as FieldDefinition[],
-                  wasStored: layout.wasStored,
-                  isStored: layout.isStored,
-                  wasStatus: layout.wasPublishedPerLanguage,
-                  status: layout.isPublishedPerLanguage,
-                  renamed: companionRename,
-                  liveTable: async () =>
-                    (
-                await introspectLiveSnapshot(adapter.getDrizzle(), adapter.dialect, [
-                  tableName,
-                ])
-              )
-                      .tables[0],
-                  columnOf: field =>
-                    getSingleRowColumnDescriptor(field, adapter.dialect, "collection"),
-                  renames: renamedFieldsOf(renameResolutions ?? []),
-                  moved: moves,
-                }));
+              oldFields: single.fields as unknown as FieldDefinition[],
+              newFields: fields as unknown as FieldDefinition[],
+              wasStored: layout.wasStored,
+              isStored: layout.isStored,
+              wasStatus: layout.wasPublishedPerLanguage,
+              status: layout.isPublishedPerLanguage,
+              renamed: companionRename,
+              liveTable: async () =>
+                (
+                  await introspectLiveSnapshot(
+                    adapter.getDrizzle(),
+                    adapter.dialect,
+                    [tableName]
+                  )
+                ).tables[0],
+              columnOf: field =>
+                getSingleRowColumnDescriptor(
+                  field,
+                  adapter.dialect,
+                  "collection"
+                ),
+              renames: renamedFieldsOf(renameResolutions ?? []),
+              moved: moves,
+            }));
           await refuseMovesOffTheFile({
             moves,
             writes: builderSave !== undefined,
-            pushReason: async () => ((await pushes()) ? "carries-values" : null),
+            pushReason: async () =>
+              (await pushes()) ? "carries-values" : null,
           });
           // A field leaving translation has preconditions of its own, asked before the push alters
           // anything.
