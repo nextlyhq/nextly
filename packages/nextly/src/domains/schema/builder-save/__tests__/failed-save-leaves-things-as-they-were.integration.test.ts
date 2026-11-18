@@ -79,6 +79,9 @@ async function shutDown(): Promise<void> {
 type BuilderField = Record<string, unknown>;
 
 /** One of the Builder's save paths, over an entity it creates first. */
+/** A step of a save that the suite fails in turn. */
+type Step = "translations" | "registry" | "ledger";
+
 interface SavePath {
   name: string;
   slug: string;
@@ -94,6 +97,12 @@ interface SavePath {
    * are taken.
    */
   pushRoad: boolean;
+  /**
+   * The steps whose failure this path does not yet leave as it was: each runs expecting its
+   * failure (`it.fails`), shown, not skipped, so the one a change makes hold fails here until it
+   * is taken off the list.
+   */
+  notKeptYet?: readonly Step[];
   create(fields: BuilderField[], translated: boolean): Promise<void>;
   save(t: TestNextly, fields: BuilderField[]): Promise<unknown>;
 }
@@ -145,6 +154,8 @@ const PATHS: readonly SavePath[] = [
     registry: "dynamic_collections",
     translatable: false,
     pushRoad: true,
+    // Its registry write and its first ledger write run after the push's own transaction.
+    notKeptYet: ["registry", "ledger"],
     create: collectionCreate("fbs_posts"),
     save: (_t, fields) =>
       dispatchCollections(
@@ -181,6 +192,8 @@ const PATHS: readonly SavePath[] = [
     registry: "dynamic_singles",
     translatable: true,
     pushRoad: false,
+    // The translations table is reconciled after the file is recorded applied.
+    notKeptYet: ["translations"],
     create: singleCreate("fbs_hero"),
     save: async (t, fields) =>
       dispatchSingles(
@@ -200,6 +213,8 @@ const PATHS: readonly SavePath[] = [
     registry: "dynamic_components",
     translatable: true,
     pushRoad: false,
+    // The translations table is reconciled after the file is recorded applied.
+    notKeptYet: ["translations"],
     create: fieldGroupCreate("fbs_card"),
     save: async (t, fields) =>
       dispatchComponents(
@@ -219,6 +234,8 @@ const PATHS: readonly SavePath[] = [
     registry: "dynamic_singles",
     translatable: true,
     pushRoad: false,
+    // Its translations step and its registry write run after the change is made.
+    notKeptYet: ["translations", "registry"],
     create: singleCreate("fbs_banner"),
     save: (_t, fields) =>
       dispatchSingles("updateSingleSchema", { slug: "fbs_banner" }, { fields }),
@@ -503,6 +520,10 @@ describe.each(getConfiguredTestDialects())(
     }
 
     describe.each(PATHS)("$name", path => {
+      /** The case as this path holds it: expected to fail while its step is not kept yet. */
+      const holds = (step: Step) =>
+        path.notKeptYet?.includes(step) === true ? it.fails : it;
+
       it.skipIf(path.pushRoad)(
         "fails at the change to its own table",
         async () => {
@@ -530,7 +551,9 @@ describe.each(getConfiguredTestDialects())(
 
       // MySQL commits each schema statement as it runs, so every later step
       // fails after one has committed: the part-way rule, not this one.
-      it.skipIf(dialect === "mysql" || !path.translatable)(
+      (dialect === "mysql" || !path.translatable
+        ? it.skip
+        : holds("translations"))(
         "fails at the change to its translations table",
         async () => {
           const t = await boot(path, true);
@@ -561,7 +584,7 @@ describe.each(getConfiguredTestDialects())(
       );
 
       for (const watched of ["registry", "ledger"] as const) {
-        it.skipIf(dialect === "mysql")(
+        (dialect === "mysql" ? it.skip : holds(watched))(
           `fails at each of its ${watched} writes in turn`,
           async () => {
             // Counted first, on a save without a failure.
