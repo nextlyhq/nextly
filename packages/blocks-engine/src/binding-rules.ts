@@ -71,6 +71,29 @@ export function isBindPath(value: unknown): value is string {
   return typeof value === "string" && BIND_PATH_RE.test(value);
 }
 
+/** The longest setting id a binding following a setting may name. */
+const MAX_SETTING_REF_LENGTH = 512;
+
+/**
+ * Whether a value is what a binding following a setting names in `$bind`:
+ * one of the component's setting ids, which are minted from labels
+ * (`hero-title`) and are no field path. One segment, as no setting has
+ * fields of its own.
+ */
+function isSettingRef(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value !== "" &&
+    value.length <= MAX_SETTING_REF_LENGTH &&
+    !value.includes(".")
+  );
+}
+
+/** Whether `$bind` is a path its source can name. */
+export function bindPathFits(source: unknown, path: unknown): path is string {
+  return source === "setting" ? isSettingRef(path) : isBindPath(path);
+}
+
 /**
  * The shape of value a bound prop holds, which its own value and its fallback
  * are judged by.
@@ -383,9 +406,9 @@ function storedSource(
 function readStoredBinding(value: unknown): StoredBinding | undefined {
   if (!isPlainRecord(value)) return undefined;
   const path = ownEntry(value, "$bind");
-  if (!isBindPath(path)) return undefined;
   const from = storedSource(value);
   if (from === undefined) return undefined;
+  if (!bindPathFits(from.source, path)) return undefined;
   const hasFallback =
     Object.prototype.hasOwnProperty.call(value, "fallback") &&
     ownEntry(value, "fallback") !== undefined;

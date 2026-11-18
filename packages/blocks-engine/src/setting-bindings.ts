@@ -16,7 +16,7 @@ import type { BlockDocument, BlockNode, ExposedProperty } from "./document";
 import { pointer } from "./issue-text";
 import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
 import { isPlainRecord } from "./plain-record";
-import { ownEntry, ownKeys } from "./safe-record";
+import { defineEntry, ownEntry, ownKeys } from "./safe-record";
 import type { ValidationIssue } from "./validation-contract";
 
 /** The source of a binding that follows one of its component's settings. */
@@ -92,6 +92,7 @@ function eachFollower(
     budget.left -= 1;
     const at = `${path}/${i}`;
     followersOn(node as unknown as BlockNode, at, visit);
+    // A follower in a placement's slot content is this component's too.
     const slots = ownEntry(node, "slots");
     if (!isPlainRecord(slots)) continue;
     for (const name of ownKeys(slots)) {
@@ -106,7 +107,7 @@ function followersOn(
   at: string,
   visit: (node: BlockNode, prop: string, id: string, at: string) => void
 ): void {
-  const bindings: unknown = ownEntry(node, "bindings");
+  const bindings: unknown = node.bindings;
   if (!isPlainRecord(bindings)) return;
   for (const prop of ownKeys(bindings)) {
     const id = followedSettingId(ownEntry(bindings, prop));
@@ -183,4 +184,142 @@ function namedSettings(exposed: unknown): ReadonlySet<string> {
     if (isPlainRecord(entry) && typeof entry.id === "string") ids.add(entry.id);
   }
   return ids;
+}
+
+/**
+ * What a placement does to one setting's own block: the last edit it makes
+ * to the setting's prop, and the binding it gives that prop, with the key it
+ * gave it under.
+ */
+export interface SettingTarget {
+  readonly edit?: { readonly value: unknown; readonly unset: boolean };
+  readonly given?: { readonly binding: unknown; readonly key?: string };
+}
+
+/**
+ * What one block following a setting shows: the setting's block's value at
+ * its prop, and the binding over it, the placement's (`given`) or else the
+ * setting's block's own (`own`). Neither, and the block shows the value.
+ */
+export interface FollowerFill {
+  readonly nodeId: string;
+  readonly prop: string;
+  /** The setting it follows. */
+  readonly settingId: string;
+  readonly value: unknown;
+  readonly unset: boolean;
+  readonly given?: SettingTarget["given"];
+  readonly own?: unknown;
+}
+
+/**
+ * The fill of each block of a component definition that follows one of its
+ * settings, given what a placement does to each setting's own block
+ * (`targetOf`): a follower shows what that block shows, so one question,
+ * the setting's block, answers both. A follower of a setting the component
+ * lacks, or of its own prop, gets none and is left unbound.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function followerFills(
+  definition: unknown,
+  targetOf: (nodeId: string, path: string) => SettingTarget,
+  maxNodes: number = DEFAULT_LIMITS.maxNodes
+): FollowerFill[] {
+  if (!isPlainRecord(definition)) return [];
+  const settings = followableSettings(ownEntry(definition, "exposed"));
+  if (settings.size === 0) return [];
+  const nodes = ownEntry(definition, "nodes");
+  const index = nodesById(nodes, maxNodes);
+  const fills: FollowerFill[] = [];
+  eachFollower(
+    nodes,
+    "/nodes",
+    (node, prop, id) => {
+      const setting = settings.get(id);
+      if (setting === undefined || holdsSetting(settings, node.id, prop)) {
+        return;
+      }
+      const block = index.get(setting.nodeId);
+      if (block === undefined) return;
+      fills.push({
+        ...fillFrom(node.id, prop, block, setting.propPath, targetOf),
+        settingId: id,
+      });
+    },
+    { left: maxNodes }
+  );
+  return fills;
+}
+
+/** One follower's fill, from the setting's block and what is done to it. */
+function fillFrom(
+  nodeId: string,
+  prop: string,
+  block: BlockNode,
+  path: string,
+  targetOf: (nodeId: string, path: string) => SettingTarget
+): Omit<FollowerFill, "settingId"> {
+  const target = targetOf(block.id, path);
+  const value =
+    target.edit === undefined ? propAt(block.props, path) : target.edit.value;
+  const unset = target.edit === undefined ? value === undefined : target.edit.unset;
+  const own = isPlainRecord(block.bindings)
+    ? ownEntry(block.bindings, path)
+    : undefined;
+  return {
+    nodeId,
+    prop,
+    value,
+    unset,
+    ...(target.given === undefined ? {} : { given: target.given }),
+    ...(target.given === undefined && own !== undefined ? { own } : {}),
+  };
+}
+
+/** The value at a dot path of a block's props. */
+function propAt(props: unknown, path: string): unknown {
+  let current: unknown = props;
+  for (const segment of path.split(".")) {
+    if (!isPlainRecord(current)) return undefined;
+    current = ownEntry(current, segment);
+  }
+  return current;
+}
+
+/** The blocks of a forest, slot content included, by id, over at most `maxNodes`. */
+function nodesById(nodes: unknown, maxNodes: number): Map<string, BlockNode> {
+  const index = new Map<string, BlockNode>();
+  const budget = { left: maxNodes };
+  const visit = (forest: unknown): void => {
+    if (!Array.isArray(forest)) return;
+    for (const node of forest as unknown[]) {
+      if (budget.left <= 0) return;
+      if (!isPlainRecord(node) || typeof node.id !== "string") continue;
+      budget.left -= 1;
+      if (!index.has(node.id)) index.set(node.id, node as unknown as BlockNode);
+      const slots = ownEntry(node, "slots");
+      if (!isPlainRecord(slots)) continue;
+      for (const name of ownKeys(slots)) visit(ownEntry(slots, name));
+    }
+  };
+  visit(nodes);
+  return index;
+}
+
+/**
+ * A node's bindings without those following a setting, `undefined` when
+ * none is left: composed, each was filled from its setting or is unbound.
+ */
+export function withoutSettingBindings(bindings: unknown): unknown {
+  if (!isPlainRecord(bindings)) return bindings;
+  const keys = ownKeys(bindings);
+  const kept = keys.filter(
+    key => followedSettingId(ownEntry(bindings, key)) === undefined
+  );
+  if (kept.length === keys.length) return bindings;
+  if (kept.length === 0) return undefined;
+  const next: Record<string, unknown> = {};
+  for (const key of kept) defineEntry(next, key, ownEntry(bindings, key));
+  return next;
 }

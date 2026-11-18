@@ -25,7 +25,9 @@ import {
   type ResolvedBlockNode,
 } from "./resolve-instances";
 import { settingBindingIssues } from "./setting-bindings";
+import { validateDocument } from "./validation";
 import { componentEnvelopeIssues } from "./validation-components";
+import { FIXTURE_BREAKPOINTS } from "./validation.fixtures";
 
 const heading = (
   id: string,
@@ -176,6 +178,25 @@ describe("a block following its component's setting, composed", () => {
     expect(echo?.bindings?.text).toEqual(fromSite);
   });
 
+  it("follows a setting whose id is not a field path", () => {
+    // Setting ids are minted from labels, hyphens and all.
+    const card = component(
+      [
+        heading("card-title", "Plain title"),
+        heading("card-echo", "Stored echo", { text: follows("hero-title") }),
+      ],
+      [exposure("hero-title", "card-title", "text")]
+    );
+    const echo = copyOf(
+      composed(
+        page([placement("p", "card", { overrides: { "hero-title": "Typed" } })]),
+        new Map<string, BlockDocument>([["card", card]])
+      ),
+      "card-echo"
+    );
+    expect(echo?.props.text).toBe("Typed");
+  });
+
   it("follows the setting of the component it sits in, inside a component", () => {
     // The badge's own Label setting is on its text; the card places the badge
     // and feeds its Label from the card's Title.
@@ -296,6 +317,25 @@ describe("where a setting binding may be saved", () => {
     );
     expect(codes(card)).toEqual([
       ["/nodes/0/bindings/text", "invalid-binding", "error"],
+    ]);
+  });
+
+  it("is judged by the document's own validation", () => {
+    const judged = (doc: BlockDocument) =>
+      validateDocument(doc, { breakpoints: FIXTURE_BREAKPOINTS })
+        .issues.filter(issue => issue.path.includes("/bindings"))
+        .map(issue => [issue.path, issue.code, issue.severity]);
+    const card = component(
+      [
+        heading("a", "A"),
+        heading("b", "B", { text: follows("hero-title") }),
+        heading("c", "C", { text: follows("gone") }),
+      ],
+      [exposure("hero-title", "a", "text")]
+    );
+    // A minted id is no field path, and is taken as one of the component's.
+    expect(judged(card)).toEqual([
+      ["/nodes/2/bindings/text", "invalid-binding", "error"],
     ]);
   });
 

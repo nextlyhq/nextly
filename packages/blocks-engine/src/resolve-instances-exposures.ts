@@ -22,6 +22,7 @@ import {
   type ResolvedBlockNode,
 } from "./resolve-instances-contract";
 import type { RetiredExposures } from "./retired-exposures";
+import { followerFills } from "./setting-bindings";
 import { boundedOwnKeys, defineEntry, ownEntry } from "./safe-record";
 import { isConditionGated } from "./visibility";
 
@@ -56,6 +57,12 @@ export interface NodePlan {
    * the page gave is still known as the page's inside a nested component.
    */
   bindingKeys?: Record<string, string>;
+  /**
+   * Prop path to a binding of the component's own that fills it: a block
+   * following a setting shows the setting's block's own binding, read where
+   * the node's own bindings are, as a binding of this definition.
+   */
+  ownBindings?: Record<string, unknown>;
 }
 
 /**
@@ -85,6 +92,9 @@ export function planEdits(
   const values = effectiveOverrides(definition, instance);
   if (values.size > 0) planExposed(definition.exposed, values, plans);
   planBoundSettings(definition.exposed, instance.bindings, plans);
+  // After both: a block following a setting shows what the setting's own
+  // block ends up with.
+  planFollowers(definition, plans);
   if (supplied !== undefined) {
     planSlots(definition.slots, supplied, plans, composed);
   }
@@ -890,6 +900,50 @@ function planBoundSettings(
       property.propPath,
       settingBindingKey(property.id)
     );
+  }
+}
+
+/**
+ * Each block following a setting, given what its setting's block is: the
+ * same value at its prop, and the binding over it, the placement's or else
+ * the component's own.
+ */
+function planFollowers(
+  definition: ComponentDocument,
+  plans: Map<string, NodePlan>
+): void {
+  const fills = followerFills(definition, (nodeId, path) => {
+    const plan = plans.get(nodeId);
+    const edit = plan?.props.filter(entry => entry.path === path).at(-1);
+    const binding =
+      plan?.bindings === undefined ? undefined : ownEntry(plan.bindings, path);
+    const key =
+      plan?.bindingKeys === undefined
+        ? undefined
+        : ownEntry(plan.bindingKeys, path);
+    return {
+      ...(edit === undefined
+        ? {}
+        : { edit: { value: edit.value, unset: edit.unset } }),
+      ...(binding === undefined
+        ? {}
+        : { given: { binding, ...(key === undefined ? {} : { key }) } }),
+    };
+  });
+  for (const fill of fills) {
+    const plan = planFor(plans, fill.nodeId);
+    plan.props.push({ path: fill.prop, value: fill.value, unset: fill.unset });
+    if (fill.given !== undefined) {
+      plan.bindings = { ...plan.bindings };
+      defineEntry(plan.bindings, fill.prop, fill.given.binding);
+      if (fill.given.key !== undefined) {
+        plan.bindingKeys = { ...plan.bindingKeys };
+        defineEntry(plan.bindingKeys, fill.prop, fill.given.key);
+      }
+    } else if (fill.own !== undefined) {
+      plan.ownBindings = { ...plan.ownBindings };
+      defineEntry(plan.ownBindings, fill.prop, fill.own);
+    }
   }
 }
 

@@ -409,6 +409,70 @@ describe("pointing an exposure elsewhere", () => {
   });
 });
 
+describe("a block following the setting", () => {
+  /** The component, with a box's card following the Title setting. */
+  function followed(): ComponentDocument {
+    const doc = component();
+    const c1 = doc.nodes[0];
+    return {
+      ...doc,
+      nodes: [
+        { ...c1, props: { title: "Default title" } } as BlockNode,
+        ...doc.nodes.slice(1, 2).map(box => ({
+          ...box,
+          slots: {
+            children: [
+              {
+                ...card("echo"),
+                props: { title: "Stored" },
+                bindings: { title: { $bind: "title", source: "setting" } },
+              } as BlockNode,
+            ],
+          },
+        })),
+        ...doc.nodes.slice(2),
+      ],
+    };
+  }
+  const echoOf = (doc: ComponentDocument) =>
+    (doc.nodes[1]?.slots?.children ?? [])[0];
+
+  it("keeps the setting's default, following nothing, when the setting is removed", () => {
+    const edit = edited(planRemoveExposure(followed(), "title"));
+    expect(echoOf(edit.document)?.props.title).toBe("Default title");
+    expect(echoOf(edit.document)?.bindings).toBeUndefined();
+    expect(errorsOf(edit.document)).toEqual([]);
+  });
+
+  it("keeps the old default, following nothing, when a new type mints a new setting", () => {
+    const edit = edited(
+      planRetargetExposure(
+        followed(),
+        "title",
+        { nodeId: "c1", propPath: "body" },
+        sources()
+      )
+    );
+    expect(edit.id).not.toBe("title");
+    expect(echoOf(edit.document)?.props.title).toBe("Default title");
+    expect(echoOf(edit.document)?.bindings).toBeUndefined();
+  });
+
+  it("still follows it when the new prop keeps the id", () => {
+    const edit = edited(
+      planRetargetExposure(
+        followed(),
+        "title",
+        { nodeId: "c1", propPath: "blurb" },
+        sources()
+      )
+    );
+    expect(echoOf(edit.document)?.bindings).toEqual({
+      title: { $bind: "title", source: "setting" },
+    });
+  });
+});
+
 describe("removing an exposure", () => {
   it("drops it, prunes every variant and retires the id", () => {
     const edit = edited(planRemoveExposure(component(), "link"));

@@ -50,6 +50,7 @@ import { isPlainRecord } from "./plain-record";
 import { exposureTypeForProp } from "./prop-exposure";
 import type { RetiredExposures } from "./retired-exposures";
 import { boundedOwnKeys } from "./safe-record";
+import { withSettingDefaults } from "./setting-defaults";
 import { contentPropsOf } from "./slot-lock";
 import type { SlotDefaultSource } from "./tree";
 import {
@@ -294,6 +295,9 @@ export function planRetargetExposure(
   }
 
   const fresh = mintId(current.label, takenIds(exposed, sources.retired));
+  // A new type is a new setting, which a block following the old one may not
+  // fit: each keeps what it showed, and follows nothing.
+  draft.nodes = withSettingDefaults(draft, id).nodes;
   exposed[at] = { id: fresh, label: current.label, ...pointed };
   draft.exposed = exposed;
   return retiring(draft, fresh, id, limits);
@@ -317,6 +321,8 @@ export function planRemoveExposure(
   const at = exposureIndex(draft, id);
   if (at === undefined) return { problem: "unknown-exposure" };
 
+  // Each block following it keeps what it showed, and follows nothing.
+  draft.nodes = withSettingDefaults(draft, id).nodes;
   draft.exposed = (draft.exposed ?? []).filter((_, i) => i !== at);
   return retiring(draft, id, id, limits);
 }
