@@ -1107,3 +1107,33 @@
   line-height: 16px;
   vertical-align: 1px;
 }
+
+/* The import's fonts the site doesn't have: each on a row, its action or
+   note beside it, wrapping under the name where the dialog is narrow. */
+.nx-vars-import__fonts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-vars-import__font {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  font-size: 13px;
+}
+
+.nx-vars-import__font-name {
+  flex: 1 1 8rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.nx-vars-import__font-note {
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}

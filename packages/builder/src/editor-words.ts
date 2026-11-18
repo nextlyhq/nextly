@@ -124,6 +124,12 @@ export const DESIGN_ACTION_WORDS = {
   kept: "Kept for Nextly only",
   leftOut: "Left out",
   withoutData: "Exported without its extra data",
+  textStyles: "Text styles",
+  alsoInFile: "Also in the file",
+  missingFonts: "Fonts this site doesn't have",
+  addFromGoogle: "Add from Google Fonts",
+  fontAdded: "Added",
+  uploadFont: "Upload its font file in Fonts to use it.",
   /** Why a shadow or a text style is not in the Figma files. */
   figmaStyles:
     "Figma keeps these as effect styles and text styles; the variables they use are in the file",

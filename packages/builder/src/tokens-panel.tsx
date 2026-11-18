@@ -248,13 +248,17 @@ export function useVariablesHeader({
   readOnly,
   prefersDark,
   mode: hosted,
+  ...carried
 }: {
   onChange: (tokens: SiteTokenSet) => void;
   currentTokens: () => SiteTokenSet | undefined;
   readOnly: boolean;
   prefersDark?: boolean;
   mode?: TokenMode;
-}): VariablesHeader {
+} & Pick<
+  Parameters<typeof useVariablesTransfer>[0],
+  "currentClasses" | "onEditClasses" | "catalogue"
+>): VariablesHeader {
   /*
    * Without a host's mode, the one the canvas actually draws: the marker on
    * the page it shows, which a site's own page may state, else the device's
@@ -263,7 +267,14 @@ export function useVariablesHeader({
    */
   const drawn = useCanvasTokenModeAt(null);
   const mode: TokenMode = hosted ?? statedMode(prefersDark) ?? drawn;
-  const transfer = useVariablesTransfer({ onChange, currentTokens, readOnly });
+  // The text styles an export writes and an import stores, and the
+  // catalogue a missing font is added from, where the host hands them in.
+  const transfer = useVariablesTransfer({
+    onChange,
+    currentTokens,
+    readOnly,
+    ...carried,
+  });
   return {
     mode,
     controls: <div className="nx-vars__controls">{transfer.menu}</div>,

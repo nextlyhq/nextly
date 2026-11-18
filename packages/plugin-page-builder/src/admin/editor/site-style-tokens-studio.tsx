@@ -21,6 +21,7 @@ import {
   DESIGN_TAB_GROUPS,
   TokensPanel,
   type DesignTab,
+  type EditClasses,
   type TokensPanelProps,
   useVariablesHeader,
   variableMatchesByTab,
@@ -57,6 +58,7 @@ import {
 } from "../variables-client";
 
 import { useDesignBrowse, useDesignHeaderSlot } from "./design-panel";
+import { useFontCatalogue } from "./site-style-fonts";
 import { usedOnPage } from "./used-on-page";
 
 /**
@@ -88,6 +90,7 @@ export function TokensStudio({
   supplied,
   pending,
   classes,
+  onEditClasses,
   opens,
   mode,
   children,
@@ -103,6 +106,12 @@ export function TokensStudio({
    * it. Absent while they are being read.
    */
   classes?: readonly NamedClass[];
+  /**
+   * The editor's one class writer, which an import's text styles are stored
+   * through, as one step of the style history. Absent: an import brings in
+   * no text styles.
+   */
+  onEditClasses?: EditClasses;
   /** Where a shared style or a block look using a variable opens. */
   opens?: StyleOpeners;
   /**
@@ -152,11 +161,20 @@ export function TokensStudio({
    */
   const currentTokens = (): SiteTokenSet | undefined =>
     withReadPrefix(shownNow(), editable);
+  // The classes as they are at the moment an export or an import asks.
+  const latestClasses = useRef(classes);
+  useEffect(() => {
+    latestClasses.current = classes;
+  }, [classes]);
+  const catalogue = useFontCatalogue();
   const header = useVariablesHeader({
     onChange: commit,
     currentTokens,
     readOnly: !mayChange,
     ...(mode === undefined ? {} : { mode }),
+    currentClasses: () => latestClasses.current,
+    ...(onEditClasses === undefined ? {} : { onEditClasses }),
+    ...(catalogue === undefined ? {} : { catalogue }),
   });
   // Memoised, so a set whose prefix was replaced is the same object until
   // the edits or the read change, as `edits ?? editable` was.

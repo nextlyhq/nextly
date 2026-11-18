@@ -1108,6 +1108,8 @@ export function editorPanelRenderer({
                   {...(classes.library === undefined
                     ? {}
                     : { classes: classes.library })}
+                  // An import's text styles are stored by the class writer.
+                  onEditClasses={classes.edit}
                   // A shared style using a variable opens in its own tab; a
                   // block look, which that tab does not list, in the inspector.
                   opens={{
