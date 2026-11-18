@@ -551,3 +551,58 @@ button.nx-font-roles__row:focus-visible {
   margin: 0;
   overflow-wrap: anywhere;
 }
+
+/*
+ * The one Fonts screen: its title row over the site's fonts, filling what it
+ * is given, the left panel in the builder or a page in the admin, with the
+ * list below scrolling on its own.
+ */
+.nx-fonts-screen {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.nx-fonts-screen__head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 10px 12px 0;
+}
+
+.nx-fonts-screen__back {
+  margin-left: -6px;
+}
+
+.nx-fonts-screen__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
+/* "Manage fonts…" under the Body and Headings fonts in Design → Type. */
+.nx-fonts-manage {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  /* A target of its own, at least 24px tall, as WCAG 2.2 asks. */
+  min-height: 24px;
+  margin: 2px 0 4px;
+}
+
+/*
+ * The screen on the admin's Fonts page: a panel-wide column on the panel's
+ * surface, so it reads as the screen the builder opens, beside the page.
+ */
+.nx-fonts-page {
+  display: flex;
+  flex-direction: column;
+  max-width: 28rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-builder-panel);
+  color: var(--nx-foreground);
+}

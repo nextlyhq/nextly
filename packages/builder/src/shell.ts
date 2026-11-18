@@ -925,11 +925,19 @@ export type {
  * @experimental The catalogue's shapes may change while the feature settles.
  */
 export { FontsPanel } from "./fonts-panel";
+/**
+ * The one Fonts screen around that list: what the builder opens over its
+ * Design panel and the admin draws as its Fonts page.
+ *
+ * @experimental Its props may change while the screen settles.
+ */
+export { FontsScreen } from "./fonts-panel";
 export type {
   CatalogueAddRequest,
   CatalogueFamilyView,
   FontCatalogue,
   FontsPanelProps,
+  FontsScreenProps,
   FontFaceUpload,
 } from "./fonts-panel";
 export {

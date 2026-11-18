@@ -109,7 +109,8 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => ({
     panels.tokens = props;
     return null;
   },
-  FontsPanel: (props: NonNullable<typeof panels.fonts>) => {
+  // The Fonts screen the plugin draws, with the writers it hands the list.
+  FontsScreen: (props: NonNullable<typeof panels.fonts>) => {
     panels.fonts = props;
     return null;
   },
@@ -124,7 +125,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
 const { TokensStudio, VariablesTab, useClassSurface } = await import(
   "./site-style-studios"
 );
-const { FontsPanelWithUpload } = await import("./site-style-fonts");
+const { SiteFontsScreen } = await import("./site-style-fonts");
 
 const brand = {
   name: "color.brand",
@@ -290,7 +291,7 @@ describe("the Fonts tab's saves", () => {
 
   it("removes a family from the faces it read, and builds the next save on the stored merge", async () => {
     render(
-      <FontsPanelWithUpload
+      <SiteFontsScreen
         {...({} as FontsPanelProps)}
         storedFaces={[lora, inter]}
         storedPending={false}
@@ -500,7 +501,7 @@ describe("a save stored over someone else's change", () => {
       src: [{ url: "/api/media/m4/raw", format: "woff2" as const }],
     };
     render(
-      <FontsPanelWithUpload
+      <SiteFontsScreen
         {...({} as FontsPanelProps)}
         storedFaces={[lora, inter]}
         storedPending={false}
