@@ -26,7 +26,12 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
+import { servedSchemaVersion } from "../../../../route-handler/schema-version";
 import { resolveRegistryTableName } from "../../../field-groups/storage/resolve-storage-names";
+import {
+  cachedCompanionReadiness,
+  isCompanionReady,
+} from "../../../i18n/runtime/companion-readiness";
 import { resolveSingleTableName } from "../../../singles/services/resolve-single-table-name";
 import { resolveComponentTableName } from "../../utils/resolve-table-name";
 
@@ -195,12 +200,28 @@ describe.each(getConfiguredTestDialects())(
       }
 
       await allow();
+      // Where the failed delete was undone, what this process remembers before the delete that
+      // finishes: the translations table seen ready, on the adapter itself, and the schema version
+      // it serves. (On MySQL the failed delete already dropped the translations table.)
+      const whole = dialect !== "mysql";
+      if (whole) {
+        expect(await isCompanionReady(t.adapter, companion)).toBe(true);
+      }
+      const servedBefore = await servedSchemaVersion();
+      expect(servedBefore).toBeDefined();
       await remove(entity);
 
       expect(await t.adapter.tableExists(entity.table)).toBe(false);
       expect(await t.adapter.tableExists(companion)).toBe(false);
       expect(await registryRowCount(t, entity)).toBe(0);
       expect(deleteFile(t, entity)).toHaveLength(1);
+      if (whole) {
+        // Forgotten on the adapter itself, not only on the transaction's: an entity made again
+        // under the name starts from nothing remembered about the dropped table.
+        expect(cachedCompanionReadiness(t.adapter, companion)).toBeUndefined();
+        // Served at once, not after the read interval: the delete is a registry write.
+        expect(await servedSchemaVersion()).toBeGreaterThan(servedBefore ?? 0);
+      }
     }
 
     it("a Single's", async () => {

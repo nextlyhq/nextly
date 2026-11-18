@@ -51,6 +51,7 @@ import type { FieldConfig } from "@nextly/collections";
 import { assertTopLevelFieldsNamed } from "../../../api/fields-payload";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
+import { bumpSchemaVersion } from "../../../route-handler/schema-version";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
@@ -786,11 +787,14 @@ export class SingleMetadataService {
     tableName: string | undefined,
     fields: readonly unknown[]
   ): Promise<void> {
-    const { teardownAdapterIn } = await import(
-      "../../collections/services/teardown-adapter-in-transaction"
-    );
+    const [{ teardownAdapterIn }, { forgetCompanionReadiness }] =
+      await Promise.all([
+        import("../../collections/services/teardown-adapter-in-transaction"),
+        import("../../i18n/runtime/companion-readiness"),
+      ]);
     let unregistered: UnregisteredSingleRow | undefined;
     try {
+      // The row's removal counts the registry write on the same transaction (`unregisterSingleIn`).
       await adapter.transaction(async tx => {
         const through = teardownAdapterIn(adapter, tx);
         if (tableName) {
@@ -807,6 +811,13 @@ export class SingleMetadataService {
         toDbError(adapter.getCapabilities().dialect, error)
       );
     }
+    // Committed: this process serves the new version at once rather than after its read interval,
+    // as a registry write's commit does (`writeRegistryRows`).
+    bumpSchemaVersion();
+    // What the teardown recorded about the translations table it dropped was recorded against the
+    // transaction's adapter, so it is forgotten here against this one, once the drop is durable: a
+    // Single made again under the name starts from nothing remembered.
+    if (tableName) forgetCompanionReadiness(adapter, `${tableName}_locales`);
     if (unregistered !== undefined) {
       await this.registry.forgetUnregisteredSingle(slug, unregistered);
     }

@@ -7,6 +7,7 @@ import type { FieldGroupAdminOptions } from "../../../field-groups/config/types"
 // Throws NextlyError so public messages stay generic and never echo a slug,
 // while identifiers (slug, source, refs) travel in `logContext` and operators
 // keep full diagnostic context.
+import { bumpSchemaVersion } from "../../../route-handler/schema-version";
 import type {
   DynamicFieldGroupInsert,
   DynamicFieldGroupRecord,
@@ -896,9 +897,11 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         this.adapter.delete(table, this.whereEq("slug", slug))
       );
     } else {
-      const { teardownAdapterIn } = await import(
-        "../../collections/services/teardown-adapter-in-transaction"
-      );
+      const [{ teardownAdapterIn }, { forgetCompanionReadiness }] =
+        await Promise.all([
+          import("../../collections/services/teardown-adapter-in-transaction"),
+          import("../../i18n/runtime/companion-readiness"),
+        ]);
       await this.adapter.transaction(async tx => {
         await this.tearDownAndDrop(
           teardownAdapterIn(this.adapter, tx),
@@ -909,6 +912,13 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         // The stored schema version's count, on the same transaction.
         await this.countWriteOn(tx);
       });
+      // Committed: this process serves the new version at once rather than after its read
+      // interval, as a registry write's commit does (`writeRegistryRows`).
+      bumpSchemaVersion();
+      // What the teardown recorded about the translations table it dropped was recorded against
+      // the transaction's adapter, so it is forgotten here against this one, once the drop is
+      // durable: a field group made again under the name starts from nothing remembered.
+      forgetCompanionReadiness(this.adapter, `${tableName}_locales`);
     }
     // The cached registry row is now out of date: cleared once the removal has committed.
     clearRegistryRowCache();
