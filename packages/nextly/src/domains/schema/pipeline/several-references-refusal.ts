@@ -60,11 +60,13 @@ const EMPTY_TEXTS = sql.join(
 /**
  * A relation holding no entry that the conversion writes as NULL: one of the stored empties, or an
  * empty JSON list however it is spaced. Asked first, so the JSON reads below never see a blank,
- * and guarded by CASE as the condition above is.
+ * and guarded by CASE as the condition above is. It also counts a one-link column, whose bare ids
+ * are not JSON: PostgreSQL, which has no check of JSON before 16, casts only a value written as a
+ * list (starting `[`), as MySQL and SQLite ask whether it is JSON first.
  */
 const NO_REFERENCES: RowCondition = {
   postgresql: c =>
-    sql`CASE WHEN btrim(${c}::text) IN (${EMPTY_TEXTS}) THEN TRUE WHEN jsonb_typeof(${c}::jsonb) = 'array' THEN jsonb_array_length(${c}::jsonb) = 0 ELSE FALSE END`,
+    sql`CASE WHEN btrim(${c}::text) IN (${EMPTY_TEXTS}) THEN TRUE WHEN left(btrim(${c}::text), 1) = '[' THEN jsonb_array_length(${c}::text::jsonb) = 0 ELSE FALSE END`,
   mysql: c =>
     sql`CASE WHEN TRIM(CAST(${c} AS CHAR)) IN (${EMPTY_TEXTS}) THEN TRUE WHEN JSON_VALID(${c}) THEN JSON_TYPE(${c}) = 'ARRAY' AND JSON_LENGTH(${c}) = 0 ELSE FALSE END`,
   sqlite: c =>
