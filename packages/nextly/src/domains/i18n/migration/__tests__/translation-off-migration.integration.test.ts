@@ -8,11 +8,16 @@
  * long text field is `text` on the main table, and a column restored wider (LONGTEXT) left the
  * table at neither end, which the runner refuses as drift.
  *
+ * On a MySQL database older than the renderer's TEXT, the translations column is LONGTEXT and can
+ * hold a value the restored `text` cannot. The copy then fails rather than cut it short, on a
+ * server that is not strict too: the runner runs every migration in strict mode.
+ *
  * Each case runs on a database of its own: the runner refuses a database holding tables it did not
  * make.
  */
 import { randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,7 +26,8 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
 import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type mysql from "mysql2/promise";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runFileMigrations } from "../../../../cli/commands/migrate";
 import { createLogger } from "../../../../cli/utils/logger";
@@ -67,6 +73,51 @@ const DIALECTS: {
 ];
 
 const quiet = createLogger({ quiet: true });
+
+// The driver the MySQL adapter loads, which may be another copy than this package's: the one whose
+// pool and own connections the runner's sessions come from.
+const adapterDriver = createRequire(
+  createRequire(import.meta.url).resolve("@nextlyhq/adapter-mysql")
+)("mysql2/promise") as typeof mysql;
+
+/** A connection as mysql2's core pool hands it to a `connection` listener. */
+interface CoreConnection {
+  query(sql: string): void;
+}
+
+/**
+ * Every session the MySQL adapter opens from here on starts with no strict mode, as on a server
+ * configured that way: its pool's connections and the connections it opens of its own. The server's
+ * own mode is left alone, since other suites share it.
+ */
+function laxSessions(): () => void {
+  const openPool = adapterDriver.createPool.bind(adapterDriver);
+  const openOwn = adapterDriver.createConnection.bind(adapterDriver);
+  const pools = vi.spyOn(adapterDriver, "createPool").mockImplementation(((
+    config: unknown
+  ) => {
+    const pool = openPool(config as never);
+    (
+      pool.pool as unknown as {
+        on(event: "connection", listener: (c: CoreConnection) => void): void;
+      }
+    ).on("connection", connection =>
+      connection.query("SET SESSION sql_mode = ''")
+    );
+    return pool;
+  }) as never);
+  const own = vi
+    .spyOn(adapterDriver, "createConnection")
+    .mockImplementation((async (config: unknown) => {
+      const connection = await openOwn(config as never);
+      await connection.query("SET SESSION sql_mode = ''");
+      return connection;
+    }) as never);
+  return () => {
+    pools.mockRestore();
+    own.mockRestore();
+  };
+}
 
 for (const entry of DIALECTS) {
   const suite = entry.url === null ? describe.skip : describe;
@@ -147,10 +198,10 @@ for (const entry of DIALECTS) {
       });
     }
 
-    function migrate(): Promise<number> {
+    function migrate(on: TestAdapter = adapter): Promise<number> {
       return runFileMigrations({
-        adapter: adapter as never,
-        db: adapter.getDrizzle(),
+        adapter: on as never,
+        db: on.getDrizzle(),
         dialect,
         migrationsDir,
         logger: quiet,
@@ -181,5 +232,42 @@ for (const entry of DIALECTS) {
       // Nothing is left for a later run: the database is at the newest snapshot.
       await expect(migrate()).resolves.toBe(0);
     });
+
+    it.runIf(dialect === "mysql")(
+      "refuses, on a server that is not strict, a value longer than the restored column holds, and keeps it",
+      async () => {
+        await migrateCreate(translated);
+        await migrate();
+        const companion = `${table}_locales`;
+        // A translations column from before the renderer emitted TEXT.
+        await adapter.executeQuery(
+          `ALTER TABLE ${q(companion)} MODIFY ${q("body")} LONGTEXT`
+        );
+        const long = "x".repeat(70_000);
+        await adapter.executeQuery(
+          `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('e1', 'One', 'one')`
+        );
+        await adapter.executeQuery(
+          `INSERT INTO ${q(companion)} (${q("_parent")}, ${q("_locale")}, ${q("body")}, ${q("label")}) ` +
+            `VALUES ('e1', 'en', '${long}', 'Hi'), ('e1', 'es', 'Hola', 'Ola')`
+        );
+        await migrateCreate(untranslated);
+
+        const restore = laxSessions();
+        const lax = entry.make(scratch?.url ?? entry.url ?? "");
+        try {
+          await lax.connect();
+          await expect(migrate(lax)).rejects.toThrow(/too long/i);
+        } finally {
+          await lax.disconnect();
+          restore();
+        }
+
+        const [kept] = await adapter.executeQuery<{ n: number | string }>(
+          `SELECT CHAR_LENGTH(${q("body")}) AS n FROM ${q(companion)} WHERE ${q("_parent")} = 'e1' AND ${q("_locale")} = 'en'`
+        );
+        expect(Number(kept?.n)).toBe(70_000);
+      }
+    );
   });
 }
