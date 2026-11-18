@@ -123,9 +123,12 @@ const POSTGRES: JsonDialect = {
     const text = `${c} #>> ${pgPath(k)}`;
     if (target.kind === "timestamp") {
       // Read as an instant, whatever offset it was written with; a plain column holds it at UTC.
+      // A date alone (the one form `movesAsTheSameDate` lets through with no offset) is midnight
+      // at UTC, as JavaScript reads it, never in the session's zone.
+      const instant = `(${text} || CASE WHEN length(${text}) = 10 THEN 'T00:00:00Z' ELSE '' END)::timestamptz`;
       return zoned(target.columnType)
-        ? `(${text})::timestamptz`
-        : `((${text})::timestamptz AT TIME ZONE 'UTC')`;
+        ? instant
+        : `(${instant} AT TIME ZONE 'UTC')`;
     }
     return TEXT_KINDS.has(target.kind)
       ? text
@@ -306,6 +309,8 @@ export function movesAsTheSameDate(
   if (written === undefined) return false;
   const at = (name: string) => Number(written[name] ?? 0);
   if (!dayExists(at("year"), at("month"), at("day"))) return false;
+  // PostgreSQL's date input has no year 0: the year before 1 is written `0001 BC`.
+  if (dialect === "postgresql" && at("year") === 0) return false;
   if (at("hour") > 23 || at("minute") > 59 || at("second") > 59) return false;
   if (!offsetReadable(written.sign, at("offsetHour"), at("offsetMinute"))) {
     return false;

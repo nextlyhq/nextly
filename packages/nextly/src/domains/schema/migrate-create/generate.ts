@@ -1217,8 +1217,6 @@ export async function generateMigration(
     args,
     args.dialect
   );
-  sqlStatements.push(...rows.up);
-  downSqlStatements.push(...rows.down);
   const added = args.appendedStatements;
   if (added !== undefined) {
     sqlStatements.unshift(...added.up.first);
@@ -1235,6 +1233,11 @@ export async function generateMigration(
   sqlStatements.push(
     ...requiredOnceRefilled(args.refilledColumns, args.dialect, desiredSnapshot)
   );
+  // The registry rows come once every value is where the new definition reads it: on MySQL,
+  // where each statement stands as it runs, a run stopped before them keeps the definition that
+  // still reads the values where they are.
+  sqlStatements.push(...rows.up);
+  downSqlStatements.push(...rows.down);
 
   // 7c. A translated relation whose shape changed keeps its values on the entity's companion,
   //     which the diff above does not reach: its guards lead the file, before any DDL, and its

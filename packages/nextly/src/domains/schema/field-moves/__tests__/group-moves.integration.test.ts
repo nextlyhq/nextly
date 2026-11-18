@@ -747,6 +747,44 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("moves a date alone out of a group as that day, whatever zone the database's sessions read in", async () => {
+      const t = await boot(dialect);
+      await createPosts(t, SLUG, { fields: INSIDE });
+      await t.nextly.create({
+        collection: SLUG,
+        data: { title: "Day", slug: "day", meta: { published: "2026-07-17" } },
+      });
+      if (dialect === "postgresql") {
+        // A zone ahead of UTC for every session of this instance's own database, which the
+        // adapter's sessions take once it reconnects: `::timestamptz` reads a date alone there.
+        await run(
+          t,
+          `DO $$ BEGIN EXECUTE format('ALTER DATABASE %I SET timezone TO %L', current_database(), 'Asia/Karachi'); END $$`
+        );
+        await t.adapter.disconnect();
+        await t.adapter.connect();
+        const [zone] = await run<{ TimeZone: string }>(t, "SHOW timezone");
+        expect(zone?.TimeZone).toBe("Asia/Karachi");
+      }
+      await save(t, OUTSIDE, OUT);
+      const moved = (await readAll(t)).get("day");
+      expect(new Date(moved?.published as string).toISOString()).toBe(
+        "2026-07-17T00:00:00.000Z"
+      );
+    });
+
+    it("writes the collection's new definition only after the values moved out of a group are in", async () => {
+      const t = await boot(dialect);
+      await createPosts(t, SLUG, { fields: INSIDE });
+      await save(t, OUTSIDE, OUT);
+      // On MySQL each statement stands as it runs: a definition written before the copy would
+      // read an empty column, where a run stops between them, while the values sit in the group.
+      const { upSql } = parseSqlSections(await newestFile());
+      const copy = upSql.indexOf(`UPDATE ${q(TABLE)} SET ${q("views")} =`);
+      expect(copy).toBeGreaterThanOrEqual(0);
+      expect(upSql.indexOf("dynamic_collections")).toBeGreaterThan(copy);
+    });
+
     describe("a move that cannot keep its values is refused before anything is written", () => {
       /** The save refused, in its review and in its apply, and nothing about the database changed. */
       async function expectRefused(

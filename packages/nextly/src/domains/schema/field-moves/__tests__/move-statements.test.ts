@@ -317,13 +317,14 @@ describe("moveDataStatements on PostgreSQL and MySQL", () => {
     expect(
       moveDataStatements(out, date("postgresql", "timestamp")).copy[0]
     ).toContain(
-      `SET "published" = (("meta" #>> '{"published"}')::timestamptz AT TIME ZONE 'UTC')`
+      // A date alone is read at UTC midnight, not in the session's zone.
+      `SET "published" = (("meta" #>> '{"published"}' || CASE WHEN length("meta" #>> '{"published"}') = 10 THEN 'T00:00:00Z' ELSE '' END)::timestamptz AT TIME ZONE 'UTC')`
     );
     expect(
       moveDataStatements(out, date("postgresql", "timestamp with time zone"))
         .copy[0]
     ).toContain(
-      `SET "published" = ("meta" #>> '{"published"}')::timestamptz WHERE`
+      `SET "published" = ("meta" #>> '{"published"}' || CASE WHEN length("meta" #>> '{"published"}') = 10 THEN 'T00:00:00Z' ELSE '' END)::timestamptz WHERE`
     );
     expect(
       moveDataStatements(out, date("mysql", "datetime(3)")).copy[0]
@@ -412,6 +413,15 @@ describe("movesAsTheSameDate", () => {
     ]) {
       expect(movesAsTheSameDate(value, "sqlite"), value).toBe(false);
     }
+  });
+
+  it("refuses the year 0 on PostgreSQL, whose date input has no such year", () => {
+    expect(movesAsTheSameDate("0000-01-01", "postgresql")).toBe(false);
+    expect(movesAsTheSameDate("0000-01-01T00:00:00Z", "postgresql")).toBe(
+      false
+    );
+    expect(movesAsTheSameDate("0001-01-01", "postgresql")).toBe(true);
+    expect(movesAsTheSameDate("0000-01-01", "sqlite")).toBe(true);
   });
 
   it("refuses a year before 1000 on MySQL only, whose DATETIME starts there", () => {
