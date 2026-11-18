@@ -162,5 +162,32 @@ describeEachDialect(
       expect(plan.changes).toEqual([]);
       expect(plan.report?.move ?? []).toEqual([]);
     });
+
+    it("leaves what an older version recorded of its parts unknown", async () => {
+      await legacySite();
+      // Versions as an earlier release recorded them: nothing of which parts each changed.
+      await database!.adapter.update(
+        VERSIONS_TABLE,
+        { changedLocales: null, sharedChanged: null },
+        { and: [{ column: "versionNo", op: "IS NOT NULL" }] }
+      );
+      const durable = () =>
+        database!.adapter.select<{
+          changedLocales: unknown;
+          sharedChanged: unknown;
+        }>(VERSIONS_TABLE, {
+          columns: ["changedLocales", "sharedChanged"],
+          where: { and: [{ column: "versionNo", op: "IS NOT NULL" }] },
+        });
+      expect((await durable()).length).toBeGreaterThan(0);
+
+      await upgrade();
+
+      // Nothing inferred: an older version's parts stay unknown.
+      for (const row of await durable()) {
+        expect(row.changedLocales ?? null).toBeNull();
+        expect(row.sharedChanged ?? null).toBeNull();
+      }
+    });
   }
 );
