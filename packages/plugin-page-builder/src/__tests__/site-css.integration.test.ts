@@ -204,8 +204,7 @@ describe.each(getConfiguredTestDialects())(
       const author = await holding(t, ["read-media"]);
       expect((await call("GET", author.cookie, ROUTE)).status).toBe(403);
       expect(
-        (await post(author.cookie, ROUTE, { css: "a{}", sha256: empty }))
-          .status
+        (await post(author.cookie, ROUTE, { css: "a{}", sha256: empty })).status
       ).toBe(403);
       // Nor may they read it to draw: they may edit nothing the builder opens.
       expect(

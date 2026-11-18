@@ -87,9 +87,7 @@ function routeOf(
     ...(options.personName === undefined
       ? {}
       : { personName: options.personName }),
-  }).find(
-    candidate => candidate.method === method && candidate.path === path
-  );
+  }).find(candidate => candidate.method === method && candidate.path === path);
   if (route === undefined) throw new Error(`no ${method} ${path} route`);
   return route;
 }
@@ -186,7 +184,10 @@ describe("saving the site CSS", () => {
         post({ css: "a { color: blue; }", sha256: await sha256Hex("") }),
         ctx
       )
-    ).rejects.toMatchObject({ code: "CONFLICT", publicMessage: SITE_CSS_STALE });
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      publicMessage: SITE_CSS_STALE,
+    });
     expect(saves).toEqual([]);
     expect(audit).not.toHaveBeenCalled();
     expect(expire).not.toHaveBeenCalled();
@@ -205,7 +206,11 @@ describe("saving the site CSS", () => {
     const { item } = (await answer.json()) as { item: { sha256: string } };
     expect(item.sha256).toBe(await sha256Hex(after));
     expect(saves).toEqual([
-      { css: after, readSha256: await sha256Hex(before), changedBy: "user:user-1" },
+      {
+        css: after,
+        readSha256: await sha256Hex(before),
+        changedBy: "user:user-1",
+      },
     ]);
     expect(audit).toHaveBeenCalledTimes(1);
     const row = audit.mock.calls[0]?.[0] as {

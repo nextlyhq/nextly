@@ -34,6 +34,7 @@ import {
 
 import { checkCustomCss, customCssProblemText } from "./css-check";
 import { SITE_CODE_LIMITS } from "./limits";
+import { requestBodyOf } from "./request-body";
 import {
   readStoredSiteCss,
   saveSiteCss,
@@ -157,21 +158,6 @@ async function readDrawnSiteCss(
   return Response.json({ css: stored.css } satisfies SiteCssDrawn);
 }
 
-/** Parse a save's body, refusing one that is not a site CSS save. */
-async function bodyOf(req: Request): Promise<z.infer<typeof SiteCssBody>> {
-  const parsed = SiteCssBody.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) {
-    throw NextlyError.validation({
-      errors: parsed.error.issues.map(issue => ({
-        path: issue.path.join(".") || "body",
-        code: "INVALID_VALUE",
-        message: issue.message,
-      })),
-    });
-  }
-  return parsed.data;
-}
-
 /** Refuse CSS the checker refuses, each refusal naming its line. */
 function refuseUnsaveable(css: string): void {
   const problems = checkCustomCss(css, "site");
@@ -218,7 +204,7 @@ async function changeSiteCss(
     });
   }
   const userId = ctx.user.id;
-  const body = await bodyOf(req);
+  const body = await requestBodyOf(req, SiteCssBody);
   refuseUnsaveable(body.css);
   const write = await written(storeOf(ctx, deps), {
     css: body.css,

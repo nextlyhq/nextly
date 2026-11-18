@@ -31,7 +31,7 @@ import { siteOptions } from "../schema/tables";
 import { sha256Hex } from "../sha256-hex";
 
 /** The header row's name. */
-export const SITE_CSS_OPTION = "site-css";
+const SITE_CSS_OPTION = "site-css";
 
 /** The start of each part row's name. */
 const PART_PREFIX = `${SITE_CSS_OPTION}:`;
@@ -189,7 +189,10 @@ export async function readStoredSiteCss(
   db: Pick<PluginDatabase, "select" | "table">
 ): Promise<StoredSiteCss> {
   const t = db.table(siteOptions);
-  const where = or(eq(t.name, SITE_CSS_OPTION), like(t.name, `${PART_PREFIX}%`));
+  const where = or(
+    eq(t.name, SITE_CSS_OPTION),
+    like(t.name, `${PART_PREFIX}%`)
+  );
   const rows = (
     where === undefined ? [] : await db.select(siteOptions).where(where).all()
   ) as Row[];

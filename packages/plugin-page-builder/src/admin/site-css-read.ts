@@ -11,8 +11,7 @@
  * @module admin/site-css-read
  * @experimental
  */
-import { readPluginRoute } from "@nextlyhq/plugin-sdk/admin";
-import { useQuery } from "@tanstack/react-query";
+import { usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 
 import {
   PAGE_BUILDER_PLUGIN_NAME,
@@ -20,25 +19,15 @@ import {
   type SiteCssDrawn,
 } from "../library-contract";
 
-/** The cache entry the canvas reads it under; a save of the CSS refreshes it. */
-export const DRAWN_SITE_CSS_KEY = [
-  "plugin-page-builder",
-  "drawn-site-css",
-] as const;
-
 /** The site's CSS as the canvas draws it, or `undefined` while there is none to draw. */
 export function useDrawnSiteCss(): string | undefined {
-  const query = useQuery<string>({
-    queryKey: DRAWN_SITE_CSS_KEY,
-    queryFn: async ({ signal }) => {
-      const read = await readPluginRoute<SiteCssDrawn>({
-        plugin: PAGE_BUILDER_PLUGIN_NAME,
-        path: SITE_CSS_DRAWN_ROUTE_PATH,
-        signal,
-      });
-      return typeof read?.css === "string" ? read.css : "";
-    },
+  // The admin's own cached plugin read. Fresh on each mount: the CSS is
+  // saved in Settings, which this read's cache knows nothing of.
+  const { data } = usePluginRoute<SiteCssDrawn>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: SITE_CSS_DRAWN_ROUTE_PATH,
+    staleTime: 0,
   });
-  const css = query.data;
-  return css === undefined || css.trim() === "" ? undefined : css;
+  const css = data?.css;
+  return typeof css !== "string" || css.trim() === "" ? undefined : css;
 }

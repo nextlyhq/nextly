@@ -86,7 +86,8 @@ export const sitesCss: WeakMap<PluginDefinition, SiteCssReader> = new WeakMap<
 function offeredService(
   plugins: Readonly<Record<string, Readonly<Record<string, unknown>>>>
 ): SiteCssService | undefined {
-  const offered: unknown = plugins[PAGE_BUILDER_PLUGIN_NAME]?.[SITE_CSS_SERVICE];
+  const offered: unknown =
+    plugins[PAGE_BUILDER_PLUGIN_NAME]?.[SITE_CSS_SERVICE];
   return typeof offered === "object" &&
     offered !== null &&
     typeof (offered as { read?: unknown }).read === "function"

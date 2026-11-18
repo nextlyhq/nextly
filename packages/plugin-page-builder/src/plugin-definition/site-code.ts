@@ -9,7 +9,6 @@ import { MANAGE_SITE_PERMISSION } from "../site-settings";
 import { mayReadSiteStyle } from "../site-style-route";
 
 import { componentStoreOf } from "./options";
-
 import type { Definition } from "./state";
 
 /** The routes site code contributes, by name. */

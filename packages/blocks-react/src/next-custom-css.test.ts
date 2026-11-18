@@ -77,10 +77,9 @@ describe("routeCustomCss", () => {
   });
 
   it("tags a public route's read with the cache tags the source names too", async () => {
-    await routeStyleContext(
+    await routeCustomCss(
       {
         ...route,
-        styleContext: BASE,
         customCss: {
           ...source("body { margin: 0; }"),
           singles: [],

@@ -1,11 +1,11 @@
 ---
 title: Custom CSS
-description: Add your own CSS where the builder's controls stop, for one block or one page, checked and scoped before it reaches a page.
+description: Add your own CSS where the builder's controls stop, for the whole site, one page or one block, checked and scoped before it reaches a page.
 ---
 
 Custom CSS is your own CSS, for the cases the builder's style controls don't cover. It
-can be written for one page or for one block, and it is drawn on the published page, in
-previews and on the canvas.
+can be written for the whole site, for one page or for one block, and it is drawn on the
+published page and on the canvas.
 
 <Callout type="warn">
   Custom CSS is experimental: the `customCss` route option,
@@ -22,24 +22,43 @@ custom CSS is saved but never shown on the live site:
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { pageBuilderCustomCss } from "@nextlyhq/plugin-page-builder";
 
+import { pageBuilderPlugin } from "../../nextly.config";
+
 export const { ContentPage, generateMetadata } = createBlocksPage({
   collections: ["pages"],
   field: "content",
-  customCss: pageBuilderCustomCss(),
+  customCss: pageBuilderCustomCss({ plugin: pageBuilderPlugin }),
 });
 ```
 
-A route without `customCss` draws none of it, at any level. The canvas and the admin's
-previews always draw it, through the same checker, so they show what the live page shows
-once the route has the line.
+`plugin` is the page builder your `nextly.config.ts` installs (the value `pageBuilder()`
+returned): the route reads the site's CSS through it. Without `plugin` the route draws the
+page's and the blocks' CSS, and none for the whole site. A route without `customCss` draws
+none of it, at any level. The canvas always draws it, the site's CSS included, through the
+same checker, so it shows what the live page shows once the route has the line.
 
-## Page and block CSS
+## Site, page and block CSS
 
-- **One page**: drawn on that page.
+- **The whole site**: drawn first, on every page.
+- **One page**: drawn after the site's, on that page.
 - **One block**: drawn after the page's, on that block only.
 
-Both come after the builder's own styles, so your CSS wins a tie with them, and a block's
-wins a tie with its page's.
+All three come after the builder's own styles, so your CSS wins a tie with them, a page's
+wins a tie with the site's, and a block's wins a tie with its page's.
+
+## The site's CSS
+
+The site's CSS is saved under the site settings permission, by a signed-in person: an API
+key can never save it, as it can never save [site code](/docs/page-builder/site-code). The
+server checks every save with the same checker, and refuses one made while someone else
+saved theirs: "Someone changed the site CSS; reload to see it". Each save is recorded in the
+audit log (who saved it, when, how long it is and its SHA-256, never the CSS itself), and
+every cached published page is refreshed, so the next visitor gets the new CSS.
+
+<Callout>
+  The site's CSS has no version history yet: a save replaces what was there.
+  Keep a copy if you may want to go back.
+</Callout>
 
 ## A block's CSS starts from `selector`
 
