@@ -221,7 +221,7 @@ export function validateDocument(
   // and anywhere a copy of one lands, against the settings it has.
   if (!overLimits) {
     issues.push(
-      ...settingBindingIssues(doc, survey.limits.maxNodes, (node, prop) =>
+      ...settingBindingIssues(doc, survey.limits, (node, prop) =>
         exposureTypeForProp(ctx.definitions?.get(node.type)?.props?.[prop])
       )
     );

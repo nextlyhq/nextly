@@ -22,7 +22,7 @@ import {
   type ResolvedBlockNode,
 } from "./resolve-instances-contract";
 import type { RetiredExposures } from "./retired-exposures";
-import { followerFills } from "./setting-bindings";
+import { followerFills, type FollowerLimits } from "./setting-bindings";
 import { boundedOwnKeys, defineEntry, ownEntry } from "./safe-record";
 import { isConditionGated } from "./visibility";
 
@@ -87,8 +87,8 @@ export function planEdits(
   instance: ResolvedBlockNode,
   supplied: Record<string, ResolvedBlockNode[]> | undefined,
   composed: boolean,
-  /** The node cap the definition is read under, for its followers. */
-  maxNodes?: number
+  /** The limits the definition is read under, for its followers. */
+  limits?: FollowerLimits
 ): Map<string, NodePlan> {
   const plans = new Map<string, NodePlan>();
   const values = effectiveOverrides(definition, instance);
@@ -96,7 +96,7 @@ export function planEdits(
   planBoundSettings(definition.exposed, instance.bindings, plans);
   // After both: a block following a setting shows what the setting's own
   // block ends up with.
-  planFollowers(definition, plans, maxNodes);
+  planFollowers(definition, plans, limits);
   if (supplied !== undefined) {
     planSlots(definition.slots, supplied, plans, composed);
   }
@@ -913,7 +913,7 @@ function planBoundSettings(
 function planFollowers(
   definition: ComponentDocument,
   plans: Map<string, NodePlan>,
-  maxNodes: number | undefined
+  limits: FollowerLimits | undefined
 ): void {
   const fills = followerFills(
     definition,
@@ -937,7 +937,7 @@ function planFollowers(
           : { given: { binding, ...(key === undefined ? {} : { key }) } }),
       };
     },
-    maxNodes
+    limits
   );
   for (const fill of fills) {
     const plan = planFor(plans, fill.nodeId);

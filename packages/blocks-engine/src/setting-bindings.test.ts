@@ -355,6 +355,32 @@ describe("a block following a setting, its edges", () => {
     });
   });
 
+  it("composes a component too deep to fill, rather than throwing", () => {
+    // A follower near the root, and a slot chain far past the node cap.
+    let chain: BlockNode = heading("deep-0", "x");
+    for (let i = 1; i < 20_000; i += 1) {
+      chain = {
+        id: `deep-${String(i)}`,
+        type: "core/box",
+        version: 1,
+        props: {},
+        slots: { children: [chain] },
+      };
+    }
+    const card = component(
+      [
+        heading("card-title", "Plain title"),
+        heading("card-echo", "Stored echo", { text: follows("title") }),
+        chain,
+      ],
+      [exposure("title", "card-title", "text")]
+    );
+    expect(() =>
+      resolveComponentInstances(card, new Map<string, BlockDocument>())
+    ).not.toThrow();
+    expect(() => withSettingDefaults(card)).not.toThrow();
+  });
+
   it("fills a follower past the default node budget when the limits allow it", () => {
     const filler = Array.from({ length: 5001 }, (_, i) =>
       heading(`f${String(i)}`, "x")

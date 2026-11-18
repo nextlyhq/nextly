@@ -15,10 +15,21 @@
 import type { BlockDocument, BlockNode, ExposedProperty } from "./document";
 import { pointer } from "./issue-text";
 import { COLLECTION_LIST_TYPE } from "./list-query-contract";
-import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
+import {
+  DEFAULT_LIMITS,
+  type DocumentLimits,
+  MAX_ENVELOPE_ENTRIES,
+} from "./limits";
 import { isPlainRecord } from "./plain-record";
 import { defineEntry, ownEntry, ownKeys } from "./safe-record";
 import type { ValidationIssue } from "./validation-contract";
+
+/**
+ * The nodes, and the levels of nesting, a follower is looked for under: a
+ * document's own limits, so what a save accepts is what is filled, and a
+ * stored chain past them is never walked.
+ */
+export type FollowerLimits = Pick<DocumentLimits, "maxNodes" | "maxDepth">;
 
 /** The source of a binding that follows one of its component's settings. */
 const SETTING_BINDING_SOURCE = "setting";
@@ -84,9 +95,11 @@ function eachFollower(
   nodes: unknown,
   path: string,
   visit: (node: BlockNode, prop: string, id: string, at: string) => void,
-  budget: { left: number }
+  /** Nodes left to read, and levels left to descend: past either, nothing is. */
+  budget: { left: number; depth: number }
 ): void {
-  if (!Array.isArray(nodes)) return;
+  if (!Array.isArray(nodes) || budget.depth <= 0) return;
+  budget.depth -= 1;
   for (let i = 0; i < nodes.length && budget.left > 0; i += 1) {
     const node: unknown = nodes[i];
     if (!isPlainRecord(node)) continue;
@@ -105,6 +118,7 @@ function eachFollower(
       );
     }
   }
+  budget.depth += 1;
 }
 
 /** The bindings of one block that follow a setting. */
@@ -133,7 +147,7 @@ function followersOn(
  */
 export function settingBindingIssues(
   doc: BlockDocument,
-  maxNodes: number = DEFAULT_LIMITS.maxNodes,
+  limits: FollowerLimits = DEFAULT_LIMITS,
   /**
    * The setting type a block's prop takes, where its block is known; a prop
    * a setting of another type would fill is refused. Unknown, it is not
@@ -175,7 +189,7 @@ export function settingBindingIssues(
         });
       }
     },
-    { left: maxNodes }
+    { left: limits.maxNodes, depth: limits.maxDepth }
   );
   return issues;
 }
@@ -260,13 +274,13 @@ export interface FollowerFill {
 export function followerFills(
   definition: unknown,
   targetOf: (nodeId: string, path: string) => SettingTarget,
-  maxNodes: number = DEFAULT_LIMITS.maxNodes
+  limits: FollowerLimits = DEFAULT_LIMITS
 ): FollowerFill[] {
   if (!isPlainRecord(definition)) return [];
   const settings = followableSettings(ownEntry(definition, "exposed"));
   if (settings.size === 0) return [];
   const nodes = ownEntry(definition, "nodes");
-  const index = nodesById(nodes, maxNodes);
+  const index = nodesById(nodes, limits);
   const at = (block: BlockNode) => ({
     block,
     list: index.listOf.get(block.id),
@@ -287,7 +301,7 @@ export function followerFills(
         settingId: id,
       });
     },
-    { left: maxNodes }
+    { left: limits.maxNodes, depth: limits.maxDepth }
   );
   return fills;
 }
@@ -348,32 +362,62 @@ function propAt(props: unknown, path: string): unknown {
  */
 function nodesById(
   nodes: unknown,
-  maxNodes: number
+  limits: FollowerLimits
 ): {
   nodes: Map<string, BlockNode>;
   listOf: Map<string, string | undefined>;
 } {
-  const index = new Map<string, BlockNode>();
-  const listOf = new Map<string, string | undefined>();
-  const budget = { left: maxNodes };
-  const visit = (forest: unknown, list: string | undefined): void => {
-    if (!Array.isArray(forest)) return;
+  const found = {
+    nodes: new Map<string, BlockNode>(),
+    listOf: new Map<string, string | undefined>(),
+  };
+  const budget = { left: limits.maxNodes };
+  const visit = (
+    forest: unknown,
+    list: string | undefined,
+    depth: number
+  ): void => {
+    if (!Array.isArray(forest) || depth > limits.maxDepth) return;
     for (const node of forest as unknown[]) {
       if (budget.left <= 0) return;
-      if (!isPlainRecord(node) || typeof node.id !== "string") continue;
+      const inner = indexed(node, list, found);
+      if (inner === null) continue;
       budget.left -= 1;
-      if (!index.has(node.id)) {
-        index.set(node.id, node as unknown as BlockNode);
-        listOf.set(node.id, list);
-      }
-      const slots = ownEntry(node, "slots");
-      if (!isPlainRecord(slots)) continue;
-      const inner = node.type === COLLECTION_LIST_TYPE ? node.id : list;
-      for (const name of ownKeys(slots)) visit(ownEntry(slots, name), inner);
+      for (const children of slotForests(node))
+        visit(children, inner, depth + 1);
     }
   };
-  visit(nodes, undefined);
-  return { nodes: index, listOf };
+  visit(nodes, undefined, 1);
+  return found;
+}
+
+/**
+ * One node into the index, first of an id kept, with the list nearest it;
+ * answers the list nearest its own children, or `null` for an entry that is
+ * no node.
+ */
+function indexed(
+  node: unknown,
+  list: string | undefined,
+  found: {
+    nodes: Map<string, BlockNode>;
+    listOf: Map<string, string | undefined>;
+  }
+): string | undefined | null {
+  if (!isPlainRecord(node) || typeof node.id !== "string") return null;
+  if (!found.nodes.has(node.id)) {
+    found.nodes.set(node.id, node as unknown as BlockNode);
+    found.listOf.set(node.id, list);
+  }
+  return node.type === COLLECTION_LIST_TYPE ? node.id : list;
+}
+
+/** The forests a node's slots hold. */
+function slotForests(node: unknown): unknown[] {
+  const slots = isPlainRecord(node) ? ownEntry(node, "slots") : undefined;
+  return isPlainRecord(slots)
+    ? ownKeys(slots).map(name => ownEntry(slots, name))
+    : [];
 }
 
 /**

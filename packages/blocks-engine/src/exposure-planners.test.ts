@@ -458,6 +458,25 @@ describe("a block following the setting", () => {
     expect(echoOf(edit.document)?.bindings).toBeUndefined();
   });
 
+  it("refuses pointing the setting at a prop that follows it", () => {
+    const edit = planRetargetExposure(
+      followed(),
+      "title",
+      { nodeId: "echo", propPath: "title" },
+      sources()
+    );
+    expect(edit).toMatchObject({ problem: "invalid-exposure" });
+  });
+
+  it("refuses a new setting on a prop that follows another", () => {
+    const edit = planExposeProperty(
+      followed(),
+      { nodeId: "echo", propPath: "title", label: "Echo" },
+      sources()
+    );
+    expect(edit).toMatchObject({ problem: "invalid-exposure" });
+  });
+
   it("still follows it when the new prop keeps the id", () => {
     const edit = edited(
       planRetargetExposure(
