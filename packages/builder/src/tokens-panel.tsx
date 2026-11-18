@@ -256,13 +256,10 @@ export function useVariablesHeader({
   readOnly: boolean;
   prefersDark?: boolean;
   mode?: TokenMode;
-} & Pick<
+} & Omit<
+  // What the import and exports carry beyond the variables, each optional.
   Parameters<typeof useVariablesTransfer>[0],
-  | "currentClasses"
-  | "onEditClasses"
-  | "storeTokensNow"
-  | "catalogue"
-  | "breakpoints"
+  "onChange" | "currentTokens" | "readOnly"
 >): VariablesHeader {
   /*
    * Without a host's mode, the one the canvas actually draws: the marker on
