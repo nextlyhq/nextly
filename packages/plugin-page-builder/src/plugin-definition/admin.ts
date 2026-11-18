@@ -12,6 +12,7 @@ import {
   BUILDER_VIEW_PATH,
   COMPONENT_STORE_DELETE_HOST_COMPONENT,
   ENTRY_DESIGN_SECTION_COMPONENT,
+  NEW_PAGE_DIALOG_COMPONENT,
   OPEN_IN_BUILDER,
   REMOVE_LAYOUT_ACTION_COMPONENT,
   SINGLE_SHOWN_ON_SECTION_COMPONENT,
@@ -106,6 +107,11 @@ export function adminContributions(def: Definition): PluginAdminContributions {
         label: "Page Builder",
         opensFirst: "mainField",
         openLabel: OPEN_IN_BUILDER,
+        // "+ New" on such a list opens the New page dialog: a title, an
+        // address made from it, the header & footer, then straight into the
+        // builder on the saved draft. A collection whose field holds no pages
+        // (only components or patterns) is handed to its create form.
+        createDialog: NEW_PAGE_DIALOG_COMPONENT,
       },
     ],
     // "Remove Layout…" in a Layout's document bar, beside History: the one

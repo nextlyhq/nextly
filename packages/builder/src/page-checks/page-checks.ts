@@ -155,6 +155,11 @@ export interface PageCheckResult {
    * absent where no one setting does, and the block alone is selected.
    */
   readonly fix?: AskedSetting;
+  /**
+   * The tab of the document's own settings that fixes it, by its id, where
+   * the fix is there rather than on a block (a plugin's tab of Page settings).
+   */
+  readonly settingsTab?: string;
 }
 
 /** One check: an id, the group it reports in, and what it finds. */
