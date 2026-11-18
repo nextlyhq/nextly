@@ -3535,6 +3535,45 @@ export class SingleQueryService extends BaseService {
     }
   }
 
+  /**
+   * The links each of the Single's many-to-many fields holds, by field name,
+   * read on `executor` (the save's transaction, so a write it made is seen):
+   * the ids its junction stores, named from `sourceTable`. Nothing for a
+   * Single with no such field. What a save's event, version and field hooks
+   * are handed for those fields, which have no column on the Single's row.
+   */
+  async readManyToManyLinks(args: {
+    executor: RelationshipDbExecutor;
+    sourceTable: string;
+    entryId: string;
+    fields: readonly FieldConfig[];
+  }): Promise<Record<string, string[]>> {
+    const junctionFields = (args.fields as unknown as FieldDefinition[]).filter(
+      field => usesJunctionTable(field)
+    );
+    if (junctionFields.length === 0) return {};
+    const relationshipService = this.resolveRelationshipService();
+    if (!relationshipService) {
+      throw NextlyError.internal({
+        logContext: {
+          table: args.sourceTable,
+          reason: "many-to-many-links-unreadable",
+        },
+      });
+    }
+    const links: Record<string, string[]> = {};
+    for (const field of junctionFields) {
+      const stored = await relationshipService.fetchManyToManyTargetIdsFrom(
+        args.sourceTable,
+        [args.entryId],
+        field,
+        args.executor
+      );
+      links[field.name] = (stored.get(args.entryId) ?? []).map(String);
+    }
+    return links;
+  }
+
   // ============================================================
   // Private Helpers
   // ============================================================

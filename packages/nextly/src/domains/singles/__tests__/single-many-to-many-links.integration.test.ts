@@ -20,6 +20,7 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { registerFieldFunctions } from "../../../shared/lib/field-level-registry";
 
 // Slugs prefixed for this file (`smm_`), so the tables it owns are its own.
 const HERO = "smm_hero";
@@ -61,6 +62,8 @@ for (const shape of SHAPES)
         {
           slug: HERO,
           label: "Hero",
+          // Each save records a version, which holds the links as the save leaves them.
+          versions: true,
           ...(shape.translated ? { localized: true } : {}),
           fields: [
             { name: "title", type: "text" },
@@ -84,6 +87,8 @@ for (const shape of SHAPES)
     });
 
     afterEach(async () => {
+      // The field functions are kept per Single across instances: none are left for the next.
+      registerFieldFunctions("single", HERO, []);
       await t.destroy();
       vi.unstubAllEnvs();
     });
@@ -124,14 +129,17 @@ for (const shape of SHAPES)
       } | null;
       return doc?.tags ?? [];
     }
-    const idsOf = (tags: unknown[]) =>
-      tags
-        .map(tag =>
-          typeof tag === "object" && tag !== null
-            ? String((tag as { id: unknown }).id)
-            : String(tag)
-        )
-        .sort();
+    // A value that is not a list reads as one entry naming it, so a missing one fails as itself.
+    const idsOf = (tags: unknown): string[] =>
+      !Array.isArray(tags)
+        ? [`not a list: ${JSON.stringify(tags)}`]
+        : tags
+            .map(tag =>
+              typeof tag === "object" && tag !== null
+                ? String((tag as { id: unknown }).id)
+                : String(tag)
+            )
+            .sort();
 
     it("writes the links an entry save sends into its junction table", async () => {
       const [a, b] = tagIds;
@@ -178,5 +186,86 @@ for (const shape of SHAPES)
 
       expect(await linked()).toEqual([]);
       expect(await read(0)).toEqual([]);
+    });
+
+    it("clears the links when a save sends null for them", async () => {
+      const [a, b] = tagIds;
+      await save([a!, b!]);
+      expect(await linked()).toEqual([a, b].sort());
+
+      await t.nextly.updateSingle({
+        slug: HERO,
+        data: { title: "Hero", tags: null, _overwrite: true },
+      });
+
+      expect(await linked()).toEqual([]);
+    });
+
+    it("hands the field's afterChange hook the links the save left", async () => {
+      const seen: unknown[] = [];
+      registerFieldFunctions("single", HERO, [
+        {
+          name: "tags",
+          hooks: {
+            afterChange: [
+              ({ value }: { value: unknown }) => {
+                seen.push(value);
+              },
+            ],
+          },
+        },
+      ]);
+      const [a, b] = tagIds;
+
+      await save([a!, b!]);
+
+      expect(seen.map(value => idsOf(value as unknown[]))).toEqual([
+        [a, b].sort(),
+      ]);
+    });
+
+    it("hands the save's in-transaction handlers the links it leaves and the ones it replaced", async () => {
+      const writes: { data: unknown; previous: unknown }[] = [];
+      t.hooks.registerInTransaction(`single:${HERO}`, async (_tx, write) => {
+        writes.push({
+          data: (write.data as { tags?: unknown } | undefined)?.tags,
+          previous: (write.originalData as { tags?: unknown } | undefined)
+            ?.tags,
+        });
+      });
+      const [a, b, c] = tagIds;
+      await save([a!, b!]);
+
+      await save([b!, c!]);
+
+      const last = writes.at(-1);
+      expect(last, JSON.stringify(writes)).toBeDefined();
+      expect(idsOf(last!.data as unknown[])).toEqual([b, c].sort());
+      expect(idsOf(last!.previous as unknown[])).toEqual([a, b].sort());
+    });
+
+    it("records the links in the version the save makes", async () => {
+      const [a, b] = tagIds;
+
+      await save([a!, b!]);
+
+      const versions = (
+        await t.adapter.select<{
+          scopeSlug: string;
+          versionNo: number | null;
+          snapshot: unknown;
+        }>("nextly_versions")
+      )
+        .filter(v => v.scopeSlug === HERO && typeof v.versionNo === "number")
+        .sort((x, y) => (x.versionNo ?? 0) - (y.versionNo ?? 0));
+      const latest = versions.at(-1);
+      expect(latest, "a version of the save").toBeDefined();
+      // Some dialects hand JSON back as text.
+      const snapshot = (
+        typeof latest!.snapshot === "string"
+          ? JSON.parse(latest!.snapshot)
+          : latest!.snapshot
+      ) as { tags?: unknown };
+      expect(idsOf(snapshot.tags as unknown[])).toEqual([a, b].sort());
     });
   });
