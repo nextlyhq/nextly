@@ -29,6 +29,7 @@ export type {
   BlockInspectorProps,
   BlockIsland,
   BlockConversion,
+  BlockConversionContext,
   BlockConverter,
   BlockExample,
   BlockSeoContribution,

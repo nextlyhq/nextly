@@ -29,6 +29,7 @@ import {
   type BlockDocument,
   type BlockNode,
   isTokenRef,
+  STYLE_STATES,
   type NodeStyles,
   type StyleValue,
 } from "./document";
@@ -153,7 +154,9 @@ export function planTurnInto(
         "Placements of this component fill in this block, so it can't be turned into another.",
     };
   }
-  const converted = converter.convert(node.props);
+  const converted = converter.convert(node.props, {
+    bound: Object.keys(node.bindings ?? {}),
+  });
   if ("refused" in converted) return { refused: converted.refused };
 
   const { bindings, unbound } = carriedBindings(
@@ -207,72 +210,70 @@ function offeredToPlacements(document: BlockDocument, id: string): boolean {
  * its classes without it; nothing when it wears none the library names.
  *
  * A look belongs to one block type: on any other it is not drawn. So the
- * block's own look (of its own type, the one it was drawn with) is folded in
- * under its own styles (`overlaidStyles`, side by side for a composite), and
- * its id is left off. Looks of other types were never drawn on it, and
- * nothing of them is folded.
+ * block's own looks (of its own type, the ones it was drawn with) are folded
+ * in under its own styles (`overlaidStyles`, side by side for a composite),
+ * and their ids are left off. Looks of other types were never drawn on it:
+ * nothing of them is folded, and they beat nothing.
  *
- * Folding moves the look into the block's own tier, which every class and
- * every width of the block's own values used to beat. So each look value is
- * kept only where nothing that beat it sets the same thing:
- * - a value a kept class (a shared style) or the block itself sets in
- *   ANOTHER state or at another width goes, since one tier orders states and
- *   widths differently from two; `trimmed` then says part of the look gave
- *   way, as it may have shown where those did not apply;
- * - in the same state and width, a kept class's sides are taken out of it
- *   (the class still beats it), and the block's own are laid over it.
+ * Folding moves a look into the block's own tier, where rules are ordered by
+ * state, then by width, rather than by tier. So each look value is kept only
+ * where what used to beat it still does:
+ * - a kept class (a shared style), or a look worn after it, beat it wherever
+ *   both applied. A value either sets at another state or width makes it go;
+ *   at the same one, their sides are taken out of it.
+ * - the block's own value beat it too. One set at a state or width written
+ *   before it in a tier would now lose to it, so it goes; one written after
+ *   it still wins, and both stay.
+ *
+ * `trimmed` says part of a look gave way, which may show where what beat it
+ * did not apply; that is said rather than guessed around.
  */
 function lookOf(
   node: BlockNode,
   library: readonly NamedClass[]
 ): { look?: NodeStyles; classes?: string[]; trimmed?: true } {
   const worn = new Set(node.classes ?? []);
-  const wornHere = library.filter(cls => worn.has(cls.id));
-  const looks = wornHere
-    .filter(cls => isLook(cls) && cls.blockType === node.type)
+  const drawn = library.filter(
+    cls => worn.has(cls.id) && (!isLook(cls) || cls.blockType === node.type)
+  );
+  const looks = drawn
+    .filter(isLook)
     .sort((a, b) => a.orderIndex - b.orderIndex);
   if (looks.length === 0) return {};
   const gone = new Set(looks.map(look => look.id));
-  const kept = wornHere.filter(cls => !gone.has(cls.id)).map(cls => cls.styles);
-  const look = looks.reduce<NodeStyles>(
-    (all, each) => overlaidStyles(all, each.styles),
-    {}
-  );
-  const left = beatenOut(look, kept, node.styles);
+  const kept = drawn.filter(cls => !gone.has(cls.id)).map(cls => cls.styles);
+  let look: NodeStyles = {};
+  let trimmed = false;
+  looks.forEach((each, index) => {
+    const later = looks.slice(index + 1).map(cls => cls.styles);
+    const left = beatenOut(each.styles, [...kept, ...later], node.styles);
+    trimmed ||= left.trimmed;
+    look = overlaidStyles(look, left.styles);
+  });
   return {
-    look: left.styles,
+    look,
     classes: (node.classes ?? []).filter(cls => !gone.has(cls)),
-    ...(left.trimmed ? { trimmed: true as const } : {}),
+    ...(trimmed ? { trimmed: true as const } : {}),
   };
 }
 
-/**
- * Every state and width an envelope sets `property` at, with its value. Read
- * across states because a state's rule has no more weight than the base's:
- * what decides between two tiers is their order, whatever the state.
- */
-function placesOf(
-  styles: NodeStyles | undefined,
-  property: string
-): Map<string, StyleValue> {
-  const out = new Map<string, StyleValue>();
-  const byState = (styles ?? {}) as Record<string, Record<string, object>>;
-  for (const [state, byWidth] of Object.entries(byState)) {
-    for (const [width, values] of Object.entries(byWidth ?? {})) {
-      if (values !== undefined && Object.hasOwn(values, property)) {
-        out.set(
-          placeKey(state, width),
-          (values as Record<string, StyleValue>)[property]
-        );
-      }
-    }
-  }
-  return out;
+/** One value an envelope sets: where, and what. */
+interface Placed {
+  readonly state: string;
+  readonly width: string;
+  readonly value: StyleValue;
 }
 
-/** One state and width, as a key. */
-function placeKey(state: string, width: string): string {
-  return `${state} ${width}`;
+/** Every state and width an envelope sets `property` at, with its value. */
+function placesOf(styles: NodeStyles | undefined, property: string): Placed[] {
+  return lookValues(styles ?? {})
+    .filter(([, , name]) => name === property)
+    .map(([state, width, , value]) => ({ state, width, value }));
+}
+
+/** Where a state is written in a tier: the states come in this order. */
+function stateOrder(state: string): number {
+  return (STYLE_STATES as readonly string[]).indexOf(state);
 }
 
 /** `value` without what `taken` sets: the sides of a composite, or all. */
@@ -286,39 +287,60 @@ function minus(value: StyleValue, taken: StyleValue): StyleValue | undefined {
   return left.length === 0 ? undefined : Object.fromEntries(left);
 }
 
+/** Whether two places are one state at one width. */
+function samePlace(
+  a: Omit<Placed, "value">,
+  b: Omit<Placed, "value">
+): boolean {
+  return a.state === b.state && a.width === b.width;
+}
+
+/**
+ * Whether a block's own value at `own` would lose, in one tier, to a look
+ * value at `at`, which it beat before: the look's is written after it (a
+ * later state), or the two are at different widths of one state, whose order
+ * this cannot know.
+ */
+function ownWouldLose(at: Omit<Placed, "value">, own: Placed): boolean {
+  const ahead = stateOrder(at.state) - stateOrder(own.state);
+  return ahead > 0 || (ahead === 0 && at.width !== own.width);
+}
+
 /** What is left of one look value once what beat it is taken out. */
 function leftOf(
   value: StyleValue,
-  place: string,
-  setters: readonly Map<string, StyleValue>[],
-  classSetters: readonly Map<string, StyleValue>[]
+  at: Omit<Placed, "value">,
+  beaters: readonly Placed[],
+  own: readonly Placed[]
 ): { value?: StyleValue; trimmed: boolean } {
-  if (setters.some(set => [...set.keys()].some(other => other !== place))) {
-    return { trimmed: true };
-  }
+  const lost =
+    beaters.some(each => !samePlace(each, at)) ||
+    own.some(each => ownWouldLose(at, each));
+  if (lost) return { trimmed: true };
   let left: StyleValue | undefined = value;
-  for (const set of classSetters) {
-    const taken = set.get(place);
-    if (left !== undefined && taken !== undefined) left = minus(left, taken);
+  for (const each of beaters) {
+    if (left !== undefined) left = minus(left, each.value);
   }
   return left === undefined
     ? { trimmed: false }
     : { value: left, trimmed: false };
 }
 
-/** The look's values that nothing which beat it also sets. */
+/** A look's values that what beat it does not overturn. */
 function beatenOut(
   look: NodeStyles,
-  kept: readonly NodeStyles[],
+  beaters: readonly NodeStyles[],
   own: NodeStyles | undefined
 ): { styles: NodeStyles; trimmed: boolean } {
   const out: Record<string, Record<string, Record<string, StyleValue>>> = {};
   let trimmed = false;
   for (const [state, width, property, value] of lookValues(look)) {
-    const classSetters = kept.map(cls => placesOf(cls, property));
-    const setters = [...classSetters, placesOf(own, property)];
-    const place = placeKey(state, width);
-    const left = leftOf(value, place, setters, classSetters);
+    const left = leftOf(
+      value,
+      { state, width },
+      beaters.flatMap(each => placesOf(each, property)),
+      placesOf(own, property)
+    );
     trimmed ||= left.trimmed;
     if (left.value === undefined) continue;
     out[state] ??= {};

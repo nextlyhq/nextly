@@ -475,6 +475,7 @@ export type {
   // Reachable from `BlockDefinition.converters`, which a block declares to be
   // turned into another type.
   BlockConversion,
+  BlockConversionContext,
   BlockConverter,
   BlockDefinition,
   BlockDocument,

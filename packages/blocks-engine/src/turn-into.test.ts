@@ -517,6 +517,93 @@ describe("a block style, which belongs to one block type", () => {
     expect(plan.lookTrimmed).toBe(true);
   });
 
+  it("keeps a look value the block's own value in a later state never beat", () => {
+    // The look's red is the block's colour until it is hovered, when its own
+    // blue wins; in one tier hover still comes after, so both stay.
+    const red: NamedClass = {
+      id: "look-red",
+      slug: "red",
+      orderIndex: 0,
+      blockType: "test/words",
+      styles: { base: { desktop: { color: "#f00" } } },
+    };
+    const own = {
+      ...WORDS,
+      classes: ["look-red"],
+      styles: { hover: { desktop: { color: "#00f" } } },
+    };
+    const plan = planTurnInto(page(own), "w1", "test/passage", lookup, [red]);
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.op.node.styles).toEqual({
+      base: { desktop: { color: "#f00" } },
+      hover: { desktop: { color: "#00f" } },
+    });
+    expect(plan.lookTrimmed).toBeUndefined();
+  });
+
+  it("is not beaten by a look of another type, which was never drawn", () => {
+    const red: NamedClass = {
+      id: "look-red",
+      slug: "red",
+      orderIndex: 0,
+      blockType: "test/words",
+      styles: { base: { desktop: { color: "#f00" } } },
+    };
+    const otherBlue: NamedClass = {
+      id: "look-blue",
+      slug: "blue",
+      orderIndex: 1,
+      blockType: "test/title",
+      styles: { base: { desktop: { color: "#00f" } } },
+    };
+    const worn = {
+      ...WORDS,
+      classes: ["look-red", "look-blue"],
+      styles: undefined,
+    };
+    const plan = planTurnInto(page(worn), "w1", "test/passage", lookup, [
+      red,
+      otherBlue,
+    ]);
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.op.node.styles).toEqual({
+      base: { desktop: { color: "#f00" } },
+    });
+  });
+
+  it("gives way between two worn looks as they were drawn, and says so", () => {
+    // The later look's desktop blue beat the earlier look's tablet red at
+    // every width; folded into one envelope the tablet red would win there.
+    const red: NamedClass = {
+      id: "look-red",
+      slug: "red",
+      orderIndex: 0,
+      blockType: "test/words",
+      styles: { base: { tablet: { color: "#f00" } } },
+    };
+    const blue: NamedClass = {
+      id: "look-blue",
+      slug: "blue",
+      orderIndex: 1,
+      blockType: "test/words",
+      styles: { base: { desktop: { color: "#00f" } } },
+    };
+    const worn = {
+      ...WORDS,
+      classes: ["look-red", "look-blue"],
+      styles: undefined,
+    };
+    const plan = planTurnInto(page(worn), "w1", "test/passage", lookup, [
+      red,
+      blue,
+    ]);
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.op.node.styles).toEqual({
+      base: { desktop: { color: "#00f" } },
+    });
+    expect(plan.lookTrimmed).toBe(true);
+  });
+
   it("folds only a look the block was drawn with", () => {
     // A look of a third type was never drawn on this block, so nothing of it
     // comes along.

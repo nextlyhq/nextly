@@ -917,8 +917,26 @@ export interface BlockConverter<P extends object = Record<string, unknown>> {
    * sentence for the author ("Bold and links are removed"), or why this block
    * cannot be turned as it stands. Pure and synchronous: it runs when a menu
    * opens, to say what each choice would do.
+   *
+   * `context.bound` names this block's props a field fills: their stored
+   * value is only what shows when the field is empty, which matters to a
+   * converter that would put something around it.
    */
-  convert(this: void, props: P): BlockConversion;
+  convert(
+    this: void,
+    props: P,
+    context?: BlockConversionContext
+  ): BlockConversion;
+}
+
+/**
+ * What a converter is told beyond the props.
+ *
+ * @experimental Settles with the editor's "Turn into".
+ */
+export interface BlockConversionContext {
+  /** This block's props a binding fills. */
+  readonly bound: readonly string[];
 }
 
 /**

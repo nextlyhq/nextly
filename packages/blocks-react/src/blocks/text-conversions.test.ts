@@ -321,6 +321,22 @@ describe("Heading → Text and Rich text", () => {
     expect(plan.dropped).toBe("The link's relationship is removed");
   });
 
+  it("removes the link when the words come from a field, and says so", () => {
+    // A bound field fills the whole of the new block's words, so a link put
+    // around the stored words would never be drawn.
+    const bound: BlockNode = {
+      ...block(HEADING_BLOCK, {
+        ...HEADING_PROPS,
+        href: "https://example.com/team",
+      }),
+      bindings: { text: { $bind: "title" } },
+    };
+    const plan = turn(bound, TEXT_BLOCK);
+    expect(plan.op.node.props).toEqual({ text: root(para(words("Our team"))) });
+    expect(plan.op.node.bindings).toEqual({ text: { $bind: "title" } });
+    expect(plan.dropped).toBe("The link is removed");
+  });
+
   it("removes a link to an entry, which a Text cannot hold, and says so", () => {
     const props = {
       ...HEADING_PROPS,

@@ -250,47 +250,65 @@ export const RICH_TEXT_CONVERTERS: Readonly<
  * which a link in a passage cannot hold, or has a relationship a passage's
  * link cannot hold.
  */
-function headingInline(props: HeadingProps): {
+function headingInline(
+  props: HeadingProps,
+  bound: readonly string[] = []
+): {
   readonly inline: RichTextNode[];
   readonly dropped?: string;
 } {
-  const words: RichTextNode = {
-    type: "text",
-    text: text(props.text),
-    format: 0,
-  };
-  if (linksToEntry(props)) {
+  // An entry link a passage cannot hold, or any link around words a field
+  // fills: the field replaces the whole value, link and all.
+  const fieldWords = bound.includes("text") && url(props.href) !== undefined;
+  if (linksToEntry(props) || fieldWords) {
     return {
       inline: paragraphChildren(toOneParagraph(text(props.text)).value),
       dropped: TURN_INTO_WORDS.linkRemoved,
     };
   }
   const href = url(props.href);
+  const words: RichTextNode = {
+    type: "text",
+    text: text(props.text),
+    format: 0,
+  };
+  if (href === undefined) {
+    return {
+      inline: paragraphChildren(
+        toOneParagraph(rooted([{ type: "paragraph", children: [words] }])).value
+      ),
+    };
+  }
+  return linkedInline(href, props, words);
+}
+
+/**
+ * A heading's words inside its link to an address, through the one
+ * restriction, so the link is one a Text can hold and the words are stored
+ * as every Text's are; a relationship that cannot come along is said.
+ */
+function linkedInline(
+  href: string,
+  props: HeadingProps,
+  words: RichTextNode
+): { readonly inline: RichTextNode[]; readonly dropped?: string } {
   // As the Heading draws it: its words, however spaced, and in the lowercase
   // a link's relationships are read in.
   const rel = [
     ...new Set(text(props.rel).toLowerCase().split(/\s+/).filter(Boolean)),
   ].join(" ");
-  const linked: RichTextNode[] =
-    href === undefined
-      ? [words]
-      : [
-          {
-            type: "link",
-            url: href,
-            ...(props.target === "_blank" ? { target: "_blank" } : {}),
-            ...(rel === "" ? {} : { rel }),
-            children: [words],
-          },
-        ];
-  // Through the one restriction, so the link is one a Text can hold and the
-  // words are stored as every Text's are.
-  const kept = toOneParagraph(
-    rooted([{ type: "paragraph", children: linked }])
+  const link: RichTextNode = {
+    type: "link",
+    url: href,
+    ...(props.target === "_blank" ? { target: "_blank" } : {}),
+    ...(rel === "" ? {} : { rel }),
+    children: [words],
+  };
+  const inline = paragraphChildren(
+    toOneParagraph(rooted([{ type: "paragraph", children: [link] }])).value
   );
-  const inline = paragraphChildren(kept.value);
   const relKept = inline.some(node => node.type === "link" && node.rel === rel);
-  return href === undefined || rel === "" || relKept
+  return rel === "" || relKept
     ? { inline }
     : { inline, dropped: TURN_INTO_WORDS.relRemoved };
 }
@@ -298,8 +316,8 @@ function headingInline(props: HeadingProps): {
 /** Heading → Text: the words, and a link to an address around them. */
 const headingToText: BlockConverter<HeadingProps> = {
   carries: { text: "text" },
-  convert: props => {
-    const { inline, dropped } = headingInline(props);
+  convert: (props, context) => {
+    const { inline, dropped } = headingInline(props, context?.bound);
     return {
       props: { text: rooted([{ type: "paragraph", children: inline }]) },
       ...(dropped === undefined ? {} : { dropped }),
@@ -310,8 +328,8 @@ const headingToText: BlockConverter<HeadingProps> = {
 /** Heading → Rich text: a heading of the same level inside the passage. */
 const headingToRichText: BlockConverter<HeadingProps> = {
   carries: { text: "content" },
-  convert: props => {
-    const { inline, dropped } = headingInline(props);
+  convert: (props, context) => {
+    const { inline, dropped } = headingInline(props, context?.bound);
     const tag =
       typeof props.level === "string" && LEVEL.test(props.level)
         ? props.level
