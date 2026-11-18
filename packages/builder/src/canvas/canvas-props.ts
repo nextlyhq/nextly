@@ -6,6 +6,7 @@
 
 import type {
   BlockDocument,
+  DefinitionsById,
   RegionArea,
   StyleState,
 } from "@nextlyhq/blocks-engine";
@@ -190,6 +191,26 @@ export interface CanvasProps {
    */
   onSelectRegion?: (area: RegionArea) => void;
   /**
+   * Ask to edit a region in place: a double-click on it, or Enter on its Tab
+   * stop while it is already selected (Enter selects it first). The host
+   * decides whether the author may, and enters it. Absent, a region is only
+   * ever selected.
+   * @experimental Settles with editing a header or footer in place.
+   */
+  onEditRegion?: (area: RegionArea) => void;
+  /**
+   * The region being edited in place, while one is: drawn from this LIVE
+   * document (the editor state the host edits it with) with its blocks
+   * addressed, so hover, selection, inline editing and drag work in it as on
+   * a page. Meanwhile `document`, the page, stays drawn as it was, but `inert`,
+   * hidden from assistive technology and with no block addressed, as is the
+   * other region; the host's dim over them is drawn in the chrome layer, so
+   * nothing here changes the page's own colours. `selectedId`, `selectedIds`
+   * and `onSelect` are the region's then. Absent, the page is edited.
+   * @experimental Settles with editing a header or footer in place.
+   */
+  editingRegion?: CanvasEditingRegion;
+  /**
    * The blocks whose visibility conditions the page can't check, which the
    * canvas marks in red: visitors never see them. Judged by the host, which
    * knows the collections' fields. Absent, every conditioned block is marked
@@ -216,4 +237,14 @@ export interface CanvasProps {
    * `document` with the entry the seam names.
    */
   composed?: BlockDocument;
+}
+
+/** A region of the page's layout as the canvas draws it while it is edited. */
+export interface CanvasEditingRegion {
+  /** Which region of `regions` is edited. */
+  readonly area: RegionArea;
+  /** Its document as it stands, edit by edit. */
+  readonly document: BlockDocument;
+  /** The definitions its component placements are drawn from. */
+  readonly definitions?: DefinitionsById;
 }

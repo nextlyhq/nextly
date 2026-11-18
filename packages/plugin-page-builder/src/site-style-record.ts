@@ -36,6 +36,7 @@ import {
   ownLooksRead,
   namedClassesRead,
   newStyleIssueBudget,
+  nonTypographyProperties,
   resolveSiteTokens,
   sameSiteToken,
   SITE_TEXT_ROLES,
@@ -1027,6 +1028,43 @@ function withUsableMarks(
  * rather than through the `var()` substitution that makes a token's own gate
  * the last chance to stop one.
  */
+/**
+ * Why a stored class's role makes it unusable, in words an author can act on,
+ * or `undefined` when its role is fine. Asked before the general usability
+ * check, whose single sentence about ids, slugs and indexes would not tell an
+ * author that a text style may hold only typography, or which property broke
+ * that.
+ *
+ * The rule itself is the engine's (`isUsableNamedClass` refuses the same
+ * entries), so a class refused here is one the stylesheet would leave out.
+ */
+function roleIssue(entry: unknown, index: number): string | undefined {
+  if (!isPlainRecord(entry) || entry.role === undefined) return undefined;
+  const at = `classes[${index}]`;
+  if (entry.role !== "text") {
+    // Named only when it is text an author could have typed; any other value
+    // is described rather than stringified.
+    const named =
+      typeof entry.role === "string"
+        ? `the role "${entry.role.slice(0, 40)}"`
+        : "a role that is not text";
+    return `${at} has ${named}; the only role a class may have is "text", for a text style.`;
+  }
+  if (entry.blockType !== undefined) {
+    return `${at} is a text style, which no block type owns: any block may wear one.`;
+  }
+  // Five named at most, so a stored entry with thousands of bad keys costs
+  // five reads past the first, not one per key.
+  const others = nonTypographyProperties(entry.styles, 5);
+  if (others.length === 0) return undefined;
+  const named = others.map(property => `"${property}"`);
+  const list =
+    named.length === 1
+      ? named[0]
+      : `${named.slice(0, -1).join(", ")} and ${named[named.length - 1]}`;
+  return `${at} is a text style, which holds typography only: ${list} ${named.length === 1 ? "is" : "are"} not typography.`;
+}
+
 export function checkStoredClasses(
   raw: unknown,
   policy: SectionPolicy = {}
@@ -1044,6 +1082,11 @@ export function checkStoredClasses(
   const ids = new Set<string>();
   const slugs = new Set<string>();
   raw.forEach((entry: unknown, index) => {
+    const role = roleIssue(entry, index);
+    if (role !== undefined) {
+      issues.push(role);
+      return;
+    }
     if (!isUsableNamedClass(entry) || !Number.isFinite(entry.orderIndex)) {
       issues.push(
         `classes[${index}] is not a usable class: it needs a string id, a lowercase dash-separated slug, a numeric orderIndex and a styles record.`
