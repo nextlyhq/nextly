@@ -12,7 +12,12 @@
  *
  * @module setting-bindings
  */
-import type { BlockDocument, BlockNode, ExposedProperty } from "./document";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  type BlockDocument,
+  type BlockNode,
+  type ExposedProperty,
+} from "./document";
 import { pointer } from "./issue-text";
 import {
   DEFAULT_LIMITS,
@@ -256,6 +261,11 @@ export interface SettingTarget {
 export interface FollowerFill {
   readonly nodeId: string;
   readonly prop: string;
+  /**
+   * Whether the follower is a placement, whose `overrides.<id>` key names a
+   * setting of the component it places by its whole id, dots and all.
+   */
+  readonly placement: boolean;
   /** The setting it follows. */
   readonly settingId: string;
   readonly value: unknown;
@@ -300,6 +310,7 @@ export function followerFills(
       if (block === undefined) return;
       fills.push({
         ...fillFrom(node.id, prop, at(block), setting.propPath, targetOf),
+        placement: node.type === COMPONENT_INSTANCE_TYPE,
         settingId: id,
       });
     },
@@ -315,7 +326,7 @@ function fillFrom(
   setting: { readonly block: BlockNode; readonly list: string | undefined },
   path: string,
   targetOf: (nodeId: string, path: string) => SettingTarget
-): Omit<FollowerFill, "settingId"> {
+): Omit<FollowerFill, "settingId" | "placement"> {
   const { block } = setting;
   const target = targetOf(block.id, path);
   const value =

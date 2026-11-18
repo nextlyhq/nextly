@@ -346,6 +346,46 @@ describe("a block following a setting, its edges", () => {
     expect(copyOf(nodes, "badge-label")?.props.text).toBe("Plain title");
   });
 
+  it("fills a placed component's setting whose id holds a dot, by its whole id", () => {
+    // The badge's Label is "hero.title": the card feeds it from its Title,
+    // and the value goes to the badge's `overrides["hero.title"]`, never to
+    // an `overrides.hero` record the badge doesn't read.
+    const badge = component(
+      [heading("badge-label", "Badge label")],
+      [exposure("hero.title", "badge-label", "text")]
+    );
+    const card = component(
+      [
+        heading("card-title", "Plain title"),
+        placement(
+          "card-badge",
+          "badge",
+          {},
+          { "overrides.hero.title": follows("title") }
+        ),
+      ],
+      [exposure("title", "card-title", "text")]
+    );
+    const definitions = new Map<string, BlockDocument>([
+      ["card", card],
+      ["badge", badge],
+    ]);
+    // Placed, with a value for Title.
+    const placed = composed(
+      page([placement("p", "card", { overrides: { title: "Typed" } })]),
+      definitions
+    );
+    expect(copyOf(placed, "badge-label")?.props.text).toBe("Typed");
+    // Shown alone, with Title's default.
+    const alone = withSettingDefaults(card).nodes[1];
+    expect(alone?.props.overrides).toEqual({ "hero.title": "Plain title" });
+    const drawn = flatten(
+      resolveComponentInstances(card, definitions).document
+        .nodes as ResolvedBlockNode[]
+    );
+    expect(copyOf(drawn, "badge-label")?.props.text).toBe("Plain title");
+  });
+
   it("settles only the bindings following the setting taken away", () => {
     const card = component(
       [

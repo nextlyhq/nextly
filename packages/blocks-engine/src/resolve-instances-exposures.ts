@@ -22,8 +22,12 @@ import {
   type ResolvedBlockNode,
 } from "./resolve-instances-contract";
 import type { RetiredExposures } from "./retired-exposures";
-import { followerFills, type FollowerLimits } from "./setting-bindings";
 import { boundedOwnKeys, defineEntry, ownEntry } from "./safe-record";
+import {
+  followerFills,
+  type FollowerFill,
+  type FollowerLimits,
+} from "./setting-bindings";
 import { isConditionGated } from "./visibility";
 
 // ---------------------------------------------------------------------------
@@ -36,6 +40,29 @@ interface PropEdit {
   value: OverrideValue;
   /** Clear the prop rather than replace it. */
   unset: boolean;
+  /**
+   * The segments written, where they are not `path` split at its dots: a
+   * placement's setting, `overrides` and its whole id.
+   */
+  segments?: readonly string[];
+}
+
+/**
+ * The edit a follower's fill writes: its value at its prop, and on a
+ * placement following into one of its own settings, at that setting's whole
+ * id, which is how composition reads it. The one way both the placed and the
+ * shown-alone fill write it.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function followerEdit(fill: FollowerFill): PropEdit {
+  const id = fill.placement ? boundSettingId(fill.prop) : undefined;
+  return {
+    path: fill.prop,
+    value: fill.value,
+    unset: fill.unset,
+    ...(id === undefined ? {} : { segments: ["overrides", id] }),
+  };
 }
 
 /** Everything one instance changes about one node of the definition. */
@@ -941,7 +968,7 @@ function planFollowers(
   );
   for (const fill of fills) {
     const plan = planFor(plans, fill.nodeId);
-    plan.props.push({ path: fill.prop, value: fill.value, unset: fill.unset });
+    plan.props.push(followerEdit(fill));
     if (fill.given !== undefined) {
       plan.bindings = { ...plan.bindings };
       defineEntry(plan.bindings, fill.prop, fill.given.binding);
@@ -1127,7 +1154,7 @@ export function editedProps(
  * never had the key.
  */
 function writeEdit(root: Record<string, unknown>, edit: PropEdit): void {
-  const segments = edit.path.split(".");
+  const segments = edit.segments ?? edit.path.split(".");
   let target = root;
   for (let i = 0; i < segments.length - 1; i += 1) {
     const next = descend(target, segments[i], edit.unset);

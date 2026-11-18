@@ -8,7 +8,7 @@
 import type { BlockDocument, BlockNode } from "./document";
 import { DEFAULT_LIMITS } from "./limits";
 import { isPlainRecord } from "./plain-record";
-import { editedProps } from "./resolve-instances-exposures";
+import { editedProps, followerEdit } from "./resolve-instances-exposures";
 import { defineEntry, ownEntry, ownKeys } from "./safe-record";
 import {
   followerFills,
@@ -86,14 +86,7 @@ function filledNode(
   fills: readonly FollowerFill[] | undefined
 ): BlockNode {
   if (fills === undefined) return node;
-  const props = editedProps(
-    node.props,
-    fills.map(fill => ({
-      path: fill.prop,
-      value: fill.value,
-      unset: fill.unset,
-    }))
-  );
+  const props = editedProps(node.props, fills.map(followerEdit));
   // Only the filled props: another binding of the block, following another
   // setting, is left as it is.
   const bindings: Record<string, unknown> = {};
