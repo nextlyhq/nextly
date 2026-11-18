@@ -74,6 +74,9 @@ function overLimit(report: PageReadReport): PageCheckResult[] {
  * How much data the page reads against its limit, always as the group's
  * line, and over the limit an item for each block that then shows empty:
  * the same count and standing as the top bar's meter, never a second one.
+ * A page that used exactly its allowance stands "over" for the meter, since
+ * its next read would be refused, but missed nothing: an item needs a read
+ * that was refused.
  */
 export const PAGE_DATA_CHECK: PageCheck = {
   id: "page-data",
@@ -82,8 +85,10 @@ export const PAGE_DATA_CHECK: PageCheck = {
   run: page => {
     const fact = page.facts.pageData;
     if (fact?.state !== "counted") return [];
-    return readBudgetStanding(fact.report) === "over"
-      ? overLimit(fact.report)
+    const { report } = fact;
+    const missed = report.refused > 0 || report.unread.length > 0;
+    return missed && readBudgetStanding(report) === "over"
+      ? overLimit(report)
       : [];
   },
 };

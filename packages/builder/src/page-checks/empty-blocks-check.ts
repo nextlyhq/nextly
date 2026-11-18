@@ -11,6 +11,7 @@
  */
 import {
   COLLECTION_LIST_TYPE,
+  isLinkableUrl,
   readListQuery,
   walkNodes,
   type BlockNode,
@@ -51,13 +52,16 @@ function emptyImage(
 }
 
 /**
- * A button that goes nowhere: no address, no entry and no field supplying
- * either, and no form job (sending or clearing a form) of its own.
+ * A button that goes nowhere: no address the page would link to, no entry
+ * and no field supplying either, and no form job (sending or clearing a
+ * form) of its own. An address is judged by the format's own rule
+ * (`isLinkableUrl`), which the renderer draws a link by, so a stored
+ * `javascript:` address is no link here as it is none on the page.
  */
 function emptyButton(node: BlockNode): PageCheckResult | undefined {
   if (node.type !== BUTTON_TYPE) return undefined;
   const linked =
-    holds(node.props.href) ||
+    isLinkableUrl(node.props.href) ||
     bound(node, "href") ||
     (holds(node.props.entryCollection) && holds(node.props.entryId)) ||
     bound(node, "entryId");

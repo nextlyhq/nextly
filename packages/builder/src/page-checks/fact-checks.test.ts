@@ -118,6 +118,15 @@ describe("page data", () => {
     ).toEqual([]);
   });
 
+  it("is no item at exactly the limit, every read made", () => {
+    const full = report({ used: 500 });
+    const run = checked({ pageData: { state: "counted", report: full } }, [
+      PAGE_DATA_CHECK,
+    ]);
+    expect(run.findings).toEqual([]);
+    expect(run.notes[0]?.text).toBe("Page data: 500 of 500");
+  });
+
   it("names each block that shows empty over the limit, once each", () => {
     const over = report({
       used: 500,

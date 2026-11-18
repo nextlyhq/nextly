@@ -99,6 +99,15 @@ describe("a Button with no link", () => {
     ).toEqual([]);
   });
 
+  it("is found with an address the page would never link to", () => {
+    expect(
+      foundOn([
+        node("b1", "core/button", { href: "javascript:alert(1)" }),
+        node("b2", "core/button", { href: "blob:https://example.com/1" }),
+      ]).map(each => each.nodeId)
+    ).toEqual(["b1", "b2"]);
+  });
+
   it("is found with an entry's collection but no entry", () => {
     expect(
       foundOn([node("b1", "core/button", { entryCollection: "posts" })])
