@@ -624,14 +624,19 @@ describe.each(getConfiguredTestDialects())(
       );
     }
 
+    /** What the last start logged of migrations it failed to apply. */
+    let startLog = "";
+
     /**
      * A production start that runs its migrations, with the consent the
      * environment gives. A migration the step refuses is logged rather than
-     * thrown, so the refusal is read from the log; the start then refuses to
-     * serve a plugin whose schema the database is behind, which is asserted
-     * here so a refused module can never be mistaken for a served one.
+     * thrown, and the start then refuses to serve a plugin whose
+     * schema the database is behind. That final error is what this answers,
+     * so a refused module can never be mistaken for a served one, and the
+     * last thing an operator reads names the module and the consent.
      */
     async function start(targets: string | undefined): Promise<Outcome> {
+      startLog = "";
       await destroyRegisteredPlugins();
       clearServices();
       rebootProcessState();
@@ -662,15 +667,21 @@ describe.each(getConfiguredTestDialects())(
         () => undefined,
         (error: unknown) => error
       );
-      const refusal = errors.filter(line =>
+      const logged = errors.filter(line =>
         line.includes("Boot migrations failed")
       );
-      if (refusal.length === 0) {
+      startLog = logged.join("\n");
+      if (logged.length === 0) {
         if (stopped !== undefined) throw stopped;
         return undefined;
       }
-      expect(stopped).toMatchObject({ code: "PLUGIN_SCHEMA_BEHIND" });
-      return refusal.join("\n");
+      // The start's FINAL error is the refusal an operator reads: the plugin
+      // is behind, and it says the consent refused its migrations.
+      expect(stopped).toMatchObject({
+        code: "PLUGIN_SCHEMA_BEHIND",
+        logContext: { plugin: PLUGIN, reason: "data-loss-consent" },
+      });
+      return (stopped as NextlyError).publicMessage;
     }
 
     /** The `migrate:down --plugin` command, over the plugin's newest applied module. */
@@ -694,17 +705,15 @@ describe.each(getConfiguredTestDialects())(
 
     /**
      * Each road that applies a module, run with consent naming `targets` or
-     * with none. `flag` is whether the road is a command taking
-     * `--accept-data-loss`, which its refusal then names.
+     * with none.
      */
     const ROADS = [
-      { road: "nextly migrate", run: migrate, flag: true },
+      { road: "nextly migrate", run: migrate },
       {
         road: "the migrations a production start runs",
         run: start,
-        flag: false,
       },
-      { road: "plugins install", run: install, flag: true },
+      { road: "plugins install", run: install },
     ] as const;
 
     /**
@@ -719,7 +728,6 @@ describe.each(getConfiguredTestDialects())(
         deletion: string;
         /** The consent the refusal tells the operator to give. */
         consent: string;
-        flag: boolean;
       }
     ): void {
       expect(refusal).toBeDefined();
@@ -729,12 +737,10 @@ describe.each(getConfiguredTestDialects())(
       expect(refusal).toContain(expected.module.name);
       expect(refusal).toContain(expected.deletion);
       expect(refusal).toContain(`${CONSENT_ENV}=${expected.consent}`);
-      if (expected.flag) {
-        expect(refusal).toContain(`--accept-data-loss=${expected.consent}`);
-      }
+      expect(refusal).toContain(`--accept-data-loss=${expected.consent}`);
     }
 
-    describe.each(ROADS)("through $road", ({ run: road, flag }) => {
+    describe.each(ROADS)("through $road", ({ run: road }) => {
       it("refuses a module dropping its own column, keeping its values, and applies it with consent naming the column", async () => {
         const { module } = shipped.dropsColumn;
         const consent = `${NOTES}.summary`;
@@ -744,7 +750,6 @@ describe.each(getConfiguredTestDialects())(
           module,
           deletion: consent,
           consent,
-          flag,
         });
         expect(await noteValues("summary")).toEqual(["kept", "kept"]);
         expect(await appliedKeys()).toEqual([key(shipped.base)]);
@@ -765,7 +770,6 @@ describe.each(getConfiguredTestDialects())(
           module,
           deletion: REPLIES,
           consent: REPLIES,
-          flag,
         });
         expect(await ids(REPLIES)).toEqual(["r-new", "r-old"]);
         expect(await appliedKeys()).toEqual([key(shipped.base)]);
@@ -786,7 +790,6 @@ describe.each(getConfiguredTestDialects())(
           module,
           deletion: consent,
           consent,
-          flag,
         });
         // The module before it adds `extra` and deletes nothing: it did not
         // run either, and the ledger records neither.
@@ -802,6 +805,37 @@ describe.each(getConfiguredTestDialects())(
         );
       }, 180_000);
     });
+
+    it("ends a production start its migrations' consent refused with a final error naming the module, the deletion and the consent, as a start gives it", async () => {
+      const { module } = shipped.dropsColumn;
+      const consent = `${NOTES}.summary`;
+      ship(shipped.dropsColumn);
+
+      const final = await start(undefined);
+
+      expect(final).toContain(
+        `The plugin "${PLUGIN}" expects schema version 2, and the database has 1, because this start did not apply its pending migrations.`
+      );
+      // The consent check's own listing: the module by its ledger key, above
+      // what it deletes.
+      expect(final).toContain(`  ${key(module)}:\n    - `);
+      expect(final).toContain(consent);
+      // The step's own log line tells of the refusal before the start ends,
+      // and ends on the same consent.
+      expect(startLog).toContain(key(module));
+      expect(startLog).toContain(
+        `start with ${CONSENT_ENV}=${consent}, or run "nextly migrate --accept-data-loss=${consent}".`
+      );
+      expect(startLog).not.toContain("to resolve");
+      expect(final).toContain(
+        `start with ${CONSENT_ENV}=${consent}, or run "nextly migrate --accept-data-loss=${consent}".`
+      );
+      // The command that would be refused again is no longer what it ends on.
+      expect(final).not.toContain(`nextly plugins install ${PLUGIN}`);
+      expect(changesIssued()).toEqual([]);
+      expect(await noteValues("summary")).toEqual(["kept", "kept"]);
+      expect(await appliedKeys()).toEqual([key(shipped.base)]);
+    }, 180_000);
 
     /** The other plugin as a release ships it, listed before the one under test. */
     const otherWith = (migrations: PluginMigration[]) =>
@@ -826,7 +860,6 @@ describe.each(getConfiguredTestDialects())(
         module,
         deletion: consent,
         consent,
-        flag: true,
       });
       expect(await adapter().tableExists(OTHER_TABLE)).toBe(false);
       expect(await noteValues("summary")).toEqual(["kept", "kept"]);
@@ -876,7 +909,6 @@ describe.each(getConfiguredTestDialects())(
         module,
         deletion: `${NOTES}.summary`,
         consent: both,
-        flag: true,
       });
       expect(refusal).toContain(otherKey);
       expect(refusal).toContain(OTHER_TABLE);
@@ -892,7 +924,6 @@ describe.each(getConfiguredTestDialects())(
         module,
         deletion: `${NOTES}.summary`,
         consent: both,
-        flag: true,
       });
       expect(
         issued.filter(statement => /DELETE\s+FROM/i.test(statement))
@@ -918,7 +949,6 @@ describe.each(getConfiguredTestDialects())(
         module,
         deletion: consent,
         consent,
-        flag: true,
       });
       expect(await noteValues("extra")).toEqual(["kept", "kept"]);
       expect(await appliedKeys()).toEqual(
@@ -951,7 +981,6 @@ describe.each(getConfiguredTestDialects())(
         module,
         deletion: REPLIES,
         consent: `${NOTES},${REPLIES}`,
-        flag: true,
       });
 
       expect(await migrate(`${NOTES},${REPLIES}`)).toBeUndefined();
