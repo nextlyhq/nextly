@@ -58,14 +58,26 @@ function refusal(
   });
 }
 
+/** The canvas's read of the CSS it draws, and each time it was asked again. */
+const drawnRefetch = vi.fn();
+
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
-  usePluginRoute: () => ({
-    data: codeRead,
-    pending: false,
-    error: readError,
-    fetching: refreshing,
-    refetch,
-  }),
+  usePluginRoute: ({ path }: { path: string }) =>
+    path === "/site/css/drawn"
+      ? {
+          data: { css: cssRead.css },
+          pending: false,
+          error: null,
+          fetching: false,
+          refetch: drawnRefetch,
+        }
+      : {
+          data: codeRead,
+          pending: false,
+          error: readError,
+          fetching: refreshing,
+          refetch,
+        },
   readPluginRoute: async ({ path }: { path: string }) => {
     expect(path).toBe("/site/css");
     if (cssReadError !== null) throw cssReadError;
@@ -101,6 +113,7 @@ vi.mock("@nextlyhq/builder/shell", () => ({
 }));
 
 const { SiteCodeSection } = await import("./site-code-settings");
+const { useDrawnSiteCss } = await import("../site-css-read");
 
 /** A place with nothing refused, holding `elements`. */
 const judged = (elements = 1) => ({ refusals: [], notes: [], elements });
@@ -145,6 +158,7 @@ beforeEach(() => {
   cssReads.length = 0;
   cssWrites.length = 0;
   cssSave = () => ({ sha256: "f".repeat(64) });
+  drawnRefetch.mockClear();
   fetched.length = 0;
   refetch.mockClear();
   livePolicy = null;
@@ -889,6 +903,30 @@ describe("the site's CSS in Settings → Code", () => {
       "e".repeat(64),
       "a".repeat(64),
     ]);
+  });
+
+  it("has the canvas read the CSS it draws again once a save stores it, and not before", async () => {
+    /** The canvas, as it reads the site's CSS to draw. */
+    function Canvas(): null {
+      useDrawnSiteCss();
+      return null;
+    }
+    render(<Canvas />);
+    show();
+    await editCss("body { outline: 4px solid red; }");
+    // Refused CSS is not stored, so the canvas has nothing new to draw.
+    fireEvent.change(screen.getByRole("textbox", { name: "CSS" }), {
+      target: { value: '@import "/a.css";' },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save code" }));
+    await waitFor(() => expect(cssRefusals()).toHaveLength(1));
+    expect(drawnRefetch).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole("textbox", { name: "CSS" }), {
+      target: { value: "body { outline: 4px solid red; }" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save code" }));
+    await screen.findByText("Site CSS saved");
+    expect(drawnRefetch).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the code editable when the CSS can't be read, and offers Retry", async () => {

@@ -63,6 +63,7 @@ import {
   saveSiteCss,
   type SiteCodeDraft,
 } from "../site-code-client";
+import { siteCssSaved } from "../site-css-read";
 
 /** The two places site code goes, in the order a page has them. */
 export const PLACES = [
@@ -264,6 +265,8 @@ function useCssDraft(
       setBase(now);
       css.saved(now);
       setSaved(true);
+      // The canvas draws the site's CSS: it reads the new CSS now.
+      siteCssSaved();
       return "saved";
     } catch (reason) {
       const refusals = cssRefusalsOf(reason);
