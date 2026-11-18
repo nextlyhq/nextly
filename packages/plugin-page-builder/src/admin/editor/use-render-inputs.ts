@@ -412,6 +412,8 @@ function useCanvasRender({
         // sheet is compiled exactly as the published route compiles it.
         previewContainer: undefined,
         previewStates: true,
+        // A frame of its own, so the page's custom CSS is drawn, as live.
+        framed: true,
         limits: documentLimits,
         // The map's identity changes only when the read does, so this memo —
         // and the resolution the canvas runs from it — is not redone per

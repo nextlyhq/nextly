@@ -8,6 +8,7 @@ import {
   resolveSiteTokens,
   type BindingRun,
   type BlockDocument,
+  type CustomCssPolicy,
   type NamedClass,
   type DefinitionsById,
   type DocumentLimits,
@@ -102,6 +103,15 @@ export interface PageRendererProps {
    * write path. Ignored when `styles` is supplied.
    */
   styleContext?: StyleCompileContext;
+  /**
+   * The host's checker for custom CSS, for a render whose compile context the
+   * site's styles supply rather than `styleContext`. Joined to whichever
+   * context the render compiles with; a `styleContext` stating its own wins.
+   * Absent, and with none on the context, the page draws no custom CSS.
+   *
+   * @experimental
+   */
+  customCss?: CustomCssPolicy;
   /**
    * The site's design tokens, fonts and named classes, compiled into the sheet
    * every page shares and emitted BEFORE the page's own.
@@ -656,6 +666,19 @@ export function pageCompileContext(
   };
 }
 
+/**
+ * A compile context with the host's custom CSS checker joined, where the
+ * render was handed one and the context states none of its own. A render with
+ * no context compiles nothing, so there is nothing to join it to.
+ */
+function withCustomCss(
+  context: StyleCompileContext | undefined,
+  customCss: CustomCssPolicy | undefined
+): StyleCompileContext | undefined {
+  if (context === undefined || customCss === undefined) return context;
+  return context.customCss === undefined ? { ...context, customCss } : context;
+}
+
 /** The first tier that stated this input, in the precedence its field has. */
 function firstStated<T>(...tiers: readonly (T | undefined)[]): T | undefined {
   return tiers.find(tier => tier !== undefined);
@@ -702,6 +725,7 @@ export function PageRenderer({
   definitions,
   styles,
   styleContext,
+  customCss,
   siteStyles,
   nodeAttribute,
   keepAsyncOutputs,
@@ -969,7 +993,10 @@ export function PageRenderer({
   // Every site-level input BOTH compiles read, resolved once. See
   // `sharedStyleInputs` for why one resolution rather than one per consumer.
   const shared = sharedStyleInputs(styleContext, siteInput);
-  const pageStyleContext = pageCompileContext(styleContext, siteInput, shared);
+  const pageStyleContext = withCustomCss(
+    pageCompileContext(styleContext, siteInput, shared),
+    customCss
+  );
 
   const {
     context: compileContext,

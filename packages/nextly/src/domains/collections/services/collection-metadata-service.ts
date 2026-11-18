@@ -611,6 +611,172 @@ export class CollectionMetadataService extends BaseService {
     }
   }
 
+  /**
+   * The one rule every kind's create follows (`clearLeftoverStorage`): every table of the family
+   * probed first, a family holding rows refused naming each table and its row count, an empty one
+   * dropped. A collection's family is its main table, its translations table and the junction
+   * tables its many-to-many fields make; field-group rows naming its table as their parent count as
+   * its content, so a leftover whose content lives there is refused rather than cleared. Dropped
+   * without CASCADE: anything else depending on these tables has already refused the create.
+   *
+   * A table a registered entity stores in is never a leftover, however empty: the create is
+   * refused first if its tables overlap one's (`assertTablesUnclaimed`).
+   *
+   * Anything this step throws that is not already a `NextlyError` (a refusal of the rule's own) is
+   * a server-side failure, reported as one (`NextlyError.internal`), never as the caller's mistake.
+   */
+  private async clearLeftoverCollection(
+    slug: string,
+    tableName: string,
+    fields: FieldDefinition[]
+  ): Promise<void> {
+    try {
+      await this.assertTablesUnclaimed(slug, tableName, fields);
+      await this.clearLeftoverTables(slug, tableName, fields);
+    } catch (error: unknown) {
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.internal({
+        cause: error instanceof Error ? error : undefined,
+        logContext: { step: "clear leftover storage", slug, tableName },
+      });
+    }
+  }
+
+  /** The clearing itself (`clearLeftoverStorage`), once no registered entity claims a table. */
+  private async clearLeftoverTables(
+    slug: string,
+    tableName: string,
+    fields: FieldDefinition[]
+  ): Promise<void> {
+    const adapter = this.adapter;
+    const [
+      { clearLeftoverStorage },
+      { junctionTablesOf },
+      { countEntityComponentRows },
+    ] = await Promise.all([
+      import("../../schema/services/leftover-storage"),
+      import("../../schema/services/field-column-descriptor"),
+      import("../../field-groups/services/teardown-entity-field-group-data"),
+    ]);
+    await clearLeftoverStorage({
+      adapter,
+      kind: "collection",
+      slug,
+      tableName,
+      makesJunctionTables: true,
+      plannedJunctions: junctionTablesOf(tableName, fields),
+      ownedElsewhere: () =>
+        countEntityComponentRows({ adapter, parentTable: tableName }),
+      logger: this.logger,
+      // The translations table references the main one, so it goes first.
+      dropFamily: async () => {
+        await adapter.dropTable(`${tableName}_locales`, { ifExists: true });
+        await adapter.dropTable(tableName, { ifExists: true });
+      },
+    });
+  }
+
+  /**
+   * Refuses the create when a table it would build or clear (`collectionOwnTables`: its main table,
+   * its `_locales` translations table and its fields' junction tables) is one a registered
+   * collection, Single or field group stores in: its main table, its translations table, or, for a
+   * collection or Single, a junction of its own fields, a name `options.junctionTable` gives
+   * included. A collection registered before the `-locales` address was reserved, or whose row
+   * keeps a table name of its own, can store in `dc_<slug>_locales`; a junction can be named
+   * `dc_<slug>`. Either would otherwise be taken for this create's leftover and dropped.
+   */
+  private async assertTablesUnclaimed(
+    slug: string,
+    tableName: string,
+    fields: FieldDefinition[]
+  ): Promise<void> {
+    const [
+      { collectionOwnTables },
+      { CollectionRegistryService },
+      { SingleRegistryService },
+      { FieldGroupRegistryService },
+    ] = await Promise.all([
+      import("../../schema/services/field-column-descriptor"),
+      import("./collection-registry-service"),
+      import("../../singles/services/single-registry-service"),
+      import("../../field-groups/services/field-group-registry-service"),
+    ]);
+    const [collections, singles, fieldGroups] = await Promise.all([
+      new CollectionRegistryService(
+        this.adapter,
+        this.logger
+      ).getAllCollections(),
+      new SingleRegistryService(this.adapter, this.logger).getAllSingles(),
+      new FieldGroupRegistryService(
+        this.adapter,
+        this.logger
+      ).getAllComponents(),
+    ]);
+    const wanted = new Set(collectionOwnTables(tableName, fields));
+    // A field group's fields make no junction table: a component row keeps a many-to-many itself.
+    const tablesOf = (entity: {
+      tableName: string;
+      fields?: unknown;
+    }): string[] =>
+      Array.isArray(entity.fields)
+        ? collectionOwnTables(
+            entity.tableName,
+            entity.fields as Parameters<typeof collectionOwnTables>[1]
+          )
+        : [entity.tableName, `${entity.tableName}_locales`];
+    // Every registered entity, none left out by its slug: the slug guard has already ruled out a
+    // collection or Single of this one, and a field group may share it while storing anywhere.
+    const owners = [
+      ...collections,
+      ...singles,
+      ...fieldGroups.map(group => ({ ...group, fields: undefined })),
+    ];
+    for (const owner of owners) {
+      const claimed = tablesOf(owner).find(table => wanted.has(table));
+      if (claimed === undefined) continue;
+      throw NextlyError.duplicate({
+        logContext: {
+          reason: "a registered entity stores in a table this create builds",
+          slug,
+          tableName,
+          ownedBy: owner.slug,
+          claimed,
+        },
+      });
+    }
+  }
+
+  /**
+   * What the create left out of its table, as one line, or null when the table holds every
+   * requested column as the type asked for (`columnsTheCreateLeftOut`). The request is the desired
+   * table a push compares the live one with, built as the creating SQL renders a collection's
+   * columns: its translatable fields kept on the translations table, not this one.
+   */
+  private async columnsLeftOut(
+    tableName: string,
+    fields: FieldDefinition[],
+    data: { status?: boolean; localized?: boolean }
+  ): Promise<string | null> {
+    const [
+      { buildDesiredTableFromFields },
+      { columnsTheCreateLeftOut, describeColumnsLeftOut },
+    ] = await Promise.all([
+      import("../../schema/pipeline/diff/build-from-fields"),
+      import("../../schema/services/created-table-shape"),
+    ]);
+    const dialect = this.adapter.getCapabilities().dialect;
+    const leftOut = await columnsTheCreateLeftOut(
+      this.adapter.getDrizzle(),
+      dialect,
+      buildDesiredTableFromFields(tableName, fields, dialect, {
+        builtBy: "collection",
+        hasStatus: data.status === true,
+        localized: storesPerLanguage(data),
+      })
+    );
+    return leftOut.length === 0 ? null : describeColumnsLeftOut(leftOut);
+  }
+
   private async createCollectionExcluded(
     data: Parameters<CollectionMetadataService["createCollection"]>[0]
   ): Promise<MetadataServiceResult> {
@@ -628,6 +794,8 @@ export class CollectionMetadataService extends BaseService {
       if (this.isDevelopment()) {
         // An index name the new table takes may already be held elsewhere, where the create's
         // IF NOT EXISTS would skip it: refused before the table is created, naming the holder.
+        // A precondition, so it runs before the leftover below is cleared: a create it refuses
+        // has changed nothing.
         try {
           await refuseNewCollectionIndexNamesTaken(this.adapter, {
             slug: data.name,
@@ -645,6 +813,15 @@ export class CollectionMetadataService extends BaseService {
             this.dialect
           );
         }
+        // A table already standing where this create builds is never adopted: empty, it is
+        // dropped so the create renders every column from this request; holding rows, the create
+        // is refused before any statement runs (`clearLeftoverStorage`). What it throws is always
+        // a `NextlyError`, which the create's own handler below reports by its code.
+        await this.clearLeftoverCollection(
+          artifacts.metadata.slug,
+          artifacts.tableName,
+          artifacts.metadata.fields
+        );
       }
 
       // The definition, then the migration `migrate:create` would write for
@@ -655,11 +832,14 @@ export class CollectionMetadataService extends BaseService {
 
       if (this.isDevelopment()) {
         try {
-          // Verify table was actually created before marking as applied
-          const tableExists = await this.adapter.tableExists(
-            artifacts.tableName
+          // Applied only when the table holds every requested column as the type asked for: a
+          // table standing under the name says nothing about its columns.
+          const leftOut = await this.columnsLeftOut(
+            artifacts.tableName,
+            artifacts.metadata.fields,
+            data
           );
-          if (tableExists) {
+          if (leftOut === null) {
             artifacts.metadata.migrationStatus = "applied";
             // The fields as the registry stores them, not as the request spelled them: the
             // table's columns were named from the stored names, and a restart rebuilds these
@@ -680,7 +860,7 @@ export class CollectionMetadataService extends BaseService {
           } else {
             artifacts.metadata.migrationStatus = "failed";
             this.logger.error(
-              `Table "${artifacts.tableName}" was not created after migration`
+              `Table "${artifacts.tableName}" was not created as requested: ${leftOut}`
             );
           }
         } catch (migrationError: unknown) {
