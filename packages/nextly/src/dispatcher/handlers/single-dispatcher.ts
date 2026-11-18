@@ -1486,14 +1486,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
           const adapter = getAdapterFromDI();
           if (!adapter) throw new Error("Database adapter not initialized");
-          // The Single's row given each new field's stated default (`dialogRowAnswers`).
-          const { fileAnswers, legacyBundle } = dialogRowAnswers({
-            single,
-            fields: fields as unknown as FieldDefinition[],
-            renameResolutions,
-            resolutions,
-            dialect: adapter.dialect,
-          });
           // Where the translatable values live and how each language publishes, before and after
           // this save (`translationLayoutChange`). Under `experimental.perLanguageStorage` a toggle
           // moves no value: it gives each language a publish state of its own, or takes it away.
@@ -1502,6 +1494,15 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             isLocalized,
             wasStatus: single.status === true,
             hasStatus: single.status === true,
+          });
+          // The Single's row given each new field's stated default (`dialogRowAnswers`).
+          const { fileAnswers, legacyBundle } = dialogRowAnswers({
+            single,
+            fields: fields as unknown as FieldDefinition[],
+            renameResolutions,
+            resolutions,
+            dialect: adapter.dialect,
+            translatedAfter: layout.isStored,
           });
           // A precondition, so before anything changes: turning translation off drops each
           // language's own publish state, which loses nothing only where it is the entry's.

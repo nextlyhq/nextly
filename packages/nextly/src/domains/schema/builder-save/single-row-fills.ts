@@ -13,6 +13,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
+import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import type {
   BrowserRenameResolution,
   LegacyFieldResolution,
@@ -88,11 +89,18 @@ export function dialogRowAnswers(args: {
   renameResolutions: readonly BrowserRenameResolution[] | undefined;
   resolutions: Readonly<Record<string, LegacyFieldResolution>> | undefined;
   dialect: SupportedDialect;
+  /** Whether the Single's translatable values are kept per language after the save. */
+  translatedAfter: boolean;
 }): {
   fileAnswers: { rowFills?: { field: string; value: unknown }[] };
   legacyBundle: LegacyResolutionsBundle | undefined;
 } {
   const answered = args.resolutions ?? {};
+  // A translated field's values live in the translations table, one row per language, so the
+  // main row takes no fill for it.
+  const translated = new Set(
+    resolveLocalizedFieldNames([...args.fields], args.translatedAfter)
+  );
   const schema = new DynamicCollectionSchemaService(undefined, args.dialect);
   const rowFills = singleRowFills({
     oldFields: (args.single.fields ?? []) as FieldDefinition[],
@@ -101,7 +109,10 @@ export function dialogRowAnswers(args: {
       .filter(rename => rename.choice === "rename")
       .map(rename => rename.toColumn),
     fillValue: field => schema.singleRowFillValue(field),
-  }).filter(fill => answered[fill.field] === undefined);
+  }).filter(
+    // Only an answer the person gave, never a member every object inherits (`constructor`).
+    fill => !translated.has(fill.field) && !Object.hasOwn(answered, fill.field)
+  );
   const required = new Set(
     args.fields.filter(field => field.required === true).map(f => f.name)
   );
