@@ -3,7 +3,11 @@
  * relations its item bindings follow and its links to entries, and nothing
  * inside a list nested in it.
  */
-import { createBindingRun, type BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  createBindingRun,
+  type Binding,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { createStandaloneContext, type ListBatchReads } from "../context";
@@ -400,6 +404,26 @@ describe("a binding naming the list it reads, through a relation", () => {
     );
     expect(media).toHaveBeenCalledOnce();
     expect(media.mock.calls[0]?.[0]).toEqual(["c1", "c2"]);
+  });
+
+  it("links to an entry it names by the list it reads, as one by the nearest list", () => {
+    const link = (binding: Binding) =>
+      node(
+        "go",
+        "core/button",
+        { entryCollection: "posts" },
+        { bindings: { entryId: binding } }
+      );
+    const bindings: Binding[] = [
+      { $bind: "id", source: "item", list: "posts" },
+      { $bind: "id", source: "item", list: "categories" },
+      { $bind: "id", source: "item" },
+    ];
+    for (const binding of bindings) {
+      expect(itemReadDemand([link(binding)]).links.map(n => n.id)).toEqual([
+        "go",
+      ]);
+    }
   });
 
   it("is read ahead by the list it names from that list's own template", () => {

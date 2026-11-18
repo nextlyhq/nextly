@@ -117,7 +117,9 @@ function valueSource(node: BlockNode, prop: string): ValueSource | undefined {
     bindings !== undefined && Object.hasOwn(bindings, prop)
       ? bindings[prop]
       : undefined;
-  const path = itemPath(bound);
+  // Bound to a list's entry, whichever list: the nearest's or a named one's,
+  // each filled as the block renders.
+  const path = itemBindPath(bound);
   if (path !== undefined) return { path };
   // A binding to the page's own sources was filled before the page drew, so
   // the prop holds what it reads.
