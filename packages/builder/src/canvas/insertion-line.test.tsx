@@ -639,6 +639,42 @@ describe("the line where a highlighted tile would land", () => {
     expect(one.style.getPropertyValue("scroll-margin-bottom")).toBe("");
   });
 
+  it("centres an empty container with none of its own scroll margins in play", async () => {
+    layOutBoxBelow();
+    const sides: string[] = [];
+    Element.prototype.scrollIntoView = function reveal(this: HTMLElement) {
+      sides.push(
+        [
+          "scroll-margin-top",
+          "scroll-margin-right",
+          "scroll-margin-bottom",
+          "scroll-margin-left",
+        ]
+          .map(side => this.style.getPropertyValue(side))
+          .join(" ")
+      );
+    };
+    const { container } = drawWith(
+      {
+        at: { parentId: "box", slot: "children", index: 0 },
+        words: "Text goes inside Box",
+      },
+      boxBelow
+    );
+    await act(async () => undefined);
+    const box = container.querySelector<HTMLElement>(
+      `[${NODE_ID_ATTRIBUTE}="box"]`
+    );
+    if (box === null) throw new Error("no block");
+    box.style.setProperty("scroll-margin-right", "300px");
+    const edge = edgeIn(container);
+    if (edge === null) throw new Error("no edge label");
+    fireEvent.click(edge);
+    // Every side zero while it is centred, then its own back.
+    expect(sides).toEqual(["0px 0px 0px 0px"]);
+    expect(box.style.getPropertyValue("scroll-margin-right")).toBe("300px");
+  });
+
   it("reveals a place beside a block drawn as an SVG", async () => {
     layOut();
     const revealed = revealSpy();

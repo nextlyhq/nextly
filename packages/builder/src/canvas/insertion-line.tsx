@@ -274,11 +274,12 @@ const REVEAL_ROOM = 24;
 /**
  * How far past the neighbour's side the place lies, plus room for its label,
  * as a CSS `scroll-margin`: the line sits in the middle of the gap after a
- * block, not on its edge. Along the line's own axis only; none for a place
- * inside an empty container, which is centred.
+ * block, not on its edge. Along the line's own axis only; every side zero for
+ * a place inside an empty container, which is centred.
  */
 function revealMargin(near: Neighbour, block: Rect, place: Rect): string {
-  if (near.side === "inside") return "";
+  // Centred with every side zero, so none of the block's own margins skews it.
+  if (near.side === "inside") return "0px 0px 0px 0px";
   const down = place.height === 0;
   const past =
     near.side === "after"
