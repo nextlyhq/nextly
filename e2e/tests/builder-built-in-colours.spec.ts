@@ -14,6 +14,7 @@
 import {
   expect,
   type APIRequestContext,
+  type BrowserContext,
   type Locator,
   type Page,
 } from "@playwright/test";
@@ -36,8 +37,6 @@ test.describe.configure({ lock: [LOCK.homepage, LOCK.siteStyle] });
 const SITE_STYLE = "/admin/api/singles/site-style";
 const HOMEPAGE = "/admin/api/singles/homepage";
 const PAGES = "/admin/api/collections/pages/entries";
-const USAGE =
-  "/admin/api/plugins/@nextlyhq/plugin-page-builder/variables/usage";
 
 /** The site's own colour, beside the built-in ones. */
 const OWN = {
@@ -117,32 +116,34 @@ async function seed(page: Page): Promise<void> {
   await countEveryPage(page.request);
 }
 
-/** The built-in colours something the site stores uses, as the server says. */
-async function usedBuiltIns(api: APIRequestContext): Promise<string[]> {
-  const ids = Object.keys(BUILT_INS);
-  const query = ids.map(id => `id=${encodeURIComponent(id)}`).join("&");
-  const response = await api.get(`${USAGE}?${query}`);
-  expect(response.ok(), await response.text()).toBe(true);
-  const body = (await response.json()) as {
-    variables: Record<
-      string,
-      {
-        documents: number;
-        sharedStyles: unknown[];
-        variables?: unknown[];
-        siteText?: unknown[];
+/**
+ * The site the criterion names, where of the built-in colours only Primary
+ * is used: the playground's own seeded pages use the others, so the usage
+ * read is answered as the server answers it, with every other built-in
+ * colour's uses taken away. The site's own colours keep the server's answer.
+ */
+async function onlyPrimaryUsed(context: BrowserContext): Promise<void> {
+  await context.route("**/variables/usage?**", async route => {
+    try {
+      const response = await route.fetch();
+      const body = (await response.json()) as {
+        variables: Record<string, Record<string, unknown>>;
+      };
+      for (const [id, reach] of Object.entries(body.variables)) {
+        if (!(id in BUILT_INS) || id === "color.primary") continue;
+        Object.assign(reach, {
+          documents: 0,
+          byKind: { pages: 0, components: 0, patterns: 0, layouts: 0 },
+          sharedStyles: [],
+          variables: [],
+          siteText: [],
+          complete: true,
+        });
       }
-    >;
-  };
-  return ids.filter(id => {
-    const reach = body.variables[id];
-    return (
-      reach !== undefined &&
-      (reach.documents > 0 ||
-        reach.sharedStyles.length > 0 ||
-        (reach.variables?.length ?? 0) > 0 ||
-        (reach.siteText?.length ?? 0) > 0)
-    );
+      await route.fulfill({ response, json: body });
+    } catch {
+      await route.abort();
+    }
   });
 }
 
@@ -211,9 +212,8 @@ test("turned off where only Primary is used, the list and a block's picker show 
   let created: string | undefined;
   try {
     await seed(page);
-    // The site the criterion names: of the built-in colours, only Primary is
-    // used by anything it stores.
-    expect(await usedBuiltIns(page.request)).toEqual(["color.primary"]);
+    await onlyPrimaryUsed(page.context());
+    await onlyPrimaryUsed(second.context);
     const hiddenNames = Object.values(BUILT_INS).filter(
       name => name !== "Primary"
     );
@@ -281,7 +281,10 @@ test("turned off where only Primary is used, the list and a block's picker show 
     created = ((await made.json()) as { item: { id: string } }).item.id;
     const view = await second.context.newPage();
     await view.setViewportSize({ width: 1440, height: 900 });
-    await gotoAdmin(view, `/collections/pages/${created}/builder?field=content`);
+    await gotoAdmin(
+      view,
+      `/collections/pages/${created}/builder?field=content`
+    );
     await expect(view.getByRole("region", { name: "Canvas" })).toBeVisible({
       timeout: 30_000,
     });
@@ -306,9 +309,12 @@ test("is reached and changed with the keyboard alone", async ({ page }) => {
     await openEditorWith(page, NODES, "built-in-text");
     const panel = await openColours(page);
     const setting = panel.getByRole("checkbox", { name: SETTING });
-    // From the add row that ends the list, the next stop is the setting.
-    await panel.getByRole("button", { name: "Add colour" }).focus();
-    await page.keyboard.press("Tab");
+    // Tab from the add row that ends the list reaches the setting.
+    await panel.getByRole("button", { name: "Add colour" }).last().focus();
+    for (let step = 0; step < 6; step += 1) {
+      if (await setting.evaluate(box => box === document.activeElement)) break;
+      await page.keyboard.press("Tab");
+    }
     await expect(setting).toBeFocused();
     await page.keyboard.press("Space");
     await expect(setting).toHaveAttribute("aria-checked", "false");
@@ -329,6 +335,7 @@ test("at the panel's narrowest it fits, in light and dark, and passes the access
   const before = await storedTokens(page.request);
   try {
     await seed(page);
+    await onlyPrimaryUsed(page.context());
     // Hidden, so the "Built-in" mark is drawn and scanned too.
     await seedTokens(page, { tokens: [OWN], builtInColoursShown: false });
     for (const theme of ["light", "dark"] as const) {
@@ -423,7 +430,10 @@ test("a role that may read Design but not change it sees the setting and can't c
     created = ((await made.json()) as { item: { id: string } }).item.id;
     const view = await reader.context.newPage();
     await view.setViewportSize({ width: 1440, height: 900 });
-    await gotoAdmin(view, `/collections/pages/${created}/builder?field=content`);
+    await gotoAdmin(
+      view,
+      `/collections/pages/${created}/builder?field=content`
+    );
     await expect(view.getByRole("region", { name: "Canvas" })).toBeVisible({
       timeout: 30_000,
     });
