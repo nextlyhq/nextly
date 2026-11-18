@@ -29,7 +29,7 @@ import type { CssNode, WalkContext } from "css-tree";
 import parse from "css-tree/parser";
 import walk from "css-tree/walker";
 
-import { cssFetchLocations } from "./css-urls";
+import { cssFetchLocations, cssName } from "./css-urls";
 import { SITE_CODE_LIMITS } from "./limits";
 import { siteCodeUrlProblem, STYLE_ELEMENT_END } from "./url-rule";
 
@@ -171,7 +171,7 @@ function parsedProblems(css: string, problems: Problems): void {
   walk(ast, {
     enter(this: WalkContext, node: CssNode) {
       const line = node.loc?.start.line ?? 1;
-      if (node.type === "Atrule" && node.name.toLowerCase() === "import") {
+      if (node.type === "Atrule" && cssName(node.name) === "import") {
         problems.add(line, "@import isn't allowed.");
         return;
       }

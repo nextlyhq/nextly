@@ -61,7 +61,9 @@ const LEADING_STRING = /^\s*(?:"([^"]*)"|'([^']*)')/;
  * as text.
  */
 function viaOf(context: WalkContext): CssFetch["via"] {
-  const atrule = context.atrule?.name.toLowerCase();
+  // Decoded, as a browser reads it: `@\69mport` is an `@import`.
+  const atrule =
+    context.atrule === null ? undefined : cssName(context.atrule.name);
   if (atrule === "import") return "import";
   return atrule === "font-face" ? "font" : "image";
 }
@@ -90,9 +92,10 @@ function rawFetches(
   try {
     walk(parse(text, { context: "value", positions: true }), {
       enter(this: WalkContext, node: CssNode) {
-        const line = firstLine + (node.loc?.start.line ?? 1) - 1;
-        if (node.type === "Url") add(node.value, line);
-        if (node.type === "String" && inImageSet(this)) add(node.value, line);
+        const url = valueFetchOf(node, this);
+        if (url !== undefined) {
+          add(url, firstLine + (node.loc?.start.line ?? 1) - 1);
+        }
       },
     });
   } catch {
@@ -108,11 +111,31 @@ function rawFetches(
 }
 
 /**
- * A function's name as a browser reads it: escapes decoded, case folded, so
- * `u\72l(` is a `url(` and `\69mage-set(` an `image-set(`.
+ * A name as a browser reads it: escapes decoded, case folded, so `u\72l(` is
+ * a `url(`, `\69mage-set(` an `image-set(` and `@\69mport` an `@import`.
  */
+export function cssName(name: string): string {
+  return decodeIdentifier(name).toLowerCase();
+}
+
+/** A function's name as a browser reads it. */
 function functionName(fn: { readonly name: string }): string {
-  return decodeIdentifier(fn.name).toLowerCase();
+  return cssName(fn.name);
+}
+
+/**
+ * The address one value node fetches, if any: a `url()`, an escaped `url(`
+ * read as the function it is, or a string inside an `image-set()`. The one
+ * reading both a sheet's walk and the re-read of text it kept unparsed use,
+ * so neither can miss what the other catches.
+ */
+function valueFetchOf(node: CssNode, context: WalkContext): string | undefined {
+  if (node.type === "Url") return node.value;
+  if (node.type === "Function" && functionName(node) === "url") {
+    return escapedUrlText(node);
+  }
+  if (node.type === "String" && inImageSet(context)) return node.value;
+  return undefined;
 }
 
 /** Whether a node sits in an `image-set()`, whose strings are images. */
@@ -152,13 +175,13 @@ function nodeFetches(
 ): LocatedCssFetch[] {
   const via = viaOf(context);
   const line = node.loc?.start.line ?? 1;
-  if (node.type === "Url") return [{ via, url: node.value, line }];
-  if (node.type === "Function" && functionName(node) === "url") {
-    return [{ via, url: escapedUrlText(node), line }];
-  }
   if (node.type === "Raw") return rawFetches(node.value, via, line);
+  const url = valueFetchOf(node, context);
+  if (url !== undefined) {
+    // A string is an `image-set()` image whatever at-rule it sits in.
+    return [{ via: node.type === "String" ? "image" : via, url, line }];
+  }
   if (node.type !== "String") return [];
-  if (inImageSet(context)) return [{ via: "image", url: node.value, line }];
   const atrule = context.atrule;
   return via === "import" &&
     context.function === null &&

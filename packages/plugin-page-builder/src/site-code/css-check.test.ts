@@ -76,6 +76,22 @@ describe.each(LEVELS)("custom CSS at the %s level", level => {
     expect(problems[0]?.reason).toMatch(/tracker\.example/);
   });
 
+  it("refuses an escaped url() kept in a custom property", () => {
+    const css = at(
+      level,
+      '--picture: u\\72l("https://tracker.example/p"); background: var(--picture);'
+    );
+    expect(reasons(css).join(" ")).toMatch(/tracker\.example/);
+  });
+
+  it("refuses an @import written with an escaped name", () => {
+    expect(
+      reasons(
+        `${at(level, "color: red;")}\n@\\69mport "https://tracker.example/a.css";`
+      )
+    ).toContain("@import isn't allowed.");
+  });
+
   it("names the line each fetch is on, not where its address first appears", () => {
     // A comment holding the same address comes first, and the address is used
     // twice: each refusal names the rule it is in.
