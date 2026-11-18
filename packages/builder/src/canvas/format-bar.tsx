@@ -8,8 +8,10 @@
  *
  * It draws the actions the passage it serves was opened with
  * ({@link FormatTarget.actions}): a Text is offered "B", "I", "Link" and
- * "Turn into". The verbs are the editor's own — the same ⌘B and ⌘I the keys
- * press — so a button and its shortcut cannot disagree.
+ * "Turn into"; a Rich text adds "H2", "H3", bullets, numbers and quote, each
+ * making the caret's block that one and, pressed again, a paragraph. The
+ * verbs are the editor's own — the same ⌘B and ⌘I the keys press — so a
+ * button and its shortcut cannot disagree.
  *
  * ## "Turn into" opens its choices in the bar
  *
@@ -35,7 +37,6 @@
  * @module format-bar
  */
 
-import { isLinkableUrl } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import { BlockActionsContext } from "../block-actions-context";
@@ -48,10 +49,18 @@ import { BLOCK_TOOLBAR_CLASS } from "./canvas-chrome";
 import { watchCanvasFor } from "./canvas-geometry-watch";
 import { overlaps } from "./canvas-tab-places";
 import {
+  BLOCK_BUTTON_FACES,
+  blockIsOn,
+  FORMAT_BAR_WORDS,
+  linkTo,
+} from "./format-actions";
+import {
   formatBar,
   formatBarShown,
+  isBlockAction,
   type FormatAction,
   type FormatBarSnapshot,
+  type FormatBlockAction,
   type FormatTarget,
 } from "./format-bar-state";
 import {
@@ -60,30 +69,12 @@ import {
   selectedWordsRect,
 } from "./geometry-dom";
 
+// The bar's words, where the tests and the bar's users have always read them.
+export { FORMAT_BAR_WORDS } from "./format-actions";
+
 /** The bar's class, and the notice's. */
 const FORMAT_BAR_CLASS = "nx-format-bar";
 const FORMAT_NOTICE_CLASS = "nx-format-notice";
-
-/** The words the bar and its notice say, in one place. */
-export const FORMAT_BAR_WORDS = {
-  bar: "Text formatting",
-  bold: "B",
-  boldName: "Bold",
-  italic: "I",
-  italicName: "Italic",
-  link: "Link",
-  turnInto: "Turn into",
-  address: "Link address",
-  addressHint: "Paste or type an address",
-  newTab: "Open in a new tab",
-  apply: "Apply",
-  removeLink: "Remove link",
-  badAddress: "This address can't be used for a link.",
-  dropped:
-    "Text keeps words, bold, italic and links. Use Rich text for headings and lists",
-  toRichText: "Turn into Rich text",
-  dismiss: "Dismiss",
-} as const;
 
 /** How far the bar sits from the words it acts on, in overlay pixels. */
 const GAP_PX = 6;
@@ -159,13 +150,19 @@ function useTurnInto(target: FormatTarget): TurnIntoAt | undefined {
   );
 }
 
-/** The bar's buttons, in order, for the passage it serves. */
+/**
+ * The bar's buttons, in order, for the passage it serves: "Turn into" where
+ * the block can be turned, and the block buttons where the editor can change
+ * a block.
+ */
 function drawnActions(
   target: FormatTarget,
   turnInto: TurnIntoAt | undefined
 ): readonly FormatAction[] {
-  return target.actions.filter(
-    action => action !== "turnInto" || turnInto !== undefined
+  return target.actions.filter(action =>
+    action === "turnInto"
+      ? turnInto !== undefined
+      : !isBlockAction(action) || target.session.block !== undefined
   );
 }
 
@@ -181,27 +178,6 @@ function keepFocus(event: React.MouseEvent): void {
 function backToWords(target: FormatTarget): void {
   target.session.focus();
   formatBar.setHoldsFocus(false);
-}
-
-/**
- * Link the selected words to `address`, answering whether it was taken: an
- * empty address takes a link off (or does nothing), and one this format
- * cannot express — `javascript:`, `data:` — is refused.
- */
-function linkTo(
-  target: FormatTarget,
-  address: string,
-  newTab: boolean,
-  linked: boolean
-): boolean {
-  const url = address.trim();
-  if (url === "") {
-    if (linked) target.session.link(null);
-    return true;
-  }
-  if (!isLinkableUrl(url)) return false;
-  target.session.link(url, { newTab });
-  return true;
 }
 
 /** Arrow keys move between the "Turn into" choices, wrapping. */
@@ -356,7 +332,7 @@ function LinkField({
     backToWords(target);
   };
   const apply = (): void => {
-    if (linkTo(target, address, newTab, current !== null)) close();
+    if (linkTo(target.session, address, newTab, current !== null)) close();
     else setRefused(true);
   };
   return (
@@ -460,6 +436,27 @@ function LinkButton(props: ButtonProps): React.JSX.Element {
   );
 }
 
+/**
+ * H2, H3, bullets, numbers or quote: makes the caret's block that one, said
+ * on while it is; pressed again, back to a paragraph.
+ */
+function BlockButton(
+  props: ButtonProps & { readonly block: FormatBlockAction }
+): React.JSX.Element {
+  const { block, state, target } = props;
+  const { face, name } = BLOCK_BUTTON_FACES[block];
+  return (
+    <button
+      {...commonOf(props)}
+      aria-label={name}
+      aria-pressed={blockIsOn(state.selection, block)}
+      onClick={() => target.session.block?.(block)}
+    >
+      {face}
+    </button>
+  );
+}
+
 /** One button of the bar. */
 function ActionButton(props: ButtonProps): React.JSX.Element {
   const { action } = props;
@@ -467,6 +464,7 @@ function ActionButton(props: ButtonProps): React.JSX.Element {
     return <MarkButton {...props} mark={action} />;
   }
   if (action === "link") return <LinkButton {...props} />;
+  if (isBlockAction(action)) return <BlockButton {...props} block={action} />;
   return (
     <button
       {...commonOf(props)}

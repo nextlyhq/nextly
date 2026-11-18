@@ -38,11 +38,14 @@ async function addHeading(page: Page): Promise<void> {
   await expect(page.getByTestId("inspector")).toContainText("Heading");
 }
 
-/** The selected heading's Style tab, with Typography open, where its colour is. */
+/** The selected heading's Style tab, with its Text section open, where its colour is. */
 async function showColour(page: Page): Promise<Locator> {
   const inspector = page.getByTestId("inspector");
   await inspector.getByRole("tab", { name: "Style" }).click();
-  const typography = inspector.getByRole("button", { name: /^Typography/ });
+  // "has changes" follows the name while the section holds a value.
+  const typography = inspector.getByRole("button", {
+    name: /^Text(\s?has changes)?$/,
+  });
   if ((await typography.getAttribute("aria-expanded")) !== "true") {
     await typography.click();
   }
@@ -177,11 +180,11 @@ test("the colour picker takes any notation, and Recent colours outlast a reload"
   }
   await expect(panel).toBeVisible();
   await panel.getByRole("tab", { name: /^Colours/ }).click();
-  const colours = panel.getByRole("button", { name: /^Colours, \d+$/ });
-  if ((await colours.getAttribute("aria-expanded")) !== "true") {
-    await colours.click();
-  }
-  await panel.locator(".nx-vars__row").first().click();
+  // Colours are listed in their groups ("Brand", "Text and surfaces"), each
+  // open to start with: the first colour's row opens its editor.
+  const row = panel.locator(".nx-vars__row").first();
+  await expect(row).toBeVisible();
+  await row.click();
   const editor = page.getByRole("dialog");
   await expect(editor).toBeVisible();
   await editor.getByRole("button", { name: "Pick the light colour" }).click();

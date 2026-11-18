@@ -109,6 +109,9 @@ const STORED: readonly (readonly [string, BlockNode[], string])[] = [
     '<div class="nx-pb-page"><a class="nx-pb-2agvzbk2ti9 nx-bt-core--card" href="https://example.com"><p class="nx-pb-1gqpnrvag2e nx-bt-core--text">A linked card</p></a></div>',
   ],
   [
+    // Its summary carries the toggle's part (its 44px height and focus
+    // ring); it opens each question alone, as before the One at a time
+    // setting, with no shared name and none opened for it.
     "accordion",
     [
       node("a", "core/accordion", { titlesAs: "h3" }, [
@@ -117,7 +120,7 @@ const STORED: readonly (readonly [string, BlockNode[], string])[] = [
         ]),
       ]),
     ],
-    '<div class="nx-pb-page"><div class="nx-pb-27060nww1es nx-bt-core--accordion"><details class="nx-pb-9qzzwcmnkx nx-bt-core--accordion-item"><summary><span class="nx-pb-disclosure-icon" aria-hidden="true"></span><h3 class="nx-pb-disclosure-title nx-bp-core--accordion-item--title">A question</h3></summary><p class="nx-pb-a3gzrhx9ay nx-bt-core--text">Its answer</p></details></div></div>',
+    '<div class="nx-pb-page"><div class="nx-pb-27060nww1es nx-bt-core--accordion"><details class="nx-pb-9qzzwcmnkx nx-bt-core--accordion-item"><summary class="nx-bp-core--accordion-item--toggle"><span class="nx-pb-disclosure-icon" aria-hidden="true"></span><h3 class="nx-pb-disclosure-title nx-bp-core--accordion-item--title">A question</h3></summary><p class="nx-pb-a3gzrhx9ay nx-bt-core--text">Its answer</p></details></div></div>',
   ],
   [
     "gallery",

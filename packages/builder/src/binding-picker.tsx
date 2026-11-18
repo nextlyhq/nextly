@@ -36,6 +36,11 @@ import type {
   BindingFieldSource,
   ListSample,
 } from "./binding-services";
+import {
+  settingSource,
+  SettingsReach,
+  type SettingSource,
+} from "./binding-setting-source";
 import { ChoiceList, type ChoiceGroup, type ListedChoice } from "./choice-list";
 import { useClickedEntries } from "./clicked-entry";
 import type { ContentServices } from "./content-controls";
@@ -49,17 +54,20 @@ import { withArticle } from "./with-article";
 
 /**
  * A source the picker lists: one the host lists, or the item of the list the
- * block sits in, which only the editor knows and the picker lists first.
+ * block sits in, which only the editor knows and the picker lists first, or,
+ * in a component, its own settings, listed before both.
  */
-type PickerSource = Omit<BindingFieldSource, "binding"> & {
-  readonly binding:
-    | BindingFieldSource["binding"]
-    | {
-        readonly source: "item";
-        /** An enclosing list further out than the nearest, by its id. */
-        readonly list?: string;
-      };
-};
+type PickerSource =
+  | (Omit<BindingFieldSource, "binding"> & {
+      readonly binding:
+        | BindingFieldSource["binding"]
+        | {
+            readonly source: "item";
+            /** An enclosing list further out than the nearest, by its id. */
+            readonly list?: string;
+          };
+    })
+  | SettingSource;
 
 /** One field the picker offers, with where it is read from. */
 interface FieldOption extends ListedChoice {
@@ -126,7 +134,7 @@ export function pickOp(
       at.document,
       at.nodeId,
       at.prop,
-      bindingFor(picked, kept),
+      pickedBinding(picked, kept),
       at.clearsOnBind
     );
     return { op, bound: at.prop };
@@ -135,7 +143,7 @@ export function pickOp(
     at.document,
     at.nodeId,
     entry.id,
-    bindingFor(picked, at.prop === entry.id ? kept : undefined),
+    pickedBinding(picked, at.prop === entry.id ? kept : undefined),
     [entry.id],
     {
       set: { [entry.collection]: collection },
@@ -145,6 +153,20 @@ export function pickOp(
     }
   );
   return { op, bound: entry.id };
+}
+
+/**
+ * The binding a pick writes; for a component's setting, its id alone:
+ * composing fills it from the setting and drops it, so a fallback or format
+ * carried over from the field it replaces would never be read.
+ */
+function pickedBinding(
+  option: FieldOption,
+  kept: Binding | undefined
+): Binding {
+  return option.source.binding.source === "setting"
+    ? { $bind: option.path, source: "setting" }
+    : bindingFor(option, kept);
 }
 
 /**
@@ -345,6 +367,31 @@ function fittingOptions(
     }
   });
   return options;
+}
+
+/**
+ * The picker's options: a component's settings first, already judged for the
+ * prop by the save's own rule (see {@link settingSource}), then the fields of
+ * every other source that fit it.
+ */
+function pickerOptions(
+  sources: readonly PickerSource[],
+  prop: EditableProp,
+  formatIn: PreviewFormatIn,
+  entryLink: EntryLink | undefined
+): readonly FieldOption[] {
+  const settings = sources.filter(
+    source => source.binding.source === "setting"
+  );
+  const others = sources.filter(source => source.binding.source !== "setting");
+  return [
+    ...settings.flatMap(source =>
+      source.fields.map(field =>
+        option(source, groupOf(source), field, field.name, choiceLabel(field))
+      )
+    ),
+    ...fittingOptions(others, prop, formatIn, entryLink),
+  ];
 }
 
 /**
@@ -636,6 +683,7 @@ export function BindingPicker({
 }): React.JSX.Element {
   const listed = useBindingSources(services, true);
   const items = useItemPickerSources(document, nodeId, services);
+  const settings = settingSource(document, nodeId, prop, entryLink?.id);
   const formatIn = usePreviewFormatIn(services);
   const name = propLabel(prop.name, prop.schema);
   // The list's fields are waited for with the page's, so the groups are
@@ -652,8 +700,13 @@ export function BindingPicker({
   }
   return (
     <PickerBody
-      sources={[...items.sources, ...listed]}
-      nearest={items.sources.length > 0}
+      // A component's settings first, as nearest of all, then the lists'.
+      sources={[
+        ...(settings === undefined ? [] : [settings]),
+        ...items.sources,
+        ...listed,
+      ]}
+      nearest={settings !== undefined || items.sources.length > 0}
       prop={prop}
       name={name}
       blockLabel={blockLabel}
@@ -694,7 +747,7 @@ function PickerBody({
   onPick: (option: FieldOption) => void;
 }): React.JSX.Element {
   // Previewed in the page's language and the site's zone.
-  const options = fittingOptions(sources, prop, formatIn, entryLink);
+  const options = pickerOptions(sources, prop, formatIn, entryLink);
   // A source with nothing to offer this prop is not listed: an empty group
   // only lengthens the list.
   const offering = new Set(options.map(option => option.group));
@@ -721,11 +774,11 @@ function PickerBody({
         choiceTitle={optionTitle}
         searchFrom={0}
         leading={
-          failed.length === 0 ? undefined : (
-            <p className="nx-binding-picker__failed" role="status">
-              {`Could not read ${failed.map(sourceName).join(", ")}. Close this and try again.`}
-            </p>
-          )
+          <PickerLeading
+            failed={failed}
+            // A component's settings' group is keyed by its source.
+            settings={offering.has("setting")}
+          />
         }
       />
       <p className="nx-binding-picker__hint">
@@ -734,6 +787,30 @@ function PickerBody({
           : `Only fields ${withArticle(blockLabel.toLowerCase())}'s ${name.toLowerCase()} can show are listed.`}
       </p>
     </div>
+  );
+}
+
+/**
+ * What the picker says between its search and its rows: how many pages use
+ * the component, over its settings where they are listed, and a source the
+ * host could not read.
+ */
+function PickerLeading({
+  failed,
+  settings,
+}: {
+  failed: readonly PickerSource[];
+  settings: boolean;
+}): React.JSX.Element {
+  return (
+    <>
+      {settings ? <SettingsReach /> : null}
+      {failed.length === 0 ? null : (
+        <p className="nx-binding-picker__failed" role="status">
+          {`Could not read ${failed.map(sourceName).join(", ")}. Close this and try again.`}
+        </p>
+      )}
+    </>
   );
 }
 

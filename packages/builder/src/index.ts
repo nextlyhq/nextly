@@ -141,6 +141,13 @@ export {
 export type { BuilderShellProps, PanelView } from "./shell/builder-shell";
 
 /**
+ * @experimental What a host lends the inspector for a block's own custom CSS
+ * (`InspectorPanelProps.customCss`): its checker, given only to a person who
+ * may change the site's code. A type, so it costs this entry nothing.
+ */
+export type { BlockCustomCssAccess } from "./custom-css";
+
+/**
  * @experimental The shell's own decisions: which panels the rail offers, the
  * bounds handed to the panel library, and the preference port.
  *
@@ -636,6 +643,7 @@ export {
   type PageCheck,
   type PageCheckGroup,
   type PageCheckGroupView,
+  type PageCheckNote,
   type PageCheckReport,
   type PageCheckResult,
   type PageFinding,
@@ -643,3 +651,12 @@ export {
   type ResolvedPage,
 } from "./page-checks/page-checks";
 export { CORE_PAGE_CHECKS } from "./page-checks/core-checks";
+// What a caller knows of the page beyond its document, for the content,
+// data and publishing checks: a script hands in the same facts the editor does.
+export type {
+  BindingToFix,
+  DoubledRegionFact,
+  PageDataFact,
+  PageFacts,
+  UnpublishedPart,
+} from "./page-checks/page-facts";

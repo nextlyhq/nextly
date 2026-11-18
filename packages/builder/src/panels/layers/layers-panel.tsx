@@ -88,6 +88,7 @@ import {
   type TreeNode,
 } from "@nextlyhq/ui";
 import {
+  Braces,
   Eye,
   EyeOff,
   Lock,
@@ -101,6 +102,7 @@ import { BlockIconMark } from "../../block-icon";
 import { DRAG_SOURCE_ATTRIBUTE } from "../../canvas/canvas";
 import { useHoveredBlockSetter } from "../../canvas/hovered-block";
 import { revealNode } from "../../canvas/reveal-node";
+import { HAS_CUSTOM_CSS } from "../../custom-css";
 import type { EditorState } from "../../editor-state";
 import { EDITOR_WORDS } from "../../editor-words";
 import {
@@ -653,6 +655,11 @@ function RowFacts({
           icon={<SlidersHorizontal size={12} />}
           text="Shown conditionally"
         />
+      ) : null}
+      {/* "{ }" for a block with custom CSS of its own, for everyone: only
+          that it has some, named for a screen reader and a resting pointer. */}
+      {node.customCss === true ? (
+        <Badge icon={<Braces size={12} />} text={HAS_CUSTOM_CSS} tooltip />
       ) : null}
     </>
   );

@@ -38,6 +38,8 @@ const PROVIDER_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export interface FormProviders {
   /** The provider registered under `id` this boot, if any. */
   get(id: string): FormProvider | undefined;
+  /** Every provider registered this boot, in the order they registered. */
+  all(): readonly FormProvider[];
   /**
    * Start a boot: forget every provider registered before, and answer the
    * service other plugins register through until the next start.
@@ -50,6 +52,7 @@ export function createFormProviders(): FormProviders {
   let current = new Map<string, FormProvider>();
   return {
     get: id => current.get(id),
+    all: () => [...current.values()],
     start() {
       const registered = new Map<string, FormProvider>();
       current = registered;

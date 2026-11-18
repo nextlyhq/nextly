@@ -112,10 +112,14 @@
   gap: 0.125rem;
 }
 
-/* "+ Add field" and "+ Add option": quiet, in the editor's accent. */
+/* "+ Add field" and "+ Add option": quiet, in the editor's text colour.
+   Not the accent: that is --nx-primary, a fill a site's brand may set to a
+   shade too light to read as small text on the panel. The weight and the
+   "+" keep it reading as a control beside the field labels. */
 .nx-form-fields__add {
   justify-self: start;
-  color: var(--nx-builder-accent);
+  color: var(--nx-builder-text);
+  font-weight: 500;
 }
 
 .nx-form-fields__advanced > summary {
@@ -154,4 +158,43 @@
 .nx-form-after {
   display: grid;
   gap: 0.5rem;
+}
+
+/*
+ * Where the form comes from: "Form: <pick a form>", the line saying what the
+ * picked form's source holds, "Edit this form ↗" and "or use a simple form";
+ * or, with no source installed, what installing the Forms plugin adds.
+ */
+.nx-form-source {
+  display: grid;
+  justify-items: start;
+  gap: 0.375rem;
+}
+
+.nx-form-source > .nx-inspector__field {
+  justify-self: stretch;
+}
+
+/* The panel's own hint words; the grid's gap spaces them. */
+.nx-form-source > .nx-inspector__hint {
+  margin: 0;
+}
+
+.nx-form-source__edit {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--nx-builder-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.nx-form-source__edit:focus-visible {
+  outline: 2px solid var(--nx-builder-select);
+  outline-offset: 2px;
+}
+
+.nx-form-source__simple {
+  padding-inline: 0;
+  font-size: var(--text-xs);
 }

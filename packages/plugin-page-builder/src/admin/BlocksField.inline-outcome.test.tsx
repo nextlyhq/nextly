@@ -36,6 +36,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import type { InlineEditOutcome } from "@nextlyhq/builder/shell";
+import { closedDocumentSession } from "../__tests__/closed-document-session";
 
 /** What the inline surface answers when this test's editor is finished. */
 let outcome: InlineEditOutcome = { status: "unchanged" };
@@ -229,9 +230,14 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
 vi.mock("./publish-offer", () => ({
   usePublishOffer: () => null,
   useFormPublishOffer: () => null,
+  usePublishQuestion: () => ({ offer: () => Promise.resolve(), dialog: null }),
+  // Page checks asks which parts aren't published; answered as unknown, so
+  // it lists none and these tests stay on what they test.
+  askReadiness: async () => null,
 }));
 vi.mock("./removal-hold-client", () => ({
   useRemovalHold: () => null,
+  useRemovalQuestion: () => ({ hold: () => Promise.resolve(), dialog: null }),
 }));
 
 /** Asking the stored style again, as the editor does after a save. */
@@ -248,6 +254,9 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The empty page's starter pages read, offering none: no case here starts
+  // a page from one.
+  readPluginRoute: async () => ({ items: [] }),
   // Where the page opens and the pin's id, which the top bar reads; no
   // collection is named here, so the exit goes to the form.
   useDocumentOpensIn: () => null,
@@ -318,6 +327,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   useReportUnsavedWork: () => {},
   // The form's storing gate, which site style writes are tracked with.
   useTrackedWrite: () => () => {},
+  // The session a header edited in place opens; none is opened here.
+  useDocumentSession: () => closedDocumentSession(),
   useBeforeDocumentAction: (
     handler: (action: string) => void | Promise<void>
   ) => {

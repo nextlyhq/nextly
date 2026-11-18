@@ -109,6 +109,10 @@
       "types": "./dist/domains/versions/comparison-baseline-name.d.mts",
       "import": "./dist/domains/versions/comparison-baseline-name.mjs"
     },
+    "./slugify": {
+      "types": "./dist/slugify.d.mts",
+      "import": "./dist/slugify.mjs"
+    },
     "./field-label": {
       "types": "./dist/collections/fields/field-label.d.mts",
       "import": "./dist/collections/fields/field-label.mjs"
