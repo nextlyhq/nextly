@@ -2465,18 +2465,18 @@ export class SingleMetadataService {
 
     // A field becoming translated takes its value to the default language's companion row first:
     // the main ALTER below drops its column. Before the try below, as the migration is: a failure
-    // here stops the save before the main table changes.
-    const joinedBefore = await this.moveJoiningFieldValues(
-      adapter,
-      input,
-      plan
-    );
+    // here stops the save before the main table changes. The save's migration file makes both
+    // moves itself, this one and the translated column's rename below, so after it neither is
+    // made again, and the companion reconcile plans from the companion as the file left it.
+    const joinedBefore =
+      main === "statements"
+        ? await this.moveJoiningFieldValues(adapter, input, plan)
+        : [];
 
-    const undoRename = await this.renameTranslatedColumnFirst(
-      adapter,
-      input,
-      plan
-    );
+    const undoRename =
+      main === "statements"
+        ? await this.renameTranslatedColumnFirst(adapter, input, plan)
+        : [];
 
     // Before the try below, which records what it catches: a refusal here has changed nothing
     // the registry should describe, so it fails the save.
