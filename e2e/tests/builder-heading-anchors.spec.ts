@@ -167,8 +167,7 @@ test("every heading has a page-unique id, and a left-out heading keeps its id", 
     "leave-me-out",
   ];
   // Every heading element on the page, in order, none without an id. The
-  // contents block lists nothing here (it reads no passage), so a visitor
-  // gets none of it.
+  // contents block's list draws links, not headings, so it adds none here.
   expect(await publishedHeadingIds(page, slug)).toEqual(expected);
 
   await page.setViewportSize({ width: 1440, height: 900 });

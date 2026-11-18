@@ -92,6 +92,7 @@ import {
   type InstanceInspection,
   type OrphanedOverride,
 } from "./instance-inspector";
+import { MakeSettingSection } from "./make-component-setting-section";
 import { refusalAnnouncement } from "./move-refusal";
 import { useStoredDraft } from "./stored-draft";
 import { VariantPicker } from "./variant-picker";
@@ -339,6 +340,19 @@ export function InstanceInspectorPanel({
             </HeldByLock>
           </section>
         )}
+
+        <MakeSettingSection
+          nodeId={inspection.nodeId}
+          componentId={inspection.componentId}
+          label={inspection.label}
+          usedOn={inspection.usedOn}
+          definition={definition}
+          definitionFound={inspection.definitionFound}
+          locked={locked}
+          document={editor.document}
+          services={bind.services}
+          onApply={bind.onApply}
+        />
 
         {inspection.orphaned.length > 0 ? (
           // Held by the same Layers lock as the rows: discarding a stored value

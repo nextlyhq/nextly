@@ -1054,6 +1054,17 @@ export interface PageContext {
    */
   accordionTitles?: AccordionTitleLevel;
   /**
+   * How the accordion being rendered opens its sections, set for its own
+   * sections as {@link accordionTitles} is: `name`, while one opens at a
+   * time, the name every section's `<details>` shares (the browser closes
+   * the others, with no script), unique on the page, list copies included;
+   * `opens`, the section starting open while the first one does. Absent
+   * outside an accordion, where a section opens by its own setting.
+   *
+   * @experimental
+   */
+  accordionGroup?: { readonly name?: string; readonly opens?: string };
+  /**
    * The editor's canvas, drawing a template: what an Entry content block
    * says to its author where it has none of the entry's content to draw (no
    * entry previewed, an empty field, a field the collection no longer has),
@@ -1071,9 +1082,11 @@ export interface PageContext {
   /**
    * Where this page's forms post, and the forms a provider describes: what
    * a Form block needs to be sent, with no script, through the page
-   * builder's receiver. Absent where a form cannot be sent from the page,
-   * such as the editor's canvas; a Form then draws its fields with nowhere
-   * to post them.
+   * builder's receiver. The editor's canvas passes one that describes a
+   * picked form as the person editing reads it, naming no document, so
+   * nothing is sent from there. Absent where a form cannot be read or sent
+   * at all; a Form then draws its own fields with nowhere to post them, and
+   * a picked form not at all.
    *
    * @experimental Settles with the form provider contract.
    */

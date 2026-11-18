@@ -21,6 +21,7 @@ import type {
   SupportDefinition,
 } from "@nextlyhq/blocks-engine";
 import type { PluginDeclaration } from "@nextlyhq/plugin-sdk";
+import type { StarterPageDefinition } from "@nextlyhq/plugin-sdk/blocks";
 
 /**
  * What an `editorEntry` module exports: the plugin's block definitions and
@@ -73,6 +74,15 @@ export interface PageBuilderDeclaration {
    * @experimental
    */
   namedQueries?: NamedQueryDefinition[];
+  /**
+   * Starter pages: ready-made page bodies an author can start a new page
+   * from, made with `defineStarterPage`. Listed beside the site's own, and
+   * checked at boot once every block is registered, so one may use the
+   * blocks this declaration adds.
+   *
+   * @experimental
+   */
+  starterPages?: StarterPageDefinition[];
 }
 
 /**

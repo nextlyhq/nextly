@@ -139,7 +139,7 @@
                           },
                           "source": {
                             "type": "string",
-                            "enum": ["entry", "site"]
+                            "enum": ["entry", "site", "setting"]
                           },
                           "sourceKey": {
                             "not": {}
@@ -355,7 +355,7 @@
                           },
                           "source": {
                             "type": "string",
-                            "enum": ["entry", "site"]
+                            "enum": ["entry", "site", "setting"]
                           },
                           "sourceKey": {
                             "not": {}
@@ -563,7 +563,7 @@
                     },
                     "source": {
                       "type": "string",
-                      "enum": ["entry", "site"]
+                      "enum": ["entry", "site", "setting"]
                     },
                     "sourceKey": {
                       "not": {}
@@ -808,7 +808,7 @@
                   },
                   "source": {
                     "type": "string",
-                    "enum": ["entry", "item", "site"]
+                    "enum": ["entry", "item", "site", "setting"]
                   },
                   "sourceKey": {
                     "not": {}

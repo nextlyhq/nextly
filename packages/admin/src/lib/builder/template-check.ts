@@ -30,13 +30,14 @@
 import {
   builderColumnIsUnique,
   fieldNameProblem,
+  fieldProducesColumn,
   siblingNameClash,
   type FieldNameProblem,
   type SiblingClashKind,
 } from "nextly/config";
 import { isFieldGroupFieldType } from "nextly/field-group-type";
 
-import { SYSTEM_FIELD_NAMES } from "./constants";
+import { builtInFieldNamesOf } from "./constants";
 import { convertToBuilderField } from "./field-transformers";
 import { builderFieldErrors } from "./field-validators";
 import { BUILT_IN_FIELD_TYPES } from "./offered-field-types";
@@ -112,16 +113,6 @@ const CONTAINER_TYPES: ReadonlySet<string> = new Set(["group", "repeater"]);
 // fields by the keys this check names them by.
 export { templateFieldKey };
 
-/**
- * The fields a kind's entity holds beside its own: a collection's and a
- * Single's title and slug; a field group holds none.
- */
-const BUILT_IN_FIELD_NAMES: Record<SchemaTemplateKind, readonly string[]> = {
-  collection: SYSTEM_FIELD_NAMES,
-  single: SYSTEM_FIELD_NAMES,
-  fieldGroup: [],
-};
-
 /** A field placed: where it is, what it is called, and whether it is nested. */
 interface Placed {
   field: SchemaTemplateField;
@@ -142,16 +133,15 @@ function nameFailure(
     surface: kind,
     nested: each.nested,
     lifecycleEnabled: ctx.lifecycleEnabled === true,
-    // A field-group field or a link to several keeps its values elsewhere,
-    // so no column carries its name.
-    producesColumn: !(
-      isFieldGroupFieldType(field.type) ||
-      (field.type === "relationship" && field.hasMany === true)
-    ),
+    // Asked as the save asks it: a field-group field keeps its values in its group's own table,
+    // so no column carries its name; a link to several entries keeps them in a column of its own.
+    producesColumn: fieldProducesColumn(field),
   });
   if (!problem) return null;
   const invalid =
-    problem.kind === "spelling" || problem.kind === "column-too-long";
+    problem.kind === "spelling" ||
+    problem.kind === "column-too-long" ||
+    problem.kind === "name-too-long";
   return {
     path: each.path,
     key: each.key,
@@ -311,7 +301,7 @@ export function checkTemplate(
     const clashes = clashFailures(
       level,
       parent === null,
-      BUILT_IN_FIELD_NAMES[template.kind],
+      builtInFieldNamesOf(template.kind),
       ctx.startingFieldNames ?? []
     );
     for (const each of level) {

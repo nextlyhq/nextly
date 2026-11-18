@@ -278,6 +278,8 @@ const PAGE_PLACE: SettingsPlace = {
     holdEdit: () => () => {},
   },
   flushHeld: () => null,
+  pageCode: { value: undefined, set: () => true },
+  pageCss: { value: undefined, set: () => true },
 };
 
 /** A tab another plugin adds to the place. */
@@ -300,6 +302,7 @@ interface Shown {
   address?: SettingsAddress | null;
   place?: SettingsPlace | null;
   openAsForm?: () => void;
+  fieldName?: string;
 }
 
 function show({
@@ -309,6 +312,7 @@ function show({
   address = null,
   place = PAGE_PLACE,
   openAsForm,
+  fieldName = "layout",
 }: Shown = {}) {
   // Built afresh each time: React skips a child whose element is unchanged,
   // so re-rendering the same tree would never ask the dialog again.
@@ -321,7 +325,7 @@ function show({
         returnFocus={() => null}
         kind={kind}
         pageTitle="Pricing"
-        fieldName="layout"
+        fieldName={fieldName}
         headerFooter={
           kind === "page" ? <HeaderFooterMenu control={{} as never} /> : null
         }
@@ -384,7 +388,7 @@ describe("Page settings", () => {
     expect(
       screen.getByRole("dialog", { name: "Page settings · Pricing" })
     ).toBeTruthy();
-    expect(tabNames()).toEqual(["General", "Fields"]);
+    expect(tabNames()).toEqual(["General", "Fields", "Code"]);
   });
 
   it("lifts the place's tabs into the same row, after Fields, in the order delivered", () => {
@@ -393,7 +397,7 @@ describe("Page settings", () => {
       placeTab("acme-reviews.tab", "Reviews"),
     ];
     show();
-    expect(tabNames()).toEqual(["General", "Fields", "SEO", "Reviews"]);
+    expect(tabNames()).toEqual(["General", "Fields", "SEO", "Reviews", "Code"]);
     // Handed the place, its context and the page's props, with a way back
     // to General.
     expect(placeAsked.at(-1)).toMatchObject({
@@ -419,6 +423,88 @@ describe("Page settings", () => {
     expect(
       screen.getByRole("tab", { name: "General" }).getAttribute("aria-selected")
     ).toBe("true");
+  });
+
+  it("ends the row with Code for a role that may manage the site, and says only that a page adds code to anyone else", async () => {
+    delivered = [placeTab("acme-reviews.tab", "Reviews")];
+    const place = {
+      ...PAGE_PLACE,
+      pageCode: {
+        value: { head: "<meta name=a content=b>" },
+        set: () => true,
+      },
+    };
+    show({ place });
+    expect(tabNames()).toEqual(["General", "Fields", "Reviews", "Code"]);
+    await userEvent.click(screen.getByRole("tab", { name: "Code" }));
+    expect(
+      screen.getByText(
+        "Code added to this page only. Site-wide code lives in Site settings."
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText(/This page adds its own code/)).toBeNull();
+    cleanup();
+
+    siteRead = { ...MANAGER, mayManageSite: false, layouts: [] };
+    show({ place });
+    expect(tabNames()).toEqual(["General", "Fields", "Reviews"]);
+    expect(
+      screen.getByText(
+        "This page adds its own code or CSS. Only people who can change site settings can see or edit it."
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText("<meta name=a content=b>")).toBeNull();
+    cleanup();
+
+    // A page with no code of its own says nothing of it.
+    show();
+    expect(screen.queryByText(/This page adds its own code/)).toBeNull();
+  });
+
+  it("shows page CSS in the Code tab's CSS box to a role that may manage the site, and to an editor only General's line, never the CSS", async () => {
+    const CSS = "h1 { color: rebeccapurple; }";
+    const place = {
+      ...PAGE_PLACE,
+      pageCss: { value: CSS, set: () => true },
+    };
+    show({ place });
+    await userEvent.click(screen.getByRole("tab", { name: "Code" }));
+    expect(
+      (screen.getByRole("textbox", { name: "CSS" }) as HTMLTextAreaElement)
+        .value
+    ).toBe(CSS);
+    expect(
+      screen.getByText(
+        "CSS for this page only. Site-wide CSS lives in Site settings."
+      )
+    ).toBeTruthy();
+    cleanup();
+
+    // An editor: a page with CSS and no code is said to add its own, and
+    // the CSS is shown nowhere.
+    siteRead = { ...MANAGER, mayManageSite: false, layouts: [] };
+    show({ place });
+    expect(tabNames()).not.toContain("Code");
+    expect(
+      screen.getByText(
+        "This page adds its own code or CSS. Only people who can change site settings can see or edit it."
+      )
+    ).toBeTruthy();
+    expect(document.body.textContent).not.toContain("rebeccapurple");
+    expect(screen.queryByRole("textbox", { name: "CSS" })).toBeNull();
+  });
+
+  it("offers no Code tab where the builder's field isn't a page's own top-level field, which the server refuses code on", () => {
+    delivered = [placeTab("acme-reviews.tab", "Reviews")];
+    for (const fieldName of ["hero.body", "sections[0].body"]) {
+      show({ fieldName });
+      expect(tabNames()).not.toContain("Code");
+      expect(screen.queryByText(/This page adds its own code/)).toBeNull();
+      cleanup();
+    }
+    // CONTROL: the page's own top-level field offers it.
+    show({ fieldName: "body" });
+    expect(tabNames()).toContain("Code");
   });
 
   it("offers Site settings apart from the tabs, only to a role that may manage the site", () => {
@@ -551,7 +637,7 @@ describe("Page settings", () => {
       placeTab("acme-reviews.tab", "Reviews"),
     ];
     show();
-    expect(tabNames()).toEqual(["General", "Fields", "Reviews"]);
+    expect(tabNames()).toEqual(["General", "Fields", "Reviews", "Code"]);
     // Mounted, hidden, so it can bring itself back.
     expect(screen.getByText("SEO panel", { selector: "p" })).toBeTruthy();
   });
@@ -595,7 +681,7 @@ describe("Page settings", () => {
   it("leaves Fields out where nothing is left for it", () => {
     contentLeft = false;
     show();
-    expect(tabNames()).toEqual(["General"]);
+    expect(tabNames()).toEqual(["General", "Code"]);
   });
 
   it("keeps a component's own settings on General, with no Fields tab", () => {

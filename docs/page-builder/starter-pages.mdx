@@ -1,0 +1,161 @@
+---
+title: Starter pages
+description: Register ready-made page bodies in code that authors start a new page from, copied once and drawn in the site's own colours and fonts.
+---
+
+A **starter page** is a ready-made page body: a hero, a few sections, a call to action.
+An author picks one when making a page, in the New page dialog's **Start from**, or on an
+empty page's **or start from a page** row in the builder, and gets a finished-looking page
+in the site's own colours and fonts.
+
+A starter page is copied once. Its blocks become the page's own, each with a new id: a
+later change to the starter page never reaches a page made from it, and a change on the
+page never reaches the starter page. It fills the page body only. The header and footer are the ones the
+author chose in the dialog. In the builder, starting an empty page from one is a single
+step, and one Undo empties the page again.
+
+Starter pages are experimental: the contract may change before the page builder is stable.
+
+## Register a starter page
+
+Write one with `defineStarterPage` and pass it to `pageBuilder({ starterPages })`:
+
+```ts
+// app/starter-pages.ts
+import { defineStarterPage } from "@nextlyhq/plugin-sdk/blocks";
+
+export const welcome = defineStarterPage({
+  id: "welcome",
+  label: "Welcome",
+  description: "A heading in your brand colour, an image to add and a button.",
+  blocks: [
+    {
+      id: "hero",
+      type: "core/section",
+      version: 1,
+      props: { as: "section", contained: true },
+      slots: {
+        children: [
+          {
+            id: "hero-title",
+            type: "core/heading",
+            version: 1,
+            props: { text: "Welcome to our site", level: "h1" },
+            // A site variable, not a raw colour, so the starter wears the
+            // site's own brand colour.
+            styles: { base: { base: { color: { $token: "color.primary" } } } },
+          },
+          {
+            id: "hero-image",
+            type: "core/image",
+            version: 1,
+            props: {},
+          },
+          {
+            id: "hero-button",
+            type: "core/button",
+            version: 1,
+            props: { label: "Get in touch", href: "/contact" },
+          },
+        ],
+      },
+    },
+  ],
+});
+```
+
+```ts
+// nextly.config.ts
+import { pageBuilder } from "@nextlyhq/plugin-page-builder";
+
+import { welcome } from "./app/starter-pages";
+
+export const builder = pageBuilder({
+  starterPages: [welcome],
+});
+```
+
+| Field         | What it is                                                              |
+| ------------- | ----------------------------------------------------------------------- |
+| `id`          | Lower case letters, digits and `-`, up to 64 characters. Unique.        |
+| `label`       | The name an author reads, up to 80 characters.                          |
+| `description` | One short sentence, up to 200 characters, read with the name.           |
+| `blocks`      | The page body's blocks, top to bottom, in the shape a page stores them. |
+
+The ids inside `blocks` are only the starter page's own: every page made from it gets new
+ones.
+
+## Hide the page builder's own starter pages
+
+The page builder lists its own starter pages beside yours. To list only the ones
+registered in code, turn them off:
+
+```ts
+pageBuilder({
+  starterPages: [welcome],
+  builtInStarterPages: false,
+});
+```
+
+## From a plugin
+
+A plugin declares starter pages under the page builder's key, the channel its blocks and named
+queries use:
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+import { defineStarterPage } from "@nextlyhq/plugin-sdk/blocks";
+
+const pricing = defineStarterPage({
+  id: "acme-pricing",
+  label: "Pricing",
+  description: "Three plans side by side.",
+  blocks: [],
+});
+
+export const acmePricingPages = definePlugin({
+  name: "acme-pricing-pages",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  contributes: {
+    declarations: {
+      "@nextlyhq/plugin-page-builder": { starterPages: [pricing] },
+    },
+  },
+});
+```
+
+A plugin's starter page may use the blocks the plugin declares, since every starter page is
+checked once all blocks are registered.
+
+## The site's own look
+
+Each starter page's preview is drawn from its own blocks with the site's style, so it shows the
+site's colours and fonts. Style a starter page's blocks with the site's variables
+(`{ $token: "color.primary" }`), text styles and block styles rather than raw colours or
+font names, and it takes each site's look.
+
+A starter page never shows a broken image or loads anything from another site: it carries no
+pictures. Leave an Image empty, and the page shows the Image's own empty state, where the
+author adds a picture from their media library.
+
+## Checked at start-up
+
+Every starter page is checked when the site starts, and the site does not start while one is
+refused. The message names the starter page, where it came from, and why:
+
+- an id that is malformed, or that another starter page already uses;
+- no name, no description, or no blocks;
+- a block the site doesn't have;
+- a placed component, which belongs to one site's library;
+- a picture or an address to load: a media library image, an Image's or Embed's `src`, or
+  a background image in its styles;
+- blocks the page builder's validation refuses, with where.
+
+```text
+[page-builder] The starter page "welcome" from pageBuilder({ starterPages }) uses the block "acme/hero", which this site doesn't have.
+```
+
+A starter page that needs a block, a variable or a shared style the site no longer has (a
+colour removed in Design, say) is left out of the list rather than offered half-drawn, and
+comes back once the site has it again.

@@ -27,6 +27,8 @@ import { DEFAULT_LIMITS } from "./limits";
 import { type ListFieldSource, listQueryIssues } from "./list-query";
 import { surveyDocument } from "./measure-bytes";
 import { definitelyNotARecord, isPlainRecord } from "./plain-record";
+import { settingBindingIssues } from "./setting-bindings";
+import { validateDocumentCode } from "./validation-code";
 import { validateComponentEnvelope } from "./validation-components";
 import type {
   IssueSeverity,
@@ -71,6 +73,7 @@ export {
 } from "./validation-node";
 export { componentEnvelopeIssues } from "./validation-components";
 export { documentSeoIssues } from "./validation-seo";
+export { documentCodeIssues } from "./validation-code";
 
 /**
  * Issues only — the narrow view, DERIVED from {@link validateDocument} rather
@@ -213,6 +216,17 @@ export function validateDocument(
     // brings, and no exposure edit can create one.
     issues.push(...variantLabelIssues(envelope.doc.variants, ctx.stored));
   }
+  // Where a block following a component's setting may stand, in a component
+  // and anywhere a copy of one lands, against the settings it has.
+  if (!overLimits) {
+    issues.push(
+      ...settingBindingIssues(
+        doc,
+        survey.limits,
+        (node, prop) => ctx.definitions?.get(node.type)?.props?.[prop]
+      )
+    );
+  }
 
   const state = nodeCheckState(ctx, issues, knownBreakpoints, unknownSeverity, {
     overLimits,
@@ -229,6 +243,9 @@ export function validateDocument(
   // walked whole.
   if (!overLimits && isPlainRecord(settings) && settings.seo !== undefined) {
     validateDocumentSeo(settings.seo, "/settings/seo", issues);
+  }
+  if (!overLimits && isPlainRecord(settings) && settings.code !== undefined) {
+    validateDocumentCode(settings.code, "/settings/code", issues);
   }
 
   validateNodeForest(envelope.nodes, state, survey.limits.maxNodes);

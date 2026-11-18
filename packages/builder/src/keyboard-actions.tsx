@@ -64,6 +64,7 @@ import {
   type MovePosition,
 } from "./canvas/toolbar-actions";
 import type { EditorState } from "./editor-state";
+import { escapeFieldEdit } from "./field-edit";
 import { lockViewOf } from "./inspector";
 import { placedComponentId } from "./instance-inspector";
 import {
@@ -98,8 +99,10 @@ import {
   selectionDuplication,
   selectionMove,
 } from "./selection-ops";
+import { planUnwrap, planWrap } from "./selection-wrap";
 import { blockActionRunners } from "./shell/builder-commands";
 import { useNoticeSink } from "./shell/builder-notices";
+import { useStyleClipboardVerbs } from "./style-clipboard-verbs";
 import { runTurnInto, turnIntoOffers } from "./turn-into-verb";
 
 // The keys and what is announced, the contexts the toolbar and menus read,
@@ -307,6 +310,45 @@ export function useBlockKeyboardActions({
     }
     announce(`${plan.subject} duplicated. Undo with ${UNDO_KEYS_SPOKEN}.`);
   }, [announce]);
+
+  /**
+   * Wrapping the selection in a Box, or unwrapping the selected container,
+   * as ONE step: refused with its reason, where the placement rules forbid
+   * the result or a lock holds a block it moves, and said either way.
+   * Selection follows what was made: the new Box, or the unwrapped blocks.
+   */
+  const runWrap = React.useCallback(
+    (kind: "wrap" | "unwrap") => {
+      const editorNow = latest.current;
+      const [only] = editorNow.selection.ids;
+      const plan =
+        kind === "wrap"
+          ? planWrap(editorNow.document, editorNow.selection.ids, nestingSource)
+          : only === undefined
+            ? null
+            : planUnwrap(editorNow.document, only, nestingSource);
+      if (plan === null) return;
+      if (isRefusal(plan)) {
+        announce(plan.reason);
+        return;
+      }
+      const locked = lockSentence(editorNow, plan.ops);
+      if (locked !== null) {
+        announce(locked);
+        return;
+      }
+      if (editorNow.applyAll(plan.ops) === null) return;
+      const [first, ...rest] = plan.select;
+      if (first !== undefined) {
+        editorNow.select(first, "replace");
+        for (const id of rest) editorNow.select(id, "toggle");
+      }
+      announce(
+        `${kind === "wrap" ? "Wrapped in a box" : "Unwrapped"}. Undo with ${UNDO_KEYS_SPOKEN}.`
+      );
+    },
+    [announce, nestingSource]
+  );
 
   /**
    * Reordering a selection that holds more than one block.
@@ -736,6 +778,17 @@ export function useBlockKeyboardActions({
           !modalIsOpen(typeof document === "undefined" ? undefined : document),
         run: event => {
           const editorNow = latest.current;
+          // A field being edited: the press puts back the value from before
+          // the edit, recording nothing, and does nothing else. Pressed again
+          // in that field, it leaves the field for the canvas, the block
+          // still selected: one thing per press, innermost first.
+          const field = escapeFieldEdit(pressOrigin(event));
+          if (field === "put-back") return;
+          if (field === "leave-field") {
+            const frame = latestFrame.current;
+            if (frame !== null) returnFocusToCanvas(frame);
+            return;
+          }
           // Where the press began, from the keystroke itself: a layer that
           // closed on this same key has already moved focus by now.
           const outcome = escapeOutcome(
@@ -945,6 +998,13 @@ export function useBlockKeyboardActions({
     sharedLibrary,
     announce
   );
+  // Copy style and Paste style: the blocks' own looks, never a shared style.
+  const styleClipboard = useStyleClipboardVerbs({
+    latest,
+    announce,
+    notify,
+    library: sharedLibrary,
+  });
 
   const actions = React.useMemo<BlockActions>(
     () => ({
@@ -960,6 +1020,10 @@ export function useBlockKeyboardActions({
         clipboard.cut();
       },
       paste: clipboard.paste,
+      copyStyle: () => {
+        styleClipboard.copyStyle();
+      },
+      pasteStyle: styleClipboard.pasteStyle,
       selectParent,
       saveAsPattern: saveSelectionAsPattern,
       editComponent: editSelectedComponent,
@@ -967,16 +1031,20 @@ export function useBlockKeyboardActions({
       detachComponent: () => runComponentVerb("detach-component"),
       duplicateComponent: () => runComponentVerb("duplicate-component"),
       updatePattern: () => runComponentVerb("update-pattern"),
+      wrapInBox: () => runWrap("wrap"),
+      unwrap: () => runWrap("unwrap"),
       saveAsSharedStyle,
       ...turnVerbs,
     }),
     [
+      runWrap,
       saveAsSharedStyle,
       turnVerbs,
       moveSelected,
       deleteSelected,
       duplicateSelected,
       clipboard,
+      styleClipboard,
       selectParent,
       saveSelectionAsPattern,
       editSelectedComponent,

@@ -4,7 +4,7 @@
  *
  * @module validation-components
  */
-import { isBindPath } from "./binding-rules";
+import { isBindPath, isSettingId } from "./binding-rules";
 import {
   type BlockDocument,
   type BlockNode,
@@ -331,7 +331,9 @@ function checkExposedIdentity(
   issues: ValidationIssue[]
 ): string | undefined {
   const id = raw.id;
-  if (typeof id !== "string" || id === "") {
+  // The rule a binding following the setting is judged by, so a follower
+  // can name every id this takes.
+  if (!isSettingId(id)) {
     issues.push({
       path: pointer(path, "id"),
       code: "exposed-property-invalid",

@@ -184,3 +184,22 @@ export const SITE_CODE_BOOTSTRAP: string = `(function () {
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
   else start();
 })();`;
+
+/** The loader's last line: when it starts, once the page has parsed. */
+const STARTS_ONCE_PARSED =
+  'if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);\n  else start();';
+
+/**
+ * The loader a page's own end-of-body code is started by: the site code
+ * loader, word for word, but starting one task after the page has parsed.
+ * Every site code loader has queued its code by then, so the page's
+ * end-of-body code runs after the site's, as the site's styles come before a
+ * page's. A page's head code is started by `SITE_CODE_BOOTSTRAP` itself,
+ * which already runs after the site's head and before its end of body. Its
+ * text is fixed too, and a site whose policy allows loaders by hash allows
+ * this one's for page code.
+ */
+export const PAGE_CODE_BODY_BOOTSTRAP: string = SITE_CODE_BOOTSTRAP.replace(
+  STARTS_ONCE_PARSED,
+  'if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function () {\n    setTimeout(start, 0);\n  });\n  else setTimeout(start, 0);'
+);

@@ -22,10 +22,18 @@
  *
  * @module domains/schema/value-conversion/type-change/judge
  */
+import { canonicalJson } from "../../../../shared/lib/canonical-json";
 import { EMAIL_RE } from "../../../../shared/lib/entry-validation";
 import { readExactIsoInstant } from "../../../../shared/lib/iso-instant";
 import type { ConversionClass } from "../types";
-import { characterLength, readsAsPostgresJson } from "../value-readings";
+import {
+  byteLengthIn,
+  characterLength,
+  decimalFit,
+  holdsNonFinite,
+  keptByInteger,
+  readsAsPostgresJson,
+} from "../value-readings";
 
 import { documentOfText, isEditorDocument } from "./document";
 import type {
@@ -39,9 +47,7 @@ import type {
 import {
   decimalWriting,
   type ExactDecimal,
-  fitsDecimal,
   fitsDouble,
-  fitsInteger,
   numberWriting,
   type ReadNumber,
   readNumber,
@@ -84,7 +90,9 @@ export type OutcomeReason =
   /** The pair of types is blocked whatever its values hold (`pairBlocked`). */
   | "pair-blocked"
   /** The new column refuses the value's writing outright, so it cannot hold it at all. */
-  | "column-refuses";
+  | "column-refuses"
+  /** The new field's own validation refuses the value as the new type reads it. */
+  | "field-refuses";
 
 /** How a relationship keeps its links. */
 type RelationKept = RelationTarget["kept"];
@@ -128,7 +136,11 @@ export type OldValue =
   | { kind: "boolean"; value: boolean }
   | { kind: "date"; date: Instant }
   | { kind: "list"; items: OldValue[] }
-  | { kind: "json"; value: unknown }
+  /**
+   * A parsed JSON value. `inexact` where it holds a number whose writing a JavaScript number does
+   * not keep exactly (0.10000000000000001): every writing of it but its own JSON would round it.
+   */
+  | { kind: "json"; value: unknown; inexact?: true }
   | { kind: "document"; value: unknown };
 
 /** An instant: whole seconds since 1970 UTC, and the digits of a second, with no trailing zero. */
@@ -276,14 +288,19 @@ function judgeAs(
   fromJson: boolean
 ): ValueVerdict {
   if (value.kind === "empty") return { outcome: "kept", reason: "empty" };
-  if (value.kind === "json") return judgeJson(to, value.value);
+  if (value.kind === "json") {
+    // A number JavaScript reads rounded is rounded by any writing but the JSON it was read from.
+    return value.inexact === true && to.family !== "json"
+      ? { outcome: "blocked", reason: "rounded" }
+      : judgeJson(to, value.value);
+  }
   // JSON holds every kind as it is, a list included, so it is asked before any list rule.
   if (to.family === "json") return judgeIntoJson(to, value);
   if (to.family === "list") return judgeIntoList(to, value, fromJson);
   if (value.kind === "list") return judgeListIntoOne(to, value, fromJson);
   const judge = INTO_FAMILY[to.family];
   return judge === undefined
-    ? { outcome: "blocked", reason: "kind-never-held" }
+    ? { outcome: "blocked", reason: "pair-blocked" }
     : judge(to, value, fromJson);
 }
 
@@ -357,7 +374,7 @@ function judgeIntoList(
 ): ValueVerdict {
   const item = to.item;
   if (item === undefined) {
-    return { outcome: "blocked", reason: "kind-never-held" };
+    return { outcome: "blocked", reason: "pair-blocked" };
   }
   if (value.kind === "list") return listIntoList(to, item, value, fromJson);
   if (value.kind === "document") return { outcome: "lost", reason: "object" };
@@ -455,7 +472,7 @@ function judgeIntoText(to: FieldTypeOnDialect, value: OldValue): ValueVerdict {
     case "document":
       return to.family === "text"
         ? textWriting(to, stableJson(value.value))
-        : { outcome: "blocked", reason: "kind-never-held" };
+        : { outcome: "blocked", reason: "pair-blocked" };
     default:
       return changedTo(
         judgeIntoText(to, { kind: "text", text: textOf(value) })
@@ -541,7 +558,7 @@ function judgeIntoNumber(
     default:
       return fromJson
         ? { outcome: "lost", reason: "kind-never-held" }
-        : { outcome: "blocked", reason: "kind-never-held" };
+        : { outcome: "blocked", reason: "pair-blocked" };
   }
 }
 
@@ -587,7 +604,7 @@ function nonFiniteInto(
   const refused =
     value === "NaN" ||
     format.kind === "integer" ||
-    !holdsNonFinite(format, dialect, value);
+    !holdsNonFinite(format.kind, dialect, value);
   return refused
     ? { outcome: "lost", reason: "non-finite" }
     : heldAs(fits, value);
@@ -625,12 +642,14 @@ function columnHolds(
   switch (format.kind) {
     case "integer":
       return wholeNumberHolds(value, number =>
-        fitsInteger(number, format.bits) ? "exactly" : "out of range"
+        keptByInteger(decimalWriting(number), format.bits)
+          ? "exactly"
+          : "out of range"
       );
     case "double":
       return doubleHolds(value);
     case "decimal":
-      return fitsDecimal(value, format.precision, format.scale);
+      return decimalFit(decimalWriting(value), format.precision, format.scale);
     case "json":
       // A JSON number is read back as a JavaScript number, and a whole-number list holds no fraction.
       return format.whole
@@ -650,25 +669,6 @@ function wholeNumberHolds(
 /** Whether a double, which reads a number back as a JavaScript number, holds it exactly. */
 function doubleHolds(value: ExactDecimal): "exactly" | "rounded" {
   return fitsDouble(value) ? "exactly" : "rounded";
-}
-
-/**
- * Which number columns hold a non-finite number, as measured on each database, written as a bound
- * parameter and read back (`non-finite-columns.integration.test.ts`): PostgreSQL's double holds all
- * three, its constrained `numeric` holds `NaN` and no infinity, and its integer none; every SQLite
- * number column, whatever its affinity, holds the infinities and keeps no `NaN`; MySQL's hold none.
- */
-export function holdsNonFinite(
-  format: NumberFormat,
-  dialect: FieldTypeOnDialect["dialect"],
-  value: "NaN" | "Infinity" | "-Infinity"
-): boolean {
-  // A list's numbers are JSON, which holds no non-finite number on any database.
-  if (format.kind === "json") return false;
-  if (dialect === "mysql") return false;
-  if (dialect === "sqlite") return value !== "NaN";
-  if (format.kind === "integer") return false;
-  return format.kind === "double" || value === "NaN";
 }
 
 /** Into Checkbox: `true`, `false`, `1` or `0`, in any letter case; a boolean kept. */
@@ -725,7 +725,7 @@ function judgeIntoDate(
   }
   return fromJson
     ? { outcome: "lost", reason: "kind-never-held" }
-    : { outcome: "blocked", reason: "kind-never-held" };
+    : { outcome: "blocked", reason: "pair-blocked" };
 }
 
 function instantInto(
@@ -894,17 +894,13 @@ function scalarJsonWriting(
     : JSON.stringify(textOf(value));
 }
 
-/** JSON with every object's keys in order, so two values that parse alike have one writing. */
+/**
+ * JSON with every object's keys in order, so two values that parse alike have one writing: the one
+ * canonical writing (`canonicalJson`). Every value here was parsed from JSON, so it has a writing;
+ * one that had none would be written as `null`.
+ */
 function stableJson(value: unknown): string {
-  return JSON.stringify(value, (_key, inner: unknown) =>
-    inner !== null && typeof inner === "object" && !Array.isArray(inner)
-      ? Object.fromEntries(
-          Object.entries(inner as Record<string, unknown>).sort(([a], [b]) =>
-            a < b ? -1 : a > b ? 1 : 0
-          )
-        )
-      : inner
-  );
+  return canonicalJson(value) ?? "null";
 }
 
 /** Whether a text column holds `text` whole: by its characters, or by its UTF-8 bytes. */
@@ -914,7 +910,7 @@ function holdsText(bound: TextBound | undefined, text: string): boolean {
   const size =
     bound.unit === "characters"
       ? characterLength(text)
-      : new TextEncoder().encode(text).length;
+      : byteLengthIn(text, bound.charset);
   return size <= bound.most;
 }
 

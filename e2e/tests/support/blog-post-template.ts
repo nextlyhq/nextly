@@ -493,10 +493,14 @@ export function blogPostTemplate(): Record<string, unknown> {
                     {
                       title: "On this page",
                       depth: "h2-h3",
+                      marker: "numbered",
                       collapsible: true,
+                      highlight: true,
                     },
                     {
-                      bindings: { content: { $bind: "content" } },
+                      // It lists the headings the page draws: the post's
+                      // body below it, as the hand-written page's sidebar.
+                      version: 2,
                       // A card, as the hand-written page boxes its contents:
                       // a hairline border, rounded corners and the page's
                       // background, its entries in the text's colour and a

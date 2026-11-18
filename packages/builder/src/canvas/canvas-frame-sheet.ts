@@ -35,12 +35,20 @@ import {
   ENTRY_CONTENT_NOTE_ATTRIBUTE,
 } from "@nextlyhq/blocks-react";
 
+import {
+  QUESTION_ROOM_ATTRIBUTE,
+  QUESTION_ROOM_PROPERTY,
+} from "../accordion-questions";
 import { GALLERY_BLOCK } from "../gallery-pictures";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { APPEAR_REPLAY_RULES } from "./appear-replay";
 import { DEVICE_HIDDEN_ATTRIBUTE } from "./canvas-device-hidden";
-import { EMPTY_CONTAINER_SELECTOR, EMPTY_TEXT_SELECTOR } from "./empty-slot";
+import {
+  EMPTY_CONTAINER_SELECTOR,
+  EMPTY_DISCLOSURE_SELECTOR,
+  EMPTY_TEXT_SELECTOR,
+} from "./empty-slot";
 
 const ROOT = `.${CANVAS_ROOT_CLASS}`;
 
@@ -51,6 +59,13 @@ function siteToken(name: string, fallback: string): string {
 
 /** The class every Gallery's root wears, its block type's. */
 const EMPTY_GALLERY_CLASS = blockTypeClassName(GALLERY_BLOCK);
+
+/**
+ * The attribute a Collection list puts on each sample item it draws for an
+ * author, spelled as the block spells it; the sheet's test draws the block
+ * to find it, so the two cannot drift apart unseen.
+ */
+const LIST_SAMPLE_ATTRIBUTE = "data-nx-list-sample";
 
 /** A collection list drawing its empty state while that state holds nothing. */
 const EMPTY_LIST = `${EMPTY_CONTAINER_SELECTOR}[data-nx-list-shows]`;
@@ -246,6 +261,27 @@ ${EMPTY_TEXT_SELECTOR} { min-height: 1lh; }
 }
 ${EMPTY_CONTAINER_SELECTOR} {
   display: block;
+  outline: 1px dashed color-mix(in srgb, currentColor 45%, transparent);
+  outline-offset: -1px;
+}
+/* An open Question emptied of its answer has the same start under its
+   title: the box an empty container draws, after the summary, where the
+   answer's blocks go. Drawn by the editor only (see
+   EMPTY_DISCLOSURE_SELECTOR); the published page draws nothing there. */
+/* The selected Accordion's row of room after its last question, where
+   "+ Add a question" sits (accordion-add-question.tsx): inside its own box,
+   so its margins and the blocks around it stay as set. The button's height
+   at the canvas's zoom. Marked by the canvas only; a published page never has it. */
+${ROOT} [${QUESTION_ROOM_ATTRIBUTE}]::after {
+  content: "";
+  display: block;
+  min-height: var(${QUESTION_ROOM_PROPERTY}, 2.75rem);
+}
+${EMPTY_DISCLOSURE_SELECTOR}::after {
+  content: "";
+  display: block;
+  min-height: 2.75rem;
+  margin-block-start: 0.5rem;
   outline: 1px dashed color-mix(in srgb, currentColor 45%, transparent);
   outline-offset: -1px;
 }
@@ -493,6 +529,35 @@ ${EMPTY_LIST}::after {
 
 ${ROOT} [data-nx-list-empty-because="chosen"]::before {
   content: "When empty";
+}
+
+/* A sample item a list draws while its collection shows nothing: greyed, so
+   it reads as a stand-in, and tagged "Sample" at its corner in the list's
+   own tag colours. Never on a page a visitor is served, which draws none. */
+${ROOT} [${LIST_SAMPLE_ATTRIBUTE}] {
+  position: relative;
+}
+
+${ROOT} [${LIST_SAMPLE_ATTRIBUTE}] > * {
+  opacity: 0.55;
+}
+
+${ROOT} [${LIST_SAMPLE_ATTRIBUTE}]::before {
+  content: "Sample";
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-end: 0;
+  z-index: 1;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 0 0 0 0.1875rem;
+  background: var(--nx-builder-select, Highlight);
+  color: var(--nx-builder-select-text, HighlightText);
+  font-family: system-ui, sans-serif;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1.4;
+  pointer-events: none;
+  zoom: calc(1 / var(--nx-canvas-zoom, 1));
 }
 
 ${ROOT} [data-nx-list-empty-because="none"]::before {
