@@ -501,6 +501,9 @@ interface RegionStore {
  * regions again, so the canvas draws what is published now, and a publish
  * says the fill toast when it filled the site's default.
  */
+/** The page's held component settings written, `false` when one was refused. */
+type HeldSettingsWrite = () => true | Promise<boolean>;
+
 function useRegionStore({
   area,
   field,
@@ -511,6 +514,7 @@ function useRegionStore({
   stored,
   rereadRegions,
   sets,
+  writeHeldSettings,
 }: {
   area: RegionArea | undefined;
   field: string | undefined;
@@ -522,6 +526,11 @@ function useRegionStore({
   stored: (sent: BlockDocument) => void;
   rereadRegions: () => void;
   sets: BuilderSets;
+  /**
+   * The held component settings' write: a setting made on a placement in the
+   * header is made by the header's Save, as the page's is by the page's.
+   */
+  writeHeldSettings: HeldSettingsWrite;
 }): RegionStore {
   const [busy, setBusy] = useState(false);
   // "Try again" stores the header as it is when it is clicked, through the
@@ -538,6 +547,10 @@ function useRegionStore({
       if (area === undefined || field === undefined) return false;
       const finished = finishInlineEdit(inline, active.document);
       if (!finished.mayClose) return false;
+      // Stored without them, the header would bind a setting never made. A
+      // refusal is said where it happened, with the binding taken off, and
+      // the header stays unsaved.
+      if (!(await writeHeldSettings())) return false;
       // Said with "Try again", which stores the header as it is then, only
       // while the opening it failed in is still the one edited.
       const refuse = (
@@ -597,6 +610,7 @@ function useRegionStore({
       stored,
       rereadRegions,
       sets,
+      writeHeldSettings,
     ]
   );
   latest.current = store;
@@ -995,7 +1009,7 @@ export function useRegionEditing({
   canvas,
   requestLayers,
   sets,
-  rereadRegions,
+  page,
 }: {
   editing: EditingTargetState;
   inline: InlineTyping;
@@ -1011,9 +1025,15 @@ export function useRegionEditing({
   requestLayers: () => void;
   /** The builder's way to its sets, for the toast a filling publish says. */
   sets: BuilderSets;
-  /** Read the regions drawn around the page again. */
-  rereadRegions: () => void;
+  /** What the page around the region does for it. */
+  page: {
+    /** Read the regions drawn around the page again. */
+    readonly rereadRegions: () => void;
+    /** The held component settings' write, which a Save of the region runs first. */
+    readonly writeHeldSettings: HeldSettingsWrite;
+  };
 }): RegionEditingHost {
+  const { rereadRegions, writeHeldSettings } = page;
   const [opening, setOpening] = useState<Opening | null>(null);
   const {
     store: place,
@@ -1062,6 +1082,7 @@ export function useRegionEditing({
     stored: savePoint.stored,
     rereadRegions,
     sets,
+    writeHeldSettings,
   });
   const release = useCallback(() => setOpening(null), []);
   const leaving = useRegionLeaving({

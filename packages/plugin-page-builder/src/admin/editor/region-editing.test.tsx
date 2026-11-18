@@ -142,7 +142,11 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   clearBlocks();
+  writeHeld = undefined;
 });
+
+/** The page's held component settings' write, where a test gives one. */
+let writeHeld: (() => true | Promise<boolean>) | undefined;
 
 const HEADER: BlockDocument = {
   formatVersion: 1,
@@ -226,7 +230,11 @@ function Host(): React.JSX.Element {
       requestPanel: () => undefined,
       pages: { revealSets: () => undefined },
     },
-    rereadRegions: () => undefined,
+    page: {
+      rereadRegions: () => undefined,
+      // None held unless a test holds one.
+      writeHeldSettings: writeHeld ?? (() => true),
+    },
   });
   seen.host = host;
   seen.editing = editing;
@@ -420,6 +428,31 @@ describe("saving the header", () => {
     act(() => options.action.onClick());
     await waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(current().host.dirty).toBe(false));
+  });
+
+  it("writes the held component settings before saving the header, and saves nothing when one is refused", async () => {
+    // A setting made on a placement in the header, bound to a field, is
+    // made by the header's Save; refused, its binding is taken off instead.
+    const saveDraft = vi.fn(() => Promise.resolve(STORED));
+    hoisted.session = sessionWith({ saveDraft });
+    const held = vi
+      .fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true);
+    writeHeld = held;
+    render(<Host />);
+    await enterHeader();
+    editHeader();
+
+    act(() => current().host.topBar?.save());
+    await waitFor(() => expect(held).toHaveBeenCalledTimes(1));
+    await act(async () => undefined);
+    expect(saveDraft).not.toHaveBeenCalled();
+    expect(current().host.dirty).toBe(true);
+
+    act(() => current().host.topBar?.save());
+    await waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(1));
+    expect(held).toHaveBeenCalledTimes(2);
   });
 
   it("waits for a shared style's write on its way before saving the header", async () => {
