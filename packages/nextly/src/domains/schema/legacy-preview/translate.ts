@@ -35,6 +35,7 @@ import {
   fieldProducesColumn,
   junctionTableNameFor,
   toSnakeCase,
+  type ColumnOrigin,
 } from "../services/field-column-descriptor";
 import { computeFieldDiff } from "../services/field-diff";
 import type {
@@ -62,6 +63,11 @@ export interface TranslateContext {
    * tables, so a save that does only that is still a change.
    */
   requestedLocalized?: boolean;
+  /**
+   * The generator that built the table. A field group's many-to-many keeps its ids in its own row
+   * (`componentRelationshipStoresJson`), with no link table, so it has none to drop or start.
+   */
+  builtBy?: ColumnOrigin;
 }
 
 /**
@@ -196,14 +202,17 @@ export async function translatePipelinePreviewToLegacy(
     };
   });
 
-  // The links each relationship leaving its link table drops with that table, counted there.
-  const droppedLinks = await countLinksDropped(
-    db,
-    dialect,
-    tableName,
-    currentFields,
-    newFields
-  );
+  // The links each relationship moving into or out of a link table drops, counted where they are.
+  const droppedLinks =
+    context.builtBy === "fieldGroup"
+      ? new Map<string, LinksDropped>()
+      : await countLinksDropped(
+          db,
+          dialect,
+          { tableName, localized },
+          currentFields,
+          newFields
+        );
 
   const changed: ChangedField[] = diff.changed.map(change => {
     const dropped = droppedLinks.get(change.name);
@@ -215,7 +224,7 @@ export async function translatePipelinePreviewToLegacy(
       // them can lose values, whatever else changed on the field with it.
       classification = "destructive";
     } else if (dropped !== undefined) {
-      // A many-to-many made a single link: its link table goes, and every link in it.
+      // Links moving into or out of a link table: neither way carries one over, so they go.
       classification = "destructive";
     } else if (change.reason === "constraint_changed") {
       const matchedEvent = preview.events.find(
@@ -340,24 +349,32 @@ function togglesHasMany(
   return (before.hasMany === true) !== (after.hasMany === true);
 }
 
-/** A relationship leaving its link table: the links that table holds, and what the field becomes. */
+/**
+ * A relationship whose links the save drops by moving them into or out of a link table: the links
+ * it holds where they are now, what it was and what it becomes, and which way it moves.
+ */
 interface LinksDropped {
   count: RemovedCount;
+  before: FieldDefinition;
   after: FieldDefinition;
+  /** Out of its link table (`leaving`), or out of its column into a new, empty one (`joining`). */
+  direction: "leaving" | "joining";
 }
 
 /**
- * The links each kept relationship leaving its link table drops with it, by field name: one that
- * keeps its links in a link table of its own now (`usesJunctionTable`) and will not after the save,
- * counted in that table (`junctionTableNameFor`, the name its DROP uses). The count quotes the name
- * as the save does (`countRowsBreakingNotNull` with no column counts every row), so a name with a
- * hyphen is counted, not refused. A count that cannot be read is unknown, never 0, and the change
- * still drops the table.
+ * The links each kept relationship drops by moving into or out of a link table of its own
+ * (`usesJunctionTable`), by field name, as the save drops them: neither way carries a link over.
+ * - Leaving one, the save drops the table: counted there (`junctionTableNameFor`, the name its DROP
+ *   uses), quoted as the save quotes it (`countRowsBreakingNotNull` with no column counts every
+ *   row), so a name with a hyphen is counted, not refused.
+ * - Joining one, the save drops the field's column and starts an empty table: counted in the column,
+ *   as a removed field's values are (`computeNonNullCounts`).
+ * A count that cannot be read is unknown, never 0, and the change still drops the links.
  */
 async function countLinksDropped(
   db: unknown,
   dialect: SupportedDialect,
-  tableName: string,
+  at: { tableName: string; localized: boolean },
   currentFields: FieldDefinition[],
   newFields: FieldDefinition[]
 ): Promise<Map<string, LinksDropped>> {
@@ -365,27 +382,57 @@ async function countLinksDropped(
   const dropped = new Map<string, LinksDropped>();
   for (const before of currentFields) {
     const after = afterByName.get(before.name);
-    if (after === undefined || !usesJunctionTable(before)) continue;
-    if (usesJunctionTable(after)) continue;
+    if (after === undefined) continue;
+    if (usesJunctionTable(before) === usesJunctionTable(after)) continue;
+    if (usesJunctionTable(after)) {
+      const counts = await computeNonNullCounts(
+        db,
+        dialect,
+        at.tableName,
+        at.localized,
+        [before]
+      );
+      dropped.set(before.name, {
+        count: counts[before.name] ?? UNCOUNTED,
+        before,
+        after,
+        direction: "joining",
+      });
+      continue;
+    }
     try {
       const { total } = await countRowsBreakingNotNull(db, dialect, {
-        table: junctionTableNameFor(tableName, before),
+        table: junctionTableNameFor(at.tableName, before),
         column: null,
       });
       dropped.set(before.name, {
         count: { rowCount: total, unknown: false },
+        before,
         after,
+        direction: "leaving",
       });
     } catch {
-      dropped.set(before.name, { count: UNCOUNTED, after });
+      dropped.set(before.name, {
+        count: UNCOUNTED,
+        before,
+        after,
+        direction: "leaving",
+      });
     }
   }
   return dropped;
 }
 
+/** What a relationship is called on the side of the move that keeps no link table. */
+function linkFieldKind(field: FieldDefinition): string {
+  return field.type === "relationship"
+    ? "a single link"
+    : `a ${field.type} field`;
+}
+
 /**
- * The warning for a relationship whose link table the save drops, with the links it holds, naming
- * what the field becomes: a single link while it stays a relationship, else a field of its new type.
+ * The warning for a relationship whose links the save drops by moving them into or out of a link
+ * table, with the links it holds, naming what it was or becomes on the side with no link table.
  */
 function linkTableWarnings(
   name: string,
@@ -393,10 +440,15 @@ function linkTableWarnings(
 ): string[] {
   const links = dropped.get(name);
   if (links === undefined) return [];
-  const becomes =
-    links.after.type === "relationship"
-      ? "a single link"
-      : `a ${links.after.type} field`;
+  if (links.direction === "joining") {
+    const was = linkFieldKind(links.before);
+    return [
+      links.count.unknown
+        ? `Changing '${name}' from ${was} to many-to-many drops the column holding its links: could not count them; its new link table starts empty.`
+        : `Changing '${name}' from ${was} to many-to-many drops the column holding its ${links.count.rowCount.toLocaleString()} links; its new link table starts empty.`,
+    ];
+  }
+  const becomes = linkFieldKind(links.after);
   return [
     links.count.unknown
       ? `Changing '${name}' from many-to-many to ${becomes} drops its link table and every link it holds: could not count them.`
