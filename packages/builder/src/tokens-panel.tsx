@@ -346,24 +346,18 @@ function VariablesView({
   // search would hide it: added where the author is, it is not lost.
   const { shown: matched, held } = searched(groups, needle, fresh);
   const usage = useUsageOfRows(hosted, groups, issue);
-  // The built-in colours the site hides, while it does: none otherwise.
-  const { hidden, marksBuiltIn } = useHiddenOfView({
-    tokens,
+  // The Colours tab's usage filter, over what the search matched, without
+  // the built-in colours the site hides.
+  const colourFilter = useColoursOfView({
+    shown: matched,
     groups,
+    tokens,
     usage,
     supplied,
     usedOnPage: hosted.usedOnPage,
-  });
-  // The Colours tab's usage filter, over what the search matched.
-  const colourFilter = useColourFilter({
-    shown: matched,
-    tokens,
-    usage,
-    usedOnPage: hosted.usedOnPage,
     openKey,
-    hidden,
   });
-  const { shown } = colourFilter;
+  const { shown, hidden, marksBuiltIn } = colourFilter;
 
   if (tokens === undefined) {
     return <Unread absence={absence} />;
@@ -899,6 +893,33 @@ function useHiddenOfView({
     }),
     marksBuiltIn: !shown,
   };
+}
+
+/**
+ * The Colours tab's usage filter over the listed groups, leaving out the
+ * built-in colours the site hides ({@link useHiddenOfView}), and those.
+ */
+function useColoursOfView<
+  G extends Parameters<typeof useColourFilter>[0]["shown"][number],
+>({
+  groups,
+  supplied,
+  ...filter
+}: Omit<Parameters<typeof useColourFilter<G>>[0], "hidden"> & {
+  groups: Parameters<typeof colourIdentities>[0];
+  supplied: SiteTokenSet | undefined;
+}): ReturnType<typeof useColourFilter<G>> & {
+  hidden: ReadonlySet<string>;
+  marksBuiltIn: boolean;
+} {
+  const { hidden, marksBuiltIn } = useHiddenOfView({
+    tokens: filter.tokens,
+    groups,
+    usage: filter.usage,
+    supplied,
+    usedOnPage: filter.usedOnPage,
+  });
+  return { ...useColourFilter({ ...filter, hidden }), hidden, marksBuiltIn };
 }
 
 /** The site's built-in colours setting, which ends the Colours tab. */
