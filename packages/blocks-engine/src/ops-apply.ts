@@ -81,7 +81,8 @@ import {
   removeNode,
   updateNode,
 } from "./tree";
-import { documentSeoIssues } from "./validation";
+import { documentCodeIssues, documentSeoIssues } from "./validation";
+import type { ValidationIssue } from "./validation-contract";
 
 /**
  * How an op is applied, beyond the document's limits.
@@ -112,7 +113,7 @@ export interface ApplyOptions {
  * unlock.
  */
 function layersLockRefusal(
-  op: Exclude<BuilderOp, { readonly kind: "envelope" | "seo" }>,
+  op: Exclude<BuilderOp, { readonly kind: "envelope" | "seo" | "code" }>,
   lockedId: string,
   where: LayersLockBreak["where"]
 ): string {
@@ -847,6 +848,9 @@ export function applyOp(
     case "seo":
       return applySeo(document, op, limits);
 
+    case "code":
+      return applyCode(document, op, limits);
+
     case "turnInto":
       return applyTurnInto(document, op, limits, options);
 
@@ -1004,6 +1008,27 @@ function applyEnvelope(
   };
 }
 
+/** A document setting an op writes whole: its key, and what it is called. */
+interface WholeSetting {
+  readonly key: "seo" | "code";
+  /** What the document holds there, in an op's refusal: "metadata". */
+  readonly noun: string;
+  /** Its problems, judged by its shape alone, as a save judges it. */
+  readonly issues: (value: unknown) => ValidationIssue[];
+}
+
+const SEO_SETTING: WholeSetting = {
+  key: "seo",
+  noun: "metadata",
+  issues: documentSeoIssues,
+};
+
+const CODE_SETTING: WholeSetting = {
+  key: "code",
+  noun: "page code",
+  issues: documentCodeIssues,
+};
+
 /**
  * Apply a `seo` op: write a document's metadata whole, or remove it.
  *
@@ -1016,61 +1041,105 @@ function applySeo(
   op: Extract<BuilderOp, { kind: "seo" }>,
   limits: DocumentLimits
 ): AppliedOp {
-  const written: unknown = op.seo;
-  if (written !== null) assertDocumentSeo(written);
+  const { result, prior } = writeWholeSetting(
+    document,
+    SEO_SETTING,
+    op.seo,
+    limits
+  );
+  // Detached, as `envelope`'s prior values are.
+  return {
+    document: result,
+    inverse: { kind: "seo", seo: prior === undefined ? null : snapshot(prior) },
+  };
+}
+
+/**
+ * Apply a `code` op: write the code a document adds to its own page whole,
+ * or remove it, held exactly as a `seo` op is.
+ */
+function applyCode(
+  document: BlockDocument,
+  op: Extract<BuilderOp, { kind: "code" }>,
+  limits: DocumentLimits
+): AppliedOp {
+  const { result, prior } = writeWholeSetting(
+    document,
+    CODE_SETTING,
+    op.code,
+    limits
+  );
+  return {
+    document: result,
+    inverse: {
+      kind: "code",
+      code: prior === undefined ? null : snapshot(prior),
+    },
+  };
+}
+
+/**
+ * Write `setting` whole, or remove it for `null`: refused where the value is
+ * not one a save would accept or the edit changes nothing, and judged against
+ * the document's caps. Answers the document it makes and the value it
+ * replaced, which the op's inverse writes back.
+ */
+function writeWholeSetting(
+  document: BlockDocument,
+  setting: WholeSetting,
+  written: unknown,
+  limits: DocumentLimits
+): { result: BlockDocument; prior: unknown } {
+  if (written !== null) assertWholeSetting(setting, written);
   const held = document as unknown as Record<string, unknown>;
   const settingsValue = ownValue(held, "settings");
   const settings = isPlainRecord(settingsValue) ? settingsValue : {};
-  const prior = ownValue(settings, "seo");
+  const prior = ownValue(settings, setting.key);
   const unchanged =
     written === null
       ? prior === undefined
       : equalWithin(prior, written, COMPARISON_BUDGET);
   if (unchanged) {
     throw new OpError(
-      `seo: the document already holds this metadata, so the edit changes ` +
-        `nothing. A history entry for it would undo to no visible effect.`
+      `${setting.key}: the document already holds this ${setting.noun}, so ` +
+        `the edit changes nothing. A history entry for it would undo to no ` +
+        `visible effect.`
     );
   }
-  const result = withSeo(held, settings, written);
-  assertFitsCaps(document, result, "seo", limits);
-  return {
-    document: result,
-    // Detached, as `envelope`'s prior values are.
-    inverse: {
-      kind: "seo",
-      seo: prior === undefined ? null : snapshot(prior),
-    },
-  };
+  const result = withSetting(held, settings, setting.key, written);
+  assertFitsCaps(document, result, setting.key, limits);
+  return { result, prior };
 }
 
-/** Refuse a `seo` op's value that is not metadata a save would accept. */
-function assertDocumentSeo(written: unknown): void {
+/** Refuse an op's value that is not one a save would accept for `setting`. */
+function assertWholeSetting(setting: WholeSetting, written: unknown): void {
   if (!isPlainRecord(written) || !isJsonValue(written)) {
     throw new OpError(
-      `seo: ${describe(written)} is not a document's metadata. A seo op ` +
-        `carries the metadata record, or null to remove it.`
+      `${setting.key}: ${describe(written)} is not a document's ` +
+        `${setting.noun}. A ${setting.key} op carries the record, or null ` +
+        `to remove it.`
     );
   }
-  const problem = documentSeoIssues(written).find(
-    issue => issue.severity === "error"
-  );
+  const problem = setting
+    .issues(written)
+    .find(issue => issue.severity === "error");
   if (problem !== undefined) {
-    throw new OpError(`seo: ${problem.path}: ${problem.message}`);
+    throw new OpError(`${setting.key}: ${problem.path}: ${problem.message}`);
   }
 }
 
-/** The document with `written` as its metadata, or none for null. */
-function withSeo(
+/** The document with `written` at `settings[key]`, or none there for null. */
+function withSetting(
   held: Record<string, unknown>,
   settings: Record<string, unknown>,
+  key: WholeSetting["key"],
   written: unknown
 ): BlockDocument {
   const nextSettings: Record<string, unknown> = { ...settings };
-  if (written === null) delete nextSettings.seo;
-  else nextSettings.seo = snapshot(written);
+  if (written === null) delete nextSettings[key];
+  else nextSettings[key] = snapshot(written);
   const next: Record<string, unknown> = { ...held };
-  // Removed rather than left empty, so undoing a document's first metadata
+  // Removed rather than left empty, so undoing a document's first setting
   // gives back the document it was.
   if (Object.keys(nextSettings).length === 0) delete next.settings;
   else next.settings = nextSettings;

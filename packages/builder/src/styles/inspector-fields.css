@@ -8,25 +8,51 @@
 }
 
 /*
- * A rich-text field in the Content tab, drawn as a field: at least the
- * control's height, so even an empty one is a target an author can hit (an
- * unstyled element was as tall as its one 16px line, under the 24px a target
- * needs), with the input's edge and surface and the focus ring.
+ * A rich-text field in the Content tab, drawn as a field at least four lines
+ * high, so it never reads as a one-line input, and growing with its words (a
+ * least height, never a fixed or largest one). Its words keep their lines
+ * before the editor attaches (`pre-wrap`, one line per block from the
+ * preview) and after (the editor's blocks drawn on the field's own lines,
+ * below), so focusing it does not change its size. The input's edge and
+ * surface, and a focus ring drawn inside its edge, so it never covers the
+ * row under it.
  */
 .nx-inspector__rich-text {
-  min-height: var(--nx-control-height);
+  min-height: calc(4 * var(--nx-builder-line-height) + 0.75rem + 2px);
   padding: 0.375rem 0.5rem;
   border: 1px solid var(--nx-input);
   border-radius: var(--radius-md);
   background: var(--nx-background);
   font-size: var(--nx-builder-font-size);
   line-height: var(--nx-builder-line-height);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   cursor: text;
 }
 
 .nx-inspector__rich-text:focus-visible {
   outline: 2px solid var(--nx-ring);
-  outline-offset: 1px;
+  outline-offset: -1px;
+}
+
+/*
+ * The editor's blocks inside the field, on the field's lines: no gaps and no
+ * heading sizes, so a passage is as tall attached as it was as its preview.
+ * Under the chrome root, to outrank the editor theme's own spacing classes.
+ */
+.nx-builder-chrome
+  .nx-inspector__rich-text
+  > :is(p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre),
+.nx-builder-chrome .nx-inspector__rich-text li {
+  margin-block: 0;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+/* "Open the full editor", under the panel's line on where Rich text is edited. */
+.nx-inspector__full-editor {
+  align-self: flex-start;
+  margin-top: 0.25rem;
 }
 
 /* An option's value beside its words, muted: an HTML tag after its name. */
@@ -1252,4 +1278,53 @@
 
 .nx-inside-parent__axis > .nx-inspector__note {
   margin: 0;
+}
+
+/*
+ * Advanced › Custom CSS: the hint, a monospace box as wide as the panel at
+ * its narrowest, Apply under it, and each refused line under that in the
+ * destructive tone, at the panel's own text sizes.
+ */
+.nx-custom-css {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nx-custom-css__hint {
+  margin: 0;
+  color: var(--nx-muted-foreground);
+  font-size: var(--nx-builder-font-size);
+  line-height: 1.4;
+}
+
+.nx-custom-css__hint code,
+.nx-custom-css__box {
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.nx-custom-css__box {
+  inline-size: 100%;
+  min-inline-size: 0;
+  font-size: var(--nx-builder-font-size);
+  line-height: 1.5;
+  resize: vertical;
+  tab-size: 2;
+}
+
+.nx-custom-css__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.nx-custom-css__problems ul {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--nx-destructive);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }

@@ -45,6 +45,8 @@ export { DEFAULT_MAX_QUERIES };
 export const BLOCKS_REACT_NEXT_ENTRY = "@nextlyhq/blocks-react/next";
 
 export type {
+  // A route's custom CSS source: the host's checker and the site's CSS read.
+  CustomCssSource,
   SiteStylesInput,
   SiteStylesProvider,
   BlocksPageConfig,

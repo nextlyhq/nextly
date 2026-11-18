@@ -17,6 +17,10 @@ import type {
 
 import type { KeptProps } from "./binding-ops";
 import type { UnbindAnswer, UnbindKeep } from "./composition-actions";
+import type {
+  ComponentSettingAnswer,
+  ComponentSettingAsk,
+} from "./make-component-setting";
 
 /**
  * One field a binding can read, as the picker lists it.
@@ -190,4 +194,16 @@ export interface BindingServices {
    * prop's menu without "Open source".
    */
   readonly sourceHref?: (binding: Binding) => string | undefined;
+  /**
+   * Make one of a component's block props a setting of the component, for
+   * a placement's "Make this a setting of the component": the host adds the
+   * setting as the page's next save writes it, and answers its id, which
+   * the placement then binds, or why it would not. Absent, the placement's
+   * panel offers no new setting.
+   *
+   * @experimental Settles with the editor's binding controls.
+   */
+  readonly makeComponentSetting?: (
+    ask: ComponentSettingAsk
+  ) => Promise<ComponentSettingAnswer>;
 }

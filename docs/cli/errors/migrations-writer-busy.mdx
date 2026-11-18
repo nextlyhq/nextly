@@ -1,0 +1,26 @@
+---
+title: MIGRATIONS_WRITER_BUSY
+description: "Another run is writing this project's migration files, so the command wrote nothing."
+---
+
+## Cause
+
+Another run is writing this project's migration files, so the command wrote nothing.
+
+`nextly migrate:create`, `nextly migrate:baseline` and a Schema Builder save that writes a migration each read the newest snapshot and write a migration after it. Two of them at once would write two migrations from the same snapshot, so each holds the project's migration folder while it works, through a file there, `.nextly-writer.lock`. `migrate:create` holds it for the whole command, its questions included. The command waited about a minute, and the folder was still held. The Why line names the command that holds it, when it started, and when its hold lapses if that run has stopped.
+
+This is not the schema lock: `migrate:create` connects to no database, so the hold is on the folder the writers share.
+
+## Fix
+
+- Wait for the run the Why line names to finish, then run the command again. A `migrate:create` left at a question holds the folder until it is answered or cancelled.
+- If that run has stopped, its hold lapses on its own at the time named, about two minutes after it stopped, and the next writer removes the file. Nothing has to be cleared by hand.
+
+## Example
+
+```text
+✗ `migrate:create` wrote nothing: another run is still writing this project's migration files after waiting 60 s.
+  Why:  `migrate:baseline` holds it (process 4242 on build-01, started 75 s ago at 2026-10-29T10:00:45Z). If that process has stopped, the lock lapses in 45 s, at 2026-10-29T10:02:45Z, with nobody clearing it by hand.
+  Next: Run it again once that finishes.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrations-writer-busy  (MIGRATIONS_WRITER_BUSY)
+```

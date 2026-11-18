@@ -55,6 +55,7 @@ function setup() {
       defaultValues: {},
     });
     const state = useBuilderEntityState({
+      kind: "collection",
       entity,
       builder,
       toFields: loaded => loaded.fields,

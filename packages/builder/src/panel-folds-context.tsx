@@ -81,6 +81,12 @@ export interface FoldedSection {
   /** What it is called, which its fold is remembered by. */
   readonly label: string;
   readonly holdsValue: boolean;
+  /**
+   * `false` for a section that stays folded until the author opens it even
+   * while it holds a value, as Custom CSS does: its dot still shows, but its
+   * value is no reason to open it.
+   */
+  readonly opensWithValue?: false;
 }
 
 /**
@@ -102,7 +108,9 @@ export function useTabFolds(
   const open = sections
     .filter((section, index) =>
       sectionOpens(folds, tab, section.label, {
-        holdsValue: section.holdsValue,
+        // A section that opts out opens only as the author leaves it; its
+        // heading's dot reads `holdsValue` on its own.
+        holdsValue: section.holdsValue && section.opensWithValue !== false,
         first: index === 0 && !firstAbove,
       })
     )

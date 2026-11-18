@@ -26,6 +26,7 @@ import {
 import { ChevronDown } from "lucide-react";
 import * as React from "react";
 
+import { HiddenColours } from "./built-in-colours";
 import { ChoiceList } from "./choice-list";
 import { useFieldDescription } from "./css-hint";
 import { isElement } from "./dom-kind";
@@ -41,6 +42,7 @@ import {
   colourHexOf,
   variableFor,
   variableLabel,
+  shownVariables,
   variablesFor,
   contrastAtLeaf,
   contrastPartnerOf,
@@ -316,7 +318,12 @@ export function ColourField({
 
   const reference = isTokenRef(stored) ? stored.$token : null;
   const mode = activeTokenMode(prefersDark);
-  const choices = variablesFor(control.leaf, tokens, mode);
+  // Without the built-in colours the site hides, as every picker lists them.
+  const choices = shownVariables(
+    variablesFor(control.leaf, tokens, mode),
+    React.useContext(HiddenColours),
+    reference
+  );
   // What the picker composed, written once the gesture is over. Compared
   // against the stored text so closing a picker nobody moved writes nothing.
   // What the picker has produced and not yet written. Held in a ref as well as

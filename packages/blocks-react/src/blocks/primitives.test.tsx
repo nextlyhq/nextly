@@ -160,10 +160,13 @@ describe("core/list", () => {
 });
 
 describe("core/quote", () => {
-  it("keeps the attribution outside the quotation", () => {
+  it("keeps the attribution outside the quotation", async () => {
     // Inside, the quotation claims the speaker also said their own name.
+    // Awaited: a quote may wait on its cited source before it draws.
     const out = html(
-      renderQuote(args({ text: "Words", attribution: "Ada", source: "A Book" }))
+      await renderQuote(
+        args({ text: "Words", attribution: "Ada", source: "A Book" })
+      )
     );
     expect(out).toContain("<figure");
     // The quotation holds the words and NOTHING else. Asserted on what sits
@@ -191,8 +194,8 @@ describe("core/quote", () => {
     );
   });
 
-  it("is a bare blockquote when there is nothing to attribute", () => {
-    const out = html(renderQuote(args({ text: "Words" })));
+  it("is a bare blockquote when there is nothing to attribute", async () => {
+    const out = html(await renderQuote(args({ text: "Words" })));
     expect(out).toBe('<blockquote class="nx-n1"><p>Words</p></blockquote>');
   });
 });
@@ -485,7 +488,9 @@ describe("core/embed", async () => {
   });
 
   it("does not leak the page path to the embedded party", async () => {
-    const out = html(await renderEmbed(args({ src: "https://e.com/v", title: "t" })));
+    const out = html(
+      await renderEmbed(args({ src: "https://e.com/v", title: "t" }))
+    );
     expect(out.toLowerCase()).toContain(
       'referrerpolicy="strict-origin-when-cross-origin"'
     );
@@ -512,7 +517,9 @@ describe("core/embed", async () => {
       allowSameOrigin: true,
     } as never;
 
-    expect(html(await renderEmbed(args(stored)))).not.toContain("allow-same-origin");
+    expect(html(await renderEmbed(args(stored)))).not.toContain(
+      "allow-same-origin"
+    );
   });
 
   it.each([

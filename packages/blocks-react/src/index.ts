@@ -90,6 +90,9 @@ export {
   formFields,
   MAX_FIELDS as FORM_MAX_FIELDS,
 } from "./blocks/form-fields";
+// A Form's picked form, by the rule the block draws with, for the editor's
+// panel, canvas notice and page checks. `@experimental`.
+export { pickedForm } from "./blocks/form";
 // Binding sources read on a server, carried to the editor's canvas and read
 // back there. `@experimental` with the editor's binding sources.
 export {
@@ -262,6 +265,7 @@ export type {
   ConditionDayStart,
   ConditionDemand,
   ConditionSubject,
+  DocumentCode,
   DocumentSeo,
   EntryContentIssueCode,
   ImageValue,
@@ -580,6 +584,9 @@ export type {
   // where a block lands, and the block that lands there.
   OpPosition,
   Placed,
+  // A host's checker for custom CSS, reachable from `StyleCompileContext`.
+  CustomCssLevel,
+  CustomCssPolicy,
   StyleCompileContext,
   StyleOrigin,
   StyleState,

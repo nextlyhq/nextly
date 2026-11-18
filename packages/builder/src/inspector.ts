@@ -41,6 +41,7 @@ import {
   CONTENT_CONTROL_TYPES,
   hasContentControl,
 } from "./content-control-types";
+import { holdsCustomCss } from "./custom-css";
 import type { EditorState } from "./editor-state";
 import { GALLERY_BLOCK } from "./gallery-pictures";
 import { INSPECTOR_SECTIONS } from "./inspector-sections";
@@ -175,6 +176,12 @@ export interface BlockInspection {
   readonly identity: BlockIdentity;
   /** What the block renders as, beside what it holds. */
   readonly html: BlockHtml;
+  /**
+   * Whether the block holds custom CSS of its own. Only the answer, never the
+   * text: the Style tab's line reads it for everyone, and the CSS itself is
+   * shown only to a person who may change the site's code.
+   */
+  readonly hasCustomCss: boolean;
   /** What to title the panel: the block's label, or its name. */
   readonly label: string;
   /**
@@ -494,6 +501,8 @@ export function inspectSelection(
       cssId: typeof node.cssId === "string" ? node.cssId : undefined,
       attributes: editableAttributes(node.attributes),
     },
+    // The one answer the Layers mark and the section's dot read too.
+    hasCustomCss: holdsCustomCss(node),
     // The same name the palette offered and the layers panel shows. Reading
     // `editor.label ?? node.type` here instead was a second rule that agreed
     // only for blocks which declare a label: an unlabelled third-party block

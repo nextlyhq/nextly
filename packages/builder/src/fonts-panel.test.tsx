@@ -24,6 +24,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SiteFamily } from "./font-library";
 import {
   FontsPanel,
+  FontsScreen,
   type FontFaceUpload,
   type FontsPanelProps,
 } from "./fonts-panel";
@@ -634,5 +635,75 @@ describe("the Fonts tab's words", () => {
   it("says fonts and variables, never tokens or typefaces", () => {
     const { container } = panel();
     expect(container.textContent).not.toMatch(/token|typeface/i);
+  });
+});
+
+describe("the Fonts screen", () => {
+  const screenProps = {
+    faces: [...INTER, BRAND],
+    tokens: TOKENS,
+    onAddFace: async () => undefined,
+  } satisfies FontsPanelProps;
+
+  it("is one region named Fonts, holding the site's fonts", () => {
+    render(<FontsScreen {...screenProps} />);
+    const region = screen.getByRole("region", { name: "Fonts" });
+    expect(
+      within(region).getByRole("button", { name: /^Inter,/ })
+    ).toBeTruthy();
+    expect(
+      within(region).getByRole("button", { name: "Add a font" })
+    ).toBeTruthy();
+  });
+
+  it("titles itself and offers the way back where it opens over Design", () => {
+    const onClose = vi.fn();
+    render(<FontsScreen {...screenProps} onClose={onClose} />);
+    const region = screen.getByRole("region", { name: "Fonts" });
+    expect(
+      within(region).getByRole("heading", { name: "Fonts", level: 2 })
+    ).toBeTruthy();
+    fireEvent.click(
+      within(region).getByRole("button", { name: "Back to Design" })
+    );
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes focus on its way back when it opens over Design, so the keyboard is in it", () => {
+    render(<FontsScreen {...screenProps} onClose={() => {}} />);
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Back to Design" })
+    );
+  });
+
+  it("draws no title or way back on a page of its own, whose heading names it", () => {
+    render(
+      <>
+        <h1 id="page-title">Fonts</h1>
+        <FontsScreen {...screenProps} labelledBy="page-title" />
+      </>
+    );
+    const region = screen.getByRole("region", { name: "Fonts" });
+    expect(within(region).queryByRole("heading", { level: 2 })).toBeNull();
+    expect(
+      within(region).queryByRole("button", { name: "Back to Design" })
+    ).toBeNull();
+  });
+
+  it("is read-only for a role without the grant, wherever it is mounted", () => {
+    render(<FontsScreen {...screenProps} readOnly onClose={() => {}} />);
+    const region = screen.getByRole("region", { name: "Fonts" });
+    expect(
+      within(region).queryByRole("button", { name: "Add a font" })
+    ).toBeNull();
+    expect(
+      within(region).getByText(
+        "You can view the site\u2019s fonts but not change them."
+      )
+    ).toBeTruthy();
+    // The way back stays: reading the fonts is not a change.
+    expect(
+      within(region).getByRole("button", { name: "Back to Design" })
+    ).toBeTruthy();
   });
 });
