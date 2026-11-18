@@ -43,7 +43,10 @@ import type { EditorState } from "../editor-state";
 import { useCanvasFrame } from "./canvas-frame-context";
 import {
   formatBar,
+  RICH_TEXT_FORMAT_ACTIONS,
   TEXT_FORMAT_ACTIONS,
+  type FormatAction,
+  type FormatBlockAction,
   type FormatSelection,
   type FormatSession,
   type FormatTurnInto,
@@ -241,6 +244,8 @@ interface EditorSession {
   format?(mark: "bold" | "italic"): void;
   link?(url: string | null, options?: { readonly newTab?: boolean }): void;
   selection?(): FormatSelection | undefined;
+  /** A whole passage's headings, lists and quote, where the editor has them. */
+  block?(kind: FormatBlockAction): void;
 }
 
 /**
@@ -258,6 +263,8 @@ interface AttachOptions {
     readonly onChange?: (value: unknown) => void;
     readonly onSelection?: (state: FormatSelection) => void;
   };
+  /** A whole passage's selection, told as it moves and changes. */
+  readonly onSelection?: (state: FormatSelection) => void;
 }
 
 /** The bar's verbs on a session, when the editor offers all of them. */
@@ -273,6 +280,11 @@ function formatVerbs(session: EditorSession): FormatSession | null {
     link: (url, options) => session.link?.(url, options),
     selection: () => session.selection?.(),
     focus: () => session.focus(),
+    // Offered only where the editor has it, so the bar draws its block
+    // buttons only where pressing one does something.
+    ...(session.block === undefined
+      ? {}
+      : { block: (kind: FormatBlockAction) => session.block?.(kind) }),
   };
 }
 
@@ -289,6 +301,14 @@ const ONE_PARAGRAPH: AttachOptions = {
   },
 };
 
+/**
+ * How a whole passage is attached: its selection told to the format bar, so
+ * the bar says which marks, link and block are on under it.
+ */
+const WHOLE_PASSAGE: AttachOptions = {
+  onSelection: state => formatBar.selected(state),
+};
+
 /** Hand the editor a passage, held to one paragraph when its value is one. */
 function attachPassage(
   live: LoadedEditor,
@@ -296,13 +316,29 @@ function attachPassage(
   target: { readonly oneParagraph?: true },
   value: unknown
 ): Attachment {
-  return target.oneParagraph === true
-    ? live.attach(element, value, ONE_PARAGRAPH)
-    : live.attach(element, value);
+  return live.attach(
+    element,
+    value,
+    target.oneParagraph === true ? ONE_PARAGRAPH : WHOLE_PASSAGE
+  );
 }
 
 /**
- * Serve the format bar for a one-paragraph value, where the editor can, with
+ * What the bar offers a passage: a one-paragraph value (a Text's) its marks
+ * and link; a whole passage (a Rich text's) those and its headings, lists and
+ * quote, where the editor can change a block. `null` where the editor offers
+ * the bar no verbs.
+ */
+function barActionsFor(
+  target: { readonly oneParagraph?: true },
+  verbs: FormatSession
+): readonly FormatAction[] | null {
+  if (target.oneParagraph === true) return TEXT_FORMAT_ACTIONS;
+  return verbs.block === undefined ? null : RICH_TEXT_FORMAT_ACTIONS;
+}
+
+/**
+ * Serve the format bar for the passage, where the editor can, with
  * "Turn into" where the block can be turned.
  */
 function serveFormatBar(
@@ -312,14 +348,15 @@ function serveFormatBar(
   finish: () => unknown,
   turnInto: () => FormatTurnInto | undefined
 ): void {
-  if (target.oneParagraph !== true) return;
   const verbs = formatVerbs(session);
   if (verbs === null) return;
+  const actions = barActionsFor(target, verbs);
+  if (actions === null) return;
   const turn = turnInto();
   formatBar.open({
     element,
     session: verbs,
-    actions: TEXT_FORMAT_ACTIONS,
+    actions,
     finish: () => {
       finish();
     },
@@ -898,8 +935,8 @@ export function useInlineRichText(
         const caret =
           point === null ? undefined : caretOffsetAt(element, point);
         // A one-paragraph value is held to it while it is typed, by the
-        // restriction it is saved and drawn by, and its selection is told to
-        // the format bar.
+        // restriction it is saved and drawn by; either kind of passage has
+        // its selection told to the format bar.
         const attachment = attachPassage(
           live,
           element,

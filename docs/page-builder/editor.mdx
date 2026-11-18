@@ -758,12 +758,12 @@ with a field for the link. Paste one and it is stored at once; type one and pres
 
 The Embed knows four providers, and sizes itself for each when its link is pasted:
 
-| Provider | Links it knows | Size it takes |
-| --- | --- | --- |
-| YouTube | a video's page, a `youtu.be` share link, a Short, a live stream, a player link | 16:9, or 9:16 for a Short |
-| Vimeo | a video's page, an unlisted video's link, a player link | 16:9 |
-| Spotify | a track, album, playlist, episode, show or artist | Spotify's own player height |
-| Google Maps | the link in Maps' **Share → Embed a map** code | 4:3 |
+| Provider    | Links it knows                                                                 | Size it takes               |
+| ----------- | ------------------------------------------------------------------------------ | --------------------------- |
+| YouTube     | a video's page, a `youtu.be` share link, a Short, a live stream, a player link | 16:9, or 9:16 for a Short   |
+| Vimeo       | a video's page, an unlisted video's link, a player link                        | 16:9                        |
+| Spotify     | a track, album, playlist, episode, show or artist                              | Spotify's own player height |
+| Google Maps | the link in Maps' **Share → Embed a map** code                                 | 4:3                         |
 
 The size is written as the block's own proportion (or height), in **Style**, so you can
 change it like any other. Under **Link**, the inspector says what it found: **YouTube
@@ -820,6 +820,25 @@ block.
 The Text's field in the inspector edits the same words, and the canvas shows them as you
 type. A Text bound to a field takes a text field's words as one plain paragraph; a
 rich-text field isn't offered for it.
+
+## Headings, lists and quotes in a Rich text
+
+A Rich text is edited where it is shown too, with the same editor as every rich-text
+field in Nextly. Double-click it, or select it and press <kbd>Enter</kbd>. Selecting
+words draws the same bar, with more on it:
+
+- **B**, **I** and **Link**, as for a Text.
+- **H2** and **H3** make the line a heading, **Bullets** and **Numbers** make it a list,
+  and **Quote** a quotation. Press the same button again and the line is a paragraph
+  again. The button for the line the caret is in shows as pressed.
+- **Turn into**, as below.
+
+When a Rich text is selected, the inspector says "Edit on the canvas. Select text for
+bold, links, headings and lists." Its **Text** field is at least four lines tall and
+grows as you type. For longer work, **Open the full editor** opens a large editor with
+the same buttons. **Done** keeps your changes and **Cancel** discards them. Either one
+takes you back to the block. While you have changes, <kbd>Escape</kbd> doesn't throw
+them away: it reminds you to press **Done** or **Cancel**.
 
 ### Turn into another text block
 
