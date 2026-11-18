@@ -38,6 +38,10 @@ import {
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
 import { computeFieldDiff } from "../services/field-diff";
+import {
+  relationshipTargetSlug,
+  sameRelationTarget,
+} from "../services/relationship-key-target";
 import type {
   AddedField,
   ChangedField,
@@ -357,8 +361,11 @@ interface LinksDropped {
   count: RemovedCount;
   before: FieldDefinition;
   after: FieldDefinition;
-  /** Out of its link table (`leaving`), or out of its column into a new, empty one (`joining`). */
-  direction: "leaving" | "joining";
+  /**
+   * Out of its link table (`leaving`); out of its column into a new, empty one (`joining`); or
+   * kept a many-to-many but pointed elsewhere, its table dropped for an empty one (`retargeted`).
+   */
+  direction: "leaving" | "joining" | "retargeted";
 }
 
 /**
@@ -383,8 +390,13 @@ async function countLinksDropped(
   for (const before of currentFields) {
     const after = afterByName.get(before.name);
     if (after === undefined) continue;
-    if (usesJunctionTable(before) === usesJunctionTable(after)) continue;
-    if (usesJunctionTable(after)) {
+    const hadTable = usesJunctionTable(before);
+    const hasTable = usesJunctionTable(after);
+    // Kept a many-to-many and pointed the same way, its link table is carried
+    // (`sameRelationTarget`, the save's own pairing); otherwise neither moves a link.
+    if (!hadTable && !hasTable) continue;
+    if (hadTable && hasTable && sameRelationTarget(before, after)) continue;
+    if (!hadTable) {
       const counts = await computeNonNullCounts(
         db,
         dialect,
@@ -409,14 +421,14 @@ async function countLinksDropped(
         count: { rowCount: total, unknown: false },
         before,
         after,
-        direction: "leaving",
+        direction: hasTable ? "retargeted" : "leaving",
       });
     } catch {
       dropped.set(before.name, {
         count: UNCOUNTED,
         before,
         after,
-        direction: "leaving",
+        direction: hasTable ? "retargeted" : "leaving",
       });
     }
   }
@@ -425,9 +437,8 @@ async function countLinksDropped(
 
 /** What a relationship is called on the side of the move that keeps no link table. */
 function linkFieldKind(field: FieldDefinition): string {
-  return field.type === "relationship"
-    ? "a single link"
-    : `a ${field.type} field`;
+  if (field.type !== "relationship") return `a ${field.type} field`;
+  return field.hasMany === true ? "a list of links" : "a single link";
 }
 
 /**
@@ -442,10 +453,23 @@ function linkTableWarnings(
   if (links === undefined) return [];
   if (links.direction === "joining") {
     const was = linkFieldKind(links.before);
+    // A list keeps several links in each entry's value, so its count is of entries, not links.
+    const held =
+      links.before.hasMany === true
+        ? `the links of its ${links.count.rowCount.toLocaleString()} entries`
+        : `its ${links.count.rowCount.toLocaleString()} links`;
     return [
       links.count.unknown
         ? `Changing '${name}' from ${was} to many-to-many drops the column holding its links: could not count them; its new link table starts empty.`
-        : `Changing '${name}' from ${was} to many-to-many drops the column holding its ${links.count.rowCount.toLocaleString()} links; its new link table starts empty.`,
+        : `Changing '${name}' from ${was} to many-to-many drops the column holding ${held}; its new link table starts empty.`,
+    ];
+  }
+  if (links.direction === "retargeted") {
+    const target = relationshipTargetSlug(links.after) ?? "another collection";
+    return [
+      links.count.unknown
+        ? `Changing '${name}' to link to '${target}' instead drops its link table and every link it holds: could not count them; its new link table starts empty.`
+        : `Changing '${name}' to link to '${target}' instead drops its link table and the ${links.count.rowCount.toLocaleString()} links it holds; its new link table starts empty.`,
     ];
   }
   const becomes = linkFieldKind(links.after);
