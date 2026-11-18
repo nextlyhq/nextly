@@ -521,6 +521,24 @@ export type { ImageStatesProps } from "./canvas/image-states";
 export { EmbedStates } from "./canvas/embed-states";
 export type { EmbedStatesProps } from "./canvas/embed-states";
 /**
+ * What the canvas says over a Form block: a picked form that is a draft,
+ * closed or deleted, with "Pick another form", and a simple form whose
+ * answers have nowhere to go. A canvas overlay composed like the one above,
+ * given the host's reads of the author's forms.
+ *
+ * @experimental
+ */
+export { FormStates } from "./canvas/form-states";
+export type { FormStatesProps } from "./canvas/form-states";
+/**
+ * The round a page's picked forms are drawn in, which goes up each time the
+ * author comes back to the editor while the page picks a form: a host draws
+ * its Forms afresh for each, so a form changed in its own tab shows as it is.
+ *
+ * @experimental
+ */
+export { useFormsShownAgain } from "./form-source-control";
+/**
  * The chooser a block just added asks for, drawn over it on the canvas while
  * the editor's first-add step holds: the Columns layouts with Skip. A canvas
  * overlay composed like the ones above, from the editor alone.
@@ -872,6 +890,13 @@ export { sharedStyleNameTaken } from "./shared-style-target";
 export { useNoticeQueue } from "./shell/builder-notices";
 export type { NoticeQueue, RaiseNotice } from "./shell/builder-notices";
 export { SharedStylesPanel } from "./shared-styles-panel";
+/**
+ * Design → Type → "Text styles": the site's text styles and their parts.
+ *
+ * @experimental Settles with text styles.
+ */
+export { TextStylesSection } from "./text-styles-section";
+export type { TextStylesSectionProps } from "./text-styles-section";
 // The whole-list class write the Styles tab's Block styles make, copy,
 // rename and hide block styles and move ★ through.
 export type { ClassListEdit, EditClasses } from "./block-style-actions";
@@ -925,11 +950,19 @@ export type {
  * @experimental The catalogue's shapes may change while the feature settles.
  */
 export { FontsPanel } from "./fonts-panel";
+/**
+ * The one Fonts screen around that list: what the builder opens over its
+ * Design panel and the admin draws as its Fonts page.
+ *
+ * @experimental Its props may change while the screen settles.
+ */
+export { FontsScreen } from "./fonts-panel";
 export type {
   CatalogueAddRequest,
   CatalogueFamilyView,
   FontCatalogue,
   FontsPanelProps,
+  FontsScreenProps,
   FontFaceUpload,
 } from "./fonts-panel";
 export {

@@ -120,10 +120,29 @@ export interface InlineRichTextSession {
   link(url: string | null, options?: { readonly newTab?: boolean }): void;
   /** What the selection holds now, or `undefined` once superseded. */
   selection(): InlineSelectionState | undefined;
+  /**
+   * Make the block the caret is in (every block the selection touches) a
+   * heading, a list or a quote, as a toolbar's button does: pressed again on
+   * a block that already is one, it goes back to a paragraph. A no-op on a
+   * passage held to one paragraph, which holds no blocks but its one.
+   */
+  block(kind: InlineBlockKind): void;
 }
 
 /** A mark a toolbar turns on and off. */
 export type InlineMark = "bold" | "italic";
+
+/**
+ * A block a toolbar makes the selected one: the headings, lists and quote a
+ * passage's toolbar offers, and the paragraph pressing one again goes back to.
+ */
+export type InlineBlockKind =
+  | "paragraph"
+  | "h2"
+  | "h3"
+  | "bullet"
+  | "number"
+  | "quote";
 
 /** What the selection in an attached passage holds. */
 export interface InlineSelectionState {
@@ -133,6 +152,11 @@ export interface InlineSelectionState {
   readonly italic: boolean;
   /** The link the selection is in, if any. */
   readonly link: { readonly url: string; readonly newTab: boolean } | null;
+  /**
+   * The block the caret is in, so a toolbar says which of its blocks is on;
+   * `other` for one it offers no button for (an H1, a checklist, a table).
+   */
+  readonly block: InlineBlockKind | "other";
 }
 
 /**
@@ -169,6 +193,12 @@ export interface InlineParagraphMode {
 export interface InlineAttachOptions {
   /** Restrict the passage to one paragraph; see {@link InlineParagraphMode}. */
   readonly paragraph?: InlineParagraphMode;
+  /**
+   * Told when the selection, or what is under it, changes, for a whole
+   * passage. A passage held to one paragraph tells its own mode's
+   * `onSelection` instead.
+   */
+  readonly onSelection?: (state: InlineSelectionState) => void;
 }
 
 /** Why the editor would not take a passage. */
@@ -290,6 +320,13 @@ function loadable(value: unknown): string | null {
   }
 }
 
+/**
+ * A toolbar's verbs are applied at once rather than batched to the next
+ * microtask, so what is read straight after a press (a "Turn into" judged on
+ * the words, an edit finished by the next click) already holds it.
+ */
+const DISCRETE = { discrete: true } as const;
+
 /** What a registration the passage does not need returns, to stop nothing. */
 const noop = (): void => {};
 
@@ -403,12 +440,13 @@ function unmarkRoot(element: HTMLElement, marks: RootMarks): void {
 async function build(): Promise<InlineRichTextEditor> {
   const [
     lexical,
-    { registerRichText },
-    { registerList, registerCheckList },
+    richText,
+    list,
     { registerTablePlugin, registerTableSelectionObserver },
     { registerCodeHighlighting },
     history,
     links,
+    blocks,
     kit,
   ] = await Promise.all([
     import("lexical"),
@@ -418,12 +456,16 @@ async function build(): Promise<InlineRichTextEditor> {
     import("@lexical/code-prism"),
     import("@lexical/history"),
     import("@lexical/link"),
+    import("@lexical/selection"),
     import("@admin/components/features/entries/fields/special/rich-text-kit"),
   ]);
+  const { registerRichText } = richText;
+  const { registerList, registerCheckList } = list;
   const {
     createEditor,
     $isDecoratorNode,
     $isElementNode,
+    $isRootNode,
     $isTextNode,
     $getRoot,
   } = lexical;
@@ -578,7 +620,13 @@ async function build(): Promise<InlineRichTextEditor> {
     editor.getEditorState().read(() => {
       const selection = lexical.$getSelection();
       if (!lexical.$isRangeSelection(selection)) {
-        return { collapsed: true, bold: false, italic: false, link: null };
+        return {
+          collapsed: true,
+          bold: false,
+          italic: false,
+          link: null,
+          block: "paragraph",
+        };
       }
       const anchor = selection.anchor.getNode();
       let found: LexicalNode | null = anchor;
@@ -591,8 +639,72 @@ async function build(): Promise<InlineRichTextEditor> {
         link: links.$isLinkNode(found)
           ? { url: found.getURL(), newTab: found.getTarget() === "_blank" }
           : null,
+        block: $blockKindAt(anchor),
       };
     });
+
+  /**
+   * Inside a read or an update: which of a toolbar's blocks `node` sits in,
+   * read from the passage's top-level block, so an item of a list nested in
+   * another says the outer list's kind.
+   */
+  const $blockKindAt = (node: LexicalNode): InlineBlockKind | "other" => {
+    const top = $isRootNode(node) ? null : node.getTopLevelElement();
+    if (top === null || lexical.$isParagraphNode(top)) return "paragraph";
+    if (richText.$isQuoteNode(top)) return "quote";
+    if (richText.$isHeadingNode(top)) {
+      const tag = top.getTag();
+      return tag === "h2" || tag === "h3" ? tag : "other";
+    }
+    if (list.$isListNode(top)) {
+      const type = top.getListType();
+      return type === "bullet" || type === "number" ? type : "other";
+    }
+    return "other";
+  };
+
+  /**
+   * Inside an update: give each block the selection touches an indent of 0
+   * where it was stored without one. A stored passage may leave `indent` out
+   * (the Rich text block's own empty passage does), Lexical then holds it
+   * unset, and making a list of such a block throws, as a list item's indent
+   * must be a number.
+   */
+  const $settleIndents = (): void => {
+    const selection = lexical.$getSelection();
+    if (selection === null) return;
+    for (const node of selection.getNodes()) {
+      const top = $isRootNode(node) ? null : node.getTopLevelElement();
+      if ($isElementNode(top) && !Number.isInteger(top.getIndent()))
+        top.setIndent(0);
+    }
+  };
+
+  /**
+   * Inside an update: make the blocks the selection touches `kind`, or a
+   * paragraph where the caret's block already is one. A list is left first,
+   * so turning a list into a heading or the other list takes its items'
+   * words with it rather than nesting a heading in an item.
+   */
+  const $setBlockKind = (kind: InlineBlockKind): void => {
+    const selection = lexical.$getSelection();
+    if (!lexical.$isRangeSelection(selection)) return;
+    const now = $blockKindAt(selection.anchor.getNode());
+    const to = now === kind ? "paragraph" : kind;
+    if (now === "bullet" || now === "number") list.$removeList();
+    if (to === "bullet" || to === "number") {
+      $settleIndents();
+      list.$insertList(to);
+      return;
+    }
+    blocks.$setBlocksType(lexical.$getSelection(), () =>
+      to === "paragraph"
+        ? lexical.$createParagraphNode()
+        : to === "quote"
+          ? richText.$createQuoteNode()
+          : richText.$createHeadingNode(to)
+    );
+  };
 
   /**
    * Replace the passage with `value`, restricted, keeping the caret where it
@@ -768,6 +880,17 @@ async function build(): Promise<InlineRichTextEditor> {
       const paragraph = options?.paragraph;
       const stopParagraph =
         paragraph === undefined ? null : restrictToParagraph(paragraph);
+      // A whole passage's selection, told to a host's toolbar on every update:
+      // a move of the caret is an update with nothing dirty, as a change is.
+      const told = options?.onSelection;
+      const stopSelection =
+        paragraph !== undefined || told === undefined
+          ? noop
+          : // A block body: Lexical calls what a listener returns as its own
+            // clean-up, so a host's return value must not reach it.
+            editor.registerUpdateListener(() => {
+              told(selectionState());
+            });
       // What only a whole passage takes: a passage held to one paragraph has
       // no lists, tables or code to register for.
       const whenFull = (register: () => () => void): (() => void) =>
@@ -827,6 +950,7 @@ async function build(): Promise<InlineRichTextEditor> {
       );
       release = () => {
         stopParagraph?.();
+        stopSelection();
         stopRange();
         lastRange = null;
         stopRichText();
@@ -879,7 +1003,7 @@ async function build(): Promise<InlineRichTextEditor> {
             const selection = lexical.$getSelection();
             if (lexical.$isRangeSelection(selection))
               selection.formatText(mark);
-          });
+          }, DISCRETE);
         },
         link(url, linkOptions) {
           if (!owns()) return;
@@ -895,10 +1019,17 @@ async function build(): Promise<InlineRichTextEditor> {
                       : { target: null, rel: null }),
                   }
             );
-          });
+          }, DISCRETE);
         },
         selection() {
           return owns() ? selectionState() : undefined;
+        },
+        block(kind) {
+          if (!owns() || paragraph !== undefined) return;
+          editor.update(() => {
+            $restoreRange();
+            $setBlockKind(kind);
+          }, DISCRETE);
         },
       };
       return { status: "attached", session };

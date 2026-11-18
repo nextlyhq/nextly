@@ -355,7 +355,9 @@ describe("exactly one navigation source claims Pages", () => {
       COMPONENTS_SLUG,
       LAYOUTS_SLUG,
       TEMPLATES_SLUG,
-      // The bindings report, a page rather than a collection.
+      // The bindings report and the Fonts page, pages rather than
+      // collections.
+      undefined,
       undefined,
     ]);
   });

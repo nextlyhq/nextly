@@ -122,6 +122,17 @@ interface QueueRow {
   settledAt: number | string | null;
 }
 
+/** Whether a stored failure says the email's template caused it. */
+export function templateCausedOf(text: unknown): boolean {
+  if (typeof text !== "string") return false;
+  try {
+    const value = JSON.parse(text) as { template?: unknown } | null;
+    return value?.template === true;
+  } catch {
+    return false;
+  }
+}
+
 /** How a row's state reads to its caller. */
 export function standingOf(
   row: Pick<QueueRow, "state" | "failure">

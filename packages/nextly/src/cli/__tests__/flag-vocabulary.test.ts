@@ -51,9 +51,10 @@ const RETIRED: Record<string, string[]> = {
   // The earlier spelling of the backup confirmation `--backup-confirmed`.
   migrate: ["--confirm-backed-up"],
   "migrate:fresh": ["-f, --force", "--yes"],
-  // It named another table for the migration records `nextly migrate` now
-  // moves; still accepted, and answered with a notice.
-  upgrade: ["--target-table-name <name>"],
+  // The first two confirmed the backup for work `nextly migrate` now does,
+  // and the third named another table for the migration records it now
+  // moves; each is still accepted, and no longer does anything.
+  upgrade: ["--confirm-backed-up", "-f, --force", "--target-table-name <name>"],
   prune: ["--force"],
   "generate:widget": ["--force"],
 };
@@ -144,6 +145,7 @@ const WRITES = [
   "generate:manifest",
   "generate:types",
   "generate:widget",
+  "i18n:convert-zoned-dates",
   "i18n:restore",
   "init",
   "media reindex-usage",
