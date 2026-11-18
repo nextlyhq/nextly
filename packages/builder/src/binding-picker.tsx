@@ -26,7 +26,7 @@ import { defaultFormatFor, previewWithFormat } from "./binding-format-field";
 import { bindOp } from "./binding-ops";
 import {
   useBindingSources,
-  useListSample,
+  useListSamples,
   usePreviewFormatIn,
   useSamplePictures,
   type PreviewFormatIn,
@@ -37,12 +37,12 @@ import type {
   ListSample,
 } from "./binding-services";
 import { ChoiceList, type ChoiceGroup, type ListedChoice } from "./choice-list";
-import { useClickedEntry } from "./clicked-entry";
+import { useClickedEntries } from "./clicked-entry";
 import type { ContentServices } from "./content-controls";
 import { fieldLabel, propLabel, type EditableProp } from "./inspector";
 import {
   itemChoices,
-  useListItem,
+  useListItems,
   type ItemSource,
 } from "./item-binding-source";
 import { withArticle } from "./with-article";
@@ -52,7 +52,13 @@ import { withArticle } from "./with-article";
  * block sits in, which only the editor knows and the picker lists first.
  */
 type PickerSource = Omit<BindingFieldSource, "binding"> & {
-  readonly binding: BindingFieldSource["binding"] | { readonly source: "item" };
+  readonly binding:
+    | BindingFieldSource["binding"]
+    | {
+        readonly source: "item";
+        /** An enclosing list further out than the nearest, by its id. */
+        readonly list?: string;
+      };
 };
 
 /** One field the picker offers, with where it is read from. */
@@ -166,6 +172,9 @@ function bindingFor(option: FieldOption, kept: Binding | undefined): Binding {
   return {
     $bind: option.path,
     ...(source.source === "entry" ? {} : { source: source.source }),
+    ...("list" in source && source.list !== undefined
+      ? { list: source.list }
+      : {}),
     ...carried,
   };
 }
@@ -192,10 +201,26 @@ function isBoundTo(option: FieldOption, binding: Binding): boolean {
   if (option.path !== binding.$bind) return false;
   const source = option.source.binding;
   if (source.source !== (binding.source ?? "entry")) return false;
+  if (source.source === "item") {
+    return (
+      (source.list ?? undefined) ===
+      ("list" in binding ? binding.list : undefined)
+    );
+  }
   return (
     source.source !== "single" ||
     ("sourceKey" in binding && binding.sourceKey === source.sourceKey)
   );
+}
+
+/**
+ * A binding as the picker matches it: one naming the nearest list (`list`)
+ * reads what one naming no list reads, so it is matched as that.
+ */
+function asListed(binding: Binding, nearest: string | undefined): Binding {
+  if (!("list" in binding) || binding.list !== nearest) return binding;
+  const { list: _nearest, ...rest } = binding;
+  return rest;
 }
 
 /**
@@ -216,7 +241,10 @@ export function sourceName(source: PickerSource): string {
  */
 function groupOf(source: PickerSource): string {
   const at = source.binding;
-  return at.source === "single" ? `single:${at.sourceKey}` : at.source;
+  if (at.source === "single") return `single:${at.sourceKey}`;
+  return at.source === "item" && at.list !== undefined
+    ? `item:${at.list}`
+    : at.source;
 }
 
 /** The option `binding` reads, marked in the list. */
@@ -510,18 +538,71 @@ function OptionRow({ option }: { option: FieldOption }): React.JSX.Element {
 }
 
 /**
- * The list item as a source the picker lists first, named for the list's
- * entries ("Each post in the list").
+ * A list's item as a source the picker lists, named for the list's entries
+ * ("Each post in the list"): the nearest list's first, binding no list, then
+ * each list further out, binding it by its id.
  */
 function itemPickerSource(
   item: ItemSource,
+  nearest: boolean,
   sample: ListSample | undefined,
   pictures: ReadonlyMap<string, string>
 ): PickerSource {
+  const list = item.list?.id;
   return {
-    binding: { source: "item" },
+    binding:
+      nearest || list === undefined
+        ? { source: "item" }
+        : { source: "item", list },
     label: item.name,
     fields: itemChoices(item.fields, sample, undefined, pictures),
+  };
+}
+
+/**
+ * The item of every list the block sits in, nearest first, as picker
+ * sources: each list's fields, with the values of the entry the author
+ * clicked on the canvas to select the block, else the first entry's, and the
+ * pictures they name by id. `loading` while a list's fields are being read.
+ */
+function useItemPickerSources(
+  document: BlockDocument,
+  nodeId: string,
+  services: ContentServices | undefined
+): {
+  readonly sources: readonly PickerSource[];
+  readonly loading: boolean;
+  readonly nearest: string | undefined;
+} {
+  const items = useListItems(document, nodeId, services, true);
+  const clicked = useClickedEntries(nodeId);
+  const samples = useListSamples(
+    services?.readListSample,
+    items.flatMap(item => {
+      const list = item.list;
+      if (list === undefined) return [];
+      const entry = clicked?.get(list.id);
+      return [{ props: list.props, ...(entry === undefined ? {} : { entry }) }];
+    })
+  );
+  const pictures = useSamplePictures(
+    services?.readMedia,
+    items.map((item, index) => ({
+      fields: item.fields,
+      sample: samples[index],
+    }))
+  );
+  return {
+    sources: items.map((item, index) =>
+      itemPickerSource(
+        item,
+        index === 0,
+        samples[index],
+        pictures[index] ?? new Map()
+      )
+    ),
+    loading: items.some(item => item.loading),
+    nearest: items[0]?.list?.id,
   };
 }
 
@@ -554,17 +635,12 @@ export function BindingPicker({
   onPick: (option: FieldOption) => void;
 }): React.JSX.Element {
   const listed = useBindingSources(services, true);
-  const item = useListItem(document, nodeId, services, true);
-  // The entry the author clicked on the canvas to select the block, else
-  // the first: the item's values are that entry's.
-  const entry = useClickedEntry(nodeId, item?.list?.id);
-  const sample = useListSample(services?.readListSample, item?.list, entry);
-  const pictures = useSamplePictures(services?.readMedia, item?.fields, sample);
+  const items = useItemPickerSources(document, nodeId, services);
   const formatIn = usePreviewFormatIn(services);
   const name = propLabel(prop.name, prop.schema);
   // The list's fields are waited for with the page's, so the groups are
   // drawn once, in their order, rather than the item's arriving above.
-  if (listed === "loading" || item?.loading === true) {
+  if (listed === "loading" || items.loading) {
     return <p className="nx-binding-picker__note">Reading the fields…</p>;
   }
   if (listed === "failed") {
@@ -576,18 +652,16 @@ export function BindingPicker({
   }
   return (
     <PickerBody
-      sources={
-        item === undefined
-          ? listed
-          : [itemPickerSource(item, sample, pictures), ...listed]
-      }
-      nearest={item !== undefined}
+      sources={[...items.sources, ...listed]}
+      nearest={items.sources.length > 0}
       prop={prop}
       name={name}
       blockLabel={blockLabel}
       formatIn={formatIn}
       entryLink={entryLink}
-      current={current}
+      current={
+        current === undefined ? undefined : asListed(current, items.nearest)
+      }
       onPick={onPick}
     />
   );

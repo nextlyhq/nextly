@@ -29,6 +29,7 @@ import {
   type LinkAttributes,
   type LinkProps,
 } from "./props";
+import { HEADING_CONVERTERS } from "./text-conversions";
 
 /** The levels a heading may render. */
 export const HEADING_LEVELS = ["h1", "h2", "h3", "h4", "h5", "h6"] as const;
@@ -161,5 +162,7 @@ export const heading: BlockDefinition<HeadingProps, PageContext> = defineBlock({
   // interactive while linked, to an address or an entry.
   contentModel: props =>
     canLink(props) ? { is: ["flow", "interactive"] } : { is: ["flow"] },
+  // "Turn into" Text or Rich text: the words, and a link to an address.
+  converters: HEADING_CONVERTERS,
   render: renderHeading,
 });
