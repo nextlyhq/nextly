@@ -22,9 +22,11 @@
  *
  * @module style/dtcg-typography
  */
+import { MAX_NAMED_CLASSES } from "../document";
 import { isTokenRef, type StyleValue } from "../document-styles";
 import type { ValidationIssue } from "../validation";
 
+import type { TokenKind } from "./catalog-types";
 import { BASE_BREAKPOINT } from "./compile-page-breakpoints";
 import { type DtcgNode, isPlainObject, issue } from "./dtcg-format";
 import { typedValue, type TypedValue } from "./dtcg-values";
@@ -33,8 +35,6 @@ import {
   MAX_NAMED_CLASS_NAME_LENGTH,
   type NamedClass,
 } from "./named-class";
-import { MAX_NAMED_CLASSES } from "../document";
-import type { TokenKind } from "./catalog-types";
 import { type SiteToken, tokenIdentity } from "./site-tokens";
 
 /** The group the typography values sit under, at the file's root. */
@@ -199,13 +199,8 @@ export function readTextStyles(
 
 /** One kept entry as a text style, or `undefined`. */
 function textStyleOf(entry: unknown): NamedClass | undefined {
-  if (!isPlainObject(entry)) return undefined;
+  if (!isPlainObject(entry) || !keptFieldsRead(entry)) return undefined;
   const { id, slug, label, orderIndex, styles, locked } = entry;
-  if (typeof orderIndex !== "number" || !Number.isFinite(orderIndex)) {
-    return undefined;
-  }
-  if (label !== undefined && typeof label !== "string") return undefined;
-  if (locked !== undefined && locked !== true) return undefined;
   const style = {
     id,
     slug,
@@ -216,6 +211,17 @@ function textStyleOf(entry: unknown): NamedClass | undefined {
     role: "text" as const,
   };
   return isUsableNamedClass(style) ? style : undefined;
+}
+
+/** Whether the fields a class's check doesn't judge are in their shapes. */
+function keptFieldsRead(entry: DtcgNode): boolean {
+  const { label, orderIndex, locked } = entry;
+  return (
+    typeof orderIndex === "number" &&
+    Number.isFinite(orderIndex) &&
+    (label === undefined || typeof label === "string") &&
+    (locked === undefined || locked === true)
+  );
 }
 
 /** How a kept entry is named in a message: its name, its id, or neither. */

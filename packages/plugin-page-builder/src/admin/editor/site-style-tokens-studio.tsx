@@ -26,6 +26,7 @@ import {
   useVariablesHeader,
   variableMatchesByTab,
 } from "@nextlyhq/builder/shell";
+import { usePluginClientConfig } from "@nextlyhq/plugin-sdk/admin";
 import { useCan } from "@nextlyhq/plugin-sdk/client";
 import {
   createContext,
@@ -49,7 +50,11 @@ import {
 } from "../../site-style-record";
 import { sameStoredValue } from "../../stored-json";
 import { conflictWords } from "../conflict-words";
-import { useHeldSiteStyle, useSaveSiteStyle } from "../site-style-client";
+import {
+  useFontCatalogueClient,
+  useHeldSiteStyle,
+  useSaveSiteStyle,
+} from "../site-style-client";
 import { useShown } from "../use-shown";
 import {
   cleanUpUnused,
@@ -58,7 +63,7 @@ import {
 } from "../variables-client";
 
 import { useDesignBrowse, useDesignHeaderSlot } from "./design-panel";
-import { useFontCatalogue } from "./site-style-fonts";
+import { PLUGIN_SOURCE } from "../plugin-source";
 import { usedOnPage } from "./used-on-page";
 
 /**
@@ -161,20 +166,12 @@ export function TokensStudio({
    */
   const currentTokens = (): SiteTokenSet | undefined =>
     withReadPrefix(shownNow(), editable);
-  // The classes as they are at the moment an export or an import asks.
-  const latestClasses = useRef(classes);
-  useEffect(() => {
-    latestClasses.current = classes;
-  }, [classes]);
-  const catalogue = useFontCatalogue();
   const header = useVariablesHeader({
     onChange: commit,
     currentTokens,
     readOnly: !mayChange,
     ...(mode === undefined ? {} : { mode }),
-    currentClasses: () => latestClasses.current,
-    ...(onEditClasses === undefined ? {} : { onEditClasses }),
-    ...(catalogue === undefined ? {} : { catalogue }),
+    ...useTransferInputs(classes, onEditClasses),
   });
   // Memoised, so a set whose prefix was replaced is the same object until
   // the edits or the read change, as `edits ?? editable` was.
@@ -213,6 +210,34 @@ export function TokensStudio({
       </SharedStyleToOpen.Provider>
     </VariablesStudio.Provider>
   );
+}
+
+/**
+ * What the ⋯ menu's export and import carry beyond the variables: the
+ * site's classes as they are when one is asked for (their text styles are
+ * exported and matched on import), the class writer an import's text styles
+ * are stored through, and the Google Fonts catalogue a missing font is added
+ * from, unless the host turned it off. The catalogue is read through the
+ * site-style client, so the fonts panel stays unloaded until it is drawn.
+ */
+function useTransferInputs(
+  classes: readonly NamedClass[] | undefined,
+  onEditClasses: EditClasses | undefined
+): Pick<
+  Parameters<typeof useVariablesHeader>[0],
+  "currentClasses" | "onEditClasses" | "catalogue"
+> {
+  const latest = useRef(classes);
+  useEffect(() => {
+    latest.current = classes;
+  }, [classes]);
+  const catalogue = useFontCatalogueClient();
+  const off = usePluginClientConfig(PLUGIN_SOURCE)?.fontCatalogue === false;
+  return {
+    currentClasses: () => latest.current,
+    ...(onEditClasses === undefined ? {} : { onEditClasses }),
+    ...(off ? {} : { catalogue }),
+  };
 }
 
 /**

@@ -40,13 +40,16 @@ function firstCuts(family: CatalogueFamilyView): {
   };
 }
 
+/** What the import reads the catalogue with: its families, and its add. */
+export type ImportCatalogue = Pick<FontCatalogue, "load" | "add">;
+
 export function MissingFonts({
   families,
   catalogue,
 }: {
   /** The missing families, as the file names them. */
   families: readonly string[];
-  catalogue?: FontCatalogue;
+  catalogue?: ImportCatalogue;
 }): React.JSX.Element {
   const [offered, setOffered] = React.useState<
     ReadonlyMap<string, CatalogueFamilyView>

@@ -50,46 +50,52 @@ export function readSiteData(
     );
     return undefined;
   }
-  const read: {
-    -readonly [K in keyof DtcgSiteData]: DtcgSiteData[K];
-  } = {};
-  const skip = (what: string) =>
-    issues.push(
-      issue(`${what} in the file could not be read, so it was skipped.`)
-    );
-  if (kept.siteText !== undefined) {
-    if (siteTextIssues(kept.siteText).length === 0) {
-      read.siteText = kept.siteText as DtcgSiteData["siteText"];
-    } else skip("Site text");
+  const read: Record<string, unknown> = {};
+  for (const [key, what, readable] of PARTS) {
+    const value = kept[key];
+    if (value === undefined) continue;
+    if (readable(value)) read[key] = value;
+    else {
+      issues.push(
+        issue(`${what} in the file could not be read, so it was skipped.`)
+      );
+    }
   }
-  if (kept.order !== undefined) {
-    const order = kept.order;
-    if (
-      Array.isArray(order) &&
-      order.length <= MAX_ORDER &&
-      order.every(entry => typeof entry === "string")
-    ) {
-      read.order = order as string[];
-    } else skip("The colour order");
-  }
-  if (kept.fluidRange !== undefined) {
-    const range = kept.fluidRange;
-    if (
-      isPlainObject(range) &&
-      typeof range.min === "number" &&
-      typeof range.max === "number" &&
-      Number.isFinite(range.min) &&
-      Number.isFinite(range.max) &&
-      range.min > 0 &&
-      range.min < range.max
-    ) {
-      read.fluidRange = { min: range.min, max: range.max };
-    } else skip("The fluid range");
-  }
-  if (kept.builtInColoursShown !== undefined) {
-    if (typeof kept.builtInColoursShown === "boolean") {
-      read.builtInColoursShown = kept.builtInColoursShown;
-    } else skip("The built-in colours setting");
-  }
-  return Object.keys(read).length === 0 ? undefined : read;
+  return Object.keys(read).length === 0 ? undefined : (read as DtcgSiteData);
+}
+
+/** Each part the file keeps, what it is called, and the shape it must take. */
+const PARTS: readonly (readonly [
+  key: keyof DtcgSiteData,
+  what: string,
+  readable: (value: unknown) => boolean,
+])[] = [
+  ["siteText", "Site text", value => siteTextIssues(value).length === 0],
+  [
+    "order",
+    "The colour order",
+    value =>
+      Array.isArray(value) &&
+      value.length <= MAX_ORDER &&
+      value.every(entry => typeof entry === "string"),
+  ],
+  ["fluidRange", "The fluid range", isFluidRange],
+  [
+    "builtInColoursShown",
+    "The built-in colours setting",
+    value => typeof value === "boolean",
+  ],
+];
+
+/** A fluid range: two positive, finite widths, the smaller first. */
+function isFluidRange(value: unknown): boolean {
+  if (!isPlainObject(value)) return false;
+  const { min, max } = value;
+  return (
+    typeof min === "number" &&
+    typeof max === "number" &&
+    Number.isFinite(max) &&
+    min > 0 &&
+    min < max
+  );
 }

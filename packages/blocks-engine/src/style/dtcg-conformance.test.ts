@@ -90,148 +90,164 @@ function tokensOf(
   return found;
 }
 
+/** Whether a value is an alias: a token path in braces. */
+const isAlias = (value: unknown): value is string =>
+  typeof value === "string" && /^\{[^{}]+\}$/.test(value);
+
+/** A number between two bounds, both included. */
+const between = (value: unknown, low: number, high: number): boolean =>
+  typeof value === "number" && value >= low && value <= high;
+
+/** A measure in one of the units the format allows for it. */
+const measure =
+  (units: readonly string[]) =>
+  (value: unknown): boolean =>
+    isNode(value) &&
+    typeof value.value === "number" &&
+    units.includes(String(value.unit));
+
+/** One check of a value against a type, given the check for the parts. */
+type ValueCheck = (
+  value: unknown,
+  part: (type: string, value: unknown, at: string) => boolean,
+  at: string
+) => boolean;
+
+const COLOUR: ValueCheck = value =>
+  isNode(value) &&
+  typeof value.colorSpace === "string" &&
+  Array.isArray(value.components) &&
+  value.components.length === 3 &&
+  value.components.every(component => between(component, 0, 1)) &&
+  (value.alpha === undefined || between(value.alpha, 0, 1)) &&
+  (value.hex === undefined ||
+    (typeof value.hex === "string" && /^#[0-9a-f]{6}$/i.test(value.hex)));
+
+const FAMILY: ValueCheck = value =>
+  (typeof value === "string" && value !== "") ||
+  (Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(name => typeof name === "string" && name !== ""));
+
+const SHADOW: ValueCheck = (value, part, at) => {
+  const layers = Array.isArray(value) ? value : [value];
+  return (
+    layers.length > 0 &&
+    layers.every(
+      layer =>
+        isNode(layer) &&
+        part("color", layer.color, `${at}.color`) &&
+        ["offsetX", "offsetY", "blur", "spread"].every(size =>
+          part("dimension", layer[size], `${at}.${size}`)
+        ) &&
+        (layer.inset === undefined || typeof layer.inset === "boolean")
+    )
+  );
+};
+
+const TYPOGRAPHY_PARTS = [
+  ["fontFamily", "fontFamily"],
+  ["fontSize", "dimension"],
+  ["fontWeight", "fontWeight"],
+  ["letterSpacing", "dimension"],
+  ["lineHeight", "number"],
+] as const;
+
+const TYPOGRAPHY: ValueCheck = (value, part, at) =>
+  isNode(value) &&
+  TYPOGRAPHY_PARTS.every(([name, type]) =>
+    part(type, value[name], `${at}.${name}`)
+  );
+
+/** The value shape of each type a written file uses. */
+const VALUE_CHECKS: Readonly<Record<string, ValueCheck>> = {
+  color: COLOUR,
+  dimension: value => measure(["px", "rem"])(value),
+  duration: value => measure(["ms", "s"])(value),
+  fontFamily: FAMILY,
+  fontWeight: value =>
+    between(value, 1, 1000) ||
+    (typeof value === "string" && WEIGHT_KEYWORDS.has(value)),
+  number: value => typeof value === "number",
+  shadow: SHADOW,
+  typography: TYPOGRAPHY,
+};
+
 /** What makes a file not valid DTCG 2025.10, one line per problem. */
 function problemsOf(document: Node): string[] {
   const problems: string[] = [];
   const tokens = tokensOf(document);
-  const aliasType = (text: string): string | undefined =>
-    tokens.get(text.slice(1, -1))?.type;
-  const isAlias = (value: unknown): value is string =>
-    typeof value === "string" && /^\{[^{}]+\}$/.test(value);
-
   const valueOk = (type: string, value: unknown, at: string): boolean => {
-    if (isAlias(value)) {
-      const target = aliasType(value);
-      if (target !== type) {
-        problems.push(
-          `${at}: ${value} is a ${target ?? "missing token"}, not a ${type}`
-        );
-      }
-      return true;
+    if (!isAlias(value)) {
+      return VALUE_CHECKS[type]?.(value, valueOk, at) ?? false;
     }
-    switch (type) {
-      case "color":
-        return (
-          isNode(value) &&
-          typeof value.colorSpace === "string" &&
-          Array.isArray(value.components) &&
-          value.components.length === 3 &&
-          value.components.every(
-            part => typeof part === "number" && part >= 0 && part <= 1
-          ) &&
-          (value.alpha === undefined ||
-            (typeof value.alpha === "number" &&
-              value.alpha >= 0 &&
-              value.alpha <= 1)) &&
-          (value.hex === undefined ||
-            (typeof value.hex === "string" &&
-              /^#[0-9a-f]{6}$/i.test(value.hex)))
-        );
-      case "dimension":
-        return (
-          isNode(value) &&
-          typeof value.value === "number" &&
-          (value.unit === "px" || value.unit === "rem")
-        );
-      case "duration":
-        return (
-          isNode(value) &&
-          typeof value.value === "number" &&
-          (value.unit === "ms" || value.unit === "s")
-        );
-      case "fontFamily":
-        return (
-          (typeof value === "string" && value !== "") ||
-          (Array.isArray(value) &&
-            value.length > 0 &&
-            value.every(name => typeof name === "string" && name !== ""))
-        );
-      case "fontWeight":
-        return (
-          (typeof value === "number" && value >= 1 && value <= 1000) ||
-          (typeof value === "string" && WEIGHT_KEYWORDS.has(value))
-        );
-      case "number":
-        return typeof value === "number";
-      case "shadow": {
-        const layers = Array.isArray(value) ? value : [value];
-        return (
-          layers.length > 0 &&
-          layers.every(
-            layer =>
-              isNode(layer) &&
-              valueOk("color", layer.color, `${at}.color`) &&
-              ["offsetX", "offsetY", "blur", "spread"].every(part =>
-                valueOk("dimension", layer[part], `${at}.${part}`)
-              ) &&
-              (layer.inset === undefined || typeof layer.inset === "boolean")
-          )
-        );
-      }
-      case "typography":
-        return (
-          isNode(value) &&
-          (
-            [
-              ["fontFamily", "fontFamily"],
-              ["fontSize", "dimension"],
-              ["fontWeight", "fontWeight"],
-              ["letterSpacing", "dimension"],
-              ["lineHeight", "number"],
-            ] as const
-          ).every(([part, partType]) =>
-            valueOk(partType, value[part], `${at}.${part}`)
-          )
-        );
-      default:
-        return false;
+    const target = tokens.get(value.slice(1, -1))?.type;
+    if (target !== type) {
+      problems.push(
+        `${at}: ${value} is a ${target ?? "missing token"}, not a ${type}`
+      );
     }
+    return true;
   };
-
   const walk = (node: Node, at: string[]): void => {
     for (const [key, child] of Object.entries(node)) {
       const here = [...at, key].join(".");
       if (key.startsWith("$")) {
-        if (!GROUP_PROPERTIES.has(key))
-          problems.push(`${here}: not a group property`);
-        if (key === "$extensions" && !isNode(child))
-          problems.push(`${here}: not an object`);
-        if (key === "$type" && !TYPES.has(String(child)))
-          problems.push(`${here}: no such type`);
-        continue;
-      }
-      if (/[.{}]/.test(key)) problems.push(`${here}: not a name`);
-      if (!isNode(child)) {
+        problems.push(...groupPropertyProblems(key, child, here));
+      } else if (/[.{}]/.test(key)) {
+        problems.push(`${here}: not a name`);
+      } else if (!isNode(child)) {
         problems.push(`${here}: neither a token nor a group`);
-        continue;
-      }
-      if (!("$value" in child)) {
+      } else if (!("$value" in child)) {
         walk(child, [...at, key]);
-        continue;
+      } else {
+        problems.push(...tokenProblems(child, here, tokens.get(here)?.type));
+        const type = tokens.get(here)?.type;
+        if (type !== undefined && TYPES.has(type)) {
+          if (!valueOk(type, child.$value, here)) {
+            problems.push(`${here}: not a ${type} value`);
+          }
+        }
       }
-      for (const property of Object.keys(child)) {
-        if (!TOKEN_PROPERTIES.has(property))
-          problems.push(`${here}.${property}: not a token property`);
-      }
-      if (child.$extensions !== undefined && !isNode(child.$extensions)) {
-        problems.push(`${here}.$extensions: not an object`);
-      }
-      if (
-        child.$description !== undefined &&
-        typeof child.$description !== "string"
-      ) {
-        problems.push(`${here}.$description: not a string`);
-      }
-      const type = tokens.get(here)?.type;
-      if (type === undefined || !TYPES.has(type)) {
-        problems.push(`${here}: no type`);
-        continue;
-      }
-      if (!valueOk(type, child.$value, here))
-        problems.push(`${here}: not a ${type} value`);
     }
   };
   walk(document, []);
+  return problems;
+}
+
+/** What is wrong with one of a group's `$` properties. */
+function groupPropertyProblems(
+  key: string,
+  value: unknown,
+  at: string
+): string[] {
+  if (!GROUP_PROPERTIES.has(key)) return [`${at}: not a group property`];
+  if (key === "$extensions" && !isNode(value)) return [`${at}: not an object`];
+  if (key === "$type" && !TYPES.has(String(value))) {
+    return [`${at}: no such type`];
+  }
+  return [];
+}
+
+/** What is wrong with a token's own properties and type. */
+function tokenProblems(
+  token: Node,
+  at: string,
+  type: string | undefined
+): string[] {
+  const problems = Object.keys(token)
+    .filter(property => !TOKEN_PROPERTIES.has(property))
+    .map(property => `${at}.${property}: not a token property`);
+  if (token.$extensions !== undefined && !isNode(token.$extensions)) {
+    problems.push(`${at}.$extensions: not an object`);
+  }
+  if (
+    token.$description !== undefined &&
+    typeof token.$description !== "string"
+  ) {
+    problems.push(`${at}.$description: not a string`);
+  }
+  if (type === undefined || !TYPES.has(type)) problems.push(`${at}: no type`);
   return problems;
 }
 

@@ -34,6 +34,11 @@ const panels = vi.hoisted(() => ({
 vi.mock("@nextlyhq/plugin-sdk/client", () => ({ useCan: () => calls.may }));
 
 vi.mock("../site-style-client", () => ({
+  // The catalogue a missing font is added from; no test here imports.
+  useFontCatalogueClient: () => ({
+    load: async () => ({ families: [], previewBase: "", fetchedAt: "" }),
+    add: async () => undefined,
+  }),
   useSaveSiteStyle: () => ({
     save: async () => ({ saved: true, issues: {} }),
     reserve: () => ({ save: async () => ({}), cancel: () => {} }),

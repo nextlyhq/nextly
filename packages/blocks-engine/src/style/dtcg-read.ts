@@ -61,37 +61,54 @@ function statedShown(
   issues: ValidationIssue[]
 ): Pick<SiteToken, "group" | "fluid"> {
   if (!isPlainObject(own)) return {};
-  const shown: { group?: string; fluid?: { small: number; large: number } } =
-    {};
-  const { group, fluid } = own;
-  if (group !== undefined) {
-    if (typeof group === "string" && group.trim() !== "") shown.group = group;
-    else {
-      issues.push(
-        issue(`"${name}" has a group that is not a name, so it was ignored.`)
-      );
-    }
-  }
-  if (fluid !== undefined) {
-    if (
-      isPlainObject(fluid) &&
-      typeof fluid.small === "number" &&
-      typeof fluid.large === "number" &&
-      Number.isFinite(fluid.small) &&
-      Number.isFinite(fluid.large) &&
-      fluid.small > 0 &&
-      fluid.large > 0
-    ) {
-      shown.fluid = { small: fluid.small, large: fluid.large };
-    } else {
-      issues.push(
-        issue(
-          `"${name}" has fluid sizes that are not two sizes in px, so they were ignored.`
-        )
-      );
-    }
-  }
-  return shown;
+  const group = takenOrSaid(
+    own.group,
+    isGroupName,
+    `"${name}" has a group that is not a name, so it was ignored.`,
+    issues
+  );
+  const fluid = takenOrSaid(
+    own.fluid,
+    isFluidSizes,
+    `"${name}" has fluid sizes that are not two sizes in px, so they were ignored.`,
+    issues
+  );
+  return {
+    ...(group === undefined ? {} : { group }),
+    ...(fluid === undefined
+      ? {}
+      : { fluid: { small: fluid.small, large: fluid.large } }),
+  };
+}
+
+/** A stated field in the shape it must take, or nothing, said when it isn't. */
+function takenOrSaid<T>(
+  value: unknown,
+  shaped: (value: unknown) => value is T,
+  said: string,
+  issues: ValidationIssue[]
+): T | undefined {
+  if (value === undefined) return undefined;
+  if (shaped(value)) return value;
+  issues.push(issue(said));
+  return undefined;
+}
+
+/** A colour's group: a name with something in it. */
+function isGroupName(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+/** A fluid size's two sizes: positive, finite numbers of px. */
+function isFluidSizes(
+  value: unknown
+): value is { small: number; large: number } {
+  return (
+    isPlainObject(value) &&
+    [value.small, value.large].every(
+      size => typeof size === "number" && Number.isFinite(size) && size > 0
+    )
+  );
 }
 
 /**
@@ -520,8 +537,7 @@ export function readToken(
       kind,
       values,
       ...(description !== undefined ? { description } : {}),
-      ...(shown.fluid !== undefined ? { fluid: shown.fluid } : {}),
-      ...(shown.group !== undefined ? { group: shown.group } : {}),
+      ...shown,
       ...(carried !== undefined ? { extensions: carried } : {}),
       ...(unread !== undefined ? { unreadExtension: unread } : {}),
     };

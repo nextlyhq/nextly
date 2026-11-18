@@ -80,14 +80,12 @@ const INTER: CatalogueFamilyView = {
 function Host({
   tokens,
   classes = [],
-  faces = [],
   onChange = () => undefined,
   onEditClasses,
   catalogue,
 }: {
   tokens: SiteTokenSet;
   classes?: readonly NamedClass[];
-  faces?: readonly FontFaceDef[];
   onChange?: (tokens: SiteTokenSet) => void;
   onEditClasses?: EditClasses;
   catalogue?: FontCatalogue;
@@ -114,13 +112,14 @@ function Host({
 }
 
 /** The Host inside the Design frame's fonts, as the editor mounts it. */
-function WithFonts(
-  props: React.ComponentProps<typeof Host>
-): React.JSX.Element {
+function WithFonts({
+  faces = [],
+  ...props
+}: React.ComponentProps<typeof Host> & {
+  faces?: readonly FontFaceDef[];
+}): React.JSX.Element {
   return (
-    <FontChoicesContext.Provider
-      value={{ faces: props.faces ?? [], fromCode: [] }}
-    >
+    <FontChoicesContext.Provider value={{ faces, fromCode: [] }}>
       <Host {...props} />
     </FontChoicesContext.Provider>
   );

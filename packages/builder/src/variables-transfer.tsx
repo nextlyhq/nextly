@@ -53,8 +53,7 @@ import * as React from "react";
 import type { EditClasses } from "./block-style-actions";
 import { ChromeTooltip } from "./chrome-tooltip";
 import { DESIGN_ACTION_WORDS as WORDS } from "./editor-words";
-import type { FontCatalogue } from "./font-catalogue-view";
-import { FontChoicesContext } from "./font-family-field";
+import { FontChoicesContext, type FontChoices } from "./font-family-field";
 import { sharedStyleName } from "./shared-style-library";
 import {
   applyImport,
@@ -67,8 +66,8 @@ import {
   type ExportResult,
   type ImportPlan,
 } from "./tokens-transfer";
-import { siteDataLines } from "./tokens-transfer-extras";
-import { MissingFonts } from "./variables-transfer-fonts";
+import { siteDataLines, type ImportContext } from "./tokens-transfer-extras";
+import { MissingFonts, type ImportCatalogue } from "./variables-transfer-fonts";
 
 type ReadyPlan = Extract<ImportPlan, { ok: true }>;
 
@@ -147,7 +146,7 @@ export function useVariablesTransfer({
   /** The host's one class writer, which an import's text styles are stored through. */
   onEditClasses?: EditClasses;
   /** The Google Fonts catalogue, which a missing font is added from. */
-  catalogue?: FontCatalogue;
+  catalogue?: ImportCatalogue;
 }): VariablesTransfer {
   // The site's fonts, from the host's Design frame: a font the file names
   // and none of these provide is listed as missing.
@@ -217,17 +216,11 @@ export function useVariablesTransfer({
       refuse("This site's variables are not loaded, so nothing was imported.");
       return;
     }
-    // Text styles only where the host can store them, and fonts only where
-    // it says which the site has.
-    const writesClasses = latest.current.onEditClasses !== undefined;
-    const planned = planImport(texts, into, {
-      ...(writesClasses
-        ? { textStyles: latest.current.currentClasses?.() ?? [] }
-        : {}),
-      ...(fonts?.faces === undefined
-        ? {}
-        : { faces: [...fonts.faces, ...fonts.fromCode] }),
-    });
+    const planned = planImport(
+      texts,
+      into,
+      importContext(latest.current, fonts)
+    );
     if (!planned.ok) {
       refuse(planned.error, planned.skipped);
       return;
@@ -479,7 +472,7 @@ function ImportPreview({
   plan: ReadyPlan;
   onCancel: () => void;
   onApply: (choices: ReadonlyMap<string, ConflictChoice>) => void;
-  catalogue?: FontCatalogue;
+  catalogue?: ImportCatalogue;
 }): React.JSX.Element {
   const [choices, setChoices] = React.useState<Map<string, ConflictChoice>>(
     () => new Map()
@@ -619,6 +612,27 @@ function ImportPreview({
       </DialogContent>
     </Dialog>
   );
+}
+
+/**
+ * What an import is planned against: the site's text styles where the host
+ * can store the file's, and its fonts where the host says which it has.
+ */
+function importContext(
+  host: {
+    readonly onEditClasses?: EditClasses | undefined;
+    readonly currentClasses?: (() => readonly NamedClass[] | undefined) | undefined;
+  },
+  fonts: FontChoices | undefined
+): ImportContext {
+  return {
+    ...(host.onEditClasses === undefined
+      ? {}
+      : { textStyles: host.currentClasses?.() ?? [] }),
+    ...(fonts?.faces === undefined
+      ? {}
+      : { faces: [...fonts.faces, ...fonts.fromCode] }),
+  };
 }
 
 /**

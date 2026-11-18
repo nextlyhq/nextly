@@ -16,9 +16,8 @@
  *
  * @module style/dtcg-shadow
  */
-import type { DtcgNode } from "./dtcg-format";
-import { isPlainObject } from "./dtcg-format";
 import { shadowLayerParts, type ShadowPart } from "./css-value-shadow";
+import { type DtcgNode, isPlainObject } from "./dtcg-format";
 
 /** The conversions a shadow is written with. */
 export interface ShadowWriters {
@@ -65,30 +64,14 @@ function layerToDtcg(
   layer: readonly ShadowPart[],
   write: ShadowWriters
 ): DtcgNode | undefined {
-  const rest = [...layer];
-  let inset = false;
-  // `inset` may open or close a layer, once.
-  if (rest[0]?.kind === "inset") {
-    inset = true;
-    rest.shift();
-  } else if (rest.at(-1)?.kind === "inset") {
-    inset = true;
-    rest.pop();
-  }
-  // The colour may open or close it too: whichever end isn't a size.
-  const colourAtStart = rest[0] !== undefined && rest[0].kind !== "length";
-  const colourPart = colourAtStart ? rest.shift() : rest.pop();
+  const { inset, rest } = withoutInset(layer);
+  // The colour may open or close the layer: whichever end isn't a size.
+  const atStart = rest[0] !== undefined && rest[0].kind !== "length";
+  const colourPart = atStart ? rest[0] : rest.at(-1);
   const colour =
     colourPart === undefined ? undefined : colourOf(colourPart, write);
-  if (colour === undefined) return undefined;
-  if (rest.length < 2 || rest.length > 4) return undefined;
-  const sizes: { value: number; unit: string }[] = [];
-  for (const part of rest) {
-    if (part.kind !== "length") return undefined;
-    const size = write.length(part.text);
-    if (size === undefined) return undefined;
-    sizes.push(size);
-  }
+  const sizes = sizesOf(atStart ? rest.slice(1) : rest.slice(0, -1), write);
+  if (colour === undefined || sizes === undefined) return undefined;
   const zero = { value: 0, unit: "px" };
   return {
     color: colour,
@@ -98,6 +81,33 @@ function layerToDtcg(
     spread: sizes[3] ?? zero,
     inset,
   };
+}
+
+/** A layer without the `inset` that may open or close it, once. */
+function withoutInset(layer: readonly ShadowPart[]): {
+  inset: boolean;
+  rest: readonly ShadowPart[];
+} {
+  if (layer[0]?.kind === "inset") return { inset: true, rest: layer.slice(1) };
+  if (layer.at(-1)?.kind === "inset") {
+    return { inset: true, rest: layer.slice(0, -1) };
+  }
+  return { inset: false, rest: layer };
+}
+
+/** Two to four sizes in px or rem, as the format writes them, or `undefined`. */
+function sizesOf(
+  parts: readonly ShadowPart[],
+  write: ShadowWriters
+): { value: number; unit: string }[] | undefined {
+  if (parts.length < 2 || parts.length > 4) return undefined;
+  const sizes: { value: number; unit: string }[] = [];
+  for (const part of parts) {
+    const size = part.kind === "length" ? write.length(part.text) : undefined;
+    if (size === undefined) return undefined;
+    sizes.push(size);
+  }
+  return sizes;
 }
 
 /** A layer's colour as the format writes it, or `undefined`. */
@@ -124,23 +134,26 @@ export function shadowFromDtcg(
   if (layers.length === 0) return undefined;
   const written: string[] = [];
   for (const layer of layers) {
-    if (!isPlainObject(layer)) return undefined;
-    const colour = read.colour(layer.color);
-    if (colour === undefined) return undefined;
-    const sizes: string[] = [];
-    for (const field of SIZES) {
-      const size = read.length(layer[field]);
-      if (size === undefined) return undefined;
-      sizes.push(size);
-    }
-    if (layer.inset !== undefined && typeof layer.inset !== "boolean") {
-      return undefined;
-    }
-    written.push(
-      [layer.inset === true ? "inset" : undefined, ...sizes, colour]
-        .filter(part => part !== undefined)
-        .join(" ")
-    );
+    const css = layerFromDtcg(layer, read);
+    if (css === undefined) return undefined;
+    written.push(css);
   }
   return written.join(", ");
+}
+
+/** One layer's fields as CSS, `inset` first, or `undefined`. */
+function layerFromDtcg(
+  layer: unknown,
+  read: ShadowReaders
+): string | undefined {
+  if (!isPlainObject(layer)) return undefined;
+  if (layer.inset !== undefined && typeof layer.inset !== "boolean") {
+    return undefined;
+  }
+  const parts = [
+    ...SIZES.map(field => read.length(layer[field])),
+    read.colour(layer.color),
+  ];
+  if (parts.some(part => part === undefined)) return undefined;
+  return [...(layer.inset === true ? ["inset"] : []), ...parts].join(" ");
 }

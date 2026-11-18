@@ -26,8 +26,8 @@ import {
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 
-import { nextOrderIndex } from "./block-style-plans";
 import type { ClassListEdit } from "./block-style-actions";
+import { nextOrderIndex } from "./block-style-plans";
 import { readStack } from "./font-library";
 import { sharedStyleName } from "./shared-style-library";
 
