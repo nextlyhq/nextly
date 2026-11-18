@@ -657,3 +657,11 @@ button.nx-font-roles__row:focus-visible {
   flex-wrap: wrap;
   gap: 0.25rem 0.75rem;
 }
+
+/* The rows following a text style, which a role's font leaves as they are. */
+.nx-fonts-use__kept {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+  overflow-wrap: anywhere;
+}
