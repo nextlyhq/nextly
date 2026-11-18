@@ -22071,6 +22071,17 @@ export class CollectionMutationService extends BaseService {
         );
       writeRow = collection as Record<string, unknown>;
 
+      // The publish gate's early answer to a create that publishes, before any hook runs, as the
+      // create door asks it: a create the gate holds back runs no hook. Asked on the caller's
+      // transaction, with no entry yet, so it reads nothing from outside it; only its refusal is
+      // kept, and the verdict after the insert is the one the create settles.
+      await this.judgeCreateOnTx(
+        tx,
+        { ...params, entryId: "" },
+        { status: body.status, locale: undefined, withoutReview },
+        collection
+      );
+
       // The transaction API has always shaped the caller's own object in place;
       // the batch worker shapes a copy. Both are preserved so neither caller's
       // observable behaviour changes here.
@@ -22416,7 +22427,7 @@ export class CollectionMutationService extends BaseService {
       // the row too, so a caller that catches the failure and commits its own
       // transaction keeps nothing of this create. Side effects and hooks run
       // after it, as before.
-      const entry = await underSavepoint(tx, async () => {
+      const { entry, createEffects } = await underSavepoint(tx, async () => {
         // Insert using transaction context
         const entry = await tx.insert<unknown>(tableName, entryData, {
           returning: "*",
@@ -22488,49 +22499,50 @@ export class CollectionMutationService extends BaseService {
           { status: finalData.status, locale: undefined, withoutReview },
           collection
         );
-        return entry;
-      });
 
-      // The in-transaction handlers, asked once for this write: the same set
-      // decides how much of the document is assembled and which handlers run.
-      const inTransactionHandlers = this.inTransactionHandlersFor(
-        params.collectionName
-      );
-      // Junction rows, the version snapshot, the outbox event and the
-      // revalidation intent, all on the caller's transaction.
-      const createEffects = await this.recordCreateSideEffects(tx, {
-        collectionName: params.collectionName,
-        inTransactionHandlers,
-        tableName,
-        entry: entry as Record<string, unknown>,
-        collection,
-        fields,
-        manyToManyFields,
-        manyToManyData,
-        user: params.user,
-        actor: params.actor,
-        // The language this create's translatable values went into, so the
-        // version snapshot is tagged with it rather than reading as shared.
-        localeTag: localizedWrite?.writeLocale,
+        // The in-transaction handlers, asked once for this write: the same set
+        // decides how much of the document is assembled and which handlers run.
+        const inTransactionHandlers = this.inTransactionHandlersFor(
+          params.collectionName
+        );
+        // Junction rows, the version snapshot, the outbox event and the
+        // revalidation intent, all on the caller's transaction.
+        const createEffects = await this.recordCreateSideEffects(tx, {
+          collectionName: params.collectionName,
+          inTransactionHandlers,
+          tableName,
+          entry: entry as Record<string, unknown>,
+          collection,
+          fields,
+          manyToManyFields,
+          manyToManyData,
+          user: params.user,
+          actor: params.actor,
+          // The language this create's translatable values went into, so the
+          // version snapshot is tagged with it rather than reading as shared.
+          localeTag: localizedWrite?.writeLocale,
+        });
+
+        // Last of the write itself, on the caller's transaction, before the
+        // after-hooks this path runs inside it. Run whether or not hooks are:
+        // see `runInTransactionPhase`. A handler's failure is thrown, not
+        // softened, so the caller's transaction keeps nothing of this entry.
+        await this.runInTransactionPhase(tx, inTransactionHandlers, {
+          collection: params.collectionName,
+          operation: "create",
+          id: (entry as { id: string }).id,
+          data: createEffects.document,
+          user: params.user,
+          context: sharedContext,
+        });
+        // What the gate's verdict started is settled now the create is written, under the same
+        // savepoint: a settle that fails takes this create back, even where a batch carries on
+        // with the items after it.
+        if (settleCreateGate) await settleCreateGate();
+        return { entry, createEffects };
       });
       const eventRecorded = createEffects.eventRecorded;
       revalidationIntent = createEffects.revalidationIntent;
-
-      // Last of the write itself, on the caller's transaction, before the
-      // after-hooks this path runs inside it. Run whether or not hooks are:
-      // see `runInTransactionPhase`. A handler's failure is thrown, not
-      // softened, so the caller's transaction keeps nothing of this entry.
-      await this.runInTransactionPhase(tx, inTransactionHandlers, {
-        collection: params.collectionName,
-        operation: "create",
-        id: (entry as { id: string }).id,
-        data: createEffects.document,
-        user: params.user,
-        context: sharedContext,
-      });
-      // What the gate's verdict started is settled now the create is written; a gate that throws
-      // takes the create back with the caller's transaction.
-      if (settleCreateGate) await settleCreateGate();
 
       // The collection event, held for the caller's commit. Announced whether
       // or not hooks run: it is not a hook, as the outbox event is not.

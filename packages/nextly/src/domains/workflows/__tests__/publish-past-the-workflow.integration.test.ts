@@ -36,11 +36,13 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { container } from "../../../di/container";
 import { createDynamicHandlers } from "../../../routeHandler";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { ContentEventsRepository } from "../../content-events/repository";
 import type { ApiKeyService } from "../../auth/services/api-key-service";
 import type { CollectionService } from "../../collections/services/collection-service";
+import type { PublishGate } from "../../collections/services/publish-gate";
 import { WITHOUT_REVIEW_KEY } from "../../collections/services/save-door-gate";
 import {
   ANY_EDITABLE_STATE,
@@ -936,7 +938,10 @@ describe.each(getConfiguredTestDialects())(
       }
 
       /** A create on a transaction the caller holds, as a plugin makes one; its answer or throw. */
-      async function createdOnCallersTransaction(data: Doc): Promise<unknown> {
+      async function createdOnCallersTransaction(
+        data: Doc,
+        collectionName: string = PAGES
+      ): Promise<unknown> {
         const entries = handlerOf(app()).getEntryService() as unknown as {
           createEntryInTransaction(
             tx: unknown,
@@ -948,7 +953,7 @@ describe.each(getConfiguredTestDialects())(
           .adapter.transaction(tx =>
             entries.createEntryInTransaction(
               tx,
-              { collectionName: PAGES, overrideAccess: true },
+              { collectionName, overrideAccess: true },
               data
             )
           )
@@ -981,6 +986,54 @@ describe.each(getConfiguredTestDialects())(
 
         expect(JSON.stringify(answer)).toContain("NOT_APPROVED");
         expect(await storedPages()).toEqual([]);
+      });
+
+      it("is refused in a batch create before any of its hooks run", async () => {
+        await boot(dialect);
+        hookCalls.count = 0;
+
+        const result = await pluginService().createMany(HOOKED, [
+          { title: "Straight out", status: "published" },
+        ]);
+
+        expect(result.failed, JSON.stringify(result)).toBe(1);
+        expect(hookCalls.count).toBe(0);
+      });
+
+      it("is refused on a caller's transaction before any of its hooks run", async () => {
+        await boot(dialect);
+        hookCalls.count = 0;
+
+        const answer = await createdOnCallersTransaction(
+          { title: "Straight out", status: "published" },
+          HOOKED
+        );
+
+        expect(JSON.stringify(answer)).toContain("NOT_APPROVED");
+        expect(hookCalls.count).toBe(0);
+      });
+
+      it("keeps nothing of a batch item whose publish the gate fails to settle, and keeps the rest", async () => {
+        await boot(dialect);
+        // A gate that lets every create through, and then fails as it settles one.
+        container.register<PublishGate>("publishGate", () => ({
+          refusals: () => Promise.resolve([]),
+          judge: () =>
+            Promise.resolve({
+              refusals: [],
+              settle: () => Promise.reject(new Error("settle failed")),
+            }),
+        }));
+
+        const result = await pluginService().createMany(PAGES, [
+          { title: "Goes live", status: "published" },
+          { title: "Stays a draft" },
+        ]);
+
+        expect(result.failed, JSON.stringify(result)).toBe(1);
+        expect((await storedPages()).map(page => page.title)).toEqual([
+          "Stays a draft",
+        ]);
       });
 
       it("creates as published for trusted code that names a reason, which is the control", async () => {
