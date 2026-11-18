@@ -60,6 +60,24 @@ every cached published page is refreshed, so the next visitor gets the new CSS.
   Keep a copy if you may want to go back.
 </Callout>
 
+## Write the site's CSS in Settings
+
+People who may change the site's settings write it in the builder: open the page's
+settings, then **Site settings**, and under **Code** choose **Add code** (or **Edit
+code**). The **CSS** box sits above Head and End of body, with the line "CSS for every
+page of the site. Write plain CSS; no `<style>` tags needed."
+
+**Save code** checks the CSS first, with the checker below. What it refuses is listed
+under the box, each line by its number with the reason, and nothing is saved, the code
+beside it included. Accepted, the CSS is saved, and the note says it applies to every
+published page at once. The canvas draws it on the page, never on the builder's own
+panels.
+
+If someone else saved the site's CSS while you were editing, nothing is saved and your
+CSS stays in the box: save again to replace theirs, or cancel to see what they saved.
+
+People without the site settings permission get no Site settings, so no CSS box.
+
 ## A block's CSS starts from `selector`
 
 Write `selector` where the block goes. Every rule of a block's CSS must start from it:
@@ -126,7 +144,8 @@ refuses, naming the line:
 - any `url(…)` that isn't a path on your site (`url(/images/a.png)` is fine;
   `https://`, `//`, `data:` and `javascript:` addresses are not);
 - anything that would end the style element early (`</style`), and a pasted
-  `<style>` wrapper (paste the CSS without the tags);
+  `<style>` wrapper: "Leave out the `<style>` tags". What is inside the tags is
+  still checked, so every refusal is named at once;
 - what can run script in a browser that still honours it: `expression()`, `behavior`
   and `-moz-binding`;
 - CSS longer than 50,000 characters.
