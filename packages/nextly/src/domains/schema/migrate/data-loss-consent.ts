@@ -6,9 +6,10 @@
  * deletion of the run, and the run prints each one before deleting it. Given
  * a comma-separated list (`--accept-data-loss=posts,pages.summary`) it covers
  * only those tables and columns: a named table covers every deletion in it —
- * dropping it, dropping any of its columns, removing its rows — and a named
- * `table.column` covers dropping that column. Anything it does not cover is
- * refused, named, before anything changes.
+ * dropping it, dropping any of its columns, removing its rows — and in its
+ * translations table (`<table>_locales`), which holds the same entries' values
+ * in each language, and a named `table.column` covers dropping that column.
+ * Anything it does not cover is refused, named, before anything changes.
  *
  * Without consent an interactive run lists every deletion, with its count
  * when the database can be read, and asks; a run with no terminal refuses at
@@ -341,10 +342,69 @@ export function consentCovers(
   if (given.targets === "all") return true;
   if (deletion.kind === "unnamed" || onlyBlanketCovers(deletion)) return false;
   if (given.targets.tables.has(deletion.table)) return true;
+  // A translations table is part of the table whose entries it translates: naming that table
+  // consents to losing both, as deleting a translated entity's table loses both.
+  const translated = translatedTableOf(deletion.table);
+  if (translated !== undefined && given.targets.tables.has(translated)) {
+    return true;
+  }
   return (
     deletion.kind === "column" &&
     given.targets.columns.has(`${deletion.table}.${deletion.column}`)
   );
+}
+
+/** The suffix of a translations table's name, after the name of the table it translates. */
+const TRANSLATIONS_SUFFIX = "_locales";
+
+/** The table `table` holds the translations of, when its name is a translations table's. */
+function translatedTableOf(table: string): string | undefined {
+  return table.endsWith(TRANSLATIONS_SUFFIX) &&
+    table.length > TRANSLATIONS_SUFFIX.length
+    ? table.slice(0, -TRANSLATIONS_SUFFIX.length)
+    : undefined;
+}
+
+/**
+ * `deletions` in their order, but with each translations table's drop listed
+ * right after the drop of the table it translates, when the same run (and the
+ * same file, where `sourceOf` names one) drops both: a file drops every
+ * translations table first, and the person asked reads each table's rows and
+ * its translations together.
+ */
+function translationsBesideTheirTables(
+  deletions: readonly Deletion[],
+  sourceOf: ((deletion: Deletion) => string | undefined) | undefined
+): Deletion[] {
+  const placeOf = (deletion: Deletion) =>
+    deletion.kind === "table"
+      ? `${sourceOf?.(deletion) ?? ""}\u0000${deletion.table}`
+      : undefined;
+  const dropped = new Set(
+    deletions.flatMap(d => {
+      const place = placeOf(d);
+      return place === undefined ? [] : [place];
+    })
+  );
+  // The translations tables to move: each one whose translated table this list drops too.
+  const moved = new Map<string, Deletion[]>();
+  for (const d of deletions) {
+    if (d.kind !== "table") continue;
+    const translated = translatedTableOf(d.table);
+    if (translated === undefined) continue;
+    const owner = `${sourceOf?.(d) ?? ""}\u0000${translated}`;
+    if (!dropped.has(owner)) continue;
+    moved.set(owner, [...(moved.get(owner) ?? []), d]);
+  }
+  const movedOnes = new Set([...moved.values()].flat());
+  const out: Deletion[] = [];
+  for (const d of deletions) {
+    if (movedOnes.has(d)) continue;
+    out.push(d);
+    const place = placeOf(d);
+    if (place !== undefined) out.push(...(moved.get(place) ?? []));
+  }
+  return out;
 }
 
 function plural(count: number, one: string, many: string): string {
@@ -511,8 +571,13 @@ export async function judgeDataLoss(args: {
   approved?: readonly Deletion[];
   sourceOf?: (deletion: Deletion) => string | undefined;
 }): Promise<DataLossVerdict> {
-  const { deletions, consent } = args;
-  if (deletions.length === 0) return { kind: "proceed" };
+  const { consent } = args;
+  if (args.deletions.length === 0) return { kind: "proceed" };
+  // Listed, and refused, with each translations table beside the table it translates.
+  const deletions = translationsBesideTheirTables(
+    args.deletions,
+    args.sourceOf
+  );
   const approved = new Set((args.approved ?? []).map(deletionKey));
   const uncovered = deletions.filter(
     d => !consentCovers(consent, d) && !approved.has(deletionKey(d))

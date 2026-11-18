@@ -1,16 +1,27 @@
 /**
- * A translated collection deleted in the Schema Builder is deleted on a
- * deployed database by `nextly migrate`, as the Builder deleted it in
- * development: its tables, its translations table among them, under the
- * data-loss consent that names the collection's table.
+ * A translated collection, Single or field group deleted in the Schema
+ * Builder is deleted on a deployed database by `nextly migrate`, as the
+ * Builder deleted it in development: its tables, its translations table among
+ * them, under the data-loss consent that names its table, which lists the
+ * translations table with its rows beside it. `migrate:down` of the delete
+ * brings the table back with an empty translations table.
  *
  * Two databases, each the commands reach through `DATABASE_URL` as an app's
- * would: the Builder's, where the collection is created and deleted in
+ * would: the Builder's, where the entity is created and deleted in
  * development and each save writes its migration, and the deployed one, where
  * `nextly migrate` applies the create, an entry is written, and then
  * `nextly migrate` applies the delete with the data-loss consent.
+ *
+ * And the same for a translated code-first collection removed from the
+ * config: `migrate:create` writes the drop of its translations table.
  */
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -19,14 +30,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createScratchDatabase } from "../../../../__tests__/helpers/fresh-database";
 import { runMigrate } from "../../../../cli/commands/migrate";
+import { runMigrateCreate } from "../../../../cli/commands/migrate-create";
+import { runMigrateDown } from "../../../../cli/commands/migrate-down";
 import type { CommandContext } from "../../../../cli/program";
 import type { AcceptDataLossOption } from "../../../../cli/utils/data-loss-consent";
 import { createLogger } from "../../../../cli/utils/logger";
-import { defineConfig, fieldGroup, text } from "../../../../config";
+import {
+  defineCollection,
+  defineConfig,
+  fieldGroup,
+  text,
+} from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
 import { clearServices, shutdownServices } from "../../../../di/register";
 import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../../dispatcher/handlers/component-dispatcher";
+import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -36,7 +55,8 @@ import {
 import type { ServiceContainer } from "../../../../services";
 import { _resetEnvCache } from "../../../../shared/lib/env";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
-import { ensureI18nArchive } from "../../../i18n/migration/ensure-archive";
+import type { SingleEntryService } from "../../../singles/services/single-entry-service";
+import { resolveSingleTableName } from "../../../singles/services/resolve-single-table-name";
 import { resolveComponentTableName } from "../../utils/resolve-table-name";
 import { setNonInteractive } from "../can-prompt";
 
@@ -58,10 +78,117 @@ const PROJECT = defineConfig({
   db: { migrationsDir: MIGRATIONS, uiSchemaFile: DEFINITION },
 });
 
-const NOTES = "dpl_notes";
-const NOTES_TABLE = `dc_${NOTES}`;
 const META = "dpl_meta";
-const META_TABLE = resolveComponentTableName(META);
+
+/**
+ * One kind of translated entity: how the Builder makes and deletes it, and
+ * how an entry with a translation is written to it on the deployed site.
+ */
+interface Kind {
+  word: string;
+  table: string;
+  create: () => Promise<unknown>;
+  /** Writes an entry and its Spanish translation; none for a field group, which no entry owns here. */
+  write?: (site: TestNextly) => Promise<void>;
+  remove: () => Promise<unknown>;
+}
+
+const NOTES = "dpl_notes";
+const HERO = "dpl_hero";
+const CARD = "dpl_card";
+
+const KINDS: Kind[] = [
+  {
+    word: "collection",
+    table: `dc_${NOTES}`,
+    create: async () => {
+      await dispatchComponents(
+        "createComponent",
+        {},
+        { slug: META, label: META, fields: [text({ name: "note" })] }
+      );
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        {
+          name: NOTES,
+          label: NOTES,
+          localized: true,
+          fields: [
+            text({ name: "body", localized: true }),
+            fieldGroup({ name: "meta", component: META }),
+          ],
+        }
+      );
+    },
+    write: async site => {
+      const entry = await site.nextly.create({
+        collection: NOTES as never,
+        data: { body: "Hello", meta: { note: "n" } } as never,
+      });
+      await site.nextly.update({
+        collection: NOTES as never,
+        id: (entry.item as { id: string }).id as never,
+        locale: "es",
+        data: { body: "Hola", _overwrite: true } as never,
+      });
+    },
+    remove: () =>
+      dispatchCollections(
+        {} as ServiceContainer,
+        "deleteCollection",
+        { collectionName: NOTES },
+        undefined
+      ),
+  },
+  {
+    word: "Single",
+    table: resolveSingleTableName({ slug: HERO }),
+    create: () =>
+      dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: HERO,
+          label: HERO,
+          localized: true,
+          fields: [text({ name: "body", localized: true })],
+        }
+      ),
+    write: async site => {
+      const singles = site.getService<SingleEntryService>("singleEntryService");
+      for (const [locale, body] of [
+        ["en", "Hello"],
+        ["es", "Hola"],
+      ] as const) {
+        const written = await singles.update(
+          HERO,
+          { body, _overwrite: true },
+          { overrideAccess: true, locale }
+        );
+        expect(written.success, JSON.stringify(written)).toBe(true);
+      }
+    },
+    remove: () => dispatchSingles("deleteSingle", { slug: HERO }, {}),
+  },
+  {
+    word: "field group",
+    table: resolveComponentTableName(CARD),
+    create: () =>
+      dispatchComponents(
+        "createComponent",
+        {},
+        {
+          slug: CARD,
+          label: CARD,
+          localized: true,
+          fields: [text({ name: "caption", localized: true })],
+        }
+      ),
+    remove: () => dispatchComponents("deleteComponent", { slug: CARD }, {}),
+  },
+];
 
 let dir: string;
 let closers: Array<() => Promise<void>> = [];
@@ -124,11 +251,13 @@ async function start(adapter: DrizzleAdapter): Promise<TestNextly> {
   });
 }
 
-/** `nextly migrate` over the project, with `consent` to losing data: its exit code and what it said. */
-async function migrate(
-  consent: AcceptDataLossOption = true
+/**
+ * A command over the project, as the CLI runs it: its exit code (undefined
+ * when it finished) and everything it said.
+ */
+async function command(
+  run: (context: CommandContext) => Promise<void>
 ): Promise<{ code: number | undefined; said: string }> {
-  loaded.config = PROJECT;
   const said: string[] = [];
   const capture = (message: string) => {
     said.push(message);
@@ -152,10 +281,7 @@ async function migrate(
     throw new Error(`exit ${String(code)}`);
   });
   try {
-    await runMigrate(
-      { cwd: dir, acceptDataLoss: consent } as Parameters<typeof runMigrate>[0],
-      context
-    );
+    await run(context);
     return { code: undefined, said: said.join("\n") };
   } catch (error) {
     const match = /^exit (\d+)$/.exec((error as Error).message);
@@ -165,6 +291,25 @@ async function migrate(
     exit.mockRestore();
     printed.mockRestore();
   }
+}
+
+/** `nextly migrate` over the project, with `consent` to losing data. */
+function migrate(consent: AcceptDataLossOption = true, config = PROJECT) {
+  loaded.config = config;
+  return command(context =>
+    runMigrate(
+      { cwd: dir, acceptDataLoss: consent } as Parameters<typeof runMigrate>[0],
+      context
+    )
+  );
+}
+
+/** `nextly migrate:down` of the last migration, with the data-loss consent. */
+function migrateDown() {
+  loaded.config = PROJECT;
+  return command(context =>
+    runMigrateDown({ cwd: dir, step: 1, acceptDataLoss: true }, context)
+  );
 }
 
 /** The Builder's own saves, in development, as its dialogs send them. */
@@ -177,45 +322,42 @@ async function builder<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
-/** What the deployed database holds of NOTES. */
-async function leftOf(adapter: DrizzleAdapter, dialect: TestDialect) {
+/** What `adapter` holds of `table`: whether it and its translations table stand, and the translations. */
+async function leftOf(
+  adapter: DrizzleAdapter,
+  dialect: TestDialect,
+  table: string
+) {
   const q = (name: string) =>
     dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
-  const count = async (sql: string) =>
-    Number(
-      (await adapter.executeQuery<{ n: unknown }>(sql))[0]?.n ?? Number.NaN
-    );
-  const companion = `${NOTES_TABLE}_locales`;
+  const companion = `${table}_locales`;
+  const translationsTable = await adapter.tableExists(companion);
   return {
-    table: await adapter.tableExists(NOTES_TABLE),
-    translationsTable: await adapter.tableExists(companion),
-    translations: (await adapter.tableExists(companion))
-      ? await count(`SELECT COUNT(*) AS n FROM ${q(companion)}`)
-      : 0,
-    registryRow: await count(
-      `SELECT COUNT(*) AS n FROM ${q("dynamic_collections")} WHERE ${q("slug")} = '${NOTES}'`
-    ),
-    fieldGroupValues: await count(
-      `SELECT COUNT(*) AS n FROM ${q(META_TABLE)} WHERE ${q("_parent_table")} = '${NOTES_TABLE}'`
-    ),
-    archiveRows: (await adapter.tableExists("nextly_i18n_archive"))
-      ? await count(
-          `SELECT COUNT(*) AS n FROM ${q("nextly_i18n_archive")} WHERE ${q("collection")} = '${NOTES}'`
+    table: await adapter.tableExists(table),
+    translationsTable,
+    translations: translationsTable
+      ? Number(
+          (
+            await adapter.executeQuery<{ n: unknown }>(
+              `SELECT COUNT(*) AS n FROM ${q(companion)}`
+            )
+          )[0]?.n ?? Number.NaN
         )
       : 0,
   };
 }
 
 describe.each(getConfiguredTestDialects())(
-  "a translated collection deleted in the Builder, on a deployed database (%s)",
+  "a translated entity deleted in the Builder, on a deployed database (%s)",
   dialect => {
     /**
-     * Create NOTES in the Builder, apply it to the deployed database with an
-     * entry there, delete NOTES in the Builder, and apply the delete to the
+     * Create the entity in the Builder, apply it to the deployed database with
+     * an entry there, delete it in the Builder, and apply the delete to the
      * deployed database with `consent`: what that run answered, and what it
-     * left.
+     * left, with the deployed database to go on from.
      */
     async function deleteOnTheDeployedDatabase(
+      kind: Kind,
       consent: AcceptDataLossOption = true
     ) {
       const own = await openDatabase(dialect, "builder");
@@ -223,121 +365,183 @@ describe.each(getConfiguredTestDialects())(
 
       reach(dialect, own.url);
       await start(own.adapter);
-      await builder(async () => {
-        await dispatchComponents(
-          "createComponent",
-          {},
-          { slug: META, label: META, fields: [text({ name: "note" })] }
-        );
-        await dispatchCollections(
-          {} as ServiceContainer,
-          "createCollection",
-          {},
-          {
-            name: NOTES,
-            label: NOTES,
-            localized: true,
-            fields: [
-              text({ name: "body", localized: true }),
-              fieldGroup({ name: "meta", component: META }),
-            ],
-          }
-        );
-      });
+      await builder(kind.create);
 
-      // The deploy: the create applied, then an entry written, with a
-      // translation and a field-group value, and an archived translation.
+      // The deploy: the create applied, then an entry written with a translation.
       reach(dialect, deployed.url);
       await start(deployed.adapter);
       const created = await migrate();
       expect(created.code, created.said).toBeUndefined();
-      const site = await start(deployed.adapter);
-      const entry = await site.nextly.create({
-        collection: NOTES as never,
-        data: { body: "Hello", meta: { note: "n" } } as never,
-      });
-      await site.nextly.update({
-        collection: NOTES as never,
-        id: (entry.item as { id: string }).id as never,
-        locale: "es",
-        data: { body: "Hola", _overwrite: true } as never,
-      });
-      await ensureI18nArchive(deployed.adapter, dialect);
-      await deployed.adapter.insert("nextly_i18n_archive", {
-        collection: NOTES,
-        entityKind: "collection",
-        entryId: (entry.item as { id: string }).id,
-        locale: "es",
-        field: "body",
-        value: "Hola",
-        archivedAt: new Date(),
-      });
-      const before = await leftOf(deployed.adapter, dialect);
+      if (kind.write !== undefined) {
+        await kind.write(await start(deployed.adapter));
+      }
+      const before = await leftOf(deployed.adapter, dialect, kind.table);
 
       // Deleted in the Builder, which writes the delete's migration.
       reach(dialect, own.url);
       await start(own.adapter);
-      await builder(() =>
-        dispatchCollections(
-          {} as ServiceContainer,
-          "deleteCollection",
-          { collectionName: NOTES },
-          undefined
-        )
-      );
+      await builder(kind.remove);
 
       // The deploy of the delete.
       reach(dialect, deployed.url);
       await start(deployed.adapter);
       const deleted = await migrate(consent);
-      const after = await leftOf(deployed.adapter, dialect);
-      return { before, deleted, after };
+      const after = await leftOf(deployed.adapter, dialect, kind.table);
+      return { before, deleted, after, deployed };
     }
 
-    it("drops its tables, its translations table among them", async () => {
-      const { before, deleted, after } = await deleteOnTheDeployedDatabase();
-      // Positive control: the deployed database held each of them.
-      expect(before).toMatchObject({
-        table: true,
-        translationsTable: true,
-      });
-      const seen = JSON.stringify({ code: deleted.code, before, after });
+    describe.each(KINDS)("a $word", kind => {
+      it("drops its tables, its translations table among them", async () => {
+        const { before, deleted, after } =
+          await deleteOnTheDeployedDatabase(kind);
+        // Positive control: the deployed database held both.
+        expect(before).toMatchObject({ table: true, translationsTable: true });
+        const seen = JSON.stringify({ code: deleted.code, before, after });
 
-      expect(deleted.code, `${seen}\n${deleted.said}`).toBeUndefined();
-      expect(
-        { table: after.table, translationsTable: after.translationsTable },
-        seen
-      ).toEqual({ table: false, translationsTable: false });
+        expect(deleted.code, `${seen}\n${deleted.said}`).toBeUndefined();
+        expect(
+          { table: after.table, translationsTable: after.translationsTable },
+          seen
+        ).toEqual({ table: false, translationsTable: false });
+      }, 180_000);
+
+      it("takes the translations table under a consent naming its table", async () => {
+        // The translations table is part of the entity's storage: naming the
+        // entity's table consents to losing both.
+        const { before, deleted, after } = await deleteOnTheDeployedDatabase(
+          kind,
+          kind.table
+        );
+        expect(before).toMatchObject({ table: true, translationsTable: true });
+        const seen = JSON.stringify({ code: deleted.code, before, after });
+
+        expect(deleted.code, `${seen}\n${deleted.said}`).toBeUndefined();
+        expect(
+          { table: after.table, translationsTable: after.translationsTable },
+          seen
+        ).toEqual({ table: false, translationsTable: false });
+      }, 180_000);
+
+      it("comes back by migrate:down with its table and an empty translations table", async () => {
+        const { deleted, deployed } = await deleteOnTheDeployedDatabase(kind);
+        expect(deleted.code, deleted.said).toBeUndefined();
+
+        const down = await migrateDown();
+        const after = await leftOf(deployed.adapter, dialect, kind.table);
+
+        expect(down.code, down.said).toBeUndefined();
+        // The translations the delete took are not in the file to bring back.
+        expect(after, down.said).toEqual({
+          table: true,
+          translationsTable: true,
+          translations: 0,
+        });
+      }, 180_000);
+    });
+
+    it("lists a collection's translations table, with its rows, right after its table", async () => {
+      const notes = KINDS[0]!;
+      const { before, deleted } = await deleteOnTheDeployedDatabase(notes);
+      // Positive control: the translations table held the two languages' rows.
+      expect(before.translations).toBe(2);
+      expect(deleted.code, deleted.said).toBeUndefined();
+
+      const lines = deleted.said.split("\n");
+      const at = lines.findIndex(line =>
+        new RegExp(`- table ${notes.table} \\(`).test(line)
+      );
+      expect(at, deleted.said).toBeGreaterThanOrEqual(0);
+      expect(lines[at + 1], deleted.said).toMatch(
+        new RegExp(`- table ${notes.table}_locales \\(2 rows\\)`)
+      );
     }, 180_000);
 
-    it("takes the translations table under a consent naming the collection's table", async () => {
-      // The translations table is part of the collection's storage: naming
-      // the collection's table consents to losing both.
-      const { before, deleted, after } =
-        await deleteOnTheDeployedDatabase(NOTES_TABLE);
-      expect(before).toMatchObject({ table: true, translationsTable: true });
-      const seen = JSON.stringify({ code: deleted.code, before, after });
-
-      expect(deleted.code, `${seen}\n${deleted.said}`).toBeUndefined();
-      expect(
-        { table: after.table, translationsTable: after.translationsTable },
-        seen
-      ).toEqual({ table: false, translationsTable: false });
-    }, 180_000);
-
-    it("refuses the delete, changing nothing, under a consent that names another table", async () => {
-      const { before, deleted, after } =
-        await deleteOnTheDeployedDatabase("dpl_another");
+    it("refuses a collection's delete, changing nothing, under a consent that names another table", async () => {
+      const notes = KINDS[0]!;
+      const { before, deleted, after } = await deleteOnTheDeployedDatabase(
+        notes,
+        "dpl_another"
+      );
       const seen = JSON.stringify({ code: deleted.code, before, after });
 
       expect(deleted.code, `${seen}\n${deleted.said}`).not.toBeUndefined();
-      // Refused before anything runs: the collection, its translations and
-      // every row stand as they were.
+      // Refused before anything runs: the collection and its translations
+      // stand as they were.
       expect(after, seen).toEqual(before);
       // Refused by the consent, naming what it does not cover, not by a
       // failure of the file.
       expect(deleted.said).toContain("The consent given does not cover");
-      expect(deleted.said).toContain(NOTES_TABLE);
+      expect(deleted.said).toContain(notes.table);
+    }, 180_000);
+  }
+);
+
+describe.skipIf(!getConfiguredTestDialects().includes("sqlite"))(
+  "a translated code-first collection removed from the config (sqlite)",
+  () => {
+    const LETTERS = "cf_letters";
+    const LETTERS_TABLE = `dc_${LETTERS}`;
+    const withLetters = defineConfig({
+      collections: [
+        defineCollection({
+          slug: LETTERS,
+          localized: true,
+          fields: [text({ name: "body", localized: true })],
+        }),
+      ],
+      localization: LOCALIZATION,
+      db: { migrationsDir: MIGRATIONS, uiSchemaFile: DEFINITION },
+    });
+
+    /** `nextly migrate:create` over `config`. */
+    function migrateCreate(name: string, config: unknown) {
+      loaded.config = config;
+      return command(context =>
+        runMigrateCreate(
+          name,
+          { cwd: dir, acceptDataLoss: true } as Parameters<
+            typeof runMigrateCreate
+          >[1],
+          context
+        )
+      );
+    }
+
+    it("writes the drop of its translations table, which the deployed run applies", async () => {
+      const site = await openDatabase("sqlite", "deployed");
+      reach("sqlite", site.url);
+
+      const created = await migrateCreate("add_letters", withLetters);
+      expect(created.code, created.said).toBeUndefined();
+      const applied = await migrate(true, withLetters);
+      expect(applied.code, applied.said).toBeUndefined();
+      // Positive control: the create made both tables.
+      expect(await leftOf(site.adapter, "sqlite", LETTERS_TABLE)).toMatchObject(
+        { table: true, translationsTable: true }
+      );
+
+      const removed = await migrateCreate("remove_letters", PROJECT);
+      expect(removed.code, removed.said).toBeUndefined();
+      const file = readdirSync(join(dir, "migrations"))
+        .filter(name => name.endsWith("_remove_letters.sql"))
+        .map(name => readFileSync(join(dir, "migrations", name), "utf8"))[0];
+      expect(file, removed.said).toBeDefined();
+      const up = (file ?? "").split(/^-- (?:DOWN|down)\b/m)[0] ?? "";
+      const dropsTranslations = up.indexOf(
+        `DROP TABLE IF EXISTS "${LETTERS_TABLE}_locales"`
+      );
+      const dropsTable = up.indexOf(`DROP TABLE "${LETTERS_TABLE}"`);
+      // Both dropped, the translations table first.
+      expect(dropsTranslations, file).toBeGreaterThanOrEqual(0);
+      expect(dropsTable, file).toBeGreaterThan(dropsTranslations);
+
+      const deleted = await migrate(true, PROJECT);
+      expect(deleted.code, deleted.said).toBeUndefined();
+      expect(await leftOf(site.adapter, "sqlite", LETTERS_TABLE)).toEqual({
+        table: false,
+        translationsTable: false,
+        translations: 0,
+      });
     }, 180_000);
   }
 );
