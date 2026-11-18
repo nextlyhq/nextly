@@ -30,6 +30,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
+import { dispatchComponents } from "../../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import { NextlyError } from "../../../../errors/nextly-error";
 import {
@@ -59,6 +60,8 @@ const kill = vi.hoisted(() => ({
   refuse: undefined as undefined | ((point: string) => boolean),
   /** Whether a removal about to be made is one to refuse, as a file the process may not touch. */
   refuseRemoving: undefined as undefined | ((path: string) => boolean),
+  /** Whether the next registry write is refused before it commits, as a lost connection would. */
+  failRegistry: false,
 }));
 
 /**
@@ -106,6 +109,10 @@ vi.mock("../../schema-version", async importOriginal => {
     writeRegistryRows: (async (
       ...args: Parameters<typeof real.writeRegistryRows>
     ) => {
+      if (kill.failRegistry) {
+        kill.failRegistry = false;
+        throw new Error("the registry write was refused");
+      }
       const written = await real.writeRegistryRows(...args);
       await stopHere("registry");
       return written;
@@ -140,6 +147,7 @@ afterEach(async () => {
   kill.release = undefined;
   kill.refuse = undefined;
   kill.refuseRemoving = undefined;
+  kill.failRegistry = false;
   await stopped;
   stopped = undefined;
   vi.restoreAllMocks();
@@ -808,5 +816,274 @@ describe.each(getConfiguredTestDialects())(
         expect(recordMarker(path)).toBeUndefined();
       }, 300_000);
     });
+  }
+);
+
+/** Whether a dispatcher's answer says the operation succeeded: a Response's status, else no error. */
+function succeeded(answer: unknown): boolean {
+  if (answer instanceof Response) return answer.ok;
+  if (answer instanceof Error) return false;
+  // A service result answers its own outcome.
+  return (answer as { success?: unknown } | null)?.success !== false;
+}
+
+/** One Builder save or delete that succeeds, after `setup` made its entity. */
+interface SucceedingPath {
+  name: string;
+  setup(): Promise<unknown>;
+  run(t: TestNextly): Promise<unknown>;
+}
+
+const heading = [text("heading")];
+const headingAndAlpha = [text("heading"), text("alpha")];
+
+const createPosts = () =>
+  dispatchCollections(
+    {} as ServiceContainer,
+    "createCollection",
+    {},
+    {
+      name: "sip_all_posts",
+      label: "sip_all_posts",
+      fields: heading,
+    }
+  );
+const createHero = () =>
+  dispatchSingles(
+    "createSingle",
+    {},
+    {
+      slug: "sip_all_hero",
+      label: "sip_all_hero",
+      fields: heading,
+    }
+  );
+const createCard = () =>
+  dispatchComponents(
+    "createComponent",
+    {},
+    {
+      slug: "sip_all_card",
+      label: "sip_all_card",
+      fields: heading,
+    }
+  );
+
+/**
+ * Every Builder save and delete of a collection, a Single and a field group, as the admin and the
+ * REST routes reach them: the create, the dialog's apply, the push or schema save with a field
+ * added, the save of settings alone, and the delete.
+ */
+const SUCCEEDING: readonly SucceedingPath[] = [
+  {
+    name: "a collection's create",
+    setup: () => Promise.resolve(),
+    run: createPosts,
+  },
+  {
+    name: "a collection's dialog apply",
+    setup: createPosts,
+    run: async t =>
+      dispatchCollections(
+        {} as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: "sip_all_posts" },
+        {
+          fields: headingAndAlpha,
+          confirmed: true,
+          schemaVersion: await versionOf(
+            t,
+            "dynamic_collections",
+            "sip_all_posts"
+          ),
+        }
+      ),
+  },
+  {
+    name: "a collection's update with a field added (the push)",
+    setup: createPosts,
+    run: () =>
+      dispatchCollections(
+        {} as ServiceContainer,
+        "updateCollection",
+        { collectionName: "sip_all_posts" },
+        { fields: headingAndAlpha }
+      ),
+  },
+  {
+    name: "a collection's update of its settings alone",
+    setup: createPosts,
+    run: () =>
+      dispatchCollections(
+        {} as ServiceContainer,
+        "updateCollection",
+        { collectionName: "sip_all_posts" },
+        { label: "Posts renamed" }
+      ),
+  },
+  {
+    name: "a collection's delete",
+    setup: createPosts,
+    run: () =>
+      dispatchCollections(
+        {} as ServiceContainer,
+        "deleteCollection",
+        { collectionName: "sip_all_posts" },
+        {}
+      ),
+  },
+  {
+    name: "a Single's create",
+    setup: () => Promise.resolve(),
+    run: createHero,
+  },
+  {
+    name: "a Single's dialog apply",
+    setup: createHero,
+    run: async t =>
+      dispatchSingles(
+        "applySingleSchemaChanges",
+        { slug: "sip_all_hero" },
+        {
+          fields: headingAndAlpha,
+          confirmed: true,
+          schemaVersion: await versionOf(t, "dynamic_singles", "sip_all_hero"),
+        }
+      ),
+  },
+  {
+    name: "a Single's schema save with a field added",
+    setup: createHero,
+    run: () =>
+      dispatchSingles(
+        "updateSingleSchema",
+        { slug: "sip_all_hero" },
+        { fields: headingAndAlpha }
+      ),
+  },
+  {
+    name: "a Single's schema save of its settings alone",
+    setup: createHero,
+    run: () =>
+      dispatchSingles(
+        "updateSingleSchema",
+        { slug: "sip_all_hero" },
+        { label: "Hero renamed" }
+      ),
+  },
+  {
+    name: "a Single's delete",
+    setup: createHero,
+    run: () => dispatchSingles("deleteSingle", { slug: "sip_all_hero" }, {}),
+  },
+  {
+    name: "a field group's create",
+    setup: () => Promise.resolve(),
+    run: createCard,
+  },
+  {
+    name: "a field group's dialog apply",
+    setup: createCard,
+    run: async t =>
+      dispatchComponents(
+        "applyComponentSchemaChanges",
+        { slug: "sip_all_card" },
+        {
+          fields: headingAndAlpha,
+          confirmed: true,
+          schemaVersion: await versionOf(
+            t,
+            "dynamic_components",
+            "sip_all_card"
+          ),
+        }
+      ),
+  },
+  // A field group's field changes that need a statement go through the dialog's apply; its update
+  // takes the ones that need none.
+  {
+    name: "a field group's update of a field that needs no statement",
+    setup: createCard,
+    run: () =>
+      dispatchComponents(
+        "updateComponent",
+        { slug: "sip_all_card" },
+        { fields: [{ name: "heading", type: "text", label: "Heading shown" }] }
+      ),
+  },
+  {
+    name: "a field group's update of its settings alone",
+    setup: createCard,
+    run: () =>
+      dispatchComponents(
+        "updateComponent",
+        { slug: "sip_all_card" },
+        { label: "Card renamed" }
+      ),
+  },
+  {
+    name: "a field group's delete",
+    setup: createCard,
+    run: () =>
+      dispatchComponents("deleteComponent", { slug: "sip_all_card" }, {}),
+  },
+];
+
+/** Every marker file in the project, of any entity. */
+function anyMarkers(): string[] {
+  if (!existsSync(MARKERS())) return [];
+  return readdirSync(MARKERS()).filter(name => name.endsWith(".json"));
+}
+
+/**
+ * A record clears only once the save's outcome is recorded: a record left by a save that succeeded
+ * would refuse the commands later for nothing. Each path that succeeds leaves neither a row nor a
+ * marker; a path that writes no registry row clears its record explicitly.
+ */
+describe.each(getConfiguredTestDialects())(
+  "every Builder save and delete that succeeds leaves no record (%s)",
+  (dialect: TestDialect) => {
+    async function boot(): Promise<TestNextly> {
+      vi.stubEnv("NODE_ENV", "development");
+      current = await createTestNextly({
+        dialect,
+        basePath,
+        db: { migrationsDir: HISTORY, uiSchemaFile: DEFINITION },
+      });
+      return current;
+    }
+
+    it.each(SUCCEEDING)(
+      "$name",
+      async path => {
+        const t = await boot();
+        expect(succeeded(await path.setup()), "the setup").toBe(true);
+
+        const answer = await path.run(t).catch((error: unknown) => error);
+        expect(succeeded(answer), `the save: ${String(answer)}`).toBe(true);
+        expect(await refusal(refuseWhileSaveInProgress(t.adapter))).toBe(
+          "none"
+        );
+        expect(anyMarkers()).toEqual([]);
+      },
+      300_000
+    );
+
+    // A collection's create answers a failed registry write as its result after its definition,
+    // files and statements were written: nothing records what was written, so the record stays.
+    it("a create whose registry write fails, answered as its result, keeps the record", async () => {
+      const t = await boot();
+      kill.failRegistry = true;
+      const answer = await createPosts().catch((error: unknown) => error);
+      expect(kill.failRegistry, "the registry write was never made").toBe(
+        false
+      );
+      expect(succeeded(answer), "the create succeeded").toBe(false);
+
+      expect(await refusal(refuseWhileSaveInProgress(t.adapter))).toBe(
+        "CONFLICT"
+      );
+      expect(anyMarkers()).toHaveLength(1);
+    }, 300_000);
   }
 );
