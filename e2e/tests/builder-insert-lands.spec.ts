@@ -246,9 +246,10 @@ test.describe("where a clicked block lands", () => {
     );
     await tile(page, "Heading").click();
     await announced(page, "Heading added inside Hero, at the end");
-    // The new Heading is the selection, and the next click's anchor.
+    // The new Heading is the selection, and the next click's anchor. The
+    // pointer still rests on the tile, so the line names it.
     await expect(placementLine(page)).toHaveText(
-      "Adding after Heading, inside Hero"
+      "Heading goes after Heading, inside Hero"
     );
     await saveDraft(page);
 
@@ -287,8 +288,9 @@ test.describe("where a clicked block lands", () => {
 
     for (let added = 0; added < 5; added++) {
       await tile(page, "Text").click();
+      // The pointer still rests on the tile, so the line names it.
       await expect(placementLine(page)).toHaveText(
-        "Adding after Text, inside Hero"
+        "Text goes after Text, inside Hero"
       );
     }
     await saveDraft(page);

@@ -121,6 +121,7 @@ describe("a block's own look, which a site edits as its type's base", () => {
     expect(blockDefaultsOf(configured)).toEqual({
       "core/button": {},
       "core/image": {},
+      "core/quote": {},
       "core/section": {},
     });
   });

@@ -456,7 +456,7 @@ has no item at all, so nothing on the rail opens an empty panel.
 | **Layers**   | The page as a tree. Select, expand, move, hide, lock and rename blocks here. See [Working with a block's row in Layers](#working-with-a-blocks-row-in-layers).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | **Pages**    | The site's pages, with search. Open, add, duplicate, rename or delete one without leaving the editor. See [Pages](#pages).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | **Design**   | The site's look, in three tabs: **Variables** (named colours, type sizes and spacing, each with a light and a dark value), **Shared styles** and **Fonts** (see [Fonts](#fonts)). A variable's dark value applies when a visitor's device prefers dark. The Variables tab imports and exports DTCG files, including one file per mode for Figma. A variable that a page, a component, a shared style or a block's default style still uses can't be removed: change those uses first. Some pages are never fully counted: a page too large to read in full, or one that keeps its blocks in a field under a named group. Before removing a variable, the editor reads those pages for it. If one of them uses the variable, or can't be read in time, the removal is refused and that page is named, or counted instead when you can't open it or its title can't be looked up in time. |
-| **Settings** | A dialog with **This page** and **Site**. See [Settings](#settings).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| **Settings** | **Page settings**, with **Site settings** beside its tabs. See [Settings](#settings).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | **Help**     | The keyboard shortcuts in effect, and links to these pages.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 Add, Layers and Design sit at the top. Settings and Help sit at the bottom.
@@ -494,6 +494,13 @@ the end of the page". Each tile tells a screen reader where it goes, and after a
 a screen reader hears what was added and where ("Heading added inside Hero, at the
 end"). The new block is selected, so the next one goes after it.
 
+While you point at a tile, or move to it with the arrow keys, the line names that tile's
+own place ("Heading goes inside Hero, at the end") and the canvas draws a blue line at
+exactly that place, with the same words beside it. The line doesn't move the page or
+scroll it. When the place is off screen, its words show at the top or bottom edge of the
+canvas with an arrow; press them to scroll the place into view. When the block would go
+inside an empty container, that container lights up instead.
+
 ### Columns ask for a layout
 
 A new **Columns** row shows "Choose a layout" on the canvas in place of its two empty
@@ -526,6 +533,44 @@ click outside closes the picker without adding anything and puts you back where 
 were.
 
 While you are typing in a block's text, <kbd>/</kbd> is just a character.
+
+## Copy, cut and paste
+
+Select one or more blocks and press <kbd>Ctrl</kbd>+<kbd>C</kbd> to copy them, or
+<kbd>Ctrl</kbd>+<kbd>X</kbd> to cut them, then <kbd>Ctrl</kbd>+<kbd>V</kbd> to paste. On
+a Mac, use <kbd>⌘</kbd>. **Copy**, **Cut** and **Paste** are also in the block's
+toolbar under **More actions**, in its right-click menu and in search
+(<kbd>Ctrl</kbd>+<kbd>K</kbd>).
+
+- Blocks are copied with their content, styles and the blocks inside them.
+- A paste lands where a clicked block would (see
+  [Where a clicked block lands](#where-a-clicked-block-lands)). Content blocks
+  (Heading, Text, Image…) go inside a selected container at the end, and after a
+  selected block that holds none. Layout blocks (Box, Columns, Card) go after a selected
+  container, and a Section goes after the top-level block holding the selection. With
+  nothing selected, the paste goes at the end of the page. The pasted blocks are
+  selected, and one undo takes the whole paste back.
+- You can paste on the same page, on another page, or in another browser tab of the
+  same site. Pasted blocks keep using the site's shared styles, block styles, variables,
+  components and media.
+- Cut copies the blocks, then removes them, as one undo step. A block locked in Layers
+  can't be cut, as it can't be deleted.
+- If that place can't take the blocks, the paste tries the next one, as a clicked block
+  does: after the selected block, then after each block around it, out to the page. Only
+  when no place takes them (a Column belongs only inside Columns, say) is the paste
+  refused, with the reason, and nothing changes. A paste that would make the page larger
+  or deeper than the site allows is refused too, though the editor doesn't say why yet.
+- A block bound to a list item's field keeps its binding when pasted outside a
+  Collection list, though there is no list item for it to read there.
+- Blocks copied on another site can't be pasted here: they use that site's styles,
+  components and media. Save them as a section, then use **Export** and **Import** on
+  the Saved sections list instead.
+
+While you are typing in a text field, or in a block's text on the canvas, the keys copy,
+cut and paste the text, as usual. The same goes for text you have highlighted.
+
+The first time you use **Paste** from a menu, the browser may ask to let the site see
+what you copied. The keys never ask.
 
 ## Adding an image
 
@@ -918,24 +963,42 @@ to the block holding it, and <kbd>Ctrl</kbd>+<kbd>K</kbd> (<kbd>⌘</kbd>+
 
 ## Settings
 
-**Settings** at the bottom of the rail opens a dialog with two tabs.
+**Settings** at the bottom of the rail opens **Page settings · <the page's title>**, with one
+row of tabs that stays in view while a tab scrolls. Everything in it saves with the page, from
+**Save** or **Publish** in the top bar, as the line at the bottom of every tab says, beside
+**Open as form**, which opens the page's form with your unsaved changes. Pressing Enter in a
+field never saves the page, and closing the dialog keeps your changes unsaved. Move between the
+tabs with the arrow keys.
 
-**This page** holds the entry's own fields, such as its title and address, as the
-entry's page draws them. Where a plugin adds a tab of its own, such as the
-[SEO plugin](/docs/plugins/seo#in-the-page-builder), these sit under **General**, with
-the plugin's tab beside them. They save with the page, from **Save** or **Publish** in the top
-bar. Below them, a preview shows roughly how a link to the page looks when it is shared.
-It uses the SEO fields where the page has them, then the page's first text and image, and
-the page's title. A heading never sets the title. Your site's own metadata may differ. Pressing Enter in a field
-never saves the page.
+- **General** holds the page's **Title**; its **Address**, the site's address and the page's
+  part, with buttons to copy it and to edit it in place (Enter keeps the edit, Escape puts it
+  back, and on a published page it says that changing it retires the old address); and its
+  **Header & footer**. Below them, a preview shows roughly how a link to the page looks when it
+  is shared. It uses the SEO fields where the page has them, then the page's first text and
+  image, and the page's title. A heading never sets the title. Your site's own metadata may
+  differ.
+- **Fields** holds every other field of the page, drawn as the entry's form draws them, with
+  the same rules: a field you add to the collection appears here with no change to the
+  builder. Another field the builder edits is a line with **Open in builder** for it. Where
+  nothing is left, there is no Fields tab.
+- Tabs other plugins add, such as the [SEO plugin](/docs/plugins/seo#in-the-page-builder)'s,
+  follow, in the order the plugins declare them.
 
-**Site** applies to the live site as soon as you change it. You see it only if your role
-may manage the page builder's site settings.
+If a **Save** or **Publish** is refused for a field shown in Page settings, the message names
+the field with **Show me**, which opens Page settings on that field's tab with the field
+focused. While you can't change the page, every tab is read-only, and a line at the top says so.
+
+A component or a template keeps its own fields on **General**, with the tabs plugins add beside
+it.
+
+**Site settings**, at the right of the tab row, opens the site's own settings in a dialog of
+their own. They apply to the live site as soon as you change them, and the dialog says so. You
+see it only if your role may manage the page builder's site settings.
 
 - **Breakpoints** lists the site's devices, in the same words as the device buttons.
   **Edit breakpoints** opens the editor in place. **Save breakpoints** stores the whole
   set at once, after checking it, and **Cancel** leaves it as it was. If you close
-  Settings with an edit open, it asks before throwing the edit away.
+  Site settings with an edit open, it asks before throwing the edit away.
 - **Site default header & footer** names the header & footer set pages without one of their own
   are shown in. **Change in Pages ▸ Header & footer** opens the list of sets in a new tab, where
   **Make site default** chooses another (see
@@ -946,7 +1009,7 @@ any other way, through the API or the site style's own form, is refused.
 
 ### A plugin's tab in Settings
 
-A plugin adds a tab to the Settings dialog at the Page Builder's admin place
+A plugin adds a tab to Page settings, in the same row as General and Fields, at the Page Builder's admin place
 `nextlyhq-plugin-page-builder.settings`, which takes tabs (`@experimental`). Name the Page
 Builder in your plugin's `dependsOn`, or in `optionalDependsOn` so a site without it still
 starts, with your tab left out:
@@ -1032,6 +1095,14 @@ Content tab, a prop that a field can fill has a bind button beside it. Choose it
 the fields that fit, grouped by where they come from, with each one's value as you read
 it. A field visitors can't read says **Not public**, and one whose value is only in a
 draft says **Draft**.
+
+**Nearest first.** For a block inside a Collection list, the list's own entries come
+first, named for them: **Each project in the list**. Then come **This page**, then the
+Singles and the site, which start folded into one row each under **Singles · Site**
+while a list's entries are listed. Choose a row to open it, or type in **Find a field**
+to search all of them. Each list field shows its value in the entry you clicked on the
+canvas, or the first entry if you selected the block another way. A picture shows as a
+small thumbnail, and a field with nothing in it says **(empty)**.
 
 Once bound, the prop shows a chip naming the field and where it comes from, with its
 **Fallback** under it: what visitors see when the field is empty or they can't read it.
@@ -1237,6 +1308,8 @@ On a Mac, <kbd>⌘</kbd> replaces <kbd>Ctrl</kbd>.
 | <kbd>Ctrl</kbd>+<kbd>Z</kbd>                                                                | Undo the last change                                                                                                              |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> or <kbd>Ctrl</kbd>+<kbd>Y</kbd>               | Redo the last undone change                                                                                                       |
 | <kbd>Ctrl</kbd>+<kbd>D</kbd>                                                                | Duplicate the selected block                                                                                                      |
+| <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>X</kbd>                                 | Copy or cut the selected blocks                                                                                                   |
+| <kbd>Ctrl</kbd>+<kbd>V</kbd>                                                                | Paste copied blocks where a clicked block would land                                                                              |
 | <kbd>Delete</kbd> or <kbd>Backspace</kbd>                                                   | Delete the selected block                                                                                                         |
 | <kbd>Enter</kbd>                                                                            | Edit the selected block's text                                                                                                    |
 | <kbd>Ctrl</kbd>+<kbd>B</kbd> / <kbd>Ctrl</kbd>+<kbd>I</kbd>                                 | While editing a Text, make the selected words bold or italic                                                                      |
