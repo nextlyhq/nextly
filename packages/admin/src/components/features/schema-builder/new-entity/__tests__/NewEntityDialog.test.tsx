@@ -519,6 +519,8 @@ describe("NewEntityDialog", () => {
         description: "a".repeat(DESCRIPTION_MAX_LENGTH),
       }),
       // No template picked: Create hands over no template fields.
+      [],
+      // Nor anything it needs made too.
       []
     );
   });

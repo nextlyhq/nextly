@@ -280,15 +280,22 @@ describe("useFieldGroupsFirst", () => {
     expect(unsavedEntity("collection", "authors")).toBeUndefined();
   });
 
-  it("lets go of, or releases, the host's own collections as its field groups", () => {
+  it("lets go of the host's own collections when it is left, and keeps its field groups as their own", () => {
     addUnsavedEntity(collection("authors", "Authors", POSTS));
     addUnsavedEntity(collection("tags", "Tags", POSTS));
+    addUnsavedEntity(group("hero", "Hero", POSTS));
     const { result } = renderHook(() =>
       useFieldGroupsFirst(POSTS.kind, POSTS.address, [])
     );
 
+    // No list or picker offers an unsaved collection on its own, so one kept
+    // ownerless would only hold its address; a field group is offered by any
+    // host's picker, so it stays.
     act(() => result.current.release());
-    expect(unsavedEntity("collection", "authors")?.ownedBy).toBeUndefined();
+    expect(unsavedEntity("collection", "authors")).toBeUndefined();
+    expect(unsavedEntity("collection", "tags")).toBeUndefined();
+    expect(unsavedEntity("field-group", "hero")?.ownedBy).toBeUndefined();
+    expect(unsavedEntity("field-group", "hero")).toBeDefined();
 
     // Held again as the host's, then its changes discarded.
     act(() => {

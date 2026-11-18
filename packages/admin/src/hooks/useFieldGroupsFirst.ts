@@ -168,9 +168,22 @@ export function useFieldGroupsFirst(
     }
   }, [held, host]);
 
+  // Leaving the host lets go of the collections it made, which no list or
+  // picker offers on their own, so kept they would only hold their addresses;
+  // its field groups stay, each one of its own, which any host's picker offers.
   const release = useCallback(() => {
-    if (host) releaseUnsavedFieldGroupsOf(host);
-  }, [host]);
+    if (!host) return;
+    for (const entity of held) {
+      if (
+        entity.kind === "collection" &&
+        entity.ownedBy?.kind === host.kind &&
+        entity.ownedBy.address === host.address
+      ) {
+        removeUnsavedEntity(entity.kind, entity.address);
+      }
+    }
+    releaseUnsavedFieldGroupsOf(host);
+  }, [held, host]);
 
   // However the editor is left, with a pending change or none (a picker cancelled after a
   // group was made leaves none), the groups its picker made stay as unsaved field groups of

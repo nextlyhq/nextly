@@ -169,6 +169,13 @@ function NeedRow({
   if (state.status === "checking") {
     return <li className="text-muted-foreground">{`Checking the ${name}…`}</li>;
   }
+  if (state.status === "unchecked") {
+    return (
+      <li className="text-danger-text">
+        {`The ${name} could not be checked: ${state.refusal ?? ""}`}
+      </li>
+    );
+  }
   if (state.status === "refused") {
     return (
       <li className="text-danger-text">
