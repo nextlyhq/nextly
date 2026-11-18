@@ -292,6 +292,23 @@ function changedFields(
   return fields as UpdateEntryPayload;
 }
 
+/**
+ * The fields a write sent, as the server stored them: its answer's value for
+ * each where it gives one (a field hook may have changed what was sent), the
+ * value sent otherwise.
+ */
+function storedValues(
+  sent: Readonly<Record<string, unknown>>,
+  answer: Readonly<Record<string, unknown>>
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(sent).map(([key, value]) => [
+      key,
+      key in answer ? answer[key] : value,
+    ])
+  );
+}
+
 /** The document's values without its id, which a recovery point leaves out. */
 function withoutId(document: StoredDocument): Record<string, unknown> {
   const values: Record<string, unknown> = { ...document };
@@ -730,14 +747,22 @@ function useRecordedParts(): {
   const base = useRef<Record<string, unknown>>({});
   const written = useRef<Record<string, unknown>>({});
   const changes = useRef<Readonly<Record<string, unknown>>>({});
+  // The read the written fields were stored over: a newer read already holds
+  // them as the server stored them, so they are dropped then.
+  const writtenOver = useRef<Record<string, unknown> | null>(null);
   return useMemo(
     () => ({
       edited: (read, edits) => {
+        if (writtenOver.current !== null && read !== writtenOver.current) {
+          written.current = {};
+          writtenOver.current = null;
+        }
         base.current = read;
         changes.current = edits;
       },
       wrote: fields => {
         written.current = { ...written.current, ...fields };
+        writtenOver.current = base.current;
       },
       joined: () => ({
         ...base.current,
@@ -748,6 +773,7 @@ function useRecordedParts(): {
         base.current = {};
         written.current = {};
         changes.current = {};
+        writtenOver.current = null;
       },
     }),
     []
@@ -897,7 +923,7 @@ function useSessionWrite(
         });
         if (!moved()) {
           versionRef.current = versionOf(result.item) ?? versionRef.current;
-          recording.stored(taken, written);
+          recording.stored(taken, storedValues(written, result.item));
           readBehind.current = read.document;
         }
         return { ok: true, values: result.item };

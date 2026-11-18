@@ -771,8 +771,8 @@ describe("useDocumentSession: recovery point", () => {
 
   it("rebases edits recorded during a save on what that save stored", async () => {
     // A save of the title is on its way when an edit to the definition is
-    // recorded: the point must hold the saved title, or restoring it would
-    // undo the save.
+    // recorded: the point must hold the title as the server stored it (a
+    // field hook tidied it), or restoring it would undo the save.
     let finish: (value: unknown) => void = () => undefined;
     api.update.mockImplementationOnce(
       () => new Promise(resolve => (finish = resolve))
@@ -789,7 +789,7 @@ describe("useDocumentSession: recovery point", () => {
     );
     await act(async () => {
       finish({
-        item: { ...STORED, title: "New title", _rev: "v2" },
+        item: { ...STORED, title: "New title, tidied", _rev: "v2" },
         warnings: [],
       });
       await saving;
@@ -798,9 +798,39 @@ describe("useDocumentSession: recovery point", () => {
 
     await waitFor(() => expect(api.saveAutosave).toHaveBeenCalledTimes(1));
     expect(api.saveAutosave.mock.calls[0]?.[1]).toMatchObject({
-      title: "New title",
+      title: "New title, tidied",
       definition: { kind: "component", nodes: [] },
       _rev: "v2",
+    });
+  });
+
+  it("takes the newer read over what a save sent, once the read has caught up", async () => {
+    // After a save lands, the document is read again; that read holds the
+    // fields as the server keeps them now, so a later recording follows it
+    // rather than what the save had sent.
+    const { result } = await heldSession();
+    api.findByID.mockResolvedValue({
+      ...STORED,
+      title: "As the server keeps it",
+      _rev: "v2",
+    });
+    await act(async () => {
+      await result.current.saveDraft({ title: "Sent title" });
+    });
+    await waitFor(() =>
+      expect(result.current.open).toMatchObject({
+        values: expect.objectContaining({ title: "As the server keeps it" }),
+      })
+    );
+
+    act(() =>
+      result.current.record({ definition: { kind: "component", nodes: [] } })
+    );
+    await act(async () => void vi.advanceTimersByTime(DEBOUNCE_WAIT));
+
+    await waitFor(() => expect(api.saveAutosave).toHaveBeenCalledTimes(1));
+    expect(api.saveAutosave.mock.calls[0]?.[1]).toMatchObject({
+      title: "As the server keeps it",
     });
   });
 
