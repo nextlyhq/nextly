@@ -600,6 +600,42 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await authorOf(t, empty)).toEqual([]);
     });
 
+    // JSON null holds no entry either, and the switch's conversion writes it as NULL too, which a
+    // required column refuses: the switch names that row before anything changes.
+    it("refuses switching a required relationship to one while a row holds JSON null, naming it", async () => {
+      const t = await boot();
+      const { a } = await postsWithAuthors(t, true, "authors", true);
+      await t.nextly.create({
+        collection: "posts",
+        data: { title: "P1", author: [a] },
+      });
+      const held = (
+        await t.nextly.create({
+          collection: "posts",
+          data: { title: "P2", author: [a] },
+        })
+      ).item.id as string;
+      await database.adapter.executeQuery(
+        `UPDATE dc_posts SET author = 'null' WHERE id = '${held}'`
+      );
+
+      const outcome = await switchAuthor(database.adapter, {
+        relationTo: "authors",
+        required: true,
+      });
+      expect(outcome).toEqual({
+        refused: expect.stringContaining("is required") as unknown as string,
+      });
+      expect((outcome as { refused: string }).refused).toContain(
+        "1 row holds none"
+      );
+      expect(
+        (await storedPosts(database.adapter)).fields.find(
+          f => f.name === "author"
+        )
+      ).toMatchObject({ hasMany: true });
+    });
+
     it("adds a required hasMany relationship over rows, filling each with an empty list before requiring it", async () => {
       const t = await boot();
       await postsWithAuthors(t, false);

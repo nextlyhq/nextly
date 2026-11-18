@@ -374,20 +374,21 @@ describe("a type change collected over its stored values", () => {
 
   it("carries a list of links becoming one link where each row holds one link or none", async () => {
     // Every road's many-to-one conversion (`referenceScalar`) writes a one-link list as its link
-    // and an empty list as no link, so neither is a value to rewrite first.
+    // and each stored empty (an empty list, a blank, JSON null) as no link, so none is a value to
+    // rewrite first.
     const result = await collectTypeChange(
       typeOf("postgresql", "relationship", {
         relationTo: "people",
         hasMany: true,
       }),
       typeOf("postgresql", "relationship", { relationTo: "people" }),
-      stored('["p3"]', "[]", null)
+      stored('["p3"]', "[]", null, "", "null")
     );
     expect(result.judgement.class).not.toBe("blocked");
     expect(result.judgement.reasons.filter(r => r.class === "blocked")).toEqual(
       []
     );
-    expect(result.counts).toEqual({ kept: 2, changed: 1, lost: 0, blocked: 0 });
+    expect(result.counts).toEqual({ kept: 4, changed: 1, lost: 0, blocked: 0 });
     expect(result.cleared).toEqual([]);
   });
 
@@ -407,6 +408,13 @@ describe("a type change collected over its stored values", () => {
         { relationTo: "people" },
         ["[]", null],
       ],
+      // One link becoming a list naming collections: the guard runs here too, not the list
+      // conversion, so each empty is cleared rather than written as a list.
+      [
+        { relationTo: "people" },
+        { relationTo: ["people", "teams"], hasMany: true },
+        [null, "", " ", "null", "[]"],
+      ],
     ] as const) {
       const result = await collectTypeChange(
         typeOf("postgresql", "relationship", from),
@@ -422,24 +430,36 @@ describe("a type change collected over its stored values", () => {
   });
 
   it("blocks a relationship's change of collections where a row holds a link, counting its rows", async () => {
-    const result = await collectTypeChange(
-      typeOf("postgresql", "relationship", { relationTo: "people" }),
-      typeOf("postgresql", "relationship", {
-        relationTo: ["people", "teams"],
-      }),
-      stored("p1", null, "p2")
-    );
-    expect(result.judgement).toEqual({
-      class: "blocked",
-      reasons: [
+    // To one reference naming its collection, or to a list of them.
+    for (const to of [
+      { relationTo: ["people", "teams"] },
+      { relationTo: ["people", "teams"], hasMany: true },
+    ]) {
+      const result = await collectTypeChange(
+        typeOf("postgresql", "relationship", { relationTo: "people" }),
+        typeOf("postgresql", "relationship", to),
+        stored("p1", null, "p2")
+      );
+      expect([to, result.judgement]).toEqual([
+        to,
         {
-          kind: "link-not-carried",
           class: "blocked",
-          rows: { first: [{ id: "1" }, { id: "3" }], count: 2 },
+          reasons: [
+            {
+              kind: "link-not-carried",
+              class: "blocked",
+              rows: { first: [{ id: "1" }, { id: "3" }], count: 2 },
+            },
+          ],
         },
-      ],
-    });
-    expect(result.counts).toEqual({ kept: 1, changed: 0, lost: 0, blocked: 2 });
+      ]);
+      expect(result.counts).toEqual({
+        kept: 1,
+        changed: 0,
+        lost: 0,
+        blocked: 2,
+      });
+    }
   });
 
   it("loses a value the new field's own validation refuses, though the rules would keep it", async () => {
