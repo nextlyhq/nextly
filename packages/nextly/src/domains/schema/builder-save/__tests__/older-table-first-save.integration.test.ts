@@ -298,17 +298,28 @@ for (const kind of KINDS.filter(k => k.name !== "a collection")) {
           (await tableOf(t, dialect, kind.table)).columns.find(
             c => c.name === name
           );
+        // Both columns there before the save: a column the reader missed would read as no default.
         const headingBefore = await columnOf("heading");
-        expect((await columnOf("views"))?.default).not.toBeNull();
+        const viewsBefore = await columnOf("views");
+        expect(headingBefore).toBeDefined();
+        expect(viewsBefore).toBeDefined();
+        expect(viewsBefore!.default).not.toBeNull();
 
         const shown = await bodyOf<Preview>(
           await kind.preview(HEADING_AS_NUMBER)
         );
         const keys = (shown.conversions ?? []).map(c => c.column);
+        // What the person is asked to confirm: the default removed, on this table's column.
         expect(
-          keys.some(key => key.includes("views")),
+          (shown.conversions ?? []).find(
+            c => c.table === kind.table && c.column.includes("views")
+          ),
           JSON.stringify(shown)
-        ).toBe(true);
+        ).toMatchObject({
+          change: "removes the default of views",
+          to: "no default",
+          deletesValues: false,
+        });
 
         // A save the push applies records the files it wrote applied once the table stands as the
         // newest one says: a default the push left would refuse it as drift, here.
@@ -323,9 +334,16 @@ for (const kind of KINDS.filter(k => k.name !== "a collection")) {
           "SELECT statements_executed AS ran FROM nextly_schema_events WHERE event_type = 'file_apply' AND status = 'applied'"
         );
         expect(recorded.length).toBeGreaterThan(0);
-        expect(recorded.map(r => Number(r.ran))).toEqual(recorded.map(() => 0));
-        expect((await columnOf("heading"))?.type).not.toBe(headingBefore?.type);
-        expect((await columnOf("views"))?.default ?? null).toBeNull();
+        // A count the record does not hold is not none run: `null` stays `null` here.
+        expect(
+          recorded.map(r => (r.ran === null ? null : Number(r.ran)))
+        ).toEqual(recorded.map(() => 0));
+        // `heading` now has the type a number field's column has: `views`'s, made by the create.
+        expect(viewsBefore!.type).not.toBe(headingBefore!.type);
+        expect(await columnOf("heading")).toMatchObject({
+          type: viewsBefore!.type,
+        });
+        expect(await columnOf("views")).toMatchObject({ default: null });
         const next = await bodyOf<Preview>(
           await kind.preview(HEADING_AS_NUMBER)
         );
