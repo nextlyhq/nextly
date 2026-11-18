@@ -141,6 +141,24 @@ describe.each(LEVELS)("custom CSS at the %s level", level => {
     ]);
   });
 
+  it("refuses an @import between style-like words in comments, which no tag blanking may hide", () => {
+    const css = '/* <style-x */ @import "https://example.com/x.css"; /* > */';
+    expect(reasons(css)).toContain("@import isn't allowed.");
+  });
+
+  it("refuses an @import after a </style-x> in a comment", () => {
+    const css = '/* </style-x> */ @import "https://example.com/x.css"; /* > */';
+    expect(reasons(css)).toContain("@import isn't allowed.");
+    // And whatever is after it, written as CSS, stays judged as written.
+    expect(
+      reasons(
+        "/* <style-x */ .a { background: url(https://x.example/a.png) } /* > */"
+      )
+    ).toEqual([
+      'Only pictures and fonts from this site can be used: "https://x.example/a.png" isn\'t a path on this site.',
+    ]);
+  });
+
   it("still names what else it refuses inside a pasted <style> wrapper", () => {
     expect(
       reasons(`<style>\n@import "/a.css";\n${at(level, "color: red;")}</style>`)
