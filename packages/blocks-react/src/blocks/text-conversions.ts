@@ -46,6 +46,7 @@ export const TURN_INTO_WORDS = {
   marksRemoved: "Bold and links are removed",
   onlyLightMarks: "Only bold, italic and links are kept",
   linkRemoved: "The link is removed",
+  relRemoved: "The link's relationship is removed",
   notOneBlockToText:
     "Only a Rich text with one paragraph or one heading can become Text.",
   notOneBlockToHeading:
@@ -195,7 +196,8 @@ export const RICH_TEXT_CONVERTERS: Readonly<
 /**
  * A heading's words as one paragraph's nodes: inside a link where the heading
  * links to an address, and what is lost said where it links to an entry,
- * which a link in a passage cannot hold.
+ * which a link in a passage cannot hold, or has a relationship a passage's
+ * link cannot hold.
  */
 function headingInline(props: HeadingProps): {
   readonly inline: RichTextNode[];
@@ -213,7 +215,11 @@ function headingInline(props: HeadingProps): {
     };
   }
   const href = url(props.href);
-  const rel = text(props.rel);
+  // As the Heading draws it: its words, however spaced, and in the lowercase
+  // a link's relationships are read in.
+  const rel = [
+    ...new Set(text(props.rel).toLowerCase().split(/\s+/).filter(Boolean)),
+  ].join(" ");
   const linked: RichTextNode[] =
     href === undefined
       ? [words]
@@ -231,7 +237,11 @@ function headingInline(props: HeadingProps): {
   const kept = toOneParagraph(
     rooted([{ type: "paragraph", children: linked }])
   );
-  return { inline: paragraphChildren(kept.value) };
+  const inline = paragraphChildren(kept.value);
+  const relKept = inline.some(node => node.type === "link" && node.rel === rel);
+  return href === undefined || rel === "" || relKept
+    ? { inline }
+    : { inline, dropped: TURN_INTO_WORDS.relRemoved };
 }
 
 /** Heading → Text: the words, and a link to an address around them. */

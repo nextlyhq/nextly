@@ -276,6 +276,22 @@ describe("the block menu", () => {
     });
   });
 
+  it("judges the turns by the placement rules the menu is given", () => {
+    // A host whose rules put a Heading only inside a Section: a Text at the
+    // top of the page may not become one there.
+    const nesting = {
+      parentsOf: (type: string) =>
+        type === "core/heading" ? ["core/section"] : undefined,
+    };
+    const actions = toolbarActions(page(text()), "t1", ["t1"], nesting);
+    const heading = actions.find(action => action.id === "turn-into-heading");
+    expect(heading?.enabled).toBe(false);
+    expect(heading?.reason).toMatch(/Heading/);
+    expect(
+      actions.find(action => action.id === "turn-into-rich-text")?.enabled
+    ).toBe(true);
+  });
+
   it("offers no turn for several blocks at once, nor for a block that turns into nothing", () => {
     const two = page(text(), text({ id: "t2" }));
     expect(

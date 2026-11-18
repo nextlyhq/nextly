@@ -267,6 +267,37 @@ describe("Heading → Text and Rich text", () => {
     expect(plan.dropped).toBeUndefined();
   });
 
+  it("keeps the link's relationship words, however they are spaced or cased", () => {
+    const props = {
+      ...HEADING_PROPS,
+      href: "https://example.com/team",
+      rel: " Nofollow   sponsored ",
+    };
+    const plan = turn(block(HEADING_BLOCK, props), TEXT_BLOCK);
+    expect(plan.op.node.props).toEqual({
+      text: root(
+        para({
+          type: "link",
+          url: "https://example.com/team",
+          rel: "nofollow sponsored",
+          children: [words("Our team")],
+        })
+      ),
+    });
+    expect(plan.dropped).toBeUndefined();
+  });
+
+  it("says when a relationship a Text cannot hold is removed", () => {
+    const props = {
+      ...HEADING_PROPS,
+      href: "https://example.com/team",
+      rel: "x-partner",
+    };
+    const plan = turn(block(HEADING_BLOCK, props), RICH_TEXT_BLOCK);
+    expect(JSON.stringify(plan.op.node.props)).not.toContain("x-partner");
+    expect(plan.dropped).toBe("The link's relationship is removed");
+  });
+
   it("removes a link to an entry, which a Text cannot hold, and says so", () => {
     const props = {
       ...HEADING_PROPS,

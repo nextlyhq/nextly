@@ -301,22 +301,39 @@ describe("a block style, which belongs to one block type", () => {
       hover: { desktop: { color: "#900" } },
     });
     const looks = { ...WORDS, styles: undefined };
-    const bare = planTurnInto(
-      page(looks),
-      "w1",
-      "test/passage",
-      lookup,
-      LIBRARY
-    );
+    const bare = planTurnInto(page(looks), "w1", "test/passage", lookup, [
+      LIBRARY[0] as NamedClass,
+    ]);
     if ("refused" in bare) throw new Error(bare.refused);
     expect(bare.op.node.styles).toEqual(LIBRARY[0]?.styles);
     // The shared style is any block's to wear, so it stays a class.
     expect(bare.op.node.classes).toEqual(["shared-brand"]);
   });
 
+  it("stays under a shared style the block keeps, as it was drawn", () => {
+    // The look is green, the shared style blue: the block was drawn blue, and
+    // the look's colour must not now win over the shared style.
+    const brand = LIBRARY[1] as NamedClass;
+    const plan = planTurnInto(
+      page({ ...WORDS, styles: undefined }),
+      "w1",
+      "test/passage",
+      lookup,
+      [LIBRARY[0] as NamedClass, brand]
+    );
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.op.node.styles).toEqual({
+      base: { desktop: { fontSize: "3rem" } },
+      hover: { desktop: { color: "#f00" } },
+    });
+    expect(plan.op.node.classes).toEqual(["shared-brand"]);
+  });
+
   it("keeps only what the new block supports of it", () => {
     const looks = { ...WORDS, styles: undefined };
-    const plan = planTurnInto(page(looks), "w1", "test/title", lookup, LIBRARY);
+    const plan = planTurnInto(page(looks), "w1", "test/title", lookup, [
+      LIBRARY[0] as NamedClass,
+    ]);
     if ("refused" in plan) throw new Error(plan.refused);
     expect(plan.op.node.styles).toEqual({
       base: { desktop: { color: "#0c0" } },

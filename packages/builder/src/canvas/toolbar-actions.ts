@@ -179,12 +179,16 @@ export interface ToolbarAction {
 function turnIntoActions(
   document: BlockDocument,
   selectedId: string,
+  nesting: NestingSource,
   ask: LockQuestion | undefined,
   planned: boolean
 ): ToolbarAction[] {
+  // Judged by the placement rules the rest of the menu is, which are the
+  // ones the verb runs by.
   return turnIntoOffers(document, selectedId, {
     ...(ask === undefined ? {} : { ask }),
     planned,
+    nesting,
   }).map(offer => ({
     id: offer.id,
     label: offer.label,
@@ -958,7 +962,7 @@ export function toolbarActions(
       lockRefusalFor,
       duplication?.ops
     ),
-    ...turnIntoActions(document, selectedId, lockRefusalFor, planned),
+    ...turnIntoActions(document, selectedId, rules, lockRefusalFor, planned),
     saveAction(document, ids, rules, mayCreatePattern, planned),
     ...sharedStyleActions(document, ids, sharedStyles),
     ...editComponentAction(document, selectedId, offersEditComponent),

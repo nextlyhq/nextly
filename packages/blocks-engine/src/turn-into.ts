@@ -194,6 +194,10 @@ function offeredToPlacements(document: BlockDocument, id: string): boolean {
  * The look the block wears that the new type cannot, merged in library order
  * when it wears several, and its classes without them; nothing when it wears
  * none the library names.
+ *
+ * A look is drawn under every other class the block wears, so a value a kept
+ * class sets (a shared style) is left out of it: written into the block's own
+ * styles it would otherwise win over that class, and the block would change.
  */
 function lookOf(
   node: BlockNode,
@@ -201,15 +205,54 @@ function lookOf(
   library: readonly NamedClass[]
 ): { look?: NodeStyles; classes?: string[] } {
   const worn = new Set(node.classes ?? []);
-  const looks = library
-    .filter(cls => worn.has(cls.id) && isLook(cls) && cls.blockType !== to)
+  const wornHere = library.filter(cls => worn.has(cls.id));
+  const looks = wornHere
+    .filter(cls => isLook(cls) && cls.blockType !== to)
     .sort((a, b) => a.orderIndex - b.orderIndex);
   if (looks.length === 0) return {};
   const gone = new Set(looks.map(look => look.id));
+  const kept = wornHere.filter(cls => !gone.has(cls.id));
+  const look = looks.reduce<NodeStyles>(
+    (all, each) => under(all, each.styles),
+    {}
+  );
   return {
-    look: looks.reduce<NodeStyles>((all, look) => under(all, look.styles), {}),
+    look: without(look, kept),
     classes: (node.classes ?? []).filter(cls => !gone.has(cls)),
   };
+}
+
+/** Whether a class sets `property` at this state and breakpoint. */
+function sets(
+  cls: NamedClass,
+  state: string,
+  breakpoint: string,
+  property: string
+): boolean {
+  const values = (cls.styles as Record<string, Record<string, object>>)[
+    state
+  ]?.[breakpoint];
+  return values !== undefined && Object.hasOwn(values, property);
+}
+
+/** `styles` without each value one of `classes` sets at the same place. */
+function without(
+  styles: NodeStyles,
+  classes: readonly NamedClass[]
+): NodeStyles {
+  const out: Record<string, Record<string, Record<string, unknown>>> = {};
+  for (const [state, breakpoints] of Object.entries(styles)) {
+    for (const [breakpoint, values] of Object.entries(breakpoints ?? {})) {
+      const left = Object.entries(values ?? {}).filter(
+        ([property]) =>
+          !classes.some(cls => sets(cls, state, breakpoint, property))
+      );
+      if (left.length === 0) continue;
+      out[state] ??= {};
+      out[state][breakpoint] = Object.fromEntries(left);
+    }
+  }
+  return out;
 }
 
 /** `below` with `above` laid over it, value by value: `above` wins. */
