@@ -24,10 +24,16 @@ import {
   type StyleLeaf,
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@nextlyhq/ui";
 import * as React from "react";
 
 import { FluidButton } from "./fluid-popover";
-import { ChoiceMenu } from "./font-choice-menu";
 import { FontChoicesContext } from "./font-family-field";
 import {
   sharedStyleChange,
@@ -146,6 +152,7 @@ export function TextStyleEditor(
         tokens={props.tokens}
         readOnly={readOnly}
         onValue={value => set(TEXT_STYLE_BASE, "lineHeight", value)}
+        onClear={() => set(TEXT_STYLE_BASE, "lineHeight", null)}
       >
         <LineHeightInput
           label="Line height"
@@ -166,6 +173,7 @@ export function TextStyleEditor(
         tokens={props.tokens}
         readOnly={readOnly}
         onValue={value => set(TEXT_STYLE_BASE, "fontWeight", value)}
+        onClear={() => set(TEXT_STYLE_BASE, "fontWeight", null)}
       >
         <WeightPart
           value={at("fontWeight")}
@@ -180,6 +188,7 @@ export function TextStyleEditor(
         tokens={props.tokens}
         readOnly={readOnly}
         onValue={value => set(TEXT_STYLE_BASE, "letterSpacing", value)}
+        onClear={() => set(TEXT_STYLE_BASE, "letterSpacing", null)}
       >
         <SpacingPart
           value={at("letterSpacing")}
@@ -214,6 +223,7 @@ function VariablePart({
   tokens,
   readOnly,
   onValue,
+  onClear,
   children,
 }: {
   label: string;
@@ -222,6 +232,11 @@ function VariablePart({
   tokens: SiteTokenSet | undefined;
   readOnly: boolean;
   onValue: (value: StyleValue) => void;
+  /**
+   * Take the part's value away, so the style writes none for it: an emptied
+   * field writes nothing, so this is the way back. Absent: not offered.
+   */
+  onClear?: (() => void) | undefined;
   children: React.ReactNode;
 }): React.JSX.Element {
   const labelId = React.useId();
@@ -255,7 +270,30 @@ function VariablePart({
           />
         )}
       </div>
+      {readOnly || onClear === undefined || value === undefined ? null : (
+        <ResetPart label={`Reset ${label}`} onClear={onClear} />
+      )}
     </div>
+  );
+}
+
+/** "Reset" beside a part holding a value, which takes it away. */
+function ResetPart({
+  label,
+  onClear,
+}: {
+  label: string;
+  onClear: () => void;
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      className="nx-style-inspector__breakpoint-action"
+      aria-label={label}
+      onClick={onClear}
+    >
+      Reset
+    </button>
   );
 }
 
@@ -287,7 +325,7 @@ function FontPart({
       <label className="nx-vars-editor__label" htmlFor={id}>
         Font
       </label>
-      <ChoiceMenu
+      <PartSelect
         id={id}
         label="Font"
         value={current === "" ? "body" : current}
@@ -355,14 +393,10 @@ function SizePart({
         )}
       </VariablePart>
       {own ? (
-        <button
-          type="button"
-          className="nx-style-inspector__breakpoint-action"
-          aria-label={`Reset the size on ${device.label}`}
-          onClick={onClear}
-        >
-          Reset
-        </button>
+        <ResetPart
+          label={`Reset the size on ${device.label}`}
+          onClear={onClear}
+        />
       ) : null}
     </>
   );
@@ -382,7 +416,7 @@ function WeightPart({
   const current =
     options.find(option => option.value === value)?.key ?? "n:400";
   return (
-    <ChoiceMenu
+    <PartSelect
       label="Weight"
       value={current}
       options={options.map(option => [option.key, option.label] as const)}
@@ -424,7 +458,7 @@ function SpacingPart({
         readOnly={readOnly}
         onCommit={typed => commit(typed, unit)}
       />
-      <ChoiceMenu
+      <PartSelect
         label="Letter spacing unit"
         value={unit}
         options={LETTER_SPACING_UNITS.map(each => [each, each] as const)}
@@ -464,5 +498,53 @@ function CasePart({
         </label>
       ))}
     </fieldset>
+  );
+}
+
+/**
+ * A short list a part is chosen from: the admin's select, whose list is
+ * drawn above the popup it is opened in.
+ */
+function PartSelect<V extends string>({
+  id,
+  label,
+  value,
+  options,
+  onChange,
+  disabled = false,
+}: {
+  id?: string;
+  /** What the control is, said before its value: "Weight". */
+  label: string;
+  value: V;
+  options: ReadonlyArray<readonly [V, string]>;
+  onChange: (value: V) => void;
+  disabled?: boolean;
+}): React.JSX.Element {
+  const shown = options.find(([option]) => option === value)?.[1] ?? value;
+  return (
+    <Select
+      value={value}
+      disabled={disabled}
+      onValueChange={next => {
+        const picked = options.find(([option]) => option === next);
+        if (picked !== undefined && picked[0] !== value) onChange(picked[0]);
+      }}
+    >
+      <SelectTrigger
+        id={id}
+        className="nx-text-styles__select"
+        aria-label={`${label}, ${shown}`}
+      >
+        <SelectValue>{shown}</SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+        {options.map(([option, words]) => (
+          <SelectItem key={option} value={option}>
+            {words}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }

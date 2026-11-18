@@ -348,6 +348,41 @@ describe("a device's own size", () => {
   });
 });
 
+describe("a part's own value", () => {
+  it("is reset, so the style writes none, for letter spacing, line height and weight", () => {
+    for (const [label, property] of [
+      ["Letter spacing", "letterSpacing"],
+      ["Line height", "lineHeight"],
+      ["Weight", "fontWeight"],
+    ] as const) {
+      const { writeStyles } = mount();
+      fireEvent.click(row(/^Text styles: Eyebrow/));
+      fireEvent.click(screen.getByRole("button", { name: `Reset ${label}` }));
+      const after = written(writeStyles)?.base?.[BASE_BREAKPOINT] as
+        | Record<string, unknown>
+        | undefined;
+      expect(after, label).not.toHaveProperty(property);
+      expect(after).toHaveProperty("fontSize", "12px");
+      cleanup();
+    }
+  });
+
+  it("offers no Reset for a part the style leaves unset", () => {
+    mount({
+      library: [
+        {
+          ...eyebrow,
+          styles: { base: { [BASE_BREAKPOINT]: { fontSize: "12px" } } },
+        },
+      ],
+    });
+    fireEvent.click(row(/^Text styles: Eyebrow/));
+    expect(
+      screen.queryByRole("button", { name: "Reset Letter spacing" })
+    ).toBeNull();
+  });
+});
+
 describe("read-only", () => {
   it("offers no add, no menu and no changes to a role that may not change design", () => {
     const { writeStyles } = mount({ readOnly: true });
