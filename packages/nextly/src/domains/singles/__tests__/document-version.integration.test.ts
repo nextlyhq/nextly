@@ -10,6 +10,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { defineSingle, text } from "../../../config";
 import {
   createTestNextly,
@@ -320,6 +321,9 @@ describe.each(getConfiguredTestDialects())(
           { locale: "en", overrideAccess: true }
         )
       );
+      // A stored super-admin: the live document is read as this caller, and
+      // a caller that does not exist may read nothing.
+      const admin = await superAdminUser(t, "system-check");
       // As the discard route makes it: the live document read first, then
       // the draft removed under the Single's lock.
       const { document, removed } = await discardWorkingDraft({
@@ -327,7 +331,7 @@ describe.each(getConfiguredTestDialects())(
         slug: PREFS,
         entryId: String((await mainRow(t, PREFS)).id),
         locale: "en",
-        user: { id: "system-check", roles: ["super-admin"] } as never,
+        user: { id: admin, roles: ["super-admin"] } as never,
         version: { _rev: held },
       });
       expect(removed).toBe(1);

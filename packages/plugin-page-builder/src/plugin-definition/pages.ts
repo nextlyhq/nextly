@@ -50,6 +50,7 @@ import {
   publishDependenciesRoute,
   publishReadinessRoute,
 } from "../publish-readiness";
+import type { StarterPagesSource } from "../starter-pages/starter-pages-route";
 import { addressSegments } from "../templates/template-addresses";
 import {
   storedAddressesReader,
@@ -650,7 +651,11 @@ export async function startAddressClaims(
 }
 
 /** The routes pages and documents contribute, by name. */
-export function routesForPages(def: Definition): {
+export function routesForPages(
+  def: Definition,
+  /** The starter pages a new page may start from. */
+  starters: StarterPagesSource
+): {
   readonly publishReadiness: PluginRoute;
   readonly publishDependencies: PluginRoute;
   readonly entries: PluginRoute;
@@ -682,8 +687,13 @@ export function routesForPages(def: Definition): {
     // The Pages panel's writes: create, duplicate, rename and delete a
     // page, each as the author asking, in exactly the collections the
     // search lists; and the New page dialog's read of what a new page
-    // would get, its address shown where the search shows a page's.
-    pagesWrite: pagesWriteRoutes(componentStoreOf(opts), opts.pagePreviewPath),
+    // would get, its address shown where the search shows a page's, and
+    // the starter pages it may start from.
+    pagesWrite: pagesWriteRoutes(
+      componentStoreOf(opts),
+      opts.pagePreviewPath,
+      starters
+    ),
     // Which collection holds the pages, as renamed: the picker draws on
     // that collection's forms and no other.
     pageCollection: pageCollectionRoute(),

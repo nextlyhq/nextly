@@ -8,12 +8,13 @@
  *
  * FREE OF SERVER IMPORTS, for the reason `pages-search-contract.ts` gives: the
  * routes reach the Direct API through `nextly/runtime`, which is server-only.
- * Its imports are another contract module's types and core's slug rule from
- * `nextly/slugify`, a client-safe leaf, so the dialog and the route make an
- * address by one implementation.
+ * Its imports are another contract module's types, the engine's document
+ * type, and core's slug rule from `nextly/slugify`, a client-safe leaf, so
+ * the dialog and the route make an address by one implementation.
  *
  * @module pages-write-contract
  */
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { slugify } from "nextly/slugify";
 
 import type { PageItem, PageReference } from "./pages-search-contract";
@@ -84,12 +85,18 @@ export const NEW_PAGE_PARAMS = {
   slug: "slug",
 } as const;
 
-/** @experimental A starter page the dialog offers beside Blank. */
+/**
+ * @experimental A starter page the dialog offers beside Blank, and the empty
+ * page's "or start from a page" row lists: its name, its short description,
+ * and its blocks as a page, which its preview is drawn from in the site's own
+ * colours and fonts. A page made from it gets a copy of those blocks with new
+ * ids, made by the server.
+ */
 export interface NewPageStarter {
   readonly id: string;
   readonly label: string;
-  /** A picture of the starter page, as an address an image can load. */
-  readonly picture?: string;
+  readonly description: string;
+  readonly document: BlockDocument;
 }
 
 /** @experimental A collection a new page can be made in. */
