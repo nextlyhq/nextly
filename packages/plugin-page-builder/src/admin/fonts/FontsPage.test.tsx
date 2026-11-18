@@ -47,6 +47,7 @@ vi.mock("../site-style-client", () => ({
       current: true,
     };
   },
+  useHeldSiteStyle: () => ({ extend: () => {}, release: async () => {} }),
   useSaveSiteStyle: () => ({
     save: vi.fn(() => Promise.resolve({ saved: true, issues: {} })),
     reread: vi.fn(),
@@ -63,6 +64,22 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   usePluginClientConfig: () => ({ siteStyle: { fonts: [FROM_CODE] } }),
   navigateTo: () => undefined,
 }));
+
+// The variable routes, as fakes that find no use: the page's studio reads
+// them, and these tests ask nothing of the counts.
+vi.mock("../variables-client", () => {
+  const access = {
+    usage: async () => ({ whole: true, variables: new Map() }),
+    uses: async () => ({
+      items: [],
+      total: 0,
+      hidden: 0,
+      hasNext: false,
+      complete: true,
+    }),
+  };
+  return { useVariablesClient: () => access };
+});
 
 const { FontsPage } = await import("./FontsPage");
 

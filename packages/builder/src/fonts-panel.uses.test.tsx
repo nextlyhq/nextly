@@ -99,7 +99,13 @@ function access(counts: Record<string, VariableReach>): VariablesAccess {
         })
       ),
     }),
-    uses: async () => ({ items: [], page: 1, hasNextPage: false }),
+    uses: async () => ({
+      items: [],
+      total: 0,
+      hidden: 0,
+      hasNext: false,
+      complete: true,
+    }),
   };
 }
 

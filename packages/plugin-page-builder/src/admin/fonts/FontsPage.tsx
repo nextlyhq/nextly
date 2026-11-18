@@ -8,8 +8,11 @@
  * It reads and writes through the same site-style client the editor does
  * (`useSiteStyle`, and the writers `SiteFontsScreen` owns), so a font added
  * here is in every font picker of the builder, and one added there is listed
- * here. The page is registered for those who may change the site's design
- * (`update-site-style`), the same permission every font route asks.
+ * here. The screen sits in the same Variables studio the Design panel wraps
+ * it in, so it says where each font is used and sets the Body and Headings
+ * fonts as the builder does. The page is registered for those who may change
+ * the site's design (`update-site-style`), the same permission every font
+ * route asks.
  *
  * @module admin/fonts/FontsPage
  */
@@ -18,7 +21,12 @@ import { useId, useMemo, type JSX } from "react";
 
 import { readSiteStyleRecord } from "../../site-style-record";
 import { SiteFontsScreen } from "../editor/site-style-fonts";
-import { offerableFaces, renderedTokens } from "../editor/site-style-studios";
+import {
+  offerableFaces,
+  offerableTokens,
+  renderedTokens,
+  TokensStudio,
+} from "../editor/site-style-studios";
 import { PLUGIN_SOURCE } from "../editor/stored-document";
 import { PageBuilderBreadcrumb } from "../page-breadcrumb";
 import { useSiteStyle } from "../site-style-client";
@@ -55,6 +63,11 @@ export function FontsPage(): JSX.Element {
       </div>
       {/* The builder's own tokens, so the screen draws as it does there. */}
       <div className="nx-builder-tokens nx-fonts-page">
+        <TokensStudio
+          merged={offerableTokens(read.siteStyle, read.pending, read.error)}
+          supplied={configSiteStyle.tokens}
+          pending={read.pending}
+        >
         <SiteFontsScreen
           labelledBy={heading}
           faces={offerableFaces(read.siteStyle, read.pending, read.error)}
@@ -65,6 +78,7 @@ export function FontsPage(): JSX.Element {
           storedPending={read.pending}
           unreadableFonts={read.unreadableFonts}
         />
+        </TokensStudio>
       </div>
     </div>
   );

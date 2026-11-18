@@ -273,8 +273,10 @@ describe("the site's fonts", () => {
     const confirm = within(details).getByRole("group", {
       name: "Remove Inter",
     });
+    // The Body variable names Inter first, so the confirmation says what it
+    // falls back to.
     expect(confirm.textContent).toContain(
-      "Text set in it falls back to the next font in its list. The files stay in your media library."
+      "Body falls back to “sans-serif”The files stay in your media library."
     );
     fireEvent.click(within(confirm).getByRole("button", { name: "Keep" }));
     expect(onRemoveFamily).not.toHaveBeenCalled();

@@ -1136,7 +1136,10 @@ export function editorPanelRenderer({
                     siteStyleError
                   )}
                   absence={siteStyleError !== null ? "failed" : "pending"}
-                  onClose={close}
+                  onClose={() => close()}
+                  // A font's "Body font" or "Headings font": back to Type,
+                  // onto that role's picker.
+                  onOpenRole={role => close(`[data-font-role="${role}"]`)}
                   // A font variable is changed in the Type tab's variables:
                   // the screen closes onto it, its group opened and in view.
                   onOpenTokens={() => {

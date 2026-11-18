@@ -21,7 +21,11 @@
  * @module fonts-panel
  */
 import { cssString, tokenDisplayLabel } from "@nextlyhq/blocks-engine";
-import type { FontFaceDef, SiteTokenSet } from "@nextlyhq/blocks-engine";
+import type {
+  FontFaceDef,
+  SiteTextMap,
+  SiteTokenSet,
+} from "@nextlyhq/blocks-engine";
 import {
   Button,
   DropdownMenu,
@@ -52,7 +56,18 @@ import {
   type SiteFamily,
 } from "./font-library";
 import { FontUploadEditor, type FontFaceUpload } from "./font-upload-editor";
+import {
+  FallbackList,
+  RoleRefusal,
+  UseForQuestion,
+  useFamiliesUses,
+  useUseFor,
+  WhereUsed,
+  type FamilyUsesHere,
+} from "./font-uses-view";
 import { KeepOrRemove, Refusal, useRefusableWrite } from "./panel-actions";
+import type { FontRole } from "./site-font-roles-model";
+import type { VariablesAccess } from "./variable-usage";
 
 export type { FontFaceUpload } from "./font-upload-editor";
 export type {
@@ -91,6 +106,35 @@ export interface FontsPanelProps {
   onRemoveFamily?: (family: SiteFamily) => Promise<string | undefined>;
   /** The Google Fonts catalogue, when the host offers one. */
   catalogue?: FontCatalogue;
+  /**
+   * How widely the site's variables are used, read for the font variables
+   * naming each font, so its details say how many places use it. Absent,
+   * no places are said.
+   *
+   * @experimental Settles with the Fonts screen.
+   */
+  usage?: VariablesAccess;
+  /**
+   * Open the Body or Headings font's picker, where a font's "Body font" or
+   * "Headings font" links. Absent, those are said, not linked.
+   *
+   * @experimental Settles with the Fonts screen.
+   */
+  onOpenRole?: (role: FontRole) => void;
+  /**
+   * Write the site's variables, so a font that finishes adding can be made
+   * the Body or Headings font at once. Absent, that is not asked.
+   *
+   * @experimental Settles with the Fonts screen.
+   */
+  onTokensChange?: (tokens: SiteTokenSet) => void;
+  /**
+   * The Site text rows the site's code supplies, which setting or taking
+   * back a role keeps.
+   *
+   * @experimental Settles with the Fonts screen.
+   */
+  suppliedText?: SiteTextMap;
 }
 
 /** What the Fonts screen adds to the list it draws: where it opens. */
@@ -185,6 +229,10 @@ export function FontsPanel({
   acceptFiles,
   onRemoveFamily,
   catalogue,
+  usage,
+  onOpenRole,
+  onTokensChange,
+  suppliedText,
 }: FontsPanelProps): React.JSX.Element {
   const [view, setView] = React.useState<View>({ kind: "list" });
   const addButton = React.useRef<HTMLButtonElement>(null);
@@ -192,32 +240,53 @@ export function FontsPanel({
     () => (faces === undefined ? [] : siteFamilies(faces, codeFaces)),
     [faces, codeFaces]
   );
+  const usesOf = useFamiliesUses(families, tokens, usage);
+  // Asked once a font finishes adding, from the catalogue or a file.
+  const useFor = useUseFor({
+    tokens,
+    faces: faces ?? [],
+    codeFaces,
+    onTokensChange: readOnly ? undefined : onTokensChange,
+    suppliedText,
+  });
+  const question =
+    useFor.asked === null ? null : (
+      <UseForQuestion family={useFor.asked.family} onAnswer={useFor.answer} />
+    );
 
   if (faces === undefined) return <Unread absence={absence} />;
 
   if (view.kind === "catalogue" && catalogue !== undefined) {
     return (
-      <FontCatalogueView
-        catalogue={catalogue}
-        initialQuery={view.query}
-        onSite={families}
-        onBack={() => {
-          setView({ kind: "list" });
-          // Back on the list, focus returns to where the catalogue was opened.
-          requestAnimationFrame(() => addButton.current?.focus());
-        }}
-      />
+      <>
+        {question}
+        <FontCatalogueView
+          catalogue={catalogue}
+          initialQuery={view.query}
+          onSite={families}
+          onAdded={useFor.ask}
+          onBack={() => {
+            setView({ kind: "list" });
+            // Back on the list, focus returns to where the catalogue was
+            // opened.
+            requestAnimationFrame(() => addButton.current?.focus());
+          }}
+        />
+      </>
     );
   }
 
   return (
     <FontsList
       families={families}
+      question={question}
       faces={faces}
       tokens={tokens}
       readOnly={readOnly}
       addButton={addButton}
       onOpenTokens={onOpenTokens}
+      onOpenRole={onOpenRole}
+      usesOf={usesOf}
       onRemoveFamily={onRemoveFamily}
       onBrowse={
         readOnly || catalogue === undefined
@@ -227,7 +296,14 @@ export function FontsPanel({
       upload={
         readOnly || onAddFace === undefined
           ? undefined
-          : { onAddFace, acceptFiles }
+          : {
+              onAddFace: async request => {
+                const refusal = await onAddFace(request);
+                if (refusal === undefined) useFor.ask(request.family);
+                return refusal;
+              },
+              acceptFiles,
+            }
       }
     />
   );
@@ -241,16 +317,28 @@ function FontsList({
   readOnly,
   addButton,
   onOpenTokens,
+  onOpenRole,
+  usesOf,
+  question,
   onRemoveFamily,
   onBrowse,
   upload,
 }: {
   families: readonly SiteFamily[];
+  /**
+   * "Use <font> for", once a font finishes adding: in the upload editor
+   * while it is open, which holds the rest of the screen inert, else at the
+   * top of the list.
+   */
+  question: React.ReactNode;
   faces: readonly FontFaceDef[];
   tokens: SiteTokenSet | undefined;
   readOnly: boolean;
   addButton: React.RefObject<HTMLButtonElement | null>;
   onOpenTokens: (() => void) | undefined;
+  onOpenRole: FontsPanelProps["onOpenRole"];
+  /** Where each family is used, by its key. */
+  usesOf: (key: string) => FamilyUsesHere;
   onRemoveFamily: FontsPanelProps["onRemoveFamily"];
   onBrowse: ((query?: string) => void) | undefined;
   upload:
@@ -293,6 +381,7 @@ function FontsList({
         />
       </div>
       <div className="nx-vars__body">
+        {uploading ? null : question}
         {readOnly ? (
           <p className="nx-vars__note">
             {`You can view the site’s ${fonts} but not change them.`}
@@ -321,6 +410,8 @@ function FontsList({
               searching={needle !== ""}
               query={query.trim()}
               readOnly={readOnly}
+              usesOf={usesOf}
+              opens={{ onOpenRole, onOpenTokens }}
               onRemoveFamily={onRemoveFamily}
               onRemoved={() => search.current?.focus()}
               onBrowse={onBrowse}
@@ -335,6 +426,7 @@ function FontsList({
               className="nx-vars-editor"
               aria-label="Upload a font file"
             >
+              {question}
               <FontUploadEditor
                 onAddFace={upload.onAddFace}
                 acceptFiles={upload.acceptFiles}
@@ -441,6 +533,8 @@ function SiteFamilies({
   searching,
   query,
   readOnly,
+  usesOf,
+  opens,
   onRemoveFamily,
   onRemoved,
   onBrowse,
@@ -450,6 +544,8 @@ function SiteFamilies({
   searching: boolean;
   query: string;
   readOnly: boolean;
+  usesOf: (key: string) => FamilyUsesHere;
+  opens: UsesOpeners;
   onRemoveFamily: FontsPanelProps["onRemoveFamily"];
   onRemoved: () => void;
   onBrowse: ((query?: string) => void) | undefined;
@@ -502,6 +598,8 @@ function SiteFamilies({
           family={family}
           open={openKey === family.key}
           onOpenChange={open => setOpenKey(open ? family.key : null)}
+          here={usesOf(family.key)}
+          opens={opens}
           onRemove={
             readOnly || !family.removable || onRemoveFamily === undefined
               ? undefined
@@ -537,11 +635,15 @@ function FamilyRow({
   family,
   open,
   onOpenChange,
+  here,
+  opens,
   onRemove,
 }: {
   family: SiteFamily;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  here: FamilyUsesHere;
+  opens: UsesOpeners;
   onRemove: (() => Promise<string | undefined>) | undefined;
 }): React.JSX.Element {
   return (
@@ -577,7 +679,12 @@ function FamilyRow({
           className="nx-vars-editor"
           aria-label={family.family}
         >
-          <FamilyDetails family={family} onRemove={onRemove} />
+          <FamilyDetails
+            family={family}
+            here={here}
+            opens={opens}
+            onRemove={onRemove}
+          />
         </PopoverContent>
       </Popover>
     </li>
@@ -596,9 +703,13 @@ function sourceLine(family: SiteFamily): string {
 /** A family's details: its name and sample in itself, each style, its source. */
 function FamilyDetails({
   family,
+  here,
+  opens,
   onRemove,
 }: {
   family: SiteFamily;
+  here: FamilyUsesHere;
+  opens: UsesOpeners;
   onRemove: (() => Promise<string | undefined>) | undefined;
 }): React.JSX.Element {
   const first = family.faces[0];
@@ -634,10 +745,17 @@ function FamilyDetails({
         </ul>
       </div>
       <p className="nx-fonts__meta">{sourceLine(family)}</p>
+      <WhereUsed
+        here={here}
+        onOpenRole={opens.onOpenRole}
+        onOpenTokens={opens.onOpenTokens}
+      />
       {onRemove === undefined ? null : (
         <RemoveFamily
           family={family.family}
           keepsCode={family.origin === "code"}
+          here={here}
+          onOpenRole={opens.onOpenRole}
           onRemove={onRemove}
         />
       )}
@@ -645,23 +763,46 @@ function FamilyDetails({
   );
 }
 
-/** Remove, behind a confirmation naming what happens to the text and files. */
+/** Where a family's details send the author: a role's picker, the variables. */
+interface UsesOpeners {
+  readonly onOpenRole: FontsPanelProps["onOpenRole"];
+  readonly onOpenTokens: (() => void) | undefined;
+}
+
+/**
+ * Remove, behind a confirmation naming what happens to the text and files:
+ * refused for the Body or Headings font, which must be changed first, and
+ * naming each font variable that loses the font with what it falls back to.
+ */
 function RemoveFamily({
   family,
   keepsCode,
+  here,
+  onOpenRole,
   onRemove,
 }: {
   family: string;
   /** Whether the site's code supplies some of its styles, which stay. */
   keepsCode: boolean;
+  here: FamilyUsesHere;
+  onOpenRole: FontsPanelProps["onOpenRole"];
   onRemove: () => Promise<string | undefined>;
 }): React.JSX.Element {
   const [confirming, setConfirming] = React.useState(false);
   const { busy, refusal, run } = useRefusableWrite();
+  // The styles the site's code supplies stay, so the family keeps its uses.
+  const refused = !keepsCode && here.uses.roles.length > 0;
   return (
     <>
       <Refusal refusal={refusal} />
-      {confirming ? (
+      {confirming && refused ? (
+        <RoleRefusal
+          family={family}
+          roles={here.uses.roles}
+          onOpenRole={onOpenRole}
+          onBack={() => setConfirming(false)}
+        />
+      ) : confirming ? (
         <div
           className="nx-vars-editor__confirm"
           role="group"
@@ -673,6 +814,8 @@ function RemoveFamily({
               from your site&rsquo;s code stay. The files stay in your media
               library.
             </p>
+          ) : here.uses.variables.length > 0 ? (
+            <FallbackList family={family} here={here} />
           ) : (
             <p>
               Remove <strong>{family}</strong>? Text set in it falls back to the

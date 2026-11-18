@@ -28,6 +28,7 @@ import { readSiteStyleRecord } from "../../site-style-record";
 import { useFontCatalogueClient, useSaveSiteStyle } from "../site-style-client";
 
 import { toastSaveConflicts } from "./conflict-toast";
+import { useVariablesStudio } from "./site-style-tokens-studio";
 import { PLUGIN_SOURCE } from "./stored-document";
 
 /**
@@ -370,6 +371,7 @@ export function SiteFontsScreen({
   tokens,
   absence,
   onOpenTokens,
+  onOpenRole,
   onClose,
   labelledBy,
   storedFaces,
@@ -382,6 +384,7 @@ export function SiteFontsScreen({
   | "tokens"
   | "absence"
   | "onOpenTokens"
+  | "onOpenRole"
   | "onClose"
   | "labelledBy"
 > & {
@@ -392,6 +395,12 @@ export function SiteFontsScreen({
   const mayChange = useCan("update-site-style");
   const writer = useFontFaceWriter(storedFaces, storedPending, unreadableFonts);
   const catalogue = useFontCatalogue();
+  // Inside the Variables studio, as the Design panel and the admin's Fonts
+  // page mount it, the screen reads the studio's variables and their usage
+  // and writes the Body and Headings fonts through it, so a role set here
+  // is one variable edit the studio saves (and, in the builder, undoes).
+  const studio = useVariablesStudio();
+  const writes = studio !== null && studio.readOnly !== true;
   return (
     <FontsScreen
       absence={absence}
@@ -402,7 +411,13 @@ export function SiteFontsScreen({
       onAddFace={writer.add}
       onRemoveFamily={writer.remove}
       catalogue={catalogue}
-      tokens={tokens}
+      tokens={studio?.tokens ?? tokens}
+      {...(studio?.usage === undefined ? {} : { usage: studio.usage })}
+      {...(writes ? { onTokensChange: studio.onChange } : {})}
+      {...(studio?.supplied?.siteText === undefined
+        ? {}
+        : { suppliedText: studio.supplied.siteText })}
+      {...(onOpenRole === undefined ? {} : { onOpenRole })}
       {...(onOpenTokens === undefined ? {} : { onOpenTokens })}
       {...(onClose === undefined ? {} : { onClose })}
       {...(labelledBy === undefined ? {} : { labelledBy })}
