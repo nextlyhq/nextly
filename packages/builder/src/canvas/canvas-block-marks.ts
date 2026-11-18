@@ -37,7 +37,14 @@ import {
 } from "../previewed-entry";
 
 import { isOutermostForAddress, nodeAddressOf } from "./canvas-addressing";
-import { CANVAS_REGION_CLASS } from "./canvas-regions";
+import { CANVAS_REGION_CLASS, REGION_EDITED_ATTRIBUTE } from "./canvas-regions";
+
+/**
+ * A region of the layout drawn around the page and not edited: a document
+ * of its own whose ids may repeat the page's, so the page's marks stay off
+ * it. A region edited in place takes the marks, which are then its own.
+ */
+const UNEDITED_REGION = `.${CANVAS_REGION_CLASS}:not([${REGION_EDITED_ATTRIBUTE}])`;
 
 /**
  * Marks the selected block's own element.
@@ -233,11 +240,11 @@ export function entryContentMarksOf(
 }
 
 /**
- * The words an Entry content block's outermost element carries, by its
- * address. Never inside a Layout region, a document of its own whose ids
- * may repeat the page's.
+ * The words a block's outermost element carries, by its address, from
+ * `marks`: an Entry content block's, or a hidden block's tag. Never inside a
+ * Layout region, a document of its own whose ids may repeat the page's.
  */
-export function entryContentMarkFor(
+export function outermostMarkFor(
   element: Element,
   container: HTMLElement,
   marks: ReadonlyMap<string, string>
@@ -245,7 +252,7 @@ export function entryContentMarkFor(
   if (marks.size === 0) return undefined;
   const address = nodeAddressOf(element);
   if (address === null) return undefined;
-  if (element.closest(`.${CANVAS_REGION_CLASS}`) !== null) return undefined;
+  if (element.closest(UNEDITED_REGION) !== null) return undefined;
   return isOutermostForAddress(element, address, container)
     ? marks.get(address)
     : undefined;
@@ -264,7 +271,7 @@ export function conditionMarkFor(
 ): { mark: ConditionMark; own: boolean; nested?: string } | undefined {
   const address = nodeAddressOf(element);
   if (address === null) return undefined;
-  if (element.closest(`.${CANVAS_REGION_CLASS}`) !== null) return undefined;
+  if (element.closest(UNEDITED_REGION) !== null) return undefined;
   const id = element.getAttribute(NODE_ID_ATTRIBUTE);
   const own = id !== null && id !== address ? marks.get(id) : undefined;
   const placed = isOutermostForAddress(element, address, container)

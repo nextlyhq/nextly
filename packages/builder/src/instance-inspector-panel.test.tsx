@@ -1702,3 +1702,85 @@ describe("the instance's card menu", () => {
     expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull(); // menu closed
   });
 });
+
+describe("an exposed Text, whose component holds one paragraph", () => {
+  const paragraphOf = (...children: unknown[]) => ({
+    root: { type: "root", children: [{ type: "paragraph", children }] },
+  });
+  const withText = () =>
+    header({
+      nodes: [
+        {
+          id: "h1",
+          type: "acme/heading",
+          version: 1,
+          props: {
+            text: paragraphOf(
+              { type: "text", text: "Made ", format: 0 },
+              { type: "text", text: "by hand", format: 1 }
+            ),
+          },
+        },
+      ],
+    });
+
+  it("shows the component's words and sets plain words in their place", () => {
+    const editor = mount(instance(), withText());
+    const field = screen.getByRole("textbox", { name: "Title" });
+    expect((field as HTMLInputElement).value).toBe("Made by hand");
+
+    fireEvent.change(field, { target: { value: "Made by us" } });
+    fireEvent.blur(field);
+    expect(appliedProps(editor)).toEqual({
+      componentId: "header",
+      overrides: { title: "Made by us" },
+    });
+  });
+
+  it("writes nothing for the component's words left as they were", () => {
+    const editor = mount(instance(), withText());
+    fireEvent.blur(screen.getByRole("textbox", { name: "Title" }));
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+});
+
+describe("an exposed Text with lines", () => {
+  it("is edited with its lines in a field that keeps them", () => {
+    const lines = header({
+      nodes: [
+        {
+          id: "h1",
+          type: "acme/heading",
+          version: 1,
+          props: {
+            text: {
+              root: {
+                type: "root",
+                children: [
+                  {
+                    type: "paragraph",
+                    children: [
+                      { type: "text", text: "First", format: 1 },
+                      { type: "linebreak" },
+                      { type: "text", text: "Second", format: 0 },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+    });
+    const editor = mount(instance(), lines);
+    const field = screen.getByRole("textbox", { name: "Title" });
+    expect(field.localName).toBe("textarea");
+    expect((field as HTMLTextAreaElement).value).toBe("First\nSecond");
+    fireEvent.change(field, { target: { value: "First\nChanged" } });
+    fireEvent.blur(field);
+    expect(appliedProps(editor)).toEqual({
+      componentId: "header",
+      overrides: { title: "First\nChanged" },
+    });
+  });
+});

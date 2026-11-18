@@ -107,15 +107,23 @@ export { useSuppressAdminChrome } from "../components/layout/ChromeSuppression";
 
 export { useFoldedPanel } from "../components/layout/PanelFold";
 
-export { PlaceTabs, TargetSlot } from "../components/shared/target-slot";
+export {
+  PlaceTabs,
+  TargetSlot,
+  useContributionApplies,
+  usePlaceTabs,
+} from "../components/shared/target-slot";
 
 export type {
+  ContributionDocument,
   PlaceContributionProps,
   PlaceProps,
   PlaceTabBadge,
+  PlaceTabEntry,
   PlaceTabProps,
   PlaceTabsProps,
   TargetSlotProps,
+  UsePlaceTabsOptions,
 } from "../components/shared/target-slot";
 
 export type { AdminChromeLayer } from "../components/layout/lib/chrome-suppression";

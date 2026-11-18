@@ -958,3 +958,165 @@ describe("referableClassIds", () => {
     expect(ids.has(`id-${MAX_NAMED_CLASSES}`)).toBe(false);
   });
 });
+
+describe("a fluid size's two sizes", () => {
+  const fluid = {
+    name: "font-size.lead",
+    kind: "dimension",
+    values: { light: "clamp(1rem, 0.9022rem + 0.4348vw, 1.25rem)" },
+    fluid: { small: 16, large: 20 },
+  };
+
+  it("are kept by a save, so the size can be made again from them", () => {
+    const checked = checkStoredTokens({ tokens: [fluid] });
+    expect(checked.issues).toEqual([]);
+    expect(checked.value?.tokens[0]?.fluid).toEqual({ small: 16, large: 20 });
+  });
+
+  it("are refused unless they are two positive sizes in px", () => {
+    for (const bad of [
+      { small: 16 },
+      { small: "16px", large: 20 },
+      { small: -1, large: 20 },
+      { small: 16, large: Number.POSITIVE_INFINITY },
+      "16-20",
+    ]) {
+      expect(
+        checkStoredTokens({ tokens: [{ ...fluid, fluid: bad }] }).issues
+      ).not.toEqual([]);
+    }
+  });
+});
+
+describe("the site's fluid range", () => {
+  it("is kept by a save", () => {
+    const checked = checkStoredTokens({
+      tokens: [],
+      fluidRange: { min: 320, max: 1440 },
+    });
+    expect(checked.issues).toEqual([]);
+    expect(checked.value?.fluidRange).toEqual({ min: 320, max: 1440 });
+  });
+
+  it("is refused unless it is two positive widths, the smallest first", () => {
+    for (const bad of [
+      { min: 1440, max: 320 },
+      { min: 0, max: 1280 },
+      { min: 360 },
+      "360-1280",
+    ]) {
+      expect(
+        checkStoredTokens({ tokens: [], fluidRange: bad }).issues
+      ).not.toEqual([]);
+    }
+  });
+});
+
+describe("the site's text", () => {
+  it("is kept by a save, each row as written", () => {
+    const siteText = {
+      body: { fontSize: "18px", lineHeight: 1.6 },
+      h2: {
+        fontSize: { $token: "font-size.h2" },
+        lineHeight: { $token: "line-height.h2" },
+      },
+      h3: {},
+      link: { color: "#0044cc", hoverColor: "#002266", underline: "hover" },
+    };
+    const checked = checkStoredTokens({ tokens: [], siteText });
+    expect(checked.issues).toEqual([]);
+    expect(checked.value?.siteText).toEqual(siteText);
+  });
+
+  it("is refused, naming the row, for a row or a value it cannot hold", () => {
+    const checked = checkStoredTokens({
+      tokens: [],
+      siteText: {
+        h1: { fontSize: "huge" },
+        link: { fontSize: "16px" },
+        quote: {},
+      },
+    });
+    expect(checked.issues.join(" ")).toContain("Heading 1");
+    expect(checked.issues.join(" ")).toContain("Links has no");
+    expect(checked.issues.join(" ")).toContain('"quote" is not a row');
+  });
+
+  it("keeps the Body and Headings fonts a save writes, and refuses a font on Links", () => {
+    const siteText = {
+      body: { fontFamily: { $token: "font.body" } },
+      h2: {
+        fontSize: { $token: "font-size.h2" },
+        lineHeight: { $token: "line-height.h2" },
+        fontFamily: { $token: "font.heading" },
+      },
+    };
+    const tokens = [
+      {
+        name: "font.body",
+        kind: "fontFamily",
+        values: { light: '"Lora", serif' },
+      },
+    ];
+    const checked = checkStoredTokens({ tokens, siteText });
+    expect(checked.issues).toEqual([]);
+    expect(checked.value?.siteText).toEqual(siteText);
+    expect(
+      checkStoredTokens({
+        tokens: [],
+        siteText: { link: { fontFamily: "serif" } },
+      }).issues.join(" ")
+    ).toContain("Links has no");
+  });
+
+  it("is read back keeping the rows that can be read, and dropping the rest", () => {
+    const read = readSiteStyleRecord({
+      tokens: {
+        tokens: [],
+        siteText: { h1: { fontSize: "huge" }, h2: { fontSize: "40px" } },
+      },
+    });
+    expect(read.tokens?.siteText).toEqual({ h2: { fontSize: "40px" } });
+  });
+});
+
+describe("colour groups and the colour order", () => {
+  const brand = {
+    name: "color.brand",
+    kind: "color",
+    values: { light: "#123456" },
+  };
+
+  it("keeps a colour's group and the site's order", () => {
+    const checked = checkStoredTokens({
+      tokens: [{ ...brand, group: "Accents" }],
+      order: ["color.brand", "color.text"],
+    });
+    expect(checked.issues).toEqual([]);
+    expect(checked.value?.tokens[0]?.group).toBe("Accents");
+    expect(checked.value?.order).toEqual(["color.brand", "color.text"]);
+  });
+
+  it("refuses a group that is no name, saying why", () => {
+    for (const group of ["", "   ", 7, "x".repeat(500)]) {
+      const issues = checkStoredTokens({
+        tokens: [{ ...brand, group }],
+      }).issues;
+      expect(issues.join(" "), String(group)).toMatch(/group/);
+    }
+  });
+
+  it("refuses an order that is not a list of different code names", () => {
+    for (const order of [
+      "color.brand",
+      ["color.brand", "color.brand"],
+      ["color.brand", 3],
+      ["x".repeat(500)],
+    ]) {
+      expect(
+        checkStoredTokens({ tokens: [brand], order }).issues.join(" "),
+        JSON.stringify(order)
+      ).toMatch(/order/);
+    }
+  });
+});

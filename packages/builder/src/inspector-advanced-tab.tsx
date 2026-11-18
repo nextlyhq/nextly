@@ -25,8 +25,6 @@ import {
 import type { BlockResolver } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
-import { SettingSlot } from "./settings-filter";
-
 import { AdvancedPanel } from "./advanced-panel";
 import {
   VisibilityExposeControl,
@@ -36,6 +34,7 @@ import { ShowWhen } from "./conditions/condition-controls";
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
 import { HeldByLock } from "./held-by-lock";
+import { HideOn, type BreakpointsStatus } from "./hide-on";
 import {
   designReadOnlyReason,
   lockViewOf,
@@ -48,7 +47,7 @@ import { keptWhileHidden, ownBlockChanged } from "./kept-while-hidden";
 import { commitLinkChanges } from "./link-control";
 import { NeverQuote } from "./never-quote";
 import { PanelSections, rowsHoldValue } from "./panel-section";
-import { VisibleOn, type BreakpointsStatus } from "./visible-on";
+import { SettingSlot } from "./settings-filter";
 
 /** The Advanced section the builder's own HTML settings join. */
 export const VISIBILITY_SECTION = "Visibility";
@@ -87,7 +86,7 @@ function DrawnAdvancedTab({
   reasonId: string;
   /** The component's own view, when the document is a component. */
   fields: ComponentFieldsBinding | undefined;
-  /** The site's breakpoints, for "Visible on". */
+  /** The site's breakpoints, for "Hide on". */
   breakpoints: BreakpointSet | undefined;
   /** The device being edited; the base one where the host names none. */
   breakpoint: BreakpointId | undefined;
@@ -132,9 +131,9 @@ function DrawnAdvancedTab({
           blockName={block.label}
         />
       )}
-      {/* Which devices the block shows on. */}
-      <SettingSlot ids={["visibleOn"]}>
-        <VisibleOn
+      {/* Which devices the block is hidden on. */}
+      <SettingSlot ids={["hideOn"]}>
+        <HideOn
           editor={editor}
           nodeId={block.nodeId}
           breakpoints={breakpoints}

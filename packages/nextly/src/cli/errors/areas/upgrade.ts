@@ -1,5 +1,6 @@
 /**
- * Codes for `nextly upgrade` and its steps.
+ * Codes for `nextly upgrade` and its steps, and for the move of an earlier
+ * release's migration records, which `nextly migrate` makes.
  *
  * @module cli/errors/areas/upgrade
  */
@@ -61,33 +62,78 @@ export const UPGRADE_CODES = defineCodes({
       },
     ],
   },
-  UPGRADE_LEDGER_UNREADABLE: {
+  MIGRATE_BACKUP_NOT_CONFIRMED: {
     cause:
-      "`nextly upgrade` found a `nextly_migrations` table holding records it cannot read, so it moved none of them.",
+      "`nextly migrate` found the migration records of an earlier Nextly release, and no backup was confirmed, with no terminal attached to ask.",
     from: [
       {
-        code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
-        reason: "legacy-ledger-unreadable",
+        code: "NEXTLY_UPGRADE_IN_PROGRESS",
+        reason: "migrate-backup-not-confirmed",
         describe: error =>
           whatThenNext(
             error.publicMessage,
-            "`nextly upgrade` moves the records an earlier release kept in `nextly_migrations` into `nextly_schema_events`, and reads every one before writing any. One of them it cannot read, so nothing was changed."
+            "No terminal is attached to ask whether the database is backed up, and `--backup-confirmed` was not passed. Nothing was changed."
           ),
       },
     ],
   },
-  UPGRADE_EVENTS_TABLE_TAKEN: {
+  MIGRATE_BACKUP_DECLINED: {
     cause:
-      "A table of another shape already has the name `nextly upgrade` moves the migration records into.",
+      "`nextly migrate` found the migration records of an earlier Nextly release, and its backup question was answered no.",
     from: [
       {
-        code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
+        code: "NEXTLY_UPGRADE_IN_PROGRESS",
+        reason: "migrate-backup-declined",
         describe: error =>
           whatThenNext(
             error.publicMessage,
-            `\`nextly upgrade\` moves the migration records into "${eventsTable(error)}", and the table there does not have the columns it writes. Nothing was changed.`
+            "`nextly migrate` moves those records into `nextly_schema_events` and drops the tables that held them, so it asks for a backup first, and the answer was no. Nothing was changed."
           ),
       },
     ],
+  },
+  MIGRATE_LEDGER_UNREADABLE: {
+    cause:
+      "`nextly migrate` found a `nextly_migrations` table of an earlier Nextly release holding records it cannot read, so it moved none of them.",
+    from: [
+      {
+        code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
+        reason: "migrate-ledger-unreadable",
+        describe: error =>
+          whatThenNext(
+            error.publicMessage,
+            "`nextly migrate` moves the records an earlier release kept in `nextly_migrations` into `nextly_schema_events`, and reads every one before writing any. One of them it cannot read, so nothing was changed."
+          ),
+      },
+    ],
+  },
+  MIGRATE_EVENTS_TABLE_TAKEN: {
+    cause:
+      "A table of another shape already has the name `nextly migrate` moves the migration records of an earlier Nextly release into.",
+    from: [
+      {
+        code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
+        reason: "migrate-events-table-taken",
+        describe: error =>
+          whatThenNext(
+            error.publicMessage,
+            `\`nextly migrate\` moves the migration records of an earlier release into "${eventsTable(error)}", and the table there does not have the columns it writes. Nothing was changed.`
+          ),
+      },
+    ],
+  },
+  UPGRADE_LEDGER_UNREADABLE: {
+    cause:
+      "`nextly upgrade` found a `nextly_migrations` table holding records it cannot read, so it moved none of them.",
+    retired: {
+      why: "`nextly upgrade` no longer moves the migration records of an earlier release: `nextly migrate` does, and a `nextly_migrations` table it cannot read ends it as `MIGRATE_LEDGER_UNREADABLE`.",
+    },
+  },
+  UPGRADE_EVENTS_TABLE_TAKEN: {
+    cause:
+      "A table of another shape already has the name `nextly upgrade` moves the migration records into.",
+    retired: {
+      why: "`nextly upgrade` no longer moves the migration records of an earlier release: `nextly migrate` does, and a table of another shape under the events table's name ends it as `MIGRATE_EVENTS_TABLE_TAKEN`.",
+    },
   },
 });

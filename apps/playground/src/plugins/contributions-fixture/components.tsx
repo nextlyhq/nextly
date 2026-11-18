@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * The components the contributions fixture's entries name, imported by the
- * generated component map as any plugin's are.
+ * The components the contributions fixture's entries name, registered by
+ * `admin.tsx`.
  *
  * Each draws a labelled region whose name and text say it is the fixture, so
  * the browser test finds it by name and reads the fixture's own words, never

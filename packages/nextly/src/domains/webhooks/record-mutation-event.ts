@@ -18,6 +18,7 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 
 import { webhookActorOf, type RequestActor } from "../../auth/request-actor";
+import { eventLanguage } from "../../hooks/hook-language";
 import type {
   ActivityLogAction,
   ActivityWriteDb,
@@ -155,10 +156,31 @@ function prepareMutationEnvelope(args: RecordMutationEventArgs): {
     ...(args.statusChange !== undefined
       ? { statusChange: args.statusChange }
       : {}),
+    ...languagesOf(args.resource),
   });
   return {
     envelope,
     retentionClass: resolveEventRetentionClass({ auditEnabled, hasEndpoints }),
+  };
+}
+
+/**
+ * The languages an event about `resource` names and whether it moved the
+ * shared part: what the change's hooks are told at the same point
+ * (`eventLanguage`), read here once for every write path rather than passed by
+ * each. Only an entry or a Single keeps content per language; any other kind
+ * names none.
+ */
+function languagesOf(resource: WebhookResource): {
+  locales?: readonly string[];
+  shared?: boolean;
+} {
+  if (resource.kind !== "entry" && resource.kind !== "single") return {};
+  const language = eventLanguage();
+  if (language === undefined) return {};
+  return {
+    locales: language.locales,
+    ...(language.shared === undefined ? {} : { shared: language.shared }),
   };
 }
 

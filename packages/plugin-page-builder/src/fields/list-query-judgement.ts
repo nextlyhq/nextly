@@ -132,7 +132,7 @@ export interface ListSetting {
 }
 
 /** What is written and where: a write, short of reading what is stored. */
-export type WriteTarget = Omit<PluginFieldWrite, "readStored">;
+export type WriteTarget = Omit<PluginFieldWrite, "readStored" | "readStoredOf">;
 
 /**
  * A write's setting: its language, and the collection its page is an entry

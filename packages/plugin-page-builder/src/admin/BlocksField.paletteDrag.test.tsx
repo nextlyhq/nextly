@@ -318,6 +318,10 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // Where the page opens and the pin's id, which the top bar reads; no
+  // collection is named here, so the exit goes to the form.
+  useDocumentOpensIn: () => null,
+  PIN_TO_DASHBOARD_ACTION: "pin-to-dashboard",
   // The canvas's media read, answering nothing: these cases draw no image.
   // One function for every call, as the admin's own hook keeps it.
   useMediaResolver: (
@@ -347,6 +351,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
    */
   // The media library, drawn as nothing: these cases never open it.
   MediaPickerDialog: () => null,
+  // The media library's upload, which an Image's empty state offers: these
+  // cases upload nothing.
+  useUploadMedia: () => ({ mutateAsync: () => new Promise<never>(() => {}) }),
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
   // Which document the field sits in. Mutable so one case can put the

@@ -1385,3 +1385,51 @@ describe("what a control would show without the node's own value here", () => {
     expect(beneath(trace, { breakpoint: "tablet" }).kind).toBe("unset");
   });
 });
+
+describe("text a block takes from Site text's Body row", () => {
+  /** A page with one paragraph, Body written on its root, and a page value. */
+  function traceOf(pageSize?: string): readonly StyleTraceEntry[] {
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "p1", type: "core/paragraph", version: 1, props: {} }],
+      ...(pageSize === undefined
+        ? {}
+        : { settings: { styles: { base: { base: { fontSize: pageSize } } } } }),
+    } as unknown as BlockDocument;
+    return (
+      compilePageCss(document, {
+        breakpoints: {
+          viewport: [{ id: "base", label: "Desktop" }],
+          container: [],
+        },
+        elementBases: { root: { base: { base: { fontSize: "18px" } } } },
+        trace: true,
+      }).trace ?? []
+    );
+  }
+  const ask = (trace: readonly StyleTraceEntry[]) =>
+    inheritedProvenance({
+      trace,
+      subject: { nodeId: "p1", blockType: "core/paragraph", tag: "p" },
+      cssProperty: "font-size",
+      state: "base",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+    });
+
+  it("is inherited from the page root's text", () => {
+    const found = ask(traceOf());
+    expect(found.kind).toBe("inherited");
+    if (found.kind !== "inherited") return;
+    expect(found.from).toEqual({ kind: "element", tag: "root" });
+    expect(found.entry.value).toBe("18px");
+  });
+
+  it("gives way to the page's own text size", () => {
+    const found = ask(traceOf("20px"));
+    expect(found.kind).toBe("inherited");
+    if (found.kind !== "inherited") return;
+    expect(found.from).toEqual({ kind: "page" });
+  });
+});

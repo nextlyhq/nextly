@@ -36,6 +36,13 @@ import {
 } from "../image-slot";
 
 import { MEDIA } from "./categories";
+import {
+  ENLARGE_ATTRIBUTE,
+  enlargeName,
+  Lightbox,
+  LIGHTBOX_PARTS,
+  lightboxId,
+} from "./lightbox";
 import { imageLooks } from "./looks";
 import {
   boundImage,
@@ -52,6 +59,9 @@ import {
   url,
   type LinkAttributes,
   type LinkProps,
+  WHEN_CLICKED,
+  type WhenClicked,
+  whenClickedOf,
 } from "./props";
 
 /** How the browser should schedule the image. */
@@ -70,6 +80,8 @@ export interface ImageProps extends LinkProps {
   loading?: "lazy" | "eager";
   /** A caption rendered under the image, inside a figure. */
   caption?: string;
+  /** What a click on the picture does; unset, see `whenClickedOf`. */
+  whenClicked?: WhenClicked;
 }
 
 /**
@@ -81,8 +93,22 @@ export interface ImageProps extends LinkProps {
  * an image with neither, which the render draws as nothing and links
  * nowhere, reads no link.
  */
-export function imageMayDraw(has: (prop: string) => boolean): boolean {
+function imageMayDraw(has: (prop: string) => boolean): boolean {
   return has("mediaId") || has("src");
+}
+
+/**
+ * Whether an image, drawn with `props`, follows its link: it may draw a
+ * picture to wrap ({@link imageMayDraw}), and a click on it follows its link
+ * (`whenClickedOf`), the reading its render makes before it reads the link.
+ * Set to Nothing or Enlarge, it keeps its link stored and reads none, so a
+ * list reading its links ahead reads none for it either.
+ */
+export function imageFollowsLink(
+  has: (prop: string) => boolean,
+  props: Readonly<Record<string, unknown>>
+): boolean {
+  return imageMayDraw(has) && whenClickedOf(props) === "link";
 }
 
 /**
@@ -138,15 +164,18 @@ export async function renderImage({
   const fetchable = (value: unknown): string | undefined =>
     fetchableUrl(value, patterns);
 
-  const picture = await firstDrawable(
+  const { picture, missing } = await firstDrawable(
     pictureCandidates(mediaId, props.src, boundImage(bound?.mediaId)),
     ctx,
     fetchable,
     claim
   );
   // Nothing to show. An `<img>` with no `src` still requests the current page
-  // in some browsers, so render nothing rather than a broken element.
-  if (picture === undefined) return null;
+  // in some browsers, so a visitor's page draws nothing rather than a broken
+  // element, and the editor draws the box it puts its controls on.
+  if (picture === undefined) {
+    return emptyPicture({ ctx, node, className, partClass, missing });
+  }
   const { record: usable } = picture;
   // Sized to where it sits, where the site keeps copies; as it is otherwise.
   const sized = await sizedPicture(picture, ctx, node, fetchable);
@@ -171,10 +200,17 @@ export async function renderImage({
       : (usable?.alt ?? "");
   const caption = text(props.caption);
   // Where the picture links, read as the button reads it; the alt text is
-  // what names the link.
-  const link = await linkFor(props, (collection, id) =>
-    ctx.resolveEntryPath(collection, id, claim)
-  );
+  // what names the link. Only while a click follows it: an Image set to
+  // Nothing or Enlarge keeps its link stored for when the author switches
+  // back, and draws none, so no entry path is read for it either.
+  const link =
+    whenClickedOf(props) === "link"
+      ? await linkFor(props, (collection, id) =>
+          ctx.resolveEntryPath(collection, id, claim)
+        )
+      : undefined;
+  // Where a click enlarges the picture, the id of the lightbox it opens.
+  const enlarge = lightboxOf(props, node, ctx);
 
   const image = (
     <img
@@ -189,7 +225,7 @@ export async function renderImage({
        * the wrapper around it looks correct. Handing the figure the whole
        * class string put the rule one element above the thing it constrains.
        */
-      className={pictureClass(className, caption, link, partClass)}
+      className={pictureClass(className, caption, { link, enlarge }, partClass)}
       {...pictureAttributes(sized, props.loading)}
       alt={alt}
       // Intrinsic dimensions reserve the space before the file arrives, which
@@ -199,15 +235,112 @@ export async function renderImage({
       {...(decorative ? { role: "presentation" } : {})}
     />
   );
+  if (enlarge !== undefined) {
+    return enlargedPicture(image, {
+      id: enlarge,
+      // Where an author is looking, a click on the picture selects the block.
+      opens: ctx?.diagnostics !== true,
+      className,
+      caption,
+      alt,
+      partClass,
+      // The full-size file is the original, never a copy sized to the page.
+      full: { src: picture.src, width: usable?.width, height: usable?.height },
+    });
+  }
   return wrapPicture(image, {
     className,
     caption,
     link,
     partClass,
-    // A picture with no alt text names no link; its caption, then where it
-    // goes, does instead, so the link is never unnamed.
-    linkName: alt !== "" ? undefined : caption !== "" ? caption : link?.href,
+    linkName: linkNameOf(alt, caption, link),
   });
+}
+
+/**
+ * The name a linked picture with no alt text gives its link: its caption,
+ * then where it goes, so the link is never unnamed. None while the alt text
+ * names it.
+ */
+function linkNameOf(
+  alt: string,
+  caption: string,
+  link: LinkAttributes | undefined
+): string | undefined {
+  if (alt !== "") return undefined;
+  return caption !== "" ? caption : link?.href;
+}
+
+/**
+ * The id of the lightbox a click on the picture opens, where it enlarges:
+ * from the node, which a block drawn on its own outside a page is not
+ * handed, so such a picture is drawn as Nothing would draw it.
+ */
+function lightboxOf(
+  props: ImageProps,
+  node: BlockNode | undefined,
+  ctx: PageContext | undefined
+): string | undefined {
+  // Unset, a picture in a gallery does what the gallery says.
+  const click = whenClickedOf(props, ctx?.galleryWhenClicked);
+  if (click !== "enlarge" || node?.id === undefined) {
+    return undefined;
+  }
+  return lightboxId(node.id, ctx?.itemPosition);
+}
+
+/**
+ * The attribute on the box an Image with no picture draws on the editor's
+ * canvas, naming why it has none: `empty`, nothing chosen yet, or `missing`,
+ * a library file it names that the library no longer has. The editor's
+ * canvas finds the box by it and draws its controls over it; its test draws
+ * this block to find it, so the two spellings cannot drift apart unseen.
+ */
+const IMAGE_EMPTY_ATTRIBUTE = "data-nx-image-empty";
+
+/** Why an Image draws its empty box, as {@link IMAGE_EMPTY_ATTRIBUTE} says it. */
+type ImageEmptyReason = "empty" | "missing";
+
+/**
+ * What an Image with no picture draws.
+ *
+ * Nothing on a page a visitor is served, which is where an empty Image has
+ * nothing to show. Where an author is looking (`diagnostics`), a box the size
+ * the picture would take, 16:9 unless the block sets its own proportion, so
+ * a new Image is a place on the canvas rather than a line nothing can land
+ * on; the editor draws its choices over it. The box carries the block's own
+ * classes, so a size, a proportion or a corner set on the block shapes it.
+ *
+ * A bound Image, by its media or its address, is left out: its picture is
+ * its binding's, and what it shows without one is the binding's Fallback,
+ * which the binding's own controls set.
+ */
+function emptyPicture({
+  ctx,
+  node,
+  className,
+  partClass,
+  missing,
+}: {
+  ctx: PageContext | undefined;
+  node: BlockNode | undefined;
+  className: string;
+  partClass: (part: string) => string;
+  missing: boolean;
+}): ReactElement | null {
+  if (ctx?.diagnostics !== true) return null;
+  if (
+    node?.bindings?.mediaId !== undefined ||
+    node?.bindings?.src !== undefined
+  )
+    return null;
+  const reason: ImageEmptyReason = missing ? "missing" : "empty";
+  return (
+    <div
+      className={[className, partClass("empty")].filter(Boolean).join(" ")}
+      {...{ [IMAGE_EMPTY_ATTRIBUTE]: reason }}
+    />
+  );
 }
 
 /** One place a picture may come from: a media id, or an address. */
@@ -255,18 +388,25 @@ function pictureCandidates(
  * for its url. Its alt text and intrinsic size describe the asset that was
  * refused, so keeping them beside the next candidate announces one image to a
  * screen reader while reserving the other one's space. A record the host
- * cannot find, deleted since it was picked or bound, moves on the same way.
+ * cannot find, deleted since it was picked or bound, moves on the same way,
+ * and is reported as `missing` when nothing after it draws either.
  */
 async function firstDrawable(
   candidates: readonly PictureCandidate[],
   ctx: PageContext,
   fetchable: (value: unknown) => string | undefined,
   claim: ReadClaim | undefined
-): Promise<Picture | undefined> {
+): Promise<{ picture?: Picture; missing: boolean }> {
+  let missing = false;
   for (const candidate of candidates) {
     if (candidate.holds === "address") {
       const src = fetchable(candidate.value);
-      if (src !== undefined) return { src, record: null, source: { url: src } };
+      if (src !== undefined) {
+        return {
+          picture: { src, record: null, source: { url: src } },
+          missing,
+        };
+      }
       continue;
     }
     // A resolver that throws must not take the page with it: media lives
@@ -275,16 +415,20 @@ async function firstDrawable(
     const record = await ctx
       .resolveMedia(candidate.value, claim)
       .catch(() => null);
+    if (record === null) missing = true;
     const src = fetchable(record?.url);
     if (
       record !== null &&
       src !== undefined &&
       typeof candidate.value === "string"
     ) {
-      return { src, record, source: { id: candidate.value } };
+      return {
+        picture: { src, record, source: { id: candidate.value } },
+        missing,
+      };
     }
   }
-  return undefined;
+  return { missing };
 }
 
 /** The picture's sources as drawn: one address, or copies for its slot. */
@@ -416,20 +560,21 @@ async function sizedPicture(
 /**
  * The picture's classes: the node's own where it is the root, else the type
  * class and the part that takes the corners, proportion, fit and focal point
- * from the root (where the node's classes land), plus the part that fills a
- * link's box when it is linked.
+ * from the root (where the node's classes land), plus the part that fills
+ * the box of the link or button it is wrapped in.
  */
 function pictureClass(
   className: string,
   caption: string,
-  link: LinkAttributes | undefined,
+  around: { link: LinkAttributes | undefined; enlarge: string | undefined },
   partClass: (part: string) => string
 ): string {
-  if (caption === "" && link === undefined) return className;
+  const wrapped = around.link !== undefined || around.enlarge !== undefined;
+  if (caption === "" && !wrapped) return className;
   return [
     blockTypeClassName(IMAGE_BLOCK),
     partClass("picture"),
-    ...(link === undefined ? [] : [partClass("linked")]),
+    ...(wrapped ? [partClass("linked")] : []),
   ]
     .filter(Boolean)
     .join(" ");
@@ -483,6 +628,70 @@ function wrapPicture(
   );
 }
 
+/**
+ * A picture a click enlarges: the picture as the button that opens its
+ * lightbox, in a figure that holds the caption and the lightbox beside it,
+ * so the block keeps one root whether or not it has a caption.
+ *
+ * The button toggles, the browser's default: the backdrop lets clicks through
+ * to the page, so a click outside the panel but over the page's picture
+ * lands on this button, and closes the lightbox as a click anywhere else
+ * outside it does.
+ *
+ * Where an author is looking (the editor's canvas, a draft's preview) the
+ * button names no popover (`opens` false): the canvas draws the page as it
+ * is published, and a click on a picture there is how the block is
+ * selected, which would otherwise open the lightbox over the editor.
+ */
+function enlargedPicture(
+  image: ReactElement,
+  {
+    id,
+    opens,
+    className,
+    caption,
+    alt,
+    partClass,
+    full,
+  }: {
+    id: string;
+    opens: boolean;
+    className: string;
+    caption: string;
+    alt: string;
+    partClass: (part: string) => string;
+    full: { src: string; width?: number; height?: number };
+  }
+): ReactElement {
+  return (
+    <figure
+      className={[className, partClass("frame")].filter(Boolean).join(" ")}
+    >
+      <button
+        type="button"
+        className={partClass("enlarge")}
+        {...(opens ? { popoverTarget: id } : {})}
+        aria-label={enlargeName(alt)}
+        {...{ [ENLARGE_ATTRIBUTE]: "" }}
+      >
+        {image}
+      </button>
+      {caption === "" ? null : (
+        <figcaption className={partClass("caption")}>{caption}</figcaption>
+      )}
+      <Lightbox
+        id={id}
+        src={full.src}
+        alt={alt}
+        width={full.width}
+        height={full.height}
+        caption={caption}
+        partClass={partClass}
+      />
+    </figure>
+  );
+}
+
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
@@ -532,6 +741,12 @@ const IMAGE_BASE_STYLES = {
  * the two things that make it read as a caption instead.
  */
 const IMAGE_PARTS = {
+  // The button an enlarged picture is, and the lightbox it opens.
+  ...LIGHTBOX_PARTS,
+  // The enlarge button, unclipped: the picture inside it takes its own
+  // corners and draws its own shadow, which a clip would cut off. Nothing
+  // else in the button draws past the picture's box.
+  enlarge: unclipped(LIGHTBOX_PARTS.enlarge),
   // A captioned picture's figure: the picture and its caption in a column,
   // so a height set on the block is shared between them rather than
   // overflowed.
@@ -550,9 +765,10 @@ const IMAGE_PARTS = {
     },
   },
   // The picture inside a wrapper (a figure, a link) takes its corners,
-  // proportion, fit and focal point from the root, from every tier that styles
-  // it (a look, a shared style, the node's own values), so the wrapper's box,
-  // and a caption inside it, is never rounded or squared by them. It may
+  // proportion, fit, focal point and shadow from the root, from every tier
+  // that styles it (a look, a shared style, the node's own values), so the
+  // wrapper's box, and a caption inside it, is never rounded, squared or
+  // shadowed by them: a shadow follows the picture's own shape. It may
   // shrink to the room the wrapper leaves it, where the fit crops or fits it.
   picture: {
     takesFromRoot: {
@@ -561,8 +777,11 @@ const IMAGE_PARTS = {
         "aspectRatio",
         "objectFit",
         "objectPosition",
+        "boxShadow",
       ],
-      whenRootIs: ["frame", "link"],
+      // The enlarge button sits between the figure and the picture, as a
+      // link does inside a captioned picture's figure.
+      whenRootIs: ["frame", "link", "enlarge"],
     },
     baseStyles: {
       base: {
@@ -591,13 +810,31 @@ const IMAGE_PARTS = {
           display: "inline-block",
           maxWidth: "100%",
           minHeight: "0",
-          // Clipped, so nothing the picture draws past its corners shows.
-          overflow: "hidden",
+          // Not clipped: the picture rounds its own corners, and its shadow
+          // falls past them.
         },
       },
     },
   },
+  // The box an Image with no picture draws for its author (`emptyPicture`):
+  // as wide as its column and 16:9, the proportion a picture most often has,
+  // until the block sets its own size or proportion, which outweighs these.
+  empty: {
+    baseStyles: {
+      base: {
+        base: {
+          display: "block",
+          width: "100%",
+          aspectRatio: "16 / 9",
+        },
+      },
+    },
+  },
+  // The caption takes the block's text size itself, inside its figure: set
+  // on the figure, a size would reach the caption scaled by its own smaller
+  // default, so 20px would read 17.5px. The default stays its own.
   caption: {
+    takesFromRoot: { properties: ["fontSize"], whenRootIs: ["frame"] },
     baseStyles: {
       base: {
         base: {
@@ -613,6 +850,54 @@ const IMAGE_PARTS = {
     },
   },
 } as const;
+
+/** A part's styles without the clip its base sets. */
+function unclipped<Part extends { baseStyles: { base: { base: object } } }>(
+  part: Part
+): Part {
+  const { overflow: _clip, ...base } = part.baseStyles.base.base as Record<
+    string,
+    unknown
+  >;
+  return { ...part, baseStyles: { base: { base } } } as Part;
+}
+
+/** The Content section a click's choice and its link are drawn in. */
+const WHEN_CLICKED_SECTION = "When clicked";
+
+/**
+ * The shared link props, placed in the When clicked section, where the
+ * editor draws them under the choice that uses them; all but `rel`, which is
+ * in Advanced › HTML.
+ */
+function whenClickedLinkProps(): {
+  readonly [Name in keyof typeof LINK_PROPS]: (typeof LINK_PROPS)[Name] & {
+    readonly section: string;
+  };
+} {
+  return {
+    href: { ...LINK_PROPS.href, section: WHEN_CLICKED_SECTION },
+    entryCollection: {
+      ...LINK_PROPS.entryCollection,
+      section: WHEN_CLICKED_SECTION,
+    },
+    entryId: { ...LINK_PROPS.entryId, section: WHEN_CLICKED_SECTION },
+    target: { ...LINK_PROPS.target, section: WHEN_CLICKED_SECTION },
+    // How the page relates to where it links is an HTML detail: drawn in
+    // Advanced › HTML with the block's other HTML settings, not with the
+    // click's choice.
+    rel: { ...LINK_PROPS.rel, section: "HTML" },
+  };
+}
+
+/**
+ * Whether a click on the picture does something a visitor can reach: it
+ * follows a link it has, or it enlarges the picture.
+ */
+function clickable(props: ImageProps): boolean {
+  const click = whenClickedOf(props);
+  return click === "enlarge" || (click === "link" && canLink(props));
+}
 
 export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
   name: IMAGE_BLOCK,
@@ -647,25 +932,46 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
     },
     src: { label: "Image address", role: "content", type: "url" },
     alt: { label: "Alt text", role: "content", type: "text" },
-    decorative: { label: "Decorative (no alt text)", type: "checkbox" },
+    decorative: { label: "Decorative, no alt text", type: "checkbox" },
+    // How the browser fetches the picture: an HTML detail, so in Advanced ›
+    // HTML. Drawn as one switch named by `eager`'s words: two states with a
+    // safe default are a yes-or-no question. The stored values stay as they
+    // are.
     loading: {
-      label: "Loading",
+      label: "Load right away",
       optionLabels: {
         lazy: "Load when near the screen",
-        eager: "Load immediately",
+        eager: "Load right away",
       },
-      // Drawn as one switch named by `eager`'s words: two states with a safe
-      // default are a yes-or-no question. The stored values stay as they are.
       display: "switch",
       switchOn: "eager",
-      hint: "Turn on for images at the top of the page.",
+      hint: "For images near the top of the page.",
       type: "select",
       options: [...IMAGE_LOADING],
+      group: "advanced",
     },
-    caption: { label: "Caption", role: "content", type: "text" },
+    // What a click does, with the link it follows beside it in the same
+    // section: the editor draws the link's settings only while Link is
+    // chosen. Stored as chosen; a new Image stores none (see `whenClickedOf`).
+    // Content, as the link it gates is: where only content may change, an
+    // author still chooses Link to add one.
+    whenClicked: {
+      label: "When clicked",
+      role: "content",
+      section: WHEN_CLICKED_SECTION,
+      type: "select",
+      options: [...WHEN_CLICKED],
+      optionLabels: { nothing: "Nothing", link: "Link", enlarge: "Enlarge" },
+    },
     // The button's link props, by the same names, so the inspector draws the
     // one link control for both and the renderer follows both the same way.
-    ...LINK_PROPS,
+    ...whenClickedLinkProps(),
+    caption: {
+      label: "Caption",
+      role: "content",
+      type: "text",
+      section: "Caption",
+    },
   },
   // No `alt`: an image placed with none takes its library file's alt text,
   // which is what an author picking a described file expects. A stored `""`
@@ -694,28 +1000,39 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
         : { url: candidate.value }
     ),
   }),
-  // The address only, for the same reason: blocks are placed with their
-  // example, and an example alt would be stored as the page's own words in
-  // place of the library's.
-  example: { props: { src: "/example.jpg" } },
+  // Nothing at all. Blocks are placed with their example, so an address here
+  // is stored on every new Image as the page's own, pointing at a file the
+  // site does not have; an alt would be stored as the page's own words in
+  // place of the library's. A new Image starts empty, and the canvas draws
+  // its choices: upload, the media library, or a link.
+  example: { props: {} },
   supports: {
+    // Text and its colour style the caption: it inherits them, and takes
+    // the text size itself (see its part).
+    typography: true,
+    color: true,
     spacing: true,
     dimensions: true,
     border: true,
     effects: true,
+    // On the picture itself, whatever wraps it: see the picture part.
+    shadow: true,
     position: true,
   },
-  // Interactive content while it links, so a link (a linked box or card)
-  // cannot hold it, which would nest one link in another.
+  // Interactive content while it links or enlarges, so a link (a linked box
+  // or card) cannot hold it, which would nest a link or a button in another.
+  // Link chosen with nothing to follow draws no link, so it is not.
   contentModel: (props: ImageProps) => ({
-    is: canLink(props) ? ["flow", "interactive"] : ["flow"],
+    is: clickable(props) ? ["flow", "interactive"] : ["flow"],
   }),
   render: renderImage,
-  // A media id may still resolve to nothing, and that is settled by a call to
-  // the host — so only the case decidable from the props alone is claimed here:
-  // no id AND no usable direct url means there is nothing to draw and nothing
-  // to ask about. An id that fails to resolve falls back to drawing nothing at
-  // render time, which the boundary already treats as a deliberate decision.
-  rendersNothing: props =>
-    text(props.mediaId) === "" && url(props.src) === undefined,
+  // No `rendersNothing`. An Image with no picture draws nothing on a page a
+  // visitor is served, but on the canvas it draws its empty box, which wears
+  // the block's own classes so a size or a proportion set on the block shapes
+  // it. A declaration answers from the props alone, for every render, and the
+  // stylesheet holds back the rules of a block that declares it draws
+  // nothing; declared here, the box would lose the very rules it is drawn to
+  // show. So an empty Image draws nothing at render time instead, as one whose
+  // library file has gone always has, and the boundary treats that as a
+  // deliberate decision too.
 });

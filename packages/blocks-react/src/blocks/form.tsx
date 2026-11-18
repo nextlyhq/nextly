@@ -1,99 +1,109 @@
 /**
- * `core/form` — a form that posts where the author says, with no runtime.
+ * `core/form` — a form a visitor can fill in and send with no JavaScript.
  *
- * Plain HTML: a `<form>`, labelled controls, a submit button. It stores
- * nothing, validates nothing beyond what the browser does for `required` and
- * `type`, and ships no client JavaScript. A form that collects submissions,
- * branches on answers, guards against spam and notifies somebody is a different
- * product, and it already exists as the form-builder plugin — which contributes
- * no block of its own, so the two do not compete for a name or for an author's
- * choice. This one is for the case that plugin is too much machinery for: a
- * contact form pointed at a route handler, a hosted form service, or `mailto:`.
+ * Every form posts, as an ordinary HTML form post, to the page builder's
+ * receiver (`ctx.forms.action`), which reads the form from the PUBLISHED
+ * page and hands the answers on: to the form's provider when one is picked,
+ * and otherwise to the simple form's "Send to" address, server to server.
+ * The visitor comes back to the same cacheable page with the outcome in the
+ * address's fragment, and a CSS `:target` rule shows the answer
+ * (`form-draw.tsx`). The block itself ships no script.
+ *
+ * **Two modes, one drawing.** With a provider's form picked (`form`), the
+ * block draws the provider's description of it; with none, its own fields.
+ * Both go through one description of each field (`FormFieldDrawing`), with
+ * the same markup and style parts, so the Style settings reach both, and a
+ * simple form's answers are checked by the same rules its controls were
+ * drawn with (`formFieldDrawings`).
  *
  * **Every form carries one hidden spam trap** ({@link FORM_HONEYPOT_FIELD}),
  * whoever receives it: a field no person fills and a bot does. Drawing it is
  * the block's part; treating a filled one as spam is the receiver's.
  *
- * **Every element is a DIRECT child of the form, which is the layout.** The
- * root is a grid, so each label and each control becomes its own row and the
- * label sits above the control it names. Nothing is wrapped: a `<label>` around
- * each pair would be a second element per field, and the grouping it exists to
- * produce is available without one.
- *
- * **The grouping comes from TWO distances rather than one.** A single `gap`
- * spaced a label from the control it names exactly as far as from the next
- * question, so nothing read as belonging together. The `gap` is now the smaller
- * of the two — label to its own control — and each control states the larger one
- * below itself, which falls between fields and before the submit. Stating it
- * below the control rather than above the label is what keeps the FIRST label
- * flush with the top of the form instead of pushed down by a leading margin.
- *
- * The control's distance is a PART, which is how a block states a rule for an
- * element it renders inside its own root. Inline styles are not an option and
- * should not be — see `root-inline-styles.test.tsx` for why a block may not
- * write one.
- *
- * **Labels are associated explicitly, not by wrapping.** `htmlFor` and `id` are
- * the association that survives the flattening above, and the id is derived
- * from the NODE's id so two forms on one page cannot mint the same one.
+ * A provider's form may need a script of the provider's own (a bot check);
+ * the block draws that module only on a page that draws such a form.
  *
  * @module blocks/library/form
  */
 import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
-import type { ReactElement, ReactNode } from "react";
+import type { ReactElement } from "react";
 
-import type { BlockRenderArgs, PageContext } from "../context";
+import type {
+  BlockRenderArgs,
+  FormDrawing,
+  FormFieldDrawing,
+  FormReference,
+  PageContext,
+} from "../context";
 
-import { BUTTON_BASE_STYLES } from "./button";
 import { INTERACTIVE } from "./categories";
-import { flag, oneOf, text, url } from "./props";
+import {
+  drawField,
+  drawResults,
+  FORM_REFUSALS,
+  FORM_RESULT_CSS,
+  FORM_RESULT_STYLE_KEY,
+  FORM_SENT_MESSAGE,
+} from "./form-draw";
+import {
+  FORM_FIELD_TYPES,
+  formFieldDrawings,
+  receiverKeepsName,
+  type FormFieldSpec,
+} from "./form-fields";
+import { FORM_BASE_STYLES, FORM_PARTS } from "./form-parts";
+import { LINK_PROPS, oneOf, text, url } from "./props";
 
-/** The control types a field may declare. */
-export const FORM_FIELD_TYPES = [
-  "text",
-  "email",
-  "tel",
-  "number",
-  "url",
-  "date",
-  "textarea",
-] as const;
-
-/** One of the control types a field may declare. */
-export type FormFieldType = (typeof FORM_FIELD_TYPES)[number];
+export {
+  FORM_FIELD_TYPES,
+  formFieldDrawings,
+  formFields,
+  sentNameOf,
+  type FormField,
+  type FormFieldSpec,
+  type FormFieldType,
+} from "./form-fields";
+export { FORM_BASE_STYLES } from "./form-parts";
+export {
+  FORM_FILE_NEEDS_SCRIPT,
+  FORM_REFUSALS,
+  FORM_SENT_MESSAGE,
+} from "./form-draw";
 
 /**
- * The methods a form may use.
- *
- * `post` first, because it is the default: a `get` form puts every answer in
- * the URL, where it reaches the server's logs and the visitor's history.
+ * What a visitor sees once a send is accepted: the form's own setting (a
+ * provider's form only), a message in the form's place, or another page.
  */
-export const FORM_METHODS = ["post", "get"] as const;
+export type FormAfterSending = "form" | "message" | "page";
 
-/** One of the methods a form may use. */
-export type FormMethod = (typeof FORM_METHODS)[number];
-
-/** One field in a form. */
-export interface FormFieldSpec {
-  /** The visible label. */
-  label?: string;
-  /** The `name` the value is submitted under. */
-  name?: string;
-  /** Which control is rendered. */
-  type?: FormFieldType;
-  /** Whether the browser should refuse an empty submission. */
-  required?: boolean;
-}
+/** Every {@link FormAfterSending}, in the order they are offered. */
+const FORM_AFTER_SENDING: readonly FormAfterSending[] = [
+  "form",
+  "message",
+  "page",
+];
 
 export interface FormProps {
-  /** Where the form submits. Omitted posts back to the page's own URL. */
+  /** A provider's form, picked in place of the block's own fields. */
+  form?: FormReference;
+  /** "Send to": where a simple form's answers are passed on, server to server. */
   action?: string;
-  /** How the form submits. */
-  method?: FormMethod;
-  /** The submit button's label. */
+  /** The button's words. */
   submitText?: string;
-  /** The fields, in order. */
+  /** A simple form's fields, in order. */
   fields?: FormFieldSpec[];
+  /**
+   * What a visitor sees once a send is accepted. Absent, a provider's form
+   * follows its own setting and a simple form shows {@link message}.
+   */
+  afterSending?: FormAfterSending;
+  /** The message shown in the form's place; {@link FORM_SENT_MESSAGE} when empty. */
+  message?: string;
+  /** "Go to a page": an address. */
+  href?: string;
+  /** "Go to a page": a page of the site, with {@link entryId}. */
+  entryCollection?: string;
+  entryId?: string;
 }
 
 /**
@@ -108,221 +118,39 @@ export interface FormProps {
  */
 export const FORM_HONEYPOT_FIELD = "_hp";
 
-/** One field as the form draws it and its receiver checks it: every default applied. */
-export interface FormField {
-  /** The `name` the value is sent under. */
-  readonly name: string;
-  /** What the label says. */
-  readonly label: string;
-  /** Which control is drawn. */
-  readonly type: FormFieldType;
-  /** Whether an empty answer is refused. */
-  readonly required: boolean;
-}
-
 /**
- * How many fields are rendered from one stored array.
- *
- * The same reasoning `core/list` records for its own cap: a stored array has no
- * length of its own, so `fields` arrives at whatever length was written, and
- * past the renderer's inspection budget the normalizer refuses the WHOLE output
- * and the block becomes a placeholder — an accidentally long form would lose
- * every field rather than the ones past the end.
- *
- * Far lower than the list's thousand, because the shapes differ: a thousand-item
- * list is a plausible document and a thousand-field form is not one anybody
- * meant. This sits well above any form a person fills in and well below the
- * budget.
+ * The hidden fields a form posts beside its answers, as the receiver reads
+ * them: the document defining the form, the form's node, the path to come
+ * back to, the page's language, and, for a form a list draws once per entry,
+ * which entry's copy was sent.
  */
-const MAX_FIELDS = 100;
+export const FORM_POST_FIELDS: {
+  readonly document: "_form";
+  readonly node: "_node";
+  readonly returnTo: "_return";
+  readonly locale: "_locale";
+  readonly item: "_item";
+} = {
+  document: "_form",
+  node: "_node",
+  returnTo: "_return",
+  locale: "_locale",
+  item: "_item",
+};
 
-/**
- * The grid that stacks the labels and controls.
- *
- * **`gap` is a LENGTH rather than a `{ $token }`, and the reason is a defect
- * this block shipped with.** It first read `{ $token: "space.4" }`, on the
- * argument that `container.tsx` wants spacing from a token and that `space.4`
- * is in `defaultSiteTokens()`. Both halves are true and the conclusion was
- * still wrong AT THE TIME: a token reference compiles to `var(--site-space-4)`,
- * and nothing in the repository then emitted that variable.
- *
- * An undefined custom property makes the declaration invalid at computed-value
- * time, so `gap` fell back to `normal`, which for a grid is zero. The form
- * rendered with its fields touching, and every check passed: the property is in
- * `STYLE_CATALOG`, the declaration reached the compiled stylesheet, and the
- * test asserted exactly that. **Whether the `var()` RESOLVES is a third
- * question, and nothing asked it.**
- *
- * **That emptiness is over, and this line still does not go back.**
- * `PageRenderer` compiles a site sheet by default, so a rendered page defines
- * `--site-space-4` and a reference would now resolve. The reason this stays a
- * length is therefore no longer the plumbing — it is the one below, and it
- * would hold even if it had never been the plumbing.
- *
- * The VALUE is no longer `space.4`, and that is a change of meaning rather than
- * of taste: this gap once carried the whole of the form's spacing, and now
- * carries only the distance from a label to the control it names. The field
- * separation moved to the control's own part, where the two together still come
- * to `1rem`. So a future token here is a label-to-control token, not `space.4`.
- *
- * Both `display` and `gap` are in `STYLE_CATALOG`. A property that is not is
- * dropped by the compiler rather than passed through, so the test asserts the
- * COMPILED CSS instead of this object: an object assertion passes on a
- * declaration that compiles to nothing.
- */
-export const FORM_BASE_STYLES = {
-  base: {
-    base: {
-      display: "grid",
-      // The gap is now the distance from a label to the control it names, NOT
-      // the distance between fields. One even gap spaced a label as far from
-      // its own input as from the next question, so nothing grouped; the field
-      // separation is stated by the control instead, which is the only element
-      // that knows a field has ended.
-      gap: "0.25rem",
-    },
-  },
-} as const;
-
-/**
- * The control a field's label names.
- *
- * Carried on the CONTROL rather than the label, and the difference is the whole
- * reason there is no leading gap inside the form: a margin above each label
- * separates fields equally well and also pushes the FIRST label down, which
- * reads as stray padding nobody asked for. Below the control the same distance
- * falls only between fields and before the submit, where it is wanted.
- */
-const FORM_PARTS = {
-  control: {
-    baseStyles: {
-      base: {
-        base: {
-          margin: { blockEnd: "0.75rem" },
-          /*
-           * The control has to LOOK like a control.
-           *
-           * A user agent draws a border and a background on an input; a host
-           * reset takes both away, and Tailwind's Preflight — which the
-           * scaffold ships — is one. This part existed and stated only
-           * spacing, so a form rendered as a column of labels with nothing
-           * under them: the field was there, focusable and submittable, and
-           * invisible.
-           *
-           * Colours are tokens because a literal is wrong in whichever of
-           * light and dark it was not chosen for. Spacing and the radius are
-           * literals, which is safe for the same reason `core/card` gives.
-           */
-          boxSizing: "border-box",
-          width: "100%",
-          padding: {
-            blockStart: "0.5rem",
-            blockEnd: "0.5rem",
-            inlineStart: "0.75rem",
-            inlineEnd: "0.75rem",
-          },
-          backgroundColor: { $token: "color.background" },
-          color: { $token: "color.text" },
-          borderRadius: "6px",
-          border: {
-            // Per LOGICAL side, so it follows writing direction rather than
-            // assuming left-to-right.
-            width: {
-              blockStart: "1px",
-              blockEnd: "1px",
-              inlineStart: "1px",
-              inlineEnd: "1px",
-            },
-            style: "solid",
-            /*
-             * `color.border-strong`, NOT the hairline `color.border`.
-             *
-             * This control takes the page's own background above, so the border
-             * is the ONLY thing telling a person where the field is — which
-             * WCAG 2.2 SC 1.4.11 requires to clear 3:1. The hairline is
-             * decorative and does not: measured `#e5e7eb` on `#ffffff` is
-             * 1.24:1, and `#1f2937` on `#0b0f19` is 1.30:1. A control outlined
-             * in it is the same invisible field this part exists to fix, one
-             * property in and passing every test that checked the border was
-             * "defined".
-             */
-            color: { $token: "color.border-strong" },
-          },
-        },
-      },
-    },
-  },
-  /**
-   * The submit, wearing `core/button`'s own appearance.
-   *
-   * Reused rather than restated: a form's submit and a button block are the
-   * same control to an author, and describing that twice is how one page comes
-   * to carry two different-looking primary actions. `width: "fit-content"` is
-   * the only addition — the form is a grid, so a stretched item would otherwise
-   * run the full column width and stop reading as a button at all.
-   *
-   * The obvious spelling for that is `justify-self: start`, and it is NOT what
-   * this uses. The catalog carries no grid ITEM properties, so the compiler
-   * drops that declaration without a word; see the note on the addition itself.
-   */
-  submit: {
-    /*
-     * The WHOLE envelope, not its base leaf.
-     *
-     * Spreading `BUTTON_BASE_STYLES.base.base` copies today's base
-     * declarations and silently drops every other state and breakpoint the
-     * button might grow. The first hover or responsive default added to
-     * `core/button` would reach the button block and not the form's submit,
-     * and the two controls this part exists to keep identical would diverge
-     * with nothing saying so.
-     */
-    baseStyles: {
-      ...BUTTON_BASE_STYLES,
-      base: {
-        ...BUTTON_BASE_STYLES.base,
-        base: {
-          ...BUTTON_BASE_STYLES.base.base,
-          /*
-           * Sized to its words rather than to the column.
-           *
-           * The form is a grid and a grid item stretches, so without this the
-           * submit runs the full width and stops reading as a button. The
-           * obvious spelling is `justify-self: start` and the catalog does not
-           * carry it — the compiler drops a property it does not know, so that
-           * declaration would have been written, dropped, and invisible.
-           */
-          width: "fit-content",
-        },
-      },
-    },
-  },
-  /**
-   * The spam trap's box, taken off screen.
-   *
-   * Absolutely positioned, so it leaves the form's grid and takes no row, and
-   * moved far past the inline start by a negative margin, where no scrolling
-   * reaches it in either writing direction. One pixel square with its overflow
-   * clipped, so nothing of it shows at the edge whatever the page's own styles
-   * do to its input.
-   */
-  trap: {
-    baseStyles: {
-      base: {
-        base: {
-          position: { type: "absolute" },
-          margin: { inlineStart: "-10000px" },
-          width: "1px",
-          height: "1px",
-          overflow: "hidden",
-        },
-      },
-    },
-  },
-} as const;
-
-/** Whether a stored array member is shaped like a field at all. */
-function isFieldSpec(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+/** The provider form `value` names, or `undefined` for the block's own fields. */
+function pickedForm(value: unknown): FormReference | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const { provider, ref } = value as Record<string, unknown>;
+  // `simple` is the page builder's own provider: the block's own fields.
+  if (
+    typeof provider !== "string" ||
+    provider === "" ||
+    provider === "simple"
+  ) {
+    return undefined;
+  }
+  return { provider, ref: typeof ref === "string" ? ref : "" };
 }
 
 /**
@@ -355,109 +183,234 @@ function honeypot(nodeId: string, className: string): ReactElement {
   );
 }
 
-/**
- * The fields a form's stored props describe, each with its defaults applied:
- * at most {@link MAX_FIELDS}, a member that is no field read as an empty one,
- * an unknown type as text, a missing name as `field-<n>`, and a missing label
- * as the name.
- *
- * One reading for the two that must agree on it: the block draws these
- * fields, and the page builder's receiver checks a post against them. Two
- * copies of the defaults would let a field drawn under one name be checked
- * under another.
- */
-export function formFields(props: FormProps): FormField[] {
-  // A stored array can hold anything: a migration, a hand edit, or an older
-  // version of this block can all leave a member that is not a field. Sliced
-  // BEFORE the walk so an oversized array is never read in full.
-  const stored: unknown = props.fields;
-  const fields = Array.isArray(stored) ? stored.slice(0, MAX_FIELDS) : [];
-  return fields.map((raw: unknown, index) => {
-    const field = isFieldSpec(raw) ? raw : {};
-    const storedName = text(field.name);
-    const name = storedName === "" ? `field-${index}` : storedName;
-    // A label with no text announces nothing, so the submitted name stands in.
-    // It is a worse label than one an author wrote and a far better one than
-    // silence.
-    const labelled = text(field.label);
-    return {
-      name,
-      label: labelled === "" ? name : labelled,
-      type: oneOf(field.type, FORM_FIELD_TYPES, "text"),
-      required: flag(field.required),
-    };
-  });
+/** What one form is drawn from, whichever mode it is in. */
+interface FormSpec {
+  readonly fields: readonly FormFieldDrawing[];
+  readonly submitText: string;
+  readonly sentMessage: string;
+  readonly multipart: boolean;
+  readonly script?: FormDrawing["script"];
 }
 
-export function renderForm({
-  props,
-  node,
-  className,
-  partClass,
-}: BlockRenderArgs<FormProps>): ReactElement {
-  const fields = formFields(props);
+/**
+ * Where the form posts and the hidden fields it posts beside its answers.
+ * Where the page has no receiver (the editor's canvas, a standalone render)
+ * it names no address but still posts: a browser's default is a GET, which
+ * would write every answer into the URL, the history and the logs.
+ */
+function sending(
+  ctx: PageContext,
+  nodeId: string,
+  multipart: boolean
+): {
+  readonly attributes: Record<string, string>;
+  readonly hidden: ReactElement[];
+} {
+  const forms = ctx.forms;
+  if (forms === undefined)
+    return { attributes: { method: "post" }, hidden: [] };
+  const values: [string, string | undefined][] = [
+    [FORM_POST_FIELDS.document, forms.document],
+    [FORM_POST_FIELDS.node, nodeId],
+    [FORM_POST_FIELDS.returnTo, forms.returnTo],
+    [FORM_POST_FIELDS.locale, ctx.locale],
+    [FORM_POST_FIELDS.item, ctx.itemPosition],
+  ];
+  return {
+    attributes: {
+      action: forms.action,
+      method: "post",
+      ...(multipart ? { encType: "multipart/form-data" } : {}),
+    },
+    hidden: values.flatMap(([name, value]) =>
+      value === undefined || value === ""
+        ? []
+        : [<input key={name} type="hidden" name={name} value={value} />]
+    ),
+  };
+}
 
-  // `url()` refuses any scheme that executes rather than navigates, which is
-  // the whole reason this goes through it: an `action` reaches an attribute the
-  // browser follows on submit, so a stored `javascript:` value would run.
-  const action = url(props.action);
-  const method = oneOf(props.method, FORM_METHODS, "post");
-  // `text()` maps a missing value AND an authored empty string to `""`, and a
-  // submit button with no words on it is unusable either way, so the fallback
-  // is applied to the result rather than passed to `text()`.
-  const submitted = text(props.submitText);
-  const submitText = submitted === "" ? "Submit" : submitted;
+/** A provider's module, drawn only where its address is one a page may load. */
+function providerScript(script: FormDrawing["script"]): ReactElement | null {
+  const src = url(script?.module);
+  if (src === undefined) return null;
+  // `async` with a `src`: React hoists it and draws it once per page, however
+  // many of the provider's forms the page holds.
+  return <script key="script" type="module" src={src} async />;
+}
 
-  const rows: ReactNode[] = [];
-  fields.forEach(({ name, label, type, required }, index) => {
-    // Derived from the NODE's id, so two forms on one page cannot collide. An
-    // id that collides silently re-points a label at the earlier form's field.
-    const id = `${node.id}-field-${index}`;
-
-    rows.push(
-      <label key={`${id}-label`} htmlFor={id}>
-        {label}
-        {/* The `required` attribute already carries this to assistive
-            technology, so the marker is decoration and is hidden from it
-            rather than announced a second time as "asterisk". */}
-        {required ? <span aria-hidden="true"> *</span> : null}
-      </label>,
-      type === "textarea" ? (
-        <textarea
-          key={id}
-          id={id}
-          name={name}
-          required={required}
-          rows={4}
-          className={partClass("control")}
-        />
-      ) : (
-        <input
-          key={id}
-          id={id}
-          name={name}
-          type={type}
-          required={required}
-          className={partClass("control")}
-        />
-      )
-    );
-  });
-
+/** One form, drawn from `spec`. */
+function drawForm(
+  spec: FormSpec,
+  { node, ctx, className, partClass }: BlockRenderArgs<FormProps>
+): ReactElement {
+  const { attributes, hidden } = sending(ctx, node.id, spec.multipart);
+  // A list draws one copy per entry, all one node: the entry's position keeps
+  // each copy's ids its own, and is the fragment a send comes back to.
+  const stem =
+    ctx.itemPosition === undefined ? node.id : `${node.id}-${ctx.itemPosition}`;
   return (
-    <form
-      className={className}
-      method={method}
-      {...(action === undefined ? {} : { action })}
-    >
-      {rows}
-      {honeypot(node.id, partClass("trap"))}
+    <form className={className} {...attributes}>
+      {/* Hoisted and deduped by React: one copy per page. */}
+      <style href={FORM_RESULT_STYLE_KEY} precedence="default">
+        {FORM_RESULT_CSS}
+      </style>
+      {drawResults({
+        anchor: stem,
+        sentMessage: spec.sentMessage,
+        partClass,
+      })}
+      {spec.fields.some(field => field.required === true) ? (
+        // Each required field says "required" to a screen reader itself, so
+        // this line is for the eye only.
+        <p className={partClass("note")} aria-hidden="true">
+          * Required
+        </p>
+      ) : null}
+      {spec.fields.map((field, index) =>
+        drawField(field, { id: `${stem}-field-${index}`, partClass })
+      )}
+      {honeypot(stem, partClass("trap"))}
+      {hidden}
       <button className={partClass("submit")} type="submit">
-        {submitText}
+        {spec.submitText}
       </button>
+      {providerScript(spec.script)}
     </form>
   );
 }
+
+/** The words of a button, `fallback` where none were stored. */
+function words(value: unknown, fallback: string): string {
+  const written = text(value).trim();
+  return written === "" ? fallback : written;
+}
+
+/** The message a provider's form shows once sent, the block's choice first. */
+function providerSentMessage(props: FormProps, drawing: FormDrawing): string {
+  const chosen = oneOf(props.afterSending, FORM_AFTER_SENDING, "form");
+  if (chosen === "message") return words(props.message, FORM_SENT_MESSAGE);
+  return drawing.afterSending.kind === "message"
+    ? words(drawing.afterSending.message, FORM_SENT_MESSAGE)
+    : FORM_SENT_MESSAGE;
+}
+
+/**
+ * A provider's form, as the page's reader sees it: drawn from its
+ * description; its closed message where it takes no answers now; nothing
+ * where it is gone, or where this page cannot read it.
+ */
+async function renderPicked(
+  picked: FormReference,
+  args: BlockRenderArgs<FormProps>
+): Promise<ReactElement | null> {
+  const { ctx, props, className, partClass } = args;
+  // The editor's canvas draws a picked form through its own routes.
+  if (ctx.forms === undefined) return null;
+  let drawing: Awaited<
+    ReturnType<NonNullable<PageContext["forms"]>["describe"]>
+  >;
+  try {
+    drawing = await ctx.forms.describe(picked);
+  } catch {
+    // A provider that fails draws nothing, never an error on the page.
+    return null;
+  }
+  // A field under a name the receiver keeps would turn its answer into the
+  // receiver's own (the document it came from, the spam trap), refusing or
+  // losing every send: such a description is drawn as a failing one is.
+  if (
+    "fields" in drawing &&
+    drawing.fields.some(field => receiverKeepsName(field.name))
+  )
+    return null;
+  if ("unavailable" in drawing) {
+    if (drawing.unavailable !== "closed") return null;
+    return (
+      <div className={className}>
+        <p className={partClass("message")}>
+          {words(drawing.message, FORM_REFUSALS.closed)}
+        </p>
+      </div>
+    );
+  }
+  return drawForm(
+    {
+      fields: drawing.fields,
+      submitText: words(drawing.submitText, "Send"),
+      sentMessage: providerSentMessage(props, drawing),
+      multipart: drawing.encoding === "multipart",
+      ...(drawing.script === undefined ? {} : { script: drawing.script }),
+    },
+    args
+  );
+}
+
+/**
+ * Draw the form. A simple form is drawn at once; a provider's waits for its
+ * description, so only a page holding one renders this block asynchronously.
+ */
+export function renderForm(
+  args: BlockRenderArgs<FormProps>
+): ReactElement | Promise<ReactElement | null> {
+  const picked = pickedForm(args.props.form);
+  if (picked !== undefined) return renderPicked(picked, args);
+  const { props } = args;
+  return drawForm(
+    {
+      fields: formFieldDrawings(props),
+      submitText: words(props.submitText, "Send"),
+      sentMessage: words(props.message, FORM_SENT_MESSAGE),
+      multipart: false,
+    },
+    args
+  );
+}
+
+/**
+ * Version 1 to 2: forms always post to the page builder's receiver, so
+ * `method` goes. A version 1 form drew "Submit" on a button with no words
+ * stored, so that is what it keeps; everything else it stored is kept as it
+ * is, "Send to" among it.
+ */
+function fromVersion1(props: Record<string, unknown>): Record<string, unknown> {
+  const { method: _method, ...rest } = props;
+  const upgraded = Array.isArray(rest.fields)
+    ? { ...rest, fields: rest.fields.map(namedAsVersion1) }
+    : rest;
+  return text(upgraded.submitText).trim() === ""
+    ? { ...upgraded, submitText: "Submit" }
+    : upgraded;
+}
+
+/**
+ * A version 1 field with the name it was sent under written down: one with
+ * none was sent as `field-<n>`, and a receiving address may expect exactly
+ * that, where a field added now is named from its label.
+ */
+function namedAsVersion1(field: unknown, index: number): unknown {
+  if (typeof field !== "object" || field === null || Array.isArray(field)) {
+    return field;
+  }
+  const record = field as Record<string, unknown>;
+  return text(record.name).trim() === ""
+    ? { ...record, name: `field-${index}` }
+    : record;
+}
+
+/** The words each field type is offered under. */
+const FIELD_TYPE_LABELS: Readonly<Record<string, string>> = {
+  text: "Text",
+  email: "Email",
+  tel: "Phone",
+  number: "Number",
+  url: "Link",
+  date: "Date",
+  textarea: "Long text",
+  select: "Dropdown",
+  checkbox: "Checkbox",
+  radio: "Choice",
+};
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The
@@ -465,15 +418,11 @@ export function renderForm({
 // published types is typed the same as one compiled here. See `./index.ts`.
 export const form: BlockDefinition<FormProps, PageContext> = defineBlock({
   name: "core/form",
-  version: 1,
+  version: 2,
+  migrate: { 1: fromVersion1 },
   // What an author reads, in the Add panel and the block card: one plain line.
-  // What the block does, for whoever maintains it: A plain HTML form that posts
-  // to a URL you choose. Stores nothing and ships no JavaScript; the form-
-  // builder plugin is the one that collects submissions.
-  description: "A form that sends what visitors type to an address you choose.",
-  // Palette metadata. The category is imported rather than spelled here so
-  // nineteen blocks cannot drift into nineteen headings; keywords are what
-  // let a search for a word the description never uses still find this.
+  description:
+    "A form visitors fill in and send, with a message once it's sent.",
   editor: {
     label: "Form",
     icon: "form",
@@ -481,41 +430,71 @@ export const form: BlockDefinition<FormProps, PageContext> = defineBlock({
     keywords: ["contact", "input", "submit", "fields"],
   },
   props: {
-    action: { label: "Send to", type: "url" },
-    method: {
-      label: "Method",
-      optionLabels: { post: "POST", get: "GET" },
-      type: "select",
-      options: [...FORM_METHODS],
-    },
     // Each field's own settings, so the inspector can draw a control for
     // each. Description only: the stored shape is the same list of records.
     fields: {
       label: "Fields",
+      section: "Fields",
       type: "array",
       of: "object",
       item: {
         label: { label: "Label", type: "text" },
-        name: { label: "Name sent with the form", type: "text" },
         type: {
           label: "Field type",
           type: "select",
           options: [...FORM_FIELD_TYPES],
+          optionLabels: FIELD_TYPE_LABELS,
         },
         required: { label: "Required", type: "checkbox" },
+        options: { label: "Options", type: "array", of: "text" },
+        name: { label: "Name sent with the form", type: "text" },
       },
     },
-    submitText: { label: "Submit button text", role: "content", type: "text" },
+    afterSending: {
+      // Its own name, not the section's again right under the section title.
+      label: "Then",
+      section: "After sending",
+      type: "select",
+      options: [...FORM_AFTER_SENDING],
+      optionLabels: {
+        form: "Use the form's own setting",
+        message: "Show a message",
+        page: "Go to a page",
+      },
+    },
+    message: {
+      label: "Message",
+      hint: 'Shown in the form\'s place. Left empty, it says "Thanks, we got your message."',
+      section: "After sending",
+      role: "content",
+      type: "text",
+    },
+    href: { ...LINK_PROPS.href, label: "Page", section: "After sending" },
+    entryCollection: {
+      ...LINK_PROPS.entryCollection,
+      section: "After sending",
+    },
+    entryId: { ...LINK_PROPS.entryId, section: "After sending" },
+    action: { label: "Send to", type: "url" },
+    submitText: { label: "Button text", role: "content", type: "text" },
   },
-  defaultProps: { method: "post", submitText: "Submit", fields: [] },
+  // What a new Form starts with: the three fields almost every contact form
+  // asks, and a button that says what it does.
+  defaultProps: {
+    submitText: "Send",
+    fields: [
+      { label: "Name", type: "text", required: true },
+      { label: "Email", type: "email", required: true },
+      { label: "Message", type: "textarea" },
+    ],
+  },
   example: {
     props: {
-      method: "post",
       submitText: "Send",
       fields: [
-        { label: "Name", name: "name", type: "text", required: true },
-        { label: "Email", name: "email", type: "email", required: true },
-        { label: "Message", name: "message", type: "textarea" },
+        { label: "Name", type: "text", required: true },
+        { label: "Email", type: "email", required: true },
+        { label: "Message", type: "textarea" },
       ],
     },
   },
@@ -532,7 +511,7 @@ export const form: BlockDefinition<FormProps, PageContext> = defineBlock({
     effects: true,
     position: true,
   },
-  // Its fields and its submit button are interactive, and it is a form.
+  // Its fields and its button are interactive, and it is a form.
   contentModel: () => ({ is: ["flow", "form", "interactive"] }),
   render: renderForm,
 });

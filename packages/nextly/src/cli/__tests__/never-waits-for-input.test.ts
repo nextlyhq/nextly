@@ -172,6 +172,9 @@ vi.mock("../commands/upgrade-steps", () => ({
 
 vi.mock("../../domains/schema/events/legacy-detection", () => ({
   assertNoLegacyBookkeeping: () => Promise.resolve(),
+  // `nextly migrate` reads which legacy tables there are: none here.
+  detectLegacyBookkeeping: () =>
+    Promise.resolve({ hasLegacy: false, tables: [] }),
 }));
 
 vi.mock("../../domains/field-groups/storage/resolve-storage-names", () => ({
@@ -605,12 +608,68 @@ describe("a command run with no terminal", () => {
     NEXTLY_RUN_TIMEOUT
   );
 
+  /**
+   * A role holding a retired `manage-` permission, as an earlier release
+   * stored one: work for `nextly upgrade`. Each row is a copy of one the
+   * migrated database already holds, so it has every column the table needs.
+   */
+  function giveARoleARetiredManagePermission() {
+    const db = new Database(dbFile);
+    try {
+      const copy = (table: string, change: Record<string, unknown>) => {
+        const row = db.prepare(`SELECT * FROM "${table}" LIMIT 1`).get() as
+          | Record<string, unknown>
+          | undefined;
+        if (row === undefined) throw new Error(`${table} holds no row to copy`);
+        const next = { ...row, ...change };
+        const columns = Object.keys(next);
+        db.prepare(
+          `INSERT INTO "${table}" (${columns.map(c => `"${c}"`).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`
+        ).run(...columns.map(column => next[column]));
+      };
+      copy("permissions", {
+        id: "nw-manage-media",
+        name: "Manage media",
+        slug: "manage-media",
+        action: "manage",
+        resource: "media",
+      });
+      copy("role_permissions", {
+        id: "nw-holds-manage-media",
+        permission_id: "nw-manage-media",
+      });
+    } finally {
+      db.close();
+    }
+  }
+
   it(
     "upgrade does not ask whether the database is backed up, and names --confirm-backed-up",
     async () => {
+      // A migrated database where one of the upgrade's steps has work: the
+      // backup is asked about only then.
+      await appliedPosts();
+      giveARoleARetiredManagePermission();
+      await expectRefusal(["upgrade"], "--confirm-backed-up");
+    },
+    NEXTLY_RUN_TIMEOUT
+  );
+
+  it(
+    "migrate does not ask whether the database is backed up before moving an earlier release's records, and names --backup-confirmed",
+    async () => {
       writeFileSync(join(project, "nextly.config.ts"), CONFIG_WITH(""));
       seedDatabase();
-      await expectRefusal(["upgrade"], "--confirm-backed-up");
+      // The ledger as an earlier release kept it, holding one record.
+      const db = new Database(dbFile);
+      db.exec(
+        "CREATE TABLE nextly_migrations (id TEXT PRIMARY KEY, filename TEXT NOT NULL UNIQUE, sha256 TEXT NOT NULL, status TEXT NOT NULL, applied_at INTEGER NOT NULL, applied_by TEXT, duration_ms INTEGER, error_json TEXT)"
+      );
+      db.exec(
+        "INSERT INTO nextly_migrations (id, filename, sha256, status, applied_at) VALUES ('1', '20200101_000000_000_posts.sql', 'aa', 'applied', 1)"
+      );
+      db.close();
+      await expectRefusal(["migrate"], "--backup-confirmed");
     },
     NEXTLY_RUN_TIMEOUT
   );

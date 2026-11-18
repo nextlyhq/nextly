@@ -1,32 +1,57 @@
 "use client";
 
 /**
- * The controls that add a section to the page itself: a start card on an
- * empty page, and a "+" in each gap between two of its top-level sections.
+ * The controls that add a block to the page itself: the start area on an
+ * empty page (`page-start-area.tsx`), and a "+" in each gap between blocks.
  *
  * An empty page used to be a blank frame with nothing on it to press, and a
- * section could only be added after the selected one, by opening Add first.
- * These put the control where the section will go, as the editor's design
- * asks ("a '+' between sections").
+ * block could only be added after the selected one, by opening Add first.
+ * These put the control where the block will go.
+ *
+ * ## Where the "+" controls are
+ *
+ * In each gap between two top-level blocks, after the last top-level block
+ * (above a Layout's footer), and between the children of the selected block,
+ * in the direction they are laid out: a vertical gap between two Boxes in a
+ * row. `page-gaps.ts` measures them. Each is drawn floating over its gap as
+ * chrome, so showing one never moves, resizes or reflows the page.
  *
  * Like the empty-container appenders beside it, this only REPORTS: pressing
- * the start card calls {@link PageInsertersProps.onStart}, and pressing a "+"
- * calls {@link PageInsertersProps.onAddAfter} with the section above the gap.
- * The host selects that section and opens Add, which already adds after the
- * selected block and names the place, so no new insertion path exists.
+ * the start area's "＋ Add a block" calls {@link PageInsertersProps.onStart},
+ * and pressing a "+"
+ * calls {@link PageInsertersProps.onAddAfter} with the block before its gap
+ * and the control itself, which the host opens the in-place picker beside,
+ * aimed at exactly that gap. Nothing is selected on the way.
  *
  * ## When the "+" shows
  *
  * At rest a gap's "+" is not drawn, and takes no pointer events: a row of
- * buttons down the page would sit on every section's edge, and an unseen one
+ * buttons down the page would sit on every block's edge, and an unseen one
  * would take the press an author meant for a short block beside the gap. It
- * shows, and takes the pointer, while the pointer is within
- * {@link NEAR_GAP_PX} of the gap or on the "+" itself, and while it has
- * keyboard focus, so Tab still reaches every one. Nearness is measured rather
- * than read from the hovered block: a short block's middle is as close to its
- * edge as a "+" is tall, so "the pointer is in the section beside it" would
- * put the "+" under a press meant for that block. Nothing shows while a block
- * is dragged: the drag's own line says where it will land.
+ * shows, and takes the pointer, only while the pointer is within the gap's
+ * reach of its line, on the canvas or on the "+" itself, and while it has
+ * keyboard focus. Nearness is measured rather than read from the hovered
+ * block: a short block's middle is as close to its edge as a "+" is tall, so
+ * "the pointer is in the block beside it" would put the "+" under a press
+ * meant for that block.
+ *
+ * ## Never over a short block's middle
+ *
+ * The "+" is 24px on screen, so centred on the line between two blocks drawn
+ * shorter than that (a line of text at a zoomed-out canvas) it covers their
+ * middles. The reach is therefore at most a quarter of the shorter block,
+ * and it holds on the "+" too: moving from the line towards a block's middle
+ * lets the "+" go before the pointer gets there, so the press lands on the
+ * block. A touch screen, which has no pointer to come near, keeps a "+"
+ * shown only where both blocks beside it are at least as deep as the "+".
+ * Nothing shows while a block is dragged: the drag's own line says where it
+ * will land.
+ *
+ * ## The keyboard
+ *
+ * Every "+" is a Tab stop, in reading order. Tab on the canvas with a block
+ * selected moves to the "+" below that block, so the next stop after a block
+ * is the gap after it; from there Tab and Shift+Tab move through the others.
  *
  * @module page-inserters
  */
@@ -37,39 +62,76 @@ import { Plus } from "lucide-react";
 import * as React from "react";
 
 import { ChromeTooltip } from "../chrome-tooltip";
-import type { Point, Rect } from "../geometry";
+import { isElement } from "../dom-kind";
+import type { Point } from "../geometry";
 import { blockNameOf, type ComponentTitleOf } from "../panels/layers/layers";
 
-import {
-  CANVAS_ROOT_CLASS,
-  CHROME_ATTRIBUTE,
-  outermostElementsOf,
-} from "./canvas";
+import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
-import { watchCanvasFor, watchScreenBand } from "./canvas-geometry-watch";
+import { watchCanvasFor } from "./canvas-geometry-watch";
 import {
+  boxInFrameViewport,
   canvasContentPoint,
-  canvasContentRect,
-  drawnBoxes,
-  onScreenOf,
   overlaySpaceOf,
 } from "./geometry-dom";
-import { startWords } from "./page-start-words";
-import { unionRect } from "./toolbar-actions";
+import {
+  blockRectOf,
+  gapAfter,
+  gapKey,
+  gapNear,
+  measureGaps,
+  type Gap,
+} from "./page-gaps";
+import { StartArea, startPlaceIn, type StarterPage } from "./page-start-area";
+import { gapWords } from "./page-start-words";
+
+/**
+ * What an empty page's start area says and reports.
+ *
+ * @experimental
+ */
+export interface StartOptions {
+  /** The page's title, which a page's start area is headed with. */
+  readonly title?: string;
+  /** "＋ Add a block" was pressed; `control` is the button. */
+  readonly onStart: (control: HTMLElement) => void;
+  /**
+   * "Insert a saved section" was pressed. Absent where a saved section cannot
+   * be inserted, and so is the button.
+   */
+  readonly onSavedSection?: () => void;
+  /** Starter pages an empty page can begin from; none, no row. */
+  readonly starters?: readonly StarterPage[];
+  /** A starter page was chosen. */
+  readonly onStarter?: (id: string) => void;
+}
 
 /** @experimental */
 export interface PageInsertersProps {
-  /** The page whose top-level sections the controls sit between. */
+  /** The page whose blocks the controls sit between. */
   readonly document: BlockDocument;
+  /**
+   * The selected block, whose children get a "+" between them too, and from
+   * which Tab moves to the "+" below it. `null` or absent for none.
+   */
+  readonly selectedId?: string | null;
   /**
    * Draws nothing: while a block is dragged, and wherever the host offers no
    * adding at all.
    */
   readonly hidden?: boolean;
-  /** The empty page's start card was pressed. */
-  readonly onStart: () => void;
-  /** A gap's "+" was pressed: add a section after this one. */
-  readonly onAddAfter: (nodeId: string) => void;
+  /**
+   * A block is dragged over the canvas: no "+" shows, and an empty page's
+   * start area is drawn as where it drops.
+   */
+  readonly dragging?: boolean;
+  /** What an empty page's start area says and reports. */
+  readonly start: StartOptions;
+  /**
+   * A gap's "+" was pressed: add a block in that gap, after `nodeId`, beside
+   * it. `control` is the "+" pressed, for the host to open its picker beside.
+   */
+  readonly onAddAfter: (nodeId: string, control: HTMLElement) => void;
   /**
    * Names a component by its library title, as Layers does, so the "+" after a
    * placement names the component rather than "Component".
@@ -77,129 +139,52 @@ export interface PageInsertersProps {
   readonly componentTitle?: ComponentTitleOf;
 }
 
-/** One gap between two top-level sections, where its "+" is drawn. */
-interface Gap {
-  /** The section above the gap, which a new section goes after. */
-  readonly after: string;
-  /** The section below it. */
-  readonly before: string;
-  /** The gap's middle, in the chrome's coordinates. */
-  readonly x: number;
-  readonly y: number;
-  /** How wide the line across the gap is drawn. */
-  readonly width: number;
-}
-
-/**
- * How near the pointer must be to a gap for its "+" to show, in the chrome's
- * pixels: less than half a short block's height, so the middle of a block
- * one line tall stays the block's to press.
- */
-const NEAR_GAP_PX = 8;
-
-/** The gap the pointer is within {@link NEAR_GAP_PX} of, by its key. */
-function gapNear(gaps: readonly Gap[], y: number): string | undefined {
-  const near = gaps.find(gap => Math.abs(gap.y - y) <= NEAR_GAP_PX);
-  return near === undefined ? undefined : keyOf(near);
-}
-
-/** A gap's identity: the two sections it is between. */
-function keyOf(gap: Gap): string {
-  // Encoded rather than joined: an id can hold any character, so a separator
-  // could make two different pairs read the same.
-  return JSON.stringify([gap.after, gap.before]);
-}
-
-/**
- * Where the start card is centred: the middle of what of the canvas is on
- * screen, as an empty page's root is only as tall as nothing in it.
- */
+/** Where the start area goes on an empty page, or `null` outside a canvas. */
 function measureStart(layer: HTMLElement): Point | null {
   const space = overlaySpaceOf(layer, CANVAS_ROOT_CLASS);
-  if (space === null) return null;
-  const band = onScreenOf(space);
-  return { x: band.x + band.width / 2, y: band.y + band.height / 2 };
+  return space === null ? null : startPlaceIn(space);
 }
 
-/** Each gap between two drawn top-level sections, measured in the chrome. */
-function measureGaps(
-  layer: HTMLElement,
-  document: BlockDocument
+/** The gaps measured in `layer`'s chrome, or none outside a canvas. */
+function gapsIn(
+  layer: HTMLElement | null,
+  document: BlockDocument,
+  selectedId: string | null
 ): readonly Gap[] {
-  const space = overlaySpaceOf(layer, CANVAS_ROOT_CLASS);
-  if (space === null) return [];
-  const { root } = space;
-  const page = space.place(canvasContentRect(root, root));
-  /*
-   * Each top-level node as the union of every element drawn for it, and only
-   * those that generate a box. A component placement draws one element per
-   * top-level node of its definition, so its first element alone would end
-   * the section early and put the next gap's "+" inside it; a node hidden on
-   * this device (`display: none`) generates no box, and a gap measured from
-   * its empty rectangle would add a "+" beside a section nobody can see.
-   * Outermost only, as the drag measures a node, so an element nested inside
-   * the same placement is not counted twice.
-   */
-  const parts = new Map<string, Rect[]>();
-  const top = new Set(document.nodes.map(node => node.id));
-  for (const [id, elements] of outermostElementsOf(root, top)) {
-    parts.set(
-      id,
-      elements
-        .flatMap(drawnBoxes)
-        .map(drawn => space.place(canvasContentRect(drawn, root)))
-    );
-  }
-  const drawn = document.nodes.flatMap(node => {
-    const rect = unionRect(parts.get(node.id) ?? []);
-    return rect === undefined ? [] : [{ id: node.id, rect }];
-  });
-  const gaps: Gap[] = [];
-  for (let at = 1; at < drawn.length; at += 1) {
-    const above = drawn[at - 1];
-    const below = drawn[at];
-    if (above === undefined || below === undefined) continue;
-    gaps.push({
-      after: above.id,
-      before: below.id,
-      x: page.x + page.width / 2,
-      y: (above.rect.y + above.rect.height + below.rect.y) / 2,
-      width: page.width,
-    });
-  }
-  return gaps;
+  const space =
+    layer === null ? null : overlaySpaceOf(layer, CANVAS_ROOT_CLASS);
+  return space === null ? [] : measureGaps(space, document, selectedId);
 }
+
+/** What the gaps and the start area are measured from, and what moves them. */
+interface Measured {
+  readonly gaps: readonly Gap[];
+  readonly start: Point | null;
+}
+
+const NOTHING_MEASURED: Measured = { gaps: [], start: null };
 
 /**
- * The start card on an empty page and the "+" between its sections.
- *
- * @experimental
+ * The gaps, or the start area's place on an empty page, measured now and
+ * again on everything that moves the canvas: a change inside it, a resize and
+ * a zoom.
  */
-export function PageInserters({
-  document,
-  hidden = false,
-  onStart,
-  onAddAfter,
-  componentTitle,
-}: PageInsertersProps): React.JSX.Element | null {
-  const words = startWords(document.kind);
-  const layer = React.useRef<HTMLDivElement | null>(null);
-  const [gaps, setGaps] = React.useState<readonly Gap[]>([]);
+function useMeasured(
+  layer: React.RefObject<HTMLDivElement | null>,
+  document: BlockDocument,
+  selectedId: string | null,
+  hidden: boolean
+): Measured {
+  const [measured, setMeasured] = React.useState<Measured>(NOTHING_MEASURED);
   const canvasFrame = useCanvasFrame();
-  // The gap the pointer is near, and the one whose "+" the pointer is on: a
-  // pointer moving onto the "+" leaves the canvas's frame, which then reports
-  // no further move, so the "+" holds itself shown while it is pointed at.
-  const [near, setNear] = React.useState<string | undefined>(undefined);
-  const [held, setHeld] = React.useState<string | undefined>(undefined);
   const empty = document.nodes.length === 0;
-
-  const [start, setStart] = React.useState<Point | null>(null);
-
   const measure = React.useCallback(() => {
     const element = layer.current;
-    setGaps(element === null || empty ? [] : measureGaps(element, document));
-    setStart(element === null || !empty ? null : measureStart(element));
-  }, [document, empty]);
+    setMeasured({
+      gaps: empty ? [] : gapsIn(element, document, selectedId),
+      start: element === null || !empty ? null : measureStart(element),
+    });
+  }, [layer, document, selectedId, empty]);
 
   React.useLayoutEffect(() => {
     if (!hidden) measure();
@@ -208,29 +193,29 @@ export function PageInserters({
   React.useEffect(() => {
     if (hidden) return;
     return watchCanvasFor(() => layer.current, measure);
-  }, [measure, hidden, canvasFrame]);
+  }, [layer, measure, hidden, canvasFrame]);
 
-  // And what moves the part of the canvas on screen, which the start card is
-  // centred on: the scroller around the canvas, and the host's around a frame.
+  return measured;
+}
+
+/** The gap the pointer is near, by its key, from its moves over the canvas. */
+function useNearGap(
+  layer: React.RefObject<HTMLDivElement | null>,
+  gaps: readonly Gap[],
+  hidden: boolean
+): readonly [string | undefined, (key: string | undefined) => void] {
+  const [near, setNear] = React.useState<string | undefined>(undefined);
+  const canvasFrame = useCanvasFrame();
   React.useEffect(() => {
     const element = layer.current;
     const space =
       element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
-    if (hidden || space === null) return;
-    return watchScreenBand(space.root, space.frame, measure);
-  }, [measure, hidden, canvasFrame]);
-
-  // The pointer's distance from each gap, from its moves over the canvas.
-  React.useEffect(() => {
-    const element = layer.current;
-    const space =
-      element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
-    if (hidden || empty || space === null) return;
+    if (hidden || gaps.length === 0 || space === null) return;
     const { root } = space;
     const move = (event: PointerEvent): void => {
       const point = canvasContentPoint(event.clientX, event.clientY, root);
       const placed = space.place({ ...point, width: 0, height: 0 });
-      setNear(gapNear(gaps, placed.y));
+      setNear(gapNear(gaps, placed.x, placed.y));
     };
     const leave = (): void => setNear(undefined);
     root.addEventListener("pointermove", move);
@@ -239,7 +224,188 @@ export function PageInserters({
       root.removeEventListener("pointermove", move);
       root.removeEventListener("pointerleave", leave);
     };
-  }, [gaps, hidden, empty, canvasFrame]);
+  }, [layer, gaps, hidden, canvasFrame]);
+  return [near, setNear];
+}
+
+/**
+ * Whether a Tab pressed here is a Tab on the canvas itself: the page's own
+ * document focused, rather than a control on the page or text being typed.
+ */
+function tabOnCanvas(event: KeyboardEvent, page: Document): boolean {
+  if (event.key !== "Tab" || event.defaultPrevented) return false;
+  if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) {
+    return false;
+  }
+  const target = event.target;
+  return (
+    isElement(target) &&
+    (target === page.body || target === page.documentElement)
+  );
+}
+
+/**
+ * Tab on the canvas with a block selected moves to the "+" below it, rather
+ * than to whichever chrome comes first after the frame. Only in a frame: the
+ * keys of an editor sharing the page's document are the editor's own.
+ */
+function useTabToGap(
+  layer: React.RefObject<HTMLDivElement | null>,
+  gaps: readonly Gap[],
+  selectedId: string | null
+): void {
+  const canvasFrame = useCanvasFrame();
+  const page = canvasFrame.frame === null ? null : canvasFrame.document;
+  React.useEffect(() => {
+    if (page === null || selectedId === null || gaps.length === 0) return;
+    const keydown = (event: KeyboardEvent): void => {
+      const element = layer.current;
+      const space =
+        element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+      if (space === null || !tabOnCanvas(event, page)) return;
+      const block = blockRectOf(space, selectedId);
+      const gap = block === undefined ? undefined : gapAfter(gaps, block);
+      const control = gap === undefined ? null : controlOf(element, gap);
+      if (control === null) return;
+      event.preventDefault();
+      control.focus({ preventScroll: true });
+    };
+    page.addEventListener("keydown", keydown);
+    return () => page.removeEventListener("keydown", keydown);
+  }, [layer, page, gaps, selectedId]);
+}
+
+/** The attribute a "+" carries its gap's key in, so Tab can find it. */
+const GAP_ATTRIBUTE = "data-nx-gap";
+
+/** The "+" drawn for a gap, in this layer. */
+function controlOf(layer: HTMLElement | null, gap: Gap): HTMLElement | null {
+  const key = gapKey(gap);
+  let found: HTMLElement | null = null;
+  layer?.querySelectorAll<HTMLElement>(`[${GAP_ATTRIBUTE}]`).forEach(button => {
+    if (found === null && button.getAttribute(GAP_ATTRIBUTE) === key) {
+      found = button;
+    }
+  });
+  return found;
+}
+
+/** One gap's "+", floating over the gap, with the line it adds on. */
+function GapControl({
+  gap,
+  words,
+  shown,
+  onHold,
+  onAddAfter,
+}: {
+  readonly gap: Gap;
+  readonly words: string;
+  readonly shown: boolean;
+  readonly onHold: (key: string | undefined) => void;
+  readonly onAddAfter: PageInsertersProps["onAddAfter"];
+}): React.JSX.Element {
+  const key = gapKey(gap);
+  const across = gap.line === "across";
+  // Held only while the pointer on the "+" is within the gap's reach of its
+  // line, which runs through the "+"'s middle: further, towards a block's
+  // middle, the "+" lets go so a press there is the block's.
+  //
+  // Let go at once, too, not on the next render: a press can follow the move
+  // that left the reach before React draws again, and it must reach the
+  // block under the "+" rather than the "+". Taken back once the "+" shows
+  // again.
+  const button = React.useRef<HTMLButtonElement | null>(null);
+  // On every render that shows it, since a let-go and a fresh show can land
+  // in one render, which leaves `shown` as it was.
+  React.useLayoutEffect(() => {
+    if (shown && button.current !== null) {
+      button.current.style.pointerEvents = "";
+    }
+  });
+  const hold = (event: React.PointerEvent<HTMLButtonElement>): void => {
+    // A finger has no hover to come near with: a touch screen keeps a roomy
+    // "+" shown and pressable all over, and the stylesheet decides which.
+    if (event.nativeEvent.pointerType === "touch") return;
+    const target = event.currentTarget;
+    // Both in the editor window's coordinates, which the chrome is drawn at.
+    const box = boxInFrameViewport(target);
+    const off = across
+      ? event.clientY - (box.y + box.height / 2)
+      : event.clientX - (box.x + box.width / 2);
+    const inReach = Math.abs(off) <= gap.reach;
+    if (!inReach) target.style.pointerEvents = "none";
+    onHold(inReach ? key : undefined);
+  };
+  return (
+    <div
+      className="nx-page-inserters__gap"
+      data-line={gap.line}
+      data-near={shown ? "" : undefined}
+      data-roomy={gap.roomy ? "" : undefined}
+      style={
+        across
+          ? { left: gap.x - gap.length / 2, top: gap.y, width: gap.length }
+          : { left: gap.x, top: gap.y - gap.length / 2, height: gap.length }
+      }
+    >
+      <span className="nx-page-inserters__line" aria-hidden="true" />
+      <ChromeTooltip content={words} side={across ? "top" : "right"}>
+        <button
+          ref={button}
+          type="button"
+          className="nx-page-inserters__add"
+          aria-label={words}
+          {...{ [GAP_ATTRIBUTE]: key }}
+          onClick={event => onAddAfter(gap.after, event.currentTarget)}
+          onPointerEnter={hold}
+          onPointerMove={hold}
+          onPointerLeave={() => onHold(undefined)}
+        >
+          <Plus size={14} aria-hidden="true" />
+        </button>
+      </ChromeTooltip>
+    </div>
+  );
+}
+
+/**
+ * The start area on an empty page and the "+" in the gaps between blocks.
+ *
+ * @experimental
+ */
+export function PageInserters({
+  document,
+  selectedId = null,
+  hidden = false,
+  dragging = false,
+  start,
+  onAddAfter,
+  componentTitle,
+}: PageInsertersProps): React.JSX.Element | null {
+  const layer = React.useRef<HTMLDivElement | null>(null);
+  const empty = document.nodes.length === 0;
+  // While a block is dragged no "+" shows: the drag's own line says where it
+  // lands. An empty page's start area stays, as where it drops.
+  const noGaps = hidden || dragging;
+  const measured = useMeasured(layer, document, selectedId, hidden);
+  const gaps = noGaps ? NO_GAPS : measured.gaps;
+  const [near, setNear] = useNearGap(layer, gaps, noGaps);
+  useTabToGap(layer, gaps, selectedId);
+  // The gap whose "+" the pointer is on: a pointer moving onto the "+"
+  // leaves the canvas's frame, which then reports no further move, so the
+  // "+" holds itself shown while it is pointed at.
+  const [held, setHeld] = React.useState<string | undefined>(undefined);
+  // Let go on the "+" is let go everywhere: the frame under it may not have
+  // heard the pointer leave, and a "+" still shown would take the press.
+  const hold = React.useCallback(
+    (key: string | undefined) => {
+      setHeld(key);
+      if (key === undefined) setNear(undefined);
+    },
+    [setNear]
+  );
+  const nameOf = (id: string): string =>
+    blockNameOf(document, id, componentTitle) ?? "this block";
 
   if (hidden) return null;
 
@@ -254,61 +420,31 @@ export function PageInserters({
         {...{ [CHROME_ATTRIBUTE]: "" }}
       >
         {empty ? (
-          <div
-            className="nx-page-inserters__start"
-            // Kept out of sight until it has been placed, rather than drawn
-            // at the layer's corner for a frame.
-            style={
-              start === null
-                ? { visibility: "hidden" }
-                : { left: start.x, top: start.y }
-            }
-          >
-            <p className="nx-page-inserters__title">{words.title}</p>
-            <p className="nx-page-inserters__hint">{words.hint}</p>
-            <button
-              type="button"
-              className="nx-page-inserters__start-button"
-              onClick={onStart}
-            >
-              <Plus size={16} aria-hidden="true" />
-              {words.start}
-            </button>
-          </div>
+          <StartArea
+            document={document}
+            place={measured.start}
+            dragging={dragging}
+            {...start}
+          />
         ) : (
           gaps.map(gap => (
-            <div
-              key={keyOf(gap)}
-              className="nx-page-inserters__gap"
-              data-near={
-                near === keyOf(gap) || held === keyOf(gap) ? "" : undefined
-              }
-              style={{
-                left: gap.x - gap.width / 2,
-                top: gap.y,
-                width: gap.width,
-              }}
-            >
-              <span className="nx-page-inserters__line" aria-hidden="true" />
-              <ChromeTooltip content={words.gap} side="top">
-                <button
-                  type="button"
-                  className="nx-page-inserters__add"
-                  aria-label={`${words.after} ${
-                    blockNameOf(document, gap.after, componentTitle) ??
-                    "this one"
-                  }`}
-                  onClick={() => onAddAfter(gap.after)}
-                  onPointerEnter={() => setHeld(keyOf(gap))}
-                  onPointerLeave={() => setHeld(undefined)}
-                >
-                  <Plus size={14} aria-hidden="true" />
-                </button>
-              </ChromeTooltip>
-            </div>
+            <GapControl
+              key={gapKey(gap)}
+              gap={gap}
+              words={gapWords(
+                nameOf(gap.after),
+                gap.before === undefined ? undefined : nameOf(gap.before)
+              )}
+              shown={near === gapKey(gap) || held === gapKey(gap)}
+              onHold={hold}
+              onAddAfter={onAddAfter}
+            />
           ))
         )}
       </div>
     </TooltipProvider>
   );
 }
+
+/** No gaps, the one value, so a drag's render changes no gap watcher. */
+const NO_GAPS: readonly Gap[] = [];

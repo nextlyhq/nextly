@@ -6,6 +6,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { getVersionDiffForDocument } from "../../../dispatcher/handlers/versions-methods";
 import { NextlyError } from "../../../errors";
 import type { CollectionsHandler } from "../../../services/collections-handler";
@@ -92,6 +93,8 @@ describe.each(getConfiguredTestDialects())(
   dialect => {
     it("compares with the version the part entered review at, and the one last approved", async () => {
       t = await bootSteps(dialect);
+      // A super-admin the read gate can look up: role names on a user grant nothing.
+      await superAdminUser(t, superAdmin.id);
       const { id, saves } = await pageWithSaves();
       const [submitted, approved, latest] = saves;
       await pin(id, enteredReviewSlot(null), submitted);
@@ -115,6 +118,8 @@ describe.each(getConfiguredTestDialects())(
 
     it("refuses a part never submitted or approved, and the pinned version itself, with why", async () => {
       t = await bootSteps(dialect);
+      // A super-admin the read gate can look up: role names on a user grant nothing.
+      await superAdminUser(t, superAdmin.id);
       const { id, saves } = await pageWithSaves();
       const latest = saves[2];
 

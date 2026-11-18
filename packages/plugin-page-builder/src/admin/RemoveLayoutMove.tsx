@@ -546,12 +546,15 @@ export function MovePagesDialog({
   published,
   onRemoved,
   onFinished,
+  onStarted,
 }: {
   entryId: string;
   check: RemovalCheck;
   published: boolean;
   onRemoved: (action: MoveAction) => void;
   onFinished: (action: MoveAction) => void;
+  /** As a move begins: from here pages may change, whatever follows. */
+  onStarted?: () => void;
 }): JSX.Element {
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   // Pages moved by every tick this dialog sent, across restarts.
@@ -581,6 +584,7 @@ export function MovePagesDialog({
     stopAsked.current = false;
     refusedIds.current = new Set();
     setPhase({ kind: "moving", action });
+    onStarted?.();
     void runTicks(action);
   };
 

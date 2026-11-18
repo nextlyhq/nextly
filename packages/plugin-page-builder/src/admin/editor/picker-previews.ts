@@ -46,9 +46,10 @@ export interface PickerPreviewTerms {
  *   a picker first opens and once for this editor (its passages), never on a
  *   canvas load: the canvas reads it only for a page that already formats a
  *   date. No zone is read without an entry to ask for or a person to ask as.
- * - A list's first entry, beside its item's fields: the canvas's own read of
- *   the list, as the canvas draws it for this author, a list of related
- *   entries reading the canvas's entry.
+ * - A list's entry beside its item's fields, the one the author clicked on
+ *   the canvas, else the first: the canvas's own read of the list, as the
+ *   canvas draws it for this author, a list of related entries reading the
+ *   canvas's entry.
  */
 export function pickerPreviewServices({
   passages,
@@ -72,6 +73,7 @@ export function pickerPreviewServices({
     ...(canvas === null || userId === null
       ? {}
       : { readSiteTimeZone: () => siteTimeZoneFor(passages, canvas, userId) }),
-    readListSample: props => canvasListSample(props, locale, userId, entry),
+    readListSample: (props, at) =>
+      canvasListSample(props, locale, userId, entry, at),
   };
 }

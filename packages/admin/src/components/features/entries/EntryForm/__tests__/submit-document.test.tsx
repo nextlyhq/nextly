@@ -166,7 +166,7 @@ describe("submitDocument and values copied from another language", () => {
       _provenance: { title: { origin: "copy", sourceLocale: "es" } },
     });
     expect(
-      copiedValuesFor(form.control).provenanceForSave({ title: "Hola" })
+      copiedValuesFor(form.control).beginSave({ title: "Hola" }).claims
     ).toBeUndefined();
   });
 

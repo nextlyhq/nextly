@@ -39,12 +39,26 @@ function directApi(rows: Record<string, Record<string, unknown>[]>) {
     {
       find: async (args: Record<string, unknown>) => {
         reads.push(args);
-        const where = args.where as { id: { equals?: string; in?: string[] } };
-        const ids = where.id.in ?? [where.id.equals];
+        const where = args.where as {
+          id?: { equals?: string; in?: string[] };
+          or?: Record<string, { equals?: unknown }>[];
+        };
+        const stored = rows[String(args.collection)] ?? [];
+        if (where.or !== undefined) {
+          // Any of the conditions, each one field's equality.
+          return {
+            items: stored.filter(row =>
+              where.or!.some(condition =>
+                Object.entries(condition).every(
+                  ([field, test]) => row[field] === test.equals
+                )
+              )
+            ),
+          };
+        }
+        const ids = where.id?.in ?? [where.id?.equals];
         return {
-          items: (rows[String(args.collection)] ?? []).filter(row =>
-            ids.includes(String(row.id))
-          ),
+          items: stored.filter(row => ids.includes(String(row.id))),
         };
       },
     },
@@ -227,5 +241,307 @@ describe("the published node", () => {
         undefined
       )
     ).toBeNull();
+  });
+});
+
+describe("a form inside a component placed on a page", () => {
+  it("is found under the id the page draws it with", async () => {
+    const { COMPONENT_INSTANCE_TYPE } = await import("@nextlyhq/blocks-engine");
+    const { coreBlocks } = await import("@nextlyhq/blocks-react/blocks");
+    const { createBlockResolver, prepareDocumentForRead } = await import(
+      "@nextlyhq/blocks-react"
+    );
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [form("contact-form")],
+    };
+    const host = page([
+      {
+        id: "placed",
+        type: COMPONENT_INSTANCE_TYPE,
+        version: 1,
+        props: { componentId: "c1" },
+      },
+    ]);
+    // The id the published page draws the form under, from the renderer's
+    // own pipeline with the same definitions.
+    const drawn = prepareDocumentForRead(host as never, {
+      resolver: createBlockResolver(coreBlocks as never),
+      definitions: new Map([["c1", definition as never]]),
+    });
+    const drawnForm = drawn?.nodes.find(node => node.type === "core/form");
+    // Must-be-found: the page really draws the form, under an id of its own.
+    expect(drawnForm?.id).toBeDefined();
+    expect(drawnForm?.id).not.toBe("contact-form");
+
+    const { api } = directApi({
+      pages: [{ id: "p1", content: host }],
+      components: [{ id: "c1", content: definition }],
+    });
+    const found = await publishedNode(
+      api,
+      STORES,
+      { kind: "page", id: "p1" },
+      drawnForm?.id ?? "",
+      undefined
+    );
+    expect(found?.type).toBe("core/form");
+  });
+
+  it("is not found where the component is not published", async () => {
+    const { COMPONENT_INSTANCE_TYPE } = await import("@nextlyhq/blocks-engine");
+    const { api } = directApi({
+      pages: [
+        {
+          id: "p1",
+          content: page([
+            {
+              id: "placed",
+              type: COMPONENT_INSTANCE_TYPE,
+              version: 1,
+              props: { componentId: "c-draft" },
+            },
+          ]),
+        },
+      ],
+    });
+    expect(
+      await publishedNode(
+        api,
+        STORES,
+        { kind: "page", id: "p1" },
+        "cx-anything",
+        undefined
+      )
+    ).toBeNull();
+  });
+});
+
+describe("a form in an entry's own blocks, drawn by its design", () => {
+  it("is found as the entry's page draws it, composed into the design", async () => {
+    const { composeEntryContent, ENTRY_CONTENT_TYPE } = await import(
+      "@nextlyhq/blocks-engine"
+    );
+    const design = {
+      formatVersion: 1,
+      kind: "template",
+      nodes: [
+        form("design-form"),
+        {
+          id: "body",
+          type: ENTRY_CONTENT_TYPE,
+          version: 1,
+          props: { field: "body" },
+        },
+      ],
+    };
+    const own = page([form("entry-form")]);
+    const drawn = composeEntryContent(design as never, {
+      valueOf: field => (field === "body" ? own : undefined),
+    });
+    const drawnIds = drawn.nodes.flatMap(function ids(node): string[] {
+      return [
+        ...(node.type === "core/form" ? [node.id] : []),
+        ...Object.values(node.slots ?? {}).flatMap(list => list.flatMap(ids)),
+      ];
+    });
+    // Must-be-found: the entry's form is drawn, under an id of its own.
+    expect(drawnIds).toContain("design-form");
+    const entryFormId = drawnIds.find(id => id !== "design-form");
+    expect(entryFormId).toBeDefined();
+
+    const { api } = directApi({
+      posts: [{ id: "e1", title: "Hello", body: own }],
+      templates: [
+        {
+          id: "t1",
+          collection: "posts",
+          entry: null,
+          content: design,
+        },
+      ],
+    });
+    const entry = parseDefiningDocument("entry:posts:e1");
+    expect(entry).toEqual({ kind: "entry", collection: "posts", id: "e1" });
+    for (const nodeId of ["design-form", entryFormId ?? ""]) {
+      expect(
+        (await publishedNode(api, STORES, entry!, nodeId, undefined))?.type,
+        nodeId
+      ).toBe("core/form");
+    }
+  });
+});
+
+describe("a form in a Layout's header or footer", () => {
+  it("is found under the id its region draws it with", async () => {
+    const { regionDocument } = await import("@nextlyhq/blocks-engine");
+    const { coreBlocks } = await import("@nextlyhq/blocks-react/blocks");
+    const { createBlockResolver, prepareDocumentForRead } = await import(
+      "@nextlyhq/blocks-react"
+    );
+    const footer = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [form("signup")],
+    };
+    // The region as the page draws it: its component placed by the region.
+    const drawn = prepareDocumentForRead(
+      regionDocument([{ area: "footer", componentId: "c1" }]),
+      {
+        resolver: createBlockResolver(coreBlocks as never),
+        definitions: new Map([["c1", footer as never]]),
+      }
+    );
+    const drawnId = drawn?.nodes.find(node => node.type === "core/form")?.id;
+    // Must-be-found: the region draws the form under an id of its own.
+    expect(drawnId).toBeDefined();
+    expect(drawnId).not.toBe("signup");
+
+    const { api } = directApi({ components: [{ id: "c1", content: footer }] });
+    expect(
+      (
+        await publishedNode(
+          api,
+          STORES,
+          { kind: "component", id: "c1" },
+          drawnId ?? "",
+          undefined
+        )
+      )?.type
+    ).toBe("core/form");
+  });
+});
+
+describe("a form on a page the site lets grow past the default size", () => {
+  it("is found under the site's own limits, as its page is drawn", async () => {
+    const { COMPONENT_INSTANCE_TYPE, DEFAULT_LIMITS } = await import(
+      "@nextlyhq/blocks-engine"
+    );
+    const filler = Array.from(
+      { length: DEFAULT_LIMITS.maxNodes },
+      (_, index): BlockNode => ({
+        id: `p${index}`,
+        type: "core/paragraph",
+        version: 1,
+        props: {},
+      })
+    );
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [form("late-form")],
+    };
+    const host = page([
+      ...filler,
+      {
+        id: "placed",
+        type: COMPONENT_INSTANCE_TYPE,
+        version: 1,
+        props: { componentId: "c1" },
+      },
+    ]);
+    const limits = {
+      ...DEFAULT_LIMITS,
+      maxNodes: DEFAULT_LIMITS.maxNodes + 100,
+    };
+    const { coreBlocks } = await import("@nextlyhq/blocks-react/blocks");
+    const { createBlockResolver, prepareDocumentForRead } = await import(
+      "@nextlyhq/blocks-react"
+    );
+    const drawnId = prepareDocumentForRead(host as never, {
+      resolver: createBlockResolver(coreBlocks as never),
+      definitions: new Map([["c1", definition as never]]),
+      limits,
+    })?.nodes.find(node => node.type === "core/form")?.id;
+    // Must-be-found: the site's page does draw the form.
+    expect(drawnId).toBeDefined();
+
+    const { api } = directApi({
+      pages: [{ id: "p1", content: host }],
+      components: [{ id: "c1", content: definition }],
+    });
+    expect(
+      (
+        await publishedNode(
+          api,
+          STORES,
+          { kind: "page", id: "p1" },
+          drawnId ?? "",
+          undefined,
+          limits
+        )
+      )?.type
+    ).toBe("core/form");
+  });
+});
+
+describe("a form in an entry's own blocks the site lets grow past the default size", () => {
+  it("is found under the site's own limits, as the entry's page is drawn", async () => {
+    const { composeEntryContent, DEFAULT_LIMITS, ENTRY_CONTENT_TYPE } =
+      await import("@nextlyhq/blocks-engine");
+    const design = {
+      formatVersion: 1,
+      kind: "template",
+      nodes: [
+        {
+          id: "body",
+          type: ENTRY_CONTENT_TYPE,
+          version: 1,
+          props: { field: "body" },
+        },
+      ],
+    };
+    const filler = Array.from(
+      { length: DEFAULT_LIMITS.maxNodes },
+      (_, index): BlockNode => ({
+        id: `p${index}`,
+        type: "core/paragraph",
+        version: 1,
+        props: {},
+      })
+    );
+    const own = page([...filler, form("late-form")]);
+    const limits = {
+      ...DEFAULT_LIMITS,
+      maxNodes: DEFAULT_LIMITS.maxNodes + 100,
+    };
+    const drawn = composeEntryContent(design as never, {
+      valueOf: field => (field === "body" ? own : undefined),
+      maxNodes: limits.maxNodes,
+      maxDepth: limits.maxDepth,
+    });
+    const drawnId = drawn.nodes
+      .flatMap(function forms(node): string[] {
+        return [
+          ...(node.type === "core/form" ? [node.id] : []),
+          ...Object.values(node.slots ?? {}).flatMap(list =>
+            list.flatMap(forms)
+          ),
+        ];
+      })
+      .at(0);
+    // Must-be-found: the site's entry page does draw the form, past the
+    // default size, so a cut at the default would lose it.
+    expect(drawnId).toBeDefined();
+
+    const { api } = directApi({
+      posts: [{ id: "e1", body: own }],
+      templates: [
+        { id: "t1", collection: "posts", entry: null, content: design },
+      ],
+    });
+    expect(
+      (
+        await publishedNode(
+          api,
+          STORES,
+          { kind: "entry", collection: "posts", id: "e1" },
+          drawnId ?? "",
+          undefined,
+          limits
+        )
+      )?.type
+    ).toBe("core/form");
   });
 });

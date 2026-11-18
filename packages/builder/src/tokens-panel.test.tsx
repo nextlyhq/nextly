@@ -10,6 +10,7 @@ import {
   validateStyleValues,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
+import { Toaster } from "@nextlyhq/ui";
 import {
   act,
   cleanup,
@@ -26,7 +27,6 @@ import {
   TokensPanel,
   useVariablesHeader,
   type TokensPanelProps,
-  type VariablesPreview,
 } from "./tokens-panel";
 import type { VariableGroup } from "./tokens-studio";
 
@@ -111,10 +111,14 @@ describe("the rows", () => {
     const headings = screen
       .getAllByRole("heading", { level: 3 })
       .map(h => h.textContent);
+    // Site text leads the type groups, in a view of every group.
     expect(headings).toEqual([
+      "Site text",
       "Colours",
       "Type scale",
-      "Spacing, radius & shadows",
+      "Spacing",
+      "Radius",
+      "Shadows",
     ]);
   });
 
@@ -126,11 +130,14 @@ describe("the rows", () => {
       spacing: { mode: "classic", onChange: () => undefined },
     };
     render(<Hosted tokens={SITE} {...stale} />);
-    const spacing = screen.getByRole("region", {
-      name: "Spacing, radius & shadows",
-    });
+    const spacing = screen.getByRole("region", { name: "Spacing" });
     expect(screen.queryByText("Space between blocks")).toBeNull();
-    expect(screen.queryByRole("radiogroup")).toBeNull();
+    // The colours' usage filter is the only choice of its kind drawn.
+    expect(
+      screen
+        .queryAllByRole("radiogroup")
+        .map(group => group.getAttribute("aria-label"))
+    ).toEqual(["Show colours"]);
     expect(screen.queryByText(/classic/i)).toBeNull();
     // The spacing variables are listed as before.
     expect(
@@ -270,7 +277,7 @@ describe("the rows", () => {
           tokens: [
             ...SITE.tokens,
             {
-              name: "space.section-y",
+              name: "space.hero",
               kind: "dimension",
               values: { light: fluid },
             },
@@ -278,32 +285,32 @@ describe("the rows", () => {
         }}
       />
     );
-    const section = row(/^Section y/);
+    const section = row(/^Hero/);
     const chip = section.querySelector(".nx-vars__chip");
-    expect(chip?.textContent).toBe("Fluid");
+    expect(chip?.textContent).toBe("Fluid · 16–32px");
     expect(chip?.getAttribute("title")).toBe(fluid);
-    expect(section.getAttribute("aria-label")).toBe(`Section y, ${fluid}`);
+    expect(section.getAttribute("aria-label")).toBe(`Hero, ${fluid}`);
     // A fixed length still reads as itself, with no hover to add.
     const fixed = row(/^Space 4/).querySelector(".nx-vars__chip");
     expect(fixed?.textContent).toBe("1rem");
     expect(fixed?.getAttribute("title")).toBeNull();
   });
 
-  it("tells apart two rows shown under one name by their kind, and only those", () => {
-    // `space.card` and `radius.card` both read "Card": side by side, nothing
-    // said which was which.
+  it("lists a spacing and a radius of one name in their own groups, each under its plain name", () => {
+    // `space.tile` and `radius.tile` both read "Tile": each sits under its
+    // own heading, so the heading tells them apart and the name stays plain.
     render(
       <Hosted
         tokens={{
           tokens: [
             ...SITE.tokens,
             {
-              name: "space.card",
+              name: "space.tile",
               kind: "dimension",
               values: { light: "24px" },
             },
             {
-              name: "radius.card",
+              name: "radius.tile",
               kind: "dimension",
               values: { light: "12px" },
             },
@@ -311,34 +318,14 @@ describe("the rows", () => {
         }}
       />
     );
-    const spacing = row(/^Card · spacing/);
-    const radius = row(/^Card · radius/);
-    expect(spacing.getAttribute("aria-label")).toBe("Card · spacing, 24px");
-    expect(radius.getAttribute("aria-label")).toBe("Card · radius, 12px");
-    // The kind is muted beside the name, not part of it.
-    expect(radius.querySelector(".nx-vars__name")?.textContent).toBe(
-      "Card · radius"
-    );
-    expect(radius.querySelector(".nx-vars__name-kind")?.textContent).toBe(
-      " · radius"
-    );
-    // A name only one row has stays as it is.
-    expect(row(/^Space 4/).getAttribute("aria-label")).toBe("Space 4, 1rem");
-    // Each draws its kind's icon, so the two differ at a glance too.
-    expect(
-      radius
-        .querySelector("[data-variable-icon]")
-        ?.getAttribute("data-variable-icon")
-    ).toBe("radius");
-    expect(
-      spacing
-        .querySelector("[data-variable-icon]")
-        ?.getAttribute("data-variable-icon")
-    ).toBe("spacing");
+    const spacing = within(screen.getByRole("region", { name: "Spacing" }));
+    const radius = within(screen.getByRole("region", { name: "Radius" }));
+    expect(spacing.getByRole("button", { name: /^Tile, 24px$/ })).toBeDefined();
+    expect(radius.getByRole("button", { name: /^Tile, 12px$/ })).toBeDefined();
   });
 
   it("names the code name when two rows of one name are of one kind too", () => {
-    // `space.card` and `spacing.card` are both spacing steps called "Card":
+    // `space.tile` and `spacing.tile` are both spacing steps called "Tile":
     // the kind cannot tell them apart, the code name can.
     render(
       <Hosted
@@ -346,12 +333,12 @@ describe("the rows", () => {
           tokens: [
             ...SITE.tokens,
             {
-              name: "space.card",
+              name: "space.tile",
               kind: "dimension",
               values: { light: "24px" },
             },
             {
-              name: "spacing.card",
+              name: "spacing.tile",
               kind: "dimension",
               values: { light: "32px" },
             },
@@ -359,11 +346,11 @@ describe("the rows", () => {
         }}
       />
     );
-    expect(row(/^Card · space\.card,/).getAttribute("aria-label")).toBe(
-      "Card · space.card, 24px"
+    expect(row(/^Tile · space\.tile,/).getAttribute("aria-label")).toBe(
+      "Tile · space.tile, 24px"
     );
-    expect(row(/^Card · spacing\.card,/).getAttribute("aria-label")).toBe(
-      "Card · spacing.card, 32px"
+    expect(row(/^Tile · spacing\.tile,/).getAttribute("aria-label")).toBe(
+      "Tile · spacing.tile, 32px"
     );
   });
 
@@ -392,25 +379,23 @@ describe("the rows", () => {
     expect(document.body.textContent).not.toMatch(/token/i);
   });
 
-  it("previews dark values when the header switch says Dark", () => {
-    render(<Hosted tokens={PREVIEWED} />);
+  it("previews dark values when its host asks for dark", () => {
+    const { rerender } = render(
+      <Hosted tokens={PREVIEWED} prefersDark={false} />
+    );
     expect(previewed()).toBe("8px");
-    const preview = screen.getByRole("group", { name: "Preview" });
-    fireEvent.click(within(preview).getByRole("button", { name: "Dark" }));
+    rerender(<Hosted tokens={PREVIEWED} prefersDark />);
     expect(previewed()).toBe("12px");
-    expect(
-      within(preview).getByRole("button", { name: "Dark" })
-    ).toHaveProperty("ariaPressed", "true");
   });
 
-  it("draws the header controls into the element the host gives it", () => {
+  it("draws the More design actions menu into the element the host gives it, and no light/dark switch", () => {
     const slot = document.createElement("div");
     document.body.append(slot);
-    render(<Hosted tokens={SITE} headerActions={slot} />);
-    expect(within(slot).getByRole("group", { name: "Preview" })).toBeDefined();
+    render(<Hosted tokens={PREVIEWED} headerActions={slot} />);
     expect(
-      within(slot).getByRole("button", { name: "Import or export" })
+      within(slot).getByRole("button", { name: "More design actions" })
     ).toBeDefined();
+    expectNoModeSwitch();
     slot.remove();
   });
 
@@ -422,6 +407,7 @@ describe("the rows", () => {
         onChange: () => undefined,
         currentTokens: () => PREVIEWED,
         readOnly: false,
+        mode: "dark",
       });
       return (
         <>
@@ -436,13 +422,16 @@ describe("the rows", () => {
       );
     }
     render(<Host />);
-    expect(screen.getAllByRole("group", { name: "Preview" })).toHaveLength(1);
     expect(
-      screen.getAllByRole("button", { name: "Import or export" })
+      screen.getAllByRole("button", { name: "More design actions" })
     ).toHaveLength(1);
-    const hosted = screen.getByTestId("host-header");
-    fireEvent.click(within(hosted).getByRole("button", { name: "Dark" }));
+    expect(
+      within(screen.getByTestId("host-header")).getByRole("button", {
+        name: "More design actions",
+      })
+    ).toBeDefined();
     expect(previewed()).toBe("12px");
+    expectNoModeSwitch();
   });
 
   it("shows one line with an Add type size action when there are no type sizes", () => {
@@ -657,22 +646,22 @@ describe("the read-only view", () => {
   it("leaves Import out of the menu", async () => {
     render(<Hosted tokens={SITE} readOnly />);
     fireEvent.keyDown(
-      screen.getByRole("button", { name: "Import or export" }),
+      screen.getByRole("button", { name: "More design actions" }),
       { key: "Enter" }
     );
     await screen.findByRole("menu");
     expect(screen.queryByRole("menuitem", { name: /Import/ })).toBeNull();
     expect(
-      screen.getByRole("menuitem", { name: "Export (DTCG)" })
+      screen.getByRole("menuitem", { name: "Export design tokens (.json)" })
     ).toBeDefined();
   });
 });
 
-describe("the import and export menu", () => {
+describe("the More design actions menu", () => {
   it("leaves the rest of the panel reachable while it is open", async () => {
     render(<Hosted tokens={SITE} />);
     fireEvent.keyDown(
-      screen.getByRole("button", { name: "Import or export" }),
+      screen.getByRole("button", { name: "More design actions" }),
       { key: "Enter" }
     );
     await screen.findByRole("menu");
@@ -758,26 +747,34 @@ describe("the add menu and the rest of the editor", () => {
 });
 
 describe("import and export", () => {
-  it("lists the exports with CSS last", async () => {
+  it("lists the four design actions, Copy CSS variables last", async () => {
     render(<Hosted tokens={SITE} />);
     fireEvent.keyDown(
-      screen.getByRole("button", { name: "Import or export" }),
+      screen.getByRole("button", { name: "More design actions" }),
       { key: "Enter" }
     );
     await screen.findByRole("menu");
     expect(
-      screen.getAllByRole("menuitem").map(item => item.textContent)
+      screen
+        .getAllByRole("menuitem")
+        .map(item => item.getAttribute("aria-label") ?? item.textContent)
     ).toEqual([
-      "Import variables\u2026",
-      "Export (DTCG)",
+      "Import design tokens\u2026",
+      "Export design tokens (.json)",
       "Export for Figma",
-      "Export CSS",
+      "Copy CSS variables",
     ]);
   });
 
   it("previews an import and changes nothing until it is confirmed", async () => {
     const onChange = vi.fn();
-    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const restore = answerMatchMedia();
+    render(
+      <>
+        <Hosted tokens={SITE} onChange={onChange} />
+        <Toaster />
+      </>
+    );
     const contents = JSON.stringify({
       color: {
         accent: {
@@ -794,7 +791,7 @@ describe("import and export", () => {
       value: () => Promise.resolve(contents),
     });
     const input = screen.getByLabelText("Choose variable files to import");
-    // Reached only through the menu's "Import variables…": a reader browsing
+    // Reached only through the menu's "Import design tokens…": a reader browsing
     // the panel meets one way to import, not a second bare file control.
     expect(input.getAttribute("aria-hidden")).toBe("true");
     expect(input.tabIndex).toBe(-1);
@@ -809,9 +806,8 @@ describe("import and export", () => {
     fireEvent.click(within(preview).getByRole("button", { name: "Import" }));
     const saved = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
     expect(saved.tokens.map(t => t.name)).toContain("color.accent");
-    expect(screen.getByRole("status").textContent).toMatch(
-      /Imported 1 variable/
-    );
+    expect(await screen.findByText("Imported 1 variable.")).toBeDefined();
+    restore();
   });
 });
 
@@ -1158,6 +1154,25 @@ describe("reset compares the whole variable", () => {
 });
 
 /** Choose one file in the panel's hidden input, as the system chooser would. */
+/**
+ * A device-scheme answer for the toaster, which jsdom cannot give; returns
+ * the undo.
+ */
+function answerMatchMedia(): () => void {
+  const original = window.matchMedia;
+  window.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+  })) as unknown as typeof window.matchMedia;
+  return () => {
+    window.matchMedia = original;
+  };
+}
+
 async function chooseFile(name: string, contents: string): Promise<void> {
   const file = new File([contents], name, { type: "application/json" });
   Object.defineProperty(file, "text", {
@@ -1235,8 +1250,8 @@ describe("the import preview", () => {
   });
 });
 
-describe("a clean export after a refusal", () => {
-  it("replaces the refusal with what was saved", async () => {
+describe("an export after an import's refusal", () => {
+  it("keeps the refusal on screen beside the export's toast", async () => {
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
       value: () => "blob:variables",
@@ -1245,18 +1260,26 @@ describe("a clean export after a refusal", () => {
       configurable: true,
       value: () => undefined,
     });
-    render(<Hosted tokens={SITE} />);
+    const restore = answerMatchMedia();
+    render(
+      <>
+        <Hosted tokens={SITE} />
+        <Toaster />
+      </>
+    );
     await chooseFile("broken.json", "{");
-    expect(screen.getByRole("alert").textContent).toMatch(/not valid JSON/);
+    const refusal = await screen.findByText(/not valid JSON/);
     fireEvent.keyDown(
-      screen.getByRole("button", { name: "Import or export" }),
+      screen.getByRole("button", { name: "More design actions" }),
       { key: "Enter" }
     );
     fireEvent.click(
-      await screen.findByRole("menuitem", { name: "Export CSS" })
+      await screen.findByRole("menuitem", { name: "Export for Figma" })
     );
-    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
-    expect(screen.getByRole("status").textContent).toMatch(/Saved/);
+    expect(await screen.findByText(/Exported for Figma/)).toBeDefined();
+    // The refusal names what did not arrive, so only the author removes it.
+    expect(refusal.isConnected).toBe(true);
+    restore();
   });
 });
 
@@ -1284,7 +1307,7 @@ describe("the type specimen's font", () => {
   });
 });
 
-describe("the preview's first mode", () => {
+describe("the mode shown with no host's mode", () => {
   it("is the device's: Dark on a device that prefers dark, and it follows a change", () => {
     let listener: ((event: { matches: boolean }) => void) | undefined;
     const original = window.matchMedia;
@@ -1297,15 +1320,10 @@ describe("the preview's first mode", () => {
       removeEventListener: () => undefined,
     })) as unknown as typeof window.matchMedia;
     try {
-      render(<Hosted tokens={SITE} />);
-      const preview = screen.getByRole("group", { name: "Preview" });
-      expect(
-        within(preview).getByRole("button", { name: "Dark" })
-      ).toHaveProperty("ariaPressed", "true");
+      render(<Hosted tokens={PREVIEWED} />);
+      expect(previewed()).toBe("12px");
       act(() => listener?.({ matches: false }));
-      expect(
-        within(preview).getByRole("button", { name: "Light" })
-      ).toHaveProperty("ariaPressed", "true");
+      expect(previewed()).toBe("8px");
     } finally {
       window.matchMedia = original;
     }
@@ -1313,16 +1331,12 @@ describe("the preview's first mode", () => {
 });
 
 /** The Design panel's header, held by a host as the editor holds it. */
-function HeaderHost({
-  preview,
-}: {
-  preview?: VariablesPreview;
-}): React.JSX.Element {
+function HeaderHost({ mode }: { mode?: "light" | "dark" }): React.JSX.Element {
   const header = useVariablesHeader({
     onChange: () => undefined,
     currentTokens: () => PREVIEWED,
     readOnly: false,
-    ...(preview === undefined ? {} : { preview }),
+    ...(mode === undefined ? {} : { mode }),
   });
   return (
     <>
@@ -1337,79 +1351,64 @@ function HeaderHost({
   );
 }
 
-const pressed = (name: "Light" | "Dark"): string | null =>
-  within(screen.getByRole("group", { name: "Preview" })).getByRole("button", {
-    name,
-  }).ariaPressed;
+/**
+ * No light/dark switch and no "Preview" label anywhere in the panel: the
+ * preview is the top bar's.
+ */
+function expectNoModeSwitch(): void {
+  expect(screen.queryByRole("group", { name: "Preview" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Light" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Dark" })).toBeNull();
+  expect(screen.queryByText("Preview")).toBeNull();
+}
 
-describe("a preview mode the host holds", () => {
-  it("shows the host's pick and hands a press to the host rather than keeping it", () => {
-    const onPick = vi.fn();
-    const { rerender } = render(
-      <HeaderHost preview={{ picked: "dark", onPick }} />
-    );
-    expect(pressed("Dark")).toBe("true");
+describe("a mode the host holds", () => {
+  it("shows the host's mode, follows it when it changes, and offers no switch", () => {
+    const { rerender } = render(<HeaderHost mode="dark" />);
     expect(previewed()).toBe("12px");
+    expectNoModeSwitch();
 
-    fireEvent.click(screen.getByRole("button", { name: "Light" }));
-    expect(onPick).toHaveBeenCalledWith("light");
-    // The host has not taken the pick yet, so nothing changed here: a header
-    // keeping the press itself would show Light already.
-    expect(pressed("Dark")).toBe("true");
-    expect(previewed()).toBe("12px");
-
-    rerender(<HeaderHost preview={{ picked: "light", onPick }} />);
-    expect(pressed("Light")).toBe("true");
+    rerender(<HeaderHost mode="light" />);
     expect(previewed()).toBe("8px");
+    expectNoModeSwitch();
   });
 
-  it("keeps a press itself when no host holds the mode", () => {
-    render(<HeaderHost />);
-    expect(pressed("Light")).toBe("true");
-    fireEvent.click(screen.getByRole("button", { name: "Dark" }));
-    expect(pressed("Dark")).toBe("true");
-    expect(previewed()).toBe("12px");
-  });
-});
-
-describe("the preview while nothing is picked", () => {
-  /**
-   * A canvas root under a page's own theme marker, on a device that prefers
-   * light (jsdom answers no media query), so the canvas draws one mode and
-   * the device names the other.
-   */
-  function canvasUnder(mode: "light" | "dark"): () => void {
-    const page = document.createElement("div");
-    page.setAttribute("data-nx-theme", mode);
-    const root = document.createElement("div");
-    root.className = "nx-canvas";
-    page.append(root);
-    document.body.append(page);
-    return () => page.remove();
-  }
-
-  it("shows the mode the canvas draws, not the device's, with a host holding none", () => {
+  it("wins over the mode the canvas draws by itself", () => {
     const remove = canvasUnder("dark");
     try {
-      render(
-        <HeaderHost preview={{ picked: null, onPick: () => undefined }} />
-      );
-      expect(pressed("Dark")).toBe("true");
-      expect(previewed()).toBe("12px");
+      render(<HeaderHost mode="light" />);
+      expect(previewed()).toBe("8px");
     } finally {
       remove();
     }
   });
+});
 
-  it("shows the mode the canvas draws on its own too, and follows the page's marker", async () => {
+/**
+ * A canvas root under a page's own theme marker, on a device that prefers
+ * light (jsdom answers no media query), so the canvas draws one mode and
+ * the device names the other.
+ */
+function canvasUnder(mode: "light" | "dark"): () => void {
+  const page = document.createElement("div");
+  page.setAttribute("data-nx-theme", mode);
+  const root = document.createElement("div");
+  root.className = "nx-canvas";
+  page.append(root);
+  document.body.append(page);
+  return () => page.remove();
+}
+
+describe("the mode shown while no host holds one", () => {
+  it("is the mode the canvas draws, not the device's, and follows the page's marker", async () => {
     const remove = canvasUnder("dark");
     try {
       render(<HeaderHost />);
-      expect(pressed("Dark")).toBe("true");
+      expect(previewed()).toBe("12px");
       const marked = document.querySelector("[data-nx-theme]");
       // Heard through a mutation observer, which answers after this task.
       marked?.setAttribute("data-nx-theme", "light");
-      await waitFor(() => expect(pressed("Light")).toBe("true"));
+      await waitFor(() => expect(previewed()).toBe("8px"));
     } finally {
       remove();
     }
@@ -1456,13 +1455,7 @@ describe("a row's name in the dark preview", () => {
             : token
       ),
     };
-    render(<Hosted tokens={site} />);
-    fireEvent.click(
-      within(screen.getByRole("group", { name: "Preview" })).getByRole(
-        "button",
-        { name: "Dark" }
-      )
-    );
+    render(<Hosted tokens={site} prefersDark />);
     expect(row(/^Space 4/).getAttribute("aria-label")).toBe("Space 4, 2rem");
     expect(row(/^Body/).getAttribute("aria-label")).toBe(
       "Body, size 16px, line height 30px"
@@ -1529,13 +1522,8 @@ describe("an explicit preview preference", () => {
       removeEventListener: () => undefined,
     })) as unknown as typeof window.matchMedia;
     try {
-      render(<Hosted tokens={SITE} prefersDark={false} />);
-      expect(
-        within(screen.getByRole("group", { name: "Preview" })).getByRole(
-          "button",
-          { name: "Light" }
-        )
-      ).toHaveProperty("ariaPressed", "true");
+      render(<Hosted tokens={PREVIEWED} prefersDark={false} />);
+      expect(previewed()).toBe("8px");
     } finally {
       window.matchMedia = original;
     }

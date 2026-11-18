@@ -1,9 +1,10 @@
 /**
  * `nextly upgrade` — bring an existing database up to date (spec §4.10).
  *
- * The upgrade is a list of steps (`upgrade-steps/index.ts`), each idempotent:
- * moving the migration records into `nextly_schema_events`, then hashing the
- * passwords stored before this release. Each step in turn says how much it
+ * The upgrade is a list of steps (`upgrade-steps/index.ts`), each idempotent,
+ * such as hashing the passwords stored before this release. A database that
+ * still keeps its migration records the way an earlier release did is
+ * refused, naming `nextly migrate`, which moves them. Each step in turn says how much it
  * would change and, when that is above 0, runs and reports its count; the
  * backup is confirmed before the first step with work, and the upgrade says
  * there is nothing to do only when no step had anything. The orchestration (`runUpgrade`) is a
@@ -148,6 +149,11 @@ export async function runUpgrade(
   const { dialect } = context;
   const steps = deps.steps ?? UPGRADE_STEPS;
 
+  // The steps read a database `nextly migrate` has brought to this release:
+  // one whose migration records are still where an earlier release kept them
+  // is refused before the lock or the backup question, naming that command.
+  await assertNoLegacyBookkeeping(adapter);
+
   await withMigrateLock(
     adapter as unknown as DrizzleAdapter,
     dialect,
@@ -203,6 +209,14 @@ export async function previewUpgrade(
   deps: Pick<RunUpgradeDeps, "adapter" | "isTTY" | "steps">
 ): Promise<DryRunPlan> {
   const context = stepContext(options, deps);
+  // Refused as the real run refuses it, before any step is counted.
+  try {
+    await assertNoLegacyBookkeeping(deps.adapter);
+  } catch (error) {
+    const gate = dryRunRefusalOf(error);
+    if (gate === undefined) throw error;
+    return { changes: [], refusals: [gate] };
+  }
   const changes: DryRunChange[] = [];
   const idle: string[] = [];
   let refusal: string | undefined;
@@ -458,6 +472,10 @@ function coreDeletionsNeedConsent(uncovered: readonly Deletion[]): string {
 export interface UpgradeCommandOptions {
   confirmBackedUp?: boolean;
   force?: boolean;
+  /**
+   * No longer read: it named another table for the migration records, which
+   * `nextly migrate` now moves. Given, it is answered with a notice.
+   */
   targetTableName?: string;
   reconcileCore?: boolean;
   /** Clear a stale migrate lock before taking it (operator escape hatch). */
@@ -552,6 +570,12 @@ export async function upgradeAction(
 
   const dbValidation = requireDatabaseEnv(context.logger);
 
+  if (cmdOptions.targetTableName !== undefined) {
+    context.logger.warn(
+      "upgrade's --target-table-name no longer does anything: the migration records of an earlier release are moved by `nextly migrate`, into nextly_schema_events."
+    );
+  }
+
   if (cmdOptions.dryRun === true) {
     await reportUpgradeDryRun(cmdOptions, dbValidation, context, globalOpts);
     return;
@@ -598,7 +622,6 @@ export async function upgradeAction(
         {
           confirmBackedUp: cmdOptions.confirmBackedUp,
           force: cmdOptions.force,
-          targetTableName: cmdOptions.targetTableName,
         },
         {
           adapter,
@@ -663,7 +686,6 @@ async function reportUpgradeDryRun(
           {
             confirmBackedUp: cmdOptions.confirmBackedUp,
             force: cmdOptions.force,
-            targetTableName: cmdOptions.targetTableName,
           },
           { adapter, isTTY: interactive }
         );

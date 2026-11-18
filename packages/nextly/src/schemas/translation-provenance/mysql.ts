@@ -22,6 +22,7 @@ import {
 
 import {
   TRANSLATION_PROVENANCE_FIELD_PATH_LENGTH,
+  TRANSLATION_PROVENANCE_FINGERPRINT_LENGTH,
   TRANSLATION_PROVENANCE_PRINCIPAL_KIND_LENGTH,
   TRANSLATION_PROVENANCE_TABLE,
 } from "./table-name";
@@ -58,7 +59,9 @@ export const nextlyTranslationProvenanceMysql = mysqlTable(
       length: TRANSLATION_PROVENANCE_FIELD_PATH_LENGTH,
     }).notNull(),
     // A sha256 of the value as it is stored now, in hex.
-    valueFingerprint: varchar("value_fingerprint", { length: 64 }).notNull(),
+    valueFingerprint: varchar("value_fingerprint", {
+      length: TRANSLATION_PROVENANCE_FINGERPRINT_LENGTH,
+    }).notNull(),
     // Where the value came from.
     origin: varchar("origin", { length: 16 })
       .$type<ProvenanceOrigin>()
@@ -75,7 +78,9 @@ export const nextlyTranslationProvenanceMysql = mysqlTable(
     // The language the value was made from, and the fingerprint of that
     // language's value then. NULL for a value written in its own language.
     sourceLocale: varchar("source_locale", { length: 35 }),
-    sourceFingerprint: varchar("source_fingerprint", { length: 64 }),
+    sourceFingerprint: varchar("source_fingerprint", {
+      length: TRANSLATION_PROVENANCE_FINGERPRINT_LENGTH,
+    }),
     // For a row of a structure kept per language, the row it was made from.
     originRowId: varchar("origin_row_id", { length: 191 }),
     writtenAt: datetime("written_at", { fsp: 3 }).notNull(),
