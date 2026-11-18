@@ -21,6 +21,7 @@ import {
   type DocumentActionOutcome,
   type DocumentSaveState,
 } from "./useDocumentActionBindings";
+import type { TrackedWritesVerdict } from "./useStoringGate";
 
 /** The document's actions as a surface inside the editor sees them. */
 export interface DocumentActions {
@@ -140,6 +141,21 @@ export function useBeforeDocumentAction(handler: BeforeDocumentAction): void {
     if (register === undefined) return undefined;
     return register((action, store) => latest.current(action, store));
   }, [register]);
+}
+
+/**
+ * Waits for every write the document depends on but does not contain (see
+ * `useTrackedWrite`), as its Save and Publish wait for them, and says what
+ * they came to. For a second document stored from inside this editor, which
+ * depends on the same writes; outside a document editor, nothing is tracked
+ * and it answers `null` at once.
+ */
+export function useTrackedWritesSettled(): () => Promise<TrackedWritesVerdict> {
+  const settle = useDocumentActionsContext()?.settleWrites;
+  return useCallback(
+    () => (settle === undefined ? Promise.resolve(null) : settle()),
+    [settle]
+  );
 }
 
 /**

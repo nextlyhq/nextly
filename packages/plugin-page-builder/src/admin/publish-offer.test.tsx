@@ -80,9 +80,8 @@ vi.mock("@nextlyhq/ui", async importOriginal => {
   };
 });
 
-const { usePublishOffer, useFormPublishOffer } = await import(
-  "./publish-offer"
-);
+const { usePublishOffer, useFormPublishOffer, usePublishQuestion } =
+  await import("./publish-offer");
 
 afterEach(() => {
   cleanup();
@@ -586,5 +585,36 @@ describe("an edit made while the question is asked", () => {
     );
     // Bounded: it stops asking rather than chase the author's typing.
     expect(edits).toBe(3);
+  });
+});
+
+describe("the question for a document published through its own session", () => {
+  it("publishes none of the chosen parts once the document may no longer be written", async () => {
+    server({ dependencies: [card], missing: 0 });
+    let offer:
+      | ((
+          documents: readonly unknown[],
+          stillMay: () => boolean
+        ) => Promise<void>)
+      | undefined;
+    function Session(): JSX.Element {
+      const question = usePublishQuestion("component");
+      offer = question.offer;
+      return question.dialog;
+    }
+    render(<Session />);
+    let mayWrite = true;
+
+    const running = offer?.([DOCUMENT], () => mayWrite);
+    await screen.findByRole("alertdialog");
+    // A colleague takes the header over while the author is asked.
+    mayWrite = false;
+    fireEvent.click(screen.getByRole("button", { name: "Publish both" }));
+
+    await expect(running).rejects.toThrow();
+    expect(routes).not.toHaveBeenCalledWith(
+      "/publish-dependencies",
+      expect.anything()
+    );
   });
 });

@@ -19,6 +19,7 @@ import type {
   ReadMediaSummary,
   SearchMediaSummaries,
 } from "./media-summary-reader";
+import type { RegionEditingHost } from "./region-editing";
 import type { Reveal } from "./reveal-hidden";
 import type { ComponentView } from "./use-component-view";
 import type { EditorMount } from "./use-editor-mount";
@@ -42,6 +43,8 @@ export type EditorView = EditorMount &
     >["visitorUnreadable"];
     documentDirty: boolean;
     pageTitle: string | undefined;
+    /** A header or footer edited in place, and the way into it. */
+    regionEditing: RegionEditingHost;
     /** "Edit component", and the banner over a component's own view. */
     componentView: ComponentView;
     /** The block verbs shared for the surfaces drawn outside the provider. */

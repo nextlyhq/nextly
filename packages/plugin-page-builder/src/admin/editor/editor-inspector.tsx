@@ -23,6 +23,7 @@ import { pageAddressOf, type PageFacts } from "./editor-settings";
 import type { CardVerbs, EditorView } from "./editor-view";
 import { PageReadMeter, type PageDataCount } from "./page-read-meter";
 import { SelectedRegionCard } from "./region-card";
+import { inspectedVariantsOf } from "./region-editing";
 import type { SettingsPlace } from "./settings-place";
 import {
   offerableFaces,
@@ -70,6 +71,11 @@ export function editorInspector<TFieldValues extends FieldValues>(
   return (
     <InspectorPanel
       editor={editor}
+      // While a header or footer is edited in place, its blocks are said to
+      // be in it: "Navigation · in Site header".
+      {...(view.editing.target.kind === "region"
+        ? { editingIn: view.editing.target.label }
+        : {})}
       // The SAME ref the canvas publishes its root through, so the style
       // tab reads the element a node is actually drawn as rather than
       // inferring one from the document. Two refs would let the panel
@@ -169,10 +175,19 @@ export function editorInspector<TFieldValues extends FieldValues>(
       // In a component's own view: the ids its live definition holds, which a
       // new field must never reuse, how far a removal reaches, and its name
       // for the card heading the view, which is the open document's title.
-      componentFields={namedFacts(componentFacts, view.pageTitle)}
+      // In a header or footer edited in place, its component's own.
+      componentFields={
+        view.regionEditing.area === undefined
+          ? namedFacts(componentFacts, view.pageTitle)
+          : view.regionEditing.componentFacts
+      }
       // And how many placements chose a variant, for its delete dialog, and
-      // the open variant, which the canvas previews.
-      componentVariants={previewingHost(componentVariants, view.preview)}
+      // the open variant, which the canvas previews. A header or footer
+      // edited in place keeps its variants to its own view.
+      componentVariants={inspectedVariantsOf(
+        view.regionEditing.area,
+        previewingHost(componentVariants, view.preview)
+      )}
       // A header or footer selected on the canvas: what it is, where it
       // comes from and how to change it, in place of the page's settings.
       {...regionCardOf(view)}
@@ -201,13 +216,17 @@ export function editorInspector<TFieldValues extends FieldValues>(
  */
 function regionCardOf(view: EditorView): { regionCard?: React.ReactNode } {
   const facts = view.selectedRegion.card;
-  if (facts === undefined) return {};
+  // While it is edited, the inspector edits its blocks instead.
+  if (facts === undefined || view.regionEditing.area !== undefined) return {};
+  const { requestEdit } = view.regionEditing;
   return {
     regionCard: (
       <SelectedRegionCard
         key={`${facts.area}:${facts.componentId}`}
         facts={facts}
-        onEditComponent={view.componentView.onEditComponent}
+        onEdit={
+          requestEdit === undefined ? undefined : () => requestEdit(facts.area)
+        }
         onOpenSettings={view.pages.openSettings}
       />
     ),

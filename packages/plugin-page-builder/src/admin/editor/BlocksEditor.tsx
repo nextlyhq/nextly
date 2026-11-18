@@ -28,6 +28,8 @@ import {
   InsertUsageContext,
   OnboardingChecklist,
   RecentColoursStore,
+  RegionEditingBar,
+  regionEscape,
   selectionAnchor,
   SelectionBreadcrumb,
   VisitorUnreadableProvider,
@@ -88,6 +90,13 @@ import { useProvidedChecks } from "./provided-checks";
 import { useReadBack } from "./read-back";
 import { recentColoursStore } from "./recent-colours-store";
 import { regionRefusal } from "./region-card";
+import {
+  inspectedBindingsOf,
+  pageInlineOf,
+  useRegionEditing,
+  useRegionsAsEdited,
+  type RegionEditingHost,
+} from "./region-editing";
 import { useReveal } from "./reveal-hidden";
 import type { SelectedRegion } from "./selected-region";
 import { useSettingsPlace } from "./settings-place";
@@ -395,7 +404,10 @@ function EditorBody<TFieldValues extends FieldValues>({
     kinds,
     readBack.kept("stored", useStoredFieldValue(control, name, place.pathIn))
   );
-  const { editor, inline } = mount;
+  // `editor` is the state of what is being edited: a header or footer while
+  // one is edited in place, else the page. The page's own state is what is
+  // saved, committed and counted as the page, whichever is being edited.
+  const { editor, inline, page: pageState, editing } = mount;
 
   /*
    * `hasUnsavedWork` rather than `undoDepth` alone, so an inline edit that is
@@ -409,13 +421,10 @@ function EditorBody<TFieldValues extends FieldValues>({
    * work the form's own values do not contain; this composes that half with the
    * form's own dirtiness, which is what a reading of the whole document needs.
    */
-  const savePoint = useSavePoint(editor);
-  // A store made here drops what the canvas kept at once: the page's own
-  // entry is among what it reads.
-  useDropKeptReadsOnSave();
+  const savePoint = usePageSavePoint(pageState);
   const documentDirty = useDocumentDirty(
     control,
-    hasUnsavedWork(editor, inline, savePoint.savedAt)
+    hasUnsavedWork(pageState, inline, savePoint.savedAt)
   );
 
   const style = useSiteStyleInputs(mount.clientConfig);
@@ -435,23 +444,41 @@ function EditorBody<TFieldValues extends FieldValues>({
   // The Settings dialog's place for other plugins' tabs, for a page or a
   // design: what is being edited, and its own metadata as one undoable edit.
   const settingsPlace = useSettingsPlace(
-    editor,
+    pageState,
     control,
     mount.initialDocument.kind,
     name
   );
+  // A header or footer edited in place: the way in, the top bar's Save and
+  // Publish for it, Done and its questions.
+  const regionEditing = useRegionEditing({
+    editing,
+    inline,
+    definitions: mount.componentLibrary.definitions,
+    cards: panels.regionCards,
+    selection: panels.selectedRegion.selection,
+    canvas: canvas.canvasElement,
+    requestLayers: () => panels.requestPanel("layers"),
+    sets: panels,
+    rereadRegions: panels.rereadRegions,
+  });
   const { done, publishOffer, removalHold } = useHostCommit({
     name,
     address: place.address,
     control,
-    editor,
-    inline,
+    editor: pageState,
+    // The page's own typing: a passage open in a header edited in place is
+    // the header's, never handed over as the page.
+    inline: pageInlineOf(regionEditing.area, inline),
     onCommit: readBack.handOver,
     onClose,
     savePoint,
     // The count the removal dialog says now; the hold keeps it as it stood
     // when each field was removed.
     removalReach: () => mount.componentFacts?.reach,
+    // A header edited in place holding work not saved: the leave guard asks
+    // about it as it asks about the page's.
+    otherUnsavedWork: regionEditing.dirty,
     // A tab's text still being typed, made before the document is stored.
     ...(settingsPlace === null ? {} : { flushHeld: settingsPlace.flushHeld }),
   });
@@ -461,7 +488,7 @@ function EditorBody<TFieldValues extends FieldValues>({
   // banner, which says how far a change reaches, and "Edit component".
   const componentView = useComponentView({
     initialDocument: mount.initialDocument,
-    editor,
+    editor: pageState,
     componentLibrary: mount.componentLibrary,
     fieldName: name,
     componentFacts: mount.componentFacts,
@@ -471,11 +498,13 @@ function EditorBody<TFieldValues extends FieldValues>({
   });
   // The canvas's render inputs with the sources its bindings read, asked of
   // the tree the canvas draws (in a component's view, the open variant's)
-  // and of the Layout regions drawn around it, together.
+  // and of the Layout regions drawn around it, together: a header edited in
+  // place, as it is edited.
+  const boundRegions = useRegionsAsEdited(panels.canvasRegions, editing);
   const { canvasRender, visitorUnreadable } = useDrawnCanvasRender(
     canvas.canvasRender,
     componentView.preview.document,
-    panels.canvasRegions,
+    boundRegions,
     mount.locale,
     mount.initialDocument.kind === "component",
     canvas.pageDataLimit
@@ -500,7 +529,7 @@ function EditorBody<TFieldValues extends FieldValues>({
   // variant's.
   const reveal = useReveal(
     componentView.preview.document,
-    mount.editor.selection.ids,
+    pageState.selection.ids,
     canvas.canvasRender.styleContext.breakpoints,
     canvas.editedBreakpoint
   );
@@ -618,6 +647,7 @@ function EditorBody<TFieldValues extends FieldValues>({
   const blockCustomCss = useBlockCustomCss();
   const view: EditorView = {
     ...mount,
+    regionEditing,
     ...style,
     ...canvas,
     ...panels,
@@ -634,12 +664,15 @@ function EditorBody<TFieldValues extends FieldValues>({
     preview: componentView.preview,
     // The stored document's kind too: a component's lists relate to the
     // entries of the pages placing it, as its save judges them.
-    entryCollection,
     // A component has no entry of its own: its bindings read each placing
     // page's, so the picker lists no entry for it and it plans no unbind of
-    // one, as its lists and its save already judge it.
-    bindingEntry: isComponentDocument ? null : identity,
-    editedDocument: isComponentDocument ? null : editedDocument,
+    // one, as its lists and its save already judge it. So with a header
+    // edited in place; the canvas is still drawn as the page's entry.
+    ...inspectedBindingsOf(regionEditing.area, {
+      entryCollection,
+      bindingEntry: isComponentDocument ? null : identity,
+      editedDocument: isComponentDocument ? null : editedDocument,
+    }),
     canvasEntry: identity,
     conditionsUnchecked,
     conditionsApplied: conditions.applied,
@@ -650,25 +683,25 @@ function EditorBody<TFieldValues extends FieldValues>({
   // settings' line.
   const pageData = usePageDataCount({
     counts: mount.initialDocument.kind === "page",
-    editor,
+    editor: pageState,
     drawnWith: view.canvasRender,
     regions: view.canvasRegions,
     componentTitle: view.componentLibrary.titleOf,
     // The limit the canvas draws under, read once for both.
     cap: view.pageDataLimit,
   });
-  // The Layout the page names, which Page checks asks about as Publish does.
-  const pageLayout = usePageLayoutAsk(control);
   useOpenAtSection({
     sectionId: openAt?.sectionId,
     blockId: openAt?.blockId,
-    editor,
+    editor: pageState,
     canvas: canvas.canvasElement,
     requestPanel: panels.requestPanel,
   });
   // The editor's one way out, for the exit arrow and the palette alike: the
-  // list on an entry whose collection opens in the builder, else the form.
-  const leave = back?.go ?? done;
+  // list on an entry whose collection opens in the builder, else the form;
+  // while a header is edited, after Done has asked about its changes.
+  const leave = regionLeave(regionEditing, back?.go ?? done);
+  const openAsForm = regionLeave(regionEditing, done);
   const {
     notices,
     componentLibrary,
@@ -685,36 +718,14 @@ function EditorBody<TFieldValues extends FieldValues>({
   } = view;
   // Page settings opened at a plugin check's tab, and heard closing.
   const settingsTabs = useSettingsTabRequestState(view.pages.openSettings);
-  // The Page checks count's checks: the builder's own and other plugins',
-  // asked again after each save and each time Page settings closes.
-  const pageChecks = useProvidedChecks({
-    page: view.pages.currentPage,
-    document: editor.document,
-    locale: mount.locale,
-    settingsClosed: settingsTabs.closed,
-  });
-  // A page showing the set's header and a header block of its own, pointed
-  // out above the canvas; the same for footers.
-  const twoRegions = useTwoRegionsNotice({
-    editor,
-    applied: conditions.applied,
-    regionCards: view.regionCards,
-    areaOf: mount.componentLibrary.areaOf,
-    currentPage: view.pages.currentPage,
-    userId: mount.userId,
-    openSettings: view.pages.openSettings,
-  });
-  // What Page checks reads of the page beyond its document: the bindings,
-  // data count, unpublished parts and doubled header the editor already has.
-  const pageFacts = usePageCheckFacts({
+  const { pageChecks, twoRegions, pageFacts } = usePageChecking({
+    view,
+    mount,
+    control,
     field: place.address,
-    document: editor.document,
     applied: conditions.applied,
-    regionCards: view.regionCards,
-    areaOf: mount.componentLibrary.areaOf,
-    currentPage: view.pages.currentPage,
     pageData,
-    layout: pageLayout,
+    settingsClosed: settingsTabs.closed,
   });
 
   return (
@@ -767,18 +778,25 @@ function EditorBody<TFieldValues extends FieldValues>({
               pageData,
               // The form, in the ⋯ menu: the same leave as the exit to the
               // form, so it is offered exactly where that is.
-              openAsForm: shellExit(componentView, done),
+              openAsForm: shellExit(componentView, openAsForm),
             })}
             // Pinned above the canvas: a template's entry it is drawn with, and
             // the visitor's view while it is on.
-            canvasStrip={editorStrip(templatePreview, conditions, twoRegions)}
+            // While a header is edited, its bar in the two-headers notice's
+            // place; the bar's live region is drawn always, so entering and
+            // leaving are announced.
+            canvasStrip={editorStrip(
+              templatePreview,
+              conditions,
+              regionStrip(regionEditing, editing, twoRegions)
+            )}
             openSettingsRequest={view.pages.settingsRequest}
             renderSettings={editorSettings(view, page, settingsPlace, {
               kind: mount.initialDocument.kind,
               fieldName: name,
               control: control as unknown as Control<FieldValues>,
               // At the bottom of Page settings, as in the ⋯ menu.
-              openAsForm: shellExit(componentView, done),
+              openAsForm: shellExit(componentView, openAsForm),
             })}
             // The shell owns the region; this fills it. Rendered unconditionally
             // rather than only when something is selected, because with nothing
@@ -830,10 +848,9 @@ function EditorBody<TFieldValues extends FieldValues>({
               editor={editor}
               // Esc with no block selected clears a selected header or footer,
               // or else leaves a look edited on its own.
-              onEscapeWithoutSelection={escapeWithoutSelection(panels)}
-              // A selected header or footer: Delete removes nothing, and says
-              // where it is changed.
-              {...selectedRegionKeys(panels.selectedRegion)}
+              // Esc with nothing selected, and a selected header or footer's
+              // Delete; inside a header edited in place, Esc is Done.
+              {...regionKeys(regionEditing, editing, panels)}
               onEditText={componentView.preview.onEditText}
               onSaveAsPattern={savePattern.open}
               /*
@@ -927,6 +944,7 @@ function EditorBody<TFieldValues extends FieldValues>({
               />
               {publishOffer}
               {removalHold}
+              {regionEditing.dialogs}
               {sharedStyle.dialog}
             </BlockKeyboardActions>
           </BuilderShell>
@@ -971,6 +989,139 @@ function addBlockHere(
       { kind: "rule" },
       selectionAnchor(canvas, editor.document, editor.selectedId)
     );
+}
+
+/**
+ * What Page checks reads, and the notice about a page showing two headers:
+ * each of the page, so of its own state (`mount.page`) even while a header
+ * is edited in place, when `mount.editor` is the header's and Page checks
+ * would otherwise judge the header.
+ */
+function usePageChecking<TFieldValues extends FieldValues>({
+  view,
+  mount,
+  control,
+  field,
+  applied,
+  pageData,
+  settingsClosed,
+}: {
+  view: EditorView;
+  mount: EditorMount;
+  control: Control<TFieldValues>;
+  field: string;
+  applied: Parameters<typeof usePageCheckFacts>[0]["applied"];
+  pageData: Parameters<typeof usePageCheckFacts>[0]["pageData"];
+  settingsClosed: Parameters<typeof useProvidedChecks>[0]["settingsClosed"];
+}): {
+  pageChecks: ReturnType<typeof useProvidedChecks>;
+  twoRegions: ReturnType<typeof useTwoRegionsNotice>;
+  pageFacts: ReturnType<typeof usePageCheckFacts>;
+} {
+  const { page } = mount;
+  // The Page checks count's checks: the builder's own and other plugins',
+  // asked again after each save and each time Page settings closes.
+  const pageChecks = useProvidedChecks({
+    page: view.pages.currentPage,
+    document: page.document,
+    locale: mount.locale,
+    settingsClosed,
+  });
+  // A page showing the set's header and a header block of its own, pointed
+  // out above the canvas; the same for footers.
+  const twoRegions = useTwoRegionsNotice({
+    editor: page,
+    applied,
+    regionCards: view.regionCards,
+    areaOf: mount.componentLibrary.areaOf,
+    currentPage: view.pages.currentPage,
+    userId: mount.userId,
+    openSettings: view.pages.openSettings,
+  });
+  // The Layout the page names, which Page checks asks about as Publish does.
+  const layout = usePageLayoutAsk(control);
+  // What Page checks reads of the page beyond its document: the bindings,
+  // data count, unpublished parts and doubled header the editor already has.
+  const pageFacts = usePageCheckFacts({
+    field,
+    document: page.document,
+    applied,
+    regionCards: view.regionCards,
+    areaOf: mount.componentLibrary.areaOf,
+    currentPage: view.pages.currentPage,
+    pageData,
+    layout,
+  });
+  return { pageChecks, twoRegions, pageFacts };
+}
+
+/**
+ * Where the page's history stood at its last store, and, on each store, what
+ * the canvas kept dropped at once: the page's own entry is among what it
+ * reads.
+ */
+function usePageSavePoint(
+  page: EditorMount["page"]
+): ReturnType<typeof useSavePoint> {
+  const savePoint = useSavePoint(page);
+  useDropKeptReadsOnSave();
+  return savePoint;
+}
+
+/**
+ * The strip's notices about the page: the two-headers notice, or, while a
+ * header or footer is edited in place, its bar in that place. The bar's
+ * live region is drawn always, so entering and leaving are announced.
+ */
+function regionStrip(
+  region: Pick<RegionEditingHost, "area" | "done">,
+  editing: EditorMount["editing"],
+  twoRegions: React.JSX.Element | undefined
+): React.JSX.Element {
+  return (
+    <>
+      {region.area === undefined ? twoRegions : null}
+      <RegionEditingBar editing={editing} onDone={region.done} />
+    </>
+  );
+}
+
+/**
+ * What the block keys are told of the regions: Esc with nothing selected
+ * clears a selected header or footer (or leaves a look edited on its own),
+ * and is Done inside one edited in place; Delete on a selected one removes
+ * nothing and says where it is changed, and is not refused while it is
+ * edited, when its own blocks are selected instead.
+ */
+function regionKeys(
+  region: Pick<RegionEditingHost, "area" | "done">,
+  editing: EditorMount["editing"],
+  panels: Pick<EditorPanels, "selectedRegion" | "lookEditing">
+): {
+  onEscapeWithoutSelection: () => void;
+  selectedRegion?: { readonly refusal: string };
+} {
+  const onEscapeWithoutSelection = regionEscape(editing, {
+    done: region.done,
+    otherwise: escapeWithoutSelection(panels),
+  });
+  return region.area === undefined
+    ? {
+        onEscapeWithoutSelection,
+        ...selectedRegionKeys(panels.selectedRegion),
+      }
+    : { onEscapeWithoutSelection };
+}
+
+/**
+ * A way out of the editor that, while a header or footer is edited in place,
+ * first leaves it as Done does, asking about unsaved changes.
+ */
+function regionLeave(
+  region: Pick<RegionEditingHost, "area" | "leaveThen">,
+  leave: () => void
+): () => void {
+  return region.area === undefined ? leave : () => region.leaveThen(leave);
 }
 
 /**
