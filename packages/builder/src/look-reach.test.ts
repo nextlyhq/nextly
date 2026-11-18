@@ -54,6 +54,27 @@ describe("the blocks an edit to a look reaches", () => {
     ]);
   });
 
+  it("take in every block that picked no look, for the look carrying ★", () => {
+    const ghost: NamedClass = {
+      ...outline,
+      id: "ghost",
+      slug: "button-ghost",
+      starred: true,
+    };
+    const of = (starred: boolean) =>
+      [
+        ...lookReach(page, [outline, ghost], {
+          id: ghost.id,
+          blockType: "core/button",
+          own: false,
+          starred,
+        }),
+      ].sort();
+    expect(of(true)).toEqual(["nested", "plain"]);
+    // The control: without ★, a look no block wears reaches none.
+    expect(of(false)).toEqual([]);
+  });
+
   it("are every block wearing it, for any other look", () => {
     expect([
       ...lookReach(page, [outline], {

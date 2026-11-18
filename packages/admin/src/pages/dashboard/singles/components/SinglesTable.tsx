@@ -38,6 +38,7 @@ import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 import { usePagination } from "@admin/hooks/usePagination";
 import { useRowSelection } from "@admin/hooks/useRowSelection";
 import { navigateTo } from "@admin/lib/navigation";
+import { useDocumentAddress } from "@admin/lib/navigation/useDocumentAddress";
 import { singleApi } from "@admin/services/singleApi";
 import type {
   ApiSingle,
@@ -172,24 +173,33 @@ export default function SinglesTable({
     });
   }, [data?.items, sourceFilter, migrationFilter]);
 
+  // Where the Single's document opens, by the admin's one rule, read from
+  // the Single the table holds: as the sidebar and the Content screen open it.
+  const addressOf = useDocumentAddress();
+  const openDocument = useCallback(
+    (single: ApiSingle) =>
+      navigateTo(
+        addressOf({ kind: "single", slug: single.slug }, { collection: single })
+      ),
+    [addressOf]
+  );
+
   // Code-first (locked) Singles open the same builder route; the builder
   // renders read-only when the loaded Single is locked.
   const handleEdit = useCallback(
     (single: ApiSingle) => {
       if (mode === "content") {
-        navigateTo(buildRoute(ROUTES.SINGLE_EDIT, { slug: single.slug }));
+        openDocument(single);
         return;
       }
       navigateTo(
         buildRoute(ROUTES.BUILDER_SINGLES_EDIT, { slug: single.slug })
       );
     },
-    [mode]
+    [mode, openDocument]
   );
 
-  const handleViewDocument = useCallback((single: ApiSingle) => {
-    navigateTo(buildRoute(ROUTES.SINGLE_EDIT, { slug: single.slug }));
-  }, []);
+  const handleViewDocument = openDocument;
 
   const handleDelete = useCallback((single: ApiSingle) => {
     if (single.locked) {

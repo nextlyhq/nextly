@@ -94,6 +94,11 @@ import {
   type StoredUse,
 } from "./shared-style-rescan";
 import {
+  readableHere,
+  usageOf,
+  type UsageHereReaders,
+} from "./shared-style-usage-here";
+import {
   collectionsTheBuilderOpens,
   siteLocales,
   singlesTheBuilderOpens,
@@ -118,6 +123,7 @@ import {
   usageCoverageGap,
   type UsageCoverageGap,
 } from "./usage-index-health";
+import { TIMED_OUT, within } from "./within-time";
 
 /** The permission that locks and unlocks shared styles, in its parts. */
 const LOCK_SHARED_STYLES = {
@@ -321,29 +327,6 @@ export const NOTHING_FOUND: DocumentsUsing = {
   complete: false,
 };
 
-const NO_KINDS: Readonly<Record<SharedStyleUsageKind, number>> = {
-  pages: 0,
-  components: 0,
-  patterns: 0,
-  layouts: 0,
-};
-
-/** One listing as a usage: its count, the same documents by kind. */
-export function usageOf(
-  found: DocumentsUsing,
-  kindOf: (collection: string) => SharedStyleUsageKind
-): SharedStyleUsage {
-  const byKind = { ...NO_KINDS };
-  for (const entry of found.collections) {
-    byKind[kindOf(entry.collection)] += entry.documents.length;
-  }
-  return {
-    documents: documentCountOf(found),
-    byKind,
-    complete: found.complete,
-  };
-}
-
 /**
  * How widely each named shared style is used, with the index's health and
  * whether this caller may lock styles.
@@ -354,9 +337,18 @@ export function usageOf(
 export async function readSharedStyleUsage(
   req: Request,
   ctx: Pick<PluginRouteContext, "caller" | "self">,
-  usage: SharedStyleUsageSource
+  usage: SharedStyleUsageSource,
+  /**
+   * Whether the caller may read the document the editor names, and the
+   * site's default language. Without them no document's share is reported.
+   */
+  readers?: UsageHereReaders
 ): Promise<SharedStylesUsageResponse> {
   const ids = usageIds(req.url);
+  // What the editor has open, whose saved share is reported apart: only for
+  // a document the caller may read, checked before the index is read.
+  const here =
+    readers === undefined ? undefined : await readableHere(req.url, readers);
   const health = await usage.health();
   // One read for the whole page of styles, not one per style.
   const found = await usage.documentsUsingEach(ids, health);
@@ -365,8 +357,10 @@ export async function readSharedStyleUsage(
   const styles: Record<string, SharedStyleUsage> = Object.fromEntries(
     ids.map(id => [
       id,
-      usageOf(found.get(id) ?? NOTHING_FOUND, collection =>
-        usage.kindOf(collection)
+      usageOf(
+        found.get(id) ?? NOTHING_FOUND,
+        collection => usage.kindOf(collection),
+        here
       ),
     ])
   );
@@ -782,6 +776,95 @@ export interface StillUsedCheck {
   uses(ids: readonly string[]): Promise<readonly StoredUse[]>;
   /** The title of the first of these the caller may open, if any. */
   firstReadable(uses: readonly StoredUse[]): Promise<string | undefined>;
+  /**
+   * The titles of the documents in an index listing the caller may open, so
+   * an in-use refusal says where. Absent: the refusal counts them only.
+   */
+  readonly titles?: (found: DocumentsUsing) => Promise<readonly string[]>;
+}
+
+/** How many documents an in-use refusal names before counting the rest. */
+const NAMED_USES_MAX = 3;
+
+/**
+ * Where a style is used, as a refusal says it: the first documents the
+ * caller may open by title, then how many more there are, readable or not.
+ */
+function whereUsedWords(titles: readonly string[], documents: number): string {
+  const shown = titles.slice(0, NAMED_USES_MAX);
+  const more = documents - shown.length;
+  if (more > 0) return `${shown.join(", ")} and ${more} more`;
+  if (shown.length === 1) return shown[0];
+  return `${shown.slice(0, -1).join(", ")} and ${shown.at(-1) as string}`;
+}
+
+/**
+ * One in-use reason said again from one listing of where the style is used,
+ * so its count and its names describe the same read: the documents counted,
+ * then the first the caller may open by title. Counted only where it may
+ * open none, and kept as it was where the listing now finds no use.
+ */
+async function namedUseReason(
+  reason: UsageReason,
+  names: ReadonlyMap<string, string>,
+  usage: SharedStyleUsageSource,
+  health: UsageIndexHealth,
+  titles: NonNullable<StillUsedCheck["titles"]>
+): Promise<UsageReason> {
+  const name = reason.id === undefined ? undefined : names.get(reason.id);
+  if (!reason.used || reason.id === undefined || name === undefined) {
+    return reason;
+  }
+  const found = await listingOf(usage, reason.id, health);
+  const documents = documentCountOf(found);
+  if (documents === 0) return reason;
+  const counted = `${name} is used on ${documents} ${documents === 1 ? "document" : "documents"}`;
+  const named = await titles(found);
+  return {
+    ...reason,
+    message:
+      named.length === 0
+        ? `${counted}.`
+        : `${counted}: ${whereUsedWords(named, documents)}.`,
+  };
+}
+
+/** The index's reasons, each use said again with where it is. */
+async function namedReasons(
+  reasons: readonly UsageReason[],
+  names: ReadonlyMap<string, string>,
+  usage: SharedStyleUsageSource,
+  titles: NonNullable<StillUsedCheck["titles"]>
+): Promise<UsageReason[]> {
+  const health = await usage.health();
+  return Promise.all(
+    reasons.map(reason => namedUseReason(reason, names, usage, health, titles))
+  );
+}
+
+/**
+ * The index's reasons against a removal, each use naming where it is, within
+ * {@link REMOVAL_COUNT_MS}, the index's health read included: past it, or
+ * where a read fails, they are counted only, as the index first said, so the
+ * refusal never waits on its own wording or is lost to it.
+ */
+async function withWhereUsed(
+  reasons: readonly UsageReason[],
+  removable: readonly { id: string; name: string }[],
+  usage: SharedStyleUsageSource,
+  titles: StillUsedCheck["titles"]
+): Promise<UsageReason[]> {
+  if (titles === undefined || !reasons.some(reason => reason.used)) {
+    return [...reasons];
+  }
+  const names = new Map(removable.map(entry => [entry.id, entry.name]));
+  const named = await within(
+    namedReasons(reasons, names, usage, titles).catch(
+      (): typeof TIMED_OUT => TIMED_OUT
+    ),
+    REMOVAL_COUNT_MS
+  );
+  return named === TIMED_OUT ? [...reasons] : named;
 }
 
 /**
@@ -826,7 +909,14 @@ export async function removeSharedStyles(
         configClassIds
       );
       // Read just before the write, never taken from what the panel showed.
-      reasons.push(...(await usageRefusals(removable, usage, "shared style")));
+      reasons.push(
+        ...(await withWhereUsed(
+          await usageRefusals(removable, usage, "shared style"),
+          removable,
+          usage,
+          stillUsed.titles
+        ))
+      );
       if (reasons.length > 0) {
         throw removalRefusalOf(reasons, { classIds: ids });
       }
@@ -1245,6 +1335,16 @@ export async function countSharedStyleUsage(
   );
 }
 
+/**
+ * The site's default language by code, as the usage index files it: the
+ * configured default, else the first language, else none.
+ */
+function siteDefaultLocale(ctx: Pick<PluginRouteContext, "config">): string {
+  return (
+    ctx.config.localization?.defaultLocale || siteLocales(ctx.config)[0] || ""
+  );
+}
+
 /** Refuse a caller who may not read shared styles' usage, before any read. */
 async function admitUsageReader(
   ctx: Pick<PluginRouteContext, "caller" | "self">
@@ -1305,7 +1405,11 @@ export function sharedStyleRoutes(setup: SharedStyleRouteSetup): {
       handler: async (req, ctx) => {
         await admitUsageReader(ctx);
         return respondDoc(
-          await readSharedStyleUsage(req, ctx, setup.usage(ctx))
+          await readSharedStyleUsage(req, ctx, setup.usage(ctx), {
+            named: namedDocumentsReader(ctx),
+            single: namedSingleReader(ctx),
+            defaultLocale: () => siteDefaultLocale(ctx),
+          })
         );
       },
     },
@@ -1338,12 +1442,18 @@ export function sharedStyleRoutes(setup: SharedStyleRouteSetup): {
       handler: async (req, ctx) => {
         const nextly = await getCachedNextly();
         const readNamed = namedDocumentsReader(ctx);
+        const usage = setup.usage(ctx);
+        const readers = { named: readNamed, single: namedSingleReader(ctx) };
         return removeSharedStyles(
           req,
           siteStyleClassStore(ctx, nextly),
-          setup.usage(ctx),
+          usage,
           setup.configClassIds,
           {
+            titles: async found =>
+              (await readableUses(found, usage, readers)).readable.map(
+                use => use.title
+              ),
             uses: storedSharedStyleUses(
               storedDocumentsOf(ctx, nextly),
               setup.limits

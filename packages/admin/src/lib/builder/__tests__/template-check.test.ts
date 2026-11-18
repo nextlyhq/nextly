@@ -124,6 +124,27 @@ describe("a template's names", () => {
     ).toEqual([]);
   });
 
+  it("title and slug for a field group, which holds no built-in fields; a Single's still clash", () => {
+    expect(
+      failures(
+        [text("title"), text("slug")],
+        offered("fieldGroup"),
+        "fieldGroup"
+      )
+    ).toEqual([]);
+    expect(failures([text("title")], offered("single"), "single")).toEqual([
+      "title name-clash",
+    ]);
+  });
+
+  it("a name the entity's starting field already holds, at the top level", () => {
+    const ctx = { ...offered("collection"), startingFieldNames: ["blocks"] };
+    expect(failures([text("blocks")], ctx)).toEqual(["blocks name-clash"]);
+    expect(
+      failures([{ name: "meta", type: "group", fields: [text("blocks")] }], ctx)
+    ).toEqual([]);
+  });
+
   it("a reserved name, at any depth", () => {
     expect(failures([text("created_at")])).toEqual([
       "created_at reserved-name",

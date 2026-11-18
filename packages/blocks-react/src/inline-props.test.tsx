@@ -18,9 +18,11 @@ import { NODE_ID_ATTRIBUTE, PROP_ATTRIBUTE } from "./block-boundary";
 import { PageRenderer } from "./page-renderer";
 import { createBlockResolver } from "./resolver";
 
-import type {
-  AnyBlockDefinition,
-  BlockDocument,
+import {
+  isInlineItemsProp,
+  itemPropName,
+  type AnyBlockDefinition,
+  type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 
 async function renderToHtml(element: ReactElement): Promise<string> {
@@ -168,14 +170,20 @@ describe("the declaration and the marking must agree", () => {
     for (const [blockName, propName] of declared) {
       const definition = coreBlocks.find(block => block.name === blockName);
       const example = definition?.example?.props ?? {};
+      // A list of words is marked item by item, each under its own address.
+      const items = isInlineItemsProp(definition?.props?.[propName]);
       const markup = await html(
-        documentOf(blockName, { ...example, [propName]: "Sample text" }),
+        documentOf(blockName, {
+          ...example,
+          [propName]: items ? ["Sample text"] : "Sample text",
+        }),
         true
       );
+      const mark = items ? itemPropName(propName, 0) : propName;
       expect(
         markup,
         `${blockName} declares "${propName}" inline but never marks an element for it`
-      ).toContain(`${PROP_ATTRIBUTE}="${propName}"`);
+      ).toContain(`${PROP_ATTRIBUTE}="${mark}"`);
     }
   });
 });

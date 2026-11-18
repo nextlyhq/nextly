@@ -44,6 +44,7 @@ import {
   useDesignSystemStylesheet,
 } from "./shell-stylesheet";
 import { ShellTopBar } from "./shell-top-bar";
+import { ShowInspectorContext } from "./show-inspector";
 
 export function ShellRegions({
   appliedScale = 1,
@@ -61,6 +62,7 @@ export function ShellRegions({
   checklist,
   canvasStrip,
   onExit,
+  exitLabel,
   preferences,
   update,
   className,
@@ -142,6 +144,17 @@ export function ShellRegions({
     regionRefs
   );
   const mountedTopology = panelTopology(openPanel, inspectorShown);
+  // For a control in the top bar that opens a block's setting: the setting
+  // opens in the inspector, so a hidden one is shown.
+  const showInspector = React.useCallback(
+    () =>
+      update(current =>
+        current.inspectorHidden
+          ? { ...current, inspectorHidden: false }
+          : current
+      ),
+    [update]
+  );
 
   const panelView: PanelView = {
     current: preferences.leftPanelView,
@@ -158,23 +171,26 @@ export function ShellRegions({
         className
       )}
     >
-      <ShellTopBar
-        headerRef={element => {
-          regionRefs.current.header = element;
-        }}
-        onExit={onExit}
-        title={title}
-        topBar={topBar}
-        topBarCenter={topBarCenter}
-        topBarEnd={topBarEnd}
-        zoom={preferences.zoom}
-        appliedScale={appliedScale}
-        onZoomPick={onZoomPick}
-        leftShown={leftShown}
-        inspectorShown={inspectorShown}
-        onLeft={toggleLeft}
-        onInspector={toggleInspector}
-      />
+      <ShowInspectorContext.Provider value={showInspector}>
+        <ShellTopBar
+          headerRef={element => {
+            regionRefs.current.header = element;
+          }}
+          onExit={onExit}
+          exitLabel={exitLabel}
+          title={title}
+          topBar={topBar}
+          topBarCenter={topBarCenter}
+          topBarEnd={topBarEnd}
+          zoom={preferences.zoom}
+          appliedScale={appliedScale}
+          onZoomPick={onZoomPick}
+          leftShown={leftShown}
+          inspectorShown={inspectorShown}
+          onLeft={toggleLeft}
+          onInspector={toggleInspector}
+        />
+      </ShowInspectorContext.Provider>
 
       <div className="flex min-h-0 flex-1">
         <RailAndDialogs

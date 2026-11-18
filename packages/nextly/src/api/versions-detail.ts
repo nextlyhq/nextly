@@ -116,7 +116,7 @@ export const GET = privateToSession(
     // What the read rules withheld is named beside the snapshot, so a reader is
     // told a value is held back rather than shown a version that lacks it.
     const withheld = await redactSnapshotForUser(
-      row.snapshot,
+      row,
       scopeKind,
       slug,
       user,

@@ -66,6 +66,10 @@ import {
   SITE_CHROME_ATTRIBUTE,
 } from "./canvas-frame-sheet";
 import {
+  PreviewWidthEdges,
+  type PreviewWidthControl,
+} from "./canvas-preview-width-edges";
+import {
   frameFillingRegion,
   frameFitScale,
   type FrameSize,
@@ -73,7 +77,6 @@ import {
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
 import {
   CANVAS_FRAME_BOX_ATTRIBUTE,
-  boxInFrameViewport,
   CANVAS_LAYER_ATTRIBUTE,
   CHROME_BLEED,
   frameInsetOf,
@@ -81,8 +84,13 @@ import {
   frameViewportOf,
   rootInFrameViewport,
 } from "./geometry-dom";
+import { useSiteChrome, type SiteChromeDrawn } from "./site-chrome";
 import { SiteChromeCues } from "./site-chrome-cues";
 import { pageSchemeOf } from "./site-ground";
+
+// Where the site's layout draws is part of what the frame reports, so its
+// shape is named here too, beside the frame's other readings.
+export type { SiteChromeDrawn } from "./site-chrome";
 
 /**
  * Where the frame's page comes from, and where in it the canvas is mounted.
@@ -153,21 +161,6 @@ export interface SiteFrameSource extends FrameSourceReading {
  * @experimental
  */
 export type CanvasFrameFallback = "other-origin" | "not-served" | "not-ready";
-
-/**
- * Where the site's own layout draws around the page on a page the site
- * serves: something with a box before the page, as a header is, and after it,
- * as a footer is. Read from where each part sits in the site's page against
- * the canvas's mount point, so it holds whatever the site's markup calls it.
- *
- * @experimental Settles with the editor's notices about the site's layout.
- */
-export interface SiteChromeDrawn {
-  /** The layout draws something before the page. */
-  readonly before: boolean;
-  /** The layout draws something after the page. */
-  readonly after: boolean;
-}
 
 /**
  * How long a page the site serves has to say it is ready, once loaded.
@@ -273,6 +266,15 @@ export interface CanvasFrameProps {
    * @experimental Settles with the canvas's preview tags.
    */
   pinned?: React.ReactNode;
+  /**
+   * Previewing the page at a width other than the device's own: the frame
+   * draws a handle at each edge, the ruler and the line saying which device
+   * is still edited, and tells the host the width settled on. The host lays
+   * the frame out at that width through `width`. Left out, no handles.
+   *
+   * @experimental Settles with the canvas's preview width.
+   */
+  previewWidth?: PreviewWidthControl;
   /** The canvas, rendered inside the frame. */
   children?: React.ReactNode;
   /** Where the frame's page comes from. The editor's blank page by default. */
@@ -338,7 +340,8 @@ function FramedCanvas({
 }: CanvasFrameProps): React.JSX.Element {
   // The chrome drawn over the frame, apart from the markers the page's own
   // document is given.
-  const { overlay, pinned, ...markers } = rest;
+  // The preview width control is the frame's own, never a page marker.
+  const { overlay, pinned, previewWidth, ...markers } = rest;
   const stage = React.useRef<HTMLDivElement | null>(null);
   const layer = React.useRef<HTMLDivElement | null>(null);
   const layerContent = React.useRef<HTMLDivElement | null>(null);
@@ -355,7 +358,20 @@ function FramedCanvas({
   const { height, scale } = frameLayout(width, statedHeight, region, zoom);
   useReportedScale(scale, onScale);
 
-  const viewport = useFrameViewport(frame, page, width, height);
+  /*
+   * Set while the preview width's handles are dragged: the drag resizes the
+   * page's frame each animation frame, and its viewport is read again once
+   * the width settles rather than at every step, so nothing that reads the
+   * frame renders per pixel.
+   */
+  const resizing = React.useRef(false);
+  // Counted at each drag's end, so the viewport is read again then, even
+  // where the drag settles on the width it started at.
+  const [settled, setSettled] = React.useState(0);
+  const viewport = useFrameViewport(frame, page, width, height, {
+    held: resizing,
+    settled,
+  });
   useRegistered(frame, scale, viewport);
 
   usePageMarkers(frame, page, mountPoint, markers);
@@ -397,6 +413,17 @@ function FramedCanvas({
           }
           overlay={overlay}
           pinned={pinned}
+        />
+        {/* At the box's edges, over the layer, so the handles sit at the
+            page's edges and beside it in the well. */}
+        <PreviewWidthEdges
+          control={previewWidth}
+          width={width}
+          scale={scale}
+          onDragging={active => {
+            resizing.current = active;
+            if (!active) setSettled(count => count + 1);
+          }}
         />
       </div>
       <FramePage mountPoint={mountPoint}>{children}</FramePage>
@@ -826,227 +853,6 @@ function readinessDeadline(
   return { arm, disarm };
 }
 
-/** Elements of a site's layout that draw nothing, and so are left alone. */
-const UNDRAWN_ELEMENTS: ReadonlySet<string> = new Set([
-  "script",
-  "style",
-  "link",
-  "meta",
-  "template",
-  "noscript",
-]);
-
-/**
- * Mark one element of the site's layout as its chrome, inert unless the site
- * made it so itself, remembering which it marked so they can be given back.
- * Answers whether the element is chrome at all: one that draws nothing is not.
- */
-function markBeside(
-  element: Element,
-  seen: Set<Element>,
-  marked: Set<Element>
-): boolean {
-  seen.add(element);
-  if (UNDRAWN_ELEMENTS.has(element.localName)) return false;
-  element.setAttribute(SITE_CHROME_ATTRIBUTE, "");
-  if (element.hasAttribute("inert")) return true;
-  element.setAttribute("inert", "");
-  marked.add(element);
-  return true;
-}
-
-/**
- * Forget the chrome the site's layout took away: no longer chrome, its cue
- * goes with it rather than staying over the canvas it uncovered, and it gets
- * back the state it had, since the site may put the same node to use again.
- * An element the site made inert itself stays so. Answers whether anything
- * went.
- */
-function dropDetached(
-  drawn: Element[],
-  ancestors: readonly Element[],
-  seen: Set<Element>,
-  marked: Set<Element>
-): boolean {
-  const kept = drawn.filter(
-    element =>
-      element.parentElement !== null &&
-      ancestors.includes(element.parentElement)
-  );
-  if (kept.length === drawn.length) return false;
-  for (const element of drawn) {
-    if (kept.includes(element)) continue;
-    seen.delete(element);
-    element.removeAttribute(SITE_CHROME_ATTRIBUTE);
-    if (marked.delete(element)) element.removeAttribute("inert");
-  }
-  drawn.splice(0, drawn.length, ...kept);
-  return true;
-}
-
-/**
- * Mark what is new beside the mount point and its ancestors, adding what
- * draws to `drawn`. Answers whether anything was added.
- */
-function markArrivals(
-  mountPoint: HTMLElement,
-  ancestors: readonly Element[],
-  drawn: Element[],
-  seen: Set<Element>,
-  marked: Set<Element>
-): boolean {
-  let added = false;
-  for (const parent of ancestors) {
-    for (const beside of Array.from(parent.children)) {
-      const onThePath = beside === mountPoint || ancestors.includes(beside);
-      if (onThePath || seen.has(beside)) continue;
-      if (markBeside(beside, seen, marked)) {
-        drawn.push(beside);
-        added = true;
-      }
-    }
-  }
-  return added;
-}
-
-/** The mount point's ancestors below the body, and the body itself. */
-function ancestorsUpToBody(
-  mountPoint: HTMLElement,
-  body: HTMLElement
-): Element[] {
-  const ancestors: Element[] = [];
-  for (
-    let node = mountPoint.parentElement;
-    node !== null;
-    node = node === body ? null : node.parentElement
-  ) {
-    ancestors.push(node);
-  }
-  return ancestors;
-}
-
-/** No site chrome: the blank page, or a site page not yet ready. */
-const NO_CHROME: readonly Element[] = [];
-
-/**
- * Make the site's own layout around the mount point inert and quiet, on a
- * page the site serves: every element beside the mount point and beside each
- * of its ancestors up to the body. The ancestors themselves cannot be inert,
- * since the canvas is inside them.
- *
- * Marked again when an ancestor gains a child, for a site whose layout draws
- * part of itself once its own scripts have run. Answers with the elements it
- * marked, for the cues drawn over them, and tells `onSiteChrome` where they
- * draw around the page.
- */
-function useSiteChrome(
-  page: Document | null,
-  mountPoint: HTMLElement | null,
-  /** Told where the marked parts draw around the page; see the prop. */
-  onSiteChrome: CanvasFrameProps["onSiteChrome"]
-): readonly Element[] {
-  const [chrome, setChrome] = React.useState<readonly Element[]>(NO_CHROME);
-  useIsomorphicLayoutEffect(() => {
-    if (page === null || mountPoint === null || mountPoint === page.body)
-      return;
-    const ancestors = ancestorsUpToBody(mountPoint, page.body);
-    // Every element looked at, and the ones this marked: an element the site
-    // made inert itself stays so when the canvas leaves.
-    const seen = new Set<Element>();
-    const marked = new Set<Element>();
-    const drawn: Element[] = [];
-    const mark = (): void => {
-      const dropped = dropDetached(drawn, ancestors, seen, marked);
-      const added = markArrivals(mountPoint, ancestors, drawn, seen, marked);
-      if (dropped || added) setChrome([...drawn]);
-    };
-    mark();
-    const Mutations = page.defaultView?.MutationObserver;
-    const arrivals = Mutations === undefined ? null : new Mutations(mark);
-    for (const parent of ancestors) {
-      arrivals?.observe(parent, { childList: true });
-    }
-    return () => {
-      arrivals?.disconnect();
-      for (const element of seen)
-        element.removeAttribute(SITE_CHROME_ATTRIBUTE);
-      for (const element of marked) element.removeAttribute("inert");
-      setChrome(NO_CHROME);
-    };
-  }, [page, mountPoint]);
-  useReportedSiteChrome(chrome, mountPoint, onSiteChrome);
-  return chrome;
-}
-
-/** Nothing drawn around the page: the state before any site page arrives. */
-const NOTHING_DRAWN: SiteChromeDrawn = { before: false, after: false };
-
-/**
- * Where `elements`, the site's layout around `mountPoint`, draw: only a part
- * with a box counts, so a script or an empty announcer is no header, and a
- * part before the mount point in the page is before the page.
- */
-function siteChromeDrawn(
-  elements: readonly Element[],
-  mountPoint: HTMLElement
-): SiteChromeDrawn {
-  let before = false;
-  let after = false;
-  for (const element of elements) {
-    const box = boxInFrameViewport(element);
-    if (box.width === 0 || box.height === 0) continue;
-    // The constant from the node itself, which belongs to the frame's realm.
-    const precedes =
-      (mountPoint.compareDocumentPosition(element) &
-        mountPoint.DOCUMENT_POSITION_PRECEDING) !==
-      0;
-    if (precedes) before = true;
-    else after = true;
-  }
-  return { before, after };
-}
-
-/**
- * Tell the host where the site's layout draws around the page, each time
- * that changes: as its parts arrive or leave, and as one gains or loses its
- * box (a part the site's stylesheet hides until its script runs), and that
- * nothing is drawn once the frame is gone.
- */
-function useReportedSiteChrome(
-  elements: readonly Element[],
-  mountPoint: HTMLElement | null,
-  onSiteChrome: CanvasFrameProps["onSiteChrome"]
-): void {
-  const latest = React.useRef(onSiteChrome);
-  React.useEffect(() => {
-    latest.current = onSiteChrome;
-  }, [onSiteChrome]);
-  const told = React.useRef<SiteChromeDrawn>(NOTHING_DRAWN);
-  const tell = React.useCallback((drawn: SiteChromeDrawn) => {
-    if (
-      drawn.before === told.current.before &&
-      drawn.after === told.current.after
-    ) {
-      return;
-    }
-    told.current = drawn;
-    latest.current?.(drawn);
-  }, []);
-  React.useEffect(() => {
-    if (mountPoint === null) return undefined;
-    const read = (): void => tell(siteChromeDrawn(elements, mountPoint));
-    read();
-    // From the frame's window, the realm of the elements it observes.
-    const Resizes = mountPoint.ownerDocument.defaultView?.ResizeObserver;
-    const sizes = Resizes === undefined ? null : new Resizes(read);
-    for (const element of elements) sizes?.observe(element);
-    return () => sizes?.disconnect();
-  }, [elements, mountPoint, tell]);
-  // Nothing is drawn once the frame is gone, so a host is never left holding
-  // a layout no frame shows.
-  React.useEffect(() => () => tell(NOTHING_DRAWN), [tell]);
-}
-
 /**
  * The nearest ancestor that lays the stage out, skipping boxless wrappers.
  *
@@ -1119,13 +925,16 @@ function useReportedScale(
 
 /**
  * The frame's viewport in its own pixels, read again when the page, the
- * frame's size or the window's resize changes it.
+ * frame's size or the window's resize changes it; not while `held`, as while
+ * the preview width is dragged, and again each time `settled` counts a drag's
+ * end.
  */
 function useFrameViewport(
   frame: HTMLIFrameElement | null,
   page: Document | null,
   width: number,
-  height: number
+  height: number,
+  { held, settled }: { held: React.RefObject<boolean>; settled: number }
 ): FrameSize | null {
   const [viewport, setViewport] = React.useState<FrameSize | null>(null);
   useIsomorphicLayoutEffect(() => {
@@ -1134,6 +943,7 @@ function useFrameViewport(
       return;
     }
     const read = (): void => {
+      if (held.current) return;
       const next = frameViewportOf(frame);
       setViewport(current =>
         current !== null &&
@@ -1148,7 +958,7 @@ function useFrameViewport(
     const view = page.defaultView;
     view?.addEventListener("resize", read);
     return () => view?.removeEventListener("resize", read);
-  }, [frame, page, width, height]);
+  }, [frame, page, width, height, held, settled]);
   return viewport;
 }
 
@@ -1268,8 +1078,8 @@ function stateAttribute(
 }
 
 /**
- * The admin's tokens the chrome drawn INSIDE the page reads: a Layout region's
- * badge and tag, which are the admin's words on the site's page, and the
+ * The admin's tokens the chrome drawn INSIDE the page reads: a header or
+ * footer's tag, which holds the admin's words on the site's page, its outline, and the
  * region's own edge and faded content.
  *
  * The frame's document loads none of the admin's stylesheets, so these are
@@ -1285,8 +1095,17 @@ const PAGE_CHROME_TOKENS: readonly {
   readonly tokens: readonly string[];
 }[] = [
   {
+    // A header or footer's edge, and its outline and tag, which take the
+    // select hue for the page's ground as the block marks do.
     selector: ".nx-canvas-region",
-    tokens: ["--nx-builder-border", "--nx-builder-accent"],
+    tokens: [
+      "--nx-builder-border",
+      "--nx-builder-select-on-light",
+      "--nx-builder-select-on-dark",
+      "--nx-builder-select-text-on-light",
+      "--nx-builder-select-text-on-dark",
+      "--nx-builder-halo",
+    ],
   },
   {
     selector: `.nx-canvas-region__content, [${SITE_CHROME_ATTRIBUTE}]`,
@@ -1323,18 +1142,9 @@ const PAGE_CHROME_TOKENS: readonly {
     tokens: ["--nx-builder-select", "--nx-builder-select-text"],
   },
   {
-    selector: ".nx-canvas-region__mark",
-    tokens: [
-      "--nx-builder-border",
-      "--nx-builder-surface-raised",
-      "--nx-builder-text",
-      "--nx-builder-text-muted",
-      "--nx-builder-accent",
-      "--nx-builder-scheme",
-      "--radius-sm",
-      "--text-xs",
-      "--font-sans",
-    ],
+    // Its tag holds the admin's words alone, so it takes the admin's face.
+    selector: ".nx-canvas-region__tag",
+    tokens: ["--font-sans"],
   },
 ];
 

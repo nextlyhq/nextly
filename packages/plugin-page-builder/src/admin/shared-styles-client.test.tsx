@@ -102,6 +102,29 @@ describe("reading how widely shared styles are used", () => {
     expect(usage.styles.get("__proto__")?.documents).toBe(1);
   });
 
+  it("names what is open, and asks again once it is stored, not for a new object", async () => {
+    readAnswer = { whole: true, counting: false, mayLock: false, styles: {} };
+    const open = {
+      document: { collection: "pages", id: "p1" },
+      field: "content",
+      variant: "published" as const,
+    };
+    const { result, rerender } = renderHook(
+      ({ stored }: { stored: string }) =>
+        useSharedStylesClient({ ...open }, stored),
+      { initialProps: { stored: "1" } }
+    );
+    const first = result.current.usage;
+    await first(["c-card"], signal);
+    expect(reads).toEqual([{ path: sharedStyleUsagePath(["c-card"], open) }]);
+    // The same document, spelled again: the same read.
+    rerender({ stored: "1" });
+    expect(result.current.usage).toBe(first);
+    // Stored again: a new read, which a reader holding the old asks anew.
+    rerender({ stored: "2" });
+    expect(result.current.usage).not.toBe(first);
+  });
+
   it("fails rather than answering an empty usage when the route says nothing", async () => {
     const { result } = renderHook(() => useSharedStylesClient());
     await expect(result.current.usage(["c-card"], signal)).rejects.toThrow();

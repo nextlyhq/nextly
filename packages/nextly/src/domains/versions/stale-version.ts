@@ -110,6 +110,16 @@ function decodeDocumentVersion(raw: unknown): DecodedVersion {
 }
 
 /**
+ * The counter language `code` holds in a `_rev` a client read: 0 where the version names none.
+ * How a copy says which version of its source language it was made from.
+ *
+ * @throws NextlyError.validation when `raw` is not a version.
+ */
+export function languageCounterInVersion(raw: unknown, code: string): number {
+  return languageCounterOf(decodeDocumentVersion(raw), code);
+}
+
+/**
  * The version `body` names, decoded; undefined when it names none. Only the
  * decode: whether a write must name one is `versionCheckFor`'s to decide.
  *

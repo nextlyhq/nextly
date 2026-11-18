@@ -22,6 +22,7 @@ import {
 import { permissionSlug } from "../../../../schemas/_zod/rbac";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
 import { ServiceContainer } from "../../../../services/index";
+import { WITHOUT_REVIEW_KEY } from "../../../collections/services/save-door-gate";
 import {
   ContentEventsRepository,
   type ContentEventRecord,
@@ -213,6 +214,19 @@ export async function versionOf(
 }
 
 /** Saves `data` to a document in `locale`, trusted, as an editor's ordinary save. */
+/**
+ * A save's body as set-up code sends it: a save naming `published` says it publishes without
+ * review, as trusted code may with a reason. What a case tests is how review state follows the
+ * content, not the publish gate, which refuses an unapproved publish.
+ */
+export function publishedPastReview(
+  data: Record<string, unknown>
+): Record<string, unknown> {
+  return data.status === "published"
+    ? { ...data, [WITHOUT_REVIEW_KEY]: { reason: "Set up as published" } }
+    : data;
+}
+
 export async function saveIn(
   t: TestNextly,
   slug: string,
@@ -223,7 +237,7 @@ export async function saveIn(
   const handler = t.getService("collectionsHandler") as CollectionsHandler;
   await handler.updateEntry(
     { collectionName: slug, entryId, overrideAccess: true, locale },
-    { ...data, _overwrite: true }
+    { ...publishedPastReview(data), _overwrite: true }
   );
 }
 

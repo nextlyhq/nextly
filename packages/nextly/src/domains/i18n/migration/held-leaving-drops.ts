@@ -17,7 +17,10 @@ import {
 } from "../../schema/services/apply-migration-statements";
 
 import { ensureI18nArchive, runI18nSchemaStatements } from "./ensure-archive";
-import type { CompanionTransitionPlan } from "./reconcile-companion";
+import type {
+  CompanionTransitionPlan,
+  FieldRename,
+} from "./reconcile-companion";
 import type { I18nTransitionKind } from "./transition-state";
 
 /**
@@ -53,12 +56,28 @@ export async function applyCompanionTransition(args: {
   kind: I18nTransitionKind;
   slug: string;
   tableName: string;
+  /** The translated field this change renames, as the schema dialog decided it. */
+  renamed?: FieldRename | null;
 }): Promise<void> {
   const { adapter, plan, settleLeaving, busyTable } = args;
   await applyCompanionStatements(adapter, plan, busyTable);
   if (settleLeaving) {
     await settleLeaving();
     await dropHeldLeavingFields(adapter, plan, args.kind, busyTable);
+  }
+  // A renamed translated field keeps its records of where each language's value came from, under
+  // its new name. Moved here, once its column has been, rather than among the plan's statements,
+  // which a migration file may carry: the records are data, not schema.
+  if (args.renamed && (args.kind === "collection" || args.kind === "single")) {
+    const { renameFieldProvenance } = await import(
+      "../provenance/record-provenance"
+    );
+    await renameFieldProvenance(adapter, {
+      scopeKind: args.kind,
+      scopeSlug: args.slug,
+      from: args.renamed.from,
+      to: args.renamed.to,
+    });
   }
   // The transition record describes a companion that no longer exists, so it stops being true the
   // moment the disable succeeds. Left behind, it would refuse the next enable's real source locale:

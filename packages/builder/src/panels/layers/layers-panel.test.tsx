@@ -719,7 +719,7 @@ describe("LayersPanel", () => {
 });
 
 describe("the regions of the page's Layout in Layers", () => {
-  function renderWithRegions() {
+  function renderWithRegions(selected?: "header" | "footer") {
     register();
     const header = vi.fn();
     const footer = vi.fn();
@@ -729,14 +729,16 @@ describe("the regions of the page's Layout in Layers", () => {
         regions={[
           {
             area: "footer",
-            name: "Footer",
-            origin: "from Layout Main",
+            name: "Site footer",
+            origin: "Main header & footer",
+            selected: selected === "footer",
             onActivate: footer,
           },
           {
             area: "header",
-            name: "Header",
-            origin: "from Layout Main",
+            name: "Site header",
+            origin: "Main header & footer",
+            selected: selected === "header",
             onActivate: header,
           },
         ]}
@@ -748,10 +750,10 @@ describe("the regions of the page's Layout in Layers", () => {
   it("shows the header above the page's blocks and the footer below them", () => {
     renderWithRegions();
     const header = screen.getByRole("button", {
-      name: "Header, from Layout Main, locked",
+      name: "Site header, Main header & footer",
     });
     const footer = screen.getByRole("button", {
-      name: "Footer, from Layout Main, locked",
+      name: "Site footer, Main header & footer",
     });
     const tree = screen.getByRole("tree");
     expect(
@@ -764,16 +766,24 @@ describe("the regions of the page's Layout in Layers", () => {
 
   it("keeps them out of the tree: not rows that select, drag or lock", () => {
     renderWithRegions();
-    expect(rows().some(row => row.includes("from Layout"))).toBe(false);
-    const header = screen.getByRole("button", { name: /^Header/ });
+    expect(rows().some(row => row.includes("header & footer"))).toBe(false);
+    const header = screen.getByRole("button", { name: /^Site header/ });
     expect(header.closest("[role=tree]")).toBeNull();
     expect(header.getAttribute("draggable")).not.toBe("true");
   });
 
-  it("shows the region on the canvas when activated", () => {
+  it("selects the region when activated", () => {
     const { header } = renderWithRegions();
-    fireEvent.click(screen.getByRole("button", { name: /^Header/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Site header/ }));
     expect(header).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the selected region's row as pressed, and only that one", () => {
+    renderWithRegions("header");
+    const header = screen.getByRole("button", { name: /^Site header/ });
+    const footer = screen.getByRole("button", { name: /^Site footer/ });
+    expect(header.getAttribute("aria-pressed")).toBe("true");
+    expect(footer.getAttribute("aria-pressed")).toBe("false");
   });
 });
 

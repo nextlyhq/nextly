@@ -110,6 +110,8 @@ type Props = {
   isSaving: boolean;
   /** What the live region announces during that save. */
   savingLabel: string;
+  /** Why Save waits, while it does: shown beside it, and Save is held. */
+  saveHeld?: string;
   /**
    * Runs when the editor is left through the leave guard's Discard Changes,
    * before the navigation: an unsaved entity is let go with its changes.
@@ -142,10 +144,21 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     onActiveChange,
     isSaving,
     savingLabel,
+    saveHeld,
     onDiscard,
     pageBuilderHref,
     children,
   } = props;
+  // The fields the save would refuse, from the map the outline marks its rows from, in its order.
+  const errorIds = useMemo(
+    () => [
+      ...builderFieldErrors(
+        builder.fields.filter(field => !field.isSystem),
+        builder.fields
+      ).keys(),
+    ],
+    [builder.fields]
+  );
   // While changes are pending, every way out asks first: an in-app link, the
   // field group's editor, the browser's back, a reload and closing the tab.
   // The guard is the admin's one, which entries use too. A read-only entity
@@ -156,7 +169,9 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     <UnsavedChangesGuard
       isDirty={unsavedCount > 0 || isSaving}
       disabled={locked}
-      busy={isSaving}
+      // Nor while an unsaved entity's new address is checked: discarding then
+      // would let the entity go before the move renames it.
+      busy={isSaving || saveHeld !== undefined}
       onDiscard={onDiscard}
     >
       <div className="flex flex-col min-h-screen bg-background">
@@ -170,7 +185,10 @@ export function BuilderPageLayout(props: Props): JSX.Element {
           onAddField={() => onActiveChange({ kind: "picker", position: {} })}
           onOpenSettings={() => onActiveChange({ kind: "settings" })}
           onSave={onSave}
+          saveHeld={saveHeld}
           pageBuilderHref={pageBuilderHref}
+          errorIds={errorIds}
+          onShowError={fieldId => onActiveChange({ kind: "edit", fieldId })}
         />
         <BuilderWorkspace {...props} />
 

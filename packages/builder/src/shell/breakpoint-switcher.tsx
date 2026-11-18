@@ -9,11 +9,12 @@
  * out at the device's preview width (`previewWidth` in `canvas-width.ts`), so
  * what the author sees is the layout of the breakpoint they are editing.
  *
- * The base breakpoint is named Desktop. The chosen device shows its exact
- * preview width ("Desktop · 1280px", "Tablet · 991px"), and every device's
- * range is in its accessible name and its tooltip: a rounded number that
- * differs from the real one misleads exactly where an author checks a
- * boundary.
+ * The base breakpoint is named Desktop. Each device is an icon whose
+ * accessible name and tooltip give its name, its exact preview width and the
+ * widths it styles ("Desktop · 1280px · styles for 1024px and wider"), and
+ * the width being styled is always shown as text beside the buttons
+ * ("1280px"): a rounded number that differs from the real one misleads
+ * exactly where an author checks a boundary.
  *
  * **Three buttons at most.** The base and the two widest breakpoints are
  * buttons; the rest are in a menu beside them, its own button rather than part
@@ -45,7 +46,14 @@ import { ChevronDown, Laptop, Monitor, Smartphone, Tablet } from "lucide-react";
 import * as React from "react";
 
 import { authoredBreakpoints, BASE_DEVICE_LABEL } from "../breakpoints";
-import { baseWidth, offeredTiers, previewWidth } from "../canvas/canvas-width";
+import { PreviewWidthText } from "../canvas/canvas-preview-width-field";
+import {
+  baseWidth,
+  offeredTiers,
+  previewWidth,
+  previewWidthRange,
+} from "../canvas/canvas-width";
+import { ChromeTooltip } from "../chrome-tooltip";
 import { radioGroupStep } from "../roving-radios";
 
 /**
@@ -65,6 +73,18 @@ export interface BreakpointSwitcherProps {
    * replaced would style a breakpoint the site may not have.
    */
   status: "loading" | "unavailable" | "ready";
+  /**
+   * The width the canvas previews in place of the chosen device's own, or
+   * `null` at the device's own. Shown in the warning colour with "Reset"
+   * beside it; the device chosen stays the one every edit goes to.
+   */
+  previewWidth?: number | null;
+  /**
+   * Where a typed width and Reset go, `null` for the device's own. Given, the
+   * width beside the buttons is a button that swaps in a field to type one;
+   * left out, it is text.
+   */
+  onPreviewWidth?: (width: number | null) => void;
 }
 
 /**
@@ -85,8 +105,14 @@ export interface DeviceOption {
   label: string;
   /** The width the canvas lays this device out at. */
   preview: number | undefined;
-  /** Where the breakpoint applies, as its name and tooltip say it. */
+  /** Where the breakpoint applies, in words, as Settings lists it. */
   range: string;
+  /**
+   * The same widths as the device's control says them, after "styles for":
+   * "1024px and wider", "991px and narrower". From the same bound as
+   * {@link DeviceOption.range}, so the two cannot disagree.
+   */
+  stylesFor: string;
 }
 
 /**
@@ -107,6 +133,7 @@ export function deviceOptions(
       label: BASE_DEVICE_LABEL,
       preview: previewWidth(breakpoints, BASE_BREAKPOINT),
       range: from === undefined ? "every width" : `from ${from} pixels`,
+      stylesFor: from === undefined ? "every width" : `${from}px and wider`,
     },
     ...offeredTiers(breakpoints).map(tier => ({
       id: tier.id,
@@ -118,6 +145,7 @@ export function deviceOptions(
         )?.label ?? tier.id,
       preview: tier.maxWidth,
       range: `up to ${tier.maxWidth} pixels`,
+      stylesFor: `${tier.maxWidth}px and narrower`,
     })),
   ];
 }
@@ -145,11 +173,26 @@ const BUTTON_COUNT = 3;
 const FOCUS_RING =
   "focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-offset-[color:var(--nx-builder-surface)] focus-visible:outline-none";
 
-/** What a device's label reads: its name and the width it is previewed at. */
+/** What a device's menu item reads: its name and the width it is previewed at. */
 function shownLabel(option: DeviceOption): string {
   return option.preview === undefined
     ? option.label
     : `${option.label} · ${option.preview}px`;
+}
+
+/**
+ * A device's accessible name and tooltip: its name, its preview width and the
+ * widths it styles, "Desktop · 1280px · styles for 1024px and wider".
+ */
+function deviceName(option: DeviceOption): string {
+  return `${shownLabel(option)} · styles for ${option.stylesFor}`;
+}
+
+/** Why the devices cannot be chosen yet, for a gate that is not open. */
+function notReadyReason(status: BreakpointSwitcherProps["status"]): string {
+  return status === "loading"
+    ? "Available once the site's saved styles have loaded."
+    : "Your site's saved styles could not be read, so the canvas cannot be sized against them.";
 }
 
 /** The glyph a device is drawn with. */
@@ -159,54 +202,91 @@ function glyphOf(option: DeviceOption): React.ComponentType<{
   return tierIcon(option.id === BASE_BREAKPOINT ? undefined : option.preview);
 }
 
+/** A device's glyph, decoration beside the name its control carries. */
+function DeviceGlyph({ device }: { device: DeviceOption }): React.JSX.Element {
+  const Glyph = glyphOf(device);
+  return <Glyph className="size-3.5" aria-hidden="true" />;
+}
+
 /**
- * The devices past the third, in a menu of their own.
- *
- * Its button names the device being styled while that device is one of
- * these, with the same label a chosen button shows; otherwise it is a plain
- * "More devices".
+ * One device's radio button: its glyph, named and tooltipped with its name,
+ * width and range. Until the saved breakpoints are read it is inert, and the
+ * browser's own tooltip says why, since a disabled control opens no other.
  */
+function DeviceButton({
+  option,
+  isSelected,
+  ready,
+  status,
+  inTabOrder,
+  buttonRef,
+  onSelect,
+}: {
+  option: DeviceOption;
+  isSelected: boolean;
+  ready: boolean;
+  status: BreakpointSwitcherProps["status"];
+  inTabOrder: boolean;
+  buttonRef: (element: HTMLButtonElement | null) => void;
+  onSelect: (breakpoint: BreakpointId) => void;
+}): React.JSX.Element {
+  const name = deviceName(option);
+  return (
+    <ChromeTooltip content={name} disabled={!ready}>
+      <button
+        ref={buttonRef}
+        type="button"
+        role="radio"
+        aria-checked={isSelected}
+        disabled={!ready}
+        aria-label={name}
+        {...(ready ? {} : { title: notReadyReason(status) })}
+        tabIndex={inTabOrder ? 0 : -1}
+        onClick={() => onSelect(option.id)}
+        className={cn(
+          "inline-flex h-full items-center rounded px-2 text-xs",
+          FOCUS_RING,
+          isSelected
+            ? "bg-accent text-accent-foreground"
+            : "text-muted-foreground"
+        )}
+      >
+        <DeviceGlyph device={option} />
+      </button>
+    </ChromeTooltip>
+  );
+}
+
 /**
  * How the menu's button reads: plain, or naming the device being styled when
- * that device is in the menu. Its tooltip keeps the device and its range, as
- * the buttons keep theirs, because the label beside the glyph is hidden on a
- * narrow bar.
+ * that device is in the menu. Its tooltip says what a button's says, since
+ * the button shows the device's glyph alone.
  */
 function moreDevicesTrigger(chosen: DeviceOption | undefined): {
   name: string;
-  title: string;
+  tip: string;
   tone: string;
 } {
   if (chosen === undefined) {
     return {
       name: "More devices",
-      title: "More devices",
+      tip: "More devices",
       tone: "text-muted-foreground",
     };
   }
   return {
-    name: `More devices, styling ${chosen.label}, ${chosen.range}`,
-    title: `${chosen.label}, ${chosen.range}`,
+    name: `More devices, styling ${deviceName(chosen)}`,
+    tip: deviceName(chosen),
     tone: "bg-accent text-accent-foreground",
   };
 }
 
-/** The device being styled, on the menu's button: its glyph and its label. */
-function ChosenDevice({ device }: { device: DeviceOption }): React.JSX.Element {
-  const Glyph = glyphOf(device);
-  return (
-    <>
-      <Glyph className="size-3.5" aria-hidden="true" />
-      <span
-        aria-hidden="true"
-        className="tabular-nums @max-[1400px]/topbar:hidden"
-      >
-        {shownLabel(device)}
-      </span>
-    </>
-  );
-}
-
+/**
+ * The devices past the third, in a menu of their own.
+ *
+ * Its button shows the glyph of the device being styled while that device is
+ * one of these, and names it; otherwise it is a plain "More devices".
+ */
 function MoreDevices({
   devices,
   chosen,
@@ -229,19 +309,21 @@ function MoreDevices({
     // Not modal, as the zoom menu: a modal menu hides the focusable editor
     // around it from assistive technology (axe: aria-hidden-focus).
     <DropdownMenu modal={false} open={open && ready} onOpenChange={setOpen}>
-      <DropdownMenuTrigger
-        disabled={!ready}
-        aria-label={trigger.name}
-        title={trigger.title}
-        className={cn(
-          "inline-flex h-full items-center gap-1 rounded px-1.5 text-xs disabled:opacity-40",
-          FOCUS_RING,
-          trigger.tone
-        )}
-      >
-        {chosen === undefined ? null : <ChosenDevice device={chosen} />}
-        <ChevronDown className="size-3.5" aria-hidden="true" />
-      </DropdownMenuTrigger>
+      <ChromeTooltip content={trigger.tip} disabled={!ready}>
+        <DropdownMenuTrigger
+          disabled={!ready}
+          aria-label={trigger.name}
+          {...(chosen === undefined ? {} : { "data-styling": "" })}
+          className={cn(
+            "inline-flex h-full items-center gap-1 rounded px-1.5 text-xs disabled:opacity-40",
+            FOCUS_RING,
+            trigger.tone
+          )}
+        >
+          {chosen === undefined ? null : <DeviceGlyph device={chosen} />}
+          <ChevronDown className="size-3.5" aria-hidden="true" />
+        </DropdownMenuTrigger>
+      </ChromeTooltip>
       <DropdownMenuContent align="start">
         <DropdownMenuRadioGroup
           value={chosen?.id ?? ""}
@@ -253,7 +335,7 @@ function MoreDevices({
             <DropdownMenuRadioItem
               key={device.id}
               value={device.id}
-              aria-label={`${device.label}, ${device.range}`}
+              aria-label={deviceName(device)}
             >
               {shownLabel(device)}
             </DropdownMenuRadioItem>
@@ -264,11 +346,84 @@ function MoreDevices({
   );
 }
 
+/**
+ * The width the canvas is laid out at, beside the buttons at every top-bar
+ * width: the devices are icons, and this is the number an author styles
+ * against. Where the host previews other widths it is a button to type one,
+ * and a width other than the device's own is in the warning colour with
+ * Reset. Otherwise it is text hidden from assistive technology, which hears
+ * it in the chosen device's name and in the switcher's announcement.
+ */
+function ActiveWidth({
+  deviceWidth,
+  breakpoints,
+  previewed,
+  onPreviewWidth,
+}: {
+  deviceWidth: number;
+  breakpoints: BreakpointSet | undefined;
+  previewed: number | null;
+  onPreviewWidth: ((width: number | null) => void) | undefined;
+}): React.JSX.Element {
+  if (onPreviewWidth === undefined) {
+    return (
+      <span
+        data-nx-active-width=""
+        aria-hidden="true"
+        className="px-1.5 text-xs tabular-nums"
+      >
+        {`${deviceWidth}px`}
+      </span>
+    );
+  }
+  return (
+    <PreviewWidthText
+      shown={previewed ?? deviceWidth}
+      previewing={previewed !== null}
+      deviceWidth={deviceWidth}
+      range={previewWidthRange(breakpoints)}
+      onPreviewWidth={onPreviewWidth}
+    />
+  );
+}
+
+/**
+ * The width on a site with no device to switch to, where the host previews
+ * other widths: the canvas still takes any width from its handles, so the
+ * width and Reset are offered without the buttons. Desktop's own width is
+ * the widest a preview reaches.
+ */
+function WidthWithoutDevices({
+  ready,
+  breakpoints,
+  previewed,
+  onPreviewWidth,
+}: {
+  ready: boolean;
+  breakpoints: BreakpointSet | undefined;
+  previewed: number | null;
+  onPreviewWidth: ((width: number | null) => void) | undefined;
+}): React.JSX.Element | null {
+  if (!ready || onPreviewWidth === undefined) return null;
+  return (
+    <div className="inline-flex h-[var(--nx-builder-control-height,1.75rem)] items-center rounded-md border p-0.5">
+      <ActiveWidth
+        deviceWidth={previewWidthRange(breakpoints).max}
+        breakpoints={breakpoints}
+        previewed={previewed}
+        onPreviewWidth={onPreviewWidth}
+      />
+    </div>
+  );
+}
+
 export function BreakpointSwitcher({
   breakpoints,
   selected,
   onSelect,
   status,
+  previewWidth: previewed = null,
+  onPreviewWidth,
 }: BreakpointSwitcherProps): React.JSX.Element | null {
   const ready = status === "ready";
   const options = React.useMemo(
@@ -297,9 +452,18 @@ export function BreakpointSwitcher({
     onSelect(next.id);
   };
 
-  // Desktop alone is not a choice: the control appears once the site has a
-  // breakpoint to switch to.
-  if (options.length < 2) return null;
+  // Desktop alone is not a choice: the device buttons appear once the site
+  // has a breakpoint to switch to. A previewed width still has its own.
+  if (options.length < 2) {
+    return (
+      <WidthWithoutDevices
+        ready={ready}
+        breakpoints={breakpoints}
+        previewed={previewed}
+        onPreviewWidth={onPreviewWidth}
+      />
+    );
+  }
 
   return (
     // The whole switcher one control high, its border and padding inside that
@@ -318,54 +482,20 @@ export function BreakpointSwitcher({
           move(step);
         }}
       >
-        {buttons.map((option, index) => {
-          const isSelected = ready && index === buttonIndex;
-          const name = `${option.label}, ${option.range}`;
-          const Glyph = glyphOf(option);
-          return (
-            <button
-              key={option.id}
-              ref={element => {
-                radios.current[index] = element;
-              }}
-              type="button"
-              role="radio"
-              aria-checked={isSelected}
-              disabled={!ready}
-              aria-label={name}
-              title={
-                ready
-                  ? name
-                  : status === "loading"
-                    ? "Available once the site's saved styles have loaded."
-                    : "Your site's saved styles could not be read, so the canvas cannot be sized against them."
-              }
-              tabIndex={index === Math.max(buttonIndex, 0) ? 0 : -1}
-              onClick={() => onSelect(option.id)}
-              className={cn(
-                "inline-flex h-full items-center gap-1 rounded px-2 text-xs",
-                FOCUS_RING,
-                isSelected
-                  ? "bg-accent text-accent-foreground"
-                  : "text-muted-foreground"
-              )}
-            >
-              <Glyph className="size-3.5" aria-hidden="true" />
-              {/* The chosen device's name and the width it is previewed at; the
-                others are told apart by their glyph, name and tooltip. The
-                first thing the top bar gives up when it is narrow: the glyph,
-                the accessible name and the tooltip still say which it is. */}
-              {isSelected ? (
-                <span
-                  aria-hidden="true"
-                  className="tabular-nums @max-[1400px]/topbar:hidden"
-                >
-                  {shownLabel(option)}
-                </span>
-              ) : null}
-            </button>
-          );
-        })}
+        {buttons.map((option, index) => (
+          <DeviceButton
+            key={option.id}
+            option={option}
+            isSelected={ready && index === buttonIndex}
+            ready={ready}
+            status={status}
+            inTabOrder={index === Math.max(buttonIndex, 0)}
+            buttonRef={element => {
+              radios.current[index] = element;
+            }}
+            onSelect={onSelect}
+          />
+        ))}
         {/* Says which device is being styled when the choice changes, for an
           author who cannot see the buttons. */}
         <span className="sr-only" aria-live="polite">
@@ -382,6 +512,14 @@ export function BreakpointSwitcher({
           onSelect={onSelect}
         />
       )}
+      {ready && active?.preview !== undefined ? (
+        <ActiveWidth
+          deviceWidth={active.preview}
+          breakpoints={breakpoints}
+          previewed={previewed}
+          onPreviewWidth={onPreviewWidth}
+        />
+      ) : null}
     </div>
   );
 }

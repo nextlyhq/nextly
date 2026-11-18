@@ -31,6 +31,8 @@ import {
   COMPONENT_LIST_TOOLS_COMPONENT,
   DELETE_COMPONENT_REPLACEMENT_COMPONENT,
   ENTRY_DESIGN_SECTION_COMPONENT,
+  LAYOUT_LIST_TOOLS_COMPONENT,
+  SINGLE_SHOWN_ON_SECTION_COMPONENT,
   OVERVIEW_PAGE_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
   TEMPLATE_DELETE_COMPONENT,
@@ -42,6 +44,7 @@ import { TRANSFER_IMPORT_COMPONENT } from "../transfer/transfer-contract";
 import type { BindingsToFixCard as BindingsToFixCardPart } from "./bindings-report/BindingsToFixCard";
 import type { BindingsToFixPage as BindingsToFixPagePart } from "./bindings-report/BindingsToFixPage";
 import type { BlocksField as BlocksFieldPart } from "./BlocksField";
+import { startBuilderOpen } from "./builder-open-start";
 import type {
   ComponentListTools as ComponentListToolsPart,
   ComponentStoreDeleteHost as ComponentStoreDeleteHostPart,
@@ -50,10 +53,12 @@ import type {
 import type { PageBuilderView as PageBuilderViewPart } from "./editor/PageBuilderView";
 import { registerEntryDesignColumn } from "./entry-design-column";
 import type { EntryDesignSection as EntryDesignSectionPart } from "./EntryDesignSection";
-import { lazyPart, withEditorStylesheet } from "./lazy-part";
+import { lazyPart, preloadPart, withEditorStylesheet } from "./lazy-part";
+import type { LayoutListTools as LayoutListToolsPart } from "./make-default-action";
 import type { PageBuilderOverview as PageBuilderOverviewPart } from "./overview/PageBuilderOverview";
 import { PUBLISHING_ACTIONS } from "./publishing-actions";
 import type { RemoveLayoutToolbarSlot as RemoveLayoutToolbarSlotPart } from "./RemoveLayoutAction";
+import type { ShownOnSection as ShownOnSectionPart } from "./shown-on/ShownOnSection";
 import type { TemplateAddressField as TemplateAddressFieldPart } from "./TemplateAddressField";
 import type { TemplateCollectionField as TemplateCollectionFieldPart } from "./TemplateCollectionField";
 import type { TemplateDeleteAction as TemplateDeleteActionPart } from "./TemplateDeleteAction";
@@ -94,8 +99,14 @@ const DeleteComponentReplacement: typeof DeleteComponentReplacementPart =
   lazyPart(() =>
     import("./DeleteComponentAction").then(m => m.DeleteComponentReplacement)
   );
+const LayoutListTools: typeof LayoutListToolsPart = lazyPart(() =>
+  import("./make-default-action").then(m => m.LayoutListTools)
+);
 const EntryDesignSection: typeof EntryDesignSectionPart = lazyPart(() =>
   import("./EntryDesignSection").then(m => m.EntryDesignSection)
+);
+const ShownOnSection: typeof ShownOnSectionPart = lazyPart(() =>
+  import("./shown-on/ShownOnSection").then(m => m.ShownOnSection)
 );
 const PageBuilderOverview: typeof PageBuilderOverviewPart = lazyPart(() =>
   import("./overview/PageBuilderOverview").then(m => m.PageBuilderOverview)
@@ -171,12 +182,17 @@ const COMPONENTS = {
   // Delete component dialog; for a host's component store, the same tools
   // drawn through the header slot.
   [COMPONENT_LIST_TOOLS_COMPONENT]: ComponentListTools,
+  // Above the Header & footer list: Import from file, and the rows' "Make
+  // site default".
+  [LAYOUT_LIST_TOOLS_COMPONENT]: LayoutListTools,
   [COMPONENT_STORE_DELETE_HOST_COMPONENT]: ComponentStoreDeleteHost,
   // The component store's own Delete, opening Delete component instead.
   [DELETE_COMPONENT_REPLACEMENT_COMPONENT]: DeleteComponentReplacement,
   // An entry's own design: the Design section of every entry's side panel,
   // a template's own designs, and the delete that says what it means.
   [ENTRY_DESIGN_SECTION_COMPONENT]: EntryDesignSection,
+  // Where the builder shows a Single's values, in every Single's side panel.
+  [SINGLE_SHOWN_ON_SECTION_COMPONENT]: ShownOnSection,
   [TEMPLATE_OWN_DESIGNS_COMPONENT]: TemplateOwnDesigns,
   [TEMPLATE_DESIGN_DETAILS_COMPONENT]: TemplateDesignDetails,
   [TEMPLATE_DELETE_COMPONENT]: TemplateDeleteAction,
@@ -196,6 +212,18 @@ registerExportActions();
 // The Design column on the lists of collections that have a template.
 registerEntryDesignColumn();
 
+// Opened straight at the builder's address: its code and its start-up read
+// are asked for now, as the admin loads, rather than once it is drawn.
+startBuilderOpen(typeof window === "undefined" ? undefined : window.location, {
+  preload: () => preloadPart(PageBuilderView),
+  startReads: async ({ locale, onCollection }) => {
+    const { startEarlyBuilderOpeningReads } = await import(
+      "./editor/builder-startup"
+    );
+    startEarlyBuilderOpeningReads(locale, onCollection);
+  },
+});
+
 export {
   BindingsToFixCard,
   BindingsToFixPage,
@@ -204,9 +232,11 @@ export {
   ComponentStoreDeleteHost,
   DeleteComponentReplacement,
   EntryDesignSection,
+  LayoutListTools,
   PageBuilderOverview,
   PageBuilderView,
   RemoveLayoutToolbarSlot,
+  ShownOnSection,
   TemplateAddressField,
   TemplateCollectionField,
   TemplateDeleteAction,

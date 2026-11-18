@@ -10,6 +10,7 @@
  *
  * @module admin/page-builder-place
  */
+import type { Control, FieldValues } from "react-hook-form";
 
 /**
  * What the Page Builder hands a tab at its place, as it declares it. Restated
@@ -22,6 +23,25 @@ interface PageBuilderSettingsContext {
   collection: string;
   entryId: string | null;
   draws: { collection: string; entryId: string | null } | null;
+}
+
+/**
+ * What the Page Builder hands a block at its place besides the context, as
+ * it declares it: where the block is drawn (General in Page settings, or the
+ * right panel's page settings), the type's name for its pages, and the page
+ * being edited. Restated, as the context is.
+ */
+export interface PageBuilderSettingsBlockProps {
+  /** Where the block is drawn: Page settings' General, or the right panel. */
+  at: "general" | "panel";
+  /** The page's content type, named for its pages ("Pages"), where known. */
+  typePlural?: string;
+  /** The entry's form, which the page's fields are typed into. */
+  control?: Control<FieldValues>;
+  /** The page's blocks as they are being edited, which the form holds only once stored. */
+  design?: Readonly<Record<string, unknown>>;
+  /** The form path of the field the builder edits. */
+  designField?: string;
 }
 
 declare module "@nextlyhq/plugin-sdk" {

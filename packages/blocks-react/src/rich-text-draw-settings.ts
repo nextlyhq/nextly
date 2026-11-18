@@ -15,13 +15,13 @@ export interface DrawSettings {
   /**
    * What each node draws of its children, read once per node for the whole
    * render: the views take their children only from it, and so does the walk
-   * that finds the passage's headings ({@link passageHeadings}).
+   * that finds the passage's headings.
    */
   readonly parts: PartsReader;
   /**
-   * The id each heading is drawn with, by the node drawn, when the caller asked
-   * for anchors; found by {@link passageHeadings}'s walk with this render's own
-   * `parts`, the reading a table of contents links by.
+   * The id each heading is drawn with, by the node drawn, when the caller
+   * handed anchors: the page outline's, matched to the headings the walk
+   * finds with this render's own `parts`, in the order it finds them.
    */
   readonly anchors?: ReadonlyMap<RichTextNode, string>;
 }

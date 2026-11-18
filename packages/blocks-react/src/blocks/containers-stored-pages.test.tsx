@@ -131,7 +131,9 @@ const STORED: readonly (readonly [string, BlockNode[], string])[] = [
         words("l1", "Each entry"),
       ]),
     ],
-    '<div class="nx-pb-page"><!--$?--><template id="B:0"></template><!--/$--></div><div hidden id="S:0"><div class="nx-pb-28qizzr3wjn nx-bt-core--collection-loop nx-pb-contained"><p class="nx-pb-8dqgee02kg nx-bt-core--text">Each entry</p></div></div>',
+    // The list is the same markup it was; it is now drawn in place, where it
+    // was once sent in a hidden part React's script moved into place.
+    '<div class="nx-pb-page"><div class="nx-pb-28qizzr3wjn nx-bt-core--collection-loop nx-pb-contained"><p class="nx-pb-8dqgee02kg nx-bt-core--text">Each entry</p></div></div>',
   ],
   [
     "entry content",

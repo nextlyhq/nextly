@@ -117,6 +117,112 @@ export function isOlderFormatSnapshot(parsed: unknown): boolean {
 /** Empty snapshot used for "first migration" (no prior state). */
 export const EMPTY_SNAPSHOT: NextlySchemaSnapshot = { tables: [] };
 
+/** One collection or Single a template's older-format snapshot lists. */
+export interface TemplateEntity {
+  slug: string;
+  /** The table the template's migration made for it, where the file says. */
+  tableName?: string;
+  /** Whether the template made it with the Draft/Published columns. */
+  status: boolean;
+  /** Its top-level fields as listed: a name, a type and whatever else was written. */
+  fields: { name: string; type: string; [key: string]: unknown }[];
+}
+
+/** The entities a template's older-format snapshot lists. */
+export interface TemplateEntities {
+  collections: TemplateEntity[];
+  singles: TemplateEntity[];
+}
+
+/** Whether `value` is a plain object. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The entities under one key of an older-format snapshot. The key may be
+ * absent; present, it is a list of entities, each with a slug and a list of
+ * named, typed fields. Anything else is refused: read as an empty list, the
+ * tables the template made would be taken as never made.
+ */
+function templateEntityList(
+  file: Record<string, unknown>,
+  key: "collections" | "singles",
+  filename: string
+): TemplateEntity[] {
+  const value = file[key];
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new SnapshotFileError(filename, `expected ${key} to be a list`);
+  }
+  return value.map((entry: unknown, index): TemplateEntity => {
+    const at = `${key}[${index}]`;
+    if (!isRecord(entry) || typeof entry.slug !== "string") {
+      throw new SnapshotFileError(filename, `expected ${at} to have a slug`);
+    }
+    const fields = entry.fields ?? [];
+    if (
+      !Array.isArray(fields) ||
+      !fields.every(
+        (field: unknown): field is TemplateEntity["fields"][number] =>
+          isRecord(field) &&
+          typeof field.name === "string" &&
+          typeof field.type === "string"
+      )
+    ) {
+      throw new SnapshotFileError(
+        filename,
+        `expected ${at}.fields to be a list of fields, each with a name and a type`
+      );
+    }
+    return {
+      slug: entry.slug,
+      ...(typeof entry.tableName === "string"
+        ? { tableName: entry.tableName }
+        : {}),
+      status: entry.status === true,
+      fields,
+    };
+  });
+}
+
+/**
+ * What a template's older-format snapshot (`isOlderFormatSnapshot`) lists:
+ * each collection and Single with its top-level fields. The one reading of
+ * that file's content; a damaged list is refused as an invalid snapshot.
+ */
+function templateEntitiesOf(
+  parsed: unknown,
+  filename: string
+): TemplateEntities {
+  const file = isRecord(parsed) ? parsed : {};
+  return {
+    collections: templateEntityList(file, "collections", filename),
+    singles: templateEntityList(file, "singles", filename),
+  };
+}
+
+/** The newest snapshot, as `loadLatestSnapshot` reads it. */
+export interface LatestSnapshot {
+  filename: string;
+  data: SnapshotFile;
+  /**
+   * Set where the file is a template's older-format one and `data` holds the
+   * tables its entities were taken as made with (`TemplateStart`): it records
+   * no settings and no permissions, and nothing in the database stands in for
+   * that record either.
+   */
+  template?: true;
+}
+
+/**
+ * The tables a template's listed entities are taken as already made with,
+ * built by the caller from the declaration it holds (`template-start.ts`).
+ */
+export type TemplateStart = (
+  template: TemplateEntities
+) => NextlySchemaSnapshot;
+
 /**
  * Read the latest snapshot file from `migrations/meta/`.
  *
@@ -127,13 +233,19 @@ export const EMPTY_SNAPSHOT: NextlySchemaSnapshot = { tables: [] };
  * `.snapshot.json` files. Callers treat that as "first migration"
  * and use `EMPTY_SNAPSHOT`.
  *
+ * A template's older-format snapshot records no tables. Given
+ * `templateStart`, it is read as the tables that function builds from the
+ * entities it lists, so the next migration holds only what changed since the
+ * template. Without it, the file is refused as any file that is no snapshot.
+ *
  * Throws `SnapshotFileError` on parse failure or invalid envelope so
  * the caller surfaces a clear error instead of a downstream
  * "cannot read property 'tables' of undefined" stack trace.
  */
 export async function loadLatestSnapshot(
-  metaDir: string
-): Promise<{ filename: string; data: SnapshotFile } | null> {
+  metaDir: string,
+  templateStart?: TemplateStart
+): Promise<LatestSnapshot | null> {
   let files: string[] = [];
   try {
     files = await readdir(metaDir);
@@ -145,6 +257,26 @@ export async function loadLatestSnapshot(
   if (snapshots.length === 0) return null;
   const latest = snapshots[snapshots.length - 1];
   const content = await readFile(resolve(metaDir, latest), "utf-8");
+  if (templateStart !== undefined) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      // Not JSON: `parseSnapshotFile` below says so.
+    }
+    if (isOlderFormatSnapshot(parsed)) {
+      return {
+        filename: latest,
+        data: {
+          version: 1,
+          // The file's own content, hashed: it has no migration hash to carry.
+          migrationHash: createHash("sha256").update(content).digest("hex"),
+          snapshot: templateStart(templateEntitiesOf(parsed, latest)),
+        },
+        template: true,
+      };
+    }
+  }
   return { filename: latest, data: parseSnapshotFile(content, latest) };
 }
 

@@ -316,6 +316,23 @@ export function withRuleLanguage<T>(
 }
 
 /**
+ * Runs `read`, a read of one stored version of a document, with its rules
+ * told the language the version records, and that one alone: a version holds
+ * that language's values, as a read in it returns them, so a rule answering
+ * by language answers for the version as for the read. A version recording
+ * none, of a document without languages, is read in the languages the
+ * operation already set.
+ */
+export function withVersionLanguage<T>(
+  locale: string | null,
+  read: () => T
+): T {
+  return locale === null || locale === ""
+    ? read()
+    : withRuleLanguage({ locale, locales: [locale] }, read);
+}
+
+/**
  * Asks `ask` once for each of `languages`, each time with its rules told that
  * one language and every one of them, as an operation that takes several
  * languages at once (publishing every language) is judged: a rule answering

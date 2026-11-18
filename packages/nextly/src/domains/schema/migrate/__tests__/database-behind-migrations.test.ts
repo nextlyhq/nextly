@@ -63,4 +63,30 @@ describe("the database-behind check over an applied snapshot", () => {
     const live = new Map([["dc_posts", new Set(["id", "title"])]]);
     expect(missingFromDatabase(applied, live)).toEqual([]);
   });
+
+  it("names each column the app added to a table Nextly makes again bare, when that table is missing whole", () => {
+    const core = {
+      snapshot: {
+        tables: [
+          table("dc_posts", ["id", "title"]),
+          // Nextly's own table, held whole because the app contributes to it.
+          table("users", ["id", "email", "app_flag", "app_note"]),
+        ],
+      },
+      contributions: { users: { columns: ["app_flag", "app_note"], ...NONE } },
+    };
+    const applied = [
+      {
+        migration: "0001_create",
+        ...appOwnedTables(core),
+        // The core reconcile makes `users` again, without the app's columns.
+        remade: new Set(["users"]),
+      },
+    ];
+    const live = new Map([["dc_posts", new Set(["id", "title"])]]);
+    expect(missingFromDatabase(applied, live)).toEqual([
+      { table: "users", column: "app_flag", createdBy: "0001_create" },
+      { table: "users", column: "app_note", createdBy: "0001_create" },
+    ]);
+  });
 });

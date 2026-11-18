@@ -76,7 +76,9 @@ import type { EditorState } from "./editor-state";
 import { FocalFrame } from "./focal-frame";
 import { FontChoicesContext, type FontChoices } from "./font-family-field";
 import { PanelFoldsProvider } from "./panel-folds-context";
+import { SpacingApplyToProvider } from "./spacing-side";
 import { layerLabel } from "./panels/layers/layers";
+import { ParentArrangementContext } from "./plain-parent-controls";
 import type { SideOrientation } from "./side-orientation";
 import {
   BLOCK_TARGET,
@@ -85,9 +87,11 @@ import {
   tokenPrefixOf,
   type StyleFieldSurroundings,
   AppliedAtTier,
+  BeneathAtTier,
   type EditedAddress,
 } from "./style-field-surroundings";
 import {
+  fieldStyles,
   sharedStyleNamer,
   targetProvenance,
   targetReadOnly,
@@ -97,6 +101,7 @@ import {
 import { inspectStyle, type StyleInspection } from "./style-inspector";
 import {
   appliedAtReader,
+  beneathAtReader,
   selectedSubject,
   cascadeFor,
   provenanceReader,
@@ -388,6 +393,7 @@ export function StyleInspectorPanel(
     <FontChoicesContext.Provider value={props.fonts}>
       {/* The panel's own folds where nothing above lends them. */}
       <PanelFoldsProvider>
+        <SpacingApplyToProvider>
         <CssNamesProvider>
           {props.tokenMode === undefined ? (
             <StyleInspectorOwnMode {...props} />
@@ -395,6 +401,7 @@ export function StyleInspectorPanel(
             <StyleInspectorBody {...props} tokenMode={props.tokenMode} />
           )}
         </CssNamesProvider>
+        </SpacingApplyToProvider>
       </PanelFoldsProvider>
     </FontChoicesContext.Provider>
   );
@@ -576,42 +583,59 @@ function StyleInspectorBody({
   return (
     <StyleTargetContext.Provider value={target}>
       <TokenPrefixContext.Provider value={tokenPrefixOf(cascade)}>
-        <AppliedAtTier.Provider
-          value={appliedAtReader({
-            cascade,
-            subject,
-            state: inspected.state,
-            breakpoints,
-            nodeId: inspected.nodeId,
-          })}
-        >
-          <CanvasTokenModeProvider value={tokenMode}>
-            {/*
-             * Spell-check off for the tab's fields: they hold numbers,
-             * lengths, colours and keywords, which a spell-checker marks as
-             * misspelt with the same red line an error would show. Set once
-             * here because the attribute is inherited by every field inside,
-             * including the ones other components draw and any added later.
-             * The Content tab is a different element and keeps its own.
-             */}
-            <div
-              className="nx-style-inspector"
-              data-style-target={target.kind}
-              spellCheck={false}
+        <ParentArrangementContext.Provider value={inspection?.parentLayout}>
+          <AppliedAtTier.Provider
+            value={appliedAtReader({
+              cascade,
+              subject,
+              state: inspected.state,
+              breakpoints,
+              nodeId: inspected.nodeId,
+            })}
+          >
+            <BeneathAtTier.Provider
+              value={beneathAtReader({
+                cascade,
+                subject,
+                state: inspected.state,
+                breakpoints,
+                nodeId: inspected.nodeId,
+              })}
             >
-              {showReadOnlyReason ? (
-                <ReadOnlyNote target={target} reason={readOnlyReason} />
-              ) : null}
-              <NoStyleProperties count={inspected.sections.length} />
-              <StyleSections
-                sections={inspected.sections}
-                readOnlyReason={readOnlyReason}
-                surroundings={surroundings}
-                fit={inspected.objectFit}
-              />
-            </div>
-          </CanvasTokenModeProvider>
-        </AppliedAtTier.Provider>
+              <CanvasTokenModeProvider value={tokenMode}>
+                {/*
+                 * Spell-check off for the tab's fields: they hold numbers,
+                 * lengths, colours and keywords, which a spell-checker marks as
+                 * misspelt with the same red line an error would show. Set once
+                 * here because the attribute is inherited by every field inside,
+                 * including the ones other components draw and any added later.
+                 * The Content tab is a different element and keeps its own.
+                 */}
+                <div
+                  className="nx-style-inspector"
+                  data-style-target={target.kind}
+                  spellCheck={false}
+                >
+                  {showReadOnlyReason ? (
+                    <ReadOnlyNote target={target} reason={readOnlyReason} />
+                  ) : null}
+                  <NoStyleProperties count={inspected.sections.length} />
+                  <StyleSections
+                    sections={inspected.sections}
+                    readOnlyReason={readOnlyReason}
+                    surroundings={surroundings}
+                    fit={inspected.objectFit}
+                    report={{
+                      shared: target.kind === "shared",
+                      styles: editedStyles(target, editor),
+                      parent: inspected.parent,
+                    }}
+                  />
+                </div>
+              </CanvasTokenModeProvider>
+            </BeneathAtTier.Provider>
+          </AppliedAtTier.Provider>
+        </ParentArrangementContext.Provider>
       </TokenPrefixContext.Provider>
     </StyleTargetContext.Provider>
   );
@@ -770,4 +794,13 @@ function sharesItsId(editor: EditorState, id: string): boolean {
     if (node.id === id) seen += 1;
   });
   return seen > 1;
+}
+
+/**
+ * The edited target's own styles at every state and device, as the controls
+ * read them: a shared style's while one is the target, the block's otherwise.
+ */
+function editedStyles(target: StyleTarget, editor: EditorState): unknown {
+  if (editor.selectedId === null) return undefined;
+  return fieldStyles(target, editor, editor.selectedId).styles;
 }

@@ -2,7 +2,8 @@
  * The blocks on the page an edit to a look reaches, marked dashed on the
  * canvas while the look is edited on its own: every block of its type for a
  * block's own look, which is the base every other look of the type is laid on,
- * and every block wearing it for any other look.
+ * and every block wearing it for any other look, with, for the look carrying
+ * ★, every block of its type wearing none of its type's looks.
  *
  * Which look a block wears is the Style tab's own answer (`wornLook` over the
  * looks the library renders), so the marks and the tiles cannot disagree.
@@ -19,7 +20,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import type { BlockLookRow } from "./block-look-rows";
-import { looksOfType } from "./look-tiles";
+import { looksOfType, wornLook } from "./look-tiles";
 
 /** Marks a block an edit to the look being edited reaches. */
 export const LOOK_REACH_ATTRIBUTE = "data-nx-look-reach";
@@ -28,13 +29,21 @@ export const LOOK_REACH_ATTRIBUTE = "data-nx-look-reach";
 export function lookReach(
   document: BlockDocument,
   library: readonly NamedClass[],
-  look: Pick<BlockLookRow, "id" | "blockType" | "own">
+  look: Pick<BlockLookRow, "id" | "blockType" | "own"> & {
+    /** The look carries ★, so a block that picked none is drawn with it. */
+    readonly starred?: boolean;
+  }
 ): Set<string> {
   const looks = looksOfType(library, look.blockType);
   const reached = new Set<string>();
   walkNodes(document.nodes, node => {
     if (node.type !== look.blockType) return;
-    if (look.own || appliesLook(node.classes, looks, look.id)) {
+    if (
+      look.own ||
+      appliesLook(node.classes, looks, look.id) ||
+      // Picked none of its type's looks, as the Style tab reads a block.
+      (look.starred === true && wornLook(node.classes, looks) === null)
+    ) {
       reached.add(node.id);
     }
   });

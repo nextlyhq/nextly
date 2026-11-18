@@ -12,7 +12,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { reservedSystemFieldNames } from "../../../lib/system-columns";
-import { addressSchema } from "../../../shared/address-rule";
+import { addressSchema, isAddressSpelling } from "../../../shared/address-rule";
 import {
   BUILDER_RESERVED_COLLECTION_NAMES,
   BUILDER_SQL_KEYWORDS,
@@ -22,6 +22,7 @@ import {
   toSnakeCase,
   usesJunctionTable,
 } from "../../schema/services/field-column-descriptor";
+import { relationshipTargetSlug } from "../../schema/services/relationship-key-target";
 import {
   fieldNameProblem,
   type FieldNameProblemKind,
@@ -134,6 +135,47 @@ export const fieldsArraySchema = z
   .min(0)
   .max(100, "Collection cannot have more than 100 fields");
 
+/**
+ * Whether a relationship names the collection it links to, as the schema can
+ * keep it.
+ *
+ * - A many-to-many keeps its links in a junction table, which is made only for
+ *   a target named in `options.target`, so it must name its target there: a
+ *   `relationTo` target alone would leave it nowhere to keep them.
+ * - A `relationTo` that is neither a string nor a list names none.
+ * - Otherwise `relationTo` first, one collection or several, each spelled as
+ *   an address is (`isAddressSpelling`).
+ * - Else the earlier Builder's `options.target`, read as every other reader of
+ *   a stored relationship reads it (`relationshipTargetSlug`).
+ */
+function namesItsTarget(
+  field: FieldDefinition,
+  relationType: unknown
+): boolean {
+  const { relationTo } = field;
+  // Any other value in relationTo names no collection, and the readers that
+  // take relationTo before options.target would take it as one: refused, not
+  // passed over for options.target.
+  if (
+    relationTo !== undefined &&
+    typeof relationTo !== "string" &&
+    !Array.isArray(relationTo)
+  ) {
+    return false;
+  }
+  if (relationType === "manyToMany") {
+    const target = field.options?.target;
+    return typeof target === "string" && target !== "";
+  }
+  if (Array.isArray(relationTo)) {
+    return relationTo.length > 0 && relationTo.every(isAddressSpelling);
+  }
+  if (typeof relationTo === "string" && relationTo !== "") {
+    return isAddressSpelling(relationTo);
+  }
+  return relationshipTargetSlug(field) !== null;
+}
+
 export class DynamicCollectionValidationService {
   /**
    * @throws Error if the name is invalid
@@ -216,48 +258,88 @@ export class DynamicCollectionValidationService {
   }
 
   /**
+   * A relationship must name the collection it links to, read as every other
+   * reader of a stored relationship reads it (`relationshipTargetSlug`): the
+   * editor's `relationTo`, one collection or several, else the earlier
+   * Builder's `options.target`. That earlier shape names its cardinality
+   * beside its target in `options.relationType` and must still give it; the
+   * editor's shape gives its cardinality by `hasMany` and Unique, and is
+   * many-to-one when it states none, as its column is created. A cardinality
+   * given either way must be one the schema knows, and the options given
+   * beside it are judged as before.
+   *
    * @throws Error if the relationship configuration is invalid
    */
   validateRelationshipField(field: FieldDefinition): void {
-    if (!field.options?.target) {
+    this.validateRelationshipTarget(field);
+    if (!field.options) return;
+    this.validateReferentialActions(field, field.options);
+    this.validateCardinalityRules(field, field.options);
+  }
+
+  /** The collection it links to, and the cardinality the earlier shape must give. */
+  private validateRelationshipTarget(field: FieldDefinition): void {
+    const relationType = field.options?.relationType;
+    const hasTarget = namesItsTarget(field, relationType);
+    if (!hasTarget) {
       throw new Error(
         `Relationship field "${field.name}" must specify a target collection`
       );
     }
 
-    if (!field.options?.relationType) {
+    // The earlier shape: its target in options, and no `relationTo` beside it.
+    const earlierShape = field.relationTo === undefined;
+    if (earlierShape && !relationType) {
       throw new Error(
         `Relationship field "${field.name}" must specify a relationType (oneToOne, oneToMany, manyToOne, or manyToMany)`
       );
     }
 
     const validTypes = ["oneToOne", "oneToMany", "manyToOne", "manyToMany"];
-    if (!validTypes.includes(field.options.relationType)) {
+    if (relationType !== undefined && !validTypes.includes(relationType)) {
       throw new Error(
-        `Invalid relationType "${field.options.relationType}" for field "${field.name}". Must be one of: ${validTypes.join(", ")}`
+        `Invalid relationType "${relationType}" for field "${field.name}". Must be one of: ${validTypes.join(", ")}`
       );
     }
+  }
 
-    if (field.options.onDelete) {
+  /** What a delete or an update of the linked row does, where one is given. */
+  private validateReferentialActions(
+    field: FieldDefinition,
+    options: NonNullable<FieldDefinition["options"]>
+  ): void {
+    // Sent as a request sends it, a value may be any type: one that is not a
+    // string is refused as an unknown action, never read as one.
+    const actionOf = (value: unknown) =>
+      typeof value === "string" ? value.toLowerCase() : undefined;
+    if (options.onDelete !== undefined) {
       const validActions = ["cascade", "set null", "restrict", "no action"];
-      if (!validActions.includes(field.options.onDelete.toLowerCase())) {
+      const action = actionOf(options.onDelete);
+      if (action === undefined || !validActions.includes(action)) {
         throw new Error(
-          `Invalid onDelete action "${field.options.onDelete}" for field "${field.name}". Must be one of: ${validActions.join(", ")}`
+          `Invalid onDelete action "${options.onDelete}" for field "${field.name}". Must be one of: ${validActions.join(", ")}`
         );
       }
     }
 
-    if (field.options.onUpdate) {
+    if (options.onUpdate !== undefined) {
       const validActions = ["cascade", "set null", "restrict", "no action"];
-      if (!validActions.includes(field.options.onUpdate.toLowerCase())) {
+      const action = actionOf(options.onUpdate);
+      if (action === undefined || !validActions.includes(action)) {
         throw new Error(
-          `Invalid onUpdate action "${field.options.onUpdate}" for field "${field.name}". Must be one of: ${validActions.join(", ")}`
+          `Invalid onUpdate action "${options.onUpdate}" for field "${field.name}". Must be one of: ${validActions.join(", ")}`
         );
       }
     }
+  }
 
+  /** What a stated cardinality asks of the field's own marks. */
+  private validateCardinalityRules(
+    field: FieldDefinition,
+    options: NonNullable<FieldDefinition["options"]>
+  ): void {
     if (
-      field.options.relationType === "oneToOne" &&
+      options.relationType === "oneToOne" &&
       !field.unique &&
       !field.required
     ) {
@@ -267,7 +349,7 @@ export class DynamicCollectionValidationService {
     }
 
     // manyToMany relationships use a junction table and cannot be required.
-    if (field.options.relationType === "manyToMany" && field.required) {
+    if (options.relationType === "manyToMany" && field.required) {
       throw new Error(
         `Many-to-many relationship "${field.name}" cannot be marked as required. Use validation in your application logic instead.`
       );

@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
 /**
- * The variable pieces on their own, as a field mounts them: the ◇ and its
- * list, the chip, and the unit menu's item.
+ * The variable pieces on their own, as a field mounts them: the menu a field
+ * with no menu of its own draws and its list, the green chip, and Unlink.
  *
  * What the panel does with them, which fields get them and what is stored,
  * is in `style-variables-panel.test.tsx`.
@@ -14,7 +14,6 @@ import {
   type SiteTokenSet,
   type StyleLeaf,
 } from "@nextlyhq/blocks-engine";
-import { DropdownMenu, DropdownMenuContent } from "@nextlyhq/ui";
 import {
   act,
   cleanup,
@@ -26,11 +25,8 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import {
-  VariableChip,
-  VariableChoice,
-  VariablesMenuItem,
-} from "./variable-choice";
+import type { SiteVariable } from "./style-colour";
+import { unlinkedValue, VariableChip, VariableChoice } from "./variable-choice";
 
 afterEach(cleanup);
 
@@ -78,13 +74,12 @@ const TOKENS: SiteTokenSet = {
 const trigger = (label = "Font size"): HTMLElement =>
   screen.getByRole("button", { name: `Variables for ${label}` });
 
-describe("the ◇ beside a field", () => {
+describe("the variables menu of a field with no menu of its own", () => {
   it("opens the variables by name, each with its value", () => {
     render(
       <VariableChoice
         leaf={FONT_SIZE}
         tokens={TOKENS}
-        bound={false}
         current={undefined}
         label="Font size"
         onPick={vi.fn()}
@@ -106,7 +101,6 @@ describe("the ◇ beside a field", () => {
       <VariableChoice
         leaf={FONT_SIZE}
         tokens={TOKENS}
-        bound={false}
         current={undefined}
         label="Font size"
         onPick={onPick}
@@ -124,7 +118,6 @@ describe("the ◇ beside a field", () => {
       <VariableChoice
         leaf={FONT_SIZE}
         tokens={TOKENS}
-        bound={false}
         current={undefined}
         label="Font size"
         onPick={onPick}
@@ -136,18 +129,16 @@ describe("the ◇ beside a field", () => {
     expect(onPick).not.toHaveBeenCalled();
   });
 
-  it("marks the variable the field holds, and stays in view while it does", () => {
+  it("marks the variable the field holds", () => {
     render(
       <VariableChoice
         leaf={FONT_SIZE}
         tokens={TOKENS}
-        bound
         current="font-size.body"
         label="Font size"
         onPick={vi.fn()}
       />
     );
-    expect(trigger().hasAttribute("data-bound")).toBe(true);
     fireEvent.click(trigger());
     expect(
       screen
@@ -161,7 +152,6 @@ describe("the ◇ beside a field", () => {
       <VariableChoice
         leaf={FONT_SIZE}
         tokens={TOKENS}
-        bound={false}
         current={undefined}
         label="Font size"
         onPick={vi.fn()}
@@ -186,7 +176,6 @@ describe("the ◇ beside a field", () => {
       <VariableChoice
         leaf={WIDTH}
         tokens={TOKENS}
-        bound={false}
         current={undefined}
         label="Width"
         onPick={vi.fn()}
@@ -211,7 +200,6 @@ describe("the ◇ beside a field", () => {
       <VariableChoice
         leaf={WIDTH}
         tokens={TOKENS}
-        bound={false}
         current={undefined}
         label="Width"
         onPick={vi.fn()}
@@ -221,9 +209,10 @@ describe("the ◇ beside a field", () => {
     const drawn = screen
       .getAllByRole("option")
       .map(option => option.textContent ?? "");
-    // The type sizes first and the engine's own Content width under Other,
-    // late, though the site's list starts with it.
-    expect(drawn.slice(0, 2)).toEqual(["Display 48px", "Body 16px"]);
+    // The type sizes first, the engine's built-in heading sizes leading, and
+    // the engine's own Content width under Other, late, though the site's
+    // list starts with it.
+    expect(drawn.slice(0, 2)).toEqual(["H1 2.25rem", "H2 1.75rem"]);
     expect(drawn.indexOf("Content width 72rem")).toBeGreaterThan(
       drawn.indexOf("Sm 8px")
     );
@@ -232,10 +221,10 @@ describe("the ◇ beside a field", () => {
         .getAllByRole("option")
         .find(option => option.getAttribute("aria-selected") === "true")
         ?.textContent ?? null;
-    expect(selected()).toBe("Display 48px");
+    expect(selected()).toBe("H1 2.25rem");
     const list = screen.getByRole("listbox", { name: "Variables" });
     fireEvent.keyDown(list, { key: "ArrowDown" });
-    expect(selected()).toBe("Body 16px");
+    expect(selected()).toBe("H2 1.75rem");
     fireEvent.keyDown(list, { key: "End" });
     expect(selected()).toBe(drawn.at(-1));
     fireEvent.keyDown(list, { key: "ArrowUp" });
@@ -247,7 +236,6 @@ describe("the ◇ beside a field", () => {
       <VariableChoice
         leaf={WIDTH}
         tokens={TOKENS}
-        bound
         current="space.sm"
         label="Width"
         onPick={vi.fn()}
@@ -261,31 +249,22 @@ describe("the ◇ beside a field", () => {
     ).toBe("true");
   });
 
-  it("is shown at rest on an empty field, and not on one holding a value", () => {
-    const { rerender } = render(
+  it("is a value menu's chevron, never a ◇", () => {
+    render(
       <VariableChoice
         leaf={FONT_SIZE}
         tokens={TOKENS}
-        bound={false}
-        empty
         current={undefined}
         label="Font size"
         onPick={vi.fn()}
       />
     );
-    expect(trigger().hasAttribute("data-empty")).toBe(true);
-    rerender(
-      <VariableChoice
-        leaf={FONT_SIZE}
-        tokens={TOKENS}
-        bound={false}
-        empty={false}
-        current={undefined}
-        label="Font size"
-        onPick={vi.fn()}
-      />
-    );
-    expect(trigger().hasAttribute("data-empty")).toBe(false);
+    const menu = trigger();
+    expect(menu.textContent).toBe("");
+    expect(menu.querySelector(".lucide-chevron-down")).not.toBeNull();
+    expect(menu.querySelector(".lucide-diamond")).toBeNull();
+    // Always drawn as it is: nothing marks it to be hidden until hover.
+    expect(menu.className).toBe("nx-variable-menu");
   });
 
   it("searches once the list is long", () => {
@@ -300,7 +279,6 @@ describe("the ◇ beside a field", () => {
       <VariableChoice
         leaf={WIDTH}
         tokens={many}
-        bound={false}
         current={undefined}
         label="Width"
         onPick={vi.fn()}
@@ -320,7 +298,6 @@ describe("the ◇ beside a field", () => {
       <VariableChoice
         leaf={OPACITY}
         tokens={TOKENS}
-        bound={false}
         current={undefined}
         label="Opacity"
         onPick={vi.fn()}
@@ -334,7 +311,6 @@ describe("the ◇ beside a field", () => {
       <VariableChoice
         leaf={FONT_SIZE}
         tokens={undefined}
-        bound={false}
         current={undefined}
         label="Font size"
         onPick={vi.fn()}
@@ -344,92 +320,199 @@ describe("the ◇ beside a field", () => {
   });
 });
 
+/** The tooltip a control's keyboard focus opens, as the builder's tooltips do. */
+async function tooltipOf(control: HTMLElement): Promise<string> {
+  fireEvent.keyDown(document.body, { key: "Tab" });
+  act(() => control.focus());
+  const tips = await screen.findAllByRole("tooltip");
+  return tips[0]?.textContent ?? "";
+}
+
+/** A spacing step named "XL", on a site with the engine's default prefix. */
+const XL: SiteTokenSet = {
+  tokens: [
+    {
+      name: "space.xl",
+      label: "XL",
+      kind: "dimension",
+      values: { light: "64px" },
+    },
+    { name: "space.sm", kind: "dimension", values: { light: "8px" } },
+  ],
+};
+
 describe("the chip a held variable shows", () => {
-  it("names the variable, with its value, and clears as a colour's Clear does", () => {
-    const onClear = vi.fn();
+  it("names the variable in green, with its value, and no ◇ or ✕", () => {
     render(
       <VariableChip
         leaf={FONT_SIZE}
         tokens={TOKENS}
         identity="font-size.display"
         label="Font size"
-        onClear={onClear}
+        onPick={vi.fn()}
+        onUnlink={vi.fn()}
       />
     );
     const chip = screen.getByRole("group", { name: "Font size" });
-    expect(chip.textContent).toBe("Display 48px");
-    fireEvent.click(
-      within(chip).getByRole("button", {
-        name: "Clear Font size",
-      })
-    );
-    expect(onClear).toHaveBeenCalledTimes(1);
+    // A type size reads as its name and pair.
+    expect(chip.textContent).toBe("Display · 48");
+    // Green is the chip's class, which the stylesheet paints: see
+    // variable-choice-styles.test.
+    expect(chip.classList.contains("nx-variable-chip")).toBe(true);
+    expect(chip.querySelector(".lucide-diamond, .lucide-x")).toBeNull();
+    expect(
+      within(chip).queryByRole("button", { name: "Clear Font size" })
+    ).toBeNull();
   });
 
-  it("shows the stored identity for a variable the site no longer has", () => {
+  it("says what the variable is in its tooltip: kind, name, value and CSS name", async () => {
+    render(
+      <VariableChip
+        leaf={WIDTH}
+        tokens={XL}
+        identity="space.xl"
+        label="Width"
+        onPick={vi.fn()}
+        onUnlink={vi.fn()}
+      />
+    );
+    const name = screen.getByRole("button", {
+      name: "Variables for Width: XL",
+    });
+    expect(await tooltipOf(name)).toBe(
+      "Spacing variable XL · 64px · --site-space-xl"
+    );
+    // A tooltip, never a title.
+    expect(screen.getByRole("group").getAttribute("title")).toBeNull();
+    expect(name.getAttribute("title")).toBeNull();
+  });
+
+  it("names the CSS property with the site's own prefix", async () => {
+    render(
+      <VariableChip
+        leaf={WIDTH}
+        tokens={{ ...XL, prefix: "--acme-" }}
+        identity="space.xl"
+        label="Width"
+        onPick={vi.fn()}
+        onUnlink={vi.fn()}
+      />
+    );
+    expect(
+      await tooltipOf(
+        screen.getByRole("button", { name: "Variables for Width: XL" })
+      )
+    ).toBe("Spacing variable XL · 64px · --acme-space-xl");
+  });
+
+  it("unlinks to the variable's value, once", () => {
+    const onUnlink = vi.fn();
+    render(
+      <VariableChip
+        leaf={WIDTH}
+        tokens={XL}
+        identity="space.xl"
+        label="Width"
+        onPick={vi.fn()}
+        onUnlink={onUnlink}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Unlink Width" }));
+    expect(onUnlink.mock.calls).toEqual([["64px"]]);
+  });
+
+  it("unlinks a scaled reference to the value it draws", () => {
+    const onUnlink = vi.fn();
+    render(
+      <VariableChip
+        leaf={WIDTH}
+        tokens={XL}
+        identity="space.xl"
+        times={0.75}
+        label="Width"
+        onPick={vi.fn()}
+        onUnlink={onUnlink}
+      />
+    );
+    expect(screen.getByRole("group").textContent).toContain("XL × 0.75");
+    fireEvent.click(screen.getByRole("button", { name: "Unlink Width" }));
+    expect(onUnlink.mock.calls).toEqual([["48px"]]);
+  });
+
+  it("chooses another variable from its name", () => {
+    const onPick = vi.fn();
+    render(
+      <VariableChip
+        leaf={WIDTH}
+        tokens={XL}
+        identity="space.xl"
+        label="Width"
+        onPick={onPick}
+        onUnlink={vi.fn()}
+      />
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Variables for Width: XL" })
+    );
+    expect(
+      screen
+        .getByRole("option", { name: "XL 64px" })
+        .hasAttribute("data-current")
+    ).toBe(true);
+    fireEvent.click(screen.getByRole("option", { name: "Sm 8px" }));
+    expect(onPick).toHaveBeenCalledWith("space.sm");
+  });
+
+  it("shows the stored identity for a variable the site no longer has, with nothing to unlink to", () => {
     render(
       <VariableChip
         leaf={FONT_SIZE}
         tokens={TOKENS}
         identity="font-size.gone"
         label="Font size"
-        onClear={vi.fn()}
+        onPick={vi.fn()}
+        onUnlink={vi.fn()}
       />
     );
-    expect(screen.getByRole("group").textContent).toBe("font-size.gone");
+    const chip = screen.getByRole("group");
+    expect(chip.textContent).toBe("font-size.gone");
+    expect(within(chip).queryByRole("button", { name: /^Unlink/ })).toBeNull();
   });
 });
 
-describe("the unit menu's item", () => {
-  // Not mounted by any field yet: the unit menu that will hold it is still to
-  // come, so this is its contract, drawn inside a menu as that menu will.
-  function inMenu(item: React.ReactNode) {
-    return render(
-      <DropdownMenu open>
-        <DropdownMenuContent>{item}</DropdownMenuContent>
-      </DropdownMenu>
-    );
-  }
-
-  it("offers the variables from the menu, and the same list", () => {
-    const onPick = vi.fn();
-    inMenu(
-      <VariablesMenuItem
-        leaf={FONT_SIZE}
-        tokens={TOKENS}
-        current={undefined}
-        label="Font size"
-        onPick={onPick}
-      />
-    );
-    const item = screen.getByRole("menuitem", {
-      name: "Use a variable for Font size",
-    });
-    expect(item.textContent).toContain("Use a variable…");
-    fireEvent.keyDown(item, { key: "ArrowRight" });
-    // A menu opened by keyboard focuses its own content, which jsdom's Radix
-    // does not do by itself: done here, focus must pass on to the list, so
-    // the arrows move through the variables rather than a menu with no items.
-    const submenu = screen.getAllByRole("menu").at(-1) as HTMLElement;
-    act(() => submenu.focus());
-    expect(document.activeElement).toBe(
-      screen.getByRole("listbox", { name: "Variables" })
-    );
-    fireEvent.click(screen.getByRole("option", { name: "Display 48px" }));
-    expect(onPick).toHaveBeenCalledWith("font-size.display");
+describe("the value Unlink keeps", () => {
+  const variable = (
+    value: string,
+    kind: SiteVariable["kind"] = "dimension"
+  ): SiteVariable => ({
+    identity: "v",
+    name: "v",
+    label: "V",
+    kind,
+    value,
+    pair: { light: undefined, dark: undefined },
+    swatch: undefined,
   });
 
-  it("is absent where nothing would be offered", () => {
-    inMenu(
-      <VariablesMenuItem
-        leaf={OPACITY}
-        tokens={TOKENS}
-        current={undefined}
-        label="Opacity"
-        onPick={vi.fn()}
-      />
-    );
-    expect(screen.queryByRole("menuitem")).toBeNull();
+  it.each([
+    ["64px", undefined, "64px"],
+    ["16px", 0.75, "12px"],
+    ["1.5rem", 2, "3rem"],
+    ["0.1rem", 3, "0.3rem"],
+    ["clamp(1rem, 4vw, 3rem)", 0.5, "calc(clamp(1rem, 4vw, 3rem) * 0.5)"],
+  ] as const)("keeps %s × %s as %s", (value, times, kept) => {
+    expect(unlinkedValue(variable(value), times)).toBe(kept);
+  });
+
+  it("keeps a number variable as a number", () => {
+    expect(unlinkedValue(variable("700", "number"))).toBe(700);
+  });
+
+  it("keeps a numeric weight as a number, and a weight keyword as written", () => {
+    // A weight is stored as a number, its words as keywords: "700" written
+    // as a string is a keyword no weight has, and the write would be refused.
+    expect(unlinkedValue(variable("700", "fontWeight"))).toBe(700);
+    expect(unlinkedValue(variable("bold", "fontWeight"))).toBe("bold");
   });
 });
 
@@ -449,7 +532,6 @@ describe("a fluid variable in the list and on the chip", () => {
       <VariableChoice
         leaf={WIDTH}
         tokens={FLUID}
-        bound={false}
         current={undefined}
         label="Width"
         onPick={vi.fn()}
@@ -468,7 +550,6 @@ describe("a fluid variable in the list and on the chip", () => {
       <VariableChoice
         leaf={FONT_SIZE}
         tokens={TOKENS}
-        bound={false}
         current={undefined}
         label="Font size"
         onPick={vi.fn()}
@@ -481,19 +562,27 @@ describe("a fluid variable in the list and on the chip", () => {
     );
   });
 
-  it("puts the whole name and value in the chip's tooltip", () => {
+  it("puts the whole value in the chip's tooltip, where the chip says Fluid", async () => {
     render(
       <VariableChip
-        leaf={FONT_SIZE}
-        tokens={TOKENS}
-        identity="font-size.display"
-        label="Font size"
-        onClear={vi.fn()}
+        leaf={WIDTH}
+        tokens={FLUID}
+        identity="space.gutter-fluid"
+        label="Width"
+        onPick={vi.fn()}
+        onUnlink={vi.fn()}
       />
     );
-    // On the chip itself, which never collapses, and in what it reads out.
-    const chip = screen.getByRole("group", { name: "Font size" });
-    expect(chip.title).toBe("Display 48px");
-    expect(chip.textContent).toBe("Display 48px");
+    const chip = screen.getByRole("group", { name: "Width" });
+    expect(chip.textContent).toBe("Gutter fluid Fluid");
+    expect(
+      await tooltipOf(
+        screen.getByRole("button", {
+          name: "Variables for Width: Gutter fluid",
+        })
+      )
+    ).toBe(
+      "Spacing variable Gutter fluid · clamp(1rem, 4vw, 3rem) · --site-space-gutter-fluid"
+    );
   });
 });
