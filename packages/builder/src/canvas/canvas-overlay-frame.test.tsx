@@ -178,6 +178,33 @@ describe("the space chrome is drawn in over a frame", () => {
     });
   });
 
+  it("finds the root without laying the editor out, and measures the scale once when asked", () => {
+    const { container, frame } = framed(
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        source={TEST_SOURCE}
+        overlay={<div data-testid="chrome" />}
+      >
+        <Canvas document={PAGE} siteStyles={false} />
+      </CanvasFrame>
+    );
+    const chrome = container.querySelector('[data-testid="chrome"]');
+    if (chrome === null) throw new Error("no chrome");
+    let measures = 0;
+    frame.getBoundingClientRect = () => {
+      measures += 1;
+      return rect(FRAME_BOX);
+    };
+    const space = overlaySpaceOf(chrome, CANVAS_ROOT_CLASS);
+    expect(space?.root.ownerDocument).not.toBe(document);
+    // Only the root was asked for: the frame's box was not read.
+    expect(measures).toBe(0);
+    expect(space?.scale).toBe(0.5);
+    expect(space?.place({ x: 0, y: 0, width: 10, height: 10 }).width).toBe(5);
+    expect(measures).toBe(1);
+  });
+
   it("maps a point into the frame and back to the same place", () => {
     const { frame } = framed(
       <CanvasFrame width={1280} title="Home" source={TEST_SOURCE} />
