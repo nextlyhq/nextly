@@ -230,6 +230,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
 vi.mock("./publish-offer", () => ({
   usePublishOffer: () => null,
   useFormPublishOffer: () => null,
+  usePublishQuestion: () => ({ offer: () => Promise.resolve(), dialog: null }),
 }));
 vi.mock("./removal-hold-client", () => ({
   useRemovalHold: () => null,

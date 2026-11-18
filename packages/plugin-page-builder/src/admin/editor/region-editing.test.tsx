@@ -57,6 +57,7 @@ const hoisted = vi.hoisted(() => ({
         inspecting?: boolean;
       },
   hold: vi.fn(),
+  offer: vi.fn(),
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
@@ -90,6 +91,9 @@ vi.mock("../pattern-capability-client", () => ({
   useComponentEditing: () => ({ collection: "components", field: "content" }),
 }));
 vi.mock("../filled-default-notice", () => ({ sayFillNotices: hoisted.fills }));
+vi.mock("../publish-offer", () => ({
+  usePublishQuestion: () => ({ offer: hoisted.offer, dialog: null }),
+}));
 vi.mock("../removal-hold-client", () => ({
   useRemovalQuestion: () => ({ hold: hoisted.hold, dialog: null }),
 }));
@@ -128,6 +132,8 @@ beforeEach(() => {
   hoisted.inline = undefined;
   hoisted.hold.mockReset();
   hoisted.hold.mockResolvedValue(undefined);
+  hoisted.offer.mockReset();
+  hoisted.offer.mockResolvedValue(undefined);
   hoisted.session = sessionWith({});
 });
 
@@ -563,6 +569,62 @@ describe("saving the header", () => {
     expect(current().host.dirty).toBe(true);
   });
 
+  it("asks about the header's unpublished parts before publishing it, and publishes nothing when called off", async () => {
+    const publish = vi.fn(() => Promise.resolve(STORED));
+    hoisted.session = sessionWith({ publish });
+    hoisted.offer.mockRejectedValue(
+      new DOMException("Publishing was cancelled.", "AbortError")
+    );
+    render(<Host />);
+    await enterHeader();
+    editHeader();
+
+    act(() => current().host.topBar?.publish());
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Publish header" })
+    );
+
+    await waitFor(() => expect(hoisted.offer).toHaveBeenCalledTimes(1));
+    const [documents] = hoisted.offer.mock.calls[0] as [BlockDocument[]];
+    expect(documents.map(d => d.nodes.length)).toEqual([2]);
+    expect(publish).not.toHaveBeenCalled();
+    expect(hoisted.toastError).not.toHaveBeenCalled();
+    expect(current().host.area).toBe("header");
+  });
+
+  it("tries a failed publish again only in the header it failed in", async () => {
+    const publish = vi.fn(() =>
+      Promise.resolve({
+        ok: false,
+        reason: "refused",
+        message: "The server is down.",
+      } as DocumentSessionOutcome)
+    );
+    hoisted.session = sessionWith({ publish });
+    render(<Host />);
+    await enterHeader();
+
+    act(() => current().host.topBar?.publish());
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Publish header" })
+    );
+    await waitFor(() => expect(hoisted.toastError).toHaveBeenCalled());
+    const [, options] = hoisted.toastError.mock.calls[0] as [
+      string,
+      { action: { onClick: () => void } },
+    ];
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    act(() => current().host.done());
+    await waitFor(() => expect(current().host.area).toBeUndefined());
+    act(() => current().host.requestEdit?.("footer"));
+    await waitFor(() => expect(current().host.area).toBe("footer"));
+
+    act(() => options.action.onClick());
+
+    await act(async () => Promise.resolve());
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
   it("saves the header, not the page, when the page is stored meanwhile", async () => {
     const saveDraft = vi.fn(() => Promise.resolve(STORED));
     hoisted.session = sessionWith({ saveDraft });
@@ -614,6 +676,21 @@ describe("Done", () => {
 
     await waitFor(() => expect(current().host.area).toBeUndefined());
     expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("empties the header's recovery point once an undo takes it back to what was opened", async () => {
+    const discard = vi.fn(() => Promise.resolve());
+    const record = vi.fn();
+    hoisted.session = sessionWith({ discard, record });
+    render(<Host />);
+    await enterHeader();
+    editHeader();
+    expect(record).toHaveBeenCalled();
+
+    act(() => current().editing.active.undo());
+
+    await waitFor(() => expect(discard).toHaveBeenCalledTimes(1));
+    expect(current().host.dirty).toBe(false);
   });
 
   it("keeps editing on Keep editing", async () => {

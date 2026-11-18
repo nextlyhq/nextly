@@ -38,6 +38,7 @@ import {
 } from "@nextlyhq/ui";
 import { Component, PanelRight, TriangleAlert } from "lucide-react";
 import {
+  useCallback,
   useEffect,
   useId,
   useRef,
@@ -109,37 +110,11 @@ function readinessRequest(input: PublishOfferInput): PublishReadinessRequest {
  * place it anywhere inside the document editor.
  */
 export function usePublishOffer(input: PublishOfferInput): JSX.Element {
-  const [question, setQuestion] = useState<{
-    readiness: PublishReadinessResponse;
-    answer: (choice: PublishChoice) => void;
-  } | null>(null);
+  const { ask, dialog } = usePublishAsk(input.subject);
   const latest = useRef(input);
   useEffect(() => {
     latest.current = input;
   });
-
-  /**
-   * Put the question, when the answer calls for one: the author's choice, or
-   * null when there was nothing to ask.
-   */
-  const ask = async (
-    readiness: PublishReadinessResponse | null
-  ): Promise<PublishChoice | null> => {
-    if (
-      readiness === null ||
-      (readiness.dependencies.length === 0 && readiness.missing === 0)
-    ) {
-      return null;
-    }
-    const choice = await new Promise<PublishChoice>(answer => {
-      setQuestion({ readiness, answer });
-    });
-    setQuestion(null);
-    if (choice.kind === "cancel") {
-      throw new DOMException("Publishing was cancelled.", "AbortError");
-    }
-    return choice;
-  };
 
   useBeforeDocumentAction(async (action, store) => {
     if (!PUBLISHING_ACTIONS.has(action)) return;
@@ -179,13 +154,87 @@ export function usePublishOffer(input: PublishOfferInput): JSX.Element {
     );
   });
 
-  return (
-    <PublishOfferDialog
-      readiness={question?.readiness ?? null}
-      subject={input.subject}
-      onAnswer={choice => question?.answer(choice)}
-    />
+  return dialog;
+}
+
+/**
+ * The question asked before a publish, and the dialog that asks it: `ask`
+ * puts it when the readiness answer calls for one, and answers the author's
+ * choice, or null when there was nothing to ask; called off, it throws.
+ */
+function usePublishAsk(subject: PublishSubject): {
+  ask: (
+    readiness: PublishReadinessResponse | null
+  ) => Promise<PublishChoice | null>;
+  dialog: JSX.Element;
+} {
+  const [question, setQuestion] = useState<{
+    readiness: PublishReadinessResponse;
+    answer: (choice: PublishChoice) => void;
+  } | null>(null);
+  const ask = useCallback(
+    async (
+      readiness: PublishReadinessResponse | null
+    ): Promise<PublishChoice | null> => {
+      if (
+        readiness === null ||
+        (readiness.dependencies.length === 0 && readiness.missing === 0)
+      ) {
+        return null;
+      }
+      const choice = await new Promise<PublishChoice>(answer => {
+        setQuestion({ readiness, answer });
+      });
+      setQuestion(null);
+      if (choice.kind === "cancel") {
+        throw new DOMException("Publishing was cancelled.", "AbortError");
+      }
+      return choice;
+    },
+    []
   );
+  return {
+    ask,
+    dialog: (
+      <PublishOfferDialog
+        readiness={question?.readiness ?? null}
+        subject={subject}
+        onAnswer={choice => question?.answer(choice)}
+      />
+    ),
+  };
+}
+
+/** The question asked before publishing a document stored by its own session. */
+export interface PublishQuestion {
+  /**
+   * Ask about the unpublished parts `documents` place, publishing those the
+   * author chooses with them. Throws when the author calls the publish off,
+   * so nothing goes live.
+   */
+  readonly offer: (documents: readonly unknown[]) => Promise<void>;
+  /** The question, to be drawn anywhere inside the editor. */
+  readonly dialog: JSX.Element;
+}
+
+/**
+ * The same question for a document published through its own session
+ * rather than the form's actions: a header or footer edited in place.
+ */
+export function usePublishQuestion(subject: PublishSubject): PublishQuestion {
+  const { ask, dialog } = usePublishAsk(subject);
+  const offer = useCallback(
+    async (documents: readonly unknown[]): Promise<void> => {
+      const readiness = await askReadiness({ documents, layout: null });
+      const choice = await ask(readiness);
+      if (choice?.kind === "with" && readiness !== null) {
+        const result = await publishChosen(choice.dependencies);
+        reportLeftUnpublished(result, readiness, subject);
+      }
+    },
+    [ask, subject]
+  );
+  return { offer, dialog };
 }
 
 /**
