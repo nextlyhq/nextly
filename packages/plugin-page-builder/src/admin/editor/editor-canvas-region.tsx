@@ -21,7 +21,6 @@ import {
   elementAnchor,
   EmbedStates,
   EmptyContainerAppenders,
-  PageInserters,
   RepairNotice,
   SpacingOverlay,
   VisitorUnreadableBadges,
@@ -40,6 +39,7 @@ import { previewedCanvas } from "./canvas-preview-mode";
 import { DoubleHeaderNotice } from "./double-header-notice";
 import type { EditorView } from "./editor-view";
 import { SiteLayoutNote } from "./site-canvas";
+import { EditorPageInserters } from "./starter-pages-client";
 
 /**
  * What stands where the canvas will be, while a read it cannot draw without is
@@ -381,9 +381,11 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                   says where a block lands. The start area's "＋ Add a block"
                   opens the picker at the page's top level, and "Insert a
                   saved section" opens Add on its Saved sections tab, with
-                  its search ready.
+                  its search ready. An empty page's row of starter pages
+                  fills the page from the one picked, as one undo step.
                 */}
-                <PageInserters
+                <EditorPageInserters
+                  view={view}
                   document={editor.document}
                   selectedId={editor.selectedId}
                   componentTitle={componentLibrary.titleOf}
