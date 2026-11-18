@@ -29,4 +29,13 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Two small links now read in the admin's own text colour rather than the brand's primary colour: a Single's "History" link under Last changed, and "Clear date filters" in a collection list's Filter menu. They were drawn in the brand's primary colour, which a site can set to a shade too light to read as small text on a light surface. An indigo such as `#6366f1` falls under the 4.5:1 a small link needs. The other links in the panel and the menu already read this way.
+Small links and buttons in the admin now read in the admin's own text colour rather than the brand's primary colour:
+
+- a Single's "History" link under Last changed;
+- "Clear date filters" in a collection list's Filter menu;
+- "Forgot password?" on the sign-in page;
+- the content widget's "Launch Initial Entry" and the stats grid's "Infrastructure" on the dashboard;
+- the media library's "Move" in its bulk bar;
+- the file drop area's browse hint.
+
+They were drawn in the brand's primary colour. A site can set that to a shade too light to read as small text on a light surface: an indigo such as `#6366f1` falls under the 4.5:1 small text needs. Icons, spinners and tinted chips keep the brand colour.

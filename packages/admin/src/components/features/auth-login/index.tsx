@@ -561,9 +561,12 @@ export function Login(): JSX.Element {
                       />
                     </div>
                     <div className="flex justify-end">
+                      {/* In the text colour: the primary token is a fill a
+                          brand may set to any colour, and small text drawn in
+                          it can fall under AA. */}
                       <Link
                         href={ROUTES.FORGOT_PASSWORD}
-                        className="text-sm text-primary cursor-pointer transition-colors font-medium mt-1"
+                        className="text-sm text-foreground cursor-pointer transition-colors font-medium mt-1"
                       >
                         Forgot password?
                       </Link>
