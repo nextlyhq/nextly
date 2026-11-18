@@ -58,6 +58,7 @@ import { busyTableBounds } from "../busy-table/bounds";
 import { endedWaiting } from "../busy-table/ended-waiting";
 import { readHolders } from "../busy-table/holder";
 import { tableBusyError, tryNotice } from "../busy-table/report";
+import { boundSqliteWait } from "../busy-table/session-try";
 import { withBusyTableTries } from "../busy-table/tries";
 import { assertSchemaLockHeld } from "../pipeline/schema-lock";
 import { readSchemaVersion } from "../schema-version";
@@ -382,7 +383,9 @@ async function insertInTries(
       assertHeld: assertSchemaLockHeld,
       stopped: tableBusyError,
     },
-    async () => {
+    async (_tryNumber, tryMs) => {
+      // Each try waits for the database no longer than its own bound, as the save's tries do.
+      const restore = await boundSqliteWait(adapter, tryMs);
       try {
         await meta.insertIfAbsent(key, record);
         return { kind: "done", value: undefined };
@@ -398,6 +401,8 @@ async function insertInTries(
           undone: true,
           committed: [],
         };
+      } finally {
+        await restore();
       }
     }
   );
