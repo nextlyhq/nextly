@@ -27,6 +27,7 @@ import {
   type FieldGroupNaming,
   type FieldGroupStorageNames,
 } from "../../field-groups/services/field-group-storage-names";
+import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
 import {
   judgeBuilderDefinitions,
   readBuilderDefinitions,
@@ -36,6 +37,7 @@ import {
   buildComponentMetadataUpsert,
   buildSingleMetadataUpsert,
 } from "../ui-schema/metadata-sql";
+import { identifierCaseRules } from "../utils/resolve-catalog-name";
 
 import { assertMigrationAddresses, type JudgedEntity } from "./addresses";
 import {
@@ -256,6 +258,16 @@ export async function appMigrationInputs(
       : {
           fieldGroupTables: new Map(
             components.map(component => [component.slug, component.tableName])
+          ),
+          // And the discriminator each holds as the newest migration recorded it
+          // (`chooseTypeColumns`: a table no migration made yet takes its name's).
+          fieldGroupTypeColumns: chooseTypeColumns(
+            (latest?.data.snapshot.tables ?? []).map(table => ({
+              table: table.name,
+              columns: table.columns.map(column => column.name),
+            })),
+            components.map(component => component.tableName),
+            identifierCaseRules({ dialect })
           ),
         }),
   });

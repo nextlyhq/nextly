@@ -58,7 +58,10 @@ import {
   underNaming,
   type FieldGroupNaming,
 } from "../../field-groups/services/field-group-storage-names";
-import { readStoredFieldGroupTables } from "../../field-groups/services/field-group-stored-tables";
+import {
+  fieldGroupRegistryUnreadable,
+  readStoredFieldGroupTables,
+} from "../../field-groups/services/field-group-stored-tables";
 import { appLanguageOrder } from "../../i18n/configured-locales";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
 import { mainTableFields } from "../../i18n/per-language-storage";
@@ -1394,7 +1397,7 @@ function placedJunctions(
  * Where the site's field groups are stored, read from the database the save writes to, so the
  * migration it writes names each group's table and registry as the database holds them: the table
  * each registry row names, and the naming a group the registry does not hold yet is created under.
- * A registry that cannot be read leaves only the naming, as before.
+ * A registry that is there but cannot be read refuses the save, rather than naming tables it cannot see.
  */
 async function fieldGroupStorageOf(deps: CollectionSaveDeps): Promise<{
   naming: FieldGroupNaming;
@@ -1402,7 +1405,8 @@ async function fieldGroupStorageOf(deps: CollectionSaveDeps): Promise<{
 }> {
   const naming = (await resolveFieldGroupStorageNames(deps.adapter)).naming;
   const stored = await readStoredFieldGroupTables(deps.adapter);
-  return { naming, tables: stored.usable ? stored.tables : undefined };
+  if (!stored.usable) throw fieldGroupRegistryUnreadable(stored.reason);
+  return { naming, tables: stored.tables };
 }
 
 /** What `appMigrationInputs` is asked with for this app, its definition aside. */

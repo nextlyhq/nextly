@@ -1930,15 +1930,20 @@ async function prepareBootSchema(
   // how the two modules happen to be resolved.
   // Each field group's stored table, so a contribution to a group attaches to the table the group
   // is in: `fg_<slug>` on a site whose field-group storage was migrated.
-  const { declaredFieldGroupTables } = await import(
+  const { declaredFieldGroupStorage } = await import(
     "../domains/field-groups/services/field-group-stored-tables"
   );
-  const fieldGroupTables = await declaredFieldGroupTables(
+  const fieldGroups = await declaredFieldGroupStorage(
     adapter,
     transformedConfig.fieldGroups
-  ).catch(() => undefined);
+  );
   return compileAndPublishExtensionSchema({
-    ...(fieldGroupTables === undefined ? {} : { fieldGroupTables }),
+    ...(fieldGroups === undefined
+      ? {}
+      : {
+          fieldGroupTables: fieldGroups.tables,
+          fieldGroupTypeColumns: fieldGroups.typeColumns,
+        }),
     dialect: bootDialect,
     // The transformed list, like everything else from Layer 0b down: a
     // plugin a `setup` transformer added declares tables too, and the

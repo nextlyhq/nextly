@@ -38,7 +38,7 @@ import { definePlugin } from "../../../plugins/plugin-context";
 import { getConfiguredTestDialects } from "../../../plugins/test-nextly";
 import { col } from "../../schema/extension/dsl";
 import { compileExtensionSchema } from "../../schema/extension/publish";
-import { declaredFieldGroupTables } from "../services/field-group-stored-tables";
+import { declaredFieldGroupStorage } from "../services/field-group-stored-tables";
 
 import {
   hasTable,
@@ -69,6 +69,9 @@ const declaredWith = (localized: boolean): Declared => ({
   ],
 });
 
+/** The columns each field group's table showed the contributor's hook, by table. */
+const seenColumns = new Map<string, string[]>();
+
 /** A plugin adding a column to every field group's table, found by kind rather than by name. */
 const contributor = definePlugin({
   name: "@test/field-group-contributor",
@@ -83,6 +86,10 @@ const contributor = definePlugin({
             if (owner.kind !== "entity" || owner.entityKind !== "component") {
               continue;
             }
+            seenColumns.set(
+              table.name,
+              table.columns.map(column => column.name)
+            );
             schema.extendTable(table.name, {
               columns: { searchKey: col.shortText({ nullable: true }) },
             });
@@ -152,7 +159,7 @@ describe.each(getConfiguredTestDialects())(
         collections: declared.collections,
         fieldGroups: declared.fieldGroups,
       };
-      const fieldGroupTables = await declaredFieldGroupTables(
+      const storage = await declaredFieldGroupStorage(
         site.adapter as never,
         config.fieldGroups
       );
@@ -161,13 +168,21 @@ describe.each(getConfiguredTestDialects())(
         plugins: [contributor],
         config,
         logger: SILENT,
-        ...(fieldGroupTables === undefined ? {} : { fieldGroupTables }),
+        ...(storage === undefined
+          ? {}
+          : {
+              fieldGroupTables: storage.tables,
+              fieldGroupTypeColumns: storage.typeColumns,
+            }),
       });
 
       const columnsOn = (table: string): string[] =>
         (schema?.entityColumns.get(table) ?? []).map(column => column.name);
       expect(columnsOn("fg_fgsc_card")).toContain("search_key");
       expect(columnsOn("comp_fgsc_card")).toEqual([]);
+      // The table is seeded with the discriminator it holds, so a hook naming it is judged right.
+      expect(seenColumns.get("fg_fgsc_card")).toContain("_field_group_type");
+      expect(seenColumns.get("fg_fgsc_card")).not.toContain("_component_type");
       expect(await legacyObjects(site.adapter, dialect)).toEqual([]);
     });
   }

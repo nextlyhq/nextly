@@ -1406,7 +1406,12 @@ export class FieldGroupMetadataService {
           typeof buildDesiredTableFromComponentFields
         >[1],
         dialect,
-        { localized: storesPerLanguage(input), builtBy: "fieldGroup" }
+        {
+          localized: storesPerLanguage(input),
+          builtBy: "fieldGroup",
+          // The discriminator the create's DDL wrote for a table under this name.
+          typeColumn: typeColumnForNewTable(input.tableName),
+        }
       )
     );
     return leftOut.length === 0 ? null : describeColumnsLeftOut(leftOut);

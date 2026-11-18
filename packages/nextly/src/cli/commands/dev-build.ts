@@ -183,12 +183,14 @@ export async function publishExtensionSchema(
   const capabilities = (adapter as unknown as DrizzleAdapter).getCapabilities();
   // Each field group under its stored table, so a contribution to a group attaches to the table
   // it is in: `fg_<slug>` on a site whose field-group storage was migrated.
-  const fieldGroupTables = await storedFieldGroupTablesOf(
-    adapter,
-    configResult.config
-  ).catch(() => undefined);
+  const fieldGroups = await storedFieldGroupsOf(adapter, configResult.config);
   await compileAndPublishExtensionSchema({
-    ...(fieldGroupTables === undefined ? {} : { fieldGroupTables }),
+    ...(fieldGroups === undefined
+      ? {}
+      : {
+          fieldGroupTables: fieldGroups.tables,
+          fieldGroupTypeColumns: fieldGroups.typeColumns,
+        }),
     dialect: capabilities.dialect,
     plugins: configResult.config.plugins ?? [],
     config: configResult.config,
@@ -1200,20 +1202,20 @@ async function storedFieldGroupTableOf(
   adapter: unknown,
   config: { fieldGroups?: readonly unknown[] }
 ): Promise<((slug: string) => string) | undefined> {
-  const tables = await storedFieldGroupTablesOf(adapter, config);
-  return tables === undefined ? undefined : slug => tables.get(slug)!;
+  const storage = await storedFieldGroupsOf(adapter, config);
+  return storage === undefined ? undefined : slug => storage.tables.get(slug)!;
 }
 
-/** The same, as the map the extension compile takes. */
-async function storedFieldGroupTablesOf(
+/** Where each declared field group is stored, as the extension compile takes it. */
+async function storedFieldGroupsOf(
   adapter: unknown,
   config: { fieldGroups?: readonly unknown[] }
-): Promise<Map<string, string> | undefined> {
-  const { declaredFieldGroupTables } = await import(
+) {
+  const { declaredFieldGroupStorage } = await import(
     "../../domains/field-groups/services/field-group-stored-tables"
   );
-  return declaredFieldGroupTables(
-    adapter as Parameters<typeof declaredFieldGroupTables>[0],
+  return declaredFieldGroupStorage(
+    adapter as Parameters<typeof declaredFieldGroupStorage>[0],
     config.fieldGroups
   );
 }

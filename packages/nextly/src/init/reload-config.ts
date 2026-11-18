@@ -2330,7 +2330,23 @@ async function applyReloadHolding(
   });
   let extensionSchemaChanged: boolean;
   try {
+    // Each field group under the table it is stored in, so a contribution to a group stays on
+    // that table: `fg_<slug>` on a site whose field-group storage was migrated. An unreadable
+    // registry refuses the reload, as an unreadable one refuses the start.
+    const { declaredFieldGroupStorage } = await import(
+      "../domains/field-groups/services/field-group-stored-tables"
+    );
+    const fieldGroups = await declaredFieldGroupStorage(
+      adapter,
+      newConfig.fieldGroups
+    );
     const reloadedExtensionSchema = await compileAndPublishExtensionSchema({
+      ...(fieldGroups === undefined
+        ? {}
+        : {
+            fieldGroupTables: fieldGroups.tables,
+            fieldGroupTypeColumns: fieldGroups.typeColumns,
+          }),
       dialect,
       plugins: newConfig.plugins ?? [],
       config: newConfig,
