@@ -37,6 +37,7 @@ import { outlineAnchors } from "../outline";
 import { drawsInteractive, RichText } from "../rich-text";
 
 import { CONTENT } from "./categories";
+import { RICH_TEXT_CONVERTERS } from "./text-conversions";
 
 export interface RichTextBlockProps {
   /** The passage, as the editor serialized it. */
@@ -181,5 +182,7 @@ export const richText: BlockDefinition<RichTextBlockProps, PageContext> =
       drawsInteractive(props.content.root.children)
         ? { is: ["flow", "interactive"] }
         : { is: ["flow"] },
+    // "Turn into" Text or Heading, while it is one paragraph or one heading.
+    converters: RICH_TEXT_CONVERTERS,
     render: renderRichText,
   });

@@ -40,7 +40,11 @@ import {
   SHARED_STYLE_IN_USE_CODE,
   type StoredSiteStyle,
 } from "./library-contract";
-import { resolveSiteStyle, type SiteStyleData } from "./site-style";
+import {
+  resolveSiteStyle,
+  siteCssPrefix,
+  type SiteStyleData,
+} from "./site-style";
 import {
   checkStoredBreakpoints,
   checkStoredClasses,
@@ -123,6 +127,70 @@ export function refuseBreakpointsOutsideSettings(hook: {
     publicMessage: BREAKPOINTS_OUTSIDE_SETTINGS,
     logContext: { reason: "site-breakpoints-outside-settings" },
   });
+}
+
+/** What any other write that changes the site's CSS variable prefix is told. */
+const PREFIX_OUTSIDE_SETTINGS =
+  "The CSS variable prefix is changed in Settings → Site.";
+
+/**
+ * The prefix a stored `tokens` section has the site's pages written under,
+ * over the code's: `siteCssPrefix`'s own answer, so the guard judges the
+ * prefix the compiler writes and not the spelling stored. SQLite hands the
+ * section back as text.
+ */
+function writtenPrefixOf(
+  defaults: SiteStyleData | undefined,
+  section: unknown
+): string {
+  const held = readStoredJson(section);
+  const prefix =
+    isPlainRecord(held) && typeof held.prefix === "string"
+      ? held.prefix
+      : undefined;
+  return siteCssPrefix(
+    defaults,
+    prefix === undefined ? undefined : { tokens: { tokens: [], prefix } }
+  ).current;
+}
+
+/**
+ * Refuse a write to this Single that changes the prefix the site's variables
+ * are written under, unless the Settings route made it.
+ *
+ * The prefix has one door, as the breakpoints do: it is a site setting under
+ * the site permission, since a change breaks any CSS of the site's own that
+ * names the old prefix, and the `tokens` section it is stored in is otherwise
+ * Design's to save. A save that carries the prefix through unchanged passes
+ * (judged on the prefix written, so dropping a saved prefix equal to the
+ * code's passes too), as does server code acting as nobody.
+ */
+function prefixOutsideSettingsGuard(
+  defaults: SiteStyleData | undefined
+): (hook: {
+  data?: Record<string, unknown>;
+  originalData?: Record<string, unknown>;
+  user?: { id: string };
+  principal?: unknown;
+  context?: Record<string, unknown>;
+}) => void {
+  return hook => {
+    if (hook.context?.[SITE_SETTINGS_WRITE] === true) return;
+    const data = hook.data;
+    if (data === undefined || !Object.hasOwn(data, "tokens")) return;
+    if (hook.user === undefined && hook.principal === undefined) return;
+    if (
+      writtenPrefixOf(defaults, data.tokens) ===
+      writtenPrefixOf(defaults, hook.originalData?.tokens)
+    ) {
+      return;
+    }
+    throw new NextlyError({
+      code: "FORBIDDEN",
+      publicMessage: PREFIX_OUTSIDE_SETTINGS,
+      logContext: { reason: "site-css-prefix-outside-settings" },
+    });
+  };
 }
 
 /** The mark the shared-style lock route puts on its own write. */
@@ -739,6 +807,8 @@ export function siteStyleSingle(
     hooks: {
       beforeValidate: [
         refuseBreakpointsOutsideSettings,
+        // The prefix's one door, judged like the breakpoints' above.
+        prefixOutsideSettingsGuard(policy.defaults),
         sharedStyleGuard(openRemoval, policy.defaults?.classes),
         variableRemovalGuard(variablesInUse, policy.defaults),
         sharedStyleVariableGuard(policy.defaults),

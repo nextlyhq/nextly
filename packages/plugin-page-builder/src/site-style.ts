@@ -36,6 +36,7 @@
 import {
   DEFAULT_FLUID_RANGE,
   isLook,
+  resolveTokenPrefix,
   sameJsonValue,
   sameSiteToken,
   tokenIdentity,
@@ -50,6 +51,8 @@ import type {
   SiteToken,
   SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
+
+import type { SiteCssPrefixRead } from "./library-contract";
 
 /**
  * One tier of site style: what a host's config states, or what the stored
@@ -570,3 +573,25 @@ function sheetOf(style?: SiteStyleData): SiteSheetInput {
 
 /** The sheet for no style: breakpoints alone, the empty set. */
 const NO_STYLE_SHEET: SiteSheetInput = sheetOf();
+
+/**
+ * The site's CSS variable prefix, and which tier sets it: the one the pages
+ * are written under now, the one the site's code sets and the one saved in
+ * Settings. `current` is read off the merged style rather than restated, so
+ * it is the prefix the compiler writes under whichever tier wins (the saved
+ * one replaces the code's) and whatever the engine refuses.
+ */
+export function siteCssPrefix(
+  defaults: SiteStyleData | undefined,
+  stored: SiteStyleData | undefined
+): SiteCssPrefixRead {
+  const code = defaults?.tokens?.prefix;
+  const saved = stored?.tokens?.prefix;
+  return {
+    current: resolveTokenPrefix(
+      resolveSiteStyle(defaults, stored).tokens?.prefix
+    ).prefix,
+    ...(code === undefined ? {} : { code }),
+    ...(saved === undefined ? {} : { stored: saved }),
+  };
+}
