@@ -39,10 +39,35 @@ export function typingRunNow(): object | null {
   return ambient;
 }
 
+/**
+ * Which stretch of typing the editor is in. Moved on by {@link endTypingRuns},
+ * so every run open before it is over: its next write is a step of its own.
+ */
+let epoch = 0;
+
+/**
+ * End every run of typing now, as leaving the field would, without the author
+ * leaving it. For a save made while a field is still being typed in: what was
+ * saved is one step, and typing on is the next, so undo after the save takes
+ * back only what came after it and the count of unsaved work stays right.
+ *
+ * @experimental
+ */
+export function endTypingRuns(): void {
+  epoch += 1;
+}
+
+/** The current stretch, for a step or a field to note when its run began. */
+export function typingEpoch(): number {
+  return epoch;
+}
+
 /** The run of typing a step of the history was pushed for, and the step. */
 export interface TypingStep<Entry> {
   readonly run: object;
   readonly entry: Entry;
+  /** The stretch the step began in: a later one ({@link endTypingRuns}) ends it. */
+  readonly epoch: number;
 }
 
 /**
@@ -55,5 +80,10 @@ export function joinsTyping<Entry>(
   newest: Entry | undefined,
   run: object | null
 ): boolean {
-  return run !== null && last?.run === run && newest === last.entry;
+  return (
+    run !== null &&
+    last?.run === run &&
+    newest === last.entry &&
+    last.epoch === epoch
+  );
 }

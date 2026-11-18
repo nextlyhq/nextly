@@ -7,8 +7,8 @@
  * draws none either, and a site gains it by adding the source its page builder
  * provides. The site's CSS is stored data, so it is read per render rather
  * than captured with the route's configuration; a public route caches that
- * read, tagged with the Singles the source names, as it caches the site's
- * styles.
+ * read, tagged with the Singles and the other cache tags the source names, as
+ * it caches the site's styles.
  *
  * @module next-custom-css
  */
@@ -60,7 +60,12 @@ async function siteCssOf(
   const read = await cachedFind(
     async () => written(await source.readSite()) ?? null,
     {
-      tags: source.singles.flatMap(slug => nextlySingleTags(slug)),
+      // The Singles' tags and any others the source names: a write to
+      // either is what changes the CSS.
+      tags: [
+        ...source.singles.flatMap(slug => nextlySingleTags(slug)),
+        ...(source.tags ?? []),
+      ],
       // Named as the site styles' read is: by the route, the Singles the
       // source declares and the source text of its read.
       keyParts: [
@@ -68,6 +73,7 @@ async function siteCssOf(
         config.cacheScope ?? "",
         JSON.stringify([config.collections, config.field]),
         JSON.stringify([...source.singles].sort()),
+        JSON.stringify([...(source.tags ?? [])].sort()),
         hashId(String(source.readSite)),
       ],
       revalidate: await releaseBoundedRevalidate(window),

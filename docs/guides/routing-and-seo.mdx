@@ -470,12 +470,40 @@ themselves, so their pages are exported as they are:
   `blockFallback`, or the two renders disagree.
 - Nothing else above the page may add a boundary back: a `loading.tsx` in the
   route's segment, or a `<Suspense>` in its layout around `children`, puts the
-  page beneath one again.
+  page beneath one again. A boundary that holds the `<body>` is the exception
+  (below): React never sends it hidden.
 - Under Cache Components a public page is built whole, so everything it reads
   has to finish while the build renders it: cached reads, as an app made by
   `create-nextly-app` registers them (`src/nextly/cached-read.ts`), and blocks
   that never read the request. A read still waiting when the build stops fails
   the build, where it used to leave a part to fill at request time.
+- Under Cache Components, hold your root layout's `<body>` in a `<Suspense>`.
+  A page the build kept is drawn again on its first visit after a write that
+  expires it, such as a database seeded or edited after `next build` on a
+  fresh deploy. That draw is a prerender too, and a read in it that isn't
+  cached, with no boundary above it, answers 500 on every visit. A boundary
+  that holds the body lets the page finish on the request instead. React never
+  sends that boundary hidden, so the page still arrives whole, and a page
+  whose reads are all cached is still kept whole. Without Cache Components it
+  changes nothing.
+
+```tsx title="app/layout.tsx"
+import { Suspense } from "react";
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <Suspense>
+        <body>{children}</body>
+      </Suspense>
+    </html>
+  );
+}
+```
 
 A page that isn't there (an unknown slug, or an entry that is unpublished or
 the visitor may not read) renders your not-found page with

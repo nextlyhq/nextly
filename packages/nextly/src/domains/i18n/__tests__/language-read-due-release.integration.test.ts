@@ -9,7 +9,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { grantTo } from "../../../__tests__/fixtures/permission-holders";
-import { defineCollection, relationship, text } from "../../../config";
+import {
+  defineCollection,
+  defineSingle,
+  relationship,
+  text,
+} from "../../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -24,6 +29,8 @@ import { ReleasesRepository } from "../../releases/releases-repository";
 const SLUG = "ldr_posts";
 /** Published notes, each relating a post. */
 const NOTES = "ldr_notes";
+/** A translated Single. */
+const HOME = "ldr_home";
 const PAST = new Date("2020-01-01T00:00:00Z");
 const FUTURE = new Date("2099-01-01T00:00:00Z");
 
@@ -59,6 +66,15 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           text({ name: "title" }),
           relationship({ name: "post", relationTo: SLUG }),
         ],
+      }),
+    ],
+    singles: [
+      defineSingle({
+        slug: HOME,
+        localized: true,
+        status: true,
+        access: { read: () => true },
+        fields: [text({ name: "title" })],
       }),
     ],
     localization: { locales: ["en", "es"], defaultLocale: "en" },
@@ -222,6 +238,88 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const id = await draftInRelease(t, FUTURE);
       expect(await inSpanish(t, id)).toEqual({ found: false, listed: [] });
+    }, 90_000);
+
+    // The translation overview of a public read counts a due release as the
+    // read does: the languages it publishes are reported published.
+    it("reports a language a due release publishes as published in the overview", async () => {
+      const t = await boot(dialect);
+      const id = await draftInRelease(t, PAST);
+      const handler = handlerOf(t);
+      const one = await handler.getEntry({
+        collectionName: SLUG,
+        entryId: id,
+        locale: "en",
+        translationStatus: true,
+      });
+      expect(one.success, JSON.stringify(one)).toBe(true);
+      expect((one.data as Record<string, unknown>)._translations).toMatchObject(
+        { es: { translated: true, status: "published" } }
+      );
+      const list = await handler.listEntries({
+        collectionName: SLUG,
+        locale: "en",
+        limit: 50,
+        translationStatus: true,
+      });
+      const listed = (list.data?.docs ?? []) as Record<string, unknown>[];
+      expect(listed.map(row => row.id)).toEqual([id]);
+      expect(listed[0]?._translations).toMatchObject({
+        es: { translated: true, status: "published" },
+      });
+    }, 90_000);
+
+    it("reports a Single's language a due release publishes as published in the overview", async () => {
+      const t = await boot(dialect);
+      const singles = t.getService("singleEntryService") as unknown as {
+        update(
+          slug: string,
+          data: Record<string, unknown>,
+          options: Record<string, unknown>
+        ): Promise<{ success: boolean; data?: { id?: string } | null }>;
+        get(
+          slug: string,
+          options: Record<string, unknown>
+        ): Promise<{ success: boolean; data?: Record<string, unknown> | null }>;
+      };
+      for (const [locale, title] of [
+        ["en", "Home"],
+        ["es", "Inicio"],
+      ] as const) {
+        const saved = await singles.update(
+          HOME,
+          { title, status: "draft", _overwrite: true },
+          { locale, overrideAccess: true }
+        );
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+      }
+      const author = await seedPlainAuthor(t);
+      await grantTo(t, author, "update", [HOME]);
+      await grantTo(t, author, "publish", [HOME]);
+      const release = await t.nextly.releases.create({ title: "Go live" });
+      await t.nextly.releases.addMember({
+        releaseId: release.id,
+        scopeKind: "single",
+        scopeSlug: HOME,
+        entryId: "ignored",
+        locale: null,
+        action: "publish",
+        userId: author,
+      });
+      await scheduleAsItStands(
+        new ReleasesRepository(t.adapter),
+        release.id,
+        PAST,
+        "UTC"
+      );
+      const read = await singles.get(HOME, {
+        locale: "en",
+        translationStatus: true,
+      });
+      expect(read.success, JSON.stringify(read)).toBe(true);
+      expect(read.data?._translations).toMatchObject({
+        es: { translated: true, status: "published" },
+      });
     }, 90_000);
   }
 );

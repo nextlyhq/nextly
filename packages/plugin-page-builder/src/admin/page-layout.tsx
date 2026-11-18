@@ -52,6 +52,7 @@ import {
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
 import { useBuilderRoute } from "./builder-route-read";
+import { useHeaderFooterInCode } from "./header-footer-in-code";
 import { HeaderFooterMenu, type MenuSearch } from "./header-footer-menu";
 import { useSetPictures } from "./header-footer-pictures";
 import {
@@ -192,6 +193,14 @@ function useStoredLayout<T extends FieldValues>(
   control: Control<T>
 ): { layout: unknown; noHeaderFooter: boolean } | undefined {
   const isPage = useIsPageForm();
+  const watched = useWatchedLayout(control);
+  return isPage ? watched : undefined;
+}
+
+/** The two values as `control` holds them, whatever form it is. */
+function useWatchedLayout<T extends FieldValues>(
+  control: Control<T>
+): { layout: unknown; noHeaderFooter: boolean } {
   const layout: unknown = useWatch({
     control,
     name: LAYOUT_FIELD as Path<T>,
@@ -203,9 +212,8 @@ function useStoredLayout<T extends FieldValues>(
   // One object per pair of values, so a reader keyed on it recomputes only
   // when the choice changes.
   return useMemo(
-    () =>
-      isPage ? { layout, noHeaderFooter: noHeaderFooter === true } : undefined,
-    [isPage, layout, noHeaderFooter]
+    () => ({ layout, noHeaderFooter: noHeaderFooter === true }),
+    [layout, noHeaderFooter]
   );
 }
 
@@ -289,8 +297,30 @@ export function PageLayoutPicker<T extends FieldValues>({
   disabled?: boolean;
 }): JSX.Element | null {
   const stored = useStoredLayout(control);
-  if (stored === undefined) return null;
+  // A site that draws its header and footer in code: the menu would change
+  // nothing it shows, so there is none. The page's stored choice is kept.
+  const inCode = useHeaderFooterInCode();
+  if (stored === undefined || inCode) return null;
   return <Picker control={control} stored={stored} disabled={disabled} />;
+}
+
+/**
+ * The "Header & footer" menu for a page not made yet: the same picker, over
+ * the New page dialog's own small form, which holds the two values and is
+ * known to make a page. "Manage headers & footers" is left out there, since
+ * it would leave the dialog and what is typed in it.
+ */
+export function NewPageLayoutPicker<T extends FieldValues>({
+  control,
+}: {
+  control: Control<T>;
+}): JSX.Element | null {
+  const stored = useWatchedLayout(control);
+  // None where the site draws its header and footer in code, as on a page.
+  if (useHeaderFooterInCode()) return null;
+  return (
+    <Picker control={control} stored={stored} disabled={false} manage={false} />
+  );
 }
 
 /** Above this many sets the menu is searched rather than scrolled. */
@@ -363,10 +393,13 @@ function Picker<T extends FieldValues>({
   control,
   stored,
   disabled,
+  manage = true,
 }: {
   control: Control<T>;
   stored: { layout: unknown; noHeaderFooter: boolean };
   disabled: boolean;
+  /** Whether the menu offers "Manage headers & footers". */
+  manage?: boolean;
 }): JSX.Element {
   // Registered only here, once the form is known to hold both fields.
   const { field: layoutField, fieldState } = useController({
@@ -423,7 +456,7 @@ function Picker<T extends FieldValues>({
         {...(searchable
           ? { search: { ...search, ...(capped ? { note: CAPPED_NOTE } : {}) } }
           : {})}
-        {...withManage(manageHrefOf(state))}
+        {...(manage ? withManage(manageHrefOf(state)) : {})}
       />
       <WhyLine id={whyId} view={view} state={state} retry={retry} />
       <RefusedLine id={errorId} refused={refused} />
@@ -593,11 +626,26 @@ export interface RegionCardFacts {
   readonly note?: string;
 }
 
+/**
+ * An area of the site's default set that shows nothing, on a page that
+ * follows the default: where the canvas draws its "No header yet" band.
+ */
+export interface EmptyDefaultArea {
+  readonly area: RegionArea;
+  /** The default set, by id: where a header made or chosen here goes. */
+  readonly setId: string;
+  readonly setTitle: string;
+}
+
 /** The regions drawn around the page, their Layers rows and their cards. */
 export interface PageLayoutRegions {
   readonly canvas: readonly CanvasRegion[];
   readonly layers: readonly LayersRegionRow[];
   readonly cards: readonly RegionCardFacts[];
+  /** The default's empty areas, while the page follows the default. */
+  readonly empty: readonly EmptyDefaultArea[];
+  /** Whether the page follows the site default: names no set, not off. */
+  readonly followsDefault: boolean;
 }
 
 /** What a header or footer is called in the editor. */
@@ -615,9 +663,15 @@ export function siteRegionName(area: RegionArea): string {
 export function usePageLayoutRegions<T extends FieldValues>(
   control: Control<T>,
   canvasRoot: HTMLElement | null
-): PageLayoutRegions {
+): PageLayoutRegions & {
+  /**
+   * Read the regions again: after a header published from the page, the
+   * canvas draws the new published version, and after a draft, its note.
+   */
+  readonly reread: () => void;
+} {
   const stored = useStoredLayout(control);
-  const { state, stale } = useLayoutChoices(
+  const { state, stale, retry } = useLayoutChoices(
     stored !== undefined,
     selectedOf(stored)
   );
@@ -632,11 +686,59 @@ export function usePageLayoutRegions<T extends FieldValues>(
   useEffect(() => {
     if (fresh !== undefined) setShown(fresh);
   }, [fresh]);
-  return fresh ?? shown;
+  // A site that draws its header and footer in code draws them itself: the
+  // canvas shows no regions of a set, whatever the page's stored choice.
+  const inCode = useHeaderFooterInCode();
+  const drawn = inCode ? NOTHING_DRAWN : (fresh ?? shown);
+  return useMemo(
+    () => ({ ...drawn, reread: () => void retry() }),
+    [drawn, retry]
+  );
 }
 
 /** What is drawn before any answer has arrived. */
-const NOTHING_DRAWN: PageLayoutRegions = { canvas: [], layers: [], cards: [] };
+const NOTHING_DRAWN: PageLayoutRegions = {
+  canvas: [],
+  layers: [],
+  cards: [],
+  empty: [],
+  followsDefault: false,
+};
+
+/** Whether a page follows the site default: it names no set, and is not off. */
+function followsDefaultOf(stored: {
+  layout: unknown;
+  noHeaderFooter: boolean;
+}): boolean {
+  return layoutRelationId(stored.layout) === null && !stored.noHeaderFooter;
+}
+
+/** The areas a set has, header first. */
+const AREAS: readonly RegionArea[] = ["header", "footer"];
+
+/**
+ * The default's areas that show nothing, for a page that follows the
+ * default: one naming no set and not switched off. Asked of the PUBLISHED
+ * areas the set fills, the ones a visitor gets, so a header still loading is
+ * never taken for none. Nothing for a default that is not published or is
+ * being removed: no page is drawn inside it.
+ */
+function emptyDefaultAreasOf(
+  stored: { layout: unknown; noHeaderFooter: boolean },
+  choices: LayoutChoicesResponse
+): readonly EmptyDefaultArea[] {
+  if (!followsDefaultOf(stored)) return [];
+  const { defaultLayout } = choices.meta;
+  const set = choices.items.find(item => item.id === defaultLayout);
+  if (set === undefined || !set.published || set.removal !== undefined) {
+    return [];
+  }
+  return AREAS.filter(area => !set.areasFilled.includes(area)).map(area => ({
+    area,
+    setId: set.id,
+    setTitle: set.title,
+  }));
+}
 
 /** The regions to draw for `stored`, their Layers rows and their cards. */
 function regionsOf(
@@ -645,9 +747,11 @@ function regionsOf(
   canvasRoot: HTMLElement | null
 ): PageLayoutRegions {
   if (stored === undefined || state.kind !== "ready") return NOTHING_DRAWN;
+  const empty = emptyDefaultAreasOf(stored, state.choices);
+  const followsDefault = followsDefaultOf(stored);
   const effective = layoutPickerView(stored, state).effective;
   if (effective === null || effective.regions.length === 0) {
-    return NOTHING_DRAWN;
+    return { ...NOTHING_DRAWN, empty, followsDefault };
   }
   const { meta } = state.choices;
   const definitions = new Map<string, BlockDocument>(
@@ -687,7 +791,7 @@ function regionsOf(
       ...noteOf(effective, region, meta),
     })
   );
-  return { canvas, layers, cards };
+  return { canvas, layers, cards, empty, followsDefault };
 }
 
 /** The area the region's component is the untouched starter for, if any. */
@@ -708,19 +812,35 @@ function regionWords(
   region: EffectiveLayout["regions"][number],
   meta: LayoutChoicesResponse["meta"]
 ): Pick<CanvasRegion, "label" | "badge" | "name"> {
-  const from = `from the ${effective.title} header & footer`;
-  const starter = starterOf(region, meta);
-  if (starter === region.area) {
+  return regionNaming(
+    effective.title,
+    region.area,
+    starterOf(region, meta) === region.area
+  );
+}
+
+/**
+ * What a region of set `setTitle` is called on the canvas and in Layers:
+ * where it comes from, or, while it shows the site's starter as seeded, that
+ * it is the starter, so an author knows it is theirs to edit or replace.
+ */
+export function regionNaming(
+  setTitle: string,
+  area: RegionArea,
+  starter: boolean
+): Pick<CanvasRegion, "label" | "badge" | "name"> {
+  const from = `from the ${setTitle} header & footer`;
+  if (starter) {
     return {
-      label: `${STARTER_NAMES[starter]}, ${from}`,
-      badge: STARTER_BADGES[starter],
-      name: STARTER_NAMES[starter],
+      label: `${STARTER_NAMES[area]}, ${from}`,
+      badge: STARTER_BADGES[area],
+      name: STARTER_NAMES[area],
     };
   }
-  const name = siteRegionName(region.area);
+  const name = siteRegionName(area);
   return {
     label: `${name}, ${from}`,
-    badge: `${name} · ${effective.title}`,
+    badge: `${name} · ${setTitle}`,
     name,
   };
 }

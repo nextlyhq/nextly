@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@admin/__tests__/utils";
 
 import {
+  addUnsavedEntities,
   addUnsavedEntity,
   removeUnsavedEntity,
   releaseUnsavedFieldGroupsOf,
@@ -59,6 +60,35 @@ describe("the unsaved-entity store", () => {
     });
     removeUnsavedEntity("collection", "products");
     expect(unsavedEntity("collection", "products")).toBeUndefined();
+  });
+
+  it("adds an entity with the ones it needs, all or none", () => {
+    const authors: Added = {
+      ...products,
+      address: "authors",
+      settings: { ...products.settings, slug: "authors" },
+      ownedBy: { kind: "collection", address: "products" },
+    };
+    expect(addUnsavedEntities([authors, products])).toBe(true);
+    expect(unsavedEntity("collection", "authors")?.ownedBy).toEqual({
+      kind: "collection",
+      address: "products",
+    });
+    expect(unsavedEntity("collection", "products")).toBeDefined();
+    removeUnsavedEntity("collection", "authors");
+    removeUnsavedEntity("collection", "products");
+
+    // One address already held: none is added, the held one kept.
+    addUnsavedEntity(products);
+    const before = unsavedEntity("collection", "products");
+    expect(addUnsavedEntities([authors, products])).toBe(false);
+    expect(unsavedEntity("collection", "authors")).toBeUndefined();
+    expect(unsavedEntity("collection", "products")).toBe(before);
+    // Two of the list under one address: none is added.
+    removeUnsavedEntity("collection", "products");
+    expect(addUnsavedEntities([products, products])).toBe(false);
+    expect(unsavedEntity("collection", "products")).toBeUndefined();
+    removeUnsavedEntity("collection", "authors");
   });
 
   it("keeps the first of two entities under one kind and address", () => {
@@ -177,7 +207,19 @@ describe("an unsaved entity's new address", () => {
       address: "hero",
       ownedBy: { kind: "single", address: "products" },
     });
+    // A collection the host made is not released: only a field group is offered
+    // on its own by another host's picker.
+    addUnsavedEntity({
+      ...products,
+      address: "authors",
+      ownedBy: { kind: "collection", address: "products" },
+    });
     releaseUnsavedFieldGroupsOf({ kind: "collection", address: "products" });
+    expect(unsavedEntity("collection", "authors")?.ownedBy).toEqual({
+      kind: "collection",
+      address: "products",
+    });
+    removeUnsavedEntity("collection", "authors");
     expect(unsavedEntity("field-group", "seo")?.ownedBy).toBeUndefined();
     expect(unsavedEntity("field-group", "seo")?.address).toBe("seo");
     expect(unsavedEntity("field-group", "hero")?.ownedBy).toEqual({

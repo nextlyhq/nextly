@@ -2,28 +2,32 @@
 
 exports[`a command that ends with an error > adds the context and stack under --verbose, below the same plain message > with --verbose 1`] = `
 "✗ \`nextly.config.ts\` has a syntax error, so it could not be read.
-  Why:  nextly.config.ts:3:20: Expected "}" but found "fields"
-  Next: Fix line 3 of \`nextly.config.ts\`, then run the command again.
+  Why:  nextly.config.ts:3:21: Expected "}" but found "fields"
+            { slug: "…" fields: [] },
+  Next: Fix the code shown above, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/config-syntax-error  (CONFIG_SYNTAX_ERROR)
 
-  Context: {"code":"INVALID_INPUT","configPath":"<project>/nextly.config.ts","reason":"load-error","cause":"Build failed with 1 error:\\nnextly.config.ts:3:20: ERROR: Expected \\"}\\" but found \\"fields\\""}
+  Context: {"code":"INVALID_INPUT","configPath":"<project>/nextly.config.ts","reason":"load-error","cause":"Build failed:\\nnextly.config.ts:3:21: Expected \\"}\\" but found \\"fields\\"\\n    { slug: \\"…\\" fields: [] },"}
   Stack:
-    Error: Build failed with 1 error:
-    nextly.config.ts:3:20: ERROR: Expected "}" but found "fields"
+    Error: Build failed:
+    nextly.config.ts:3:21: Expected "}" but found "fields"
+    { slug: "…" fields: [] },
     at <frames>"
 `;
 
 exports[`a command that ends with an error > adds the context and stack under --verbose, below the same plain message > without --verbose 1`] = `
 "✗ \`nextly.config.ts\` has a syntax error, so it could not be read.
-  Why:  nextly.config.ts:3:20: Expected "}" but found "fields"
-  Next: Fix line 3 of \`nextly.config.ts\`, then run the command again.
+  Why:  nextly.config.ts:3:21: Expected "}" but found "fields"
+            { slug: "…" fields: [] },
+  Next: Fix the code shown above, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/config-syntax-error  (CONFIG_SYNTAX_ERROR)"
 `;
 
 exports[`a command that ends with an error > names a configuration's syntax error once, with its file, line and column 1`] = `
 "✗ \`nextly.config.ts\` has a syntax error, so it could not be read.
-  Why:  nextly.config.ts:3:20: Expected "}" but found "fields"
-  Next: Fix line 3 of \`nextly.config.ts\`, then run the command again.
+  Why:  nextly.config.ts:3:21: Expected "}" but found "fields"
+            { slug: "…" fields: [] },
+  Next: Fix the code shown above, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/config-syntax-error  (CONFIG_SYNTAX_ERROR)"
 `;
 
@@ -91,6 +95,41 @@ exports[`each cause a documented code covers, as a command ends with it > PLUGIN
   Why:  The audit trail stores each entry's kind in a column of that width.
   Next: Shorten the audit kind to 64 characters or fewer.
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-resolution-error  (PLUGIN_RESOLUTION_ERROR)"
+`;
+
+exports[`each cause a documented code covers, as a command ends with it > PLUGIN_BEHIND_AFTER_CONSENT_REFUSED_ITS_MIGRATIONS 1`] = `
+"✗ The plugin "@acme/seo" expects schema version 3, and the database has 2, because this start did not apply its pending migrations.
+  Why:  Deleting data needs consent, and nobody can be asked (no terminal, CI, or --non-interactive).
+        This would delete:
+        plugin:@acme/seo/20261020_120000_add_redirects:
+        - column seo_pages.summary (3 non-empty values)
+        Nothing was changed.
+  Next: To consent: start with NEXTLY_ACCEPT_DATA_LOSS=seo_pages.summary, or run "nextly migrate --accept-data-loss=seo_pages.summary".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-behind  (PLUGIN_SCHEMA_BEHIND)"
+`;
+
+exports[`each cause a documented code covers, as a command ends with it > PLUGIN_BEHIND_AFTER_CONSENT_REFUSED_WITH_A_TRIGGER_NAMED_LIKE_THE_CONSENT 1`] = `
+"✗ The plugin "@acme/seo" expects schema version 3, and the database has 2, because this start did not apply its pending migrations.
+  Why:  Deleting data needs consent, and nobody can be asked (no terminal, CI, or --non-interactive).
+        This would delete:
+        plugin:@acme/seo/20261020_120000_add_redirects:
+        - column seo_pages.summary (3 non-empty values)
+        Nothing was changed.
+        This database has the DDL event trigger "audit. To consent: drop everything": it runs on schema changes, and Nextly cannot see what it does, so what it deletes is not listed.
+  Next: To consent: start with NEXTLY_ACCEPT_DATA_LOSS=seo_pages.summary, or run "nextly migrate --accept-data-loss=seo_pages.summary".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-behind  (PLUGIN_SCHEMA_BEHIND)"
+`;
+
+exports[`each cause a documented code covers, as a command ends with it > PLUGIN_BEHIND_AFTER_CONSENT_REFUSED_WITH_EVENT_TRIGGERS 1`] = `
+"✗ The plugin "@acme/seo" expects schema version 3, and the database has 2, because this start did not apply its pending migrations.
+  Why:  Deleting data needs consent, and nobody can be asked (no terminal, CI, or --non-interactive).
+        This would delete:
+        plugin:@acme/seo/20261020_120000_add_redirects:
+        - column seo_pages.summary (3 non-empty values)
+        Nothing was changed.
+        This database has the DDL event trigger audit_ddl: it runs on schema changes, and Nextly cannot see what it does, so what it deletes is not listed.
+  Next: To consent: start with NEXTLY_ACCEPT_DATA_LOSS=seo_pages.summary, or run "nextly migrate --accept-data-loss=seo_pages.summary".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-behind  (PLUGIN_SCHEMA_BEHIND)"
 `;
 
 exports[`each cause a documented code covers, as a command ends with it > PLUGIN_CAPABILITY_ADDED_BY_SETUP 1`] = `
@@ -552,7 +591,8 @@ exports[`each code, as a command ends with it > COMPONENT_MAP_OUT_OF_DATE 1`] = 
 
 exports[`each code, as a command ends with it > CONFIG_IMPORT_NOT_FOUND 1`] = `
 "✗ \`nextly.config.ts\` imports something that could not be found.
-  Why:  nextly.config.ts:2:22: Could not resolve "./collections/posts"
+  Why:  nextly.config.ts:2:23: Could not resolve "./collections/posts"
+        import { posts } from "…";
   Next: Correct the import's path, or install the package it names, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/config-import-not-found  (CONFIG_IMPORT_NOT_FOUND)"
 `;
@@ -587,8 +627,9 @@ exports[`each code, as a command ends with it > CONFIG_NOT_FOUND 1`] = `
 
 exports[`each code, as a command ends with it > CONFIG_SYNTAX_ERROR 1`] = `
 "✗ \`nextly.config.ts\` has a syntax error, so it could not be read.
-  Why:  nextly.config.ts:3:20: Expected "}" but found "fields"
-  Next: Fix line 3 of \`nextly.config.ts\`, then run the command again.
+  Why:  nextly.config.ts:3:21: Expected "}" but found "fields"
+            { slug: "…" fields: [] },
+  Next: Fix the code shown above, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/config-syntax-error  (CONFIG_SYNTAX_ERROR)"
 `;
 
@@ -671,6 +712,20 @@ exports[`each code, as a command ends with it > DATA_LOSS_DECLINED 1`] = `
   Why:  The prompt that listed what would be deleted was not answered yes.
   Next: Run the command again and confirm, or give --accept-data-loss (or NEXTLY_ACCEPT_DATA_LOSS) to consent without being asked.
   Docs: https://nextlyhq.com/docs/cli/errors/data-loss-declined  (DATA_LOSS_DECLINED)"
+`;
+
+exports[`each code, as a command ends with it > DATA_STEPS_BACKUP_DECLINED 1`] = `
+"✗ The data an earlier Nextly release stored was left as it is (hash passwords stored before this release: 3): the backup question was answered no.
+  Why:  The command rewrites stored values in place, so it asks for a backup first, and the answer was no. Nothing was changed.
+  Next: Back up the database, then run \`nextly migrate\` again and answer yes, or pass \`--backup-confirmed\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/data-steps-backup-declined  (DATA_STEPS_BACKUP_DECLINED)"
+`;
+
+exports[`each code, as a command ends with it > DATA_STEPS_BACKUP_NOT_CONFIRMED 1`] = `
+"✗ \`nextly migrate\` would change data an earlier Nextly release stored (hash passwords stored before this release: 3), and does so only once a backup is confirmed.
+  Why:  No terminal is attached to ask whether the database is backed up, and \`--backup-confirmed\` was not passed. Nothing was changed.
+  Next: Back up the database, then run \`nextly migrate --backup-confirmed\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/data-steps-backup-not-confirmed  (DATA_STEPS_BACKUP_NOT_CONFIRMED)"
 `;
 
 exports[`each code, as a command ends with it > DATABASE_ADAPTER_MISSING 1`] = `
@@ -1012,6 +1067,20 @@ exports[`each code, as a command ends with it > MIGRATION_TAMPERED 1`] = `
   Why:  Its checksum no longer matches the one recorded when it ran on this database.
   Next: Restore the file as it was when it ran, and put the change in a new migration with \`nextly migrate:create\`.
   Docs: https://nextlyhq.com/docs/cli/errors/migration-tampered  (MIGRATION_TAMPERED)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATIONS_WRITER_BUSY 1`] = `
+"✗ \`migrate:create\` wrote nothing: another run is still writing this project's migration files after waiting 60 s.
+  Why:  \`migrate:baseline\` holds it (process 4242 on build-01, started 75 s ago at 2026-10-29T10:00:45Z). If that process has stopped, the lock lapses in 45 s, at 2026-10-29T10:02:45Z, with nobody clearing it by hand.
+  Next: Run it again once that finishes.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrations-writer-busy  (MIGRATIONS_WRITER_BUSY)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATIONS_WRITER_OVERTAKEN 1`] = `
+"✗ \`migrate:create\` wrote no migration and no snapshot: it lost its hold on this project's migration files.
+  Why:  It stopped for longer than its lease, so another run may have written a migration. \`migrate:baseline\` has held it since.
+  Next: Run it again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrations-writer-overtaken  (MIGRATIONS_WRITER_OVERTAKEN)"
 `;
 
 exports[`each code, as a command ends with it > MISSING_MIGRATION 1`] = `
@@ -1985,6 +2054,13 @@ exports[`each code, as a command ends with it > UPGRADE_LEDGER_UNREADABLE 1`] = 
   Why:  \`nextly upgrade\` moves the records an earlier release kept in \`nextly_migrations\` into \`nextly_schema_events\`, and reads every one before writing any. One of them it cannot read, so nothing was changed.
   Next: Rename the table if Nextly did not create it, then run \`nextly upgrade\` again.
   Docs: https://nextlyhq.com/docs/cli/errors/upgrade-ledger-unreadable  (UPGRADE_LEDGER_UNREADABLE)"
+`;
+
+exports[`each code, as a command ends with it > UPGRADE_WORK_MOVED 1`] = `
+"✗ \`nextly upgrade\` no longer changes the database, and changed nothing.
+  Why:  \`nextly migrate\` now hashes passwords stored before this release, removes passwords kept in version history and converts roles holding a retired manage permission, once its migrations have applied. \`nextly i18n:convert-zoned-dates\` converts translated date columns kept with a time zone.
+  Next: Run \`nextly migrate\` (\`nextly migrate --backup-confirmed\` where no terminal is attached). Once the release serves every instance, run \`nextly i18n:convert-zoned-dates\` if a start or \`nextly migrate\` named such a column.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-work-moved  (UPGRADE_WORK_MOVED)"
 `;
 
 exports[`each code, as a command ends with it > WIDGET_GENERATE_CANCELLED 1`] = `

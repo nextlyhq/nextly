@@ -12,13 +12,17 @@ import {
   BUILDER_VIEW_PATH,
   COMPONENT_STORE_DELETE_HOST_COMPONENT,
   ENTRY_DESIGN_SECTION_COMPONENT,
+  NEW_PAGE_DIALOG_COMPONENT,
   OPEN_IN_BUILDER,
   REMOVE_LAYOUT_ACTION_COMPONENT,
+  SET_BUILDER_VIEW_COMPONENT,
+  SET_BUILDER_VIEW_PATH,
   SINGLE_SHOWN_ON_SECTION_COMPONENT,
   TEMPLATE_DELETE_COMPONENT,
   TEMPLATE_DESIGN_DETAILS_COMPONENT,
   TEMPLATE_OWN_DESIGNS_COMPONENT,
 } from "../builder-view";
+import { LAYOUTS_SLUG } from "../collections/layouts";
 import { TEMPLATES_SLUG } from "../collections/templates";
 import { BLOCKS_TYPE } from "../fields/blocksField";
 import {
@@ -106,6 +110,11 @@ export function adminContributions(def: Definition): PluginAdminContributions {
         label: "Page Builder",
         opensFirst: "mainField",
         openLabel: OPEN_IN_BUILDER,
+        // "+ New" on such a list opens the New page dialog: a title, an
+        // address made from it, the header & footer, then straight into the
+        // builder on the saved draft. A collection whose field holds no pages
+        // (only components or patterns) is handed to its create form.
+        createDialog: NEW_PAGE_DIALOG_COMPONENT,
       },
     ],
     // "Remove Layout…" in a Layout's document bar, beside History: the one
@@ -175,6 +184,21 @@ export function adminContributions(def: Definition): PluginAdminContributions {
     // template, or an own design, does to the site before it happens.
     views: {
       ...deleteComponentViews(componentStoreOf(opts)),
+      // A header & footer set in the builder: its header and footer around
+      // a placeholder for the page, with its settings beside them, under the
+      // admin's own form, lock, recovery and leave guard for the set. Its
+      // list and its form offer it as "Open in builder"; the builder's Pages
+      // panel opens it from a set's row.
+      [LAYOUTS_SLUG]: {
+        documentViews: [
+          {
+            path: SET_BUILDER_VIEW_PATH,
+            component: SET_BUILDER_VIEW_COMPONENT,
+            label: "Page Builder",
+            openLabel: OPEN_IN_BUILDER,
+          },
+        ],
+      },
       [TEMPLATES_SLUG]: {
         documentActions: {
           delete: { component: TEMPLATE_DELETE_COMPONENT },
