@@ -127,8 +127,13 @@ async function savedAreas(page: Page, id: string): Promise<unknown> {
   const answer = await page.request.get(
     `${API}/collections/layouts/entries/${encodeURIComponent(id)}?draft=true&depth=0`
   );
-  const body = (await answer.json()) as { item?: { areas?: unknown } };
-  return body.item?.areas;
+  expect(answer.ok(), `reading set ${id}: ${answer.status()}`).toBe(true);
+  // One entry's read answers the entry itself, or it inside `item`.
+  const body = (await answer.json()) as {
+    item?: { areas?: unknown };
+    areas?: unknown;
+  };
+  return (body.item ?? body).areas;
 }
 
 for (const [label, expectHeader] of [
