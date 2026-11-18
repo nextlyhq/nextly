@@ -625,6 +625,37 @@ describe("the Style tab's drags", () => {
     expect(styleOf("color")).toBe("#0000ff");
   });
 
+  it("finishes a picker gesture in its one undo step when the field goes away mid-gesture", () => {
+    mount();
+    openStyle();
+    row("color");
+    fireEvent.click(screen.getByRole("button", { name: /^Colour for / }));
+    const custom = screen.queryByRole("button", { name: "Custom colour" });
+    if (custom?.getAttribute("aria-expanded") === "false") {
+      fireEvent.click(custom);
+    }
+    const surface = screen.getByRole("application", {
+      name: /Saturation and brightness/,
+    });
+    fireEvent.keyDown(surface, { key: "ArrowLeft" });
+    frame();
+    const first = styleOf("color");
+    expect(first).not.toBe("#0000ff");
+    // A second move, still waiting for its frame when the field goes, as it
+    // does when another block is selected in the canvas.
+    fireEvent.keyDown(surface, { key: "ArrowLeft" });
+    act(() => editor().select(null));
+    expect(styleOf("color")).not.toBe(first);
+
+    // The move written on the way out joins the gesture: one Undo takes the
+    // whole of it back, to the colour from before.
+    expect(editor().undoDepth).toBe(1);
+    act(() => {
+      void editor().undo();
+    });
+    expect(styleOf("color")).toBe("#0000ff");
+  });
+
   it("puts the canvas back on Escape mid-drag, and records nothing", () => {
     const field = pressAndMove(10);
     frame();

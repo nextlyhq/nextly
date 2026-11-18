@@ -775,8 +775,11 @@ function usePickerWrites({
   // gives the field a new callback — which is every render — and flush a
   // gesture the author is still making.
   const write = React.useRef(commitColour);
+  // The gesture as it is now, for the same teardown.
+  const finishing = React.useRef(gesture);
   React.useEffect(() => {
     write.current = commitColour;
+    finishing.current = gesture;
   });
   /*
    * Write an unfinished gesture when this field goes away, and do it NOW.
@@ -803,7 +806,13 @@ function usePickerWrites({
       // Closing it properly means the pending edit living somewhere that
       // outlives one field, which is the same thing undo and the unsaved-work
       // guard need and is tracked with them.
-      if (unwritten !== null) write.current(unwritten);
+      // In the gesture's run, as a close writes it, so the moves already
+      // written and this last one are one step of undo. The gesture's own
+      // teardown, which runs first, drops the frame but keeps the run.
+      if (unwritten !== null) {
+        const finish = write.current;
+        finishing.current.end(() => finish(unwritten));
+      }
     },
     []
   );
