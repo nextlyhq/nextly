@@ -37,6 +37,14 @@ import {
   type UpgradeProject,
 } from "./helpers/upgrade-project";
 
+/**
+ * These cases name no database, so they run once: on the leg that sets no
+ * database address, and not again on each leg that tests one.
+ */
+const OTHER_LEG = Boolean(
+  process.env.TEST_POSTGRES_URL ?? process.env.TEST_MYSQL_URL
+);
+
 /** A project install and a run of the command, each of which compiles or downloads. */
 const TIMEOUT = NEXTLY_RUN_TIMEOUT * 2;
 
@@ -97,240 +105,246 @@ function managerCases(manager: Manager, define: () => void): void {
   describe.skipIf(!present)(`with ${manager}`, define);
 }
 
-describe("nextly upgrade moves every Nextly package to one release", () => {
-  for (const manager of MANAGERS) {
-    managerCases(manager, () => {
+describe.skipIf(OTHER_LEG)(
+  "nextly upgrade moves every Nextly package to one release",
+  () => {
+    for (const manager of MANAGERS) {
+      managerCases(manager, () => {
+        it(
+          "with no version, moves each to the release its channel's tag names, exactly, and says what to run next",
+          async () => {
+            const app = await project({ manager, versions: OLDEST });
+            // The fixture's control: installed where the command starts from.
+            expect(versions(app)).toEqual(allAt(OLDEST));
+
+            const run = await app.nextly(["upgrade"]);
+
+            expect(run.status, output(run)).toBe(0);
+            expect(versions(app)).toEqual(allAt(MIDDLE));
+            expect(run.stdout).toContain(
+              `https://github.com/nextlyhq/nextly/releases/tag/v${MIDDLE}`
+            );
+            expect(run.stdout).toContain("nextly migrate:create");
+            expect(run.stdout).toMatch(/then.*`nextly migrate`/s);
+          },
+          TIMEOUT
+        );
+
+        it(
+          "moves to an older release when it is named",
+          async () => {
+            const app = await project({ manager, versions: MIDDLE });
+
+            const run = await app.nextly(["upgrade", OLDEST]);
+
+            expect(run.status, output(run)).toBe(0);
+            expect(versions(app)).toEqual(allAt(OLDEST));
+          },
+          TIMEOUT
+        );
+
+        it(
+          "moves a package held at another version into lockstep",
+          async () => {
+            const app = await project({
+              manager,
+              versions: {
+                nextly: OLDEST,
+                "@nextlyhq/admin": NEWEST,
+                "@nextlyhq/adapter-sqlite": OLDEST,
+              },
+            });
+            expect(app.installed("@nextlyhq/admin")).toBe(NEWEST);
+
+            const run = await app.nextly(["upgrade"]);
+
+            expect(run.status, output(run)).toBe(0);
+            expect(versions(app)).toEqual(allAt(MIDDLE));
+          },
+          TIMEOUT
+        );
+
+        it(
+          "leaves package.json, the lockfile and every installed package as they were when the registry fails part-way",
+          async () => {
+            const app = await project({ manager, versions: OLDEST });
+            const before = app.files();
+            const downloadsBefore = registry.downloads.length;
+            // One package's download fails; the others' are served.
+            registry.failDownloadOf(`@nextlyhq/admin@${UNSERVED}`);
+
+            const run = await app.nextly(["upgrade", UNSERVED]);
+
+            expect(run.status, output(run)).toBe(1);
+            // The control: this run's install did reach the registry for it.
+            expect(registry.downloads.slice(downloadsBefore)).toContain(
+              `@nextlyhq/admin@${UNSERVED}`
+            );
+            expect(app.files()).toEqual(before);
+            expect(versions(app)).toEqual(allAt(OLDEST));
+            expect(output(run)).toContain("(UPGRADE_INSTALL_FAILED)");
+          },
+          TIMEOUT
+        );
+      });
+    }
+
+    managerCases("npm", () => {
       it(
-        "with no version, moves each to the release its channel's tag names, exactly, and says what to run next",
+        "leaves all three as they were when a dependencies script fails after npm changed node_modules",
         async () => {
-          const app = await project({ manager, versions: OLDEST });
-          // The fixture's control: installed where the command starts from.
-          expect(versions(app)).toEqual(allAt(OLDEST));
-
-          const run = await app.nextly(["upgrade"]);
-
-          expect(run.status, output(run)).toBe(0);
-          expect(versions(app)).toEqual(allAt(MIDDLE));
-          expect(run.stdout).toContain(
-            `https://github.com/nextlyhq/nextly/releases/tag/v${MIDDLE}`
-          );
-          expect(run.stdout).toContain("nextly migrate:create");
-          expect(run.stdout).toMatch(/then.*`nextly migrate`/s);
-        },
-        TIMEOUT
-      );
-
-      it(
-        "moves to an older release when it is named",
-        async () => {
-          const app = await project({ manager, versions: MIDDLE });
-
-          const run = await app.nextly(["upgrade", OLDEST]);
-
-          expect(run.status, output(run)).toBe(0);
-          expect(versions(app)).toEqual(allAt(OLDEST));
-        },
-        TIMEOUT
-      );
-
-      it(
-        "moves a package held at another version into lockstep",
-        async () => {
+          // npm runs `dependencies` once it has changed `node_modules` and both
+          // files. It passes for the fixture's install and fails once asked to.
           const app = await project({
-            manager,
-            versions: {
-              nextly: OLDEST,
-              "@nextlyhq/admin": NEWEST,
-              "@nextlyhq/adapter-sqlite": OLDEST,
+            manager: "npm",
+            versions: OLDEST,
+            manifest: {
+              scripts: {
+                dependencies:
+                  "node -e \"process.exit(require('fs').existsSync('fail-now') ? 1 : 0)\"",
+              },
             },
           });
-          expect(app.installed("@nextlyhq/admin")).toBe(NEWEST);
+          const before = app.files();
+          const downloadsBefore = registry.downloads.length;
+          writeFileSync(join(app.dir, "fail-now"), "");
 
           const run = await app.nextly(["upgrade"]);
 
-          expect(run.status, output(run)).toBe(0);
-          expect(versions(app)).toEqual(allAt(MIDDLE));
-        },
-        TIMEOUT
-      );
-
-      it(
-        "leaves package.json, the lockfile and every installed package as they were when the registry fails part-way",
-        async () => {
-          const app = await project({ manager, versions: OLDEST });
-          const before = app.files();
-          const downloadsBefore = registry.downloads.length;
-          // One package's download fails; the others' are served.
-          registry.failDownloadOf(`@nextlyhq/admin@${UNSERVED}`);
-
-          const run = await app.nextly(["upgrade", UNSERVED]);
-
           expect(run.status, output(run)).toBe(1);
-          // The control: this run's install did reach the registry for it.
+          // The control: npm did fetch the new release, so `node_modules` had
+          // changed by the time the script failed.
           expect(registry.downloads.slice(downloadsBefore)).toContain(
-            `@nextlyhq/admin@${UNSERVED}`
+            `nextly@${MIDDLE}`
           );
+          expect(output(run)).toContain("(UPGRADE_INSTALL_FAILED)");
           expect(app.files()).toEqual(before);
           expect(versions(app)).toEqual(allAt(OLDEST));
-          expect(output(run)).toContain("(UPGRADE_INSTALL_FAILED)");
         },
         TIMEOUT
       );
     });
   }
+);
 
-  managerCases("npm", () => {
+describe.skipIf(OTHER_LEG)(
+  "nextly upgrade with no version follows the installed release's channel",
+  () => {
     it(
-      "leaves all three as they were when a dependencies script fails after npm changed node_modules",
+      "changes nothing on the channel's newest release, exits 0, and names the newer release another tag holds",
       async () => {
-        // npm runs `dependencies` once it has changed `node_modules` and both
-        // files. It passes for the fixture's install and fails once asked to.
-        const app = await project({
-          manager: "npm",
-          versions: OLDEST,
-          manifest: {
-            scripts: {
-              dependencies:
-                "node -e \"process.exit(require('fs').existsSync('fail-now') ? 1 : 0)\"",
-            },
-          },
-        });
+        const app = await project({ manager: "npm", versions: MIDDLE });
         const before = app.files();
-        const downloadsBefore = registry.downloads.length;
-        writeFileSync(join(app.dir, "fail-now"), "");
 
         const run = await app.nextly(["upgrade"]);
 
-        expect(run.status, output(run)).toBe(1);
-        // The control: npm did fetch the new release, so `node_modules` had
-        // changed by the time the script failed.
-        expect(registry.downloads.slice(downloadsBefore)).toContain(
-          `nextly@${MIDDLE}`
-        );
-        expect(output(run)).toContain("(UPGRADE_INSTALL_FAILED)");
+        expect(run.status, output(run)).toBe(0);
         expect(app.files()).toEqual(before);
+        expect(versions(app)).toEqual(allAt(MIDDLE));
+        expect(run.stdout).toContain(`nextly upgrade ${NEWEST}`);
+        expect(run.stdout).toContain("beta");
+      },
+      TIMEOUT
+    );
+
+    it(
+      "follows latest from a release with no prerelease identifier",
+      async () => {
+        const app = await project({ manager: "npm", versions: STABLE });
+
+        const run = await app.nextly(["upgrade"]);
+
+        expect(run.status, output(run)).toBe(0);
+        // `latest` names the oldest prerelease here; `alpha` and `beta` are newer.
         expect(versions(app)).toEqual(allAt(OLDEST));
       },
       TIMEOUT
     );
-  });
-});
 
-describe("nextly upgrade with no version follows the installed release's channel", () => {
-  it(
-    "changes nothing on the channel's newest release, exits 0, and names the newer release another tag holds",
-    async () => {
-      const app = await project({ manager: "npm", versions: MIDDLE });
-      const before = app.files();
-
-      const run = await app.nextly(["upgrade"]);
-
-      expect(run.status, output(run)).toBe(0);
-      expect(app.files()).toEqual(before);
-      expect(versions(app)).toEqual(allAt(MIDDLE));
-      expect(run.stdout).toContain(`nextly upgrade ${NEWEST}`);
-      expect(run.stdout).toContain("beta");
-    },
-    TIMEOUT
-  );
-
-  it(
-    "follows latest from a release with no prerelease identifier",
-    async () => {
-      const app = await project({ manager: "npm", versions: STABLE });
-
-      const run = await app.nextly(["upgrade"]);
-
-      expect(run.status, output(run)).toBe(0);
-      // `latest` names the oldest prerelease here; `alpha` and `beta` are newer.
-      expect(versions(app)).toEqual(allAt(OLDEST));
-    },
-    TIMEOUT
-  );
-
-  /** A refusal that can name no release: every tag, each with its release. */
-  function expectEveryTag(run: { stdout: string; stderr: string }): void {
-    for (const [tag, version] of [
-      ["latest", OLDEST],
-      ["alpha", MIDDLE],
-      ["beta", NEWEST],
-    ]) {
-      expect(output(run)).toMatch(new RegExp(`${tag}[^\\n]*${version}`));
+    /** A refusal that can name no release: every tag, each with its release. */
+    function expectEveryTag(run: { stdout: string; stderr: string }): void {
+      for (const [tag, version] of [
+        ["latest", OLDEST],
+        ["alpha", MIDDLE],
+        ["beta", NEWEST],
+      ]) {
+        expect(output(run)).toMatch(new RegExp(`${tag}[^\\n]*${version}`));
+      }
+      expect(output(run)).toContain("nextly upgrade <version>");
     }
-    expect(output(run)).toContain("nextly upgrade <version>");
+
+    it(
+      "changes nothing and exits 1 on a channel the registry has no tag for, naming every tag",
+      async () => {
+        const app = await project({ manager: "npm", versions: CANDIDATE });
+        const before = app.files();
+
+        const run = await app.nextly(["upgrade"]);
+
+        expect(run.status, output(run)).toBe(1);
+        expect(app.files()).toEqual(before);
+        expect(versions(app)).toEqual(allAt(CANDIDATE));
+        expect(output(run)).toContain("rc");
+        expectEveryTag(run);
+      },
+      TIMEOUT
+    );
+
+    it(
+      "does the same where the packages are not installed",
+      async () => {
+        const app = await project({
+          manager: "npm",
+          versions: OLDEST,
+          install: false,
+        });
+        const before = app.files();
+
+        const run = await app.nextly(["upgrade"]);
+
+        expect(run.status, output(run)).toBe(1);
+        expect(app.files()).toEqual(before);
+        expect(app.installed("nextly")).toBeUndefined();
+        expect(output(run)).toContain("not installed");
+        expectEveryTag(run);
+      },
+      TIMEOUT
+    );
+
+    it.each([`9.0.0-beta.9`, "not-a-version"])(
+      "refuses %s, which is not a published release, naming the installed channel's release",
+      async given => {
+        const app = await project({ manager: "npm", versions: OLDEST });
+        const before = app.files();
+
+        const run = await app.nextly(["upgrade", given]);
+
+        expect(run.status, output(run)).toBe(1);
+        expect(app.files()).toEqual(before);
+        expect(versions(app)).toEqual(allAt(OLDEST));
+        expect(output(run)).toContain(given);
+        expect(output(run)).toContain(`nextly upgrade ${MIDDLE}`);
+      },
+      TIMEOUT
+    );
+
+    it.each([`9.0.0-beta.9`, "not-a-version"])(
+      "refuses %s with every tag where the packages are not installed",
+      async given => {
+        const app = await project({
+          manager: "npm",
+          versions: OLDEST,
+          install: false,
+        });
+        const before = app.files();
+
+        const run = await app.nextly(["upgrade", given]);
+
+        expect(run.status, output(run)).toBe(1);
+        expect(app.files()).toEqual(before);
+        expectEveryTag(run);
+      },
+      TIMEOUT
+    );
   }
-
-  it(
-    "changes nothing and exits 1 on a channel the registry has no tag for, naming every tag",
-    async () => {
-      const app = await project({ manager: "npm", versions: CANDIDATE });
-      const before = app.files();
-
-      const run = await app.nextly(["upgrade"]);
-
-      expect(run.status, output(run)).toBe(1);
-      expect(app.files()).toEqual(before);
-      expect(versions(app)).toEqual(allAt(CANDIDATE));
-      expect(output(run)).toContain("rc");
-      expectEveryTag(run);
-    },
-    TIMEOUT
-  );
-
-  it(
-    "does the same where the packages are not installed",
-    async () => {
-      const app = await project({
-        manager: "npm",
-        versions: OLDEST,
-        install: false,
-      });
-      const before = app.files();
-
-      const run = await app.nextly(["upgrade"]);
-
-      expect(run.status, output(run)).toBe(1);
-      expect(app.files()).toEqual(before);
-      expect(app.installed("nextly")).toBeUndefined();
-      expect(output(run)).toContain("not installed");
-      expectEveryTag(run);
-    },
-    TIMEOUT
-  );
-
-  it.each([`9.0.0-beta.9`, "not-a-version"])(
-    "refuses %s, which is not a published release, naming the installed channel's release",
-    async given => {
-      const app = await project({ manager: "npm", versions: OLDEST });
-      const before = app.files();
-
-      const run = await app.nextly(["upgrade", given]);
-
-      expect(run.status, output(run)).toBe(1);
-      expect(app.files()).toEqual(before);
-      expect(versions(app)).toEqual(allAt(OLDEST));
-      expect(output(run)).toContain(given);
-      expect(output(run)).toContain(`nextly upgrade ${MIDDLE}`);
-    },
-    TIMEOUT
-  );
-
-  it.each([`9.0.0-beta.9`, "not-a-version"])(
-    "refuses %s with every tag where the packages are not installed",
-    async given => {
-      const app = await project({
-        manager: "npm",
-        versions: OLDEST,
-        install: false,
-      });
-      const before = app.files();
-
-      const run = await app.nextly(["upgrade", given]);
-
-      expect(run.status, output(run)).toBe(1);
-      expect(app.files()).toEqual(before);
-      expectEveryTag(run);
-    },
-    TIMEOUT
-  );
-});
+);
