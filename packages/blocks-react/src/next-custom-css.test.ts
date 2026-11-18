@@ -41,11 +41,11 @@ const route = { collections: ["pages"], field: "content" };
 
 describe("routeCustomCss", () => {
   it("is none when the route names no custom CSS", async () => {
-    expect(await routeCustomCss({ ...route }, true, undefined)).toBeUndefined();
+    expect(await routeCustomCss({ ...route }, true, undefined)).toEqual({});
   });
 
   it("is the host's checker with the site's CSS", async () => {
-    const policy = await routeCustomCss(
+    const { customCss: policy } = await routeCustomCss(
       { ...route, customCss: source("body { margin: 0; }") },
       false,
       undefined
@@ -57,7 +57,7 @@ describe("routeCustomCss", () => {
   });
 
   it("carries no site CSS when the site has none", async () => {
-    const policy = await routeCustomCss(
+    const { customCss: policy } = await routeCustomCss(
       { ...route, customCss: source(undefined) },
       false,
       undefined

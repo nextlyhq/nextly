@@ -820,7 +820,7 @@ export function blocksRouteConfig(
         },
         blocks: resolver,
         styleContext,
-        ...(customCss === undefined ? {} : { customCss }),
+        ...customCss,
         blockFallback,
         limits,
         // Spread conditionally: `PageRenderer` distinguishes an absent policy
