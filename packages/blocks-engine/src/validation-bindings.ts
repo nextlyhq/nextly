@@ -117,5 +117,29 @@ export function validBindingShape(
       message: 'sourceKey is only allowed when source is "single".',
     });
   }
+  listShapeIssue(binding, source, bPath, issues);
   return true;
+}
+
+/**
+ * The enclosing list an item binding names, where one is named: a list's
+ * node id, and only on an item binding, the one source a list draws.
+ */
+function listShapeIssue(
+  binding: Record<string, unknown>,
+  source: unknown,
+  bPath: string,
+  issues: ValidationIssue[]
+): void {
+  const list = binding.list;
+  if (list === undefined) return;
+  if (source !== "item" || typeof list !== "string" || list.length === 0) {
+    issues.push({
+      path: pointer(bPath, "list"),
+      code: "invalid-binding",
+      severity: "error",
+      message:
+        'list names the enclosing list an item binding reads, by its id, and is only allowed when source is "item".',
+    });
+  }
 }
