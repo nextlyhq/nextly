@@ -270,6 +270,12 @@ export {
   // The column a field's name becomes (@experimental): the Builder matches a rename it made to the
   // columns the save's preview pairs by it, rather than by a copy of the spelling.
   toSnakeCase as fieldColumnName,
+  // Whether a field becomes a column of its table, and whether a relationship keeps its links in a
+  // junction table instead (@experimental): the Builder holds a name to a column's length only
+  // where the field makes one, as the save's field-name rule does, rather than by a copy of the
+  // rule that could come to disagree with it.
+  fieldProducesColumn,
+  usesJunctionTable,
 } from "./domains/schema/field-rules";
 // The mount travels with the path builder, so a client that resolves a route
 // names the same union the server declared it with.

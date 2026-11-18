@@ -22,6 +22,7 @@
 
 import type { FieldAccess } from "../collections/fields/types/base";
 import { isIconIdShape } from "../collections/fields/types/icon";
+import { MAX_FIELD_NAME_LENGTH } from "../domains/dynamic-collections/field-name-rule";
 import { MIGRATION_TARGET } from "../domains/field-groups/migration/target";
 import { neverTranslatable } from "../domains/i18n/classify-fields";
 import {
@@ -185,7 +186,8 @@ export function validateSlugShared(
 
 /**
  * Validate a single field name against the standard Nextly rules:
- * required, string, pattern-conformant, not a SQL keyword. Whether it clashes
+ * required, string, pattern-conformant, no longer than any field name may be
+ * (`MAX_FIELD_NAME_LENGTH`, the field-name rule's own cap), not a SQL keyword. Whether it clashes
  * with a sibling's is the sibling rule's question, asked once for the whole
  * entity (`validateSiblingFieldsShared`).
  */
@@ -218,6 +220,16 @@ export function validateFieldNameShared(
       path: `${path}.name`,
       message: `Field name '${name}' must start with a letter and contain only letters, numbers, and underscores`,
       code: "FIELD_NAME_INVALID_FORMAT",
+    });
+  }
+
+  // The cap the field-name rule holds every name to, column or not: a field group's rows point
+  // back to their field by its name, in a parent-pointer column of that width.
+  if (name.length > MAX_FIELD_NAME_LENGTH) {
+    errors.push({
+      path: `${path}.name`,
+      message: `Field name is longer than ${MAX_FIELD_NAME_LENGTH} characters, the longest a field group's rows can point back to`,
+      code: "FIELD_NAME_TOO_LONG",
     });
   }
 

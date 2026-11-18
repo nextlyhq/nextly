@@ -127,6 +127,12 @@ import {
 import { loadUiSchema } from "../ui-schema/loader";
 import { uiToMinimal } from "../ui-schema/merge";
 import { mutateManifest, type ManifestKind } from "../ui-schema/mutate";
+import {
+  entityLabel,
+  fieldTypeChangesOf,
+  perLanguageBefore,
+  refuseFieldTypeChanges,
+} from "../value-conversion/type-change/field-type-changes";
 
 /** What the writer works with: the app's database, config and folders. */
 export interface CollectionSaveDeps {
@@ -176,6 +182,12 @@ export interface CollectionSave {
    * (`previewCollectionSave`): a save converts no column it was not shown to.
    */
   acknowledgedConversions?: readonly string[];
+  /**
+   * The registry row's migration status before the save, where the caller read the row: a field
+   * type change while the definition still awaits its migration is refused, since the columns do
+   * not hold what the definition says yet. Absent, the history checks are what stand for it.
+   */
+  migrationStatus?: string | null;
   /**
    * The statements that take the collection's many-to-many junction tables
    * from before the save to after it, and back
@@ -434,6 +446,9 @@ async function writeSave(
 }> {
   if (options.historyChecked !== true) await checkSaveHistory(deps);
   const plan = await planSave(deps, save);
+  // Each field whose type the save changes is judged over the values its column holds, before any
+  // file is written: a blocked change, or a lossy one not consented to, refuses the save.
+  await refuseSaveTypeChanges(deps, save, plan.table);
   refuseUnconfirmedConversions(plan, save);
   refuseUnenforceableUniques(deps, save, plan.table);
   // A move that cannot keep its values is refused here, before the definition is written.
@@ -459,6 +474,95 @@ async function writeSave(
   } catch (error) {
     return undoThenThrow(error, [{ files: names, undo: () => undo(error) }]);
   }
+}
+
+/**
+ * Refuse the save's blocked and lossy field type changes, judged over the values the entity's
+ * table holds (`refuseFieldTypeChanges`). A create or a delete changes no field's type. The fields
+ * are the whole lists, so a field a group with no name holds is judged by its own name. Where an
+ * earlier save's file for the table is not applied yet (outside development, before the deploy's
+ * `nextly migrate`), the columns do not hold what the definition says, and a type change is
+ * refused until it is.
+ */
+async function refuseSaveTypeChanges(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): Promise<void> {
+  if (save.previous === null || save.entity === null) return;
+  const kind = kindOf(save);
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const previous = save.previous.fields as unknown as FieldDefinition[];
+  const next = save.entity.fields as unknown as FieldDefinition[];
+  const renamed = new Map(
+    (save.renamedFields ?? []).map(r => [r.from, r.to] as const)
+  );
+  // Asked only of a save that changes a field's type, so no other save reads its folder.
+  const changes = fieldTypeChangesOf({
+    previous,
+    next,
+    renamed,
+    dialect,
+    builtBy: kind.builtBy,
+  });
+  if (changes.length === 0) return;
+  await refuseFieldTypeChanges(deps.adapter.getDrizzle(), dialect, {
+    label: entityLabel(kind.kind, save.slug),
+    table,
+    ...perLanguageBefore(save.previous, table, previous),
+    previous,
+    next,
+    renamed,
+    ...(await migrationStatusOf(deps, save, table)),
+    // No consent is taken here: a lossy type change is refused until the save clears the
+    // consented values before it converts the column.
+    builtBy: kind.builtBy,
+  });
+}
+
+/**
+ * The status the save's entity is judged under: the registry row's, where the caller read it;
+ * `pending` where a file not yet applied changes the table; none otherwise.
+ */
+async function migrationStatusOf(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): Promise<{ migrationStatus?: string | null }> {
+  if (save.migrationStatus !== undefined) {
+    return { migrationStatus: save.migrationStatus };
+  }
+  return (await unappliedFileChanges(deps, table))
+    ? { migrationStatus: "pending" }
+    : {};
+}
+
+/**
+ * Whether a migration file in the folder that is not recorded applied changes `table`, or may: one
+ * whose statements name tables this reading cannot tell is taken as changing it.
+ */
+async function unappliedFileChanges(
+  deps: CollectionSaveDeps,
+  table: string
+): Promise<boolean> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const repo = new SchemaEventsRepository(deps.adapter.getDrizzle(), dialect);
+  const applied = new Set(
+    (await repo.listFileApplies())
+      .filter(row => row.status === "applied")
+      .map(row => row.filename)
+  );
+  for (const filename of await sqlFiles(deps.migrationsDir)) {
+    if (applied.has(filename)) continue;
+    const tables = tablesChangedBy(await unitOf(deps, filename), dialect);
+    if (
+      tables === undefined ||
+      tables.some(name => name.toLowerCase() === table.toLowerCase())
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

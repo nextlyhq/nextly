@@ -41,6 +41,11 @@ import {
   type CssPropertyRow,
 } from "./css-properties";
 import {
+  CUSTOM_CSS_KEY,
+  CUSTOM_CSS_SECTION,
+  CUSTOM_CSS_SETTING,
+} from "./custom-css";
+import {
   galleryColumnsHoldValue,
   GALLERY_COLUMNS,
   GALLERY_MOBILE,
@@ -242,7 +247,12 @@ function hiddenSomewhere(node: BlockNode | undefined): boolean {
 /** The Advanced tab's settings: Visibility, HTML, then the block's own. */
 export function advancedEntries(
   inspection: BlockInspection,
-  node: BlockNode | undefined
+  node: BlockNode | undefined,
+  /**
+   * Whether Advanced draws Custom CSS, for a person who may change site
+   * code: only then can a search find it or Only changed count it.
+   */
+  offersCustomCss = false
 ): SettingEntry[] {
   const bound = boundProps(node);
   const { htmlRows, visibilityRows, others } = advancedRowsBySection(
@@ -307,6 +317,20 @@ export function advancedEntries(
         drawnRows(section.rows, bound)
       )
     ),
+    // Last, as the tab draws it; set by the one answer its dot reads.
+    ...(offersCustomCss
+      ? sectionEntries(
+          "advanced",
+          { key: CUSTOM_CSS_KEY, label: CUSTOM_CSS_SECTION },
+          [
+            {
+              id: CUSTOM_CSS_SETTING,
+              label: CUSTOM_CSS_SECTION,
+              set: inspection.hasCustomCss,
+            },
+          ]
+        )
+      : []),
   ];
 }
 

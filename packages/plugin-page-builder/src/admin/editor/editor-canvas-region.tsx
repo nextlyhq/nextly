@@ -7,11 +7,14 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-canvas-region
  */
+import type { RegionArea } from "@nextlyhq/blocks-engine";
 import { blockNameOf } from "@nextlyhq/builder";
 import {
   BlockContextMenu,
   BlockToolbar,
   Canvas,
+  type CanvasEditingRegion,
+  canvasEditingOf,
   CanvasFrame,
   CanvasMarks,
   InsertionLine,
@@ -20,6 +23,7 @@ import {
   elementAnchor,
   EmbedStates,
   EmptyContainerAppenders,
+  RegionEditingScrim,
   RepairNotice,
   SpacingOverlay,
   VisitorUnreadableBadges,
@@ -132,6 +136,25 @@ const COMPONENT_READ_NOTES: Readonly<
 };
 
 /** The canvas, or what stands in its place while a read it needs is out. */
+/** The region edited in place, or nothing while the page is edited. */
+function editedArea(view: EditorView): RegionArea | undefined {
+  const { target } = view.editing;
+  return target.kind === "region" ? target.area : undefined;
+}
+
+/** The canvas's way into editing a region in place, and the region edited. */
+function regionEditingProps(view: EditorView): {
+  onEditRegion?: (area: RegionArea) => void;
+  editingRegion?: CanvasEditingRegion;
+} {
+  const { requestEdit } = view.regionEditing;
+  const editingRegion = canvasEditingOf(view.editing);
+  return {
+    ...(requestEdit === undefined ? {} : { onEditRegion: requestEdit }),
+    ...(editingRegion === undefined ? {} : { editingRegion }),
+  };
+}
+
 export function editorCanvasRegion(view: EditorView): React.JSX.Element {
   const {
     componentLibrary,
@@ -270,6 +293,14 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
             pinned={previewed.tags}
             overlay={
               <>
+                {/* While a header or footer is edited in place, the dim over
+                    the rest of the canvas: a press on it changes nothing and
+                    highlights Done. First, so the header's marks are drawn
+                    over it. */}
+                <RegionEditingScrim
+                  area={editedArea(view)}
+                  onPress={view.editing.pulseDone}
+                />
                 {/* An Image with no picture: "Add an image" with Upload,
                     Media library and Link, and a file dropped on it, through
                     the admin's media library. First, so the marks, the drop
@@ -462,6 +493,11 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
               regions={view.canvasRegions}
               selectedRegion={view.selectedRegion.selection.area}
               onSelectRegion={view.selectedRegion.selection.select}
+              // A double-click on a region, or Enter on it while selected,
+              // edits it in place, for someone who may edit components; and
+              // the region being edited, drawn from its live document with
+              // its blocks addressed, the page around it inert under the dim.
+              {...regionEditingProps(view)}
               // The conditioned blocks visitors never see, because the page
               // can't check their conditions: badged in red on the canvas.
               conditionsUnchecked={view.conditionsUnchecked}

@@ -29,8 +29,8 @@ import type {
 import type { SavedComponent, SavedPattern } from "@nextlyhq/builder";
 import type { HookWarning } from "nextly/config";
 
-import type { LayoutArea } from "./collections/areas";
 import type { RemovalDryRun } from "./breakpoint-removal/dry-run";
+import type { LayoutArea } from "./collections/areas";
 import type { SharedStyleUsageKind } from "./shared-style-usage-contract";
 import type { CspAddition, CspCheck } from "./site-code/csp";
 
