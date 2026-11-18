@@ -302,7 +302,7 @@ function wordsAroundCaret(element: HTMLElement): [string, string] {
     !element.contains(range.startContainer) ||
     !element.contains(range.endContainer)
   ) {
-    return [elementWords(element), ""];
+    return [withoutPlaceholder(element, elementWords(element)), ""];
   }
   const before = element.ownerDocument.createRange();
   before.selectNodeContents(element);
@@ -311,11 +311,25 @@ function wordsAroundCaret(element: HTMLElement): [string, string] {
   after.selectNodeContents(element);
   after.setStart(range.endContainer, range.endOffset);
   // Read as the element is, a `<br>` as the line break it stands for, so a
-  // split changes nothing either side of the caret.
-  return [
-    elementWords(before.cloneContents()),
-    elementWords(after.cloneContents()),
-  ];
+  // split changes nothing either side of the caret; the placeholder an
+  // emptied line holds is the element's last node, so it ends whichever side
+  // reaches the element's end, and is no line break in either.
+  const head = elementWords(before.cloneContents());
+  const tail = elementWords(after.cloneContents());
+  return range.collapsed && tail === "" && !before.collapsed
+    ? [withoutPlaceholder(element, head), tail]
+    : [head, withoutPlaceholder(element, tail)];
+}
+
+/**
+ * Words read up to an element's end, without the `<br>` a browser leaves as
+ * its last node to hold an emptied line open. Judged by the element's last
+ * node, not by the words: a line break stored as text is kept.
+ */
+function withoutPlaceholder(element: Node, words: string): string {
+  return endsInBreak(element) && words.endsWith("\n")
+    ? words.slice(0, -1)
+    : words;
 }
 
 /**
@@ -327,8 +341,8 @@ function wordsAroundCaret(element: HTMLElement): [string, string] {
  */
 function editedWords(element: Node, editing: InlineTextEditing): string {
   const words = elementWords(element);
-  return itemOfPropName(editing.prop) !== null && endsInBreak(element)
-    ? words.slice(0, -1)
+  return itemOfPropName(editing.prop) !== null
+    ? withoutPlaceholder(element, words)
     : words;
 }
 

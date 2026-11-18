@@ -162,6 +162,18 @@ describe("Enter in a list item", () => {
     expect(itemsNow()).toEqual(["a\nb", ""]);
   });
 
+  it("splits an emptied item into two empty ones, the placeholder no line break", () => {
+    open(["One"], 0);
+    element(0).innerHTML = "<br>";
+    const range = document.createRange();
+    range.setStart(element(0), 0);
+    range.collapse(true);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    press(0, "Enter");
+    expect(itemsNow()).toEqual(["", ""]);
+  });
+
   it("at an item's end adds an empty one after it", () => {
     open(["One", "Two"], 1);
     caretAt(1, 3);
