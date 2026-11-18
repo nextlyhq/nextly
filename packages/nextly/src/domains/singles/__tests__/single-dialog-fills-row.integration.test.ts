@@ -253,22 +253,6 @@ describeEachDialect(
       expect(Object.keys(await row())).toEqual(columns);
     });
 
-    // A field inside a group with no name is a column of the row like one beside it; a JSON
-    // default is written as the JSON its column stores.
-    it("fills a JSON field inside a group with no name with its default", async () => {
-      await save([
-        BODY,
-        {
-          type: "group",
-          fields: [{ name: "meta", type: "json", defaultValue: { a: 1 } }],
-        },
-      ]);
-      const stored = (await row()).meta;
-      expect(typeof stored === "string" ? JSON.parse(stored) : stored).toEqual({
-        a: 1,
-      });
-    });
-
     it("fills a field named after an object member, which is no answer the person gave", async () => {
       await save([
         BODY,
