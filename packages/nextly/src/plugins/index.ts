@@ -121,6 +121,7 @@ export type {
   PluginFieldWrite,
   PluginStoredValue,
   PluginStoredValueTarget,
+  PluginStoredValuesTarget,
   PluginFieldInstance,
   PluginFieldIssue,
   PluginFieldValidationResult,

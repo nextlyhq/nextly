@@ -18,6 +18,7 @@ import type { BindingIssue, BindingIssueCode } from "./binding-issues";
 import {
   checkBinding,
   type BindingCheck,
+  type BindingRefs,
   type BindingSchemaRef,
   type BindingSchemaSource,
   type CheckedBinding,
@@ -139,7 +140,7 @@ function nodeFindings(
   node: Readonly<Record<string, unknown>>,
   path: string,
   judgement: BindingSchemaJudgement,
-  item: BindingSchemaRef | undefined
+  around: DrawnWith
 ): BindingFinding[] {
   const bindings = node.bindings;
   const id = node.id;
@@ -149,7 +150,7 @@ function nodeFindings(
   for (const prop of ownKeys(bindings)) {
     const bound = { id, prop, binding: ownEntry(bindings, prop), props };
     const at = pointer(pointer(path, "bindings"), prop);
-    const check = bindingCheckOf(bound, judgement, item);
+    const check = bindingCheckOf(bound, judgement, around);
     findings.push(...propFindings(bound, at, check));
     if (prop === ENTRY_LINK_PROPS.id) {
       findings.push(...entryLinkFindings({ node, bindings, bound, check }, at));
@@ -275,17 +276,16 @@ function declaredProps(
  */
 function schemaOf(
   judgement: BindingSchemaJudgement,
-  item?: BindingSchemaRef
+  around?: DrawnWith
 ): {
   readonly schema: BindingSchemaSource;
-  readonly refs?: {
-    readonly entry?: BindingSchemaRef;
-    readonly item?: BindingSchemaRef;
-  };
+  readonly refs?: BindingRefs;
 } {
+  const item = around?.item;
   const refs = {
     ...(judgement.entry === undefined ? {} : { entry: judgement.entry }),
     ...(item === undefined ? {} : { item }),
+    ...(around === undefined ? {} : { lists: around.lists }),
   };
   return {
     schema: judgement.schema,
@@ -326,14 +326,14 @@ interface BoundProp {
 function bindingCheckOf(
   bound: BoundProp,
   judgement: BindingSchemaJudgement,
-  item: BindingSchemaRef | undefined
+  around: DrawnWith
 ): BindingCheck {
   return checkBinding({
     nodeId: bound.id,
     prop: bound.prop,
     binding: bound.binding,
     ...(bound.props === undefined ? {} : { props: bound.props }),
-    ...schemaOf(judgement, item),
+    ...schemaOf(judgement, around),
   });
 }
 
@@ -360,8 +360,44 @@ interface Frame {
   readonly nodes: readonly unknown[];
   next: number;
   readonly at: (index: number) => string;
-  /** The item its nodes are drawn with: the nearest list's, if any. */
+  /** The item its nodes are drawn with, and every list's around them. */
+  readonly around: DrawnWith;
+}
+
+/**
+ * What a node is drawn with: the item of the nearest list's entry, if any,
+ * and every list whose entry it is drawn in, by node id, with the ref its
+ * entries bind against, for an item binding naming its `list`.
+ */
+interface DrawnWith {
   readonly item: BindingSchemaRef | undefined;
+  readonly lists: ReadonlyMap<string, BindingSchemaRef | undefined>;
+}
+
+/** Drawn with nothing: outside every list. */
+const OUTSIDE_LISTS: DrawnWith = { item: undefined, lists: new Map() };
+
+/**
+ * What a node's slot draws its children with: a list's entries slot draws
+ * each entry as the item, and adds the list to those around; its empty state
+ * has no item of its own, while the lists further out still draw theirs. Any
+ * other node's slots draw what it is drawn with.
+ */
+function slotDrawnWith(
+  node: Readonly<Record<string, unknown>>,
+  slot: string,
+  around: DrawnWith,
+  namedQueries: NamedQuerySource | undefined
+): DrawnWith {
+  const item = slotItem(node, slot, around.item, namedQueries);
+  if (
+    node.type !== COLLECTION_LIST_TYPE ||
+    slot !== LIST_ENTRY_SLOT ||
+    typeof node.id !== "string"
+  ) {
+    return item === around.item ? around : { ...around, item };
+  }
+  return { item, lists: new Map(around.lists).set(node.id, item) };
 }
 
 /**
@@ -400,7 +436,7 @@ function slotItem(
 function slotFrames(
   node: Readonly<Record<string, unknown>>,
   path: string,
-  item: BindingSchemaRef | undefined,
+  around: DrawnWith,
   namedQueries: NamedQuerySource | undefined
 ): Frame[] {
   const slots = node.slots;
@@ -414,7 +450,7 @@ function slotFrames(
       nodes: children,
       next: 0,
       at: index => pointer(slotPath, index),
-      item: slotItem(node, name, item, namedQueries),
+      around: slotDrawnWith(node, name, around, namedQueries),
     });
   }
   return frames;
@@ -432,7 +468,12 @@ function walkBindingFindings(
   const findings: BindingFinding[] = [];
   let left = judgement.maxNodes ?? Number.MAX_SAFE_INTEGER;
   const stack: Frame[] = [
-    { nodes, next: 0, at: index => pointer("/nodes", index), item: undefined },
+    {
+      nodes,
+      next: 0,
+      at: index => pointer("/nodes", index),
+      around: OUTSIDE_LISTS,
+    },
   ];
   while (left > 0) {
     const frame = stack[stack.length - 1];
@@ -447,11 +488,11 @@ function walkBindingFindings(
     const node: unknown = frame.nodes[index];
     if (!isPlainRecord(node)) continue;
     const path = frame.at(index);
-    findings.push(...nodeFindings(node, path, judgement, frame.item));
+    findings.push(...nodeFindings(node, path, judgement, frame.around));
     for (const slot of slotFrames(
       node,
       path,
-      frame.item,
+      frame.around,
       judgement.namedQueries
     ))
       stack.push(slot);

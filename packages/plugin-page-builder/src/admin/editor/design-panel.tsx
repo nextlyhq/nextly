@@ -30,6 +30,7 @@ import { Input, Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
 import { Search } from "lucide-react";
 import * as React from "react";
 
+import { useGroupFolds } from "./group-folds";
 import {
   RemountOnStyleReplay,
   StyleRevisionContext,
@@ -74,7 +75,7 @@ interface DesignBrowse {
   /** The search field, where focus goes once a listed thing is removed. */
   readonly searchRef: React.RefObject<HTMLInputElement | null>;
   /** Opens a group the author folded and brings it into view, focused. */
-  readonly reveal: (group: string) => void;
+  readonly reveal: Reveal;
   readonly folds: GroupFolds | undefined;
   readonly reportMatches: (matches: DesignMatches) => void;
 }
@@ -94,38 +95,6 @@ export function useDesignBrowse(): DesignBrowse {
 }
 
 /**
- * The folded groups, read from and written to the author's own store, so a
- * group stays folded across reloads. Without a store every group is open,
- * and folding lasts only as long as the panel.
- */
-function useFolds(store: PreferenceStore | undefined): GroupFolds {
-  const [kept, setKept] = React.useState(() => ({
-    store,
-    folded: foldsRead(store),
-  }));
-  // A store arriving after the panel mounted, as once the author is known,
-  // is read then, so a toggle builds on the folds it holds rather than
-  // writing over them.
-  if (kept.store !== store) {
-    setKept({ store, folded: foldsRead(store) });
-  }
-  const folded = kept.store === store ? kept.folded : foldsRead(store);
-  const onFold = React.useCallback(
-    (group: string, fold: boolean) => {
-      setKept(current => {
-        const next = new Set(current.folded);
-        if (fold) next.add(group);
-        else next.delete(group);
-        store?.write(JSON.stringify([...next]));
-        return { store, folded: next };
-      });
-    },
-    [store]
-  );
-  return React.useMemo(() => ({ folded, onFold }), [folded, onFold]);
-}
-
-/**
  * Opens a group of the open tab and brings it into view with focus on its
  * heading, as a part sending the author to it asks: once drawn, since a
  * folded group's rows are not.
@@ -133,21 +102,82 @@ function useFolds(store: PreferenceStore | undefined): GroupFolds {
 function useReveal(
   root: React.RefObject<HTMLElement | null>,
   folds: GroupFolds
-): (group: string) => void {
+): Reveal {
   return React.useCallback(
-    (group: string) => {
+    (group: string, block: ScrollLogicalPosition = "nearest") => {
       if (folds.folded.has(group)) folds.onFold(group, false);
-      window.setTimeout(() => {
-        const section = [
-          ...(root.current?.querySelectorAll<HTMLElement>("[data-group]") ??
-            []),
-        ].find(element => element.dataset.group === group);
-        section?.scrollIntoView({ block: "nearest" });
-        section?.querySelector<HTMLElement>("button")?.focus();
-      }, 0);
+      revealWhenDrawn(root, group, block, REVEAL_TRIES);
     },
     [root, folds]
   );
+}
+
+/** Opens a group and brings it into view, at the edge `block` names. */
+type Reveal = (group: string, block?: ScrollLogicalPosition) => void;
+
+/**
+ * How many times a reveal looks for its group, 50ms apart: a tab opened by
+ * the same request draws its groups once its reads land, so the group may
+ * not be there on the first look.
+ */
+const REVEAL_TRIES = 40;
+
+/** Scroll a group into view and focus its heading, once it is drawn. */
+function revealWhenDrawn(
+  root: React.RefObject<HTMLElement | null>,
+  group: string,
+  block: ScrollLogicalPosition,
+  tries: number
+): void {
+  window.setTimeout(
+    () => {
+      const section = [
+        ...(root.current?.querySelectorAll<HTMLElement>("[data-group]") ?? []),
+      ].find(element => element.dataset.group === group);
+      if (section === undefined) {
+        if (tries > 1) revealWhenDrawn(root, group, block, tries - 1);
+        return;
+      }
+      section.scrollIntoView({ block });
+      section.querySelector<HTMLElement>("button")?.focus();
+    },
+    tries === REVEAL_TRIES ? 0 : 50
+  );
+}
+
+/**
+ * A request from outside the panel to show one group of one tab, such as the
+ * block panel's "Edit block styles" asking for a block type's styles. Counted,
+ * so the same group asked for twice is two requests.
+ */
+export interface DesignRevealRequest {
+  readonly view: DesignView;
+  readonly group: string;
+  readonly count: number;
+}
+
+/**
+ * Answers a reveal request once its tab is the one open: the search put away,
+ * since a search can hide the group, then the group opened, brought to the
+ * top and focused. Told back, so the host stops asking and a later open of
+ * the panel replays nothing.
+ */
+function useRevealRequest(
+  request: DesignRevealRequest | undefined,
+  current: DesignView,
+  reveal: Reveal,
+  setSearch: (search: string) => void,
+  onRevealed: ((count: number) => void) | undefined
+): void {
+  const answered = React.useRef<number | undefined>(undefined);
+  React.useEffect(() => {
+    if (request === undefined || request.view !== current) return;
+    if (answered.current === request.count) return;
+    answered.current = request.count;
+    setSearch("");
+    reveal(request.group, "start");
+    onRevealed?.(request.count);
+  }, [request, current, reveal, setSearch, onRevealed]);
 }
 
 /**
@@ -160,22 +190,6 @@ export function DesignReveal({
   children: (reveal: (group: string) => void) => React.ReactNode;
 }): React.JSX.Element {
   return <>{children(useDesignBrowse().reveal)}</>;
-}
-
-/** The stored folds, or none: a store that holds nothing or no list of names. */
-function foldsRead(store: PreferenceStore | undefined): ReadonlySet<string> {
-  const text = store?.read() ?? null;
-  if (text === null) return new Set();
-  try {
-    const parsed: unknown = JSON.parse(text);
-    return new Set(
-      Array.isArray(parsed)
-        ? parsed.filter((entry): entry is string => typeof entry === "string")
-        : []
-    );
-  } catch {
-    return new Set();
-  }
 }
 
 /**
@@ -200,8 +214,14 @@ export function DesignPanel({
   tabs,
   frame = noFrame,
   foldStore,
+  revealRequest,
+  onRevealed,
 }: {
   view: PanelView;
+  /** A group asked for from outside the panel, shown once its tab is open. */
+  revealRequest?: DesignRevealRequest;
+  /** Told the count of each reveal request the panel has answered. */
+  onRevealed?: (count: number) => void;
   /** What fills each tab. Only the open tab's content is mounted. */
   tabs: Record<DesignView, () => React.ReactNode>;
   /** Where the author's folded groups are kept. Absent: they are not kept. */
@@ -227,7 +247,7 @@ export function DesignPanel({
   const searchRef = React.useRef<HTMLInputElement>(null);
   const root = React.useRef<HTMLElement>(null);
   const [matches, setMatches] = React.useState<DesignMatches>({});
-  const folds = useFolds(foldStore);
+  const folds = useGroupFolds(foldStore);
   // Parts report the counts they list; only the counts that changed land.
   const reportMatches = React.useCallback((reported: DesignMatches) => {
     setMatches(current =>
@@ -239,6 +259,7 @@ export function DesignPanel({
     );
   }, []);
   const reveal = useReveal(root, folds);
+  useRevealRequest(revealRequest, current, reveal, setSearch, onRevealed);
   const browse = React.useMemo(
     () => ({ search, setSearch, searchRef, reveal, folds, reportMatches }),
     [search, reveal, folds, reportMatches]

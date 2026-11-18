@@ -247,7 +247,8 @@ afterEach(() => {
 /** Open Brand's editor and answer its Light field. */
 function openBrand(): HTMLElement {
   act(() => {
-    fireEvent.click(screen.getByRole("button", { name: /^Brand/ }));
+    // The row, not the "Brand" group's heading, which reads "Brand, <count>".
+    fireEvent.click(screen.getByRole("button", { name: /^Brand, (?!\d+$)/ }));
   });
   return screen.getByLabelText("Light");
 }

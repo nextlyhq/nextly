@@ -103,6 +103,34 @@ describe("the canvas's change check", () => {
     expect(ask).toHaveBeenCalledTimes(1);
   });
 
+  it("takes the first mark from the canvas's first reads, asking nothing for it", async () => {
+    const ask = vi.fn(async () => "m1");
+    renderHook(() => useCanvasSourceCheck(ASKED, "u1", ask, true, "m1"));
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ask).not.toHaveBeenCalled();
+    // The minute's check compares with it: the same mark keeps what was read.
+    await vi.advanceTimersByTimeAsync(SOURCE_CHECK_EVERY_MS);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(dropped).toBe(0);
+  });
+
+  it("drops what was read when a save landed after the first reads' mark", async () => {
+    const ask = vi.fn(async () => "m2");
+    renderHook(() => useCanvasSourceCheck(ASKED, "u1", ask, true, "m1"));
+    await vi.advanceTimersByTimeAsync(SOURCE_CHECK_EVERY_MS);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(dropped).toBe(1);
+  });
+
+  it("asks once drawn when the first reads carry no mark", async () => {
+    const ask = vi.fn(async () => "same");
+    renderHook(() => useCanvasSourceCheck(ASKED, "u1", ask, true, undefined));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(dropped).toBe(0);
+  });
+
   it("takes the first mark only once the canvas has painted, two frames on", async () => {
     const frames: FrameRequestCallback[] = [];
     vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {

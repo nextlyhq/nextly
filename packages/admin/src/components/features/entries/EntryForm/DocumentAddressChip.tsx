@@ -165,7 +165,7 @@ function ChipButtons({
     <>
       {text.copied === "" ? null : <CopyAddressButton text={text.copied} />}
       {onEdit === undefined ? null : (
-        <ChipButton label="Edit address" onClick={onEdit}>
+        <ChipButton label="Edit address" onClick={onEdit} fieldControl>
           <Pencil className="h-3 w-3" aria-hidden="true" />
         </ChipButton>
       )}
@@ -198,16 +198,23 @@ const CHIP_BUTTON = cn(
 function ChipButton({
   label,
   onClick,
+  fieldControl = false,
   children,
 }: {
   label: string;
   onClick: () => void;
+  /**
+   * Whether this is the control that edits the field, which a surface
+   * sending an author to the field focuses before the others.
+   */
+  fieldControl?: boolean;
   children: ReactNode;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      {...(fieldControl ? { "data-field-control": "" } : {})}
       aria-label={label}
       title={label}
       className={CHIP_BUTTON}
@@ -317,6 +324,9 @@ function SlugEditInput({
       className="h-5 max-w-full rounded border border-input bg-background px-1 font-mono text-xs text-foreground transition-colors focus:border-primary focus:outline-none"
       aria-label="Address"
       aria-invalid={invalid}
+      // Escape here puts the address back; a dialog around the chip leaves
+      // Escape to it rather than closing.
+      data-own-escape=""
     />
   );
 }

@@ -194,6 +194,32 @@ describe("a control's tooltip says what it writes", () => {
   });
 });
 
+describe("the Background section's hints", () => {
+  it("say what each position point writes", async () => {
+    mount();
+    openTab("Style");
+    openSection("background");
+    const points = screen.getByRole("radiogroup", { name: "Position" });
+    const hint = await hintOn(
+      within(points).getByRole("radio", { name: "Top right" })
+    );
+    expect(hint).toMatch(/^background-position: /);
+    expect(hint).toContain("right top");
+  });
+});
+
+describe("Inside its parent's hints", () => {
+  it("say what each Width choice writes", async () => {
+    mount();
+    openTab("Style");
+    openSection("inside-parent");
+    const width = screen.getByRole("radiogroup", { name: "Width" });
+    expect(
+      await hintOn(within(width).getByRole("radio", { name: "Fit" }))
+    ).toBe("width: fit-content");
+  });
+});
+
 describe("the tooltip on keyboard focus", () => {
   it("opens when the author reaches the control with the keyboard", async () => {
     mount();

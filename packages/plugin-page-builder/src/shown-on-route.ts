@@ -229,7 +229,12 @@ async function draftsShown(
   places: readonly Found[],
   readable: ReadonlyMap<string, ReadableDocument>,
   deps: Pick<ShownOnDeps, "draftPlacesShown">
-): Promise<ReadonlySet<string>> {
+): Promise<{
+  /** The places the caller's reads showed, by place key. */
+  readonly shown: ReadonlySet<string>;
+  /** The documents and languages read, as `<document key>\0<language>`. */
+  readonly read: ReadonlySet<string>;
+}> {
   // One read per document and language, each in the language its draft
   // uses were indexed in.
   const reads = new Map<
@@ -268,7 +273,19 @@ async function draftsShown(
     );
     for (const within of found) shown.add(`${use.documentKey}\u0000${within}`);
   }
-  return shown;
+  return { shown, read: new Set(reads.keys()) };
+}
+
+/**
+ * Whether a place found only in a working draft was left unread: one of its
+ * document's languages was past the reads one answer makes, so whether the
+ * caller may open it is not known, rather than known to be no.
+ */
+function unread(place: Found, read: ReadonlySet<string>): boolean {
+  if (place.published) return false;
+  return [...place.draftLocales].some(
+    locale => !read.has(`${place.first.documentKey}\u0000${locale}`)
+  );
 }
 
 /** Answer one Single's places, as the caller may see them. */
@@ -286,7 +303,14 @@ export async function readShownOn(
   const reader = deps.uses();
   // Before the plugin is installed the index has nothing to say yet.
   if (reader === null) {
-    return { checking: true, places: [], more: 0, hidden: 0 };
+    return {
+      checking: true,
+      places: [],
+      more: 0,
+      hidden: 0,
+      unchecked: 0,
+      floor: false,
+    };
   }
   const [uses, filled] = await Promise.all([
     reader.ofSingle(slug, USES_READ_MAX),
@@ -306,13 +330,16 @@ export async function readShownOn(
       : await deps.singleLabels(ctx, singleDocuments);
   const drafts = await draftsShown(ctx, slug, places, readable, deps);
   const visible: ShownOnPlace[] = [];
+  let unchecked = 0;
   for (const place of places) {
     const document = readable.get(place.first.documentKey);
-    const open =
-      document !== undefined &&
-      document.fields.has(place.first.blocksField) &&
-      (place.published || drafts.has(place.key));
-    if (open) visible.push(shownPlace(place, document, singles, deps.blocks));
+    const mayRead =
+      document !== undefined && document.fields.has(place.first.blocksField);
+    if (mayRead && (place.published || drafts.shown.has(place.key))) {
+      visible.push(shownPlace(place, document, singles, deps.blocks));
+    } else if (mayRead && unread(place, drafts.read)) {
+      unchecked += 1;
+    }
   }
   visible.sort(byTitle);
   const listed = all ? visible : visible.slice(0, SHOWN_ON_FIRST);
@@ -320,7 +347,10 @@ export async function readShownOn(
     checking: !filled,
     places: listed,
     more: visible.length - listed.length,
-    hidden: places.length - visible.length,
+    hidden: places.length - visible.length - unchecked,
+    unchecked,
+    // The read stopped at its bound: there may be places it never reached.
+    floor: uses.length >= USES_READ_MAX,
   };
 }
 

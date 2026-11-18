@@ -1,0 +1,100 @@
+/*
+ * Design → Type → "Site text": a row's name, its preview and its pair on one
+ * line, fitted to the panel at its narrowest, 240px, with the preview the
+ * part that gives way; and the row's popup: the type sizes as a list of
+ * choices, a typed size and line height, and a link's colours and underline.
+ * Admin tokens for every colour, so both themes follow.
+ */
+.nx-site-text__row {
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
+}
+
+.nx-site-text__row .nx-vars__name {
+  max-width: 5.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-site-text__preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.25;
+  color: var(--nx-foreground);
+}
+
+.nx-site-text__title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.nx-site-text__sizes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.nx-site-text__option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 24px;
+  font-size: 13px;
+  color: var(--nx-foreground);
+  cursor: pointer;
+}
+
+.nx-site-text__option input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--nx-primary);
+}
+
+.nx-site-text__option input:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
+}
+
+.nx-site-text__option span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.nx-site-text__typed {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.nx-site-text__colour {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-site-text__colour > .nx-vars-editor__field {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.nx-site-text__said,
+.nx-type-pair {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  margin: 0;
+  font-size: 12px;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-type-pair__action {
+  min-height: 24px;
+}

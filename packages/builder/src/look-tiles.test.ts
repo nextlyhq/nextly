@@ -284,6 +284,63 @@ describe("a look built from scaled tokens", () => {
   });
 });
 
+describe("a look drawn on a sample of its block", () => {
+  // Shaped as the core Hero over a Section's base: a fluid padding token on
+  // the base, and a tall, centred, surfaced band on the look.
+  const sectionBase = values({
+    padding: {
+      blockStart: { $token: "space.section-y" },
+      blockEnd: { $token: "space.section-y" },
+    },
+  });
+  const hero = values({
+    backgroundColor: { $token: "color.surface" },
+    minHeight: "60vh",
+    padding: { blockStart: "6rem", blockEnd: "6rem" },
+    textAlign: "center",
+    fontSize: "1.5em",
+  });
+
+  it("draws the look's sizes and words, at the values the page has", () => {
+    expect(
+      lookTileStyle(sectionBase, hero, undefined, "light", "sample")
+    ).toMatchObject({
+      backgroundColor: "#f9fafb",
+      paddingBlockStart: "6rem",
+      paddingBlockEnd: "6rem",
+      textAlign: "center",
+      fontSize: "1.5em",
+    });
+  });
+
+  it("reads the page's viewport as the sample's own frame", () => {
+    // A sample stands for a page: a height or a padding that follows the
+    // screen follows the sample's frame instead, so a Hero stays a tall band.
+    const sample = lookTileStyle(
+      sectionBase,
+      hero,
+      undefined,
+      "light",
+      "sample"
+    );
+    expect(sample.minHeight).toBe("60cqh");
+    const plain = lookTileStyle(
+      sectionBase,
+      undefined,
+      undefined,
+      "light",
+      "sample"
+    );
+    expect(plain.paddingBlockStart).toBe("clamp(3rem, 2rem + 4cqw, 5rem)");
+  });
+
+  it("keeps a mark's own sizes, as before", () => {
+    // A Button's tile is a mark, not a sample: it stays its own size.
+    const mark = lookTileStyle(sectionBase, hero, undefined, "light");
+    expect(mark).toEqual({ backgroundColor: "#f9fafb" });
+  });
+});
+
 describe("the bar's line about a worn look", () => {
   it("says an edit here is this block's, and offers the look for every block", () => {
     expect(lookLineWords("Outline", "Button")).toEqual({
@@ -325,7 +382,12 @@ describe("the tile for picking no style, once another style carries ★", () => 
   const starred = { ...outline, starred: true as const };
 
   it("is the ★ style, by its name and its look, and the ★ style isn't offered twice", () => {
-    const tiles = lookTiles([card, starred, secondary], "core/button", "Primary", null);
+    const tiles = lookTiles(
+      [card, starred, secondary],
+      "core/button",
+      "Primary",
+      null
+    );
     expect(tiles.map(tile => [tile.id, tile.name])).toEqual([
       [null, "Outline"],
       [secondary.id, "Secondary"],

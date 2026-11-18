@@ -24,12 +24,12 @@ import type { ComponentFieldsHost } from "./component-fields";
 import type { ComponentVariantsHost } from "./component-variants";
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
+import type { BreakpointsStatus } from "./hide-on";
 import type { LookEditing } from "./look-inspector";
 import type { SavedComponent } from "./panels/add/inserter";
 import type { StyleInspectorPanelProps } from "./style-inspector-panel";
 import type { SharedStylesHost, StyleTargetBarProps } from "./style-target";
 import type { StylePolicy } from "./style-values";
-import type { BreakpointsStatus } from "./visible-on";
 
 export interface StyleStateBinding {
   /** The state being edited. `base` when omitted. */
@@ -107,6 +107,14 @@ export interface InspectorPanelProps {
    */
   fonts?: StyleInspectorPanelProps["fonts"];
   /**
+   * Opens the Design panel's Block styles at a block type, from the Style
+   * tab's "Edit block styles". Absent, the Block style section offers no way
+   * there.
+   *
+   * @experimental Settles with the Design panel's Block styles.
+   */
+  onEditBlockStyles?: (blockType: string) => void;
+  /**
    * The editor whose selected block this edits.
    *
    * The whole state rather than a document and an `apply` separately: a patch is
@@ -163,7 +171,7 @@ export interface InspectorPanelProps {
   /**
    * Whether `breakpoints` is the site's own set yet: `loading` while the
    * config's defaults stand in for the stored set being read, `unavailable`
-   * when that read failed. "Visible on" writes only once it is `ready`: a
+   * when that read failed. "Hide on" writes only once it is `ready`: a
    * hide resolved against the wrong set is stored wrong. Defaults to
    * `ready`, for a host whose breakpoints are known up front.
    */
@@ -264,6 +272,14 @@ export interface InspectorPanelProps {
    * @experimental Settles with the page's settings panel.
    */
   documentSettings?: DocumentSettingsView;
+  /**
+   * The host's card for the header or footer selected on the canvas: what it
+   * is, where it comes from and how to change it. Drawn in place of
+   * everything else while no block is selected; absent while no region is.
+   *
+   * @experimental Settles with editing a header or footer in place.
+   */
+  regionCard?: React.ReactNode;
 }
 
 /** What the host draws of the open document while nothing is selected. */

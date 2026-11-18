@@ -19,6 +19,8 @@ import {
   scrollToField,
 } from "@admin/lib/errors/error-mapping";
 
+import { useFieldReveal, type FieldReveal } from "./field-reveal";
+
 // ============================================================================
 // Component
 // ============================================================================
@@ -71,6 +73,13 @@ export interface FormErrorSummaryProps {
   maxErrors?: number;
   /** Optional CSS class name */
   className?: string;
+  /**
+   * Where the surface draws some fields out of sight (a document view's
+   * dialog), how it shows one: a field it can show is named, with "Show me",
+   * rather than linked to a place on screen that may not hold it. Left out,
+   * the one the surrounding scope's surface registered (`FieldRevealScope`).
+   */
+  reveal?: FieldReveal;
 }
 
 /**
@@ -126,7 +135,10 @@ export function FormErrorSummary({
   errors,
   submitCount = 0,
   maxErrors = 5,
+  reveal: given,
 }: FormErrorSummaryProps) {
+  const scoped = useFieldReveal();
+  const reveal = given ?? scoped ?? undefined;
   const errorList = flattenErrors(errors);
 
   // Stringify path-list to only re-fire toast when the *set* of errors changes,
@@ -162,16 +174,12 @@ export function FormErrorSummary({
         <div className="mt-1">
           <ul className="space-y-1 list-none p-0">
             {displayedErrors.map(({ path, message }) => (
-              <li key={path} className="text-sm">
-                <button
-                  type="button"
-                  className="font-medium underline hover:no-underline focus:outline-none focus:ring-2 focus:ring-danger-solid rounded-md inline-block"
-                  onClick={() => scrollToField(path)}
-                >
-                  {formatFieldPath(path)}
-                </button>
-                <span className="ml-1">: {message}</span>
-              </li>
+              <ErrorRow
+                key={path}
+                path={path}
+                message={message}
+                show={reveal?.(path) ?? null}
+              />
             ))}
           </ul>
           {remainingCount > 0 && (
@@ -182,7 +190,59 @@ export function FormErrorSummary({
         </div>
       ),
     });
-  }, [errorList, errorPathKey, maxErrors, submitCount]);
+  }, [errorList, errorPathKey, maxErrors, submitCount, reveal]);
 
   return null;
+}
+
+/** The underlined, focusable look the message's buttons share. */
+const ROW_BUTTON =
+  "font-medium underline hover:no-underline focus:outline-none focus:ring-2 focus:ring-danger-solid rounded-md inline-block";
+
+/**
+ * One field's line: its name and what is wrong. Where the surface can show
+ * the field (`show`), the name is plain and "Show me" opens it, closing the
+ * message; otherwise the name scrolls to the field on screen.
+ */
+function ErrorRow({
+  path,
+  message,
+  show,
+}: {
+  path: string;
+  message: string;
+  show: (() => void) | null;
+}) {
+  const name = formatFieldPath(path);
+  if (show === null) {
+    return (
+      <li className="text-sm">
+        <button
+          type="button"
+          className={ROW_BUTTON}
+          onClick={() => scrollToField(path)}
+        >
+          {name}
+        </button>
+        <span className="ml-1">: {message}</span>
+      </li>
+    );
+  }
+  return (
+    <li className="text-sm">
+      <span className="font-medium">{name}</span>
+      <span className="ml-1">: {message}</span>{" "}
+      <button
+        type="button"
+        className={ROW_BUTTON}
+        aria-label={`Show me ${name}`}
+        onClick={() => {
+          toast.dismiss("form-errors");
+          show();
+        }}
+      >
+        Show me
+      </button>
+    </li>
+  );
 }

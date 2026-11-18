@@ -204,7 +204,12 @@ test("the admin's dashboard looks the same in a site that styles bare elements",
 const HOMEPAGE_API = "/admin/api/singles/homepage";
 
 /** The homepage form's action that opens the Page Builder. */
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
+/**
+ * The Page Builder card on the form, whose way in is named as the document
+ * bar's is, so a lookup by that name is scoped to the card.
+ */
+const PAGE_BUILDER_CARD = '[data-slot="page-builder-card"]';
 
 /** An element rule in the admin's document, which no block style sets. */
 const SITE_HEADING_RULE = "h2 { text-transform: uppercase; }";
@@ -243,7 +248,10 @@ test("the Page Builder's canvas is a document of its own, which the admin's elem
   );
 
   await gotoAdmin(page, "/singles/homepage");
-  await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+  await page
+    .locator(PAGE_BUILDER_CARD)
+    .getByRole("link", { name: OPEN_BUILDER_ACTION })
+    .click();
   const canvasHeading = canvasFrame(page)
     .locator(".nx-canvas h2")
     .filter({ hasText: heading })

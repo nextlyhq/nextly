@@ -6,6 +6,8 @@
 import {
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
+  resolveSiteTokens,
+  type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
@@ -30,11 +32,21 @@ import {
   variableRoutes,
   variablesInUseCheck,
   variableUsesPagesMax,
+  type SiteStyleNow,
   type StillUsedVariables,
   type VariableRead,
   type VariableRemovalChecks,
   type VariableStore,
 } from "./variables-routes";
+import { siteTokensOverCode } from "./site-style-storage";
+
+/** A site's variables with nothing of its own: the engine's, under `--site-`. */
+const SITE: SiteTokenSet = resolveSiteTokens();
+
+/** The site style a read is handed: these shared styles, and {@link SITE}. */
+function siteStyleOf(classes: () => Promise<readonly unknown[]>): SiteStyleNow {
+  return async () => ({ classes: await classes(), variables: SITE });
+}
 
 const WHOLE: UsageIndexHealth = {
   coversExistingDocuments: true,
@@ -211,7 +223,7 @@ describe("how widely variables are used", () => {
       usageRequest("t-accent", "color.brand", "color.unused"),
       design,
       source,
-      async () => styles,
+      siteStyleOf(async () => styles),
       () => [
         blockNaming("acme/card", "Card", "color.brand"),
         blockNaming("acme/button", "Button", "color.brand"),
@@ -229,6 +241,8 @@ describe("how widely variables are used", () => {
           // In id order, whatever order the site style lists them in.
           sharedStyles: ["c-card", "c-hero"],
           blockDefaults: [],
+          variables: [],
+          siteText: [],
           complete: true,
         },
         "color.brand": {
@@ -237,6 +251,8 @@ describe("how widely variables are used", () => {
           sharedStyles: ["c-quote"],
           // In type order, whatever order the registry lists them in.
           blockDefaults: ["acme/button", "acme/card"],
+          variables: [],
+          siteText: [],
           complete: true,
         },
         "color.unused": {
@@ -244,6 +260,8 @@ describe("how widely variables are used", () => {
           byKind: { pages: 0, components: 0, patterns: 0, layouts: 0 },
           sharedStyles: [],
           blockDefaults: [],
+          variables: [],
+          siteText: [],
           complete: true,
         },
       },
@@ -256,7 +274,7 @@ describe("how widely variables are used", () => {
       usageRequest("t-accent"),
       holding("read-renamed_site-style", "update-renamed_site-style"),
       source,
-      async () => [],
+      siteStyleOf(async () => []),
       NO_BLOCKS
     );
     expect(answer).toMatchObject({
@@ -274,10 +292,13 @@ describe("how widely variables are used", () => {
       usageRequest("t-a", "t-b", "t-a"),
       design,
       source,
-      sharedStyles,
+      siteStyleOf(sharedStyles),
       NO_BLOCKS
     );
-    expect(batches).toEqual([["t-a", "t-b"]]);
+    // Each identity once, with the key of the property it is written under.
+    expect(batches).toEqual([
+      ["t-a", "var:--site-t-a", "t-b", "var:--site-t-b"],
+    ]);
     expect(sharedStyles).toHaveBeenCalledTimes(1);
   });
 
@@ -293,7 +314,7 @@ describe("how widely variables are used", () => {
       usageRequest("__proto__"),
       design,
       source,
-      async () => [],
+      siteStyleOf(async () => []),
       NO_BLOCKS
     );
     expect(Object.hasOwn(answer.variables, "__proto__")).toBe(true);
@@ -310,7 +331,7 @@ describe("how widely variables are used", () => {
             usageRequest(...ids),
             design,
             source,
-            async () => [],
+            siteStyleOf(async () => []),
             NO_BLOCKS
           )
         )
@@ -334,7 +355,7 @@ describe("where a variable is used", () => {
       new Request(`http://local/variables/where-used?${query}`),
       source,
       { named, single: async () => null },
-      async () => styles,
+      siteStyleOf(async () => styles),
       () => blocks,
       "renamed_site-style"
     );
@@ -526,6 +547,7 @@ describe("the in-use check every removal makes", () => {
         refuseVariablesInUse(
           removable,
           [],
+          SITE,
           { usage: usageOf(NOT_WHOLE).source, blocks: NO_BLOCKS, stillUsed },
           pathOf
         )
@@ -551,6 +573,7 @@ describe("the in-use check every removal makes", () => {
             styleNaming("c-card", "Card", "color.brand"),
             styleNaming("c-hero", "Hero", "color.brand"),
           ],
+          SITE,
           { usage, blocks: NO_BLOCKS, stillUsed },
           pathOf
         )
@@ -582,6 +605,7 @@ describe("the in-use check every removal makes", () => {
         refuseVariablesInUse(
           removable,
           [],
+          SITE,
           {
             usage: usageOf(WHOLE).source,
             blocks: () => [
@@ -637,6 +661,7 @@ describe("the in-use check every removal makes", () => {
       refuseVariablesInUse(
         removable,
         [],
+        SITE,
         { usage, blocks: NO_BLOCKS, stillUsed },
         pathOf
       )
@@ -662,6 +687,7 @@ describe("the in-use check every removal makes", () => {
         refuseVariablesInUse(
           removable.slice(0, 1),
           [],
+          SITE,
           { usage: usageOf(WHOLE).source, blocks: NO_BLOCKS, stillUsed },
           pathOf
         )
@@ -679,7 +705,8 @@ describe("the in-use check every removal makes", () => {
         ],
       },
     });
-    expect(uses).toHaveBeenCalledWith(["t-accent"]);
+    // Asked by usage key: the identity, and the property it is written under.
+    expect(uses).toHaveBeenCalledWith(["t-accent", "var:--site-t-accent"]);
   });
 
   it("names no document when made for a write whose author it cannot ask", async () => {
@@ -691,6 +718,7 @@ describe("the in-use check every removal makes", () => {
         refuseVariablesInUse(
           removable,
           [],
+          SITE,
           { usage: usageOf(WHOLE).source, blocks: NO_BLOCKS, stillUsed },
           pathOf
         )
@@ -759,6 +787,7 @@ describe("the in-use check every removal makes", () => {
         refuseVariablesInUse(
           removable,
           [],
+          SITE,
           {
             usage: gapUsage(),
             blocks: NO_BLOCKS,
@@ -777,6 +806,7 @@ describe("the in-use check every removal makes", () => {
           refuseVariablesInUse(
             removable,
             [],
+            SITE,
             {
               usage: gapUsage(),
               blocks: NO_BLOCKS,
@@ -808,6 +838,7 @@ describe("the in-use check every removal makes", () => {
           refuseVariablesInUse(
             removable,
             [],
+            SITE,
             {
               usage: gapUsage(),
               blocks: NO_BLOCKS,
@@ -832,6 +863,7 @@ describe("the in-use check every removal makes", () => {
           refuseVariablesInUse(
             removable,
             [],
+            SITE,
             {
               usage: gapUsage({
                 "color.brand": [{ collection: "pages", documents: ["p2"] }],
@@ -866,6 +898,7 @@ describe("the in-use check every removal makes", () => {
           refuseVariablesInUse(
             removable,
             [],
+            SITE,
             {
               usage: usageOf(NOT_WHOLE).source,
               blocks: NO_BLOCKS,
@@ -887,6 +920,7 @@ describe("the in-use check every removal makes", () => {
       refuseVariablesInUse(
         removable,
         [styleNaming("c-card", "Card", "color.other")],
+        SITE,
         { usage: usage.source, blocks: NO_BLOCKS, stillUsed },
         pathOf
       )
@@ -897,6 +931,7 @@ describe("the in-use check every removal makes", () => {
     await refuseVariablesInUse(
       [],
       [],
+      SITE,
       { usage: idle.source, blocks: NO_BLOCKS, stillUsed },
       pathOf
     );
@@ -909,17 +944,39 @@ const staleRefusal = () =>
   NextlyError.staleVersion({ data: { currentVersion: "9" } });
 
 /** A store over the stored tokens section, recording each write. */
-function storeOf(section: Record<string, unknown>, rev?: string) {
+function storeOf(
+  section: Record<string, unknown>,
+  rev?: string,
+  /** Site text rows the site's code supplies, under the section's own. */
+  codeText?: Record<string, unknown>
+) {
+  // The site's variables as a write leaves them: the engine's, with the
+  // section's Site text rows over the code's, row by row, as the merge does.
+  const variablesWith = (after: Record<string, unknown>): SiteTokenSet => {
+    const rows = {
+      ...codeText,
+      ...(after.siteText as Record<string, unknown> | undefined),
+    };
+    return Object.keys(rows).length === 0
+      ? SITE
+      : { ...SITE, siteText: rows as SiteTokenSet["siteText"] };
+  };
   const read: VariableRead = {
     section,
     classes: [styleNaming("c-card", "Card", "color.other")],
+    variablesWith,
     rev,
   };
   // Each write answers the document it left, with the next version.
   let version = Number(rev ?? "0");
   const write = vi.fn<VariableStore["write"]>(async written => {
     version += 1;
-    return { section: written, classes: read.classes, rev: String(version) };
+    return {
+      section: written,
+      classes: read.classes,
+      variablesWith: read.variablesWith,
+      rev: String(version),
+    };
   });
   return { store: { read: async () => read, write }, write, read };
 }
@@ -953,7 +1010,8 @@ describe("removing variables", () => {
     // Judged on the read the write is made from, with its shared styles.
     expect(inUse).toHaveBeenCalledWith(
       [{ id: "t-accent", name: "Accent" }],
-      read.classes
+      read.classes,
+      SITE
     );
     expect(write).toHaveBeenCalledWith(
       { tokens: [brand, unreadable], fonts: ["kept"] },
@@ -991,6 +1049,7 @@ describe("removing variables", () => {
         .mockResolvedValueOnce({
           section: { tokens: [brand, accent] },
           classes: [],
+          variablesWith: () => SITE,
           rev: "7",
         })
         .mockResolvedValue(newer);
@@ -1002,6 +1061,7 @@ describe("removing variables", () => {
       const newer: VariableRead = {
         section: { tokens: [brand, accent, added] },
         classes: [],
+        variablesWith: () => SITE,
         rev: "8",
       };
       const { store, write } = savedMeanwhile(newer);
@@ -1018,7 +1078,8 @@ describe("removing variables", () => {
       // Judged again on the newest read's shared styles.
       expect(inUse).toHaveBeenLastCalledWith(
         [{ id: "t-accent", name: "Accent" }],
-        newer.classes
+        newer.classes,
+        SITE
       );
     });
 
@@ -1027,6 +1088,7 @@ describe("removing variables", () => {
       const { store, write } = savedMeanwhile({
         section: { tokens: [brand, accent] },
         classes: [naming],
+        variablesWith: () => SITE,
         rev: "8",
       });
       const inUseRefusal = new Error("in use by New");
@@ -1050,6 +1112,7 @@ describe("removing variables", () => {
       const { store, write } = savedMeanwhile({
         section: { tokens: [brand] },
         classes: [],
+        variablesWith: () => SITE,
         rev: "8",
       });
       expect(
@@ -1180,6 +1243,7 @@ describe("the site style's stored variables, as the remove route reads and write
     expect(await store.read()).toEqual({
       section: {},
       classes: [],
+      variablesWith: expect.any(Function),
       rev: undefined,
     });
   });
@@ -1200,7 +1264,10 @@ describe("the site style's stored variables, as the remove route reads and write
       },
       undefined
     );
-    await store.write({ tokens: [] }, { section: {}, classes: [], rev: "9" });
+    await store.write(
+      { tokens: [] },
+      { section: {}, classes: [], variablesWith: () => SITE, rev: "9" }
+    );
     expect(updates).toEqual([
       {
         slug: "renamed_site-style",
@@ -1228,9 +1295,14 @@ describe("the site style's stored variables, as the remove route reads and write
     expect(
       await store.write(
         { tokens: [accent] },
-        { section: {}, classes: [], rev: "9" }
+        { section: {}, classes: [], variablesWith: () => SITE, rev: "9" }
       )
-    ).toEqual({ section: { tokens: [accent] }, classes: [], rev: "10" });
+    ).toEqual({
+      section: { tokens: [accent] },
+      classes: [],
+      variablesWith: expect.any(Function),
+      rev: "10",
+    });
   });
 
   it("merges the code's shared styles under the stored ones by id", () => {
@@ -1284,7 +1356,7 @@ describe("the in-use check, bound to the stored documents", () => {
     });
 
     const refused = await refusal(
-      check([{ id: "t-accent", name: "Accent" }], [])
+      check([{ id: "t-accent", name: "Accent" }], [], SITE)
     );
     expect(refused).toMatchObject({
       publicData: { errors: [{ path: "", code: "IN_USE" }] },
@@ -1294,7 +1366,7 @@ describe("the in-use check, bound to the stored documents", () => {
     ]);
     // The control: a variable no document names, whatever its classes say.
     await expect(
-      check([{ id: "t-other", name: "Other" }], [])
+      check([{ id: "t-other", name: "Other" }], [], SITE)
     ).resolves.toBeUndefined();
   });
 
@@ -1311,7 +1383,7 @@ describe("the in-use check, bound to the stored documents", () => {
         pathOf: id => id,
       });
       const seen: { error?: unknown } = {};
-      void check([{ id: "t-accent", name: "Accent" }], []).catch(
+      void check([{ id: "t-accent", name: "Accent" }], [], SITE).catch(
         (error: unknown) => {
           seen.error = error;
         }
@@ -1335,5 +1407,394 @@ describe("the in-use check, bound to the stored documents", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("removing a type size a Site text row uses", () => {
+  const display = {
+    name: "font-size.display",
+    label: "Display",
+    kind: "dimension",
+    values: { light: "3rem" },
+  };
+  const displayLine = {
+    name: "line-height.display",
+    kind: "number",
+    values: { light: "1.05" },
+  };
+
+  it("refuses, naming the row, and writes nothing", async () => {
+    const { store, write } = storeOf({
+      tokens: [display, displayLine],
+      siteText: {
+        h1: {
+          fontSize: { $token: "font-size.display" },
+          lineHeight: { $token: "line-height.display" },
+        },
+      },
+    });
+    const inUse = vi.fn<VariablesInUseCheck>(async () => undefined);
+    expect(
+      await refusal(
+        removeVariables(
+          post({ ids: ["font-size.display", "line-height.display"] }),
+          store,
+          new Set(),
+          checksOf(inUse)
+        )
+      )
+    ).toMatchObject({
+      code: "CONFLICT",
+      publicMessage: expect.stringContaining(
+        "Display is used by Site text: Heading 1."
+      ),
+    });
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("refuses where the site's code supplies the row using it", async () => {
+    const { store, write } = storeOf(
+      { tokens: [display, displayLine] },
+      undefined,
+      { h1: { fontSize: { $token: "font-size.display" } } }
+    );
+    const inUse = vi.fn<VariablesInUseCheck>(async () => undefined);
+    expect(
+      await refusal(
+        removeVariables(
+          post({ ids: ["font-size.display"] }),
+          store,
+          new Set(),
+          checksOf(inUse)
+        )
+      )
+    ).toMatchObject({
+      code: "CONFLICT",
+      publicMessage: expect.stringContaining(
+        "Display is used by Site text: Heading 1."
+      ),
+    });
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("refuses where a row names it through var() of its custom property", async () => {
+    const { store, write } = storeOf({
+      tokens: [display, displayLine],
+      siteText: { h2: { fontSize: "var(--site-font-size-display)" } },
+    });
+    const inUse = vi.fn<VariablesInUseCheck>(async () => undefined);
+    expect(
+      await refusal(
+        removeVariables(
+          post({ ids: ["font-size.display"] }),
+          store,
+          new Set(),
+          checksOf(inUse)
+        )
+      )
+    ).toMatchObject({
+      code: "CONFLICT",
+      publicMessage: expect.stringContaining(
+        "Display is used by Site text: Heading 2."
+      ),
+    });
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("removes it once no row uses it", async () => {
+    const { store, write } = storeOf({
+      tokens: [display, displayLine],
+      siteText: { h1: { fontSize: "40px" } },
+    });
+    await removeVariables(
+      post({ ids: ["font-size.display", "line-height.display"] }),
+      store,
+      new Set(),
+      checksOf()
+    );
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a variable named through var(), as a shadow names its colour", () => {
+  const removable = [{ id: "t-accent", name: "Accent" }];
+  const shadow = (property: string) => `0 1px 2px var(${property})`;
+  /** A shadow variable whose value names `property`. */
+  const lift = (property: string) => ({
+    id: "t-lift",
+    name: "shadow.lift",
+    label: "Lift",
+    kind: "shadow" as const,
+    values: { light: shadow(property) },
+  });
+  /** The site's variables: the engine's, with `tokens` and `prefix` over them. */
+  const siteWith = (tokens: unknown[], prefix?: string): SiteTokenSet =>
+    siteTokensOverCode(undefined, {
+      tokens,
+      ...(prefix === undefined ? {} : { prefix }),
+    });
+  /** A stored page whose one box's shadow names `property`. */
+  const pageWithShadow = (id: string, property: string) => ({
+    id,
+    content: {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "n",
+          type: "core/box",
+          version: 1,
+          props: {},
+          styles: { base: { base: { boxShadow: shadow(property) } } },
+        },
+      ],
+    },
+  });
+  const documentsOf = (rows: unknown[]): StoredDocuments => ({
+    collections: async () => [
+      { slug: "pages", label: "Pages", paths: ["content"] },
+    ],
+    singles: async () => [],
+    rowsAfter: async () => ({ items: rows, hasNext: false }),
+    rowForms: async () => [],
+    singleForms: async () => [],
+  });
+
+  it("refuses a colour the index records only under its property's key", async () => {
+    const { stillUsed, uses } = stillUsedOf([]);
+    const usage = usageOf(WHOLE, {
+      "var:--site-t-accent": [{ collection: "pages", documents: ["p1"] }],
+    }).source;
+    expect(
+      await refusal(
+        refuseVariablesInUse(
+          removable,
+          [],
+          SITE,
+          { usage, blocks: NO_BLOCKS, stillUsed },
+          id => id
+        )
+      )
+    ).toMatchObject({
+      publicData: {
+        errors: [
+          {
+            path: "t-accent",
+            code: "IN_USE",
+            message: "Accent is used on 1 document.",
+          },
+        ],
+      },
+    });
+    expect(uses).not.toHaveBeenCalled();
+  });
+
+  it("asks under the site's own prefix, and not under another", async () => {
+    const usage = usageOf(WHOLE, {
+      "var:--brand-t-accent": [{ collection: "pages", documents: ["p1"] }],
+    }).source;
+    const branded = siteWith([], "--brand-");
+    await expect(
+      refuseVariablesInUse(
+        removable,
+        [],
+        branded,
+        { usage, blocks: NO_BLOCKS, stillUsed: stillUsedOf([]).stillUsed },
+        id => id
+      )
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    // The control: under the default prefix, that row is no use of Accent.
+    await expect(
+      refuseVariablesInUse(
+        removable,
+        [],
+        SITE,
+        { usage, blocks: NO_BLOCKS, stillUsed: stillUsedOf([]).stillUsed },
+        id => id
+      )
+    ).resolves.toBeUndefined();
+  });
+
+  it("refuses a colour only a stored page's shadow names, though the index counts none", async () => {
+    const check = variablesInUseCheck({
+      usage: usageOf(WHOLE).source,
+      blocks: NO_BLOCKS,
+      documents: async () =>
+        documentsOf([pageWithShadow("p1", "--site-t-accent")]),
+      limits: DEFAULT_LIMITS,
+      firstReadable: async () => "Home",
+      pathOf: id => id,
+    });
+    expect(await refusal(check(removable, [], SITE))).toMatchObject({
+      publicData: {
+        errors: [
+          {
+            code: "IN_USE",
+            message: "Still used on Home. Remove it from that page first.",
+          },
+        ],
+      },
+    });
+    // The control: a colour the shadow does not name.
+    await expect(
+      check([{ id: "t-other", name: "Other" }], [], SITE)
+    ).resolves.toBeUndefined();
+  });
+
+  it("refuses a colour a shared style's shadow names", async () => {
+    const lifted = {
+      id: "c-lifted",
+      slug: "lifted",
+      label: "Lifted",
+      orderIndex: 0,
+      styles: { base: { base: { boxShadow: shadow("--site-t-accent") } } },
+    };
+    expect(
+      await refusal(
+        refuseVariablesInUse(
+          removable,
+          [lifted],
+          SITE,
+          {
+            usage: usageOf(WHOLE).source,
+            blocks: NO_BLOCKS,
+            stillUsed: stillUsedOf([]).stillUsed,
+          },
+          id => id
+        )
+      )
+    ).toMatchObject({
+      publicData: {
+        errors: [{ message: "Accent is used by the shared style Lifted." }],
+      },
+    });
+  });
+
+  it("refuses a colour another variable's value names, naming that variable", async () => {
+    const { stillUsed, uses } = stillUsedOf([]);
+    expect(
+      await refusal(
+        refuseVariablesInUse(
+          removable,
+          [],
+          siteWith([lift("--site-t-accent")]),
+          { usage: usageOf(WHOLE).source, blocks: NO_BLOCKS, stillUsed },
+          id => id
+        )
+      )
+    ).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          {
+            path: "t-accent",
+            code: "IN_USE",
+            message: "Accent is used by the variable Lift.",
+          },
+        ],
+      },
+    });
+    expect(uses).not.toHaveBeenCalled();
+  });
+
+  it("removes a colour with the shadow variable naming it, in one removal", async () => {
+    const section = { tokens: [accent, lift("--site-t-accent")] };
+    const written: unknown[] = [];
+    const store: VariableStore = {
+      read: async () => ({
+        section,
+        classes: [],
+        variablesWith: tokens => siteTokensOverCode(undefined, tokens),
+        rev: "1",
+      }),
+      write: async (after, from) => {
+        written.push(after);
+        return from;
+      },
+    };
+    const check = variablesInUseCheck({
+      usage: usageOf(WHOLE).source,
+      blocks: NO_BLOCKS,
+      documents: async () => documentsOf([]),
+      limits: DEFAULT_LIMITS,
+      pathOf: id => id,
+    });
+    // Alone, the colour is refused: the shadow left behind still names it.
+    expect(
+      await refusal(
+        removeVariables(post({ ids: ["t-accent"] }), store, new Set(), {
+          inUse: check,
+        })
+      )
+    ).toMatchObject({
+      publicData: {
+        errors: [{ message: "Accent is used by the variable Lift." }],
+      },
+    });
+    expect(written).toEqual([]);
+    const both = await removeVariables(
+      post({ ids: ["t-accent", "t-lift"] }),
+      store,
+      new Set(),
+      { inUse: check }
+    );
+    expect(both.status).toBe(200);
+    expect(written).toEqual([{ tokens: [] }]);
+  });
+
+  it("counts a document once whether it names a colour by $token, by var(), or both", async () => {
+    const { source, batches } = usageOf(WHOLE, {
+      "t-accent": [{ collection: "pages", documents: ["p1", "p2"] }],
+      "var:--site-t-accent": [
+        { collection: "pages", documents: ["p2", "p3"] },
+        { collection: "components", documents: ["k1"] },
+      ],
+    });
+    const answer = await readVariableUsage(
+      usageRequest("t-accent"),
+      holding("read-site_style"),
+      source,
+      siteStyleOf(async () => []),
+      NO_BLOCKS
+    );
+    expect(answer.variables["t-accent"]).toMatchObject({
+      documents: 4,
+      byKind: { pages: 3, components: 1, patterns: 0, layouts: 0 },
+      complete: true,
+    });
+    expect(batches).toEqual([["t-accent", "var:--site-t-accent"]]);
+  });
+
+  it("names the variables that name a colour through var(), for the usage filter", async () => {
+    const { source } = usageOf(WHOLE, {});
+    const site = siteWith([accent, lift("--site-t-accent")]);
+    const answer = await readVariableUsage(
+      usageRequest("t-accent", "t-lift"),
+      holding("read-site_style"),
+      source,
+      async () => ({ classes: [], variables: site }),
+      NO_BLOCKS
+    );
+    expect(answer.variables["t-accent"]?.variables).toEqual(["t-lift"]);
+    expect(answer.variables["t-lift"]?.variables).toEqual([]);
+  });
+
+  it("names the Site text rows using a colour, by reference or through var()", async () => {
+    const { source } = usageOf(WHOLE, {});
+    const site: SiteTokenSet = {
+      ...siteWith([accent]),
+      siteText: {
+        link: { color: { $token: "t-accent" } },
+        caption: { color: "var(--site-t-accent)" },
+      },
+    };
+    const answer = await readVariableUsage(
+      usageRequest("t-accent"),
+      holding("read-site_style"),
+      source,
+      async () => ({ classes: [], variables: site }),
+      NO_BLOCKS
+    );
+    expect(answer.variables["t-accent"]?.siteText).toEqual(["link", "caption"]);
   });
 });

@@ -45,7 +45,7 @@ const MARKABLE: Readonly<Record<string, { linkable: boolean }>> = {
 const READ_ON: ReadonlySet<string> = new Set(["section", "div"]);
 
 /** Whether the mark is offered on `node`: a container. */
-function offersNeverQuote(node: Pick<BlockNode, "type">): boolean {
+export function offersNeverQuote(node: Pick<BlockNode, "type">): boolean {
   return Object.hasOwn(MARKABLE, node.type);
 }
 

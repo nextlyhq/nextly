@@ -139,7 +139,17 @@ describe("what a field's list offers: its own family", () => {
     variablesFor(leaf, TOKENS).map(token => token.name);
 
   it("offers a font size the type sizes alone", () => {
-    expect(names(FONT_SIZE)).toEqual(["font-size.display"]);
+    // The site's own and the engine's built-in heading sizes.
+    expect(names(FONT_SIZE)).toEqual([
+      "font-size.h1",
+      "font-size.h2",
+      "font-size.h3",
+      "font-size.h4",
+      "font-size.h5",
+      "font-size.h6",
+      "font-size.small",
+      "font-size.display",
+    ]);
   });
 
   it("offers a line height the line heights alone", () => {

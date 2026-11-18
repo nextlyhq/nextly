@@ -4,7 +4,11 @@
  * @module canvas-props
  */
 
-import type { BlockDocument, StyleState } from "@nextlyhq/blocks-engine";
+import type {
+  BlockDocument,
+  RegionArea,
+  StyleState,
+} from "@nextlyhq/blocks-engine";
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
 
 import type { AppliedConditions } from "../conditions/applied-conditions";
@@ -174,6 +178,17 @@ export interface CanvasProps {
    * page exactly as it always has.
    */
   regions?: readonly CanvasRegion[];
+  /**
+   * Which of `regions` is selected, or `null`: the canvas's second kind of
+   * selection, which the host holds beside the block selection
+   * (`useRegionSelection`). The selected region wears its outline and name.
+   */
+  selectedRegion?: RegionArea | null;
+  /**
+   * Select a region, from a click or from Enter or Space on its Tab stop.
+   * Absent, a region selects nothing.
+   */
+  onSelectRegion?: (area: RegionArea) => void;
   /**
    * The blocks whose visibility conditions the page can't check, which the
    * canvas marks in red: visitors never see them. Judged by the host, which

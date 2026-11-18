@@ -6,7 +6,10 @@
  * settings name it in a `$token` reference, by a shared style whose own
  * styles name it, and by a block type whose own default styles
  * (`baseStyles`) name it; the last two count whether or not any page applies
- * the style or places the block. Documents are read from the variable usage
+ * the style or places the block. Each of them names it too through `var()`
+ * of the custom property it is written under, as a shadow's colour is kept,
+ * and another variable's value can name it so; every question here asks for
+ * both (`variablesAsked`), under the site's prefix. Documents are read from the variable usage
  * index (`token-usage`), through the same listing the shared-style counts
  * are read from, so a count, its split by kind and the where-used list cannot
  * disagree. Shared styles are read from the site style as the compiler
@@ -53,6 +56,7 @@
 import {
   MAX_TOKEN_NAME_LENGTH,
   type DocumentLimits,
+  type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import {
   getCachedNextly,
@@ -87,6 +91,7 @@ import {
   type StoredDocuments,
   type StoredUse,
 } from "./shared-style-rescan";
+import { usageOf } from "./shared-style-usage-here";
 import {
   invalidRequest,
   jsonBody,
@@ -99,7 +104,6 @@ import {
   removalRefusalOf,
   respondWithUsesPage,
   siteStylePermission,
-  usageOf,
   usageRefusals,
   type ReadNamedDocuments,
   type ReadNamedSingle,
@@ -111,25 +115,32 @@ import {
   SITE_STYLE_SLUG,
   VARIABLE_REMOVE_WRITE_CONTEXT,
   sharedStylesOverCode,
+  siteTokensOverCode,
   storedVariableIdentity,
   storedVariables,
   suppliedVariableIds,
   type NamedVariable,
   type VariablesInUseCheck,
 } from "./site-style-storage";
+import { siteTextReasons, siteTextRowsUsing } from "./site-text-uses";
 import { retryOnStale } from "./stale-retry";
 import { readStoredJson } from "./stored-json";
 import {
   blockDefaultsUsing,
   sharedStylesUsing,
   tokenUsageOf,
+  usageKeysOf,
+  variablesAsked,
+  variablesUsing,
   type BlockTypeDefaults,
+  type VariablesAsked,
 } from "./token-usage";
 import {
   type UncoveredPage,
   type UncoveredPages,
   variablesOnUncoveredPages,
 } from "./uncovered-pages";
+import type { DocumentsUsing } from "./usage-count";
 import { indexIsWhole, indexStillCounting } from "./usage-index-health";
 
 /** A variable's identity, as the engine bounds one it can write. */
@@ -141,9 +152,11 @@ const RemoveBody = z.strictObject({
 
 /**
  * The stored documents' own answer to whether some variables are still used:
- * the one shape a shared style's removal asks too. Without `firstReadable`
- * the check is made for a write whose author cannot be asked, and no
- * document is named.
+ * the one shape a shared style's removal asks too. Its `uses` is asked by
+ * usage key, a variable's identity and its property's key alike
+ * (`variablesAsked`), since only the asker knows the site's prefix. Without
+ * `firstReadable` the check is made for a write whose author cannot be
+ * asked, and no document is named.
  */
 export type StillUsedVariables = StillUsed;
 
@@ -172,12 +185,10 @@ export interface VariableUseSources {
  */
 export function sharedStyleReasons(
   removable: readonly NamedVariable[],
-  classes: readonly unknown[]
+  classes: readonly unknown[],
+  asked: VariablesAsked
 ): UsageReason[] {
-  const using = sharedStylesUsing(
-    classes,
-    new Set(removable.map(variable => variable.id))
-  );
+  const using = sharedStylesUsing(classes, asked);
   return removable.flatMap(({ id, name }) => {
     const styles = using.get(id);
     if (styles === undefined) return [];
@@ -199,12 +210,10 @@ export function sharedStyleReasons(
  */
 function blockDefaultReasons(
   removable: readonly NamedVariable[],
-  blocks: readonly BlockTypeDefaults[]
+  blocks: readonly BlockTypeDefaults[],
+  asked: VariablesAsked
 ): UsageReason[] {
-  const using = blockDefaultsUsing(
-    blocks,
-    new Set(removable.map(variable => variable.id))
-  );
+  const using = blockDefaultsUsing(blocks, asked);
   return removable.flatMap(({ id, name }) => {
     const types = using.get(id);
     if (types === undefined) return [];
@@ -215,6 +224,114 @@ function blockDefaultReasons(
       { id, message: `${name} is used by the ${labels} ${style}.`, used: true },
     ];
   });
+}
+
+/**
+ * The reasons the site's other variables give against removing each
+ * variable: one whose own value names it through `var()`, as a shadow
+ * variable names its colour, changes once it is gone. `variables` is the
+ * site's variables as the write leaves them, every tier merged, which the
+ * in-use check and the site style's write under the composition graph lock
+ * (`site-style-removal-lock`) both refuse by.
+ */
+export function variableReasons(
+  removable: readonly NamedVariable[],
+  variables: SiteTokenSet,
+  asked: VariablesAsked
+): UsageReason[] {
+  const using = variablesUsing(variables, asked);
+  return removable.flatMap(({ id, name }) => {
+    const naming = using.get(id);
+    if (naming === undefined) return [];
+    const names = naming.map(variable => variable.name).join(", ");
+    const noun = naming.length === 1 ? "variable" : "variables";
+    return [
+      { id, message: `${name} is used by the ${noun} ${names}.`, used: true },
+    ];
+  });
+}
+
+/**
+ * The variables asked about, as `variables` writes them: the one question
+ * every read and check here asks (`variablesAsked`), under the site's prefix.
+ */
+function askedOf(
+  identities: readonly string[],
+  variables: Pick<SiteTokenSet, "prefix">
+): VariablesAsked {
+  return variablesAsked(identities, variables.prefix);
+}
+
+/** Two listings of one variable's uses as one: each document once. */
+function mergedListing(a: DocumentsUsing, b: DocumentsUsing): DocumentsUsing {
+  const byCollection = new Map<
+    string,
+    { ids: Set<string>; unnamed: number; single?: true }
+  >();
+  for (const listing of [a, b]) {
+    for (const entry of listing.collections) {
+      const key = `${entry.single === true ? "single" : "collection"}:${entry.collection}`;
+      const held = byCollection.get(key) ?? {
+        ids: new Set<string>(),
+        unnamed: 0,
+        ...(entry.single === true ? { single: true as const } : {}),
+      };
+      const named = entry.documents.filter(
+        (document): document is string => document !== null
+      );
+      for (const document of named) held.ids.add(document);
+      // A row naming no document is one nobody can tell apart from another,
+      // so the two listings' counts of them are not added: the larger stands.
+      held.unnamed = Math.max(
+        held.unnamed,
+        entry.documents.length - named.length
+      );
+      byCollection.set(key, held);
+    }
+  }
+  return {
+    collections: [...byCollection.entries()].map(([key, held]) => ({
+      collection: key.slice(key.indexOf(":") + 1),
+      documents: [
+        ...held.ids,
+        ...Array.from({ length: held.unnamed }, () => null),
+      ],
+      ...(held.single === true ? { single: true as const } : {}),
+    })),
+    complete: a.complete && b.complete,
+  };
+}
+
+/**
+ * The variable usage index, asked about variables as the site writes them:
+ * each identity's listing is the documents recorded under any of its keys
+ * (`variablesAsked`), in one read of the index however many are asked. A
+ * key the read did not answer for is one it cannot vouch for, so the
+ * listing is then not complete.
+ */
+function variableUsageSource(
+  usage: SharedStyleUsageSource,
+  variables: Pick<SiteTokenSet, "prefix">
+): SharedStyleUsageSource {
+  return {
+    ...usage,
+    documentsUsingEach: async (ids, health) => {
+      const asked = askedOf(ids, variables);
+      const byKey = await usage.documentsUsingEach(asked.keys, health);
+      const listings = new Map<string, DocumentsUsing>();
+      for (const key of asked.keys) {
+        const found = byKey.get(key) ?? NOTHING_FOUND;
+        for (const id of asked.identitiesIn([key])) {
+          const held = listings.get(id);
+          listings.set(
+            id,
+            held === undefined ? found : mergedListing(held, found)
+          );
+        }
+      }
+      return listings;
+    },
+  };
 }
 
 /**
@@ -229,10 +346,14 @@ export async function uncoveredReasons(
   removable: readonly NamedVariable[],
   pages: UncoveredPages,
   namer: Pick<StillUsedVariables, "firstReadable">,
+  variables: Pick<SiteTokenSet, "prefix">,
   now: () => number = () => Date.now()
 ): Promise<UsageReason[]> {
   const outcome = await variablesOnUncoveredPages({
-    identities: removable.map(variable => variable.id),
+    asked: askedOf(
+      removable.map(variable => variable.id),
+      variables
+    ),
     pages,
     deadline: now() + REMOVAL_COUNT_MS,
     now,
@@ -309,39 +430,50 @@ async function pagesNamed(
  *
  * In order, each read only once the cheaper ones found nothing: the usage
  * index must be whole and count no document for any of them, and no shared
- * style (`classes`, the site's as merged) and no registered block type's own
- * default styles may name one; then the stored documents themselves are
- * read, since an index zero is not proof. `pathOf`
- * says where each variable's issue is filed: its identity for the route, the
- * section for a write of the Single.
+ * style (`classes`, the site's as merged), no registered block type's own
+ * default styles and no other variable's value (`variables`, the site's as
+ * the write leaves them) may name one; then the stored documents themselves
+ * are read, since an index zero is not proof. Every one of them is asked for
+ * each variable's identity and the custom property `variables` writes it
+ * under (`variablesAsked`). `pathOf` says where each variable's issue is
+ * filed: its identity for the route, the section for a write of the Single.
  */
 export async function refuseVariablesInUse(
   removable: readonly NamedVariable[],
   classes: readonly unknown[],
+  variables: SiteTokenSet,
   sources: VariableUseSources,
   pathOf: (id: string) => string
 ): Promise<void> {
   if (removable.length === 0) return;
   const ids = removable.map(variable => variable.id);
+  const asked = askedOf(ids, variables);
   const uncovered = sources.uncovered;
   const reasons = [
     ...(await usageRefusals(
       removable,
-      sources.usage,
+      variableUsageSource(sources.usage, variables),
       "variable",
       uncovered === undefined
         ? undefined
-        : asked => uncoveredReasons(asked, uncovered, sources.stillUsed)
+        : judged =>
+            uncoveredReasons(judged, uncovered, sources.stillUsed, variables)
     )),
-    ...sharedStyleReasons(removable, classes),
-    ...blockDefaultReasons(removable, sources.blocks()),
+    ...sharedStyleReasons(removable, classes, asked),
+    ...blockDefaultReasons(removable, sources.blocks(), asked),
+    ...variableReasons(removable, variables, asked),
   ];
   if (reasons.length > 0) {
     throw removalRefusalOf(reasons, { variableIds: ids }, pathOf);
   }
   // The stored documents' own answer, read past the index, last before the
-  // write; the site style's write asks it again under the lock.
-  await refuseStoredUses(ids, sources.stillUsed, "variableIds");
+  // write, for every key the variables are asked by; the site style's write
+  // asks it again under the lock.
+  await refuseStoredUses(
+    ids,
+    { ...sources.stillUsed, uses: () => sources.stillUsed.uses(asked.keys) },
+    "variableIds"
+  );
 }
 
 /** The variables a usage read asks about: one or more, at most one page. */
@@ -360,8 +492,14 @@ function usageIds(url: string): string[] {
   return parsed.data;
 }
 
-/** The site's shared styles as the compiler merges them, read for a request. */
-export type SharedStylesNow = () => Promise<readonly unknown[]>;
+/**
+ * The site style as the compiler merges it, read for a request: its shared
+ * styles, and its variables with the prefix they are written under.
+ */
+export type SiteStyleNow = () => Promise<{
+  readonly classes: readonly unknown[];
+  readonly variables: SiteTokenSet;
+}>;
 
 /**
  * How widely each variable asked about is used, with the index's health and
@@ -371,15 +509,26 @@ export async function readVariableUsage(
   req: Request,
   ctx: Pick<PluginRouteContext, "caller" | "self">,
   usage: SharedStyleUsageSource,
-  sharedStyles: SharedStylesNow,
+  siteStyle: SiteStyleNow,
   blocks: RegisteredBlocks
 ): Promise<VariablesUsageResponse> {
   const ids = usageIds(req.url);
   const health = await usage.health();
-  // One index read for the whole page of variables, and one site-style read.
-  const found = await usage.documentsUsingEach(ids, health);
-  const styles = sharedStylesUsing(await sharedStyles(), new Set(ids));
-  const defaults = blockDefaultsUsing(blocks(), new Set(ids));
+  // One site-style read, and one index read for the whole page of variables,
+  // each asked as the site writes them.
+  const site = await siteStyle();
+  const asked = askedOf(ids, site.variables);
+  const found = await variableUsageSource(
+    usage,
+    site.variables
+  ).documentsUsingEach(ids, health);
+  const styles = sharedStylesUsing(site.classes, asked);
+  const defaults = blockDefaultsUsing(blocks(), asked);
+  // The variables whose own values name each one through `var()`: the
+  // relation a removal is refused by, so the filter and the refusal agree.
+  const naming = variablesUsing(site.variables, asked);
+  // The Site text rows using each, by the reading a removal is refused by.
+  const rowsUsing = siteTextRowsUsing(site.variables);
   // Built from entries, so an identity like `__proto__` is an own key.
   const variables: Record<string, VariableUsage> = Object.fromEntries(
     ids.map(id => [
@@ -391,6 +540,8 @@ export async function readVariableUsage(
         sharedStyles: (styles.get(id) ?? []).map(style => style.id).sort(),
         // In type order already, as the walk reads the registry.
         blockDefaults: (defaults.get(id) ?? []).map(block => block.type),
+        variables: (naming.get(id) ?? []).map(variable => variable.id),
+        siteText: rowsUsing(id),
       },
     ])
   );
@@ -444,7 +595,7 @@ export async function readVariableUses(
   req: Request,
   usage: SharedStyleUsageSource,
   readers: { named: ReadNamedDocuments; single: ReadNamedSingle },
-  sharedStyles: SharedStylesNow,
+  siteStyle: SiteStyleNow,
   blocks: RegisteredBlocks,
   siteStyleSlug: string
 ): Promise<Response> {
@@ -459,8 +610,10 @@ export async function readVariableUses(
     );
   }
   const { id, page } = parsed.data;
+  const { classes, variables } = await siteStyle();
+  const asked = askedOf([id], variables);
   const styles: VariableUseItem[] = (
-    sharedStylesUsing(await sharedStyles(), new Set([id])).get(id) ?? []
+    sharedStylesUsing(classes, asked).get(id) ?? []
   )
     .map(style => ({
       id: style.id,
@@ -474,7 +627,7 @@ export async function readVariableUses(
     .sort(byIdThenType);
   // In type order already, as the walk reads the registry.
   const defaults: VariableUseItem[] = (
-    blockDefaultsUsing(blocks(), new Set([id])).get(id) ?? []
+    blockDefaultsUsing(blocks(), asked).get(id) ?? []
   ).map(block => ({
     id: block.type,
     title: block.label,
@@ -486,7 +639,8 @@ export async function readVariableUses(
       "That page is past the last place a variable can be used."
     );
   }
-  const found = await listingOf(usage, id, await usage.health());
+  const keyed = variableUsageSource(usage, variables);
+  const found = await listingOf(keyed, id, await usage.health());
   const { readable, hidden } = await readableUses(found, usage, readers);
   return respondWithUsesPage<VariableUseItem>(
     [...styles, ...defaults, ...readable],
@@ -501,6 +655,11 @@ export interface VariableRead {
   readonly section: Record<string, unknown>;
   /** The site's shared styles as merged, for the in-use check. */
   readonly classes: readonly unknown[];
+  /**
+   * The site's variables with `section` as its stored tokens, every tier
+   * merged (`siteTokensOverCode`), for the in-use check.
+   */
+  readonly variablesWith: (section: Record<string, unknown>) => SiteTokenSet;
   /** The Single's version as read; absent from a server that issues none. */
   readonly rev: string | undefined;
 }
@@ -608,15 +767,24 @@ export async function removeVariables(
         read.section,
         supplied
       );
+      const after = withoutVariables(read.section, gone);
+      // The site's variables as the write leaves them: the code's Site text
+      // rows with the stored ones over them, as every page draws them.
+      const merged = read.variablesWith(after);
+      reasons.push(
+        ...siteTextReasons(removable, merged).map(reason => reason.message)
+      );
       if (reasons.length > 0) {
         throw NextlyError.conflict({
           reason: "state",
-          message: `Nothing was removed. ${reasons.join(" ")}`,
+          message: `Nothing was removed. ${[...new Set(reasons)].join(" ")}`,
           logContext: { variableIds: ids },
         });
       }
-      await checks.inUse(removable, read.classes);
-      await store.write(withoutVariables(read.section, gone), read);
+      // Judged against the same set, so a variable removed beside the one
+      // its value names is not its use.
+      await checks.inUse(removable, read.classes, merged);
+      await store.write(after, read);
     }
   );
   return respondMutation(
@@ -671,6 +839,7 @@ function variableReadOf(
         ? (section as Record<string, unknown>)
         : {},
     classes: mergedSharedStyles(doc, defaults),
+    variablesWith: tokens => siteTokensOverCode(defaults, tokens),
     rev: documentVersionOf(doc),
   };
 }
@@ -750,16 +919,23 @@ export function variableRoutes(setup: VariableRouteSetup): {
   requiredPermission?: ReturnType<typeof siteStylePermission>;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 }[] {
-  const sharedStylesOf = (ctx: Pick<PluginRouteContext, "self">) => async () =>
-    mergedSharedStyles(
-      await (
+  const siteStyleOf =
+    (ctx: Pick<PluginRouteContext, "self">): SiteStyleNow =>
+    async () => {
+      const doc = await (
         await getCachedNextly()
       ).findSingle({
         slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
         overrideAccess: true,
-      }),
-      setup.defaults
-    );
+      });
+      return {
+        classes: mergedSharedStyles(doc, setup.defaults),
+        variables: siteTokensOverCode(
+          setup.defaults,
+          storedDocument(doc).tokens
+        ),
+      };
+    };
   return [
     {
       method: "GET",
@@ -772,7 +948,7 @@ export function variableRoutes(setup: VariableRouteSetup): {
             req,
             ctx,
             setup.usage(ctx),
-            sharedStylesOf(ctx),
+            siteStyleOf(ctx),
             setup.blocks
           )
         );
@@ -788,7 +964,7 @@ export function variableRoutes(setup: VariableRouteSetup): {
           req,
           setup.usage(ctx),
           { named: namedDocumentsReader(ctx), single: namedSingleReader(ctx) },
-          sharedStylesOf(ctx),
+          siteStyleOf(ctx),
           setup.blocks,
           ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG
         );
@@ -844,11 +1020,11 @@ export function variableRemovalChecks(
   args: VariableCheckSetup
 ): VariableRemovalChecks {
   const stillUsed: StillUsedVariables = {
-    uses: async ids =>
-      storedUsesOf(
-        ids,
-        await args.documents(),
-        stored => tokenUsageOf(stored, args.limits).ids
+    // Asked by usage key (`variablesAsked`), each document read for the keys
+    // the index records it under, so the two cannot disagree.
+    uses: async keys =>
+      storedUsesOf(keys, await args.documents(), stored =>
+        usageKeysOf(tokenUsageOf(stored, args.limits))
       ),
     ...(args.firstReadable === undefined
       ? {}
@@ -856,10 +1032,11 @@ export function variableRemovalChecks(
   };
   return {
     stillUsed,
-    inUse: (removable, classes) =>
+    inUse: (removable, classes, variables) =>
       refuseVariablesInUse(
         removable,
         classes,
+        variables,
         {
           usage: args.usage,
           blocks: args.blocks,

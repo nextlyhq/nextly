@@ -100,6 +100,42 @@ export function resolvePublishTransition(
 }
 
 /**
+ * The permission a status write needs beyond the edit's own, or `null` when it
+ * needs none.
+ *
+ * A move into or out of published needs `publish` or `unpublish`, as
+ * {@link resolvePublishTransition} classifies it. Where the document holds
+ * working drafts (`holdsWorkingDrafts`, the same answer as the admin's
+ * `draftsEnabled`), a save that names `"published"` over a row that is ALREADY
+ * published needs `publish` too. It is no move, but it writes the live row,
+ * which changes what visitors see: there, a caller who may edit but not
+ * publish changes a published document through its working draft (a save
+ * naming no status is held as one), so naming the status it already has must
+ * not be a way past that.
+ *
+ * Where it holds no working drafts, `update` is the permission to change a
+ * published document's live content, and a save naming no status writes live
+ * as well, so naming `"published"` asks nothing more.
+ *
+ * The access gates ask this; {@link resolvePublishTransition} keeps answering
+ * the narrower question for what records a first publication, where a
+ * republish must record nothing.
+ */
+export function transitionGrantNeeded(
+  previousStatus: string | null | undefined,
+  nextStatus: unknown,
+  holdsWorkingDrafts: boolean
+): PublishTransition | null {
+  const move = resolvePublishTransition(previousStatus, nextStatus);
+  if (move !== null) return move;
+  return holdsWorkingDrafts &&
+    previousStatus === "published" &&
+    nextStatus === "published"
+    ? "publish"
+    : null;
+}
+
+/**
  * Drop an explicit `status: undefined` own-property from a write payload.
  *
  * `resolvePublishTransition` treats an undefined next status as "no move", so the

@@ -20,6 +20,9 @@ import {
   type DeliveredAdminEntry,
 } from "nextly/config";
 
+/** A delivered tab contribution. */
+export type DeliveredTab = Extract<DeliveredAdminContribution, { kind: "tab" }>;
+
 /** What the page knows that decides whether a contribution is drawn on it. */
 export interface PlaceView {
   /** The place's context, or `null` while the page does not know its ids. */
@@ -101,7 +104,7 @@ function tabFields(item: DeliveredAdminEntry): readonly string[] | undefined {
  * an edit page, which names its fields (`fieldNames`). A tab that edits none
  * is left to the place's other rules.
  */
-export function tabFitsDocument(
+function tabFitsDocument(
   item: DeliveredAdminEntry,
   fieldNames: readonly string[] | undefined
 ): boolean {
@@ -109,6 +112,26 @@ export function tabFitsDocument(
   if (fields === undefined) return true;
   return (
     fieldNames !== undefined && fields.every(name => fieldNames.includes(name))
+  );
+}
+
+/**
+ * The tabs an edit page draws of the entries that can be drawn on it
+ * (`entriesDrawnHere`): those that fit the document's top-level fields
+ * (`tabFitsDocument`). The one rule both a page's row of tabs and the
+ * "would this contribution be drawn here" read (`useContributionApplies`)
+ * follow, so the two can never answer differently for one document.
+ */
+export function tabsFittingDocument(
+  drawn: readonly DeliveredAdminEntry[],
+  fieldNames: readonly string[] | undefined
+): DeliveredTab[] {
+  return drawn.flatMap((item): DeliveredTab[] =>
+    "builtIn" in item ||
+    item.kind !== "tab" ||
+    !tabFitsDocument(item, fieldNames)
+      ? []
+      : [item]
   );
 }
 

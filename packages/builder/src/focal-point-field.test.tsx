@@ -163,10 +163,13 @@ describe("FocalPointField", () => {
     expect(backdrop?.style.objectPosition).toBe("100% 0%");
   });
 
-  it("shows an exact point as written, and writes one as CSS", () => {
+  it("shows an exact point as Custom with its value, and writes one as CSS", () => {
     const onCommit = mount("30% 70%");
     expect(checked()).toEqual([]);
-    expect(screen.getByText("30% 70%", { selector: "b" })).toBeDefined();
+    // Named as a choice the nine points can't make, then the value itself.
+    expect(
+      screen.getByText("Custom: 30% 70%", { selector: "b" })
+    ).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Focal point as CSS" }));
     const css = screen.getByRole("textbox", { name: "Focal point as CSS" });
     fireEvent.change(css, { target: { value: "20% 10%" } });

@@ -5,8 +5,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  planChildSize,
   planAlign,
   planArrange,
+  planChildHeight,
+  planChildWidth,
   planColumns,
   planReverse,
   planRows,
@@ -17,6 +20,11 @@ import {
   ownCascade,
   planPlain,
   readArrange,
+  readChildHeight,
+  readChildSize,
+  readChildWidth,
+  type ChildFit,
+  type ParentArrangement,
   unusedSettings,
   type AlignPoint,
   type LayoutTiers,
@@ -598,5 +606,287 @@ describe("a fitted minimum width with commas of its own", () => {
       mode: "grid",
       columns: { kind: "fit", min: "min(12rem, 100%)" },
     });
+  });
+});
+
+describe("Stack on with a narrower row of its own", () => {
+  it("stacks the narrower device too, keeping its order", () => {
+    const block = new Block({ display: "flex", flexDirection: "row-reverse" });
+    block.own.sm.flexDirection = "row";
+    block.apply(planStackOn(block.tiers(), "md"));
+    expect(block.own.md.flexDirection).toBe("column-reverse");
+    expect(block.own.sm.flexDirection).toBe("column");
+    expect(block.read("sm")).toMatchObject({ mode: "row", stacked: true });
+  });
+});
+
+describe("a flex direction with no plain reading", () => {
+  it("reads as Custom, and plain controls take it away", () => {
+    const block = new Block({ display: "flex", flexDirection: "inherit" });
+    expect(block.read()).toEqual({ mode: "custom" });
+    block.apply(planPlain(block.tiers(), "base"));
+    expect(block.own.base.flexDirection).toBeUndefined();
+    expect(block.read()).toMatchObject({ mode: "row" });
+  });
+});
+
+describe("a clear at a device beside a hidden tier of the same width", () => {
+  it("spells out the default where the hidden tier's value would stay", () => {
+    // "md2" is compiled before "md" at one width; the switcher offers "md".
+    const own: Record<string, LayoutValues> = {
+      base: { display: "flex" },
+      md2: { flexDirection: "inherit" },
+      md: {},
+      sm: {},
+    };
+    const cascade = ["base", "md2", "md", "sm"];
+    const tiers: LayoutTiers = {
+      order: ORDER,
+      cascadeOrder: cascade,
+      own: device => own[device] ?? {},
+      inForce: ownCascade(
+        cascade,
+        device => own[device] ?? {},
+        () => ({})
+      ),
+    };
+    expect(readArrange(tiers, "md")).toEqual({ mode: "custom" });
+    expect(planPlain(tiers, "md")).toContainEqual({
+      device: "md",
+      property: "flexDirection",
+      value: "row",
+    });
+  });
+});
+
+describe("Inside its parent: Width", () => {
+  const writesOf = (
+    parent: ParentArrangement,
+    choice: ChildFit,
+    size?: string
+  ) => {
+    const block = new Block();
+    block.apply(planChildWidth(block.tiers(), "base", parent, choice, size));
+    return block;
+  };
+
+  it("in a Stack's flow: auto, fit-content, or the width set", () => {
+    expect(writesOf("flow", "fill").own.base).toEqual({});
+    expect(writesOf("flow", "fit").own.base).toEqual({ width: "fit-content" });
+    expect(writesOf("flow", "fixed", "320px").own.base).toEqual({
+      width: "320px",
+    });
+  });
+
+  it("in a flex column: stretched, at the start, or set at the start", () => {
+    expect(writesOf("column", "fill").own.base).toEqual({
+      alignSelf: "stretch",
+    });
+    expect(writesOf("column", "fit").own.base).toEqual({
+      alignSelf: "flex-start",
+    });
+    expect(writesOf("column", "fixed", "50%").own.base).toEqual({
+      width: "50%",
+      alignSelf: "flex-start",
+    });
+  });
+
+  it("in a Row: grown from nothing, its content's, or set and kept", () => {
+    expect(writesOf("row", "fill").own.base).toEqual({
+      flexGrow: "1",
+      flexShrink: "1",
+      flexBasis: "0",
+      minWidth: "0",
+    });
+    expect(writesOf("row", "fit").own.base).toEqual({});
+    expect(writesOf("row", "fixed", "12rem").own.base).toEqual({
+      width: "12rem",
+      flexShrink: "0",
+    });
+  });
+
+  it("in a Grid: stretched, at the start, or set", () => {
+    // Stretched itself, whatever the Grid's own Align.
+    expect(writesOf("grid", "fill").own.base).toEqual({
+      justifySelf: "stretch",
+    });
+    expect(writesOf("grid", "fit").own.base).toEqual({ justifySelf: "start" });
+    expect(writesOf("grid", "fixed", "200px").own.base).toEqual({
+      width: "200px",
+    });
+  });
+
+  it("reads every choice back as itself under each parent", () => {
+    for (const parent of ["flow", "column", "row", "grid"] as const) {
+      for (const choice of ["fill", "fit", "fixed"] as const) {
+        const block = writesOf(parent, choice, "240px");
+        expect(readChildWidth(block.tiers(), "base", parent)).toEqual(
+          choice === "fixed" ? { choice, size: "240px" } : { choice }
+        );
+      }
+    }
+  });
+
+  it("reads anything else as Custom", () => {
+    const centred = new Block({ alignSelf: "center" });
+    expect(readChildWidth(centred.tiers(), "base", "column")).toEqual({
+      choice: "custom",
+    });
+    const grown = new Block({ flexGrow: "2" });
+    expect(readChildWidth(grown.tiers(), "base", "row")).toEqual({
+      choice: "custom",
+    });
+  });
+
+  it("switches from one choice to another without leaving the last behind", () => {
+    const block = writesOf("row", "fixed", "12rem");
+    block.apply(planChildWidth(block.tiers(), "base", "row", "fill"));
+    expect(block.own.base).toEqual({
+      flexGrow: "1",
+      flexShrink: "1",
+      flexBasis: "0",
+      minWidth: "0",
+    });
+  });
+});
+
+describe("Inside its parent under a Row stacked at the edited device", () => {
+  it("sizes and reads the child as in a column there", () => {
+    const block = new Block({ flexGrow: "1", flexShrink: "1", flexBasis: "0" });
+    // The Row's main-axis Fill from the desktop doesn't change what shows.
+    expect(readChildWidth(block.tiers(), "sm", "column")).toEqual({
+      choice: "fill",
+    });
+    block.apply(planChildWidth(block.tiers(), "sm", "column", "fit"));
+    expect(block.own.sm).toEqual({ alignSelf: "flex-start" });
+    expect(readChildWidth(block.tiers(), "sm", "column")).toEqual({
+      choice: "fit",
+    });
+  });
+
+  it("lets Fill there replace a width fixed at a wider device", () => {
+    const block = new Block({ width: "300px", flexShrink: "0" });
+    block.apply(planChildWidth(block.tiers(), "sm", "column", "fill"));
+    expect(block.own.sm).toEqual({ width: "auto", alignSelf: "stretch" });
+    expect(readChildWidth(block.tiers(), "sm", "column")).toEqual({
+      choice: "fill",
+    });
+  });
+});
+
+describe("Inside its parent: Height, under a Row or a Grid", () => {
+  it("writes and reads each choice on the cross axis", () => {
+    for (const choice of ["fill", "fit", "fixed"] as const) {
+      const block = new Block();
+      block.apply(planChildHeight(block.tiers(), "base", choice, "80px"));
+      expect(readChildHeight(block.tiers(), "base")).toEqual(
+        choice === "fixed" ? { choice, size: "80px" } : { choice }
+      );
+    }
+    const fit = new Block();
+    fit.apply(planChildHeight(fit.tiers(), "base", "fit"));
+    expect(fit.own.base).toEqual({ alignSelf: "start" });
+  });
+});
+
+describe("Inside its parent: what a choice can't say", () => {
+  it("fills the line for an inline-level block in flow", () => {
+    const block = new Block({ display: "inline-block" });
+    expect(readChildWidth(block.tiers(), "base", "flow")).toEqual({
+      choice: "fit",
+    });
+    block.apply(planChildWidth(block.tiers(), "base", "flow", "fill"));
+    expect(block.own.base.width).toBe("100%");
+    expect(readChildWidth(block.tiers(), "base", "flow")).toEqual({
+      choice: "fill",
+    });
+  });
+
+  it("reads a Row child's basis of its own as Custom", () => {
+    const block = new Block({ flexGrow: "0", flexBasis: "240px" });
+    expect(readChildWidth(block.tiers(), "base", "row")).toEqual({
+      choice: "custom",
+    });
+  });
+});
+
+describe("Inside its parent with lines running down the screen", () => {
+  it("fills a vertical Row's width across it, and its height along it", () => {
+    const block = new Block();
+    block.flow = { writingMode: "vertical-rl", rtl: false };
+    block.apply(planChildWidth(block.tiers(), "base", "row", "fill"));
+    // The width is the Row's cross axis there: stretched, not grown.
+    expect(block.own.base).toEqual({ alignSelf: "stretch" });
+    const tall = new Block();
+    tall.flow = { writingMode: "vertical-rl", rtl: false };
+    tall.apply(planChildHeight(tall.tiers(), "base", "fill", undefined, "row"));
+    expect(tall.own.base).toMatchObject({
+      flexGrow: "1",
+      flexBasis: "0",
+      minHeight: "0",
+    });
+    expect(readChildHeight(tall.tiers(), "base", "row")).toEqual({
+      choice: "fill",
+    });
+  });
+});
+
+describe("Inside its parent with a self-alignment no choice writes", () => {
+  it("reads a centred Fixed child as Custom, so its alignment row stays", () => {
+    const block = new Block({ width: "200px", justifySelf: "center" });
+    expect(readChildWidth(block.tiers(), "base", "grid")).toEqual({
+      choice: "custom",
+    });
+  });
+});
+
+describe("Inside its parent: vertical flow and a parent's Align", () => {
+  it("fits an automatic width in vertical flow, and fills it with 100%", () => {
+    const block = new Block();
+    block.flow = { writingMode: "vertical-rl", rtl: false };
+    expect(readChildWidth(block.tiers(), "base", "flow")).toEqual({
+      choice: "fit",
+    });
+    block.apply(planChildWidth(block.tiers(), "base", "flow", "fill"));
+    expect(block.own.base.width).toBe("100%");
+  });
+
+  it("reads an automatic size under a parent Align that doesn't stretch as Custom", () => {
+    const block = new Block();
+    expect(
+      readChildSize(block.tiers(), "base", "column", "width", {
+        alignItems: "center",
+      })
+    ).toEqual({ choice: "custom" });
+    // Under one that stretches it is Fill, as before.
+    expect(
+      readChildSize(block.tiers(), "base", "column", "width", {
+        alignItems: "stretch",
+      })
+    ).toEqual({ choice: "fill" });
+  });
+
+  it("keeps Fixed under a parent Align that doesn't stretch, and its size editable", () => {
+    // Fixed leaves the alignment to the parent, so the block stays centred
+    // at the size it was given, and reads as Fixed with that size.
+    const grid = new Block();
+    grid.apply(planChildSize(grid.tiers(), "base", "grid", "width", "fixed", "200px"));
+    expect(
+      readChildSize(grid.tiers(), "base", "grid", "width", {
+        justifyItems: "center",
+      })
+    ).toEqual({ choice: "fixed", size: "200px" });
+    const row = new Block();
+    row.apply(planChildSize(row.tiers(), "base", "row", "height", "fixed", "80px"));
+    expect(
+      readChildSize(row.tiers(), "base", "row", "height", {
+        alignItems: "center",
+      })
+    ).toEqual({ choice: "fixed", size: "80px" });
+    // A centring of the block's own is no choice's, so it stays Custom.
+    row.own.base.alignSelf = "center";
+    expect(
+      readChildSize(row.tiers(), "base", "row", "height")
+    ).toEqual({ choice: "custom" });
   });
 });

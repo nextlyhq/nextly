@@ -6,7 +6,8 @@
  *   bar follows a change of device and of state.
  * - The Style tab orders its sections Layout to Effects and places each
  *   property as the placement table says, for a section, a heading and an
- *   image: the common controls show, the rest wait behind "+ More".
+ *   image: the common controls show, and the rest are offered by "+ Add CSS
+ *   property" in the last section, "CSS properties".
  * - A block stored with a CSS id and attributes reopens with them on the
  *   Advanced tab, and an edit there survives a save and a reload.
  * - Locking from the card's menu makes every control read-only and says so;
@@ -201,14 +202,26 @@ async function shownProperties(page: Page, section: string): Promise<string[]> {
     );
 }
 
-/** What a section's "+ More" lists. */
-async function moreProperties(page: Page, label: string): Promise<string[]> {
-  await page
-    .getByRole("button", { name: `More ${label.toLowerCase()} properties` })
-    .click();
-  // Read once the menu is drawn: reading at once can find none yet.
-  await expect(page.getByRole("menuitem").first()).toBeVisible();
-  const items = await page.getByRole("menuitem").allTextContents();
+/** The CSS names "+ Add CSS property" lists, with the section each is in. */
+async function addableProperties(page: Page): Promise<string[]> {
+  const item = page.locator(
+    '.nx-style-inspector [data-section="css-properties"]'
+  );
+  if ((await item.getAttribute("data-state")) !== "open") {
+    await item.locator("button").first().click();
+  }
+  await page.getByRole("button", { name: "+ Add CSS property" }).click();
+  // Read once the list is drawn: reading at once can find none yet.
+  const options = page.getByRole("option");
+  await expect(options.first()).toBeVisible();
+  const items = await options.evaluateAll(nodes =>
+    nodes.map(
+      node =>
+        `${node.querySelector(".nx-css-picker__css")?.textContent ?? ""} in ${
+          node.querySelector(".nx-css-picker__section")?.textContent ?? ""
+        }`
+    )
+  );
   await page.keyboard.press("Escape");
   return items;
 }
@@ -379,7 +392,15 @@ test.describe("the inspector", () => {
     await page.getByRole("tab", { name: "Style" }).click();
     await expect
       .poll(() => sectionLabels(page))
-      .toEqual(["Spacing", "Size", "Position", "Text", "Border", "Effects"]);
+      .toEqual([
+        "Spacing",
+        "Size",
+        "Position",
+        "Text",
+        "Border",
+        "Effects",
+        "CSS properties",
+      ]);
     expect(await shownProperties(page, "typography")).toEqual([
       "fontFamily",
       "fontWeight",
@@ -388,17 +409,25 @@ test.describe("the inspector", () => {
       "color",
       "textAlign",
     ]);
-    expect(await moreProperties(page, "Text")).toContain("Letter spacing");
+    expect(await addableProperties(page)).toContain("letter-spacing in Text");
 
     // An image: the media fit controls show at once in Size.
     await select(page, IMAGE);
     await expect
       .poll(() => sectionLabels(page))
-      .toEqual(["Spacing", "Size", "Position", "Border", "Effects"]);
+      .toEqual([
+        "Spacing",
+        "Size",
+        "Position",
+        "Border",
+        "Effects",
+        "CSS properties",
+      ]);
     const size = await shownProperties(page, "size");
     expect(size).toEqual(expect.arrayContaining(["aspectRatio", "objectFit"]));
 
-    // A section: Layout first; the container query and box sizing wait in More.
+    // A section: Layout first; the container query and box sizing are added
+    // from "CSS properties", each said to be of its own section.
     await select(page, SECTION, "corner");
     await expect
       .poll(() => sectionLabels(page))
@@ -410,11 +439,12 @@ test.describe("the inspector", () => {
         "Background",
         "Border",
         "Effects",
+        "CSS properties",
       ]);
     expect(await shownProperties(page, "layout")).toEqual(["display"]);
-    expect(await moreProperties(page, "Layout")).toContain("Container type");
-    await shownProperties(page, "size");
-    expect(await moreProperties(page, "Size")).toContain("Box sizing");
+    const addable = await addableProperties(page);
+    expect(addable).toContain("container-type in Layout");
+    expect(addable).toContain("box-sizing in Size");
     // And no style section is called Advanced.
     expect(await sectionLabels(page)).not.toContain("Advanced");
   });
@@ -505,17 +535,17 @@ test.describe("the inspector", () => {
       name: "Keep out of search previews",
     });
     await expect(never).toHaveAttribute("aria-checked", "false");
-    // After Visible on and Show when, before the anchor: each is measured,
+    // After Hide on and Show when, before the anchor: each is measured,
     // so the switch drawn above Show when, or Show when missing, fails here.
     const order = await page
       .getByRole("tabpanel", { name: "Advanced" })
       .locator(
-        "[data-visible-on], .nx-show-when, [data-never-quote], #nx-block-css-id:visible"
+        "[data-hide-on], .nx-show-when, [data-never-quote], #nx-block-css-id:visible"
       )
       .evaluateAll(elements =>
         elements.map(element =>
-          element.hasAttribute("data-visible-on")
-            ? "visible-on"
+          element.hasAttribute("data-hide-on")
+            ? "hide-on"
             : element.classList.contains("nx-show-when")
               ? "show-when"
               : element.hasAttribute("data-never-quote")
@@ -523,7 +553,7 @@ test.describe("the inspector", () => {
                 : "css-id"
         )
       );
-    expect(order).toEqual(["visible-on", "show-when", "never-quote", "css-id"]);
+    expect(order).toEqual(["hide-on", "show-when", "never-quote", "css-id"]);
 
     await never.click();
     await expect(page.getByText("On: marked")).toBeVisible();

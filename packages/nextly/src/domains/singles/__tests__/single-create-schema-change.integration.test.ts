@@ -623,6 +623,42 @@ for (const dialect of getConfiguredTestDialects()) {
       );
     });
 
+    it("rebuilds a missing table through a settings save that adds a field filling its row", async () => {
+      current = await createTestNextly({ dialect });
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: plain,
+          label: "Plain",
+          fields: [{ name: "body", type: "text" }],
+        }
+      );
+      // The table gone from under its registered Single; the save plans the whole table again.
+      await current.adapter.executeQuery(`DROP TABLE single_${plain}`);
+
+      await dispatchSingles(
+        "updateSingleSchema",
+        { slug: plain },
+        {
+          fields: [
+            { name: "body", type: "text" },
+            {
+              name: "subtitle",
+              type: "text",
+              required: true,
+              defaultValue: "Untitled",
+            },
+          ],
+        }
+      );
+
+      expect(await current.adapter.tableExists(`single_${plain}`)).toBe(true);
+      expect((await registryRow(current, plain))?.migrationStatus).toBe(
+        "applied"
+      );
+    });
+
     /**
      * 🔴 A LOCALIZED single's interrupted create is repaired the same way: by rebuilding.
      *

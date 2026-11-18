@@ -2,18 +2,20 @@
 
 /**
  * The editor's top bar: the page's title and state with its history at the
- * start, the devices in the centre, and search, Preview and the document's
- * actions at the end.
+ * start, the devices and the light and dark preview in the centre, and
+ * search, Preview, the document's actions and its ⋯ menu at the end.
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-top-bar
  */
-import { BreakpointSwitcher } from "@nextlyhq/builder/shell";
+import { BreakpointSwitcher, PageChecksChip } from "@nextlyhq/builder/shell";
 import { DocumentSaveAndPublish } from "@nextlyhq/plugin-sdk/admin";
 
 import { BindingsToFixChip } from "../bindings-report/BindingsToFixChip";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import { OwnDesignsChip } from "../TemplateOwnDesigns";
 
+import { CanvasModeSwitch } from "./canvas-preview-mode";
+import { EditorMoreMenu } from "./editor-more-menu";
 import { SearchButton } from "./editor-search";
 import type { EditorView } from "./editor-view";
 import { HistoryButtons } from "./history-buttons";
@@ -61,7 +63,8 @@ export function editorTopBar(
    * address, where that field sits in words when below the top level, and
    * the canvas, which a binding's Select brings its block into view in,
    * and "Preview as visitor", which Preview's menu holds, and the page's
-   * data count, which the bar shows only near the limit.
+   * data count, which the bar shows only near the limit, and the way to the
+   * document's form, which the ⋯ menu offers.
    */
   page: {
     title: string | undefined;
@@ -70,6 +73,7 @@ export function editorTopBar(
     canvas: HTMLElement | null;
     visitor: VisitorPreview;
     pageData: PageDataCount | null;
+    openAsForm: (() => void) | undefined;
   }
 ): {
   topBar: React.JSX.Element;
@@ -145,6 +149,9 @@ export function editorTopBar(
           onSelect={chooseDevice}
           status={siteStyleStatus(siteStylePending, siteStyleError)}
         />
+        {/* Beside the devices: the whole site in its dark values, offered
+            while some variable has one. */}
+        <CanvasModeSwitch preview={view.previewMode} />
       </>
     ),
     topBarEnd: (
@@ -153,6 +160,12 @@ export function editorTopBar(
           blocks, the page, other pages and commands, also on ⌘K. */}
         <SearchButton onOpen={() => view.search.setOpen(true)} />
         <PreviewButton visitor={page.visitor} />
+        {/* Beside Publish, on a page: how many of the draft's checks need
+          attention, opening the list. Never a reason to hold Save or
+          Publish back, which read nothing of it. */}
+        {editor.document.kind === "page" ? (
+          <PageChecksChip editor={editor} canvas={page.canvas} />
+        ) : null}
         {/* Last, at the bar's far end where the header kept them: Save and
           Publish, which say themselves whether the work is saved and
           whether the live page is behind, so nothing else in the bar says
@@ -160,6 +173,10 @@ export function editorTopBar(
           the builder's taking the window would otherwise leave reachable
           only from the keyboard. */}
         <DocumentSaveAndPublish />
+        {/* After them, as the entry page's own ⋯ follows its Publish: the
+          form and the pin, which a page that opens here would otherwise
+          leave out of reach. */}
+        <EditorMoreMenu onOpenAsForm={page.openAsForm} />
       </>
     ),
   };
