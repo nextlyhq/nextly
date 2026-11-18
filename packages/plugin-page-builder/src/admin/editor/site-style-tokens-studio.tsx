@@ -48,7 +48,12 @@ import {
 } from "../../site-style-record";
 import { sameStoredValue } from "../../stored-json";
 import { conflictWords } from "../conflict-words";
-import { useHeldSiteStyle, useSaveSiteStyle } from "../site-style-client";
+import {
+  SiteStyleHistoryContext,
+  SiteStylePreviewContext,
+  useHeldSiteStyle,
+  useSaveSiteStyle,
+} from "../site-style-client";
 import { useShown } from "../use-shown";
 import {
   cleanUpUnused,
@@ -137,7 +142,16 @@ export function TokensStudio({
    * database on the first edit — the same fault as saving the merged set, one
    * tier further down.
    */
-  const { editable, baseline } = resolvedTiers(merged, supplied);
+  const baseline = resolveSiteTokens(supplied);
+  const preview = useTokenPreview(baseline);
+  /*
+   * What the studio edits from is the read WITHOUT its own preview. The
+   * canvas's read draws a value being typed over what is stored, and edited
+   * from that read, the first edit would find its typed value stored already:
+   * the field would write nothing when left, and the end of the preview would
+   * take the value back unsaved.
+   */
+  const editable = editableTokens(preview.underneath(merged));
   const { edits, shownNow, issue, notice, commit, cleanUp } = useTokenCommits(
     baseline,
     editable,
@@ -175,6 +189,7 @@ export function TokensStudio({
     absence: absenceOf(pending),
     readOnly: !mayChange,
     onChange: commit,
+    onPreview: preview.draw,
     onActivity: held.extend,
     onSettle: () => void held.release(),
     currentTokens,
@@ -198,19 +213,76 @@ export function TokensStudio({
 }
 
 /**
- * The two tiers of variables the studio works with, both resolved as the
- * canvas resolves them (see {@link TokensStudio}): the set it shows and edits,
- * absent while the site style is unread, and the baseline its overrides are
- * stored against.
+ * The set the studio shows and edits, resolved as the canvas resolves it (see
+ * {@link TokensStudio}), or `undefined` while the site style is unread. Its
+ * overrides are stored against the code tier, resolved the same way.
  */
-function resolvedTiers(
-  merged: SiteTokenSet | undefined,
-  supplied: SiteTokenSet | undefined
-): { editable: SiteTokenSet | undefined; baseline: SiteTokenSet } {
-  return {
-    editable: merged === undefined ? undefined : resolveSiteTokens(merged),
-    baseline: resolveSiteTokens(supplied),
+function editableTokens(
+  merged: SiteTokenSet | undefined
+): SiteTokenSet | undefined {
+  return merged === undefined ? undefined : resolveSiteTokens(merged);
+}
+
+/**
+ * A variable's value drawn on the canvas while it is typed or picked, before
+ * its edit ends: through the editor's held-value preview, which draws over
+ * the stored read and stores nothing. The edit is written once, when it ends,
+ * by the commit every edit goes through.
+ *
+ * An edit ending with nothing to write takes its drawing back, and draws
+ * again what was drawn before it began: an earlier edit still waiting for its
+ * write, the same value, so that write's answer still finds it. Marked stored
+ * as well, so a value whose write had already answered gives way once the
+ * read moves on, rather than standing over the read for good. The panel ends
+ * a preview before the edit's commit, so this never draws over that commit.
+ *
+ * The preview reaches the canvas alone. `underneath` answers the read the
+ * studio edits from as it stood before the preview began, for as long as the
+ * preview is drawn: the read the studio is handed is the canvas's, with the
+ * preview over it.
+ */
+function useTokenPreview(baseline: SiteTokenSet): {
+  draw: (next: SiteTokenSet | null) => void;
+  underneath: (merged: SiteTokenSet | undefined) => SiteTokenSet | undefined;
+} {
+  const history = useContext(SiteStyleHistoryContext);
+  const drawn = useContext(SiteStylePreviewContext);
+  const drawnNow = useRef(drawn);
+  drawnNow.current = drawn;
+  // What this preview draws, and what was drawn before it began.
+  const under = useRef<{ shown: unknown; before: unknown } | null>(null);
+  // The read as it was last seen with no preview of the studio's over it.
+  const readBefore = useRef<SiteTokenSet | undefined>(undefined);
+  const underneath = (
+    merged: SiteTokenSet | undefined
+  ): SiteTokenSet | undefined => {
+    if (under.current !== null) return readBefore.current;
+    readBefore.current = merged;
+    return merged;
   };
+  const draw = (next: SiteTokenSet | null): void => {
+    const preview = history?.preview;
+    if (preview === undefined) return;
+    if (next !== null) {
+      const shown = tokenOverrideOf(baseline, next);
+      const before =
+        under.current === null
+          ? drawnNow.current.get("tokens")
+          : under.current.before;
+      under.current = { shown, before };
+      preview("tokens", shown, "held");
+      return;
+    }
+    const ended = under.current;
+    under.current = null;
+    if (ended === null) return;
+    preview("tokens", ended.shown, "dropped");
+    if (ended.before !== undefined) {
+      preview("tokens", ended.before, "held");
+      preview("tokens", ended.before, "stored");
+    }
+  };
+  return { draw, underneath };
 }
 
 /** The panel's conflict notice, as an optional prop: present only when said. */

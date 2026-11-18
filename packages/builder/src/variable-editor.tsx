@@ -42,6 +42,7 @@ import {
   relabelToken,
   variableLabelIssue,
   writeTokenValue,
+  type TokenValueWrite,
   type VariableEntry,
 } from "./tokens-studio";
 import {
@@ -70,6 +71,7 @@ import {
   unwritableValue,
   valueFieldFor,
   variableCss,
+  VariablePreview,
   type ValueFieldProps,
 } from "./variable-value-controls";
 
@@ -119,7 +121,10 @@ export function VariableEditor({
   const token = tokens.tokens[row.at];
   const [nameIssue, setNameIssue] = React.useState<string | undefined>();
   const [name, setName] = useDraft(entry.label);
-  const { writeValue, refusals, note } = useValueWrites(tokens, onChange);
+  const { writeValue, previewValue, refusals, note } = useValueWrites(
+    tokens,
+    onChange
+  );
 
   const commitName = (value: string): void => {
     if (readOnly || value.trim() === entry.label) {
@@ -178,6 +183,7 @@ export function VariableEditor({
           readOnly={readOnly}
           onChange={onChange}
           write={writeValue}
+          preview={previewValue}
           refused={refused}
         />
       )}
@@ -290,13 +296,14 @@ function codeNameOf(
 /**
  * The value fields' one write, and what it leaves said under the fields: the
  * fields holding a refused value, and a note about what a write changed
- * beyond its own field.
+ * beyond its own field. Also the fields' preview, judged as the write is.
  */
 function useValueWrites(
   tokens: SiteTokenSet,
   onChange: (tokens: SiteTokenSet) => void
 ): {
   writeValue: ValueWrite;
+  previewValue: ValuePreview;
   refusals: ReadonlyMap<string, RefusedValue>;
   note: string | undefined;
 } {
@@ -342,16 +349,7 @@ function useValueWrites(
       refuse(at, mode);
       return;
     }
-    // Refused where it is typed when the site's stylesheet would not write
-    // it, a value that would load a file among them, rather than at the save.
-    const token = tokens.tokens[at];
-    const unwritable =
-      token === undefined ? undefined : unwritableValue(tokens, token, next);
-    if (unwritable !== undefined) {
-      refuse(at, mode, unwritable);
-      return;
-    }
-    const written = writeTokenValue(tokens, at, mode, next);
+    const written = valueWritten(tokens, at, mode, next);
     if ("issue" in written) {
       refuse(at, mode, written.issue);
       return;
@@ -368,11 +366,74 @@ function useValueWrites(
     );
     onChange(written.tokens);
   };
-  return { writeValue, refusals, note };
+  const previewValue = useValuePreview(tokens);
+  return { writeValue, previewValue, refusals, note };
+}
+
+/**
+ * What a value would write: refused where it is typed when the site's
+ * stylesheet would not write it, a value that would load a file among them,
+ * rather than at the save. The one judgement a write and a preview share.
+ */
+function valueWritten(
+  tokens: SiteTokenSet,
+  at: number,
+  mode: TokenMode,
+  next: string
+): TokenValueWrite {
+  const token = tokens.tokens[at];
+  const unwritable =
+    token === undefined ? undefined : unwritableValue(tokens, token, next);
+  if (unwritable !== undefined) return { issue: unwritable };
+  return writeTokenValue(tokens, at, mode, next);
+}
+
+/**
+ * The value fields' preview: each value a field is given that its write
+ * would take is handed to the host to draw, and one it would refuse, such as
+ * half a colour, is not, so the canvas keeps the last valid value. `null`
+ * ends it, drawing what is stored again; said once, and said when the editor
+ * goes away mid-edit too, so nothing unwritten stays drawn.
+ */
+function useValuePreview(tokens: SiteTokenSet): ValuePreview {
+  const host = React.useContext(VariablePreview);
+  // The host drawing an edit under way, while one is.
+  const drawing = React.useRef<typeof host>(undefined);
+  React.useEffect(
+    () => () => {
+      drawing.current?.(null);
+      drawing.current = undefined;
+    },
+    []
+  );
+  return (at, mode, text) => {
+    if (text === null) {
+      const drew = drawing.current;
+      drawing.current = undefined;
+      drew?.(null);
+      return;
+    }
+    const next = text.trim();
+    if (host === undefined || next === "") return;
+    // The stored value typed back is drawn as stored.
+    const written =
+      tokens.tokens[at]?.values[mode] === next
+        ? { tokens }
+        : valueWritten(tokens, at, mode, next);
+    if ("issue" in written) return;
+    drawing.current = host;
+    host(written.tokens);
+  };
 }
 
 /** Writes one variable's value for one mode, or says why it cannot. */
 type ValueWrite = (at: number, mode: TokenMode, value: string) => void;
+
+/**
+ * Draws one variable's value for one mode before it is written, or, given
+ * `null`, ends the drawing.
+ */
+type ValuePreview = (at: number, mode: TokenMode, text: string | null) => void;
 
 /** A note a write left, and what its variable held once written, as JSON. */
 interface WriteNote {
@@ -433,6 +494,7 @@ function Values({
   readOnly,
   onChange,
   write,
+  preview,
   refused,
 }: {
   entry: VariableEntry;
@@ -441,6 +503,7 @@ function Values({
   readOnly: boolean;
   onChange: (tokens: SiteTokenSet) => void;
   write: ValueWrite;
+  preview: ValuePreview;
   refused: Refused;
 }): React.JSX.Element {
   const { row, lineHeight } = entry;
@@ -452,6 +515,7 @@ function Values({
         cssOf={value => variableCss(tokens, held, value)}
         readOnly={readOnly}
         onCommit={(mode, value) => write(at, mode, value)}
+        onPreview={(mode, text) => preview(at, mode, text)}
         onClear={() => onChange(clearDarkValue(tokens, at))}
         refusedIn={mode => refusalAt(refused, at, mode)}
         fluid={fluidHookOf({ token: held, tokens, at, onChange, readOnly })}
@@ -707,6 +771,7 @@ function ModeValues({
   cssOf,
   readOnly,
   onCommit,
+  onPreview,
   onClear,
   refusedIn,
   fluid,
@@ -716,6 +781,8 @@ function ModeValues({
   cssOf: (value: string) => string;
   readOnly: boolean;
   onCommit: (mode: TokenMode, value: string) => void;
+  /** Draws a mode's value before it is written; `null` ends it. */
+  onPreview: (mode: TokenMode, text: string | null) => void;
   onClear: () => void;
   /** The reason's element while a mode's field holds a refused value. */
   refusedIn: (mode: TokenMode) => string | undefined;
@@ -731,6 +798,7 @@ function ModeValues({
         readOnly={readOnly}
         refusedBy={refusedIn("light")}
         onCommit={value => onCommit("light", value)}
+        onPreview={text => onPreview("light", text)}
         css={cssOf(token.values.light)}
         mode="light"
       />
@@ -741,6 +809,7 @@ function ModeValues({
         readOnly={readOnly}
         refusedBy={refusedIn("dark")}
         onCommit={value => onCommit("dark", value)}
+        onPreview={text => onPreview("dark", text)}
         onAdd={() => onCommit("dark", token.values.light)}
         onClear={onClear}
       />
@@ -765,7 +834,9 @@ function fieldFor(
  * The picker sits inside this popover rather than in a second one, so focus
  * stays in one dialog. What it composes is held as a draft and written once,
  * when the picker is closed or this editor goes away, so dragging across it
- * is one save rather than one per pointer move.
+ * is one save rather than one per pointer move. Given `onPreview`, each move
+ * and each colour typed is drawn on the canvas meanwhile, and the drawing
+ * ends before the one write.
  *
  * Its picker lists the author's Recent colours, as a block's does; a colour
  * written here, typed or picked, joins them.
@@ -776,6 +847,7 @@ export function ColourValue({
   readOnly,
   refusedBy,
   onCommit,
+  onPreview,
   mode = "light",
 }: {
   label: string;
@@ -784,6 +856,8 @@ export function ColourValue({
   /** The id of the reason, while this field holds a value that was refused. */
   refusedBy?: string | undefined;
   onCommit: (value: string) => void;
+  /** Draws a colour before it is written; `null` ends it. */
+  onPreview?: ((text: string | null) => void) | undefined;
   /** Which mode's value this is, drawn ☀ or ☾ beside the label. */
   mode?: TokenMode | undefined;
 }): React.JSX.Element {
@@ -795,13 +869,14 @@ export function ColourValue({
   // its colour so each step builds on the last; written only when it closes.
   const [shown, setShown] = React.useState<string | null>(null);
   const [recentColours, remember] = useRecentColours();
-  const latest = React.useRef({ value, onCommit, remember });
+  const latest = React.useRef({ value, onCommit, onPreview, remember });
   React.useEffect(() => {
-    latest.current = { value, onCommit, remember };
+    latest.current = { value, onCommit, onPreview, remember };
   });
   const flush = React.useCallback((): void => {
     const pending = draft.current;
     draft.current = null;
+    latest.current.onPreview?.(null);
     if (pending !== null && pending !== latest.current.value) {
       latest.current.onCommit(pending);
       latest.current.remember(pending);
@@ -812,6 +887,7 @@ export function ColourValue({
   // The value it holds commits too while a refusal is shown: putting it
   // back is how a refused value is corrected, and clears the refusal.
   const commit = (typed: string): boolean => {
+    onPreview?.(null);
     const next = typed.trim();
     const writes =
       !readOnly && next !== "" && (next !== value || refusedBy !== undefined);
@@ -883,6 +959,7 @@ export function ColourValue({
             // typed text.
             draft.current = null;
             setShown(null);
+            if (!readOnly) onPreview?.(event.currentTarget.value);
           }}
           readOnly={readOnly}
           onBlur={event => commitTyped(event.currentTarget.value)}
@@ -904,6 +981,7 @@ export function ColourValue({
           onColorChange={next => {
             draft.current = next;
             setShown(next);
+            onPreview?.(next);
           }}
         />
       ) : null}
@@ -979,6 +1057,7 @@ function DarkValue({
   readOnly,
   refusedBy,
   onCommit,
+  onPreview,
   onAdd,
   onClear,
 }: {
@@ -987,6 +1066,7 @@ function DarkValue({
   readOnly: boolean;
   refusedBy: string | undefined;
   onCommit: (value: string) => void;
+  onPreview: (text: string | null) => void;
   onAdd: () => void;
   onClear: () => void;
 }): React.JSX.Element | null {
@@ -1028,6 +1108,7 @@ function DarkValue({
         readOnly={readOnly}
         refusedBy={refusedBy}
         onCommit={onCommit}
+        onPreview={onPreview}
         css={cssOf(dark)}
         mode="dark"
       />
