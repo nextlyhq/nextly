@@ -142,6 +142,27 @@ describe("where a font is used", () => {
     expect(familyUses("inter", following).roles).toEqual(["heading"]);
   });
 
+  it("names a role whose row reads a site variable through var(), in either mode", () => {
+    // Body reads Display (Lora) as CSS; Headings read Quote, Lora in dark.
+    const reading: SiteTokenSet = {
+      ...BASE,
+      siteText: {
+        body: { fontFamily: "var(--site-font-display), serif" },
+        h1: { fontFamily: "var(--site-font-quote)" },
+      },
+    };
+    expect(familyUses("lora", reading).roles).toEqual(["body", "heading"]);
+    expect(familyUses("inter", reading).roles).toEqual(["heading"]);
+    // The variables the rows read are said as the roles.
+    expect(familyUses("lora", reading).variables).toEqual([]);
+    // A var() after the first family is only a fallback.
+    const fallback: SiteTokenSet = {
+      ...BASE,
+      siteText: { body: { fontFamily: "Inter, var(--site-font-display)" } },
+    };
+    expect(familyUses("lora", fallback).roles).toEqual([]);
+  });
+
   it("counts the places of every variable naming it, a role's own included", () => {
     const body = withFontRole(BASE, "body", '"Lora", serif');
     const uses = familyUses("lora", body);

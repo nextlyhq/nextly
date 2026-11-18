@@ -279,6 +279,24 @@ describe("removing a font in use", () => {
     );
   });
 
+  it("refuses a font the Body row reads through a site variable's var()", async () => {
+    const onRemoveFamily = vi.fn(async () => undefined);
+    panel({
+      tokens: {
+        ...TOKENS,
+        siteText: { body: { fontFamily: "var(--site-font-display), serif" } },
+      },
+      onRemoveFamily,
+    });
+    const open = await details("Lora");
+    fireEvent.click(within(open).getByRole("button", { name: "Remove" }));
+    expect(
+      within(open).getByRole("group", { name: "Lora can’t be removed" })
+        .textContent
+    ).toContain("Lora is your body font. Choose another body font first.");
+    expect(onRemoveFamily).not.toHaveBeenCalled();
+  });
+
   it("refuses a font one heading row draws, though the headings are mixed", async () => {
     const onRemoveFamily = vi.fn(async () => undefined);
     panel({

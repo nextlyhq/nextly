@@ -14,6 +14,7 @@
  */
 import {
   compileStyleValues,
+  customPropertiesReferenced,
   DEFAULT_SITE_TEXT,
   isTokenRef,
   readFamilyList,
@@ -92,13 +93,37 @@ function variableValue(
   return mode === "dark" ? (values?.dark ?? values?.light) : values?.light;
 }
 
+/**
+ * The site variable a row's font reads, by identity: a `$token`, or a stack
+ * whose first family is a `var()` of one of the site's variables, as
+ * `var(--site-font-display), serif` reads `font.display`. A `var()` later in
+ * the stack is only a fallback, and one naming no site variable reads none.
+ */
+function variableRead(
+  tokens: SiteTokenSet,
+  value: StyleValue
+): string | undefined {
+  if (isTokenRef(value)) return value.$token;
+  if (typeof value !== "string") return undefined;
+  const first = readFamilyList(value).parts[0];
+  if (first?.kind !== "dynamic") return undefined;
+  const [property] = customPropertiesReferenced(first.part.raw) ?? [];
+  if (property === undefined) return undefined;
+  const { prefix } = resolveTokenPrefix(tokens.prefix);
+  const read = resolveSiteTokens(tokens).tokens.find(
+    token => tokenCustomProperty(tokenIdentity(token), prefix) === property
+  );
+  return read === undefined ? undefined : tokenIdentity(read);
+}
+
 /** The font a row's value draws in a mode, as a stack. */
 function drawnStack(
   tokens: SiteTokenSet,
   value: StyleValue,
   mode: FontMode
 ): string | undefined {
-  if (isTokenRef(value)) return variableValue(tokens, value.$token, mode);
+  const identity = variableRead(tokens, value);
+  if (identity !== undefined) return variableValue(tokens, identity, mode);
   return typeof value === "string" ? value : undefined;
 }
 
@@ -187,9 +212,10 @@ export function fontRoleVariables(
   role: FontRole,
   classes?: readonly NamedClass[]
 ): readonly string[] {
-  const identities = roleFonts(tokens, role, classes).flatMap(font =>
-    isTokenRef(font) ? [font.$token] : []
-  );
+  const identities = roleFonts(tokens, role, classes).flatMap(font => {
+    const identity = variableRead(tokens, font);
+    return identity === undefined ? [] : [identity];
+  });
   return [...new Set(identities)];
 }
 
