@@ -18,7 +18,12 @@
  * @module site-code/css-urls
  * @experimental
  */
-import { parse, walk, type CssNode, type WalkContext } from "css-tree";
+// The parser and walker entries rather than the root, which loads css-tree's
+// reference data and `node:module`: the custom CSS checker runs this in the
+// browser too.
+import type { CssNode, WalkContext } from "css-tree";
+import parse from "css-tree/parser";
+import walk from "css-tree/walker";
 
 /** One fetch a stylesheet makes: what it loads, and from where as written. */
 export interface CssFetch {

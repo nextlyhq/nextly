@@ -51,12 +51,27 @@ describe.each(LEVELS)("custom CSS at the %s level", level => {
     ["an http address", "url(http://example.com/a.png)"],
     ["a script address", 'url("javascript:alert(1)")'],
     ["a data address", 'url("data:image/svg+xml,<svg/>")'],
+    ["an image-set string", 'image-set("https://tracker.example/p" 1x)'],
   ])("refuses a fetch from %s", (_case, url) => {
     const problems = checkCustomCss(at(level, `background: ${url};`), level);
     expect(problems).toHaveLength(1);
     expect(problems[0]?.reason).toMatch(
       /^Only pictures and fonts from this site can be used:/
     );
+  });
+
+  it("refuses a fetch kept in a custom property, naming its line", () => {
+    // css-tree keeps a custom property's value as text, which a fetch check
+    // reading only parsed `url()` nodes would pass.
+    const css = at(
+      level,
+      "--picture: url(https://tracker.example/p); background: var(--picture);",
+      "/* first */\n"
+    );
+    const problems = checkCustomCss(css, level);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]?.line).toBe(2);
+    expect(problems[0]?.reason).toMatch(/tracker\.example/);
   });
 
   it("refuses CSS that would end the style element, naming its line", () => {

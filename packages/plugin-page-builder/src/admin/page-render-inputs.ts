@@ -105,9 +105,15 @@ export interface PageRenderInputsOptions {
    */
   previewStates?: boolean;
   /**
-   * The site's own custom CSS, where the surface has read it: drawn before the
-   * page's own, as on the live page. Absent draws the page's and the blocks'
-   * CSS without it.
+   * Whether the surface draws the page in a frame of its own, as the canvas
+   * does. Only such a surface draws custom CSS: a page's or the site's CSS is
+   * written for the whole page (`body { … }`), and drawn inside the admin's
+   * own document it would restyle, or hide, the admin around it.
+   */
+  framed?: boolean;
+  /**
+   * The site's own custom CSS, where a framed surface has read it: drawn
+   * before the page's own, as on the live page.
    */
   siteCss?: string;
   /** The site's document caps, already read from the config. */
@@ -135,6 +141,7 @@ export function pageRenderInputs({
   previewStates,
   limits,
   definitions,
+  framed,
   siteCss,
 }: PageRenderInputsOptions): PageRenderInputs {
   /*
@@ -162,12 +169,11 @@ export function pageRenderInputs({
       ...(previewStates === true ? { previewStates: true } : {}),
       /*
        * Custom CSS through the page builder's one checker, the same one the
-       * published route and the server use, so the canvas and every preview
-       * draw exactly what goes live: what it refuses is drawn nowhere. The
-       * canvas draws the page in a frame of its own, so CSS styling `body`
-       * reaches the page and never the builder around it.
+       * published route and the server use, so the canvas draws exactly what
+       * goes live: what it refuses is drawn nowhere. Only on a framed surface,
+       * where CSS styling `body` reaches the page and never the admin.
        */
-      customCss: customCssPolicy(siteCss),
+      ...(framed === true ? { customCss: customCssPolicy(siteCss) } : {}),
     },
     /*
      * ABSENT is not the same as empty here, and the difference is the whole

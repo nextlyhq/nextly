@@ -19,7 +19,7 @@
  *
  * @module style/custom-css-scope
  */
-import type { CssNode, List, Rule } from "css-tree";
+import type { CssNode, List, Rule, Selector } from "css-tree";
 import parse from "css-tree/parser";
 
 /** The placeholder an author writes where the block goes. */
@@ -47,6 +47,14 @@ export type ScopedBlockCss =
   | { readonly ok: false; readonly refusals: readonly CustomCssRefusal[] };
 
 const RULE_REFUSAL = "A rule in a block's CSS starts with selector.";
+const SIBLING_REFUSAL =
+  "A rule in a block's CSS can't reach the blocks beside it (+ or ~).";
+
+/**
+ * Combinators that step from an element to the ones beside it rather than
+ * into it. Taken from the block's own element they reach its neighbours.
+ */
+const SIBLING_COMBINATORS = new Set(["+", "~", "||"]);
 const UNREADABLE_REFUSAL = "This CSS can't be read.";
 
 /**
@@ -102,7 +110,8 @@ function scopeList(
   children.forEach(node => {
     const line = node.loc?.start.line ?? 1;
     if (node.type === "Rule") {
-      if (!scopeRule(node, placeholders)) refuse(line, RULE_REFUSAL);
+      const refusal = scopeRule(node, placeholders);
+      if (refusal !== undefined) refuse(line, refusal);
       return;
     }
     if (node.type === "Atrule") {
@@ -121,20 +130,22 @@ function scopeList(
 }
 
 /**
- * Record where each selector of a rule names the block, or `false` when one
- * does not START from it. Every selector of a list must: one that does not is
- * a rule reaching past the block.
+ * Record where each selector of a rule names the block, or return why one
+ * cannot be scoped (`undefined` when all can): it does not START from it, or steps from it to its neighbours.
+ * Every selector of a list must scope: one that does not is a rule reaching
+ * past the block.
  */
 function scopeRule(
   rule: Rule,
   placeholders: { start: number; end: number }[]
-): boolean {
-  if (rule.prelude.type !== "SelectorList") return false;
+): string | undefined {
+  if (rule.prelude.type !== "SelectorList") return RULE_REFUSAL;
   const found: { start: number; end: number }[] = [];
-  let scoped = true;
+  let verdict: string | undefined;
   rule.prelude.children.forEach(selector => {
+    if (verdict !== undefined) return;
     if (selector.type !== "Selector") {
-      scoped = false;
+      verdict = RULE_REFUSAL;
       return;
     }
     const first = selector.children.first;
@@ -143,13 +154,33 @@ function scopeRule(
       first.name.toLowerCase() !== SELECTOR_PLACEHOLDER ||
       first.loc === undefined
     ) {
-      scoped = false;
+      verdict = RULE_REFUSAL;
+      return;
+    }
+    if (leavesTheBlock(selector)) {
+      verdict = SIBLING_REFUSAL;
       return;
     }
     found.push({ start: first.loc.start.offset, end: first.loc.end.offset });
   });
-  if (scoped) placeholders.push(...found);
-  return scoped;
+  if (verdict === undefined) placeholders.push(...found);
+  return verdict;
+}
+
+/**
+ * Whether a selector's first step out of the block's own element goes to the
+ * elements beside it. Once a descendant or child step has gone inside, a
+ * sibling step after it stays inside too.
+ */
+function leavesTheBlock(selector: Selector): boolean {
+  let leaves = false;
+  let decided = false;
+  selector.children.forEach(part => {
+    if (decided || part.type !== "Combinator") return;
+    decided = true;
+    leaves = SIBLING_COMBINATORS.has(part.name);
+  });
+  return leaves;
 }
 
 /** The source with each placeholder replaced by the block's selector. */

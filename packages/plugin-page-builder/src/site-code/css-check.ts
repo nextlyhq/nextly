@@ -29,6 +29,7 @@ import type { CssNode, WalkContext } from "css-tree";
 import parse from "css-tree/parser";
 import walk from "css-tree/walker";
 
+import { cssFetches } from "./css-urls";
 import { SITE_CODE_LIMITS } from "./limits";
 import { siteCodeUrlProblem, STYLE_ELEMENT_END } from "./url-rule";
 
@@ -66,6 +67,7 @@ export function checkCustomCss(
   const problems = new Problems();
   textProblems(css, problems);
   parsedProblems(css, problems);
+  fetchProblems(css, problems);
   if (level === "block") {
     // A placeholder selector: only whether each rule CAN be scoped is asked.
     const scoped = scopeBlockCss(css, ".block");
@@ -183,12 +185,23 @@ function parsedProblems(css: string, problems: Problems): void {
         );
         return;
       }
-      if (node.type === "Url") {
-        const problem = fetchProblem(node.value);
-        if (problem !== undefined) problems.add(line, problem);
-      }
     },
   });
+}
+
+/**
+ * Every fetch the CSS makes, read as site code reads a stylesheet's: a
+ * `url()`, an `image-set()` string and one kept in a custom property's text
+ * alike. An `@import` is refused as an import, above.
+ */
+function fetchProblems(css: string, problems: Problems): void {
+  for (const fetch of cssFetches(css)) {
+    if (fetch.via === "import") continue;
+    const problem = fetchProblem(fetch.url);
+    if (problem === undefined) continue;
+    const at = css.indexOf(fetch.url);
+    problems.add(at === -1 ? 1 : lineAt(css, at), problem);
+  }
 }
 
 /**
