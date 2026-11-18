@@ -235,6 +235,15 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
           */}
           <CanvasFrame
             width={frameWidth}
+            // Any width from a small phone to Desktop, by the handles at the
+            // frame's edges, kept apart from the device every edit goes to.
+            previewWidth={{
+              breakpoints: canvasRender.styleContext.breakpoints,
+              edited: view.editedBreakpoint,
+              deviceWidth: view.deviceWidth,
+              override: view.previewWidth,
+              onChange: view.setPreviewWidth,
+            }}
             zoom={zoom}
             onScale={setAppliedScale}
             title={pageTitle}

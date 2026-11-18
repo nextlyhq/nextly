@@ -70,6 +70,7 @@ import { requireNextly } from "nextly/runtime";
  * @module library-route
  */
 
+import { LAYOUT_AREAS, type LayoutArea } from "./collections/areas";
 import { COMPONENTS_SLUG } from "./collections/components";
 import { PATTERNS_SLUG } from "./collections/patterns";
 import {
@@ -821,6 +822,9 @@ function withDraftDocument(
     // are, so a component whose useful terms are in neither its title nor its
     // description is findable by them.
     ...storedKeywords(record.keywords),
+    // The "Use as" mark, so the editor can tell a placed header or footer
+    // component from any other without reading each one again.
+    ...storedArea(record.area),
     document:
       content === undefined || content === null
         ? null
@@ -1065,6 +1069,15 @@ function storedKeywords(value: unknown): { keywords?: string | null } {
 }
 
 /** One optional string field, present only when it is actually a string. */
+/**
+ * A component's "Use as" area, only where it is one of the areas: a value
+ * the select no longer offers, or none, carries no key.
+ */
+function storedArea(value: unknown): { area?: LayoutArea } {
+  const area = LAYOUT_AREAS.find(known => known === value);
+  return area === undefined ? {} : { area };
+}
+
 function optionalText(
   value: unknown,
   name: string

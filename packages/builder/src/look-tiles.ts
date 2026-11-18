@@ -223,10 +223,18 @@ function resolved(
 }
 
 /**
+ * What a tile draws a look on: a `mark` standing for the block at the tile's
+ * own size (a Button's label), or a `sample` of the block drawn at the page's
+ * own sizes and scaled down whole (an Image's picture, a Quote's words, a
+ * Section's band), so its padding, type and height read in proportion.
+ */
+export type LookDrawing = "mark" | "sample";
+
+/**
  * Whether a tile draws this CSS property: what a small specimen can show
  * (colour, border, corners, decoration, proportion). The engine writes
  * logical properties (`border-block-start-width`), so borders are matched by
- * family rather than listed; sizes stay the tile's own.
+ * family rather than listed; a mark's sizes stay the tile's own.
  */
 function drawnOnTile(property: string): boolean {
   return (
@@ -240,6 +248,45 @@ function drawnOnTile(property: string): boolean {
   );
 }
 
+/**
+ * What a sample draws as well as a mark: the sizes and the type that make a
+ * style what it is on a block drawn whole (a Hero's height and padding, a
+ * Large quote's size and centring). Never its width or margins: the sample's
+ * frame places it.
+ */
+const SAMPLE_PROPERTIES: ReadonlySet<string> = new Set([
+  "min-height",
+  "min-block-size",
+  "font-size",
+  "font-style",
+  "line-height",
+  "letter-spacing",
+  "text-align",
+  "text-transform",
+]);
+
+/** Whether a sample draws this CSS property: a mark's, its sizes and type. */
+function drawnOnSample(property: string): boolean {
+  return (
+    drawnOnTile(property) ||
+    SAMPLE_PROPERTIES.has(property) ||
+    property.startsWith("padding")
+  );
+}
+
+/**
+ * A page's value as a sample reads it: a length that follows the screen
+ * (`60vh`, `4vw`) follows the sample's frame instead, which stands for the
+ * screen and is a size container (`cqh`, `cqw`), so a Hero is as tall in its
+ * tile as on the page, in proportion, however wide the editor's window is.
+ */
+function onSampleFrame(value: string): string {
+  return value.replace(
+    /(\d)[sdl]?v(w|h|i|b|min|max)\b/g,
+    (_, digit: string, axis: string) => `${digit}cq${axis}`
+  );
+}
+
 /** A CSS property as React spells it: `border-block-start-width` → `borderBlockStartWidth`. */
 function reactProperty(property: string): string {
   return property.replace(/-([a-z])/g, (_, letter: string) =>
@@ -248,33 +295,53 @@ function reactProperty(property: string): string {
 }
 
 /**
+ * One source's declarations a tile draws, as React style entries: its tokens
+ * resolved for the mode, only the properties the drawing shows, and never a
+ * value still naming a variable, which has nothing to resolve against here.
+ */
+function drawnEntries(
+  source: NodeStyles,
+  set: SiteTokenSet,
+  mode: TokenMode,
+  drawing: LookDrawing
+): [string, string][] {
+  const drawn = drawing === "sample" ? drawnOnSample : drawnOnTile;
+  const literal = resolved(source, set, mode) as NodeStyles;
+  return classDeclarations(literal)
+    .shown.filter(
+      entry =>
+        drawn(entry.property) &&
+        entry.descendant === undefined &&
+        !/\b(?:var|url)\(/i.test(entry.value)
+    )
+    .map(entry => [
+      reactProperty(entry.property),
+      drawing === "sample" ? onSampleFrame(entry.value) : entry.value,
+    ]);
+}
+
+/**
  * How a tile draws a look: the block's base with the look laid over, its
- * tokens resolved for the mode the canvas shows, as inline styles. Only the
- * properties a small specimen can show (colour, border, corners, decoration,
- * proportion); sizes stay the tile's own, so every tile is the same size.
+ * tokens resolved for the mode the canvas shows, as inline styles. On a mark,
+ * only the properties a small specimen can show (colour, border, corners,
+ * decoration, proportion), so every mark is the same size; on a sample, its
+ * sizes and type too, with the screen read as the sample's frame.
  */
 export function lookTileStyle(
   base: NodeStyles | undefined,
   look: NodeStyles | undefined,
   tokens: SiteTokenSet | undefined,
-  mode: TokenMode
+  mode: TokenMode,
+  drawing: LookDrawing = "mark"
 ): Record<string, string> {
-  const style: Record<string, string> = {};
   // The site's tokens over the defaults, as the canvas compiles with them.
   const set = resolveSiteTokens(tokens);
-  for (const source of [base, look]) {
-    if (source === undefined) continue;
-    const literal = resolved(source, set, mode) as NodeStyles;
-    for (const entry of classDeclarations(literal).shown) {
-      if (!drawnOnTile(entry.property) || entry.descendant !== undefined) {
-        continue;
-      }
-      // A value still naming a variable has nothing to resolve against here.
-      if (/\b(?:var|url)\(/i.test(entry.value)) continue;
-      style[reactProperty(entry.property)] = entry.value;
-    }
-  }
-  return style;
+  // The look's entries after the base's, so a property both set is the look's.
+  return Object.fromEntries(
+    [base, look].flatMap(source =>
+      source === undefined ? [] : drawnEntries(source, set, mode, drawing)
+    )
+  );
 }
 
 /**

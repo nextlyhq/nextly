@@ -19,6 +19,7 @@ import {
   resolveSiteText,
   siteTextStyles,
   type BlockPart,
+  type NamedClass,
   type NodeStyles,
   type SiteTextMap,
   type SiteTextRole,
@@ -45,14 +46,18 @@ const RECEIVERS: readonly Receiver[] = [
   { type: "core/quote", part: "attribution", role: "caption" },
 ];
 
-/** What each receiving row writes, where the site set it. */
+/**
+ * What each receiving row writes, where the site set it: a row following a
+ * text style writes that text style's look, read from the site's classes.
+ */
 function rowStyles(
-  siteText: SiteTextMap | undefined
+  siteText: SiteTextMap | undefined,
+  classes: readonly NamedClass[] | undefined
 ): Partial<Record<Receiver["role"], NodeStyles>> {
   const rows = resolveSiteText(siteText);
   const out: Partial<Record<Receiver["role"], NodeStyles>> = {};
   for (const role of ["button", "caption"] as const) {
-    const styles = siteTextStyles(role, rows[role]);
+    const styles = siteTextStyles(role, rows[role], classes);
     if (styles !== undefined) out[role] = styles;
   }
   return out;
@@ -65,9 +70,10 @@ function rowStyles(
  */
 export function withSiteTextBases(
   bases: Record<string, NodeStyles>,
-  siteText: SiteTextMap | undefined
+  siteText: SiteTextMap | undefined,
+  classes?: readonly NamedClass[]
 ): Record<string, NodeStyles> {
-  const rows = rowStyles(siteText);
+  const rows = rowStyles(siteText, classes);
   for (const { type, part, role } of RECEIVERS) {
     const styles = rows[role];
     if (part !== undefined || styles === undefined) continue;
@@ -84,9 +90,10 @@ export function withSiteTextBases(
  */
 export function withSiteTextParts(
   parts: Record<string, Readonly<Record<string, BlockPart>>>,
-  siteText: SiteTextMap | undefined
+  siteText: SiteTextMap | undefined,
+  classes?: readonly NamedClass[]
 ): Record<string, Readonly<Record<string, BlockPart>>> {
-  const rows = rowStyles(siteText);
+  const rows = rowStyles(siteText, classes);
   for (const { type, part, role } of RECEIVERS) {
     const styles = rows[role];
     if (part === undefined || styles === undefined) continue;

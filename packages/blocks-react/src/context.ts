@@ -13,6 +13,7 @@ import type { ReactNode } from "react";
 
 import type { PageForms } from "./forms-context";
 import type { ImageCopies, ImageSlot } from "./image-slot";
+import type { PageOutline } from "./outline";
 
 export type {
   FormAfterSendingDrawing,
@@ -1096,6 +1097,19 @@ export interface PageContext {
    * @experimental Settles with the form provider contract.
    */
   forms?: PageForms;
+  /**
+   * The page's outline: every heading the page draws, in page order, with
+   * the anchor each is drawn with, unique on the whole page (header, page and
+   * footer). Heading and Rich text take their ids from it, and a table of
+   * contents its entries, so a link and its heading cannot disagree.
+   *
+   * Set by the renderer. A host drawing a page in parts (a Layout's header
+   * and footer around it) sets the outline of all of them on each part's
+   * context; a renderer given none outlines the document it draws.
+   *
+   * @experimental
+   */
+  outline?: PageOutline;
 }
 
 /**

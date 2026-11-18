@@ -46,6 +46,7 @@ import {
   useState,
   type JSX,
   type KeyboardEvent,
+  type MouseEvent,
   type RefObject,
 } from "react";
 
@@ -133,6 +134,8 @@ export function CanvasRegionFrame({
   sheet,
   selected,
   onSelect,
+  onEdit,
+  dimmed,
 }: {
   region: CanvasRegion;
   /** The canvas's own renderer inputs, less what belongs to the page alone. */
@@ -143,6 +146,16 @@ export function CanvasRegionFrame({
   selected: boolean;
   /** Ask for this region to be selected; absent, the region selects nothing. */
   onSelect: ((area: RegionArea) => void) | undefined;
+  /**
+   * Ask to edit this region in place: a double-click, or Enter while it is
+   * selected. Absent, the region is only ever selected.
+   */
+  onEdit: ((area: RegionArea) => void) | undefined;
+  /**
+   * Whether another region is edited in place: then this one is out of
+   * reach, as the page is, and hidden from assistive technology.
+   */
+  dimmed: boolean;
 }): JSX.Element {
   const frame = useRef<HTMLDivElement | null>(null);
   const tag = useRef<HTMLSpanElement | null>(null);
@@ -156,7 +169,20 @@ export function CanvasRegionFrame({
     if (event.key !== "Enter" && event.key !== " ") return;
     // Space would scroll the canvas; Enter is the region's own here.
     event.preventDefault();
+    // Enter selects the region, and Enter again edits it.
+    if (event.key === "Enter" && selected && onEdit !== undefined) {
+      onEdit(region.area);
+      return;
+    }
     choose();
+  };
+  // A double-click goes straight in: selected on its first click, edited on
+  // the second. Kept from the canvas's own double-click, which opens a
+  // block's text and has no block here.
+  const edit = (event: MouseEvent<HTMLDivElement>): void => {
+    if (onEdit === undefined) return;
+    event.stopPropagation();
+    onEdit(region.area);
   };
 
   return (
@@ -170,7 +196,11 @@ export function CanvasRegionFrame({
       aria-pressed={selected}
       tabIndex={0}
       onClick={choose}
+      onDoubleClick={edit}
       onKeyDown={onKeyDown}
+      // Out of reach and unheard while another region is edited in place.
+      inert={dimmed}
+      aria-hidden={dimmed ? "true" : undefined}
       // The ground under the marks, judged as the pointer arrives, since a
       // hover cue changes no state and so runs no effect.
       onPointerEnter={() => markScheme(frame.current)}
@@ -198,6 +228,46 @@ export function CanvasRegionFrame({
 }
 
 /**
+ * The region being edited in place: drawn from the live document being
+ * edited, its blocks addressed and within reach, so it is edited as a page
+ * is. No longer chrome and no longer a button: a click lands on its blocks.
+ * It keeps its area's attribute, so the dim over the rest of the canvas is
+ * measured around it, and its edge where it meets the page.
+ */
+export function EditedRegionFrame({
+  area,
+  document,
+  definitions,
+  rendered,
+  sheet,
+}: {
+  area: RegionArea;
+  /** Its document as it stands, edit by edit. */
+  document: BlockDocument;
+  definitions: DefinitionsById | undefined;
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
+  sheet: PartSheet;
+}): JSX.Element {
+  return (
+    <div
+      className={CANVAS_REGION_CLASS}
+      {...{ [REGION_ATTRIBUTE]: area, [REGION_EDITED_ATTRIBUTE]: "" }}
+    >
+      <RegionContent
+        document={document}
+        definitions={definitions}
+        rendered={rendered}
+        sheet={sheet}
+        addressed
+      />
+    </div>
+  );
+}
+
+/** The attribute a region carries while it is edited in place. */
+export const REGION_EDITED_ATTRIBUTE = "data-nx-region-edited";
+
+/**
  * State on the region the page's ground it is drawn over, so its marks take
  * the hue for that ground, as the block marks over the page do.
  */
@@ -216,6 +286,8 @@ interface RegionContentProps {
   definitions: DefinitionsById | undefined;
   rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
   sheet: PartSheet;
+  /** Whether its blocks carry their addresses: only while it is edited. */
+  addressed?: boolean;
 }
 
 /**
@@ -227,6 +299,7 @@ const RegionContent = memo(function RegionContent({
   definitions,
   rendered,
   sheet,
+  addressed = false,
 }: RegionContentProps): JSX.Element {
   const {
     styles: _pageStyles,
@@ -249,6 +322,9 @@ const RegionContent = memo(function RegionContent({
       // drawn again, rather than blinking out while it runs again. Never on
       // a published page, which this is not.
       keepAsyncOutputs
+      // Addressed while it is edited in place, so the canvas's hover,
+      // selection, inline editing and drag find its blocks as a page's.
+      nodeAttribute={addressed}
     />
   );
 }, sameRegionDraw);
@@ -267,6 +343,7 @@ function sameRegionDraw(
   return (
     before.document === after.document &&
     before.definitions === after.definitions &&
+    before.addressed === after.addressed &&
     sameFields(regionInputs(before.rendered), regionInputs(after.rendered)) &&
     before.sheet.siteStyles === after.sheet.siteStyles &&
     sameFields(before.sheet.styleContext, after.sheet.styleContext)

@@ -21,6 +21,8 @@
  *   a block is visible on, and variable choices.
  * - canvas: the canvas region and frame, the marks drawn over blocks, the drop
  *   line and its refusals.
+ * - canvas-preview-width: the handles at the frame's edges, the ruler of
+ *   breakpoint starts and the line naming the device still edited.
  * - layers: the Layers panel.
  * - block-toolbar: the bottom bar, the breadcrumb, the block toolbar and the
  *   spacing overlay.
@@ -53,6 +55,8 @@
  * - form-fields: a Form's Fields and After sending.
  * - first-add: the chooser a block just added asks for on the canvas, such
  *   as the Columns layouts.
+ * - region-editing: the bar and the dim while a header or footer is edited
+ *   in place.
  *
  * Tests that read the stylesheet's rules read it through
  * `chrome-stylesheet.ts` beside this file, which follows these imports in
@@ -72,6 +76,8 @@
 @import "./style-inspector.css";
 
 @import "./canvas.css";
+/* The handles, ruler and notice for previewing another width. */
+@import "./canvas-preview-width.css";
 
 @import "./layers.css";
 
@@ -123,3 +129,5 @@
 @import "./form-fields.css";
 
 @import "./first-add.css";
+
+@import "./region-editing.css";

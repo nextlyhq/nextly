@@ -98,6 +98,7 @@ import {
   useDrawnTemplate,
   useTemplatePreviewState,
 } from "./template-preview-strip";
+import { useTwoRegionsNotice } from "./two-regions-notice";
 import { UsageHereField } from "./usage-here";
 import { useComponentView, type ComponentView } from "./use-component-view";
 import { useEditorMount, type EditorMount } from "./use-editor-mount";
@@ -668,6 +669,17 @@ function EditorBody<TFieldValues extends FieldValues>({
     deviceRequest,
     setChosenDevice,
   } = view;
+  // A page showing the set's header and a header block of its own, pointed
+  // out above the canvas; the same for footers.
+  const twoRegions = useTwoRegionsNotice({
+    editor,
+    applied: conditions.applied,
+    regionCards: view.regionCards,
+    areaOf: mount.componentLibrary.areaOf,
+    currentPage: view.pages.currentPage,
+    userId: mount.userId,
+    openSettings: view.pages.openSettings,
+  });
 
   return (
     // Fills the view's area, under the admin's lock and recovery notices for
@@ -715,7 +727,7 @@ function EditorBody<TFieldValues extends FieldValues>({
           })}
           // Pinned above the canvas: a template's entry it is drawn with, and
           // the visitor's view while it is on.
-          canvasStrip={editorStrip(templatePreview, conditions)}
+          canvasStrip={editorStrip(templatePreview, conditions, twoRegions)}
           openSettingsRequest={view.pages.settingsRequest}
           renderSettings={editorSettings(view, page, settingsPlace, {
             kind: mount.initialDocument.kind,

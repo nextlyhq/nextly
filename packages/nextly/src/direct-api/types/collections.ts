@@ -795,6 +795,11 @@ export interface PublishArgs<TSlug extends CollectionSlug = CollectionSlug>
    * `"7.es:3"` from a read of Spanish), or `_overwrite: true`.
    */
   data?: { _rev?: string; _overwrite?: boolean };
+  /**
+   * A publish made without review, and why: told to the publish gate, which decides whether this
+   * caller may (trusted code may, with a reason), and never stored. @experimental
+   */
+  withoutReview?: { reason: string };
 }
 
 /**

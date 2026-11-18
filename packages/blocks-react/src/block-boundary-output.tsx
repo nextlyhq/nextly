@@ -21,6 +21,7 @@ import {
   warnNoHostRoot,
 } from "./block-boundary-root-checks";
 import type { BlockHostPolicy, PageContext } from "./context";
+import { anchorsWithin, contextBeforeOutline } from "./outline";
 import { BlockPlaceholder } from "./placeholder";
 import { describeThrown, normalizeRenderable } from "./renderable";
 
@@ -261,7 +262,10 @@ const EDITOR_OUTPUTS_KEPT = 256;
  * stored exactly as one on the page, and only the page's output wears the
  * markers that make its text editable. So is the host's policy, which a
  * block judges a remote host by: a host it now allows or refuses is judged
- * again rather than shown as it was.
+ * again rather than shown as it was. So are the anchors the page outline
+ * gives the headings in the block and inside it, drawn as their ids: a
+ * heading, or a list holding one, is drawn again when a heading elsewhere
+ * renumbers it.
  */
 function editorOutputKey(
   marked: boolean,
@@ -269,7 +273,8 @@ function editorOutputKey(
   name: string,
   className: string,
   node: BlockNode,
-  bound: BoundValues | undefined
+  bound: BoundValues | undefined,
+  anchors: readonly string[]
 ): string | undefined {
   try {
     return JSON.stringify([
@@ -279,6 +284,7 @@ function editorOutputKey(
       className,
       node,
       bound ?? null,
+      anchors,
     ]);
   } catch {
     // A node a stringify cannot write (a cycle, a bigint) is drawn afresh.
@@ -333,9 +339,21 @@ export function editorOutputSlot(
   bound: BoundValues | undefined
 ): EditorOutputSlot {
   if (!editorRender) return UNKEPT;
-  const key = editorOutputKey(marked, hostPolicy, name, className, node, bound);
+  const key = editorOutputKey(
+    marked,
+    hostPolicy,
+    name,
+    className,
+    node,
+    bound,
+    anchorsWithin(context, node)
+  );
   if (key === undefined) return UNKEPT;
-  const outputs = EDITOR_OUTPUTS.get(context);
+  // Kept by the context before the page outline was put on it: the outline
+  // changes as an author types in a heading, and the other blocks' outputs
+  // stay the same (the anchors a block and its children draw are in its key).
+  const owner = contextBeforeOutline(context);
+  const outputs = EDITOR_OUTPUTS.get(owner);
   const kept = outputs?.get(key);
   if (outputs !== undefined && kept !== undefined) {
     // Used again, so the newest: a header drawn on every edit is not dropped
@@ -346,7 +364,7 @@ export function editorOutputSlot(
   return {
     output: run => kept ?? run(),
     keep: output => {
-      if (kept === undefined) keepEditorOutput(context, key, output);
+      if (kept === undefined) keepEditorOutput(owner, key, output);
     },
   };
 }
