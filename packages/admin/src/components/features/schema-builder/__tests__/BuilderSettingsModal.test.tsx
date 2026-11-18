@@ -21,6 +21,7 @@ import {
   BuilderSettingsModal,
   type BuilderSettingsValues,
 } from "../BuilderSettingsModal";
+import { DESCRIPTION_MAX_LENGTH } from "../builder-settings-modal/BasicsTab";
 import type { BuilderConfig } from "../builder-config";
 
 import type { StoredHookConfig } from "@admin/types/collection";
@@ -329,6 +330,48 @@ describe("BuilderSettingsModal — shell", () => {
   });
 });
 
+// A description saved before the builder's limit, or set longer some other
+// way, still loads whole: the field says it is over, and Save waits until it
+// is shortened rather than cutting it.
+describe("BuilderSettingsModal — the description limit", () => {
+  it("holds Save while the description is over its limit", () => {
+    const onSubmit = vi.fn();
+    render(
+      <BuilderSettingsModal
+        open
+        mode="edit"
+        config={collectionConfig}
+        initialValues={{
+          singularName: "Post",
+          pluralName: "Posts",
+          slug: "posts",
+          description: "a".repeat(DESCRIPTION_MAX_LENGTH + 1),
+          icon: "FileText",
+        }}
+        onCancel={vi.fn()}
+        onSubmit={onSubmit}
+      />
+    );
+    const description = screen.getByLabelText("Description");
+    expect(description).toHaveValue("a".repeat(DESCRIPTION_MAX_LENGTH + 1));
+    expect(description).toHaveAttribute("aria-invalid", "true");
+    expect(
+      screen.getByText(
+        `Keep the description to ${DESCRIPTION_MAX_LENGTH} characters or fewer.`
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+
+    fireEvent.change(description, {
+      target: { value: "a".repeat(DESCRIPTION_MAX_LENGTH) },
+    });
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(
+      screen.getByText(`${DESCRIPTION_MAX_LENGTH}/${DESCRIPTION_MAX_LENGTH}`)
+    ).toBeInTheDocument();
+  });
+});
+
 describe("BuilderSettingsModal — a collection's stored hooks", () => {
   const slugHook: StoredHookConfig = {
     hookId: "auto-slug",
@@ -459,7 +502,7 @@ describe("BuilderSettingsModal — the address", () => {
         onSubmit={onSubmit}
       />
     );
-    const name = screen.getByLabelText("Singular name");
+    const name = screen.getByRole("textbox", { name: "Singular name" });
     await user.clear(name);
     await user.type(name, "Article");
     expect(screen.getByLabelText("Slug")).toHaveValue("post");
@@ -578,7 +621,7 @@ describe("BuilderSettingsModal — its changes, pending", () => {
         onSubmit={next => editor.result.current.setSettings(next)}
       />
     );
-    const name = screen.getByLabelText("Singular name");
+    const name = screen.getByRole("textbox", { name: "Singular name" });
     await user.clear(name);
     await user.type(name, "Article");
     await user.click(screen.getByRole("tab", { name: "Advanced" }));

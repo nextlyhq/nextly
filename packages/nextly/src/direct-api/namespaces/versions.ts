@@ -408,6 +408,9 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
         h.markVersionSeenForDocument({
           ...restArgs(ref, checked?.user ?? (user as UserContext), args),
           versionNo: args.versionNo,
+          // A trusted call records the person's marker for what the server
+          // showed them, without asking their own read rules.
+          ...(checked ? {} : { trusted: true }),
         })
       );
       return { message: "Marked as seen.", item };

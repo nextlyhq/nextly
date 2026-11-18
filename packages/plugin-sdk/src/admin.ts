@@ -1392,6 +1392,20 @@ export type {
   FieldTypeSettings,
   FixedFieldSetting,
 } from "@nextlyhq/admin/kit/field-ui";
+/**
+ * Whether a numeric validation bound can be kept as it stands — the rule the
+ * field settings panel says under each bound. A surface that saves what the
+ * panel edited asks this of every bound before it persists, so a bound the
+ * panel flags is never stored and read downstream as its own meaning (a max
+ * length of 0 as "no limit", a schema `.max(0)` refusing every value).
+ *
+ * @experimental
+ */
+export {
+  boundProblem,
+  NUMERIC_BOUND_RULES,
+  type NumericRule,
+} from "@nextlyhq/admin/kit/field-ui";
 
 /**
  * @experimental Upload a file into the media library, as the admin's own
