@@ -19,6 +19,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   type MigrationSource,
 } from "@nextlyhq/blocks-engine";
@@ -304,7 +305,9 @@ describe("layersLockIssues, on a locked block stored at an older version", () =>
       "Content",
       undefined,
       undefined,
-      migration
+      migration === undefined
+        ? undefined
+        : { source: migration, limits: DEFAULT_LIMITS }
     );
 
   it("keeps a write holding it upgraded, as the editor opened it", async () => {
@@ -321,6 +324,39 @@ describe("layersLockIssues, on a locked block stored at an older version", () =>
 
   it("keeps a write holding it as stored, from a client that did not upgrade it", async () => {
     expect(await judge(stored, quoteSource)).toEqual([]);
+  });
+
+  it("does not upgrade a write nested past the cap", async () => {
+    // Upgrading walks the tree by recursion. The field's own rules refuse a
+    // value nested past the cap, and this judgement still runs on it, so it
+    // compares such a value as it came rather than walking it.
+    const nested = (levels: number) => {
+      let node: Record<string, unknown> = {
+        id: "leaf",
+        type: "acme/box",
+        version: 1,
+        props: {},
+      };
+      for (let level = 0; level < levels; level++) {
+        node = {
+          id: `n${String(level)}`,
+          type: "acme/box",
+          version: 1,
+          props: {},
+          slots: { children: [node] },
+        };
+      }
+      return { ...page({ version: 1, props: {} }), nodes: [node] };
+    };
+    const asked: string[] = [];
+    const watching: MigrationSource = {
+      get: type => (asked.push(type), quoteSource.get(type)),
+    };
+    await judge(nested(DEFAULT_LIMITS.maxDepth + 5), watching);
+    expect(asked).not.toContain("acme/box");
+    // CONTROL: within the cap, the same write is upgraded, its blocks asked.
+    await judge(nested(2), watching);
+    expect(asked).toContain("acme/box");
   });
 
   it("still refuses a change to the locked block", async () => {
