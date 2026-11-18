@@ -192,6 +192,7 @@ export function tokensToDtcg(
     }
   }
 
+  carryUnplacedAliases(document, written, carried);
   const styles = textStylesFor(options.textStyles ?? [], written);
   if (styles.group !== undefined) document[TEXT_STYLES_GROUP] = styles.group;
   const site = siteDataOf(set);
@@ -206,6 +207,42 @@ export function tokensToDtcg(
     document.$extensions = { [NEXTLY_EXTENSION]: own };
   }
   return { document, issues, keptTextStyles: styles.only };
+}
+
+/**
+ * A shadow written with an alias to a colour the file couldn't place (its
+ * path is another token's group) would point at nothing: each such shadow
+ * is taken back out of the tree and kept as Nextly data, as every value the
+ * format can't hold is.
+ */
+function carryUnplacedAliases(
+  document: DtcgNode,
+  written: { token: SiteToken; typed: TypedValue }[],
+  carried: DtcgNode
+): void {
+  const placed = new Set(written.map(entry => entry.token.name));
+  for (const entry of [...written]) {
+    if (entry.token.kind !== "shadow") continue;
+    const aliases = [
+      ...JSON.stringify(entry.typed).matchAll(/"\{([^"{}]+)\}"/g),
+    ];
+    if (aliases.every(([, name]) => placed.has(name ?? ""))) continue;
+    unplace(document, entry.token.name.split("."));
+    written.splice(written.indexOf(entry), 1);
+    carried[entry.token.name] = entryFor(entry.token, undefined);
+  }
+}
+
+/** Take the token at `path` out of the tree, with any group it leaves empty. */
+function unplace(root: DtcgNode, path: readonly string[]): void {
+  const [head, ...rest] = path;
+  if (head === undefined || !Object.hasOwn(root, head)) return;
+  const child = root[head];
+  if (rest.length > 0 && isPlainObject(child)) {
+    unplace(child, rest);
+    if (Object.keys(child).length > 0) return;
+  }
+  delete root[head];
 }
 
 /**
@@ -618,7 +655,8 @@ function inSequence(tokens: SiteToken[], sequence: unknown): void {
   sequence.forEach((name: unknown, index) => {
     if (typeof name === "string" && !at.has(name)) at.set(name, index);
   });
-  const rank = (token: SiteToken) => at.get(token.name) ?? at.size;
+  // After every listed one, however often a name is listed.
+  const rank = (token: SiteToken) => at.get(token.name) ?? sequence.length;
   // A stable sort: tokens of one rank keep the order they were read in.
   tokens.sort((left, right) => rank(left) - rank(right));
 }

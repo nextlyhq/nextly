@@ -274,14 +274,15 @@ describe("a site's design exported and imported into a fresh site", () => {
 
   it("lists the font the first site uploaded as missing on the fresh one", () => {
     const { plan } = roundTrip();
-    if (!plan.ok) return;
+    if (!plan.ok) throw new Error(plan.error);
     expect(plan.extras.missingFonts).toContain("Brand Sans");
     // The first site has the file, so its own import lists nothing of it.
     const own = planImport(roundTrip().files, FIRST, {
       textStyles: FIRST_CLASSES,
       faces: [UPLOADED],
     });
-    expect(own.ok && own.extras.missingFonts).not.toContain("Brand Sans");
+    if (!own.ok) throw new Error(own.error);
+    expect(own.extras.missingFonts).not.toContain("Brand Sans");
   });
 
   it("leaves the block style and the shared style out of the file", () => {

@@ -165,4 +165,25 @@ describe("the order of the variables", () => {
       "color.b",
     ]);
   });
+  it("puts a variable the sequence doesn't name after every one it does, a name listed twice or not", () => {
+    const list: SiteToken[] = [
+      { name: "color.a", kind: "color", values: { light: "#111111" } },
+      { name: "color.b", kind: "color", values: { light: "#222222" } },
+      { name: "color.c", kind: "color", values: { light: "#333333" } },
+    ];
+    const file = written({ tokens: list });
+    const own = (file.$extensions ?? {}) as Record<string, DtcgNode>;
+    file.$extensions = {
+      ...own,
+      [NEXTLY_EXTENSION]: {
+        ...own[NEXTLY_EXTENSION],
+        sequence: ["color.b", "color.b", "color.b", "color.a"],
+      },
+    };
+    expect(dtcgToTokens(file).tokens.map(token => token.name)).toEqual([
+      "color.b",
+      "color.a",
+      "color.c",
+    ]);
+  });
 });

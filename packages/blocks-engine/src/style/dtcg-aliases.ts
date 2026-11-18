@@ -46,7 +46,40 @@ export function resolveAliases(document: DtcgNode): {
     const outcome = followAlias(path, found, settled, []);
     if (typeof outcome === "string") issues.push(issue(outcome));
   }
-  return { document: substituted(document, [], settled), issues };
+  // A shadow layer's colour may be an alias too (a composite's part may
+  // reference a token of its type): each one resolving to a colour is
+  // written as that colour's value.
+  const layered = new Map<string, unknown>();
+  for (const [path, entry] of found) {
+    if (entry.type !== "shadow") continue;
+    const value = withLayerColours(entry.node.$value, found, settled);
+    if (value !== entry.node.$value) layered.set(path, value);
+  }
+  return { document: substituted(document, [], settled, layered), issues };
+}
+
+/**
+ * A shadow's value with each layer's colour alias written as the colour it
+ * resolves to; the same value where none does.
+ */
+function withLayerColours(
+  value: unknown,
+  found: ReadonlyMap<string, FoundToken>,
+  settled: Map<string, FoundToken | string>
+): unknown {
+  const layers: unknown[] = Array.isArray(value) ? value : [value];
+  let changed = false;
+  const read = layers.map(layer => {
+    if (!isPlainObject(layer)) return layer;
+    const target = aliasTarget(layer.color);
+    if (target === undefined) return layer;
+    const end = followAlias(target, found, settled, []);
+    if (typeof end === "string" || end.type !== "color") return layer;
+    changed = true;
+    return { ...layer, color: end.node.$value };
+  });
+  if (!changed) return value;
+  return Array.isArray(value) ? read : read[0];
 }
 
 /**
@@ -160,7 +193,9 @@ function followAlias(
 function substituted(
   node: DtcgNode,
   path: string[],
-  settled: ReadonlyMap<string, FoundToken | string>
+  settled: ReadonlyMap<string, FoundToken | string>,
+  /** Shadow values whose layer colours were resolved, by path. */
+  layered: ReadonlyMap<string, unknown>
 ): DtcgNode {
   const entries: [string, unknown][] = [];
   for (const [key, child] of Object.entries(node)) {
@@ -169,11 +204,14 @@ function substituted(
     if (isReservedKey(key) || !isPlainObject(child)) {
       entries.push([key, child]);
     } else if (outcome === undefined) {
+      const resolved = layered.get(here.join("."));
       entries.push([
         key,
-        isTokenNode(child) || here.length > MAX_TOKEN_NAME_SEGMENTS
-          ? child
-          : substituted(child, here, settled),
+        resolved !== undefined
+          ? { ...child, $value: resolved }
+          : isTokenNode(child) || here.length > MAX_TOKEN_NAME_SEGMENTS
+            ? child
+            : substituted(child, here, settled, layered),
       ]);
     } else if (typeof outcome !== "string") {
       entries.push([

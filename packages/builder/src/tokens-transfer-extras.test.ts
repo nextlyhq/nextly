@@ -6,10 +6,11 @@
  *
  * @module tokens-transfer-extras.test
  */
-import type {
-  FontFaceDef,
-  NamedClass,
-  SiteTokenSet,
+import {
+  fluidValue,
+  type FontFaceDef,
+  type NamedClass,
+  type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
@@ -183,8 +184,19 @@ describe("an import carrying the site's own design data", () => {
   });
 
   it("doesn't list a font the site has, nor a generic family", () => {
+    // A stack that is a generic family alone is never missing.
+    const generic: SiteTokenSet = {
+      ...SITE,
+      tokens: [
+        ...SITE.tokens,
+        { name: "font.mono", kind: "fontFamily", values: { light: "serif" } },
+      ],
+    };
     const plan = ready(
-      planImport(files(SITE, []), fresh, { textStyles: [], faces: [brandSans] })
+      planImport(files(generic, []), fresh, {
+        textStyles: [],
+        faces: [brandSans],
+      })
     );
     expect(plan.extras.missingFonts).toEqual(["Inter"]);
   });
@@ -355,6 +367,88 @@ describe("an import carrying the site's own design data", () => {
       h3: { fontSize: "var(--site-t-own-h2, 1rem)" },
       h4: { fontSize: "calc(var(--site-t-own-h2) * 1.2)" },
     });
+  });
+
+  it("orders the file's colours under the ids they merge into here", () => {
+    const into: SiteTokenSet = {
+      tokens: [
+        {
+          id: "c-own-accent",
+          name: "color.accent",
+          kind: "color",
+          values: { light: "#000000" },
+        },
+      ],
+    };
+    const source: SiteTokenSet = {
+      tokens: [
+        { name: "color.accent", kind: "color", values: { light: "#ff0000" } },
+      ],
+      order: ["color.accent"],
+    };
+    const plan = ready(planImport(files(source, []), into, { textStyles: [] }));
+    expect(plan.extras.site?.order).toEqual(["c-own-accent"]);
+  });
+
+  it("keeps this site's row where the file's follows a text style neither has, saying so", () => {
+    const into: SiteTokenSet = {
+      tokens: [],
+      siteText: { h2: { fontSize: "2rem" } },
+    };
+    const plan = ready(
+      planImport(files(SITE, []), into, { textStyles: others })
+    );
+    expect(plan.extras.site?.siteText).toEqual({ body: SITE.siteText?.body });
+    expect(plan.skipped).toContain(
+      "Site text: Heading 2 kept this site's own settings, because the text style it follows isn't on this site."
+    );
+  });
+
+  it("keeps this site's place for a text style it updates", () => {
+    const placed: NamedClass = {
+      ...eyebrow,
+      orderIndex: 7,
+      styles: { base: { base: { fontSize: "1rem" } } },
+    };
+    const plan = ready(
+      planImport(files(SITE, [eyebrow]), fresh, { textStyles: [placed] })
+    );
+    expect(plan.extras.textStyles.updated).toEqual([
+      { ...eyebrow, orderIndex: 7 },
+    ]);
+    // Only its place differing, it is unchanged.
+    const same = ready(
+      planImport(files(SITE, [eyebrow]), SITE, {
+        textStyles: [{ ...eyebrow, orderIndex: 9 }],
+      })
+    );
+    expect(same.extras.textStyles.unchanged.map(style => style.id)).toEqual([
+      "ts-eyebrow",
+    ]);
+  });
+
+  it("remakes this site's own fluid sizes across a fluid range the file changes", () => {
+    const sizes = { small: 16, large: 24 };
+    const into: SiteTokenSet = {
+      tokens: [
+        {
+          name: "space.roomy",
+          kind: "dimension",
+          fluid: sizes,
+          values: { light: fluidValue(sizes, { min: 360, max: 1280 }) },
+        },
+      ],
+      fluidRange: { min: 360, max: 1280 },
+    };
+    const plan = ready(planImport(files(SITE, []), into, {}));
+    const applied = applyImport(plan, into, new Map());
+    if (!applied.ok) throw new Error(applied.error);
+    const roomy = applied.tokens.tokens.find(
+      token => token.name === "space.roomy"
+    );
+    expect(roomy?.values.light).toBe(
+      fluidValue(sizes, { min: 320, max: 1440 })
+    );
   });
 
   it("keeps this site's Site text row where the file's follows a text style that wasn't imported, saying so", () => {

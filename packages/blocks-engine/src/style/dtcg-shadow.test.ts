@@ -208,6 +208,55 @@ describe("a shadow in the design-token file", () => {
     ]);
   });
 
+  it("reads a layer's colour another tool wrote as an alias to a colour in the file", () => {
+    const read = dtcgToTokens({
+      color: {
+        brand: {
+          $type: "color",
+          $value: {
+            colorSpace: "srgb",
+            components: [0.2, 0.4, 0.6],
+            hex: "#336699",
+          },
+        },
+      },
+      shadow: {
+        lift: {
+          $type: "shadow",
+          $value: {
+            color: "{color.brand}",
+            offsetX: px(0),
+            offsetY: px(1),
+            blur: px(2),
+            spread: px(0),
+          },
+        },
+      },
+    });
+    expect(read.issues).toEqual([]);
+    expect(read.tokens).toContainEqual(
+      shadow("shadow.lift", "0px 1px 2px 0px #336699")
+    );
+  });
+
+  it("keeps a shadow as Nextly data where its colour variable isn't written as a token", () => {
+    // `color.brand.tint` can't be written beside the token `color.brand`,
+    // so an alias to it would point at nothing in the file.
+    const written = tokensToDtcg({
+      tokens: [
+        brand,
+        {
+          name: "color.brand.tint",
+          kind: "color",
+          values: { light: "#99bbdd" },
+        },
+        shadow("shadow.lift", "0 1px 2px var(--site-color-brand-tint)"),
+      ],
+    }).document;
+    expect(at(written, "shadow.lift")).toBeUndefined();
+    expect(carried(written)).toContain("shadow.lift");
+  });
+
   it("skips a shadow from another tool whose parts it can't read, saying so", () => {
     const read = dtcgToTokens({
       shadow: {

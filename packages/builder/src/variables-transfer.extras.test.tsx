@@ -385,6 +385,31 @@ describe("importing a file with text styles and the site's design data", () => {
     );
   });
 
+  it("adds a family in the style it has when it has no upright one", async () => {
+    const add = vi.fn<FontCatalogue["add"]>(async () => undefined);
+    const italicOnly: CatalogueFamilyView = {
+      ...INTER,
+      styles: ["italic"],
+    };
+    const catalogue: FontCatalogue = {
+      load: async () => ({ families: [italicOnly] }),
+      previewUrl: () => "",
+      add,
+    };
+    render(<WithFonts tokens={{ tokens: [] }} catalogue={catalogue} />);
+    await chooseFile("variables.tokens.json", exported());
+    const preview = await screen.findByRole("dialog", {
+      name: "Import variables",
+    });
+    fireEvent.click(
+      await within(preview).findByRole("button", {
+        name: "Add from Google Fonts: Inter",
+      })
+    );
+    await waitFor(() => expect(add).toHaveBeenCalledTimes(1));
+    expect(add.mock.calls[0]?.[0].styles).toEqual(["italic"]);
+  });
+
   it("lists no font the site has a file for", async () => {
     const face: FontFaceDef = {
       family: "Brand Sans",
