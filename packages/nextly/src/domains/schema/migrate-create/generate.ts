@@ -1476,6 +1476,8 @@ export async function generateMigration(
       operations.length === 0 &&
       groupRenames.up.length === 0 &&
       (added?.up.first.length ?? 0) + (added?.up.last.length ?? 0) === 0,
+    // A disable puts its table's columns back itself, before this file.
+    tableChangesInCompanionFiles: disablePlans.length > 0,
     now,
   });
 
@@ -2288,7 +2290,16 @@ function settingsAfterRestore(
   restored: readonly string[],
   dialect: SupportedDialect
 ): { up: string[]; down: string[]; indexes: string[] } | undefined {
-  const held = heldSettingsOf(prevMain.name, restored, desiredMain);
+  // A unique index the disable can create: every column it stands on is there once the disable
+  // has run. One that also covers a column the main file adds stays the main file's.
+  const there = new Set([...prevMain.columns.map(c => c.name), ...restored]);
+  const allHeld = heldSettingsOf(prevMain.name, restored, desiredMain);
+  const held = {
+    ...allHeld,
+    uniqueIndexes: allHeld.uniqueIndexes.filter(index =>
+      index.columns.every(column => there.has(column))
+    ),
+  };
   if (
     desiredMain === undefined ||
     (held.required.size === 0 && held.uniqueIndexes.length === 0)

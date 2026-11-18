@@ -16,10 +16,10 @@
  * make.
  */
 import { randomBytes } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
@@ -30,14 +30,22 @@ import type mysql from "mysql2/promise";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runFileMigrations } from "../../../../cli/commands/migrate";
+import {
+  downDatabaseDeps,
+  migrateDownCore,
+} from "../../../../cli/commands/migrate-down";
 import { createLogger } from "../../../../cli/utils/logger";
 import { installRegistryResolver } from "../../../../cli/utils/registry-resolver";
 import { loadDialectTables } from "../../../../database/dialect-tables";
 import { reconcileCore } from "../../../schema/migrate/core-reconcile";
+import { parseSqlSections } from "../../../schema/migrate/sql-sections";
+import { marksNoTransaction } from "../../../schema/migrate/split-sql";
 import {
   generateMigration,
   type MinimalConfigEntity,
 } from "../../../schema/migrate-create/generate";
+import { withMigrateLock } from "../../../schema/pipeline/locks";
+import { stepFileOf } from "../step-windows";
 import {
   createScratchDatabase,
   type ScratchDatabase,
@@ -208,6 +216,31 @@ for (const entry of DIALECTS) {
       });
     }
 
+    /** `nextly migrate:down --step <n> --allow-data-loss --yes`, reading each file's DOWN. */
+    async function migrateDown(step: number): Promise<string[]> {
+      const result = await migrateDownCore({
+        ...(await downDatabaseDeps({
+          adapter: adapter as unknown as DrizzleAdapter,
+          dialect,
+        })),
+        nodeEnv: "test",
+        logger: quiet,
+        options: { step, allowDataLoss: true, yes: true, dryRun: false },
+        fileExists: () => Promise.resolve(true),
+        readDownSql: async filename => {
+          const name = filename.endsWith(".sql") ? filename : `${filename}.sql`;
+          const content = await readFile(resolve(migrationsDir, name), "utf-8");
+          return {
+            sql: parseSqlSections(content).downSql,
+            transaction: !marksNoTransaction(content),
+            stepFile: stepFileOf(content, name),
+          };
+        },
+        withLock: withMigrateLock,
+      });
+      return result.rolledBack;
+    }
+
     async function mainValues(): Promise<{ body: string; label: string }[]> {
       return adapter.executeQuery<{ body: string; label: string }>(
         `SELECT ${q("body")} AS body, ${q("label")} AS label FROM ${q(table)} WHERE ${q("id")} = 'e1'`
@@ -304,6 +337,70 @@ for (const entry of DIALECTS) {
         await expect(migrate()).resolves.toBe(0);
       }
     );
+
+    // Rolled back, the disable drops the index it put back before it moves the values home again:
+    // SQLite drops no column an index covers.
+    it("rolls back turning translation off for a Unique field, its translations back", async () => {
+      const unique = (entity: MinimalConfigEntity): MinimalConfigEntity => ({
+        ...entity,
+        fields: entity.fields.map(f =>
+          f.name === "label" ? { ...f, unique: true } : f
+        ),
+      });
+      await migrateCreate(unique(translated));
+      await migrate();
+      await adapter.executeQuery(
+        `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('e1', 'One', 'one')`
+      );
+      await adapter.executeQuery(
+        `INSERT INTO ${q(`${table}_locales`)} (${q("_parent")}, ${q("_locale")}, ${q("body")}, ${q("label")}) ` +
+          `VALUES ('e1', 'en', 'Hello', 'Hi'), ('e1', 'es', 'Hola', 'Ola')`
+      );
+      await migrateCreate(unique(untranslated));
+      await migrate();
+
+      expect(await migrateDown(2)).toHaveLength(2);
+
+      const back = await adapter.executeQuery<{ body: string; label: string }>(
+        `SELECT ${q("body")} AS body, ${q("label")} AS label FROM ${q(`${table}_locales`)} WHERE ${q("_parent")} = 'e1' AND ${q("_locale")} = 'en'`
+      );
+      expect(back).toEqual([{ body: "Hello", label: "Hi" }]);
+    });
+
+    // A unique index that also covers a field the same change adds cannot be made before the main
+    // file adds that field: it stays the main file's, and the disable makes only what it can.
+    it("leaves to the main file a unique index over a restored field and a field it adds", async () => {
+      await migrateCreate(translated);
+      const turnedOff: MinimalConfigEntity = {
+        ...untranslated,
+        fields: [...untranslated.fields, { name: "code", type: "text" }],
+        indexes: [{ fields: ["label", "code"], unique: true }],
+      };
+      await migrateCreate(turnedOff);
+
+      const files = (await readdir(migrationsDir)).filter(n =>
+        n.endsWith(".sql")
+      );
+      const read = (name: string | undefined) =>
+        name === undefined
+          ? Promise.resolve("")
+          : readFile(join(migrationsDir, name), "utf8");
+      const upOf = (content: string) => content.split("-- DOWN")[0] ?? "";
+      const disable = upOf(
+        await read(files.find(n => n.includes("_disable_localization_")))
+      );
+      const main = upOf(
+        await read(
+          files
+            .filter(n => /_notes_\d+\.sql$/.test(n))
+            .sort()
+            .at(-1)
+        )
+      );
+      const coversCode = /CREATE UNIQUE INDEX[^;]*\([^;]*code[^;]*\)/;
+      expect(disable).not.toMatch(coversCode);
+      expect(main).toMatch(coversCode);
+    });
 
     // An entry whose language the copy keeps has no value: the column cannot be required over it.
     // The runner refuses before the setting, naming the field, and the translations stay.
