@@ -179,6 +179,29 @@ function variableRead(
 }
 
 /**
+ * Whether a font value reads a role's variable, directly or through the
+ * variables it reads in turn ({@link firstStep}): such a font changes when
+ * the role's font is chosen. A loop reads no role.
+ */
+export function fontReadsRole(
+  tokens: SiteTokenSet,
+  value: StyleValue,
+  role: FontRole
+): boolean {
+  const seen = new Set<string>();
+  let step = firstStep(tokens, value);
+  while (step !== undefined && "identity" in step) {
+    if (step.identity === FONT_ROLE_TOKEN[role]) return true;
+    if (seen.has(step.identity)) return false;
+    seen.add(step.identity);
+    const next = variableValue(tokens, step.identity, "light");
+    if (next === undefined) return false;
+    step = firstStep(tokens, next);
+  }
+  return false;
+}
+
+/**
  * The font a row's value draws in a mode, as a stack. A variable it reads is
  * followed, and so is one that variable reads through `var()` in turn, past
  * fallbacks as {@link firstStep} reads them. A loop of variables draws no

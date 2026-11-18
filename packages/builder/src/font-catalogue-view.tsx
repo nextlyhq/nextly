@@ -86,20 +86,21 @@ export interface FontCatalogue {
 const PREVIEWS_SHOWN = "shown";
 
 /**
- * Whether previews may load, and the way to allow them: read once from the
- * author's kept choice, and kept again when they press "Show previews".
+ * Whether previews may load, and the way to allow them. The kept choice is
+ * read again whenever the store changes, since it can arrive late (the
+ * author's identity is read after the catalogue may open), and a press made
+ * before it arrived is kept in it once it does.
  */
 function usePreviewConsent(
   store: PreferenceStore | undefined
 ): readonly [boolean, () => void] {
-  const [shown, setShown] = React.useState(
-    () => store?.read() === PREVIEWS_SHOWN
-  );
-  const allow = React.useCallback(() => {
-    store?.write(PREVIEWS_SHOWN);
-    setShown(true);
-  }, [store]);
-  return [shown, allow];
+  const kept = React.useMemo(() => store?.read() === PREVIEWS_SHOWN, [store]);
+  const [pressed, setPressed] = React.useState(false);
+  React.useEffect(() => {
+    if (pressed && !kept) store?.write(PREVIEWS_SHOWN);
+  }, [pressed, kept, store]);
+  const allow = React.useCallback(() => setPressed(true), []);
+  return [kept || pressed, allow];
 }
 
 /** The list before the catalogue has answered, kept so its order is too. */

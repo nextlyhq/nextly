@@ -6,7 +6,7 @@
  *
  * @module font-uses.test
  */
-import type { SiteTokenSet } from "@nextlyhq/blocks-engine";
+import type { SiteTokenSet, NamedClass } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -339,6 +339,36 @@ describe("what a role's font leaves as it is", () => {
     );
     expect(followedStyleWords(following, ["body"], classes)).toEqual([
       "Body follows the text style “Lead”, so a body font doesn’t change it.",
+    ]);
+  });
+
+  it("promises nothing for a text style that uses the role's own font, or sets none", () => {
+    const withFont = (
+      id: string,
+      label: string,
+      fontFamily?: { readonly $token: string }
+    ): NamedClass => ({
+      ...style(id, label),
+      styles: {
+        base: { base: fontFamily === undefined ? {} : { fontFamily } },
+      },
+    });
+    const roleStyles = [
+      // Follows the Headings font: choosing one does change these rows.
+      withFont("display", "Display", { $token: "font.heading" }),
+      // Sets no font: the row's font comes from elsewhere, so no promise.
+      withFont("lead", "Lead"),
+    ];
+    expect(
+      followedStyleWords(following, ["body", "heading"], roleStyles)
+    ).toEqual([]);
+    // A style naming the OTHER role's font keeps its rows for this role.
+    const bodyStyled = [
+      withFont("display", "Display", { $token: "font.body" }),
+      withFont("lead", "Lead"),
+    ];
+    expect(followedStyleWords(following, ["heading"], bodyStyled)).toEqual([
+      "Heading 1 and Heading 4 follow the text style “Display”, so a headings font doesn’t change them.",
     ]);
   });
 

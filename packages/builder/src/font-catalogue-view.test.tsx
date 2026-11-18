@@ -328,6 +328,42 @@ describe("previews, only once the author asks", () => {
     expect(screen.queryByRole("button", { name: "Show previews" })).toBeNull();
   });
 
+  it("reads the kept choice once the author's store arrives, and keeps a press made before it", async () => {
+    const families = [{ ...INTER, id: "late-store-inter" }];
+    const props = { onBack: () => undefined, onSite: siteFamilies([], []) };
+    // No author known yet: no store, so the author is asked.
+    const shown = { read: () => "shown", write: vi.fn() };
+    const later = render(
+      <FontCatalogueView catalogue={catalogue({}, families)} {...props} />
+    );
+    await row(/^Inter/);
+    expect(screen.getByRole("button", { name: "Show previews" })).toBeTruthy();
+    // The author is known now, and had already said yes.
+    later.rerender(
+      <FontCatalogueView
+        catalogue={catalogue({ previewConsent: shown }, families)}
+        {...props}
+      />
+    );
+    expect(screen.queryByRole("button", { name: "Show previews" })).toBeNull();
+    later.unmount();
+
+    // Pressed before the author is known: the choice is kept once they are.
+    const empty = { read: () => null, write: vi.fn() };
+    const early = render(
+      <FontCatalogueView catalogue={catalogue({}, families)} {...props} />
+    );
+    await row(/^Inter/);
+    fireEvent.click(screen.getByRole("button", { name: "Show previews" }));
+    early.rerender(
+      <FontCatalogueView
+        catalogue={catalogue({ previewConsent: empty }, families)}
+        {...props}
+      />
+    );
+    expect(empty.write).toHaveBeenCalledWith("shown");
+  });
+
   it("keeps the author's choice: asked once, then previews load on every later visit", async () => {
     let stored: string | null = null;
     const previewConsent = {

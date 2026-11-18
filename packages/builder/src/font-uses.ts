@@ -24,6 +24,7 @@ import { FONT_ROLE_WORDS } from "./editor-words";
 import { listedWords } from "./shared-style-library";
 import {
   firstFamily,
+  fontReadsRole,
   fontRoleRows,
   fontRoleStacks,
   fontRoleVariables,
@@ -179,11 +180,13 @@ export function followedStyleWords(
 ): string[] {
   // The Type tab's own reading of which rows follow which style.
   const views = siteTextRowViews(tokens, "light", classes);
+  const styles = new Map((classes ?? []).map(each => [each.id, each]));
   return roles.flatMap(role => {
     const rows = new Set<string>(fontRoleRows(role));
     const byStyle = new Map<string, string[]>();
     for (const view of views) {
       if (view.follows === undefined || !rows.has(view.role)) continue;
+      if (!keepsItsFont(tokens, styles.get(view.follows.id), role)) continue;
       const labels = byStyle.get(view.follows.name) ?? [];
       byStyle.set(view.follows.name, [...labels, view.label]);
     }
@@ -192,6 +195,20 @@ export function followedStyleWords(
       return `${listedWords(labels)} ${one ? "follows" : "follow"} the text style “${style}”, so a ${rolesWords([role])} font doesn’t change ${one ? "it" : "them"}.`;
     });
   });
+}
+
+/**
+ * Whether a text style keeps its own font when `role`'s font is chosen: it
+ * names one, and not one that reads the role's variable. A style naming no
+ * font leaves the row's font to what it inherits, so nothing is promised.
+ */
+function keepsItsFont(
+  tokens: SiteTokenSet,
+  style: NamedClass | undefined,
+  role: FontRole
+): boolean {
+  const font = style?.styles.base?.base?.fontFamily;
+  return font !== undefined && !fontReadsRole(tokens, font, role);
 }
 
 /** The role's own name, as Design's Type tab labels it ("Body font"). */
