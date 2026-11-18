@@ -25,7 +25,10 @@ const policy = (id: string, site?: string): CustomCssPolicy => ({
 
 describe("the stamp of a stored sheet, for custom CSS", () => {
   it("is what it always was with no checker", () => {
-    expect(stamp()).toBe(sharedStyleInputsId({ breakpoints: BREAKPOINTS }));
+    // The stamp the code before custom CSS existed gave these inputs, so a
+    // change that moved every stamp, checker or not, fails here: it would
+    // recompile every stored sheet on sites that draw no custom CSS.
+    expect(stamp()).toBe("v12:213nkp93cfb");
   });
 
   it("moves when a checker judges the compile", () => {

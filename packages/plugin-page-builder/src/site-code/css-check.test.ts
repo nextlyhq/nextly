@@ -52,6 +52,8 @@ describe.each(LEVELS)("custom CSS at the %s level", level => {
     ["a script address", 'url("javascript:alert(1)")'],
     ["a data address", 'url("data:image/svg+xml,<svg/>")'],
     ["an image-set string", 'image-set("https://tracker.example/p" 1x)'],
+    ["an escaped url()", 'u\\72l("https://tracker.example/p")'],
+    ["an escaped image-set()", '\\69mage-set("https://tracker.example/p" 1x)'],
   ])("refuses a fetch from %s", (_case, url) => {
     const problems = checkCustomCss(at(level, `background: ${url};`), level);
     expect(problems).toHaveLength(1);

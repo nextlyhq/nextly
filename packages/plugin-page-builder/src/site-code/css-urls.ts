@@ -21,7 +21,8 @@
 // The parser and walker entries rather than the root, which loads css-tree's
 // reference data and `node:module`: the custom CSS checker runs this in the
 // browser too.
-import type { CssNode, WalkContext } from "css-tree";
+import { decodeIdentifier } from "@nextlyhq/blocks-engine";
+import type { CssNode, FunctionNode, WalkContext } from "css-tree";
 import parse from "css-tree/parser";
 import walk from "css-tree/walker";
 
@@ -106,10 +107,36 @@ function rawFetches(
   return [...urls].map(([url, line]) => ({ via, url, line }));
 }
 
+/**
+ * A function's name as a browser reads it: escapes decoded, case folded, so
+ * `u\72l(` is a `url(` and `\69mage-set(` an `image-set(`.
+ */
+function functionName(fn: { readonly name: string }): string {
+  return decodeIdentifier(fn.name).toLowerCase();
+}
+
 /** Whether a node sits in an `image-set()`, whose strings are images. */
 function inImageSet(context: WalkContext): boolean {
   const fn = context.function;
-  return fn !== null && IMAGE_SET.has(fn.name.toLowerCase());
+  return fn !== null && IMAGE_SET.has(functionName(fn));
+}
+
+/**
+ * The address an escaped `url(` names. Only by an escaped spelling does a
+ * `url()` reach the walk as a function rather than a `Url` node: its argument
+ * is then a string, or tokens whose text is read back as the browser reads it.
+ */
+function escapedUrlText(fn: FunctionNode): string {
+  let text = "";
+  fn.children.forEach(child => {
+    if (child.type === "String") text += child.value;
+    else if (child.type === "Identifier") text += decodeIdentifier(child.name);
+    else if (child.type === "Operator" || child.type === "Raw") {
+      text += child.value;
+    } else if (child.type === "Number") text += child.value;
+    else if (child.type === "Dimension") text += child.value + child.unit;
+  });
+  return text;
 }
 
 /**
@@ -126,6 +153,9 @@ function nodeFetches(
   const via = viaOf(context);
   const line = node.loc?.start.line ?? 1;
   if (node.type === "Url") return [{ via, url: node.value, line }];
+  if (node.type === "Function" && functionName(node) === "url") {
+    return [{ via, url: escapedUrlText(node), line }];
+  }
   if (node.type === "Raw") return rawFetches(node.value, via, line);
   if (node.type !== "String") return [];
   if (inImageSet(context)) return [{ via: "image", url: node.value, line }];
