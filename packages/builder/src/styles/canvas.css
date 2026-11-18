@@ -684,6 +684,13 @@
   transform: translateX(4px);
 }
 
+/* Before it instead, where the screen's right edge leaves no room after it.
+   The room is judged against the label's max-width, which the insertion
+   line reads as `LABEL_WIDEST`. */
+.nx-insertion-line__label[data-axis="x"][data-before] {
+  transform: translateX(calc(-100% - 4px));
+}
+
 /* The place off screen: its label at the nearest edge, which a press scrolls
    the place into view from. */
 .nx-insertion-line__edge {

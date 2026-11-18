@@ -427,6 +427,43 @@ describe("the line where a highlighted tile would land", () => {
     ]);
   });
 
+  it("puts a row line's label on its left where the screen's right edge leaves no room", async () => {
+    // Hero's two blocks side by side, the end of the row at the screen's edge.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 1000, 500);
+        }
+        switch (this.getAttribute(NODE_ID_ATTRIBUTE)) {
+          case "hero":
+            return new DOMRect(0, 0, 1000, 100);
+          case "one":
+            return new DOMRect(0, 0, 400, 100);
+          case "two":
+            return new DOMRect(500, 0, 495, 100);
+          default:
+            return new DOMRect(0, 0, 1000, 2000);
+        }
+      }
+    );
+    const { container, rerender } = drawWith({
+      at: { parentId: "hero", slot: "children", index: 2 },
+      words: "Text goes inside Hero, at the end",
+    });
+    await act(async () => undefined);
+    expect(lineIn(container)?.getAttribute("data-axis")).toBe("x");
+    expect(labelIn(container)?.hasAttribute("data-before")).toBe(true);
+    // The control: the line between the two, with room to its right.
+    rerender(
+      canvasWith({
+        at: { parentId: "hero", slot: "children", index: 1 },
+        words: "Text goes after One, inside Hero",
+      })
+    );
+    await act(async () => undefined);
+    expect(labelIn(container)?.hasAttribute("data-before")).toBe(false);
+  });
+
   it("draws a place before a block that renders nothing at the gap where it shows", async () => {
     // Hero holds One and then a block that draws nothing: the place between
     // them is the gap after One on screen.

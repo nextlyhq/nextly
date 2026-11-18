@@ -63,6 +63,8 @@ type Drawn =
       readonly start: { readonly x: number; readonly y: number };
       /** No room above the line on screen, so the label goes below it. */
       readonly labelBelow: boolean;
+      /** No room right of a row's line on screen, so the label goes left. */
+      readonly labelBefore: boolean;
     }
   | {
       readonly kind: "edge";
@@ -91,6 +93,13 @@ const EDGE_GAP = 8;
 
 /** The room a label above its line needs on screen, in pixels. */
 const LABEL_ROOM = 22;
+
+/**
+ * The widest a label is drawn, in pixels: the stylesheet's `max-width` of
+ * 24rem on `.nx-insertion-line__label`, the room a label beside a row's line
+ * needs on screen.
+ */
+const LABEL_WIDEST = 384;
 
 /**
  * How long an edge label outlasts the panel letting go of its place: long
@@ -225,6 +234,7 @@ function drawnFor(
     target: mark.target,
     start: { x: drawnAt.x, y: drawnAt.y },
     labelBelow: drawnAt.y - LABEL_ROOM < screen.y,
+    labelBefore: drawnAt.x + LABEL_WIDEST > screen.x + screen.width,
   };
 }
 
@@ -349,6 +359,7 @@ export function InsertionLine({
             className="nx-insertion-line__label"
             data-axis={drawn.target.axis}
             {...(drawn.labelBelow ? { "data-below": "" } : {})}
+            {...(drawn.labelBefore ? { "data-before": "" } : {})}
             aria-hidden="true"
             style={{ left: drawn.start.x, top: drawn.start.y }}
           >
