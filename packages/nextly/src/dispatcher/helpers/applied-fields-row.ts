@@ -8,9 +8,9 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../../collections/fields/types";
 import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
-import { bumpSchemaVersion } from "../../route-handler/schema-version";
 import { writeRegistryRows } from "../../domains/schema/schema-version";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
+import { bumpSchemaVersion } from "../../route-handler/schema-version";
 
 /**
  * Record on `slug`'s row of the registry table `table` the fields a save
@@ -47,6 +47,20 @@ export async function writeAppliedFieldsRow(
   );
   clearRegistryRowCache();
   await afterEnclosingCommit(adapter);
+}
+
+/**
+ * Whether a Single's or field group's Builder apply writes its registry row inside its file's
+ * transaction (`inLastTransaction`), so a failed write leaves the save as it was. Not where the
+ * entity keeps translations before or after the save: their table is reconciled after the file,
+ * and the row would then record the change before that step holds it, so the apply writes it
+ * after the reconcile instead.
+ */
+export function registryInFileTransaction(translations: {
+  wasStored: boolean;
+  isStored: boolean;
+}): boolean {
+  return !translations.wasStored && !translations.isStored;
 }
 
 /**

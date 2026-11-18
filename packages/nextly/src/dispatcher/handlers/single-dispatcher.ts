@@ -103,7 +103,10 @@ import { assertGlobalResourceSlugAvailable } from "../../services/lib/resource-s
 import { assertAddressAllowed } from "../../shared/address-rule";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import { consoleLogger } from "../../shared/types";
-import { writeAppliedFieldsRow } from "../helpers/applied-fields-row";
+import {
+  registryInFileTransaction,
+  writeAppliedFieldsRow,
+} from "../helpers/applied-fields-row";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
@@ -1849,9 +1852,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               // write leaves the save as it was and is answered as the failure it is. Not where the
               // translations table is reconciled after the file: the row would then record the
               // change before that step holds it, so it is written after it, as before.
-              ...(layout.wasStored || layout.isStored
-                ? {}
-                : { registry: writeRow }),
+              ...(registryInFileTransaction(layout)
+                ? { registry: writeRow }
+                : {}),
             }
           );
 

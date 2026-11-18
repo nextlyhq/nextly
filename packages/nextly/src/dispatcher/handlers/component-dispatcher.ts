@@ -77,7 +77,10 @@ import type { FieldGroupRegistryService } from "../../services/field-groups/fiel
 import { readableSlugsOfKind } from "../../services/lib/readable-slug-allowlist";
 import { assertAddressAllowed } from "../../shared/address-rule";
 import type { Logger } from "../../shared/types";
-import { writeAppliedFieldsRow } from "../helpers/applied-fields-row";
+import {
+  registryInFileTransaction,
+  writeAppliedFieldsRow,
+} from "../helpers/applied-fields-row";
 import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import {
   builderSaveDeps,
@@ -1030,7 +1033,9 @@ export const COMPONENTS_METHODS: Record<
               // write leaves the save as it was and is answered as the failure it is. Not where the
               // translations table is reconciled after the file: the row would then record the
               // change before that step holds it, so it is written after it, as before.
-              ...(wasStored || isStored ? {} : { registry: writeRow }),
+              ...(registryInFileTransaction({ wasStored, isStored })
+                ? { registry: writeRow }
+                : {}),
             }
           );
 

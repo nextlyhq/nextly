@@ -63,7 +63,6 @@ import type { Resolution } from "../../domains/schema/pipeline/resolution/types"
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
 import { writeRegistryRows } from "../../domains/schema/schema-version";
-import { afterEnclosingCommit } from "../helpers/applied-fields-row";
 import {
   applyCollectionSchemaChange,
   fieldsAsStored,
@@ -88,6 +87,7 @@ import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlis
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import { SLUG_PATTERN } from "../../shared/slug-pattern";
 import { consoleLogger } from "../../shared/types";
+import { afterEnclosingCommit } from "../helpers/applied-fields-row";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
