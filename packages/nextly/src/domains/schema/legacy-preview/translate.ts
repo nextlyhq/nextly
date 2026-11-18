@@ -28,6 +28,7 @@ import { usesJunctionTable } from "../field-rules";
 import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
+  countRowsBreakingNotNull,
 } from "../pipeline/classifier/count-helpers";
 import type { PipelinePreviewResult } from "../pipeline/preview";
 import {
@@ -207,7 +208,7 @@ export async function translatePipelinePreviewToLegacy(
   const changed: ChangedField[] = diff.changed.map(change => {
     const dropped = droppedLinks.get(change.name);
     const rowCount =
-      dropped?.rowCount ?? fieldRowCounts[change.name]?.rowCount ?? 0;
+      dropped?.count.rowCount ?? fieldRowCounts[change.name]?.rowCount ?? 0;
     let classification: "safe" | "destructive" | "interactive" = "safe";
     if (togglesHasMany(change.name, currentFields, newFields)) {
       // One related entry or many is stored differently, so switching between
@@ -230,6 +231,8 @@ export async function translatePipelinePreviewToLegacy(
       from: change.from,
       to: change.to,
       rowCount,
+      // A link count that could not be read is unknown, never a known 0.
+      ...(dropped?.count.unknown ? { rowCountUnknown: true as const } : {}),
       classification,
       reason: change.reason ?? "type_changed",
     };
@@ -337,11 +340,19 @@ function togglesHasMany(
   return (before.hasMany === true) !== (after.hasMany === true);
 }
 
+/** A relationship leaving its link table: the links that table holds, and what the field becomes. */
+interface LinksDropped {
+  count: RemovedCount;
+  after: FieldDefinition;
+}
+
 /**
  * The links each kept relationship leaving its link table drops with it, by field name: one that
  * keeps its links in a link table of its own now (`usesJunctionTable`) and will not after the save,
- * counted in that table (`junctionTableNameFor`, the name its DROP uses). A count that cannot be
- * read is unknown, never 0, and the change still drops the table.
+ * counted in that table (`junctionTableNameFor`, the name its DROP uses). The count quotes the name
+ * as the save does (`countRowsBreakingNotNull` with no column counts every row), so a name with a
+ * hyphen is counted, not refused. A count that cannot be read is unknown, never 0, and the change
+ * still drops the table.
  */
 async function countLinksDropped(
   db: unknown,
@@ -349,38 +360,47 @@ async function countLinksDropped(
   tableName: string,
   currentFields: FieldDefinition[],
   newFields: FieldDefinition[]
-): Promise<Map<string, RemovedCount>> {
-  const after = new Map(newFields.map(field => [field.name, field]));
-  const counts = new Map<string, RemovedCount>();
+): Promise<Map<string, LinksDropped>> {
+  const afterByName = new Map(newFields.map(field => [field.name, field]));
+  const dropped = new Map<string, LinksDropped>();
   for (const before of currentFields) {
-    const kept = after.get(before.name);
-    if (kept === undefined || !usesJunctionTable(before)) continue;
-    if (usesJunctionTable(kept)) continue;
+    const after = afterByName.get(before.name);
+    if (after === undefined || !usesJunctionTable(before)) continue;
+    if (usesJunctionTable(after)) continue;
     try {
-      const rowCount = await countRowsHelper(
-        db,
-        dialect,
-        junctionTableNameFor(tableName, before)
-      );
-      counts.set(before.name, { rowCount, unknown: false });
+      const { total } = await countRowsBreakingNotNull(db, dialect, {
+        table: junctionTableNameFor(tableName, before),
+        column: null,
+      });
+      dropped.set(before.name, {
+        count: { rowCount: total, unknown: false },
+        after,
+      });
     } catch {
-      counts.set(before.name, UNCOUNTED);
+      dropped.set(before.name, { count: UNCOUNTED, after });
     }
   }
-  return counts;
+  return dropped;
 }
 
-/** The warning for a relationship whose link table the save drops, with the links it holds. */
+/**
+ * The warning for a relationship whose link table the save drops, with the links it holds, naming
+ * what the field becomes: a single link while it stays a relationship, else a field of its new type.
+ */
 function linkTableWarnings(
   name: string,
-  dropped: ReadonlyMap<string, RemovedCount>
+  dropped: ReadonlyMap<string, LinksDropped>
 ): string[] {
-  const count = dropped.get(name);
-  if (count === undefined) return [];
+  const links = dropped.get(name);
+  if (links === undefined) return [];
+  const becomes =
+    links.after.type === "relationship"
+      ? "a single link"
+      : `a ${links.after.type} field`;
   return [
-    count.unknown
-      ? `Changing '${name}' from many-to-many to a single link drops its link table and every link it holds: could not count them.`
-      : `Changing '${name}' from many-to-many to a single link drops its link table and the ${count.rowCount.toLocaleString()} links it holds.`,
+    links.count.unknown
+      ? `Changing '${name}' from many-to-many to ${becomes} drops its link table and every link it holds: could not count them.`
+      : `Changing '${name}' from many-to-many to ${becomes} drops its link table and the ${links.count.rowCount.toLocaleString()} links it holds.`,
   ];
 }
 
