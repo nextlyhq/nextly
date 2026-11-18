@@ -727,21 +727,23 @@ function judgeAppliedColumn(
   if (aspects === null) return null;
   // An override reaches only the entity's own table. Where no record says which were applied, a
   // column there of another type may be as its override made it: judging it against the field's
-  // own storage would report, and convert, a column that is as applied.
-  if (
+  // own storage would report, and convert, a column that is as applied. An override keeps the
+  // field's nullability, so that is still judged, with the type left as the database holds it.
+  const typeUnknown =
     aspects.type &&
     entity.applied?.storageUnknown === true &&
-    !column.location.translation
-  ) {
-    return null;
-  }
+    !column.location.translation;
+  if (typeUnknown && !aspects.nullability) return null;
+  const expected = typeUnknown
+    ? { ...state, nullable: column.expected.nullable }
+    : column.expected;
   return {
     kind: "differs",
     location: column.location,
     ...ownedBy(entity.plugin),
-    expected: column.expected,
+    expected,
     live: state,
-    aspects,
+    aspects: typeUnknown ? { type: false, nullability: true } : aspects,
     judgement: null,
     conversion: null,
     rowsRewritten: null,
@@ -752,7 +754,7 @@ function judgeAppliedColumn(
       dialect,
       translation: column.location.translation,
       live: state,
-      expected: column.expected,
+      expected,
     }),
   };
 }

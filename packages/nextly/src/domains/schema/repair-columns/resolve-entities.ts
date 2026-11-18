@@ -122,7 +122,13 @@ const NO_SOURCES: EntitySources = {
   recorded: undefined,
 };
 
-/** The registry statuses that say the row's definition is in the database. */
+/**
+ * The registry statuses that say the row's definition is in the database. Every other status says
+ * it is not, each for its own reason: `pending` waits for its migration, `generated` has one
+ * written and not applied, and `failed` is an apply that did not finish, whose table may hold part
+ * of the change. None of them says what was applied, so the entity is reported as pending and
+ * never converted. `diverged` is none of these: the reader refuses such a row before it gets here.
+ */
 const APPLIED_STATUSES: ReadonlySet<string | undefined> = new Set([
   "applied",
   "synced",

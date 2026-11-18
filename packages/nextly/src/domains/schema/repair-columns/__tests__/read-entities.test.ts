@@ -19,6 +19,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { readRepairEntities } from "../read-entities";
 
+/** Every read and existence check of a file, by path, as the modules under test make them. */
+const files = vi.hoisted(() => ({
+  reads: [] as string[],
+  stats: [] as string[],
+}));
+
+vi.mock("node:fs/promises", async importOriginal => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    readFile: (...args: Parameters<typeof actual.readFile>) => {
+      files.reads.push(String(args[0]));
+      return actual.readFile(...args);
+    },
+    stat: (...args: Parameters<typeof actual.stat>) => {
+      files.stats.push(String(args[0]));
+      return actual.stat(...args);
+    },
+  };
+});
+
 const registry = vi.hoisted(() => ({
   collections: [] as unknown[],
   singles: [] as unknown[],
@@ -165,6 +186,30 @@ describe("readRepairEntities: a registry row that names no table", () => {
   );
 });
 
+describe("readRepairEntities: a registry row marked as diverged", () => {
+  it("stops the run, naming the row and the state, rather than read it as never applied", async () => {
+    // Its tables were changed and its stored definition was not: reporting its columns as
+    // pending a migration would send the owner to repeat the change the state forbids.
+    registry.collections = [];
+    registry.singles = [];
+    registry.fieldGroups = [
+      {
+        slug: "card",
+        tableName: "comp_card",
+        fields: [],
+        source: "ui",
+        migrationStatus: "diverged",
+      },
+    ];
+    await expect(read(["dynamic_field_groups"])).rejects.toMatchObject({
+      code: "CONFIGURATION_ERROR",
+      logMessage: expect.stringMatching(
+        /field group registry row "card".*diverged/
+      ) as unknown,
+    });
+  });
+});
+
 describe("readRepairEntities: user fields as configured", () => {
   const record = (over: Record<string, unknown>) => ({
     label: String(over.name),
@@ -282,6 +327,21 @@ describe("readRepairEntities: Builder entities as configured", () => {
     );
     expect(posts?.applied?.source).toBe("registry");
     expect(posts?.configured).toBeNull();
+  });
+
+  it("reads the manifest once, and takes its presence from that read", async () => {
+    // Two reads, or a separate existence check, can see the file in two states while it is
+    // being written, and then disagree about which Builder entities are declared.
+    manifest({ collections: [], singles: [], components: [] });
+    const path = join(projectRoot, "ui-schema.json");
+    files.reads.length = 0;
+    files.stats.length = 0;
+    const posts = (await read(["dynamic_collections"])).find(
+      e => e.slug === "rcposts"
+    );
+    expect(posts?.configured).toBeNull();
+    expect(files.reads.filter(read => read === path)).toHaveLength(1);
+    expect(files.stats.filter(checked => checked === path)).toEqual([]);
   });
 
   it("refuses to run on a manifest it cannot read rather than drop the Builder's declarations", async () => {

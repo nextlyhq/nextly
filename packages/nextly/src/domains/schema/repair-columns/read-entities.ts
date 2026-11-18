@@ -11,7 +11,7 @@
 //
 // @module domains/schema/repair-columns/read-entities
 
-import { readdir, stat } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -39,7 +39,7 @@ import {
   type EntitySettingsRecord,
   type RecordedEntitySettings,
 } from "../migrate-create/entity-settings";
-import { loadUiSchema } from "../ui-schema/loader";
+import { readUiSchema } from "../ui-schema/loader";
 
 import {
   resolveRepairEntities,
@@ -170,52 +170,35 @@ const MANIFEST_LISTS = {
 } as const satisfies Record<RecordedKind, string>;
 
 /**
- * Whether the Builder manifest is checked out. The loader reads an absent manifest as an empty one,
- * which declares nothing, so it cannot say this: an empty manifest removes every Builder entity
- * the registry holds, while no manifest at all leaves the registry rows to say what each would be.
- * Any answer other than "it does not exist" stops the run, since guessing either way changes every
- * Builder entity's configured definition.
- */
-async function manifestExists(args: ConfigurationArgs): Promise<boolean> {
-  const path = resolve(args.projectRoot, args.config.db.uiSchemaFile);
-  try {
-    await stat(path);
-    return true;
-  } catch (error) {
-    if ((error as { code?: unknown }).code === "ENOENT") return false;
-    throw NextlyError.configuration({
-      logMessage: `Whether the Builder manifest ${path} exists could not be read, so what the next migration would apply cannot be known.`,
-      logContext: { path },
-      ...(error instanceof Error ? { cause: error } : {}),
-    });
-  }
-}
-
-/**
  * The Builder entities the next migration would apply: the manifest's, with the plugins' deferred
  * extensions of them and without those code-first shadows, merged as migration generation merges
  * them. The resolved entities do not carry `localized`, so it is read from the manifest itself.
  *
  * An absent manifest is the ordinary code-first project and declares none; one that exists and
  * cannot be read stops the run, since dropping it would drop every Builder declaration.
+ *
+ * Also whether a manifest is checked out, which the loader's empty manifest for an absent file
+ * cannot say: an empty manifest removes every Builder entity the registry holds, while no manifest
+ * at all leaves the registry rows to say what each would be. The file is read once, and the
+ * entities, their `localized` and its presence all come from that read, so a file written while
+ * the run starts cannot make them disagree.
  */
 async function builderEntities(
   args: ConfigurationArgs,
   ownerOf: (kind: RecordedKind, slug: string) => string | undefined
-): Promise<ConfiguredEntity[]> {
-  const [declared, manifest] = await Promise.all([
-    resolveDeclaredSchema({
-      projectRoot: args.projectRoot,
-      config: args.config,
-      ...(args.deferredExtends !== undefined
-        ? { deferredExtends: args.deferredExtends }
-        : {}),
-    }),
-    loadUiSchema({
-      projectRoot: args.projectRoot,
-      uiSchemaFile: args.config.db.uiSchemaFile,
-    }),
-  ]);
+): Promise<{ entities: ConfiguredEntity[]; hasManifest: boolean }> {
+  const { manifest, exists } = await readUiSchema({
+    projectRoot: args.projectRoot,
+    uiSchemaFile: args.config.db.uiSchemaFile,
+  });
+  const declared = await resolveDeclaredSchema({
+    projectRoot: args.projectRoot,
+    config: args.config,
+    manifest,
+    ...(args.deferredExtends !== undefined
+      ? { deferredExtends: args.deferredExtends }
+      : {}),
+  });
   const localized = new Set(
     (Object.keys(MANIFEST_LISTS) as RecordedKind[]).flatMap(kind =>
       (manifest[MANIFEST_LISTS[kind]] ?? [])
@@ -223,7 +206,7 @@ async function builderEntities(
         .map(entity => entityKey(kind, entity.slug))
     )
   );
-  return declared.entities
+  const entities = declared.entities
     .filter(entity => entity.builtBy !== "codeFirst")
     .map((entity): ConfiguredEntity => {
       const plugin = ownerOf(entity.kind, entity.slug);
@@ -237,6 +220,7 @@ async function builderEntities(
         ...(plugin !== undefined ? { plugin } : {}),
       };
     });
+  return { entities, hasManifest: exists };
 }
 
 /** What the configured side is read from. */
@@ -258,13 +242,10 @@ async function configuredEntities(
   const owners = pluginOwners(args.config.plugins);
   const ownerOf = (kind: RecordedKind, slug: string) =>
     owners.get(entityKey(kind, slug));
-  const [builder, hasManifest] = await Promise.all([
-    builderEntities(args, ownerOf),
-    manifestExists(args),
-  ]);
+  const builder = await builderEntities(args, ownerOf);
   return {
-    entities: [...codeFirstEntities(args.config, ownerOf), ...builder],
-    hasManifest,
+    entities: [...codeFirstEntities(args.config, ownerOf), ...builder.entities],
+    hasManifest: builder.hasManifest,
   };
 }
 
@@ -277,6 +258,9 @@ const REGISTRY_TABLES: Record<RecordedKind, readonly string[]> = {
   single: ["dynamic_singles"],
   fieldGroup: [STORAGE_FORMAT.registryTable, MIGRATION_TARGET.registryTable],
 };
+
+/** The registry status of an entity whose tables were changed while its row was not. */
+const DIVERGED_STATUS = "diverged";
 
 /** Each kind of entity as a message about its registry row names it. */
 const REGISTRY_ROW_LABEL: Record<RecordedKind, string> = {
@@ -315,6 +299,11 @@ async function hasRegistry(
  *
  * A row that names no table stops the run: where its columns are cannot be known, and leaving the
  * row out would report its entity as never applied, or not report it at all.
+ *
+ * So does a row marked as diverged, whatever else records its entity: its tables were changed and
+ * its stored definition was not, so neither the row nor an older snapshot says what the database
+ * holds. Reading it as never applied would send the owner to repeat the change the state forbids,
+ * and judging its columns against an older record would convert them back.
  */
 async function registryRows(
   adapter: DrizzleAdapter,
@@ -335,6 +324,12 @@ async function registryRows(
       throw NextlyError.configuration({
         logMessage: `The ${REGISTRY_ROW_LABEL[kind]} registry row "${slug}" names no table, so where its columns are cannot be known. Restore the row's table name, then run \`nextly repair-columns\` again.`,
         logContext: { kind, slug },
+      });
+    }
+    if (row.migrationStatus === DIVERGED_STATUS) {
+      throw NextlyError.configuration({
+        logMessage: `The ${REGISTRY_ROW_LABEL[kind]} registry row "${slug}" is marked as diverged: its tables were changed and its stored definition still describes the previous shape, so what the database last had applied cannot be known. Reconcile the definition against the tables, then run \`nextly repair-columns\` again.`,
+        logContext: { kind, slug, migrationStatus: row.migrationStatus },
       });
     }
     return [{ ...row, kind, slug, tableName }];

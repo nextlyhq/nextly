@@ -1214,6 +1214,33 @@ describe.each(getConfiguredTestDialects())(
       ]);
     });
 
+    it("still judges a column's nullability where its applied storage is unknown", async () => {
+      // `score` is held as nullable text; the field as applied is a required number. Its type may
+      // be an override's, but an override keeps the field's nullability, so that still differs.
+      await createBuilderTable(MX_OLD, MX_RETYPED);
+      const required = MX_FIELDS.map(field =>
+        field.name === "score"
+          ? f({ name: "score", type: "number", required: true })
+          : field
+      );
+      const removed = resolveRepairEntities({
+        configured: [],
+        registry: [mxRow({ fields: required })],
+        snapshots: [],
+        hasManifest: true,
+      });
+      const findings = await find(removed);
+      expect(findings.map(matrixRow)).toEqual([
+        ["differs", col(MX_OLD, "score"), "", "", ""],
+        ...removals(true),
+      ]);
+      const [score] = differs(findings);
+      // The type is left as the database holds it: only the nullability is this run's to repair.
+      expect(score?.aspects).toEqual({ type: false, nullability: true });
+      expect(score?.live.nullable).toBe(true);
+      expect(score?.expected).toEqual({ ...score?.live, nullable: false });
+    });
+
     it("reports a plugin's legacy column and names the plugin", async () => {
       await createLegacyTables();
       const findings = await find([
