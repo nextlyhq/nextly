@@ -57,6 +57,8 @@ export interface EntityMoves {
     field: string;
     /** Whether the field is required, so every entry needs a value to move. */
     required: boolean;
+    /** The column's kind, which says what a value from the group must be to be read into it. */
+    kind: MoveColumn["kind"];
     /** Where the values come from: the group's column and the keys inside it. */
     source: { column: string; keys: readonly string[] };
   }[];
@@ -424,12 +426,13 @@ export function planEntityMoves(args: {
     refuseUnplaceable(request, move, columns);
     // A field moving between places on one level (a group with no name) keeps its column.
     if (move.from.kind === "column" && move.to.kind === "column") continue;
-    const statements = placed(move, moveColumn(move, args.table, args.dialect));
+    const target = moveColumn(move, args.table, args.dialect);
+    const statements = placed(move, target);
     for (const way of ["up", "down"] as const) {
       result[way].first.push(...statements[way].first);
       result[way].last.push(...statements[way].last);
     }
-    recordColumns(result, move, request, args.table);
+    recordColumns(result, move, request, target);
   }
   return result;
 }
@@ -439,8 +442,9 @@ function recordColumns(
   result: EntityMoves,
   move: PlannedMove,
   request: FieldMoveRequest,
-  table: string
+  target: MoveColumn
 ): void {
+  const { table } = target;
   const { from, to } = move;
   if (from.kind === "json" && to.kind === "column") {
     result.refilledColumns.push({
@@ -448,6 +452,7 @@ function recordColumns(
       column: to.column,
       field: request.to.join("."),
       required: (move.field as { required?: unknown }).required === true,
+      kind: target.kind,
       source: { column: from.column, keys: from.keys },
     });
   }

@@ -66,7 +66,11 @@ import { boundedStopRecord } from "../busy-table/stopped-record";
 import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import type { FieldMoveRequest } from "../field-moves/check-move";
-import { holdsValueAt } from "../field-moves/move-statements";
+import {
+  heldValueAt,
+  holdsValueAt,
+  movesAsTheSameDate,
+} from "../field-moves/move-statements";
 import { movedColumnSentences } from "../field-moves/moved-column-facts";
 import { planEntityMoves, type EntityMoves } from "../field-moves/plan-moves";
 import { checksumOf } from "../migrate/applied-checksums";
@@ -453,11 +457,9 @@ async function writeSave(
   refuseUnconfirmedConversions(plan, save);
   refuseUnenforceableUniques(deps, save, plan.table);
   // A move that cannot keep its values is refused here, before the definition is written.
-  await refuseEmptyRequiredRefills(
-    deps,
-    plannedMovesOf(deps, save, plan.table),
-    plan.table
-  );
+  const planned = plannedMovesOf(deps, save, plan.table);
+  await refuseEmptyRequiredRefills(deps, planned, plan.table);
+  await refuseUnreadableDates(deps, planned, plan.table);
   await settledRows(deps, save, plan.table);
 
   const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
@@ -602,6 +604,7 @@ export async function previewCollectionSave(
     const conversions = plan.adoption?.conversions ?? [];
     const planned = plannedMovesOf(deps, save, plan.table);
     await refuseEmptyRequiredRefills(deps, planned, plan.table);
+    await refuseUnreadableDates(deps, planned, plan.table);
     const moved = await moveSentencesOf(deps, plan.table, planned);
     return {
       adopts: plan.adoption !== null,
@@ -1669,6 +1672,71 @@ async function refuseEmptyRequiredRefills(
         },
       ],
       logContext: { table, column: refill.column, empty },
+    });
+  }
+}
+
+/** How many entries a date check reads at a time. */
+const DATE_CHECK_PAGE = 500;
+
+/** How many of the entries holding an unreadable date a refusal names. */
+const NAMED_ENTRIES = 3;
+
+/**
+ * Refuses a date moved out of a group while some entry's group holds it in a form the copy would
+ * not read as the same instant (`movesAsTheSameDate`), naming the field and the entries, read
+ * before anything is written. The copy would otherwise write nothing for that entry on SQLite,
+ * and leave the value only in a key the saved fields no longer read.
+ */
+async function refuseUnreadableDates(
+  deps: CollectionSaveDeps,
+  planned: EntityMoves,
+  table: string
+): Promise<void> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  for (const refill of planned.refilledColumns) {
+    if (refill.kind !== "timestamp") continue;
+    const { column, keys } = refill.source;
+    const held = holdsValueAt(column, keys, dialect);
+    const value = heldValueAt(column, keys, dialect);
+    const unreadable: string[] = [];
+    // The last id read, as the driver gave it, so the next page starts past it whatever its type.
+    let after: unknown;
+    for (;;) {
+      const rows = await querySqlRows<{
+        id: unknown;
+        type: unknown;
+        text: unknown;
+      }>(
+        deps.adapter.getDrizzle(),
+        dialect,
+        sql`SELECT ${sql.identifier("id")} AS id, ${sql.raw(value.type)} AS type, ${sql.raw(value.text)} AS text FROM ${sql.identifier(table)} WHERE ${sql.raw(held)}${after === undefined ? sql`` : sql` AND ${sql.identifier("id")} > ${after}`} ORDER BY ${sql.identifier("id")} LIMIT ${DATE_CHECK_PAGE}`
+      );
+      for (const row of rows) {
+        const isString = ["string", "text"].includes(
+          String(row.type).toLowerCase()
+        );
+        if (!isString || !movesAsTheSameDate(String(row.text), dialect)) {
+          unreadable.push(String(row.id));
+        }
+      }
+      if (rows.length < DATE_CHECK_PAGE) break;
+      after = rows[rows.length - 1].id;
+    }
+    if (unreadable.length === 0) continue;
+    const count = unreadable.length;
+    const named = unreadable.slice(0, NAMED_ENTRIES).join(", ");
+    const more =
+      count > NAMED_ENTRIES ? ` and ${count - NAMED_ENTRIES} more` : "";
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: refill.field,
+          code: "FIELD_MOVE_REFUSED",
+          message: `${count} ${count === 1 ? "entry holds" : "entries hold"} a date for ${refill.field} in a form its own column would not read as the same date (${named}${more}). Write ${count === 1 ? "it" : "each"} as an ISO date, such as 2026-07-17 or 2026-07-17T10:00:00Z, then move the field.`,
+        },
+      ],
+      logContext: { table, column: refill.column, unreadable: count },
     });
   }
 }

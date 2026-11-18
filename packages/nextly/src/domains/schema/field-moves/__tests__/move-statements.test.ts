@@ -7,7 +7,11 @@ import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 
 import type { StoragePlace } from "../check-move";
-import { moveDataStatements, type MoveColumn } from "../move-statements";
+import {
+  moveDataStatements,
+  movesAsTheSameDate,
+  type MoveColumn,
+} from "../move-statements";
 
 const column = (name: string): StoragePlace => ({
   kind: "column",
@@ -367,5 +371,53 @@ describe("moveDataStatements on PostgreSQL and MySQL", () => {
         }
       )
     ).toThrow();
+  });
+});
+
+describe("movesAsTheSameDate", () => {
+  it("takes an ISO date, alone or with a time and its offset", () => {
+    for (const value of [
+      "2026-07-17",
+      "2026-07-17T10:00Z",
+      "2026-07-17T10:00:05Z",
+      "2026-07-17T10:00:05.123Z",
+      "2026-07-17T10:00:05.1+05:30",
+      "2024-02-29T23:59:59-13:59",
+      "2026-07-17T00:00:00+14:00",
+    ]) {
+      expect(movesAsTheSameDate(value, "sqlite"), value).toBe(true);
+    }
+  });
+
+  it("refuses a form the copy would read as another date, or not at all", () => {
+    for (const value of [
+      // A form JavaScript reads that SQLite's strftime cannot.
+      "July 17, 2026",
+      // No offset: JavaScript reads it in the server's zone, the copy at UTC.
+      "2026-07-17T10:00:00",
+      "2026-07-17 10:00:00Z",
+      // A day that does not exist, which JavaScript rolls into the next month.
+      "2026-02-30",
+      "2025-02-29T00:00:00Z",
+      "2026-07-17T24:00:00Z",
+      "2026-07-17T10:60:00Z",
+      "2026-07-17T10:00:60Z",
+      // Beyond the milliseconds JavaScript keeps, which MySQL would round instead.
+      "2026-07-17T10:00:00.1234Z",
+      "2026-07-17T10:00:00+14:01",
+      "2026-07-17T10:00:00-14:00",
+      "+002026-07-17",
+      "2026-07",
+      "",
+    ]) {
+      expect(movesAsTheSameDate(value, "sqlite"), value).toBe(false);
+    }
+  });
+
+  it("refuses a year before 1000 on MySQL only, whose DATETIME starts there", () => {
+    expect(movesAsTheSameDate("0999-12-31", "mysql")).toBe(false);
+    expect(movesAsTheSameDate("1000-01-01", "mysql")).toBe(true);
+    expect(movesAsTheSameDate("0999-12-31", "postgresql")).toBe(true);
+    expect(movesAsTheSameDate("0999-12-31", "sqlite")).toBe(true);
   });
 });
