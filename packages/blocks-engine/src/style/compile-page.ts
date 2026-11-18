@@ -55,6 +55,7 @@ import {
   readClassSlug,
   type StyleCompileContext,
 } from "./compile-page-context";
+import { customCssOf } from "./compile-page-custom-css";
 import {
   classLinksNarrowing,
   type ContainerReading,
@@ -118,6 +119,8 @@ import { newWarningAllowance, pushBoundedWarning } from "./warning-allowance";
 
 export type {
   CompiledPageCss,
+  CustomCssLevel,
+  CustomCssPolicy,
   StyleCompileContext,
 } from "./compile-page-context";
 export {
@@ -1031,12 +1034,27 @@ export function compilePageCss(
     attributeClasses.set(node.id, names.join(" "));
   }
 
+  // Custom CSS last, after every rule above, so an author's CSS wins a tie
+  // with the builder's own. Read before the gated entries are serialized into
+  // the sheet, since a gated block's CSS joins its own entry.
+  const custom = customCssOf({
+    doc,
+    nodes,
+    classes,
+    duplicateIds,
+    pageRoot,
+    policy: ctx.customCss,
+    gated,
+  });
+
   return {
     ...(effectiveScope === undefined ? {} : { scope: effectiveScope }),
     // The NORMALISED name, so a refused one leaves this absent and the artifact
     // reads as the published sheet it actually is.
     ...(preview === undefined ? {} : { previewContainer: preview }),
-    css: withPreludes(rules, gated, scope),
+    css: [withPreludes(rules, gated, scope), custom]
+      .filter(part => part !== "")
+      .join("\n"),
     warnings,
     classes: attributeClasses,
     // Omitted rather than empty when nobody asked, so a caller cannot mistake "not requested"
