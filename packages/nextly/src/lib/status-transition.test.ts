@@ -9,7 +9,9 @@ import { describe, it, expect } from "vitest";
 import {
   resolveFirstPublishedStamp,
   resolvePublishTransition,
+  keepsWorkingDrafts,
   selectPublicationTransition,
+  transitionGrantNeeded,
 } from "./status-transition";
 
 describe("resolvePublishTransition", () => {
@@ -72,6 +74,67 @@ describe("resolvePublishTransition", () => {
     // Some callers pass undefined rather than null for "no prior status".
     expect(resolvePublishTransition(undefined, "published")).toBe("publish");
     expect(resolvePublishTransition(undefined, "draft")).toBeNull();
+  });
+});
+
+describe("transitionGrantNeeded", () => {
+  it("needs publish for a save naming published over a published row that keeps working drafts", () => {
+    // It writes the live row, so it changes what visitors see.
+    expect(transitionGrantNeeded("published", "published", true)).toBe(
+      "publish"
+    );
+    // The narrower classifier still calls it no move, for what records a
+    // first publication.
+    expect(resolvePublishTransition("published", "published")).toBeNull();
+  });
+
+  it("needs nothing more for it where there are no working drafts", () => {
+    // There, update is what changes a published document's live content.
+    expect(transitionGrantNeeded("published", "published", false)).toBeNull();
+  });
+
+  it("answers as resolvePublishTransition does for every move, drafts or not", () => {
+    for (const drafts of [true, false]) {
+      expect(transitionGrantNeeded("draft", "published", drafts)).toBe(
+        "publish"
+      );
+      expect(transitionGrantNeeded(null, "published", drafts)).toBe("publish");
+      expect(transitionGrantNeeded("published", "draft", drafts)).toBe(
+        "unpublish"
+      );
+      expect(transitionGrantNeeded("published", 0, drafts)).toBe("unpublish");
+    }
+  });
+
+  it("needs nothing for a write that keeps a draft a draft or names no status", () => {
+    expect(transitionGrantNeeded("draft", "draft", true)).toBeNull();
+    expect(transitionGrantNeeded("published", undefined, true)).toBeNull();
+    expect(transitionGrantNeeded("draft", undefined, true)).toBeNull();
+  });
+});
+
+describe("keepsWorkingDrafts", () => {
+  it("is true only for a lifecycle with draft versions turned on", () => {
+    expect(
+      keepsWorkingDrafts({
+        status: true,
+        versions: { drafts: { enabled: true } },
+      })
+    ).toBe(true);
+    expect(
+      keepsWorkingDrafts({
+        status: true,
+        versions: { drafts: { enabled: false } },
+      })
+    ).toBe(false);
+    expect(keepsWorkingDrafts({ status: true })).toBe(false);
+    expect(
+      keepsWorkingDrafts({
+        status: false,
+        versions: { drafts: { enabled: true } },
+      })
+    ).toBe(false);
+    expect(keepsWorkingDrafts(null)).toBe(false);
   });
 });
 

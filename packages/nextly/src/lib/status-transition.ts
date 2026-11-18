@@ -73,6 +73,54 @@ export function resolvePublishTransition(
 }
 
 /**
+ * The permission a status write needs beyond the edit's own, or `null` when it
+ * needs none.
+ *
+ * A move into or out of published needs `publish` or `unpublish`, as
+ * {@link resolvePublishTransition} classifies it. Where the document keeps
+ * working drafts (`draftsEnabled`), a save that names `"published"` over a row
+ * that is ALREADY published needs `publish` too. It is no move, but it writes
+ * the live row, which changes what visitors see: there, a caller who may edit
+ * but not publish changes a published document through its working draft (a
+ * save naming no status is held as one), so naming the status it already has
+ * must not be a way past that.
+ *
+ * Without drafts there is no working draft to hold an edit: `update` is the
+ * permission to change a published document's live content, and a save naming
+ * no status writes live as well, so naming `"published"` asks nothing more.
+ *
+ * The access gates ask this; {@link resolvePublishTransition} keeps answering
+ * the narrower question for what records a first publication, where a
+ * republish must record nothing.
+ */
+export function transitionGrantNeeded(
+  previousStatus: string | null | undefined,
+  nextStatus: unknown,
+  draftsEnabled: boolean
+): PublishTransition | null {
+  const move = resolvePublishTransition(previousStatus, nextStatus);
+  if (move !== null) return move;
+  return draftsEnabled &&
+    previousStatus === "published" &&
+    nextStatus === "published"
+    ? "publish"
+    : null;
+}
+
+/**
+ * Whether a collection or Single keeps working drafts: a draft/published
+ * lifecycle with draft versions turned on, the config every gate reads the
+ * same way for {@link transitionGrantNeeded}.
+ */
+export function keepsWorkingDrafts(entity: unknown): boolean {
+  const config = entity as {
+    status?: unknown;
+    versions?: { drafts?: { enabled?: unknown } | null } | null;
+  } | null;
+  return config?.status === true && config.versions?.drafts?.enabled === true;
+}
+
+/**
  * Drop an explicit `status: undefined` own-property from a write payload.
  *
  * `resolvePublishTransition` treats an undefined next status as "no move", so the

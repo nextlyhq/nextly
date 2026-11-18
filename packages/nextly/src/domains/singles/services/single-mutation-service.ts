@@ -62,7 +62,8 @@ import {
 import {
   LIFECYCLE_STATUSES,
   isLifecycleStatus,
-  resolvePublishTransition,
+  keepsWorkingDrafts,
+  transitionGrantNeeded,
   stripUndefinedStatus,
 } from "../../../lib/status-transition";
 import {
@@ -3644,13 +3645,17 @@ export class SingleMutationService extends BaseService {
             // makes the guarded transition against its row-locked prior status.
             const firesOnMainRow =
               mainNextStatus !== undefined &&
-              resolvePublishTransition(lockedMainStatus, mainNextStatus) ===
-                transitionGuard.op;
+              transitionGrantNeeded(
+                lockedMainStatus,
+                mainNextStatus,
+                keepsWorkingDrafts(singleMeta)
+              ) === transitionGuard.op;
             const firesOnCompanion =
               companionNextStatus !== undefined &&
-              resolvePublishTransition(
+              transitionGrantNeeded(
                 lockedCompanionStatus,
-                companionNextStatus
+                companionNextStatus,
+                keepsWorkingDrafts(singleMeta)
               ) === transitionGuard.op;
             // The sweep moves companion rows NEITHER test above can see, so a
             // wildcard write is judged as the lifecycle move it is,

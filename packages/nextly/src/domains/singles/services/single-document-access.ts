@@ -40,7 +40,10 @@ import {
 } from "../../../database/with-db-errors";
 import { getService } from "../../../di";
 import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
-import { resolvePublishTransition } from "../../../lib/status-transition";
+import {
+  keepsWorkingDrafts,
+  transitionGrantNeeded,
+} from "../../../lib/status-transition";
 import { readCompanionLocaleStatus } from "../../i18n/companion-join";
 import { appLocalization } from "../../i18n/configured-locales";
 import {
@@ -196,9 +199,10 @@ export async function singleDocumentEditable(
  * document, asked WITHOUT writing: nothing is created and no hook runs. The
  * lifecycle gate a Single's update asks (`checkSingleAccess` for `publish` or
  * `unpublish`), and only where it asks it: for a write that moves the stored
- * row into or out of published, as {@link resolvePublishTransition}
- * classifies it. A write that keeps the status asks nothing more. A Single
- * with no row is refused here, as it is not editable.
+ * row into or out of published, or names published over a published row, as
+ * {@link transitionGrantNeeded} classifies it. A write that keeps a draft a
+ * draft asks nothing more. A Single with no row is refused here, as it is not
+ * editable.
  *
  * @experimental
  */
@@ -218,7 +222,11 @@ export async function singleDocumentStatusMoveAllowed(
     document,
     subject.locale
   )) {
-    const move = resolvePublishTransition(prior, nextStatus);
+    const move = transitionGrantNeeded(
+      prior,
+      nextStatus,
+      keepsWorkingDrafts(record)
+    );
     if (move !== null) moves.add(move);
   }
   for (const move of moves) {
