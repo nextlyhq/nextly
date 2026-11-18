@@ -13,6 +13,7 @@ import { CANVAS_MOUNT_ATTRIBUTE } from "../canvas/attributes";
 
 import {
   isGatedSiteCode,
+  PAGE_CODE_BODY_BOOTSTRAP,
   SITE_CODE_BOOTSTRAP,
   SITE_CODE_DATA_ATTRIBUTE,
 } from "./bootstrap";
@@ -412,5 +413,58 @@ describe("what the loader starts", () => {
     expect(
       isGatedSiteCode({ tag: "meta", attrs: { name: "a", content: "b" } })
     ).toBe(false);
+  });
+});
+
+describe("a page's own code beside the site's", () => {
+  /** One place's data block and loader, its one script recording `name`. */
+  function place(slot: "head" | "body", name: string, loader: string): string {
+    const data = JSON.stringify({
+      slot,
+      skip: ["/admin"],
+      entries: [
+        {
+          tag: "script",
+          attrs: {},
+          text: `window.ran = (window.ran || []).concat(${JSON.stringify(name)})`,
+        },
+      ],
+    });
+    return `<script type="application/json" ${SITE_CODE_DATA_ATTRIBUTE}="${slot}">${data}</script><script>${loader}</script>`;
+  }
+
+  it("runs site head, page head, site end of body, then page end of body, as a layout and a page write them", async () => {
+    // The layout's head; then the page's content, with its own code before
+    // and after it, as the published route draws it; then the layout's end
+    // of body, the last thing in it.
+    const dom = new JSDOM(
+      `<!doctype html><html><head>${place("head", "site head", SITE_CODE_BOOTSTRAP)}</head><body>` +
+        `${place("head", "page head", SITE_CODE_BOOTSTRAP)}<main>Pricing</main>${place("body", "page body", PAGE_CODE_BODY_BOOTSTRAP)}` +
+        `${place("body", "site body", SITE_CODE_BOOTSTRAP)}</body></html>`,
+      { url: "https://acme.example/pricing", runScripts: "dangerously" }
+    );
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect((dom.window as unknown as { ran?: string[] }).ran).toEqual([
+      "site head",
+      "page head",
+      "site body",
+      "page body",
+    ]);
+  });
+
+  it("is the site loader word for word but for when it starts", () => {
+    expect(PAGE_CODE_BODY_BOOTSTRAP).not.toBe(SITE_CODE_BOOTSTRAP);
+    expect(PAGE_CODE_BODY_BOOTSTRAP).toContain("setTimeout(start, 0)");
+    expect(
+      PAGE_CODE_BODY_BOOTSTRAP.slice(
+        0,
+        PAGE_CODE_BODY_BOOTSTRAP.lastIndexOf("if (document.readyState")
+      )
+    ).toBe(
+      SITE_CODE_BOOTSTRAP.slice(
+        0,
+        SITE_CODE_BOOTSTRAP.lastIndexOf("if (document.readyState")
+      )
+    );
   });
 });

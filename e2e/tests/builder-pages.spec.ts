@@ -159,8 +159,9 @@ test.describe("the Pages panel", () => {
     await expect(row(page, `${stamp} here`)).toBeVisible();
 
     await panel(page).getByRole("button", { name: "New page" }).click();
-    await panel(page)
-      .getByRole("textbox", { name: "Page title" })
+    await page
+      .getByRole("dialog", { name: "New page" })
+      .getByRole("textbox", { name: "Title" })
       .fill(`${stamp} fresh`);
     await page.keyboard.press("Enter");
 

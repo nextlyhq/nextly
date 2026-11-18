@@ -20,6 +20,14 @@ export const BUILDER_VIEW_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#PageBuilderView";
 
 /**
+ * The New page dialog's body, which the admin opens from "+ New" on a list
+ * whose entries open in the builder. Declared here, beside the view, for the
+ * reason the action below gives.
+ */
+export const NEW_PAGE_DIALOG_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#NewPageCreateDialog";
+
+/**
  * The "Remove Layout…" action drawn in a Layout's document bar, through the
  * entry-form toolbar slot. Declared here,
  * a module with no React in it, so the plugin's node-safe entry can name it
