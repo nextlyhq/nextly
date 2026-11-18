@@ -156,6 +156,24 @@ describe("an Accordion's Icon", () => {
     expect(at(BASE_BREAKPOINT)).not.toContain("disclosureIcon");
   });
 
+  it("stays in Style while a shared style is edited, which Content never writes", () => {
+    const document = page({ openMode: "one" });
+    const shared = {
+      base: { [BASE_BREAKPOINT]: { disclosureIcon: "chevron" } },
+    };
+    const rows = (styles?: BlockNode["styles"]) =>
+      inspectStyle(document, "acc", styles === undefined ? {} : { styles })
+        ?.sections.find(section => section.key === "icon")
+        ?.properties.map(each => each.property);
+    // The shared style's own icon, at its base values, can be changed and
+    // cleared here: the Content row writes only the block's own styles.
+    expect(rows(shared)).toEqual(["disclosureIcon", "disclosurePosition"]);
+    // A shared style holding no icon offers it too, so one can be set on it.
+    expect(rows({})).toContain("disclosureIcon");
+    // The control: the block's own styles leave it to Content.
+    expect(rows()).toEqual(["disclosurePosition"]);
+  });
+
   it("reads + / − while nothing is stored, and for a stored Browser default", () => {
     const node = (styles?: BlockNode["styles"]) =>
       page({}, styles).nodes[0] as BlockNode;

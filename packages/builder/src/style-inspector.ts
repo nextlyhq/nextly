@@ -59,7 +59,6 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
-import type { ParentArrangement } from "./plain-layout";
 import { liveBreakpointsFor } from "./breakpoints";
 import { fieldLabel, selectedNode } from "./inspector";
 import {
@@ -69,6 +68,7 @@ import {
   type InspectorSectionKey,
   type TierContext,
 } from "./inspector-sections";
+import type { ParentArrangement } from "./plain-layout";
 import {
   styleControlsFor,
   type StyleControl,
@@ -323,8 +323,14 @@ export function inspectStyle(
     });
     // Chosen in the Content tab, at the block's base values, so neither drawn
     // nor added here, but for a value held at another device or state, which
-    // only this tab reaches: drawn so it can be seen and cleared.
-    if (placement.tier === "content" && !heldAwayFromBase(row.set, at)) {
+    // only this tab reaches: drawn so it can be seen and cleared. A shared
+    // style keeps it here at every address, since Content writes only the
+    // block's own styles.
+    if (
+      placement.tier === "content" &&
+      options?.styles === undefined &&
+      !heldAwayFromBase(row.set, at)
+    ) {
       return [];
     }
     const has = applies(property, context);
