@@ -132,6 +132,9 @@ async function documentWithGuardedComponent(dialect: TestDialect) {
       _overwrite: true,
     }
   );
+  // BOSS may read the document: a history read asks the document's read gate
+  // as its caller, which a reader without the permission does not pass.
+  await userWhoMay(current, BOSS.id, "read", ["posts"]);
   return id;
 }
 
@@ -146,6 +149,7 @@ describe.each(getConfiguredTestDialects())(
   dialect => {
     it("withholds a component field from a version a reader may not read it in", async () => {
       const id = await documentWithGuardedComponent(dialect);
+      await userWhoMay(current!, CLERK.id, "read", ["posts"]);
 
       const clerk = await getVersionForDocument({
         ...at(id),
@@ -168,6 +172,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("withholds it from a comparison, and says so", async () => {
       const id = await documentWithGuardedComponent(dialect);
+      await userWhoMay(current!, CLERK.id, "read", ["posts"]);
 
       const diff = await getVersionDiffForDocument({
         ...at(id),
@@ -196,6 +201,8 @@ describe.each(getConfiguredTestDialects())(
 
     it("judges an API key on its own grants, as the document read does", async () => {
       const id = await documentWithGuardedComponent(dialect);
+      // CLERK holds no read of their own: only the key's scope carries it.
+      await userWhoMay(current!, CLERK.id, "update", ["posts"]);
 
       const asKey = await getVersionForDocument({
         ...at(id),
@@ -209,14 +216,15 @@ describe.each(getConfiguredTestDialects())(
         versionNo: 1,
       });
       expect(JSON.stringify(asKey)).toContain("K-1");
-      // The same user without the key's scope has no such permission.
-      const asSession = await getVersionForDocument({
-        ...at(id),
-        user: CLERK,
-        versionNo: 1,
-      });
-      expect(JSON.stringify(asSession)).not.toContain("K-1");
-      expect(asSession.withheld).toContain("keyed");
+      // The same user without the key's scope has no such permission, so the
+      // document's read gate refuses them its history, `keyed` with the rest.
+      await expect(
+        getVersionForDocument({
+          ...at(id),
+          user: CLERK,
+          versionNo: 1,
+        })
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
     it("names a restored field's source only to a reader who may read the field", async () => {
