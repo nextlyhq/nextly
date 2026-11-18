@@ -34,6 +34,7 @@ test.describe.configure({
 
 const SITE_STYLE = "/admin/api/singles/site-style";
 const ENTRIES = "/admin/api/collections/block-pages/entries";
+const PAGES = "/admin/api/collections/pages/entries";
 const PAGE_SLUG = "section-padding";
 /** The editor's undo and redo: `mod` is Control in the suite's browser. */
 const UNDO = "Control+z";
@@ -329,11 +330,26 @@ test("a side's own value reads as Custom; a preset chosen again clears it, and o
 
 test("a Section locked in Layers shows its Padding held", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await openEditorWith(
-    page,
-    [section("sp-locked", "A locked band", { locked: true })],
-    "sp-locked-text"
-  );
+  // On a page of its own: a locked block is kept by every later write, so on
+  // the homepage it would refuse the next spec's seeding.
+  const created = await page.request.post(PAGES, {
+    data: {
+      title: "Section padding locked",
+      slug: `section-padding-locked-${Date.now()}`,
+      status: "draft",
+      content: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [section("sp-locked", "A locked band", { locked: true })],
+      },
+    },
+  });
+  expect(created.ok(), await created.text()).toBe(true);
+  const pageId = ((await created.json()) as { item: { id: string } }).item.id;
+  await gotoAdmin(page, `/collections/pages/${pageId}/builder?field=content`);
+  await expect(await block(page, "sp-locked-text")).toBeVisible({
+    timeout: 60_000,
+  });
   const group = await openSpacing(page, "sp-locked");
   for (const radio of await group.getByRole("radio").all()) {
     await expect(radio).toBeDisabled();
