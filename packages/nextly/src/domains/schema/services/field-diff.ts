@@ -165,7 +165,7 @@ function hasFieldChanged(
  * Whether a relationship's links move into or out of a link table of their own, by the one rule
  * that says which fields have one (`usesJunctionTable`).
  */
-export function movesLinkStorage(
+function movesLinkStorage(
   oldField: FieldDefinition,
   newField: FieldDefinition
 ): boolean {

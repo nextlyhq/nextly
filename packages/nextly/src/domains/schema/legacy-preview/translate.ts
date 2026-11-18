@@ -24,12 +24,12 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
+import { usesJunctionTable } from "../field-rules";
 import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "../pipeline/classifier/count-helpers";
 import type { PipelinePreviewResult } from "../pipeline/preview";
-import { usesJunctionTable } from "../field-rules";
 import {
   fieldProducesColumn,
   junctionTableNameFor,
