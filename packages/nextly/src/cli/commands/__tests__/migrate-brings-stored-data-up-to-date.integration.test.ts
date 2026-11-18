@@ -12,7 +12,8 @@
  * earlier release left it, and a second migration waiting to apply. What
  * would separate a correct run from a broken one:
  *
- * - a refusal that applied the waiting migration first;
+ * - a refusal that applied the waiting migration first, or one made after
+ *   the migrations applied that says nothing was changed;
  * - a confirmed run that applied the migration and left the password as
  *   written, or stored something the password no longer verifies against;
  * - a database with nothing of the kind asked for a backup it does not need;
@@ -44,6 +45,7 @@ import {
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
 import type { mergeSetupResultIntoConfig as MergeSetupResultIntoConfig } from "../../utils/config-loader";
+import { toCliError } from "../../errors";
 import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
 import { runMigrateCreate } from "../migrate-create";
@@ -196,7 +198,11 @@ describe.each(getConfiguredTestDialects())(
 
     /** `nextly migrate` with `options`: what it said. It throws what it refused with. */
     async function migrate(
-      options: { backupConfirmed?: boolean; dryRun?: boolean } = {}
+      options: {
+        backupConfirmed?: boolean;
+        dryRun?: boolean;
+        step?: number;
+      } = {}
     ): Promise<string[]> {
       const { context, said } = command();
       await runMigrate(
@@ -277,6 +283,36 @@ describe.each(getConfiguredTestDialects())(
       expect(messageOf(refusal)).toContain(STEP);
       expect(await storedPin()).toBe("plain-pin");
       expect(await summaryColumnExists()).toBe(false);
+      // Refused before anything changed, and printed as that.
+      expect(toCliError(refusal).why).toContain("Nothing was changed");
+    }, 240_000);
+
+    it("under --step, which is not checked beforehand, refuses once the last migration has applied, and says so", async () => {
+      await siteHoldingAPlainPassword("plain-pin");
+
+      // One migration is waiting, so this run applies the last and reaches
+      // the data steps.
+      const refusal = await migrate({ step: 1 }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(messageOf(refusal)).toContain(
+        "`nextly migrate --backup-confirmed`"
+      );
+      // The refusal carries that the migrations had applied by then, which
+      // its printed form says in place of "Nothing was changed".
+      expect((refusal as NextlyError).logContext).toMatchObject({
+        reason: "data-steps-backup-not-confirmed",
+        afterMigrations: true,
+      });
+      expect(toCliError(refusal).why).toContain("stay applied");
+      expect(await summaryColumnExists()).toBe(true);
+      expect(await storedPin()).toBe("plain-pin");
+
+      // The run the refusal names finishes the work.
+      await migrate({ backupConfirmed: true });
+      expect(isPasswordHash(await storedPin())).toBe(true);
     }, 240_000);
 
     it("applies the migration and hashes the password once the backup is confirmed, then has nothing left to do", async () => {

@@ -31,6 +31,17 @@ function whatThenNext(message: string, why: string): CliErrorParts {
   };
 }
 
+/**
+ * What a backup refusal of the data steps left: nothing changed, or, where
+ * the command had applied its migrations by then, those applied and the
+ * stored data as it was.
+ */
+function leftAsItWas(error: NextlyError): string {
+  return error.logContext?.afterMigrations === true
+    ? "The migrations of this run had applied by then, and stay applied; the stored data was left as it is."
+    : "Nothing was changed.";
+}
+
 export const UPGRADE_CODES = defineCodes({
   UPGRADE_CANCELLED: {
     cause:
@@ -60,7 +71,7 @@ export const UPGRADE_CODES = defineCodes({
         describe: error =>
           whatThenNext(
             error.publicMessage,
-            "No terminal is attached to ask whether the database is backed up, and `--backup-confirmed` was not passed. Nothing was changed."
+            `No terminal is attached to ask whether the database is backed up, and \`--backup-confirmed\` was not passed. ${leftAsItWas(error)}`
           ),
       },
     ],
@@ -75,7 +86,7 @@ export const UPGRADE_CODES = defineCodes({
         describe: error =>
           whatThenNext(
             error.publicMessage,
-            "The command rewrites stored values in place, so it asks for a backup first, and the answer was no. Nothing was changed."
+            `The command rewrites stored values in place, so it asks for a backup first, and the answer was no. ${leftAsItWas(error)}`
           ),
       },
     ],

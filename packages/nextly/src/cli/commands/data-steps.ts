@@ -24,6 +24,7 @@ import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { NextlyError } from "../../errors";
 import type { DryRunChange, DryRunPlan } from "../dry-run";
 
+import { confirmBackup } from "./backup-confirmation";
 import { dryRunRefusalOf } from "./migrate-create";
 
 import type {
@@ -47,6 +48,12 @@ export interface DataStepsDeps {
   askBackedUp?: () => Promise<boolean>;
   log: (message: string) => void;
   warn: (message: string) => void;
+  /**
+   * Set where the command has already changed the database by the time the
+   * steps are reached, as `nextly migrate` has once its migrations applied:
+   * a refusal then says so, rather than that nothing was changed.
+   */
+  afterMigrations?: boolean;
   /** How long a held schema lock is waited for, in milliseconds. Absent, about a minute. */
   lockWaitMs?: number;
   /** The schema lock's lease, in seconds, as the configuration sets it. */
@@ -98,47 +105,76 @@ export async function firstDataStepWithWork(
 /** The refusal of steps with work whose backup nobody confirmed, and nobody can be asked about. */
 function backupNotConfirmed(
   command: string,
-  first: PendingDataStep
+  first: PendingDataStep,
+  afterMigrations = false
 ): NextlyError {
   return new NextlyError({
     code: "NEXTLY_UPGRADE_IN_PROGRESS",
     publicMessage:
       `\`${command}\` would change data an earlier Nextly release stored (${named(first)}), and does so only once a backup is confirmed. ` +
       `Back up the database, then run \`${command} --backup-confirmed\`.`,
-    logContext: { reason: "data-steps-backup-not-confirmed", command },
+    logContext: {
+      reason: "data-steps-backup-not-confirmed",
+      command,
+      afterMigrations,
+    },
   });
 }
 
 /** The refusal of steps with work whose backup question was answered no. */
-function backupDeclined(command: string, first: PendingDataStep): NextlyError {
+function backupDeclined(
+  command: string,
+  first: PendingDataStep,
+  afterMigrations = false
+): NextlyError {
   return new NextlyError({
     code: "NEXTLY_UPGRADE_IN_PROGRESS",
     publicMessage:
       `The data an earlier Nextly release stored was left as it is (${named(first)}): the backup question was answered no. ` +
       `Back up the database, then run \`${command}\` again and answer yes, or pass \`--backup-confirmed\`.`,
-    logContext: { reason: "data-steps-backup-declined", command },
+    logContext: {
+      reason: "data-steps-backup-declined",
+      command,
+      afterMigrations,
+    },
   });
 }
 
+/** Whether `error` is one of the two backup refusals of the steps. */
+export function isDataStepsBackupRefusal(error: unknown): error is NextlyError {
+  if (!NextlyError.isCode(error, "NEXTLY_UPGRADE_IN_PROGRESS")) return false;
+  const reason = error.logContext?.reason;
+  return (
+    reason === "data-steps-backup-not-confirmed" ||
+    reason === "data-steps-backup-declined"
+  );
+}
+
 /**
- * Confirms a backup for the work `first` starts: by the flag, or by a yes at
- * a terminal. With neither it refuses, having changed nothing. With no work
- * it asks nothing, whatever the flag says.
+ * Confirms a backup for the work `first` starts (`confirmBackup`): by the
+ * flag, or by a yes at a terminal. With neither it refuses, the stored data
+ * as it was. With no work it asks nothing, whatever the flag says.
  */
 export async function confirmDataStepsBackup(
   deps: Pick<
     DataStepsDeps,
-    "command" | "backupConfirmed" | "interactive" | "askBackedUp"
+    | "command"
+    | "backupConfirmed"
+    | "interactive"
+    | "askBackedUp"
+    | "afterMigrations"
   >,
   first: PendingDataStep | undefined
 ): Promise<void> {
-  if (first === undefined || deps.backupConfirmed) return;
-  if (!deps.interactive || deps.askBackedUp === undefined) {
-    throw backupNotConfirmed(deps.command, first);
-  }
-  if (!(await deps.askBackedUp())) {
-    throw backupDeclined(deps.command, first);
-  }
+  if (first === undefined) return;
+  await confirmBackup({
+    backupConfirmed: deps.backupConfirmed,
+    interactive: deps.interactive,
+    askBackedUp: deps.askBackedUp,
+    notConfirmed: () =>
+      backupNotConfirmed(deps.command, first, deps.afterMigrations),
+    declined: () => backupDeclined(deps.command, first, deps.afterMigrations),
+  });
 }
 
 /**

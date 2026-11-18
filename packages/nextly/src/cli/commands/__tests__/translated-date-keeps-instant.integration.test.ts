@@ -29,11 +29,11 @@ import {
   syncComponents,
   syncSingles,
 } from "../dev-build";
-import type { UpgradeStepContext } from "../upgrade-step";
 import {
-  convertZonedDates,
-  zonedDatesToConvert,
-} from "../upgrade-steps/zoned-dates";
+  runConvertZonedDates,
+  type ConvertZonedDatesDeps,
+} from "../i18n-convert-zoned-dates";
+import { zonedDatesToConvert } from "../upgrade-steps/zoned-dates";
 import { openSyncTarget, type SyncTarget } from "./helpers/sync-target";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -172,7 +172,11 @@ async function runMigratePass(
   return logged;
 }
 
-/** The step of `nextly i18n:convert-zoned-dates`, as the command runs it: counted, then run when it has work. */
+/**
+ * `nextly i18n:convert-zoned-dates` as the command runs it, the backup
+ * confirmed (`runConvertZonedDates`): how many columns it found to convert
+ * beforehand, how many it converted, and what it said.
+ */
 async function runUpgradeStep(): Promise<{
   pending: number;
   converted: number;
@@ -180,15 +184,24 @@ async function runUpgradeStep(): Promise<{
 }> {
   if (!target) throw new Error("no sync target");
   const logged: string[] = [];
-  const context = {
-    adapter: target.adapter,
+  const log = (message: string) => {
+    logged.push(message);
+  };
+  const adapter = target.adapter as unknown as ConvertZonedDatesDeps["adapter"];
+  const pending = await zonedDatesToConvert({
+    adapter,
     db: target.adapter.getDrizzle(),
-    dialect: "postgresql" as const,
-    log: (message: string) => logged.push(message),
-    warn: (message: string) => logged.push(message),
-  } as unknown as UpgradeStepContext;
-  const pending = await zonedDatesToConvert(context);
-  const converted = pending > 0 ? await convertZonedDates(context) : 0;
+    dialect: "postgresql",
+    log,
+    warn: log,
+  });
+  const converted = await runConvertZonedDates({
+    adapter,
+    backupConfirmed: true,
+    interactive: false,
+    log,
+    warn: log,
+  });
   return { pending, converted, logged };
 }
 
@@ -300,7 +313,9 @@ describe.runIf(PG).each(["Asia/Karachi", "America/Los_Angeles"])(
       expect(await runUpgradeStep()).toEqual({
         pending: 0,
         converted: 0,
-        logged: [],
+        logged: [
+          "No translated date column is kept with a time zone. Nothing to do.",
+        ],
       });
     });
 
