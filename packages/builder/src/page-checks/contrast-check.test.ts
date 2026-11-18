@@ -321,6 +321,52 @@ describe("the contrast check", () => {
     ]);
   });
 
+  it("judges no text block with no words", () => {
+    const empty = { ...text("a", { color: "#e5e7eb" }), props: { text: "" } };
+    expect(findings([empty])).toEqual([]);
+    // A Heading's level is not words.
+    const untitled = {
+      ...block("h", "core/heading", { color: "#e5e7eb" }),
+      props: { text: "", level: "h3" },
+    };
+    expect(findings([untitled])).toEqual([]);
+  });
+
+  it("skips text under a gradient its type's own look paints", () => {
+    const panel = {
+      name: "acme/panel",
+      version: 1,
+      editor: { label: "Panel" },
+      props: {},
+      baseStyles: {
+        base: { base: { backgroundGradient: "linear-gradient(#000, #000)" } },
+      },
+      render: () => null,
+    } as unknown as AnyBlockDefinition;
+    const found = runPageChecks(
+      {
+        document: {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            block("p", "acme/panel", undefined, [
+              text("a", { color: "#ffffff" }),
+            ]),
+          ],
+        },
+        blocks: type => (type === "acme/panel" ? panel : undefined),
+        tokens: LIGHT_ONLY,
+      },
+      [CONTRAST_CHECK]
+    ).findings;
+    expect(found).toEqual([
+      expect.objectContaining({
+        nodeId: "a",
+        what: "Contrast not checked: text over an image or gradient",
+      }),
+    ]);
+  });
+
   it("judges nothing whose colours come from a shared style", () => {
     expect(
       findings([text("a", { color: "#e5e7eb" }, { classes: ["c-1"] })])

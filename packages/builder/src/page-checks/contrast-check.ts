@@ -102,6 +102,50 @@ function typeColours(
   };
 }
 
+/**
+ * What stands over the block's colours, from every tier it is drawn with:
+ * its own styles, the site's edit of its type's look and the type's own.
+ */
+function obscuringOf(
+  node: BlockNode,
+  { blocks, siteLooks }: Pick<ResolvedPage, "blocks" | "siteLooks">
+): { readonly local?: string; readonly subtree?: string } {
+  const tiers = [
+    node.styles,
+    siteLooks[node.type],
+    blocks(node.type)?.baseStyles,
+  ].map(contrastObscuringIn);
+  const local = tiers.find(tier => tier.local !== undefined)?.local;
+  const subtree = tiers.find(tier => tier.subtree !== undefined)?.subtree;
+  return {
+    ...(local === undefined ? {} : { local }),
+    ...(subtree === undefined ? {} : { subtree }),
+  };
+}
+
+/**
+ * Whether the block draws any words: text it stores, words in its rich text,
+ * or text bound to a field, which the entry gives. One with none has no
+ * text to read, so nothing to judge.
+ */
+function drawsWords(node: BlockNode): boolean {
+  if (Object.keys(node.bindings ?? {}).length > 0) return true;
+  if (WORD_PROPS.some(prop => hasText(node.props[prop]))) return true;
+  let words = false;
+  eachRichTextNode(node, part => {
+    if (hasText(part.text)) words = true;
+  });
+  return words;
+}
+
+/** Whether a value is text with something in it. */
+function hasText(value: unknown): boolean {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+/** The props a text block keeps its plain words in: a Heading's, a Button's. */
+const WORD_PROPS: readonly string[] = ["text", "label"];
+
 /** Whether a block's colours come from somewhere this check can't read. */
 function unreadable(node: BlockNode): boolean {
   const look = node.props.look;
@@ -131,7 +175,7 @@ function paintedBy(
     type.background,
     around.background
   );
-  const obscuring = contrastObscuringIn(node.styles);
+  const obscuring = obscuringOf(node, page);
   // A background of its own covers what its container paints behind it.
   const covered = nearest(own.background, type.background) !== undefined;
   return {
@@ -252,6 +296,32 @@ function contrastFinding(
 }
 
 /** Every text block whose contrast is too low, or which couldn't be judged. */
+/** A stored entry read as a block, or none where it can't be. */
+function asBlock(entry: unknown): BlockNode | undefined {
+  if (typeof entry !== "object" || entry === null) return undefined;
+  const block = entry as BlockNode;
+  return typeof block.type === "string" && typeof block.props === "object"
+    ? block
+    : undefined;
+}
+
+/** A block's children in drawing order, across its slots. */
+function childrenOf(block: BlockNode): unknown[] {
+  return Object.values(block.slots ?? {}).flatMap(slot =>
+    Array.isArray(slot) ? slot : []
+  );
+}
+
+/** The block's finding, where it is a text block that draws words. */
+function judged(
+  block: BlockNode,
+  painted: Painted,
+  page: ResolvedPage
+): PageCheckResult | undefined {
+  if (!TEXT_BLOCKS.has(block.type) || !drawsWords(block)) return undefined;
+  return contrastFinding(block, painted, page.tokens);
+}
+
 function contrastFindings(page: ResolvedPage): PageCheckResult[] {
   const found: PageCheckResult[] = [];
   const start: Painted = {
@@ -264,22 +334,14 @@ function contrastFindings(page: ResolvedPage): PageCheckResult[] {
     .reverse()
     .map(node => ({ node, around: start }));
   const seen = new Set<unknown>();
-  while (stack.length > 0) {
-    const { node, around } = stack.pop() as { node: unknown; around: Painted };
-    if (typeof node !== "object" || node === null || seen.has(node)) continue;
-    seen.add(node);
-    const block = node as BlockNode;
-    if (typeof block.type !== "string" || typeof block.props !== "object") {
-      continue;
-    }
-    const painted = paintedBy(block, around, page);
-    if (TEXT_BLOCKS.has(block.type)) {
-      const finding = contrastFinding(block, painted, page.tokens);
-      if (finding !== undefined) found.push(finding);
-    }
-    const children = Object.values(block.slots ?? {}).flatMap(slot =>
-      Array.isArray(slot) ? slot : []
-    );
+  for (let next = stack.pop(); next !== undefined; next = stack.pop()) {
+    const block = seen.has(next.node) ? undefined : asBlock(next.node);
+    if (block === undefined) continue;
+    seen.add(block);
+    const painted = paintedBy(block, next.around, page);
+    const finding = judged(block, painted, page);
+    if (finding !== undefined) found.push(finding);
+    const children = childrenOf(block);
     for (let index = children.length - 1; index >= 0; index -= 1) {
       stack.push({ node: children[index], around: painted });
     }
