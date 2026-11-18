@@ -272,7 +272,12 @@ test('makes "Eyebrow" (12 / 1.4, Semibold, UPPERCASE, +8%) and reads it back unc
   await enter(popup.getByRole("textbox", { name: "Line height" }), "1.4");
   await choose(page, /^Weight, /, /^Semibold 600/);
   await enter(popup.getByRole("textbox", { name: "Letter spacing" }), "0.08");
-  await popup.getByRole("radio", { name: "UPPERCASE" }).check();
+  // The case is held by the stored style, so the radio shows as checked once
+  // the editor's write has re-rendered it: clicked, then waited for, rather
+  // than asserted the instant the click lands.
+  const uppercase = popup.getByRole("radio", { name: "UPPERCASE" });
+  await uppercase.click();
+  await expect(uppercase).toBeChecked();
   const want = {
     base: {
       base: {
@@ -394,7 +399,10 @@ test("Heading 1 follows Display, and every H1 draws it", async ({ page }) => {
       .getByRole("button", { name: /^Site text: Heading 1,/ })
       .click();
     const popup = page.getByRole("dialog", { name: "Edit Heading 1" });
-    await popup.getByRole("radio", { name: "Text style: Display" }).check();
+    await popup.getByRole("radio", { name: "Text style: Display" }).click();
+    await expect(
+      popup.getByRole("radio", { name: "Text style: Display" })
+    ).toBeChecked();
     await expect.poll(() => computed(heading.first(), "fontSize")).toBe("56px");
     await page.keyboard.press("Escape");
     await expect(
@@ -425,7 +433,8 @@ test("Undo and Redo take a text style's change back and forward", async ({
   const section = await openTextStyles(page);
   await styleRow(section, "Eyebrow").click();
   const popup = page.getByRole("dialog", { name: "Edit Eyebrow" });
-  await popup.getByRole("radio", { name: "lowercase" }).check();
+  await popup.getByRole("radio", { name: "lowercase" }).click();
+  await expect(popup.getByRole("radio", { name: "lowercase" })).toBeChecked();
   const transform = async () =>
     (
       (await storedStyle(page.request, "Eyebrow"))?.styles as {
