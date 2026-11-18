@@ -5,6 +5,7 @@ import { EMAIL_BRAND_TABLE } from "../schemas/email-brand/table-name";
 import { EMAIL_QUEUE_TABLE } from "../schemas/email-queue/table-name";
 import { EMAIL_QUEUE_RECIPIENTS_TABLE } from "../schemas/email-queue-recipients/table-name";
 import { EMAIL_SEND_CLAIMS_TABLE } from "../schemas/email-send-claims/table-name";
+import { EXTERNAL_IDENTITIES_TABLE } from "../schemas/external-identities/table-name";
 import { LANGUAGES_TABLE } from "../schemas/languages/table-name";
 import { LIMIT_STORE_TABLE } from "../schemas/limit-store/table-name";
 import { MEDIA_USAGE_TABLE } from "../schemas/media-usage/table-name";
@@ -1041,6 +1042,23 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE INDEX IF NOT EXISTS "email_queue_recipients_hash_idx"
       ON "${EMAIL_QUEUE_RECIPIENTS_TABLE}" ("recipient_hash")`,
+    // The external identities a person signed in with. Columns match
+    // schemas/external-identities/sqlite.ts; `issuer` is "" where the
+    // provider has no issuer, so the unique index holds without leaning on
+    // how the database compares missing values.
+    `CREATE TABLE IF NOT EXISTS "${EXTERNAL_IDENTITIES_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "provider_key" TEXT NOT NULL,
+      "issuer" TEXT NOT NULL,
+      "subject" TEXT NOT NULL,
+      "address" TEXT,
+      "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+      "created_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_external_identities_key_uidx"
+      ON "${EXTERNAL_IDENTITIES_TABLE}" ("provider_key", "issuer", "subject")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_external_identities_user_idx"
+      ON "${EXTERNAL_IDENTITIES_TABLE}" ("user_id")`,
   ];
 }
 
