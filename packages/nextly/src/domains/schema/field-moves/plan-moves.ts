@@ -17,8 +17,8 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
-import { companionTableOf } from "../../i18n/migration/derive-companion-spec";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { companionTableOf } from "../../i18n/migration/derive-companion-spec";
 import {
   classifyFieldKind,
   fieldProducesColumn,
