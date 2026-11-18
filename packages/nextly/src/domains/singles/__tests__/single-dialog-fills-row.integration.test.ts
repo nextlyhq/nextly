@@ -24,6 +24,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
@@ -196,6 +197,15 @@ describeEachDialect(
     });
 
     it("does not ask about a camelCase required field stating a default, and calls the review safe", async () => {
+      // A camelCase name the Single already holds, as a plugin or the API may declare it, on a
+      // virtual field: it has no column yet, and the Builder keeps a name the Single holds.
+      const declared: Field = { name: "tagLine", type: "text", virtual: true };
+      await query(
+        `UPDATE ${q("dynamic_singles")} SET ${q("fields")} = '${JSON.stringify([BODY, declared])}' WHERE ${q("slug")} = 'sdf_home'`
+      );
+      // Written past the registry's own writes, so its kept rows are read again.
+      clearRegistryRowCache();
+      // The dialog stores it now, required and stating a default the row is filled with.
       const answer = await dispatchSingles(
         "previewSingleSchemaChanges",
         { slug: "sdf_home" },
@@ -215,10 +225,20 @@ describeEachDialect(
         answer instanceof Response ? await answer.json() : answer
       ) as { data?: unknown } & Record<string, unknown>;
       const body = (preview.data ?? preview) as {
+        changes?: {
+          added?: { name: string }[];
+          changed?: { name: string }[];
+        };
         interactiveFields?: { name: string }[];
         classification?: string;
         hasDestructiveChanges?: boolean;
       };
+      // The review sees the field among its changes, so the case reaches the settling it is about.
+      expect(
+        [...(body.changes?.added ?? []), ...(body.changes?.changed ?? [])].map(
+          field => field.name
+        )
+      ).toContain("tagLine");
       expect(body.interactiveFields ?? []).toEqual([]);
       expect(body.classification).toBe("safe");
       expect(body.hasDestructiveChanges).toBe(false);
