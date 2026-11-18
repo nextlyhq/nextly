@@ -175,6 +175,7 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
 
   it("answers that it failed, with the reason, and records nothing of the shape it asked for", async () => {
     const before = await recorded();
+    const folderBefore = await migrationFiles();
     const failed = failTableStatement();
     // Outside development: the save writes its files, then runs its own statements.
     vi.stubEnv("NODE_ENV", "test");
@@ -216,10 +217,14 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
       thrown,
       `the save answered instead of failing: ${said}`
     ).toBeDefined();
-    expect(
-      String((thrown as Error).message),
-      "the failure says why"
-    ).not.toMatch(/pending/i);
+    // Nothing landed, so nothing is kept and there is nothing to finish. The driver's text, which
+    // can hold identifiers and values, is not told.
+    expect(String((thrown as Error).message)).toBe(
+      "The database refused this schema change, so nothing was changed."
+    );
+    expect(await migrationFiles(), "the migrations folder").toEqual(
+      folderBefore
+    );
     expect(await recorded(), "the registry row").toEqual(before);
   });
 
@@ -241,18 +246,15 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
         thrown,
         `the save answered instead of failing: ${said}`
       ).toBeDefined();
-      const message = String((thrown as Error).message);
-      expect(message, "the failure says pending").not.toMatch(/pending/i);
       const kept = (await migrationFiles()).filter(
         name => !folderBefore.includes(name)
       );
-      expect(kept.length, "the change's file is kept").toBeGreaterThan(0);
-      for (const file of kept) {
-        expect(message, `the failure names ${file}`).toContain(file);
-      }
-      expect(message).toContain("nextly migrate:resolve --applied");
-      expect(message, "the step that brings the registry in step").toMatch(
-        /then run `nextly migrate`/
+      expect(kept, "the change's one file is kept").toHaveLength(1);
+      const [file] = kept;
+      expect(String((thrown as Error).message)).toBe(
+        `The database does not stand as ${file} says after the save's change was applied, so the save's file ${file} was kept and not recorded applied. Compare the table with ${file}. ` +
+          `Finish the change by hand, run \`nextly migrate:resolve --applied ${file}\`; then run \`nextly migrate\`, which brings the registry in step with the recorded file. ` +
+          "Or reverse what of it ran and run `nextly migrate`, which runs it from the start."
       );
       expect(await recorded(), "the registry row").toEqual(before);
     }
