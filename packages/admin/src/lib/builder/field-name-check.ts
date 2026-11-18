@@ -60,6 +60,8 @@ function described(name: string, problem: FieldNameProblem): string {
       return "Use lowercase letters, digits and underscores, starting with a letter.";
     case "column-too-long":
       return "Too long: a field's column may have at most 63 characters.";
+    case "name-too-long":
+      return "Too long: a field's name may have at most 255 characters.";
     case "reserved":
       return `${name} is a built-in column here. Choose another name.`;
     case "lifecycle":

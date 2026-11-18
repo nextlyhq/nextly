@@ -64,10 +64,21 @@ describe("nameRuleProblem", () => {
   it("holds a name to the column's length only where the field makes a column", () => {
     const long = "a".repeat(64);
     expect(nameRuleProblem(long, TOP)?.kind).toBe("column-too-long");
-    expect(
-      nameRuleProblem(long, { ...TOP, producesColumn: true })?.kind
-    ).toBe("column-too-long");
+    expect(nameRuleProblem(long, { ...TOP, producesColumn: true })?.kind).toBe(
+      "column-too-long"
+    );
     expect(nameRuleProblem(long, { ...TOP, producesColumn: false })).toBeNull();
+  });
+
+  // A field-group field's name is what its group's rows point back to it by, which keeps 255
+  // characters: past that the name is refused whether or not the field makes a column.
+  it("holds every name to the longest its parent pointer keeps", () => {
+    const place = { ...TOP, producesColumn: false };
+    expect(nameRuleProblem("a".repeat(255), place)).toBeNull();
+    expect(nameRuleProblem("a".repeat(256), place)).toEqual({
+      kind: "name-too-long",
+      message: "Too long: a field's name may have at most 255 characters.",
+    });
   });
 });
 

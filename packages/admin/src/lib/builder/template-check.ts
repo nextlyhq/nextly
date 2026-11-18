@@ -149,7 +149,9 @@ function nameFailure(
   });
   if (!problem) return null;
   const invalid =
-    problem.kind === "spelling" || problem.kind === "column-too-long";
+    problem.kind === "spelling" ||
+    problem.kind === "column-too-long" ||
+    problem.kind === "name-too-long";
   return {
     path: each.path,
     key: each.key,
