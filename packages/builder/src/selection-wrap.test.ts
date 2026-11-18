@@ -10,7 +10,12 @@ import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { isRefusal } from "./selection-ops";
-import { isUnwrappable, planUnwrap, planWrap, WRAP_WORDS } from "./selection-wrap";
+import {
+  isUnwrappable,
+  planUnwrap,
+  planWrap,
+  WRAP_WORDS,
+} from "./selection-wrap";
 
 beforeAll(() => {
   registerBlocks(coreBlocks as never, { source: "selection-wrap-test" });
@@ -22,19 +27,29 @@ afterAll(() => {
 
 const nesting = () => registryNestingSource();
 
-const text = (id: string): BlockNode => ({ id, type: "core/text", version: 2, props: {} });
+const text = (id: string): BlockNode => ({
+  id,
+  type: "core/text",
+  version: 2,
+  props: {},
+});
 
 function page(...nodes: BlockNode[]): BlockDocument {
   return { formatVersion: 1, kind: "page", nodes };
 }
 
 /** The document a plan leaves, as type and id outlines. */
-function after(document: BlockDocument, ops: Parameters<typeof applyOps>[1]): unknown {
+function after(
+  document: BlockDocument,
+  ops: Parameters<typeof applyOps>[1]
+): unknown {
   const outline = (nodes: readonly BlockNode[]): unknown[] =>
     nodes.map(node => ({
       type: node.type,
       ...(node.type === "core/text" ? { id: node.id } : {}),
-      ...(node.slots?.children === undefined ? {} : { children: outline(node.slots.children) }),
+      ...(node.slots?.children === undefined
+        ? {}
+        : { children: outline(node.slots.children) }),
     }));
   return outline(applyOps(document, ops).document.nodes);
 }
@@ -60,11 +75,22 @@ describe("planWrap", () => {
   });
 
   it("refuses blocks that are not side by side in one place", () => {
-    const document = page(
-      text("a"),
-      { id: "box", type: "core/box", version: 1, props: {}, slots: { children: [text("in")] } }
-    );
+    const document = page(text("a"), {
+      id: "box",
+      type: "core/box",
+      version: 1,
+      props: {},
+      slots: { children: [text("in")] },
+    });
     expect(planWrap(document, ["a", "in"], nesting())).toEqual({
+      reason: WRAP_WORDS.notSideBySide,
+    });
+  });
+
+  it("refuses blocks with an unselected block between them, keeping the reading order", () => {
+    // Wrapping a and c would carry c ahead of b, which stays outside.
+    const document = page(text("a"), text("b"), text("c"));
+    expect(planWrap(document, ["a", "c"], nesting())).toEqual({
       reason: WRAP_WORDS.notSideBySide,
     });
   });
@@ -77,8 +103,20 @@ describe("planWrap", () => {
       props: {},
       slots: {
         children: [
-          { id: "c1", type: "core/column", version: 1, props: {}, slots: { children: [] } },
-          { id: "c2", type: "core/column", version: 1, props: {}, slots: { children: [] } },
+          {
+            id: "c1",
+            type: "core/column",
+            version: 1,
+            props: {},
+            slots: { children: [] },
+          },
+          {
+            id: "c2",
+            type: "core/column",
+            version: 1,
+            props: {},
+            slots: { children: [] },
+          },
         ],
       },
     });
@@ -97,7 +135,13 @@ describe("planUnwrap", () => {
     type => {
       const document = page(
         text("before"),
-        { id: "outer", type, version: 1, props: {}, slots: { children: [text("x"), text("y")] } },
+        {
+          id: "outer",
+          type,
+          version: 1,
+          props: {},
+          slots: { children: [text("x"), text("y")] },
+        },
         text("after")
       );
       const plan = planUnwrap(document, "outer", nesting());
@@ -121,7 +165,13 @@ describe("planUnwrap", () => {
         props: {},
         slots: {
           children: [
-            { id: "c1", type: "core/column", version: 1, props: {}, slots: { children: inner } },
+            {
+              id: "c1",
+              type: "core/column",
+              version: 1,
+              props: {},
+              slots: { children: inner },
+            },
           ],
         },
       });
@@ -131,11 +181,26 @@ describe("planUnwrap", () => {
   });
 
   it("is offered on Box, Section, Column and Card, and not on Columns, Accordion, Gallery or Collection list", () => {
-    const node = (type: string): BlockNode => ({ id: "n", type, version: 1, props: {} });
-    for (const type of ["core/box", "core/section", "core/column", "core/card"]) {
+    const node = (type: string): BlockNode => ({
+      id: "n",
+      type,
+      version: 1,
+      props: {},
+    });
+    for (const type of [
+      "core/box",
+      "core/section",
+      "core/column",
+      "core/card",
+    ]) {
       expect(isUnwrappable(node(type)), type).toBe(true);
     }
-    for (const type of ["core/columns", "core/accordion", "core/gallery", "core/collection-loop"]) {
+    for (const type of [
+      "core/columns",
+      "core/accordion",
+      "core/gallery",
+      "core/collection-loop",
+    ]) {
       expect(isUnwrappable(node(type)), type).toBe(false);
       expect(planUnwrap(page(node(type)), "n", nesting()), type).toBeNull();
     }

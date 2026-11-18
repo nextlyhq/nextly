@@ -4,8 +4,8 @@
  *
  * Both are groups of the ordinary ops, applied together as ONE step to undo:
  *
- * - **Wrap in a box.** The selected blocks must sit side by side in one list
- *   (the engine's `siblingRun`, the rule every selection planner shares). A new
+ * - **Wrap in a box.** The selected blocks must sit side by side in one list,
+ *   with no unselected block between them (the engine's `contiguousRun`). A new
  *   Box is put where the first of them is, and each is moved into it in the
  *   order a reader meets them.
  * - **Unwrap (keep what's inside).** A Box, Section, Column or Card is replaced
@@ -20,12 +20,12 @@
  * @module selection-wrap
  */
 import {
+  contiguousRun,
   findNode,
   getBlock,
   locateNode,
   makeNode,
   placementVerdict,
-  siblingRun,
   type BlockDocument,
   type BlockNode,
   type NestingSource,
@@ -55,7 +55,8 @@ const UNWRAPPABLE: ReadonlySet<string> = new Set([
 export const WRAP_WORDS = {
   wrap: "Wrap in a box",
   unwrap: "Unwrap (keep what's inside)",
-  notSideBySide: "Select blocks side by side in one place to wrap them in a box.",
+  notSideBySide:
+    "Select blocks side by side in one place to wrap them in a box.",
 } as const;
 
 /** A wrap or an unwrap, planned: its ops and what to select after it. */
@@ -95,7 +96,9 @@ function placementRefusal(
     // Both lines, as a refused drop draws them: why, and what goes there.
     return {
       reason:
-        words.remedy === null ? words.headline : `${words.headline} ${words.remedy}`,
+        words.remedy === null
+          ? words.headline
+          : `${words.headline} ${words.remedy}`,
     };
   }
   return null;
@@ -114,7 +117,9 @@ export function planWrap(
   const ids = normalizeSelection(document, selectedIds);
   const box = getBlock(BOX);
   if (ids.length === 0 || box === undefined) return null;
-  const found = siblingRun(document.nodes, ids);
+  // Side by side with nothing unselected between them: wrapping blocks with
+  // a gap would carry the later ones ahead of what stays outside.
+  const found = contiguousRun(document.nodes, ids);
   if (found.run === undefined) return { reason: WRAP_WORDS.notSideBySide };
   const { run } = found;
   const parent =
