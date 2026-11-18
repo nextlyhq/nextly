@@ -63,12 +63,15 @@ export type InspectorSectionKey =
  *   image, a video, an embed), `more` on every other block. A choice about
  *   what an author reaches for first, not about whether the property works:
  *   an aspect ratio sizes any box, but it is what an image is set by.
- * - `icon-drawn`: while a disclosure draws an icon of its own (not the
- *   browser's marker, and not none), which is what a position moves.
+ * - `icon-drawn`: while a disclosure draws an icon (any but none), which is
+ *   what a position moves.
  * - `state`: while a state other than Normal is being edited.
  * - `focus-state`: while the Focus state is being edited, `more` in every
  *   other state. An outline is mostly a focus ring, so that is where an
  *   author looks for it.
+ * - `content`: never in Style, and never added there. A style value chosen in
+ *   the Content tab, because what it picks is what the block shows (an
+ *   Accordion's icon): one place to set it, so two controls never disagree.
  */
 export type PropertyTier =
   | "common"
@@ -76,7 +79,8 @@ export type PropertyTier =
   | "common-on-media"
   | "icon-drawn"
   | "state"
-  | "focus-state";
+  | "focus-state"
+  | "content";
 
 export interface InspectorSectionDef {
   readonly key: InspectorSectionKey;
@@ -228,7 +232,8 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
     key: "icon",
     label: "Icon",
     properties: [
-      ["disclosureIcon", "common"],
+      // Chosen in the Content tab (`accordion-icon-field.tsx`).
+      ["disclosureIcon", "content"],
       ["disclosurePosition", "icon-drawn"],
     ],
   },
@@ -323,11 +328,8 @@ export interface TierContext {
   readonly state: StyleState;
 }
 
-/**
- * The disclosure icons that draw nothing a position could move: the browser's
- * own marker, which stays where the browser puts it, and none.
- */
-const UNDRAWN_ICONS: ReadonlySet<string> = new Set(["browser", "none"]);
+/** The disclosure icon that draws nothing a position could move. */
+const UNDRAWN_ICONS: ReadonlySet<string> = new Set(["none"]);
 
 /**
  * Whether a property of this tier shows without being asked for, where it
@@ -351,5 +353,7 @@ export function tierShows(tier: PropertyTier, context: TierContext): boolean {
       return context.state !== "base";
     case "focus-state":
       return context.state === "focus";
+    case "content":
+      return false;
   }
 }

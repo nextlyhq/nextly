@@ -34,6 +34,12 @@ export interface SchemaChangeAnswers {
   eventResolutions?: readonly Resolution[];
   resolutions?: Readonly<Record<string, PerFieldResolution>>;
   acknowledgedConversions?: readonly string[];
+  /**
+   * A Single's one row given the default each field new to its table states, by field
+   * (`singleRowFills`): not an answer the person gave, and judged as a Single's fill alone
+   * (`CollectionSave.rowFills`).
+   */
+  rowFills?: readonly { field: string; value: unknown }[];
 }
 
 /** A field as an answer is matched to it: by its name, which a layout-only field lacks. */
@@ -129,6 +135,15 @@ export function saveOfSchemaChange(args: {
       change: "update",
       renamedFields: renamedFieldsOf(args.answers.renameResolutions ?? []),
       ...(resolutions.length === 0 ? {} : { resolutions }),
+      ...(args.answers.rowFills === undefined ||
+      args.answers.rowFills.length === 0
+        ? {}
+        : {
+            rowFills: args.answers.rowFills.map(fill => ({
+              column: fill.field,
+              value: fill.value,
+            })),
+          }),
       ...(args.answers.acknowledgedConversions === undefined
         ? {}
         : { acknowledgedConversions: args.answers.acknowledgedConversions }),

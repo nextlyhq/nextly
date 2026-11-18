@@ -8,7 +8,7 @@
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
@@ -23,6 +23,7 @@ const api = vi.hoisted(() => ({
   can: vi.fn(),
   localized: { enabled: false, defaultLocale: "en" },
   onScreen: undefined as string | undefined,
+  settle: vi.fn(),
 }));
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
@@ -52,6 +53,16 @@ vi.mock("@admin/services/versionApi", () => ({
   versionApi: { saveAutosave: api.saveAutosave, getAutosave: api.getAutosave },
 }));
 vi.mock("@admin/hooks/useCan", () => ({ useCan: api.can }));
+// The view the session is drawn in: its tracked writes, as its gate answers.
+vi.mock(
+  "@admin/components/features/entries/EntryForm/useDocumentActionHooks",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("@admin/components/features/entries/EntryForm/useDocumentActionHooks")
+    >()),
+    useTrackedWritesSettled: () => api.settle,
+  })
+);
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => api.localized,
 }));
@@ -157,6 +168,7 @@ beforeEach(() => {
   });
   api.localized = { enabled: false, defaultLocale: "en" };
   api.onScreen = undefined;
+  api.settle.mockResolvedValue(null);
   api.getAutosave.mockImplementation(async () => ({
     snapshot: api.saveAutosave.mock.calls.at(-1)?.[1] ?? null,
   }));
@@ -665,6 +677,62 @@ describe("useDocumentSession: recovery point", () => {
     });
   });
 
+  it("makes a recording not yet made as it goes away, before it lets go of the lock", async () => {
+    // The editor holding the session can be taken away mid-edit (a colleague
+    // takes over the page it is drawn in): the work it asked to record
+    // within the last pause is recorded then, not dropped with the timer.
+    const view = await heldSession();
+    act(() => view.result.current.record({ title: "Just typed" }));
+
+    view.unmount();
+
+    expect(api.saveAutosave).toHaveBeenCalledTimes(1);
+    expect(api.saveAutosave.mock.calls[0]?.[1]).toMatchObject({
+      title: "Just typed",
+    });
+    expect(api.saveAutosave.mock.invocationCallOrder[0]).toBeLessThan(
+      api.del.mock.invocationCallOrder[0] ?? 0
+    );
+  });
+
+  it("records what its caller hands over as it goes away", async () => {
+    // A caller's own layout cleanup runs first, while what it shows can
+    // still answer: what it records there is recorded at once.
+    const view = renderHook(
+      () => {
+        const session = useDocumentSession(HEADER);
+        const latest = useRef(session);
+        latest.current = session;
+        useLayoutEffect(
+          () => () => latest.current.record({ title: "Handed over" }),
+          []
+        );
+        return session;
+      },
+      { wrapper: wrapper() }
+    );
+    await waitFor(() => expect(view.result.current.lock.status).toBe("held"));
+
+    view.unmount();
+
+    expect(api.saveAutosave).toHaveBeenCalledTimes(1);
+    expect(api.saveAutosave.mock.calls[0]?.[1]).toMatchObject({
+      title: "Handed over",
+    });
+  });
+
+  it("records nothing as it goes away once the work was saved", async () => {
+    const view = await heldSession();
+    act(() => view.result.current.record({ title: "Saved" }));
+    await act(async () => {
+      await view.result.current.saveDraft({ title: "Saved" });
+    });
+
+    view.unmount();
+
+    expect(api.saveAutosave).not.toHaveBeenCalled();
+  });
+
   it("drops a recording not yet made when the work is saved", async () => {
     const { result } = await heldSession();
 
@@ -962,5 +1030,57 @@ describe("useDocumentSession: recovery point", () => {
 
     expect(api.saveAutosave).toHaveBeenCalledTimes(2);
     expect(api.saveAutosave.mock.calls[1]?.[1]).toEqual({});
+  });
+});
+
+describe("useDocumentSession: the view's tracked writes", () => {
+  // A site-wide change made while the document is edited (a shared style)
+  // is a write the view tracks: the session's caller waits for it before it
+  // stores, as the view's own Save does.
+  it("answers nothing to refuse once every tracked write landed", async () => {
+    const { result } = await heldSession();
+
+    await expect(result.current.writesSettled()).resolves.toBeNull();
+    expect(api.settle).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses, naming it, while a tracked write's latest attempt failed", async () => {
+    api.settle.mockResolvedValue({
+      kind: "failed",
+      label: "Site colours",
+      message: "The server is down.",
+    });
+    const { result } = await heldSession();
+
+    await expect(result.current.writesSettled()).resolves.toEqual({
+      ok: false,
+      reason: "refused",
+      message:
+        "Site colours wasn't saved: The server is down. Make that change again where you made it, then try again.",
+    });
+  });
+
+  it("refuses while tracked writes keep starting", async () => {
+    api.settle.mockResolvedValue({ kind: "still-writing" });
+    const { result } = await heldSession();
+
+    await expect(result.current.writesSettled()).resolves.toEqual({
+      ok: false,
+      reason: "refused",
+      message: "Other changes are still being saved. Try again in a moment.",
+    });
+  });
+
+  it("leaves its own saves as they were: they wait for no tracked write", async () => {
+    api.settle.mockResolvedValue({ kind: "still-writing" });
+    const { result } = await heldSession();
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.saveDraft({ title: "Saved" });
+    });
+
+    expect(outcome).toMatchObject({ ok: true });
+    expect(api.settle).not.toHaveBeenCalled();
   });
 });

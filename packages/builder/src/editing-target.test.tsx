@@ -237,6 +237,36 @@ describe("what the region's editing says and draws", () => {
     expect(drawn?.document).toBe(result.current.editing.active.document);
   });
 
+  it("draws the region from the definitions the host has now, its history kept", () => {
+    const entered = new Map<string, BlockDocument>();
+    const loaded = new Map<string, BlockDocument>([
+      ["new-card", { ...doc([node("card")]), kind: "component" }],
+    ]);
+    const { result, rerender } = renderHook(
+      ({
+        definitions,
+      }: {
+        definitions: ReadonlyMap<string, BlockDocument>;
+      }) => {
+        const page = useEditorState({ initialDocument: doc([node("hero")]) });
+        return useEditingTarget(page, { definitions });
+      },
+      { initialProps: { definitions: entered } }
+    );
+    act(() => result.current.enter({ ...header(), definitions: entered }));
+    act(() => {
+      result.current.active.apply(insert("nav", 1));
+    });
+
+    // A component made while the header is edited: the host's library
+    // reads it, and the region knows it at once.
+    rerender({ definitions: loaded });
+
+    expect(canvasEditingOf(result.current)?.definitions).toBe(loaded);
+    expect(result.current.active.undoDepth).toBe(1);
+    expect(ids(result.current.active.document)).toEqual(["logo", "nav"]);
+  });
+
   it("leaves the region on Escape with nothing selected, else runs the host's own", () => {
     const { result } = renderEditing();
     const otherwise = vi.fn();

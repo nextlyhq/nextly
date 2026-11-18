@@ -22,6 +22,7 @@ import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { commitOnEnter } from "./commit-on-enter";
 import { useFieldDescription } from "./css-hint";
 import { isElement } from "./dom-kind";
+import { useFieldEdit } from "./field-edit";
 import { useUnsetHint } from "./inherited-value";
 import { fieldStep, scrubModifiersOf } from "./scrub-gesture";
 import { CompactSides, fieldDescribedBy } from "./spacing-box";
@@ -48,10 +49,13 @@ export function useDraft(stored: StyleValue | undefined): {
   edited: boolean;
   reset: () => void;
 } {
-  const [draft, setDraft] = React.useState(() => storedText(stored));
+  const [draft, setDraftState] = React.useState(() => storedText(stored));
   React.useEffect(() => {
-    setDraft(storedText(stored));
+    setDraftState(storedText(stored));
   }, [stored]);
+  // A draft away from the stored value is an edit in progress, which Escape
+  // in the field puts back (`field-edit.ts`), as in every other field.
+  const setDraft = useFieldEdit(storedText(stored), setDraftState);
   return {
     draft,
     setDraft,

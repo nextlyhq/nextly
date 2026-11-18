@@ -97,6 +97,18 @@ function section(): HTMLElement {
 }
 
 describe("a component's variants in its own view", () => {
+  it("draws no section where the host keeps them to the component's own view", () => {
+    // A header edited in place from a page: its canvas has no variant to
+    // preview, so its variants are edited in its own view alone.
+    mount(component({ variants: { a: { label: "Night", overrides: {} } } }), {
+      editedInOwnView: true,
+    });
+
+    expect(screen.queryByRole("region", { name: "Variants" })).toBeNull();
+    // Its exposed fields are still listed.
+    expect(screen.getByRole("region", { name: "Fields" })).toBeTruthy();
+  });
+
   it("adds one with its name ready to type over, as one undo step", () => {
     const editor = mount(component());
     fireEvent.click(

@@ -4,12 +4,16 @@
  * unique. One implementation, so the Builder refuses a move by the very rule a
  * save refuses it by, rather than by a copy that could come to disagree.
  *
- * Browser-safe on purpose: it imports nothing at run time, so `nextly/config`
- * can offer it to the admin. The server's own modules (sibling-fields, the
- * column descriptor, the dynamic-collection schema service) import from here.
+ * Browser-safe on purpose: it imports only two browser-safe predicates (a
+ * virtual field, a field-group field type), so `nextly/config` can offer it to
+ * the admin. The server's own modules (sibling-fields, the column descriptor,
+ * the dynamic-collection schema service) import from here.
  *
  * @module domains/schema/field-rules
  */
+import { isVirtualField } from "../../collections/fields/virtual";
+import { isFieldGroupFieldType } from "../field-groups/storage/field-group-field-type";
+
 /** Why two sibling fields clash, in the order the rule asks. */
 export type SiblingClashKind =
   | "same-name"
@@ -101,6 +105,40 @@ export function usesJunctionTable(field: {
       ? (options as { relationType?: unknown }).relationType
       : undefined;
   return relationType === "manyToMany";
+}
+
+/**
+ * Whether a field becomes a column of the table it is declared on.
+ *
+ * The single answer to that question: the column descriptor's `classifyFieldKind` and
+ * `getColumnDescriptor` both defer to it, the save's field-name rule asks it whether a column's
+ * length reaches a name, and the Builder asks it through `nextly/config` (@experimental), so a rule that only applies to columns cannot disagree with the generator about which fields
+ * have one.
+ *
+ * Dialect-free by construction — a component and a many-to-many relationship keep their values in
+ * their own tables on every dialect. Structural rather than typed because config validation asks
+ * this before the field has been parsed. Anything unrecognised counts as a column, matching the
+ * column descriptor's text fallback, so a field type whose plugin has not registered yet is still held to the
+ * rules that columns carry rather than quietly escaping them.
+ */
+export function fieldProducesColumn(field: {
+  type?: unknown;
+  options?: unknown;
+  /** The root-level `virtual` flag every field type accepts. */
+  virtual?: unknown;
+}): boolean {
+  if (typeof field.type !== "string") return true;
+  // A virtual field stores nothing: no column, no insert, no select. Both
+  // spellings of the flag are read by the one predicate the localization
+  // classifier also asks.
+  if (isVirtualField(field)) return false;
+  // Field-group and component values live in their own dedicated tables (fg_{slug} or
+  // comp_{slug}) and are stripped from the parent row on write, so the parent needs no column.
+  if (isFieldGroupFieldType(field.type)) return false;
+  // A many-to-many relationship stores its links in a dedicated junction table, not on the parent
+  // row. Every other relationship shape does get a column.
+  if (usesJunctionTable(field)) return false;
+  return true;
 }
 
 /**

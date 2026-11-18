@@ -425,7 +425,15 @@ export function sameDetails(a: OwnerDetails, b: OwnerDetails): boolean {
  * site has changed them, the site's stay. Absent on an override kept before
  * details were tracked, which then follows the owner's details.
  */
-export type KeptBase = EmailTemplateVersion & { details?: OwnerDetails };
+export type KeptBase = EmailTemplateVersion & {
+  details?: OwnerDetails;
+  /**
+   * @experimental A written owner's blocks in that version, so an owner's
+   * later update is reviewed block by block; absent for a coded one, and on
+   * a copy kept before blocks were.
+   */
+  blocks?: WrittenDocument | null;
+};
 
 /** The configuration ownership is read from: the plugins and `email.templates`. */
 export interface OwnershipConfig {
@@ -738,7 +746,12 @@ export function sameStoredValue(a: unknown, b: unknown): boolean {
   return stable(a) === stable(b);
 }
 
-function stable(value: unknown): string {
+/**
+ * A value as one canonical string: object keys sorted, undefined properties
+ * left out. Two values that read back differently from JSON storage (key
+ * order) but say the same thing serialize the same, and the string is JSON.
+ */
+export function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
   if (value && typeof value === "object") {
     // A property set to undefined is left out, as JSON storage leaves it out.
