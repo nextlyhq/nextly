@@ -37,6 +37,7 @@ import {
 } from "./default-layout/install";
 import { embedThumbnailRoute } from "./embed-thumbnail/route";
 import { blocksFieldType } from "./fields/blocksField";
+import { editorFormsRoutes } from "./forms/editor-forms-route";
 import {
   createFormProviders,
   FORM_SERVICE,
@@ -165,6 +166,8 @@ export const pageBuilder = (
   const def = createDefinition(opts);
   // The form providers other plugins register, read by the form receiver.
   const formProviders = createFormProviders();
+  // The Form block's picker and the canvas's picked form, read as the author.
+  const editorForms = editorFormsRoutes(formProviders);
   // The page check providers other plugins register, run by the
   // provided-checks route for the editor's Page checks list.
   const pageCheckProviders = createPageCheckProviders();
@@ -573,6 +576,8 @@ export const pageBuilder = (
         ...siteStyle.sharedStyles,
         ...siteStyle.variables,
         startup.builderStartup,
+        editorForms.list,
+        editorForms.describe,
         // The Embed's "Use the video's thumbnail": copies a video's picture
         // from its provider's fixed host into the media library.
         embedThumbnailRoute(),

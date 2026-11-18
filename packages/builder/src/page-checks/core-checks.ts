@@ -13,6 +13,7 @@ import {
   PAGE_DATA_CHECK,
   UNPUBLISHED_PARTS_CHECK,
 } from "./fact-checks";
+import { FORM_NOWHERE_CHECK } from "./form-nowhere-check";
 import { HEADING_CHECK } from "./heading-check";
 import { IMAGE_ALT_CHECK } from "./image-alt-check";
 import { LABELS_CHECK } from "./labels-check";
@@ -31,6 +32,7 @@ export const CORE_PAGE_CHECKS: readonly PageCheck[] = [
   PAGE_DATA_CHECK,
   DOUBLED_REGIONS_CHECK,
   EMPTY_BLOCKS_CHECK,
+  FORM_NOWHERE_CHECK,
   // Publishing: the parts it uses that are not live.
   UNPUBLISHED_PARTS_CHECK,
 ];
