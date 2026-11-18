@@ -245,3 +245,78 @@ describe("a read of the saved entry that differs from what is shown", () => {
     expect(differs.walks).toBeGreaterThan(0);
   });
 });
+
+/**
+ * A page stored before the Quote, the Form and the Text raised their versions,
+ * each holding what its version 1 held.
+ */
+const STORED_AT_VERSION_1 = {
+  formatVersion: 1,
+  kind: "page",
+  nodes: [
+    {
+      id: "quote",
+      type: "core/quote",
+      version: 1,
+      props: { text: "Said", source: "Ada", citeUrl: "https://example.com/a" },
+    },
+    {
+      id: "form",
+      type: "core/form",
+      version: 1,
+      props: { fields: [{ label: "Email", type: "email" }], submitText: "" },
+    },
+    {
+      id: "text",
+      type: "core/text",
+      version: 1,
+      props: { text: "Line one" },
+    },
+  ],
+} as unknown as BlockDocument;
+
+/** Each block's version, by id, in the order the page holds them. */
+const versionsOf = (doc: BlockDocument): Record<string, unknown> =>
+  Object.fromEntries(doc.nodes.map(node => [node.id, node.version]));
+
+const CURRENT = { quote: 2, form: 2, text: 2 };
+
+describe("a page holding blocks stored at an older version", () => {
+  it("opens with each block at its current version, and nothing to save", () => {
+    render(
+      <Host opened={STORED_AT_VERSION_1} stored={STORED_AT_VERSION_1} steady />
+    );
+    if (held === null) throw new Error("not rendered");
+    expect(versionsOf(held.document)).toEqual(CURRENT);
+    expect(held.document.nodes[0]?.props).toMatchObject({
+      href: "https://example.com/a",
+    });
+    // Opening is not an edit: the author has changed nothing, so nothing asks
+    // them to save or warns them on leaving.
+    expect(held.undoDepth).toBe(0);
+  });
+
+  it("hands the upgraded blocks over on the first edit", () => {
+    render(
+      <Host opened={STORED_AT_VERSION_1} stored={STORED_AT_VERSION_1} steady />
+    );
+    const saved = editAndHand();
+    const { added: _added, ...rest } = versionsOf(saved);
+    expect(rest).toEqual(CURRENT);
+    expect(saved.nodes[1]?.props).not.toHaveProperty("citeUrl");
+  });
+
+  it("stays steady when a read answers with the page already upgraded", () => {
+    // A save from the entry form, or another reader, stores the page at the
+    // current versions while this editor still holds what it opened: the same
+    // document, so nothing is drawn or walked again.
+    const view = render(
+      <Host opened={STORED_AT_VERSION_1} stored={STORED_AT_VERSION_1} steady />
+    );
+    const upgraded = fromServer(documentFrom(STORED_AT_VERSION_1));
+    const read = costOf(() =>
+      view.rerender(<Host opened={upgraded} stored={upgraded} steady />)
+    );
+    expect(read).toEqual({ draws: 0, walks: 0 });
+  });
+});

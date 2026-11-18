@@ -35,5 +35,9 @@ the live page. The dash before the person's name is drawn in CSS, not stored in 
 words. A Quote has three block styles, Line (its own: a line in the site's accent
 colour), Plain and Large, the same on the canvas and the live page. Its stored shape
 is version 2: a Quote saved before is upgraded when it is read, its source address
-moved to the link's address, on a page or inside a component. Existing Quotes now
-draw the Line style and link their source's title.
+moved to the link's address, on a page or inside a component, together with a field
+bound to it. A migration step may now rename props (`renames`), and a value bound to
+a renamed prop moves with it. The page builder opens a page with every block at its
+current version, so an edit saves the block upgraded, and opening a page alone marks
+nothing as changed. Existing Quotes now draw the Line style and link their source's
+title.

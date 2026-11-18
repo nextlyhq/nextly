@@ -29,12 +29,77 @@ export type MigrateFn = (
  */
 export type MigrationMap = Record<number, MigrateFn>;
 
+/**
+ * Props a version step renames, keyed by the FROM version, each old name to
+ * its new one: `{ 1: { citeUrl: "href" } }`. Applied before that step's
+ * function, to the node's props and to its bindings alike, so a value bound
+ * to a renamed prop moves with the value stored in it: one rename, one
+ * place, and no binding left addressing a prop the block no longer has.
+ *
+ * @experimental
+ */
+export type MigrationRenames = Record<
+  number,
+  Readonly<Record<string, string>>
+>;
+
 /** What migration needs to know about one block type. */
 export interface BlockMigrationInfo {
   /** The block definition's current schema version. */
   version: number;
   /** Upgrade steps keyed by from-version; omitted when the block never changed. */
   migrate?: MigrationMap;
+  /** Props each step renames, keyed by from-version. @experimental */
+  renames?: MigrationRenames;
+}
+
+/**
+ * A block definition's migration info, the one reading every migration
+ * source takes, so a field added here reaches all of them.
+ */
+export function migrationInfoOf(definition: {
+  readonly version: number;
+  readonly migrate?: MigrationMap | undefined;
+  readonly renames?: MigrationRenames | undefined;
+}): BlockMigrationInfo {
+  return {
+    version: definition.version,
+    ...(definition.migrate === undefined ? {} : { migrate: definition.migrate }),
+    ...(definition.renames === undefined ? {} : { renames: definition.renames }),
+  };
+}
+
+/**
+ * A record with each old key a step renames moved to its new name, where the
+ * old one is set and the new one is not (a value already at the new name is
+ * the newer, and stays). The same record when nothing moves.
+ */
+function withRenames<V>(
+  record: Readonly<Record<string, V>>,
+  names: Readonly<Record<string, string>> | undefined
+): Record<string, V> {
+  if (names === undefined) return record;
+  let next: Record<string, V> | undefined;
+  for (const [from, to] of Object.entries(names)) {
+    if (!Object.hasOwn(record, from) || Object.hasOwn(record, to)) continue;
+    next ??= { ...record };
+    defineEntry(next, to, next[from] as V);
+    delete next[from];
+  }
+  return next ?? record;
+}
+
+/** A node's bindings with the renames of the steps from `from` to `to` applied. */
+function bindingsRenamed(
+  bindings: BlockNode["bindings"],
+  renames: MigrationRenames | undefined,
+  from: number,
+  to: number
+): BlockNode["bindings"] {
+  if (renames === undefined || !isPlainRecord(bindings)) return bindings;
+  let current = bindings;
+  for (let v = from; v < to; v++) current = withRenames(current, renames[v]);
+  return current;
 }
 
 /**
@@ -153,7 +218,8 @@ export function migrateProps(
   props: Record<string, unknown>,
   fromVersion: number,
   toVersion: number,
-  map: MigrationMap | undefined
+  map: MigrationMap | undefined,
+  renames?: MigrationRenames
 ): PropsMigrationResult {
   if (fromVersion >= toVersion) return { props };
   // Reject non-integer, negative, or absurdly wide spans before iterating: an
@@ -179,7 +245,7 @@ export function migrateProps(
     try {
       // Widen to unknown: a step's declared return type does not bind a
       // plain-JS caller, so its result is validated at runtime.
-      const next: unknown = step(current);
+      const next: unknown = step(withRenames(current, renames?.[v]));
       // A step must return a props object; anything else is a failed upgrade.
       if (typeof next !== "object" || next === null || Array.isArray(next)) {
         return {
@@ -324,8 +390,18 @@ export function migrateDocument(
         node.props,
         node.version,
         info.version,
-        info.migrate
+        info.migrate,
+        info.renames
       );
+      // A value bound to a renamed prop moves with it, through the steps run.
+      const reached = result.failure?.fromVersion ?? info.version;
+      const bindings = bindingsRenamed(
+        node.bindings,
+        info.renames,
+        node.version,
+        reached
+      );
+      const moved = bindings === node.bindings ? {} : { bindings };
       if (result.failure) {
         failures.push({
           path,
@@ -340,6 +416,7 @@ export function migrateDocument(
         // non-idempotent steps. Flag the node so a renderer can placeholder it.
         next = {
           ...node,
+          ...moved,
           props: result.props,
           version: result.failure.fromVersion,
           migrationFailed: true,
@@ -356,7 +433,12 @@ export function migrateDocument(
           result.props
         );
       } else {
-        next = { ...node, props: result.props, version: info.version };
+        next = {
+          ...node,
+          ...moved,
+          props: result.props,
+          version: info.version,
+        };
         if (next.migrationFailed) delete next.migrationFailed;
         recordRewrite(node, path, node.version, info.version, result.props);
       }

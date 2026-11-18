@@ -18,7 +18,7 @@
  * @module blocks/quote
  */
 import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
@@ -27,6 +27,7 @@ import { quoteLooks } from "./looks";
 import {
   addressLinkFor,
   boundText,
+  canLink,
   LINK_PROPS,
   linkFor,
   linksToEntry,
@@ -45,15 +46,19 @@ export interface QuoteProps extends LinkProps {
   source?: string;
 }
 
-/** The mark the person's name carries, which the dash before it is drawn on. */
-const BY_ATTRIBUTE = "data-nx-quote-by";
+/**
+ * The mark of the empty element before the person's name the dash is drawn
+ * on. Its own element, hidden from screen readers, so the dash is never
+ * read out as part of the name either.
+ */
+const DASH_ATTRIBUTE = "data-nx-quote-dash";
 
 /**
  * The dash before the person's name: generated content, which no reader
  * copies with the words. Hoisted and deduped by React, one copy per page,
  * and carried by every attributed quote so none reaches a page without it.
  */
-const QUOTE_CSS = `[${BY_ATTRIBUTE}]::before{content:"\\2014\\00a0"}`;
+const QUOTE_CSS = `[${DASH_ATTRIBUTE}]::before{content:"\\2014\\00a0"}`;
 
 /** The key the quote's rule is hoisted under. */
 const QUOTE_STYLE_KEY = "nx-quote";
@@ -87,9 +92,6 @@ function drawQuote(
   const source = text(props.source);
   const cite = link === undefined ? {} : { cite: link.href };
   const markText = markProp?.("text");
-  // The source's words are marked where they are drawn: inside its link
-  // when it has one, else on the `<cite>` itself.
-  const markSource = markProp?.("source");
 
   // With nothing to attribute, the blockquote IS the block and takes the class.
   if (attribution === "" && source === "") {
@@ -113,22 +115,17 @@ function drawQuote(
             <style href={QUOTE_STYLE_KEY} precedence="default">
               {QUOTE_CSS}
             </style>
-            <span {...{ [BY_ATTRIBUTE]: "" }}>
-              {boundText(attribution, bound?.attribution)}
-            </span>
+            <span {...{ [DASH_ATTRIBUTE]: "" }} aria-hidden="true" />
+            {boundText(attribution, bound?.attribution)}
           </>
         )}
         {attribution !== "" && source !== "" ? ", " : null}
         {source === "" ? null : (
-          <cite {...(link === undefined ? markSource : {})}>
-            {link === undefined ? (
-              boundText(source, bound?.source)
-            ) : (
-              <a {...link} {...markSource}>
-                {boundText(source, bound?.source)}
-              </a>
-            )}
-          </cite>
+          <QuoteSource
+            words={boundText(source, bound?.source)}
+            link={link}
+            mark={markProp?.("source")}
+          />
         )}
       </figcaption>
     </figure>
@@ -136,16 +133,44 @@ function drawQuote(
 }
 
 /**
+ * The source's title, as a `<cite>`, linked where the quote has a source
+ * link. Its words are marked where they are drawn: inside the link when there
+ * is one, else on the `<cite>` itself, so the canvas edits the text and not
+ * the link around it.
+ */
+function QuoteSource({
+  words,
+  link,
+  mark,
+}: {
+  words: ReactNode;
+  link: LinkAttributes | undefined;
+  mark: Record<string, string> | undefined;
+}): ReactElement {
+  if (link === undefined) return <cite {...mark}>{words}</cite>;
+  return (
+    <cite>
+      <a {...link} {...mark}>
+        {words}
+      </a>
+    </cite>
+  );
+}
+
+/**
  * Version 1 to 2: the source's loose address becomes the shared link's
- * address. A new tab and a relationship are left unset, as version 1 had
- * neither; every other value is kept as it is.
+ * address. The move is the step's rename (`QUOTE_RENAMES`), which carries a
+ * value bound to it too; a new tab and a relationship are left unset, as
+ * version 1 had neither. A blank address moved is no link, so it is dropped.
  */
 function fromVersion1(props: Record<string, unknown>): Record<string, unknown> {
-  const { citeUrl, ...rest } = props;
-  return typeof citeUrl === "string" && citeUrl.trim() !== ""
-    ? { ...rest, href: citeUrl }
-    : rest;
+  if (typeof props.href !== "string" || props.href.trim() !== "") return props;
+  const { href: _blank, ...rest } = props;
+  return rest;
 }
+
+/** The props version 1 to 2 renames, with any value bound to them. */
+const QUOTE_RENAMES = { 1: { citeUrl: "href" } } as const;
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The
@@ -263,6 +288,7 @@ export const quote: BlockDefinition<QuoteProps, PageContext> = defineBlock({
   name: QUOTE_BLOCK,
   version: 2,
   migrate: { 1: fromVersion1 },
+  renames: QUOTE_RENAMES,
   // What an author reads, in the Add panel and the block card: one plain line.
   // What the block does, for whoever maintains it: Quoted text with an optional
   // attribution, kept outside the quotation so the speaker is not quoted saying
@@ -322,5 +348,12 @@ export const quote: BlockDefinition<QuoteProps, PageContext> = defineBlock({
     effects: true,
     position: true,
   },
+  // Interactive content once its source's title draws a link, so a linked
+  // Box or Card cannot hold it and nest one link in another. A link with no
+  // title to draw it on is only the blockquote's `cite`, which is no link.
+  contentModel: props =>
+    canLink(props) && text(props.source) !== ""
+      ? { is: ["flow", "interactive"] }
+      : { is: ["flow"] },
   render: renderQuote,
 });

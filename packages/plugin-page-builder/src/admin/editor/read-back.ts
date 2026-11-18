@@ -18,6 +18,8 @@
  */
 import { useCallback, useRef } from "react";
 
+import { storedAtCurrentVersions } from "./stored-document";
+
 /**
  * How deep a value may nest before it counts as different. Deeper than any
  * document the engine accepts; past it the value is taken as it comes, which
@@ -88,8 +90,9 @@ export interface ReadBack<T> {
   /**
    * `value` as the editor should hold it: the object it already held, or the
    * one it last handed the form, when `value` holds the same data; `value`
-   * itself otherwise. `slot` names the value, since the opening value and the
-   * stored copy are kept apart.
+   * itself otherwise. Each with every block in it at its current version.
+   * `slot` names the value, since the opening value and the stored copy are
+   * kept apart.
    */
   kept: (slot: "opened" | "stored", value: unknown) => unknown;
 }
@@ -121,7 +124,10 @@ export function useReadBack<T>(onCommit: (value: T) => void): ReadBack<T> {
     const was = held.current[slot];
     // The same arrival again: the answer already given.
     if (was.from === value) return was.is;
-    const is = keptAs(value, was.is, handed.current);
+    // Compared, and held, with every block at its current version, as the
+    // editor holds the document: the same page read back at the versions it
+    // was stored at, or at the current ones, is the same page.
+    const is = keptAs(storedAtCurrentVersions(value), was.is, handed.current);
     held.current[slot] = { from: value, is };
     return is;
   }, []);
