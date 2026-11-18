@@ -22,7 +22,7 @@
 // The CLI then says "No schema changes detected" and exits 0, since nothing
 // to do is a finished run; a failure exits 1.
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
@@ -179,10 +179,17 @@ import {
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
+  newestSnapshotName,
   snapshotPathOf,
   writeSnapshot,
   type SnapshotFile,
 } from "./snapshot-io";
+import {
+  assertWriterHold,
+  startMovedError,
+  underWriterHold,
+  writeWhole,
+} from "./writer-hold";
 
 /**
  * A field as its entity declares it.
@@ -277,7 +284,7 @@ export interface GenerateArgs {
    * one starting point: for a project made from a template, the tables the
    * template's entities were taken as made with. Absent, the folder is read.
    */
-  previous?: { data: SnapshotFile } | null;
+  previous?: { data: SnapshotFile; filename?: string } | null;
   /**
    * UI-built metadata-row upserts (spec §4.12.7), keyed by data-table name.
    * Each is appended to the generated SQL when an operation touches its table
@@ -816,6 +823,43 @@ async function renameDecisions(
  * remain (config matches latest snapshot; the CLI exits 0 for that).
  */
 export async function generateMigration(
+  requested: GenerateArgs
+): Promise<GenerateResult | null> {
+  // A dry run writes nothing, so it holds nothing.
+  if (requested.dryRun === true) return generateHeld(requested);
+  // One writer of the folder at a time, from the newest snapshot's read to
+  // the files' write: under the hold the caller already has, or one taken here.
+  return underWriterHold(
+    requested.migrationsDir,
+    "migrate:create",
+    async () => {
+      // A run that stalled while another took the folder stops here, before it plans.
+      await assertWriterHold(requested.migrationsDir);
+      await refuseMovedStart(requested);
+      return generateHeld(requested);
+    }
+  );
+}
+
+/**
+ * Refuses where the caller read its starting snapshot before it held the
+ * folder and another writer has written one since: the migration would be a
+ * second written from the snapshot it read. Asked under the hold, so the
+ * answer stands until the files are written.
+ */
+async function refuseMovedStart(requested: GenerateArgs): Promise<void> {
+  const { previous } = requested;
+  // Read here, under the hold, or by a caller that does not say which file.
+  if (previous === undefined) return;
+  if (previous !== null && previous.filename === undefined) return;
+  const newest = await newestSnapshotName(
+    resolve(requested.migrationsDir, "meta")
+  );
+  if (newest !== previous?.filename) throw startMovedError(newest);
+}
+
+/** `generateMigration`, with the folder held where the run writes. */
+async function generateHeld(
   requested: GenerateArgs
 ): Promise<GenerateResult | null> {
   // Scoped, every planner below sees the scoped entity alone.
@@ -1758,8 +1802,8 @@ interface MigrationPair {
 }
 
 /**
- * Writes a migration's `.sql` file, named for the run's name and time, then its paired snapshot:
- * the order every `migrate:create` writes them in. A dry run writes neither and returns the paths
+ * Writes a migration's snapshot, then its `.sql` file, named for the run's name and time: the
+ * order every `migrate:create` writes them in. A dry run writes neither and returns the paths
  * they would be written at.
  */
 async function writeMigrationPair(
@@ -1772,8 +1816,11 @@ async function writeMigrationPair(
     // Where `writeSnapshot` would put it, by the writer's own rule.
     return { sqlPath, snapshotPath: snapshotPathOf(pair.metaDir, baseName) };
   }
+  // A writer that stalled while another went ahead writes neither file.
+  await assertWriterHold(args.migrationsDir);
   await mkdir(args.migrationsDir, { recursive: true });
-  await writeFile(sqlPath, pair.sqlContent, "utf-8");
+  // The snapshot first, each file whole: a reader counts a migration from
+  // its `.sql`, so it never finds one whose snapshot is still to come.
   const snapshotPath = await writeSnapshot(
     pair.metaDir,
     baseName,
@@ -1783,6 +1830,7 @@ async function writeMigrationPair(
     pair.entities,
     pair.permissions
   );
+  await writeWhole(sqlPath, pair.sqlContent);
   return { sqlPath, snapshotPath };
 }
 

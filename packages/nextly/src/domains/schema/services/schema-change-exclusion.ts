@@ -66,8 +66,15 @@ export async function withSchemaChangeExcluded<T>(
   },
   work: () => Promise<T>
 ): Promise<T> {
+  // Loaded on demand, as the migration machinery below is.
+  const { withBuilderWriterScope } = await import(
+    "../migrate-create/writer-hold"
+  );
+  // A migration this change writes is written holding the project's
+  // migration files, refused at once where another writer holds them.
+  const held = () => withBuilderWriterScope(args.label, work);
   const { adapter } = args;
-  if (!adapter) return work();
+  if (!adapter) return held();
 
   // Loaded on demand for the reason the services' own imports are: this module is reached from DI
   // registration, and a static import would pull the migration machinery into the boot graph of
@@ -91,6 +98,6 @@ export async function withSchemaChangeExcluded<T>(
       whenHeld: "refuse",
       refusal: "editor",
     },
-    work
+    held
   );
 }

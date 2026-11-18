@@ -20,7 +20,7 @@
 // canonical store for `migrate:check`'s offline integrity verification.
 
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { normalizeContributions } from "../pipeline/diff/contributions";
@@ -37,6 +37,7 @@ import {
   isEntitySettingsRecord,
   type EntitySettingsRecord,
 } from "./entity-settings";
+import { writeWhole } from "./writer-hold";
 
 export interface SnapshotFile {
   version: 1;
@@ -224,6 +225,27 @@ export type TemplateStart = (
 ) => NextlySchemaSnapshot;
 
 /**
+ * The newest snapshot file's name in `metaDir`, by the same order
+ * `loadLatestSnapshot` reads; undefined where the folder is absent or holds
+ * none.
+ */
+export async function newestSnapshotName(
+  metaDir: string
+): Promise<string | undefined> {
+  let files: string[] = [];
+  try {
+    files = await readdir(metaDir);
+  } catch (err) {
+    if ((err as { code?: string }).code === "ENOENT") return undefined;
+    throw err;
+  }
+  return files
+    .filter(f => f.endsWith(".snapshot.json"))
+    .sort()
+    .at(-1);
+}
+
+/**
  * Read the latest snapshot file from `migrations/meta/`.
  *
  * "Latest" = alphabetically last, which corresponds to the highest
@@ -246,16 +268,8 @@ export async function loadLatestSnapshot(
   metaDir: string,
   templateStart?: TemplateStart
 ): Promise<LatestSnapshot | null> {
-  let files: string[] = [];
-  try {
-    files = await readdir(metaDir);
-  } catch (err) {
-    if ((err as { code?: string }).code === "ENOENT") return null;
-    throw err;
-  }
-  const snapshots = files.filter(f => f.endsWith(".snapshot.json")).sort();
-  if (snapshots.length === 0) return null;
-  const latest = snapshots[snapshots.length - 1];
+  const latest = await newestSnapshotName(metaDir);
+  if (latest === undefined) return null;
   const content = await readFile(resolve(metaDir, latest), "utf-8");
   if (templateStart !== undefined) {
     let parsed: unknown;
@@ -477,7 +491,8 @@ export async function writeSnapshot(
   };
   const json = JSON.stringify(file, sortedKeysReplacer, 2);
   const path = snapshotPathOf(metaDir, baseName);
-  await writeFile(path, json + "\n", "utf-8");
+  // Whole or not at all: a reader of the folder never finds half a snapshot.
+  await writeWhole(path, json + "\n");
   return path;
 }
 

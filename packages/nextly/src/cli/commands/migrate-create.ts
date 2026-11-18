@@ -45,7 +45,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -89,6 +89,11 @@ import {
   type GeneratePluginMigrationResult,
 } from "../../domains/schema/migrate-create/generate-plugin";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
+import {
+  assertWriterHold,
+  withMigrationWriterHold,
+  writeWhole,
+} from "../../domains/schema/migrate-create/writer-hold";
 import type {
   ContributedElements,
   TableSpec,
@@ -645,6 +650,60 @@ export async function runMigrateCreate(
 
   logger.keyValue("Dialect", getDialectDisplayName(dialect));
 
+  const run: AppMigrationRun = {
+    name,
+    dialect,
+    configResult,
+    cwd,
+    migrationsDir,
+    startTime,
+    options,
+    context,
+  };
+  // A dry run writes nothing, so it holds nothing.
+  if (options.dryRun === true) {
+    await writeAppMigration(run);
+    return;
+  }
+  // A real run holds the project's migration files from the newest
+  // snapshot's read to the files' write, prompts included, so no other
+  // writer reads the same snapshot or writes beside it.
+  await withMigrationWriterHold(
+    { migrationsDir, command: "migrate:create" },
+    () => writeAppMigration(run)
+  );
+}
+
+/** What `runMigrateCreate` resolved before it reads the migration folder. */
+interface AppMigrationRun {
+  /** The migration's name; absent only for a blank file, which has a default. */
+  name: string | undefined;
+  dialect: ReturnType<typeof requireDatabaseEnv>["dialect"];
+  configResult: Awaited<ReturnType<typeof loadConfigOrExit>>;
+  cwd: string;
+  migrationsDir: string;
+  startTime: number;
+  options: ResolvedMigrateCreateOptions;
+  context: CommandContext;
+}
+
+/**
+ * The run from its first read of the migration folder to its files: the blank
+ * file, or the migration generated from the configuration.
+ */
+async function writeAppMigration(run: AppMigrationRun): Promise<void> {
+  const {
+    name,
+    dialect,
+    configResult,
+    cwd,
+    migrationsDir,
+    startTime,
+    options,
+    context,
+  } = run;
+  const { logger } = context;
+
   // --blank: write a stub file and exit. No diff, no prompts.
   if (options.blank) {
     await runBlankPath(
@@ -923,8 +982,10 @@ async function runBlankPath(
     reportDryRun(logger, { changes: [{ action: "write", target: sqlFile }] });
     return;
   }
+  // Under the command's hold, and whole or not at all for a reader.
+  await assertWriterHold(migrationsDir);
   await mkdir(migrationsDir, { recursive: true });
-  await writeFile(sqlPath, content, "utf-8");
+  await writeWhole(sqlPath, content);
 
   // F11 PR 3: blank migrations don't get a paired snapshot file. The
   // operator-authored SQL has no schema diff to capture; the next
