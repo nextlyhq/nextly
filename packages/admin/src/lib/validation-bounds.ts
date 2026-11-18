@@ -22,7 +22,33 @@ import type { FieldValidationRule } from "nextly/field-catalog";
  * `required` is deliberately absent: every surface offers it through its own
  * control outside this set, so drawing it here would draw it twice.
  */
-export const NUMERIC_RULES = {
+/**
+ * What one numeric rule is called and what it admits, as every surface that
+ * edits a bound draws it.
+ */
+export interface NumericRuleMeta {
+  /** The rule's visible name, which its messages name it by. */
+  label: string;
+  /** Help text under the control. */
+  description: string;
+  /**
+   * The bound counts things — characters, rows, items — so it admits whole
+   * numbers of zero or more. Off for a bound on a VALUE, which may
+   * legitimately be fractional or negative.
+   */
+  counts: boolean;
+}
+
+/** The six numeric rules, named as core's `FieldValidationRule` names them. */
+export type NumericRule =
+  | "minLength"
+  | "maxLength"
+  | "minRows"
+  | "maxRows"
+  | "min"
+  | "max";
+
+export const NUMERIC_RULES: Readonly<Record<NumericRule, NumericRuleMeta>> = {
   minLength: {
     label: "Min length",
     description: "Fewest characters allowed.",
@@ -45,14 +71,7 @@ export const NUMERIC_RULES = {
   },
   min: { label: "Min", description: "Lowest value allowed.", counts: false },
   max: { label: "Max", description: "Highest value allowed.", counts: false },
-} as const satisfies Partial<
-  Record<
-    FieldValidationRule,
-    { label: string; description: string; counts: boolean }
-  >
->;
-
-export type NumericRule = keyof typeof NUMERIC_RULES;
+} satisfies Partial<Record<FieldValidationRule, NumericRuleMeta>>;
 
 /**
  * Every rule, in the order the vocabulary presents them: the order a save

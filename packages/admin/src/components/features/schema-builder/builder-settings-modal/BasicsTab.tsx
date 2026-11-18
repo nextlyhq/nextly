@@ -12,6 +12,7 @@
 // snake for the others), decided with the rest of the derivation in
 // `lib/builder/entity-names`, which the new-entity dialog shares.
 import { Input, Label, Textarea } from "@nextlyhq/ui";
+import { textLength } from "nextly/config";
 import { type JSX, useId } from "react";
 
 import { usePluginFieldTypeEntries } from "@admin/components/field-ui";
@@ -305,9 +306,14 @@ export function RequiredMark(): JSX.Element {
  */
 export const DESCRIPTION_MAX_LENGTH = 255;
 
-/** Whether a description is longer than the builder accepts. */
+/**
+ * Whether a description is longer than the builder accepts, counted as a
+ * person counts it (`textLength`, in code points) so an emoji or a letter
+ * outside the BMP is one character, not the two UTF-16 units
+ * `String.length` would say.
+ */
 export function descriptionTooLong(description: string | undefined): boolean {
-  return (description ?? "").length > DESCRIPTION_MAX_LENGTH;
+  return textLength(description ?? "") > DESCRIPTION_MAX_LENGTH;
 }
 
 /**
@@ -329,7 +335,7 @@ export function DescriptionField({
   value: string;
   onChange: (next: string) => void;
 }): JSX.Element {
-  const over = value.length > DESCRIPTION_MAX_LENGTH;
+  const over = textLength(value) > DESCRIPTION_MAX_LENGTH;
   const countId = `${id}-count`;
   const errorId = `${id}-error`;
   return (
@@ -361,7 +367,7 @@ export function DescriptionField({
             over ? "text-danger-text" : "text-muted-foreground"
           )}
         >
-          {value.length}/{DESCRIPTION_MAX_LENGTH}
+          {textLength(value)}/{DESCRIPTION_MAX_LENGTH}
         </p>
       </div>
     </div>

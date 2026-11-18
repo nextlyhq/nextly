@@ -10,7 +10,7 @@ import { render, screen } from "@admin/__tests__/utils";
 
 import type { BuilderSettingsValues } from "../../BuilderSettingsModal";
 import type { BasicsField, BuilderKind } from "../../builder-config";
-import { BasicsTab } from "../BasicsTab";
+import { BasicsTab, descriptionTooLong } from "../BasicsTab";
 
 function Controlled(props: {
   fields: readonly BasicsField[];
@@ -257,5 +257,45 @@ describe("BasicsTab -- the three basics a kind without a plural renders", () => 
     expect(screen.getByLabelText(/plural name/i)).toBeInTheDocument();
     expect(screen.getByText(/^Slug$/)).toBeInTheDocument();
     expect(screen.getByText(/^Icon$/)).toBeInTheDocument();
+  });
+});
+
+// The limit is told in characters, so it is counted in code points
+// (`textLength`): an emoji or a letter outside the BMP is one character,
+// not the two UTF-16 units `String.length` would call it — 255 of them are
+// at the limit, not past it.
+describe("the description limit, counted as a person counts it", () => {
+  it("holds the save only past 255 code points", () => {
+    expect(descriptionTooLong(undefined)).toBe(false);
+    expect(descriptionTooLong("a".repeat(255))).toBe(false);
+    expect(descriptionTooLong("a".repeat(256))).toBe(true);
+    expect(descriptionTooLong("🎉".repeat(255))).toBe(false);
+    expect(descriptionTooLong("🎉".repeat(256))).toBe(true);
+  });
+
+  it("counts the shown count the same way", () => {
+    render(
+      <Controlled
+        fields={["singularName", "description"]}
+        initial={{ description: "🎉".repeat(255) }}
+      />
+    );
+    expect(screen.getByText("255/255")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Keep the description to 255/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it("says over, and holds, past the limit in code points", () => {
+    render(
+      <Controlled
+        fields={["singularName", "description"]}
+        initial={{ description: "🎉".repeat(256) }}
+      />
+    );
+    expect(screen.getByText("256/255")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Keep the description to 255/i)
+    ).toBeInTheDocument();
   });
 });
