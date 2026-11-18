@@ -6,17 +6,20 @@
  * applied or not applied. The next save of the entity is an ordinary change from there, and the
  * folder replayed on an empty database gives the tables the development database has.
  *
- * Each Builder save path that applies its change through its file, in turn: a collection's
- * Builder apply, a Single's Builder apply, a field group's Builder apply and the Single schema
- * save. The failure is injected at one statement of the file, by its text, after an earlier
- * statement of the same file has committed; each case first checks that the earlier one did.
+ * Each Builder save path in turn. Through its file: a collection's Builder apply, a Single's
+ * Builder apply, a field group's Builder apply and the Single schema save. Through the
+ * development push: a translated collection's Builder apply and a collection's update. The
+ * failure is injected at one statement, by its text, after an earlier statement of the same
+ * change has committed; each case first checks that the earlier one did.
  *
- * On PostgreSQL and SQLite the file runs in one transaction, so the same failure leaves nothing
- * applied and no file: those legs guard that settling never records a step that rolled back.
+ * On PostgreSQL and SQLite the file runs in one transaction, and so does PostgreSQL's push, so the
+ * same failure leaves nothing applied and no file: those legs guard that settling never records a
+ * step that rolled back. SQLite's push keeps the statements before the one that fails, which
+ * these cases do not judge.
  *
- * Not covered here: the saves the Builder still applies with its schema push (a translated
- * collection, the collection save), and a translated field's rename stopped between its two
- * tables.
+ * Not covered here: a translated field's rename stopped between its two tables, and on the push
+ * roads a stop after a drop, since the push drops a column holding data only on the dialog's
+ * answer for it.
  */
 import {
   existsSync,
@@ -45,14 +48,17 @@ import {
   type TestNextly,
 } from "../../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../../services";
+import type { CollectionService } from "../../../collections/services/collection-service";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { NO_CONSENT } from "../../migrate/data-loss-consent";
 import { parseSnapshotFile } from "../../migrate-create/snapshot-io";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
+import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
 
 const HISTORY = "./database/history";
 const DEFINITION = "./schema/builder.json";
+const LOCALIZATION = { locales: ["en", "es"], defaultLocale: "en" };
 
 let current: TestNextly | undefined;
 let basePath: string;
@@ -75,13 +81,17 @@ type BuilderField = Record<string, unknown>;
 
 const text = (name: string): BuilderField => ({ name, type: "text" });
 
-/** One of the Builder's save paths that applies its change through its file. */
+/** One of the Builder's save paths, and the road it applies its change by. */
 interface SavePath {
   name: string;
   slug: string;
   table: string;
   registry: string;
-  create(fields: BuilderField[]): Promise<void>;
+  /** The development push applies the change, rather than the save's file. */
+  push?: boolean;
+  /** The entity is translated, so the instance is booted with languages. */
+  translated?: boolean;
+  create(t: TestNextly, fields: BuilderField[]): Promise<void>;
   save(t: TestNextly, fields: BuilderField[]): Promise<unknown>;
   /** Store an entry holding `values`, where the entity has entries of its own. */
   store?(t: TestNextly, values: Record<string, string>): Promise<void>;
@@ -107,7 +117,7 @@ const PATHS: readonly SavePath[] = [
     slug: "sts_posts",
     table: "dc_sts_posts",
     registry: "dynamic_collections",
-    create: async fields => {
+    create: async (_t, fields) => {
       await dispatchCollections(
         {} as ServiceContainer,
         "createCollection",
@@ -139,7 +149,7 @@ const PATHS: readonly SavePath[] = [
     slug: "sts_hero",
     table: "single_sts_hero",
     registry: "dynamic_singles",
-    create: async fields => {
+    create: async (_t, fields) => {
       await dispatchSingles(
         "createSingle",
         {},
@@ -174,7 +184,7 @@ const PATHS: readonly SavePath[] = [
     slug: "sts_card",
     table: "comp_sts_card",
     registry: "dynamic_components",
-    create: async fields => {
+    create: async (_t, fields) => {
       await dispatchComponents(
         "createComponent",
         {},
@@ -197,7 +207,7 @@ const PATHS: readonly SavePath[] = [
     slug: "sts_banner",
     table: "single_sts_banner",
     registry: "dynamic_singles",
-    create: async fields => {
+    create: async (_t, fields) => {
       await dispatchSingles(
         "createSingle",
         {},
@@ -219,11 +229,90 @@ const PATHS: readonly SavePath[] = [
         unknown
       >,
   },
+  {
+    // A translated collection's change is applied by the development push.
+    name: "a translated collection's Builder apply (the push)",
+    slug: "sts_articles",
+    table: "dc_sts_articles",
+    registry: "dynamic_collections",
+    push: true,
+    translated: true,
+    // Made translated through the collection service, which takes the collection's own setting.
+    create: async (t, fields) => {
+      await t.getService("collectionService").createCollection(
+        {
+          name: "sts_articles",
+          label: "sts_articles",
+          localized: true,
+          fields,
+        } as Parameters<CollectionService["createCollection"]>[0],
+        {}
+      );
+    },
+    save: async (t, fields) =>
+      dispatchCollections(
+        {} as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: "sts_articles" },
+        {
+          fields,
+          confirmed: true,
+          localized: true,
+          schemaVersion: await versionOf(
+            t,
+            "dynamic_collections",
+            "sts_articles"
+          ),
+        }
+      ),
+    store: async (t, values) => {
+      await t.nextly.create({
+        collection: "sts_articles",
+        data: values,
+      } as never);
+    },
+    read: async t => {
+      const found = await t.nextly.find({
+        collection: "sts_articles",
+      } as never);
+      return (found.items[0] ?? {}) as Record<string, unknown>;
+    },
+  },
+  {
+    // The admin's update of a collection, which the development push applies.
+    name: "a collection's update (the push)",
+    slug: "sts_notes",
+    table: "dc_sts_notes",
+    registry: "dynamic_collections",
+    push: true,
+    create: async (_t, fields) => {
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        { name: "sts_notes", label: "sts_notes", fields }
+      );
+    },
+    save: (_t, fields) =>
+      dispatchCollections(
+        {} as ServiceContainer,
+        "updateCollection",
+        { collectionName: "sts_notes" },
+        { fields }
+      ),
+    store: async (t, values) => {
+      await t.nextly.create({ collection: "sts_notes", data: values } as never);
+    },
+    read: async t => {
+      const found = await t.nextly.find({ collection: "sts_notes" } as never);
+      return (found.items[0] ?? {}) as Record<string, unknown>;
+    },
+  },
 ];
 
 /**
- * Fail the first statement matching `pattern`, on the adapter or on a transaction, before it
- * runs. Returns how many statements it failed.
+ * Fail the first statement matching `pattern`, on the adapter, on a transaction, or among those
+ * the development push sends, before it runs. Returns how many statements it failed.
  */
 function failStatement(
   t: TestNextly,
@@ -272,6 +361,22 @@ function failStatement(
       options
     )
   );
+  // The push runs its statements through its own executor on a Drizzle transaction the adapter
+  // does not see: each is sent alone, so the ones before a failing statement run as they would.
+  const run = DrizzleStatementExecutor.prototype.executeStatements;
+  vi.spyOn(
+    DrizzleStatementExecutor.prototype,
+    "executeStatements"
+  ).mockImplementation(async function (
+    this: DrizzleStatementExecutor,
+    tx: unknown,
+    statements: string[]
+  ) {
+    for (const statement of statements) {
+      refuse(statement);
+      await run.call(this, tx, [statement]);
+    }
+  });
   return () => failed;
 }
 
@@ -345,13 +450,14 @@ describe.each(getConfiguredTestDialects())(
   (dialect: TestDialect) => {
     const history = () => join(basePath, HISTORY);
 
-    /** Boot in development, as the Builder runs, over the shared folder. */
-    async function boot(): Promise<TestNextly> {
+    /** Boot in development, as the Builder runs, over the shared folder; translated where `path` is. */
+    async function boot(path: SavePath): Promise<TestNextly> {
       vi.stubEnv("NODE_ENV", "development");
       current = await createTestNextly({
         dialect,
         basePath,
         db: { migrationsDir: HISTORY, uiSchemaFile: DEFINITION },
+        ...(path.translated === true ? { localization: LOCALIZATION } : {}),
       });
       return current;
     }
@@ -455,7 +561,7 @@ describe.each(getConfiguredTestDialects())(
       await current?.destroy();
       current = undefined;
       vi.unstubAllEnvs();
-      const fresh = await boot();
+      const fresh = await boot(path);
       await migrated(fresh);
       expect(
         await liveColumns(fresh, path.table),
@@ -467,8 +573,8 @@ describe.each(getConfiguredTestDialects())(
       it.runIf(dialect === "mysql")(
         "stopped at its second addition, keeps the first: one file for it, recorded applied, the definition and the registry at that shape",
         async () => {
-          const t = await boot();
-          await path.create([text("heading")]);
+          const t = await boot(path);
+          await path.create(t, [text("heading")]);
           await path.store?.(t, { heading: "Hello" });
           const folderBefore = filesBelow(history());
           const appliedBefore = await appliedFiles(t);
@@ -558,11 +664,13 @@ describe.each(getConfiguredTestDialects())(
         300_000
       );
 
-      it.runIf(dialect === "mysql")(
+      // The push drops a column holding data only on the dialog's answer for it, which these
+      // saves do not send: on the push its drops are judged by the push's own tests.
+      it.runIf(dialect === "mysql" && path.push !== true)(
         "stopped at an addition after a drop committed, stops naming the dropped field and keeps reading the rest",
         async () => {
-          const t = await boot();
-          await path.create([text("heading"), text("old_note")]);
+          const t = await boot(path);
+          await path.create(t, [text("heading"), text("old_note")]);
           await path.store?.(t, { heading: "Hello", old_note: "Gone" });
           const folderBefore = filesBelow(history());
           const failed = failStatement(t, adding(path.table, "beta"));
@@ -611,11 +719,12 @@ describe.each(getConfiguredTestDialects())(
         300_000
       );
 
-      it.runIf(dialect === "mysql")(
+      // As above: the push drops a column holding data only on the dialog's answer for it.
+      it.runIf(dialect === "mysql" && path.push !== true)(
         "whose second drop fails after the first committed, names that column again with its values readable",
         async () => {
-          const t = await boot();
-          await path.create([text("heading"), text("old_a"), text("old_b")]);
+          const t = await boot(path);
+          await path.create(t, [text("heading"), text("old_a"), text("old_b")]);
           await path.store?.(t, {
             heading: "Hello",
             old_a: "Kept a",
@@ -678,11 +787,15 @@ describe.each(getConfiguredTestDialects())(
         300_000
       );
 
-      it.runIf(dialect !== "mysql")(
+      // SQLite's push keeps the statements before one that fails, so there a push is not one
+      // transaction: only PostgreSQL's push rolls back whole.
+      it.runIf(
+        dialect !== "mysql" && !(path.push === true && dialect === "sqlite")
+      )(
         "stopped at its second addition, rolls back whole and records no step",
         async () => {
-          const t = await boot();
-          await path.create([text("heading")]);
+          const t = await boot(path);
+          await path.create(t, [text("heading")]);
           const folderBefore = filesBelow(history());
           const appliedBefore = await appliedFiles(t);
           const columnsBefore = await liveColumns(t, path.table);
