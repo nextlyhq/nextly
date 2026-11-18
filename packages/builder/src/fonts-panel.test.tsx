@@ -172,6 +172,17 @@ describe("the site's fonts", () => {
     ).toEqual(["From Google Fonts", "Upload a font file"]);
   });
 
+  it("says a failed save of the site's fonts in the catalogue too", async () => {
+    panel({ issue: "The site style wasn't saved. Try again." });
+    await openMenu();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "From Google Fonts" })
+    );
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "The site style wasn't saved. Try again."
+    );
+  });
+
   it("offers only the upload when the host has no catalogue", async () => {
     panel({ catalogue: undefined });
     await openMenu();

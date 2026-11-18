@@ -23,7 +23,11 @@ import {
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+const toasts = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  dismiss: vi.fn(),
+}));
 vi.mock("@nextlyhq/ui", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/ui")>()),
   toast: toasts,
@@ -36,6 +40,7 @@ import type { VariableReach, VariablesAccess } from "./variable-usage";
 afterEach(() => {
   cleanup();
   toasts.success.mockReset();
+  toasts.dismiss.mockReset();
 });
 
 const file = (id: string) => [{ url: `/api/media/${id}/raw`, format: "woff2" }];
@@ -520,6 +525,16 @@ describe("using a font once it is added", () => {
       values: { light: '"Inter", sans-serif', dark: '"Lora", serif' },
     });
     expect(undone.siteText).toEqual(initial.siteText);
+  });
+
+  it("takes its Undo away once the screen is left, so it never writes an old set", async () => {
+    toasts.success.mockReturnValue("use-for-toast");
+    const view = render(<Writable onWrite={vi.fn()} />);
+    await upload("Brand");
+    fireEvent.click(screen.getByRole("button", { name: "Headings" }));
+    expect(toasts.dismiss).not.toHaveBeenCalled();
+    view.unmount();
+    expect(toasts.dismiss).toHaveBeenCalledWith("use-for-toast");
   });
 
   it("closes the upload editor once a role is chosen, so the toast and the canvas are in reach", async () => {

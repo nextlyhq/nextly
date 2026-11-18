@@ -281,6 +281,7 @@ export function FontsPanel({
     return (
       <>
         {question}
+        <SaveIssue issue={studio.issue} />
         <FontCatalogueView
           catalogue={catalogue}
           initialQuery={view.query}
@@ -537,12 +538,25 @@ function ListNotes({
           {`You can view the site’s ${words().fonts} but not change them.`}
         </p>
       ) : null}
-      {issue === undefined ? null : (
-        <p className="nx-vars__alert" role="alert">
-          {issue}
-        </p>
-      )}
+      <SaveIssue issue={issue} />
     </>
+  );
+}
+
+/**
+ * A save of the site's variables that failed, as the Variables tab says it:
+ * in the list and in the catalogue, wherever a role was chosen.
+ */
+function SaveIssue({
+  issue,
+}: {
+  issue: string | undefined;
+}): React.JSX.Element | null {
+  if (issue === undefined) return null;
+  return (
+    <p className="nx-vars__alert" role="alert">
+      {issue}
+    </p>
   );
 }
 

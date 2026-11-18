@@ -284,6 +284,16 @@ export function useUseFor(host: UseForHost): {
   readonly dismiss: (family: string) => void;
 } {
   const [asked, setAsked] = React.useState<Asked | null>(null);
+  // The toast whose Undo builds on this screen's copy of the variables. It
+  // goes when the screen does: past that, the copy no longer follows edits
+  // made elsewhere, and an Undo would write them away.
+  const offered = React.useRef<string | number | undefined>(undefined);
+  React.useEffect(
+    () => () => {
+      if (offered.current !== undefined) toast.dismiss(offered.current);
+    },
+    []
+  );
   // The variables as last drawn, so an Undo pressed later builds on them.
   const latest = React.useRef(host.tokens);
   latest.current = host.tokens;
@@ -310,7 +320,7 @@ export function useUseFor(host: UseForHost): {
     );
     onTokensChange(set);
     host.onChosen?.();
-    toast.success(nowYourFontWords(asked.family, roles), {
+    offered.current = toast.success(nowYourFontWords(asked.family, roles), {
       action: {
         label: "Undo",
         onClick: () => {
