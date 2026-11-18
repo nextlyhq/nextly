@@ -23,7 +23,11 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
-import type { BindingFieldChoice, ListSample } from "./binding-services";
+import type {
+  BindingFieldChoice,
+  ListSample,
+  ListSampleValue,
+} from "./binding-services";
 import { useLoopCollections } from "./collection-loop-controls";
 import type { ContentServices, LoopCollection } from "./content-controls";
 import { useCustomSources } from "./list-query-controls";
@@ -166,31 +170,58 @@ export function useItemSource(
   if (!item || found !== undefined) return found;
   // An item binding outside every list still names its source, with no
   // fields to name its field from: the save refuses it there.
-  return { name: "Each entry in the list", one: "entry", fields: [], loading: false };
+  return {
+    name: "Each entry in the list",
+    one: "entry",
+    fields: [],
+    loading: false,
+  };
+}
+
+/**
+ * A sampled value as a field choice says it: its start as text, a picture's
+ * thumbnail, or that the field holds nothing.
+ */
+function sampled(
+  value: ListSampleValue | undefined,
+  field: ItemField,
+  picture: string | undefined
+): Pick<BindingFieldChoice, "preview" | "thumbnail" | "empty"> {
+  if (picture !== undefined) return { thumbnail: picture };
+  if (value === undefined) return {};
+  // A media item stored by its id: its picture, once read, never the id.
+  if (typeof value === "string") {
+    return field.type === "upload" ? {} : { preview: value };
+  }
+  return "thumbnail" in value
+    ? { thumbnail: value.thumbnail }
+    : { empty: true as const };
 }
 
 /**
  * A list item's fields as the picker lists them: each one visitors may read
- * (only those are listed for an item), with its value in the list's first
- * entry where the host read one, one step into a group or a relation.
+ * (only those are listed for an item), with its value in the sampled entry
+ * (the one the author clicked, else the first) where the host read one, one
+ * step into a group or a relation.
  */
 export function itemChoices(
   fields: readonly ItemField[],
   sample: ListSample | undefined,
-  parent?: string
+  parent?: string,
+  /** The pictures the sample names by id, read, by the field's path. */
+  pictures?: ReadonlyMap<string, string>
 ): readonly BindingFieldChoice[] {
   return fields.map(field => {
     const { fields: inside, ...own } = field;
     const path = parent === undefined ? field.name : `${parent}.${field.name}`;
-    const preview = sample?.[path];
     return {
       ...own,
       public: true,
-      ...(preview === undefined ? {} : { preview }),
+      ...sampled(sample?.[path], field, pictures?.get(path)),
       // One step in, as the host lists a source's fields.
       ...(inside === undefined || parent !== undefined
         ? {}
-        : { fields: itemChoices(inside, sample, path) }),
+        : { fields: itemChoices(inside, sample, path, pictures) }),
     };
   });
 }

@@ -387,15 +387,15 @@ for (const theme of ["dark", "light"] as const) {
 }
 
 test.describe("with the system in dark mode", () => {
-  test("the canvas page follows the site's own dark mode, not the admin's light one", async ({
+  test("the canvas page follows the site's own dark mode once previewed dark, not the admin's light one", async ({
     page,
     context,
   }) => {
     /*
      * The playground's site darkens with the system (its strategy is `media`),
-     * while the admin here is pinned to LIGHT. The canvas is drawn inside the
-     * site's own page, so it goes dark exactly as the published page does:
-     * the same ground and the same colour scheme, never the admin's.
+     * while the admin here is pinned to LIGHT. Once the top bar previews dark,
+     * the canvas is drawn as the published page is on a dark system: the same
+     * ground and the same colour scheme, never the admin's.
      */
     test.slow();
     await page.emulateMedia({ colorScheme: "dark" });
@@ -410,13 +410,23 @@ test.describe("with the system in dark mode", () => {
 
     await openBuilder(page, "light");
     const canvas = canvasFrame(page).locator(".nx-canvas");
-    expect(
-      await canvas.evaluate(element => getComputedStyle(element).colorScheme)
-    ).toBe(site.colorScheme);
-    const ground = await toRgb(page, await groundBehind(canvasPage(page)));
-    expect(ground, "the canvas ground is the published page's").toEqual(
-      site.ground
-    );
+    const scheme = () =>
+      canvas.evaluate(element => getComputedStyle(element).colorScheme);
+    const groundNow = async () =>
+      toRgb(page, await groundBehind(canvasPage(page)));
+    // The preview starts light; the site's own stylesheet, which reads the
+    // device's preference itself, is the site's to follow.
+    const darkPreview = page.getByRole("button", {
+      name: "Preview in dark mode",
+    });
+    await expect(darkPreview).toHaveAttribute("aria-pressed", "false");
+
+    await darkPreview.click();
+    await expect.poll(scheme).toBe(site.colorScheme);
+    await expect
+      .poll(groundNow, { message: "the canvas ground is the published page's" })
+      .toEqual(site.ground);
+    const ground = await groundNow();
     const pageText = await toRgb(
       page,
       await canvasText(page).evaluate(

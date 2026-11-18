@@ -66,7 +66,7 @@ const MAKE_DEFAULT_ACTION_ID = "page-builder-make-site-default";
 const PUBLISH_THEN_DEFAULT_ACTION_ID = "page-builder-publish-then-make-default";
 
 /** The set a row action was chosen on. */
-interface MakeDefaultAsked {
+export interface MakeDefaultAsked {
   readonly id: string;
   readonly title: string;
   readonly published: boolean;
@@ -253,56 +253,40 @@ function useMakeDefaultActions(
 }
 
 /**
- * Above the Header & footer list: the "Make site default" row actions, and
- * the question a set with unpublished parts asks before it becomes the
- * default. `collectionSlug` is the list's own, renamed or not.
+ * The whole "Make site default" flow for a set, as one start and the
+ * question it may ask: shared by the Header & footer list's row actions and
+ * the builder's Pages panel, so both ask the same question and make the same
+ * writes.
+ *
+ * @param on.published - after a publish the flow made, whatever follows
+ * @param on.made - after the set became the default
  */
-export function MakeDefaultListTools({
-  collectionSlug,
-}: {
-  readonly collectionSlug?: string;
-}): JSX.Element {
-  const read = usePluginRoute<SiteSettingsRead>({
-    plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path: SITE_SETTINGS_ROUTE_PATH,
-    staleTime: 0,
-  });
-  const { refetch } = read;
+export function useMakeDefaultFlow(on: {
+  readonly published: () => void;
+  readonly made: () => void;
+}): {
+  readonly start: (asked: MakeDefaultAsked) => void;
+  readonly dialog: JSX.Element;
+} {
   const [question, setQuestion] = useState<{
     readiness: PublishReadinessResponse;
     answer: (choice: PublishChoice) => void;
   } | null>(null);
-  const refetchLatest = useLatest(refetch);
-  // One function for as long as the list is shown, so the actions are
+  const onLatest = useLatest(on);
+  // One function for as long as the caller is shown, so a list's actions are
   // registered once per change of who may and which set is the default.
-  const queryClient = useQueryClient();
-  // The list's own entries read, which a plugin route's write leaves as it
-  // was: invalidated after a publish, so the published set's row shows its
-  // new status and stops offering to publish it.
-  const listLatest = useLatest(collectionSlug ?? "");
   const [start] = useState(() => (asked: MakeDefaultAsked) => {
     void makeSiteDefault(asked, {
       ask: readiness =>
         new Promise<PublishChoice>(resolve => {
           setQuestion({ readiness, answer: resolve });
         }),
-      published: () => {
-        void queryClient.invalidateQueries({
-          queryKey: ["entries", "list", listLatest.current],
-        });
-      },
+      published: () => onLatest.current.published(),
     }).then(made => {
-      // The new default's row no longer offers to become it.
-      if (made) refetchLatest.current();
+      if (made) onLatest.current.made();
     });
   });
-  useMakeDefaultActions(
-    collectionSlug ?? "",
-    read.data?.mayChooseDefaultLayout === true,
-    read.data?.defaultLayout ?? null,
-    start
-  );
-  return (
+  const dialog = (
     <PublishOfferDialog
       readiness={question?.readiness ?? null}
       subject="header & footer set"
@@ -318,6 +302,44 @@ export function MakeDefaultListTools({
       }
     />
   );
+  return { start, dialog };
+}
+
+/**
+ * Above the Header & footer list: the "Make site default" row actions, and
+ * the question a set with unpublished parts asks before it becomes the
+ * default. `collectionSlug` is the list's own, renamed or not.
+ */
+export function MakeDefaultListTools({
+  collectionSlug,
+}: {
+  readonly collectionSlug?: string;
+}): JSX.Element {
+  const read = usePluginRoute<SiteSettingsRead>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: SITE_SETTINGS_ROUTE_PATH,
+    staleTime: 0,
+  });
+  const queryClient = useQueryClient();
+  const { start, dialog } = useMakeDefaultFlow({
+    // The list's own entries read, which a plugin route's write leaves as it
+    // was: invalidated after a publish, so the published set's row shows its
+    // new status and stops offering to publish it.
+    published: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["entries", "list", collectionSlug ?? ""],
+      });
+    },
+    // The new default's row no longer offers to become it.
+    made: () => read.refetch(),
+  });
+  useMakeDefaultActions(
+    collectionSlug ?? "",
+    read.data?.mayChooseDefaultLayout === true,
+    read.data?.defaultLayout ?? null,
+    start
+  );
+  return dialog;
 }
 
 /** The newest `value`, read later without re-subscribing to it. */

@@ -81,25 +81,58 @@ import { EDITING_ATTRIBUTE } from "./use-inline-text";
 /**
  * The marks that are the marked element's outline and nothing more, by the
  * attribute that asks for each: a block an edit to the look being edited
- * reaches, and a drop's parent and refused target.
+ * reaches, and a drop's parent and refused target. Each with how far its
+ * outline is drawn outside its box, the stylesheet's offset and width
+ * together (`canvas.css`), which it is kept that far inside the page by.
  */
 const OUTLINE_MARKS = [
-  [LOOK_REACH_ATTRIBUTE, "look-reach"],
-  [DROP_PARENT_ATTRIBUTE, "drop-parent"],
-  [DROP_REFUSED_ATTRIBUTE, "drop-refused"],
+  [LOOK_REACH_ATTRIBUTE, "look-reach", 5],
+  [DROP_PARENT_ATTRIBUTE, "drop-parent", 4],
+  [DROP_REFUSED_ATTRIBUTE, "drop-refused", 4],
 ] as const;
 
 /**
+ * `rect` pulled in from the page's edges by `reach` on each side where an
+ * outline that far outside it would run past them: the page meets the canvas
+ * region's edges, which cut off anything drawn past them.
+ */
+function pulledInFrom(page: Rect, rect: Rect, reach: number): Rect {
+  const kept = withinRect(
+    {
+      x: rect.x - reach,
+      y: rect.y - reach,
+      width: rect.width + 2 * reach,
+      height: rect.height + 2 * reach,
+    },
+    page
+  );
+  return {
+    x: kept.x + reach,
+    y: kept.y + reach,
+    width: Math.max(0, kept.width - 2 * reach),
+    height: Math.max(0, kept.height - 2 * reach),
+  };
+}
+
+/**
  * The marks drawn over an element's box alone that it asks for, drawn as
- * `box`: its outline-only marks, and the stripes and tag of a block the page
- * hides on the device shown. Those are drawn here, over the canvas, rather
+ * `box`: its outline-only marks, kept on the `page`, and the stripes and tag
+ * of a block the page hides on the device shown. Those are drawn here, over the canvas, rather
  * than by an overlay inside the block, which would need the block to hold it
  * and so move what its fixed or absolutely placed blocks are laid out against.
  */
-function outlineMarksOf(marked: Element, box: Omit<Mark, "kind">): Mark[] {
+function outlineMarksOf(
+  marked: Element,
+  box: Omit<Mark, "kind">,
+  page: Rect
+): Mark[] {
   const marks: Mark[] = OUTLINE_MARKS.filter(([attribute]) =>
     marked.hasAttribute(attribute)
-  ).map(([, kind]) => ({ ...box, kind }));
+  ).map(([, kind, reach]) => ({
+    ...box,
+    rect: pulledInFrom(page, box.rect, reach),
+    kind,
+  }));
   const deviceTag = marked.getAttribute(DEVICE_HIDDEN_ATTRIBUTE);
   if (deviceTag !== null) {
     marks.push({ ...box, kind: "device-hidden", deviceTag });
@@ -466,28 +499,52 @@ function outlineOf(
 
 /**
  * Where a selection ring is drawn for an outline: outside the block by
- * {@link RING_OUTSIDE}, with its rounded corners grown to stay concentric.
- * The layer reaches as far past the frame, so a block flush with the page's
- * edge keeps its ring there too.
+ * {@link RING_OUTSIDE}, with its rounded corners grown to stay concentric,
+ * and never past the page's edges (`page`, in the chrome's coordinates).
+ *
+ * The page meets the canvas region's edges, and the region cuts off whatever
+ * is drawn past them, so a ring outside a block flush with the page's edge
+ * lost that side. On such a side the ring stays on the page, over the
+ * block's edge, so all four of its sides are on screen.
  *
  * A clipped outline is drawn where it is: the page shows nothing past the
  * clip, so a ring outside it would ring what the reader cannot see.
  */
-function ringOf(outline: Outline): Outline {
+function ringOf(outline: Outline, page: Rect): Outline {
   if (outline.clipped) return outline;
   const { x, y, width, height } = outline.rect;
   const radii = outsetCornerRadii(outline.radii, RING_OUTSIDE);
   return {
-    rect: {
-      x: x - RING_OUTSIDE,
-      y: y - RING_OUTSIDE,
-      width: width + 2 * RING_OUTSIDE,
-      height: height + 2 * RING_OUTSIDE,
-    },
+    rect: withinRect(
+      {
+        x: x - RING_OUTSIDE,
+        y: y - RING_OUTSIDE,
+        width: width + 2 * RING_OUTSIDE,
+        height: height + 2 * RING_OUTSIDE,
+      },
+      page
+    ),
     radius: borderRadiusOf(radii),
     radii,
     clipped: false,
     ...(outline.shaped === true ? { shaped: true } : {}),
+  };
+}
+
+/**
+ * `rect` cut to `bounds` on each side it runs past them; left as it is where
+ * it lies inside them. A rectangle wholly outside keeps no area.
+ */
+function withinRect(rect: Rect, bounds: Rect): Rect {
+  const left = Math.max(rect.x, bounds.x);
+  const top = Math.max(rect.y, bounds.y);
+  const right = Math.min(rect.x + rect.width, bounds.x + bounds.width);
+  const bottom = Math.min(rect.y + rect.height, bounds.y + bounds.height);
+  return {
+    x: left,
+    y: top,
+    width: Math.max(0, right - left),
+    height: Math.max(0, bottom - top),
   };
 }
 
@@ -759,7 +816,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): Measured {
         if (placement !== "") {
           gatherPlacement(placements, copies, marked, placement, outline, look);
         } else {
-          found.push(selectedMark(ringOf(outline), look, placedTag));
+          found.push(selectedMark(ringOf(outline, pageBox), look, placedTag));
         }
       }
       // An exposed part keeps its dash inside its placement's frame. A block
@@ -777,10 +834,10 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): Measured {
         });
       }
       // The marks drawn as the element's outline alone, one per attribute.
-      found.push(...outlineMarksOf(marked, { ...outline, ...plain }));
+      found.push(...outlineMarksOf(marked, { ...outline, ...plain }, pageBox));
     });
   placements.forEach(({ placement, parts, ...look }) => {
-    const ring = ringOf(placementOutline(parts));
+    const ring = ringOf(placementOutline(parts), pageBox);
     found.push({
       ...selectedMark(ring, look, placedTag, placement),
       // Measured from the top of what is on screen rather than of the page:

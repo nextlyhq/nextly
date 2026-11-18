@@ -12,12 +12,14 @@ import { isTokenRef } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import { fieldLabel } from "./inspector";
+import { siteDefaultSource } from "./site-default-source";
 import { CompactSides } from "./spacing-box";
 import { SpacingRingContext } from "./spacing-side";
 import type { StyleControl } from "./style-controls";
 import { StyleControlField } from "./style-field-shell";
 import {
   StyleTargetContext,
+  TokenPrefixContext,
   type StyleFieldSurroundings,
 } from "./style-field-surroundings";
 import { fieldStyles } from "./style-field-target";
@@ -118,6 +120,7 @@ export function SpacingBox({
     />
   );
   const bound = useAnySideBound([margin, padding], surroundings);
+  const siteDefault = useSiteDefaultSource(padding, surroundings);
   return (
     <div className="nx-spacing-box">
       <CompactSides.Provider value={true}>
@@ -133,6 +136,11 @@ export function SpacingBox({
           </SpacingRing>
         )}
       </CompactSides.Provider>
+      {siteDefault === undefined ? null : (
+        <p className="nx-spacing-box__note" data-site-default="">
+          {siteDefault}
+        </p>
+      )}
       {bound ? (
         <p className="nx-spacing-box__note">
           Green values come from your spacing variables.
@@ -140,6 +148,31 @@ export function SpacingBox({
       ) : null}
     </div>
   );
+}
+
+/**
+ * The site setting the padding comes from, once, under the box: "Site
+ * default: Section spacing" on a new Section, whose padding reads the site's
+ * section spacing variables. `undefined` when no side takes its value from a
+ * site setting, or the sides take it from two.
+ */
+function useSiteDefaultSource(
+  padding: InspectedStyleProperty,
+  surroundings: StyleFieldSurroundings
+): string | undefined {
+  const tokenPrefix = React.useContext(TokenPrefixContext);
+  const sources = new Set<string>();
+  for (const control of padding.controls) {
+    const provenance = surroundings.provenanceOf(control.leaf)?.provenance;
+    if (provenance?.kind !== "inherited") continue;
+    const source = siteDefaultSource(
+      provenance.from,
+      provenance.entry,
+      tokenPrefix
+    );
+    if (source !== undefined) sources.add(source);
+  }
+  return sources.size === 1 ? [...sources][0] : undefined;
 }
 
 /** Whether any side of the box holds a variable, at the tier being edited. */
@@ -188,40 +221,43 @@ function SpacingRing({
       data-property={property.property}
     >
       <SpacingRingContext.Provider value={box}>
-      <SideBoxFrame box={box} ring={ring}>
-        {/* Seen, not heard: every side's own name already says it. */}
-        <span className="nx-spacing-box__caption" aria-hidden="true">
-          {property.label}
-        </span>
-        {box.controls.map(control => {
-          const name = spacingSideName(property, box, control);
-          return (
-            <StyleControlField
-              key={[state, breakpoint, property.property, ...control.path].join(
-                "."
-              )}
-              control={control}
-              side={sideOf(box, control)}
-              label={name}
-              summary={undefined}
-              // The side's whole name, so its actions say "Reset Margin top"
-              // rather than naming the property twice.
-              propertyLabel={name}
-              clearOnly={control.withheld}
-              nodeId={surroundings.nodeId}
-              state={state}
-              breakpoint={breakpoint}
-              editor={surroundings.editor}
-              policy={surroundings.policy}
-              tokens={surroundings.tokens}
-              prefersDark={surroundings.prefersDark}
-              provenanceOf={surroundings.provenanceOf}
-              editing={surroundings.editing}
-            />
-          );
-        })}
-        {children}
-      </SideBoxFrame>
+        <SideBoxFrame box={box} ring={ring}>
+          {/* Seen, not heard: every side's own name already says it. */}
+          <span className="nx-spacing-box__caption" aria-hidden="true">
+            {property.label}
+          </span>
+          {box.controls.map(control => {
+            const name = spacingSideName(property, box, control);
+            return (
+              <StyleControlField
+                key={[
+                  state,
+                  breakpoint,
+                  property.property,
+                  ...control.path,
+                ].join(".")}
+                control={control}
+                side={sideOf(box, control)}
+                label={name}
+                summary={undefined}
+                // The side's whole name, so its actions say "Reset Margin top"
+                // rather than naming the property twice.
+                propertyLabel={name}
+                clearOnly={control.withheld}
+                nodeId={surroundings.nodeId}
+                state={state}
+                breakpoint={breakpoint}
+                editor={surroundings.editor}
+                policy={surroundings.policy}
+                tokens={surroundings.tokens}
+                prefersDark={surroundings.prefersDark}
+                provenanceOf={surroundings.provenanceOf}
+                editing={surroundings.editing}
+              />
+            );
+          })}
+          {children}
+        </SideBoxFrame>
       </SpacingRingContext.Provider>
     </div>
   );

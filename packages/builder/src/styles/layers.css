@@ -26,6 +26,17 @@
   background: var(--nx-builder-surface-raised);
 }
 
+/* Selected, as a selected block's row is: the theme's selection surface. */
+.nx-layers-region[aria-pressed="true"] {
+  border-style: solid;
+  background: var(--nx-accent);
+  color: var(--nx-accent-foreground);
+}
+
+.nx-layers-region[aria-pressed="true"] .nx-layers-region__origin {
+  color: inherit;
+}
+
 .nx-layers-region:focus-visible {
   outline: 2px solid var(--nx-builder-accent);
   outline-offset: -2px;

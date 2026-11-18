@@ -505,7 +505,7 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
     setting: "afterSending",
     tab: "content",
     section: "After sending",
-    label: "After sending",
+    label: "Then",
   },
   {
     block: "core/form",
@@ -551,6 +551,13 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   },
   {
     block: "core/gallery",
+    setting: "whenClicked",
+    tab: "content",
+    section: "Layout",
+    label: "When clicked",
+  },
+  {
+    block: "core/gallery",
     setting: "as",
     tab: "advanced",
     section: "HTML",
@@ -593,10 +600,38 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   },
   {
     block: "core/quote",
-    setting: "citeUrl",
+    setting: "href",
     tab: "content",
     section: "Source",
-    label: "Source URL",
+    label: "Source link",
+  },
+  {
+    block: "core/quote",
+    setting: "entryCollection",
+    tab: "content",
+    section: "Source",
+    label: "Linked collection",
+  },
+  {
+    block: "core/quote",
+    setting: "entryId",
+    tab: "content",
+    section: "Source",
+    label: "Linked entry",
+  },
+  {
+    block: "core/quote",
+    setting: "target",
+    tab: "content",
+    section: "Source",
+    label: "Open in a new tab",
+  },
+  {
+    block: "core/quote",
+    setting: "rel",
+    tab: "advanced",
+    section: "HTML",
+    label: "Link relationship",
   },
   {
     block: "core/embed",

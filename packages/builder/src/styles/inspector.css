@@ -151,6 +151,28 @@
   color: var(--nx-muted-foreground);
 }
 
+/* A picture's way back to its gallery: a quiet text button under the
+   title, in the panel's own colours, so it reads as a step back rather
+   than one more setting. */
+.nx-block-card__back {
+  align-self: flex-start;
+  padding: 0.125rem 0.25rem;
+  margin-inline-start: -0.25rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--nx-muted-foreground);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.nx-block-card__back:hover,
+.nx-block-card__back:focus-visible {
+  color: var(--nx-foreground);
+  background: var(--nx-accent);
+}
+
 .nx-block-card__menu {
   display: inline-flex;
   align-items: center;

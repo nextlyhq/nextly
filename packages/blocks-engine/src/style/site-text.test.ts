@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
+
 import { compilePageCss } from "./compile-page";
 import {
   DEFAULT_SITE_TEXT,
@@ -13,6 +15,8 @@ import {
   siteTextUses,
   type SiteTextMap,
 } from "./site-text";
+import { compileSiteSheet } from "./site-sheet";
+import { resolveSiteTokens } from "./site-tokens";
 
 const NO_BREAKPOINTS = { viewport: [], container: [] };
 
@@ -246,5 +250,116 @@ describe("what uses a variable", () => {
     expect(siteTextRoleOf("h2", "color")).toBeUndefined();
     expect(siteTextRoleOf("a", "font-size")).toBeUndefined();
     expect(siteTextRoleOf("p", "margin-block-start")).toBeUndefined();
+  });
+});
+
+describe("the Body and Headings fonts", () => {
+  /** Every heading row as built in, pointed at the Headings font too. */
+  const headingsAt = (font: string) =>
+    Object.fromEntries(
+      (["h1", "h2", "h3", "h4", "h5", "h6"] as const).map(level => [
+        level,
+        { ...DEFAULT_SITE_TEXT[level], fontFamily: { $token: font } },
+      ])
+    );
+
+  it("writes the Body font on the page root and the Headings font on every heading, through their variables", () => {
+    const css = sheetOf({
+      body: { fontFamily: { $token: "font.body" } },
+      ...headingsAt("font.heading"),
+    });
+    expect(css).toMatch(
+      /^\.nx-pb-page \{ font-family: var\(--site-font-body\) \}$/m
+    );
+    for (const level of [1, 2, 3, 4, 5, 6]) {
+      expect(css).toContain(
+        `.nx-pb-page :where(h${level}) { font-family: var(--site-font-heading); font-size: var(--site-font-size-h${level});`
+      );
+    }
+    // Nothing on paragraphs: they take the root's font by inheritance, so a
+    // block that sets its own font still passes it to the text inside it.
+    expect(css).not.toMatch(/:where\(p\) \{[^}]*font-family/);
+  });
+
+  it("writes no font at all for a site that never picked one", () => {
+    expect(sheetOf(undefined)).not.toContain("font-family");
+    const shared = compileSiteSheet(
+      { breakpoints: FIXTURE_BREAKPOINTS, tokens: resolveSiteTokens() },
+      {}
+    ).css;
+    // The variables are declared, and nothing reads them.
+    expect(shared).toContain("--site-font-body:");
+    expect(shared).not.toContain("font-family");
+  });
+
+  it("declares font.body and font.heading for a host's own CSS to read", () => {
+    const { css } = compileSiteSheet(
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        tokens: resolveSiteTokens({
+          tokens: [
+            {
+              name: "font.body",
+              kind: "fontFamily",
+              values: { light: '"Inter", sans-serif' },
+            },
+          ],
+        }),
+      },
+      {}
+    );
+    expect(css).toContain('--site-font-body:"Inter", sans-serif');
+    // Built in, so a host can read it before the site sets it.
+    expect(css).toContain("--site-font-heading:system-ui");
+  });
+
+  it("starts the Headings font as a built-in variable no heading reads", () => {
+    const heading = resolveSiteTokens().tokens.find(
+      token => token.name === "font.heading"
+    );
+    expect(heading).toMatchObject({ kind: "fontFamily" });
+    expect(
+      Object.values(DEFAULT_SITE_TEXT).some(row => row?.fontFamily !== undefined)
+    ).toBe(false);
+  });
+
+  it("accepts a font on every row but Links, and names the row of a font it refuses", () => {
+    expect(
+      siteTextIssues({
+        body: { fontFamily: { $token: "font.body" } },
+        h2: { fontFamily: '"Lora", serif', fontSize: "2rem" },
+        caption: { fontFamily: "ui-monospace, monospace" },
+      })
+    ).toEqual([]);
+    const issues = siteTextIssues({
+      link: { fontFamily: "serif" },
+      body: { fontFamily: "serif; color: red" },
+    });
+    expect(issues.map(issue => issue.path).sort()).toEqual([
+      "siteText/body/fontFamily",
+      "siteText/link/fontFamily",
+    ]);
+    expect(
+      issues.find(issue => issue.path === "siteText/body/fontFamily")?.message
+    ).toMatch(/^Body's font: /);
+  });
+
+  it("names the rows a font variable is used by, and the font as a row's own declaration", () => {
+    const uses = siteTextUses({
+      body: { fontFamily: { $token: "font.body" } },
+      ...headingsAt("font.heading"),
+    });
+    expect(uses.get("font.body")).toEqual(["body"]);
+    expect(uses.get("font.heading")).toEqual([
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6",
+    ]);
+    expect(siteTextRoleOf("root", "font-family")).toBe("body");
+    expect(siteTextRoleOf("h3", "font-family")).toBe("h3");
+    expect(siteTextRoleOf("a", "font-family")).toBeUndefined();
   });
 });

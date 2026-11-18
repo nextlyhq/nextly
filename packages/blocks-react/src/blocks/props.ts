@@ -244,21 +244,25 @@ export type WhenClicked = (typeof WHEN_CLICKED)[number];
 /**
  * What a click on a picture does, read from its props: the stored choice
  * where it is one, else Link while a link is set (an address the page would
- * follow, or an entry), else Nothing.
+ * follow, or an entry), else `followed`, the choice of the gallery the
+ * picture sits in, else Nothing.
  *
  * The one reading the Image's render, its content model and the editor's
  * panel ask, so the three cannot disagree. Unset is how every Image stored
  * before the choice existed reads, and how a new one is placed, so a linked
- * one still links and a new one waits for the author's choice.
+ * one still links, one in a gallery does what the gallery says, and any
+ * other waits for the author's choice.
  *
  * @experimental
  */
 export function whenClickedOf(
-  props: Readonly<LinkProps & { whenClicked?: unknown }>
+  props: Readonly<LinkProps & { whenClicked?: unknown }>,
+  followed?: WhenClicked
 ): WhenClicked {
   const stored = WHEN_CLICKED.find(choice => choice === props.whenClicked);
   if (stored !== undefined) return stored;
-  return canLink(props) ? "link" : "nothing";
+  if (canLink(props)) return "link";
+  return followed ?? "nothing";
 }
 
 /**

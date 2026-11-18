@@ -127,8 +127,9 @@ export function AfterSendingControl({
   return (
     <div className="nx-form-after" data-content-control="after-sending">
       <div className="nx-inspector__field nx-inspector__field--stacked">
+        {/* Its own name, not the section's title again right above it. */}
         <p className="nx-inspector__field-name" id={`${id}-label`}>
-          After sending
+          Then
         </p>
         {picked === undefined ? (
           <SegmentedChoice

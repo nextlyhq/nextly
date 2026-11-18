@@ -39,6 +39,9 @@ function verbs(): CommandVerbs & Record<string, ReturnType<typeof vi.fn>> {
     move: vi.fn(),
     delete: vi.fn(),
     duplicate: vi.fn(),
+    copy: vi.fn(),
+    cut: vi.fn(),
+    paste: vi.fn(),
     selectParent: vi.fn(),
     saveAsPattern: vi.fn(),
     editComponent: vi.fn(),
@@ -87,8 +90,21 @@ function build(
 }
 
 describe("builderCommands", () => {
-  it("offers no block commands without a selection", () => {
-    expect(build({}, { selectedId: null }).map(c => c.id)).toEqual([]);
+  it("offers no block commands without a selection, but Paste", () => {
+    // Paste with nothing selected lands at the end of the page, so search
+    // offers it on a blank page too.
+    expect(build({}, { selectedId: null }).map(c => c.id)).toEqual([
+      "block.paste",
+    ]);
+  });
+
+  it("offers Paste once with a selection, and runs the paste verb", () => {
+    const run = verbs();
+    const commands = build({ verbs: run }, { selectedId: "a" });
+    const paste = commands.filter(command => command.id === "block.paste");
+    expect(paste).toHaveLength(1);
+    paste[0]?.run();
+    expect(run.paste).toHaveBeenCalledTimes(1);
   });
 
   it("omits a block verb the toolbar would show as unavailable", () => {
