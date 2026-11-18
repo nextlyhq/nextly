@@ -1501,6 +1501,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             fields: fields as unknown as FieldDefinition[],
             renameResolutions,
             resolutions,
+            eventResolutions,
             dialect: adapter.dialect,
             translatedAfter: layout.isStored,
           });

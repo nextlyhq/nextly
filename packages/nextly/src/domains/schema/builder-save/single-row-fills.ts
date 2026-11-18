@@ -19,7 +19,9 @@ import type {
   LegacyFieldResolution,
   LegacyResolutionsBundle,
 } from "../pipeline/prompt-dispatcher/browser";
+import { parseEventId, type Resolution } from "../pipeline/resolution/types";
 import {
+  fieldProducesColumn,
   fieldsStoredOnRow,
   toSnakeCase,
 } from "../services/field-column-descriptor";
@@ -38,8 +40,10 @@ export function namedOnRow(
 }
 
 /**
- * The fields a save adds to a Single's table: stored on its row after the save, and neither there
- * before it nor renamed onto (a rename keeps the value the column holds).
+ * The fields a save adds to a Single's table: stored on its row after the save, and neither a
+ * column of the row before it (`fieldProducesColumn`: a many-to-many or a field group's field of
+ * the same name kept its values elsewhere) nor renamed onto (a rename keeps the value the column
+ * holds).
  */
 export function fieldsNewToSingleTable(args: {
   oldFields: readonly FieldDefinition[];
@@ -48,7 +52,9 @@ export function fieldsNewToSingleTable(args: {
   renamedTo: readonly string[];
 }): (FieldDefinition & { name: string })[] {
   const kept = new Set([
-    ...namedOnRow(args.oldFields).map(field => toSnakeCase(field.name)),
+    ...namedOnRow(args.oldFields)
+      .filter(field => fieldProducesColumn(field))
+      .map(field => toSnakeCase(field.name)),
     ...args.renamedTo,
   ]);
   return namedOnRow(args.newFields).filter(
@@ -88,6 +94,8 @@ export function dialogRowAnswers(args: {
   fields: readonly FieldDefinition[];
   renameResolutions: readonly BrowserRenameResolution[] | undefined;
   resolutions: Readonly<Record<string, LegacyFieldResolution>> | undefined;
+  /** The person's typed answers, each naming the column it settles by its event. */
+  eventResolutions: readonly Resolution[] | undefined;
   dialect: SupportedDialect;
   /** Whether the Single's translatable values are kept per language after the save. */
   translatedAfter: boolean;
@@ -96,6 +104,17 @@ export function dialogRowAnswers(args: {
   legacyBundle: LegacyResolutionsBundle | undefined;
 } {
   const answered = args.resolutions ?? {};
+  // The columns the person answered with a typed answer, each named by its event on this table.
+  const answeredColumns = new Set(
+    (args.eventResolutions ?? []).flatMap(resolution => {
+      try {
+        const event = parseEventId(resolution.eventId);
+        return event.table === args.single.tableName ? [event.column] : [];
+      } catch {
+        return [];
+      }
+    })
+  );
   // A translated field's values live in the translations table, one row per language, so the
   // main row takes no fill for it.
   const translated = new Set(
@@ -110,11 +129,18 @@ export function dialogRowAnswers(args: {
       .map(rename => rename.toColumn),
     fillValue: field => schema.singleRowFillValue(field),
   }).filter(
-    // Only an answer the person gave, never a member every object inherits (`constructor`).
-    fill => !translated.has(fill.field) && !Object.hasOwn(answered, fill.field)
+    // Only an answer the person gave, in either shape, never a member every object inherits
+    // (`constructor`).
+    fill =>
+      !translated.has(fill.field) &&
+      !Object.hasOwn(answered, fill.field) &&
+      !answeredColumns.has(toSnakeCase(fill.field))
   );
+  // Required fields wherever the row stores them, inside a group with no name included.
   const required = new Set(
-    args.fields.filter(field => field.required === true).map(f => f.name)
+    namedOnRow(args.fields)
+      .filter(field => field.required === true)
+      .map(field => field.name)
   );
   const pushAnswers: Record<string, LegacyFieldResolution> = {
     ...Object.fromEntries(
