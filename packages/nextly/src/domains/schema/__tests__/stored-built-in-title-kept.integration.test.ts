@@ -7,8 +7,9 @@
  * its stored definition as declared: on a translated collection a text field is translated, so its
  * values live in the translations table. A save of anything else must neither ask whether `title`
  * was renamed into a field the save adds, nor drop its translations column: its values in every
- * language stay as they were. Held on both roads that save a collection's fields: the Builder's
- * schema dialog, and the collection's settings update carrying a field list.
+ * language stay as they were. Held on every road that saves a collection's fields: the Builder's
+ * schema dialog, the collection's settings update carrying a field list, and the root-exported
+ * service's update, as a plugin's `ctx.services.collections` calls it.
  *
  * The stored shape is written as the demote writes it (the field in the registry row, its column in
  * the translations table) after an entry is saved, so the entry's values are already in place.
@@ -195,5 +196,25 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await columnsOf("dc_tkd_locales")).toContain("title");
       expect((await titlesIn("dc_tkd_locales")).es).toBe("Titular");
     });
+
+    // The root-exported service, as a plugin's `ctx.services.collections` calls it: no dispatcher
+    // in between to hand the stored built-in back, so the service keeps it from the row.
+    it.each([
+      ["with another field added", [BODY, { name: "note", type: "text" }]],
+      ["with its field list unchanged", [{ ...BODY, label: "Text" }]],
+    ])(
+      "is kept by the root-exported service's update %s",
+      async (_case, fields) => {
+        const slug = fields.length > 1 ? "tke" : "tkf";
+        await demotedCollection(slug);
+
+        await app()
+          .getService("collectionService")
+          .updateCollection(slug, { fields } as never, {});
+
+        expect(await columnsOf(`dc_${slug}_locales`)).toContain("title");
+        expect((await titlesIn(`dc_${slug}_locales`)).es).toBe("Titular");
+      }
+    );
   });
 }

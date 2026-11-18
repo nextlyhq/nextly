@@ -279,23 +279,22 @@ function orderLocalizedMigration(
 }
 
 /**
- * The fields of `fields` named as a built-in (`RESERVED_FIELD_NAMES`: `title`, `slug` and the rest)
- * that the stored row already holds under that name, handed back as they are. A built-in is never
- * defined by a save, so one a create is sent is dropped; but a row can hold one, a `title` a
- * code-first config declared and `nextly db:sync --demote` stored (translated, as a text field on
- * a translated collection is), and dropping it from an update would read as that field leaving,
- * renamed into another or dropped with its translations.
+ * Each built-in field (`RESERVED_FIELD_NAMES`: `title`, `slug` and the rest) the stored row holds,
+ * as `fields` hands it back or, where they leave it out, as stored. A built-in is never defined by
+ * a save, so one a create is sent is dropped; but a row can hold one, a `title` a code-first config
+ * declared and `nextly db:sync --demote` stored (translated, as a text field on a translated
+ * collection is), and an update dropping it, whether it was handed back or left out, would read as
+ * that field leaving, renamed into another or dropped with its translations. Derived from the row,
+ * so every road that updates a collection keeps it: the dispatcher, the root-exported
+ * `CollectionService` and a plugin's `ctx.services.collections`.
  */
 function builtInsHeldByRow(
   fields: readonly FieldDefinition[],
   stored: readonly FieldDefinition[] | null
 ): FieldDefinition[] {
-  const held = new Set((stored ?? []).map(field => field.name));
-  return fields.filter(
-    field =>
-      RESERVED_FIELD_NAMES.includes(field.name.toLowerCase()) &&
-      held.has(field.name)
-  );
+  return (stored ?? [])
+    .filter(field => RESERVED_FIELD_NAMES.includes(field.name.toLowerCase()))
+    .map(held => fields.find(field => field.name === held.name) ?? held);
 }
 
 export class DynamicCollectionService extends BaseService {
