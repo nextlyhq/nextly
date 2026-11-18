@@ -103,6 +103,8 @@ import {
 } from "./region-editing";
 import { useReveal } from "./reveal-hidden";
 import type { SelectedRegion } from "./selected-region";
+import type { SetMode } from "./set-regions";
+import { SET_HAS_NO_PAGE, setRegionRefusal } from "./set-words";
 import { useSettingsPlace } from "./settings-place";
 import {
   SettingsTabRequestContext,
@@ -210,6 +212,13 @@ interface BlocksEditorProps<TFieldValues extends FieldValues> {
   pathIn?:
     | ((values: Record<string, unknown>) => string | undefined)
     | undefined;
+  /**
+   * The header & footer set whose own screen this is: the page is a
+   * placeholder no edit reaches, the regions drawn around it are the set
+   * form's working areas, and with nothing selected the inspector shows the
+   * set's settings. Absent, the editor edits the field's page.
+   */
+  set?: SetMode | undefined;
 }
 
 export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
@@ -397,6 +406,7 @@ function EditorBody<TFieldValues extends FieldValues>({
   control,
   openAt,
   place,
+  set,
 }: BlocksEditorProps<TFieldValues> & { place: FieldPlace }): JSX.Element {
   // A save hands the document to the form, and the form takes the entry in
   // again from the save's answer and the read after it, each a new object
@@ -410,7 +420,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     useEditorMount(
       readBack.kept("opened", initialValue),
       kinds,
-      readBack.kept("stored", useStoredFieldValue(control, name, place.pathIn))
+      readBack.kept("stored", useStoredFieldValue(control, name, place.pathIn)),
+      set === undefined ? undefined : SET_HAS_NO_PAGE
     )
   );
   // `editor` is the state of what is being edited: a header or footer while
@@ -449,6 +460,7 @@ function EditorBody<TFieldValues extends FieldValues>({
       style.siteStylePending,
       style.siteStyleError
     ),
+    set,
   });
   // The Settings dialog's place for other plugins' tabs, for a page or a
   // design: what is being edited, and its own metadata as one undoable edit.
@@ -656,6 +668,7 @@ function EditorBody<TFieldValues extends FieldValues>({
   const blockCustomCss = useBlockCustomCss();
   const view: EditorView = {
     ...mount,
+    set,
     regionEditing,
     ...style,
     ...canvas,
@@ -802,13 +815,19 @@ function EditorBody<TFieldValues extends FieldValues>({
               regionStrip(regionEditing, editing, twoRegions)
             )}
             openSettingsRequest={view.pages.settingsRequest}
-            renderSettings={editorSettings(view, page, settingsPlace, {
-              kind: mount.initialDocument.kind,
-              fieldName: name,
-              control: control as unknown as Control<FieldValues>,
-              // At the bottom of Page settings, as in the ⋯ menu.
-              openAsForm: shellExit(componentView, openAsForm),
-            })}
+            // A set's screen has no page, so no Page settings: its own
+            // settings are the inspector's with nothing selected.
+            {...(set === undefined
+              ? {
+                  renderSettings: editorSettings(view, page, settingsPlace, {
+                    kind: mount.initialDocument.kind,
+                    fieldName: name,
+                    control: control as unknown as Control<FieldValues>,
+                    // At the bottom of Page settings, as in the ⋯ menu.
+                    openAsForm: shellExit(componentView, openAsForm),
+                  }),
+                }
+              : {})}
             // The shell owns the region; this fills it. Rendered unconditionally
             // rather than only when something is selected, because with nothing
             // selected the panel shows the document's own settings: a region
@@ -861,7 +880,7 @@ function EditorBody<TFieldValues extends FieldValues>({
               // or else leaves a look edited on its own.
               // Esc with nothing selected, and a selected header or footer's
               // Delete; inside a header edited in place, Esc is Done.
-              {...regionKeys(regionEditing, editing, panels)}
+              {...regionKeys(regionEditing, editing, panels, set)}
               onEditText={componentView.preview.onEditText}
               onSaveAsPattern={savePattern.open}
               /*
@@ -984,13 +1003,18 @@ function escapeWithoutSelection(
 }
 
 /** What the block keys are told of a selected header or footer. */
-function selectedRegionKeys(region: SelectedRegion): {
+function selectedRegionKeys(
+  region: SelectedRegion,
+  set: SetMode | undefined
+): {
   selectedRegion?: { readonly refusal: string };
 } {
   const area = region.selection.area;
-  return area === null
-    ? {}
-    : { selectedRegion: { refusal: regionRefusal(area) } };
+  if (area === null) return {};
+  // On a set's own screen, the header is the set's to change, not a page's.
+  const refusal =
+    set === undefined ? regionRefusal(area) : setRegionRefusal(area);
+  return { selectedRegion: { refusal } };
 }
 
 /**
@@ -1114,7 +1138,8 @@ function regionStrip(
 function regionKeys(
   region: Pick<RegionEditingHost, "area" | "done">,
   editing: EditorMount["editing"],
-  panels: Pick<EditorPanels, "selectedRegion" | "lookEditing">
+  panels: Pick<EditorPanels, "selectedRegion" | "lookEditing">,
+  set: SetMode | undefined
 ): {
   onEscapeWithoutSelection: () => void;
   selectedRegion?: { readonly refusal: string };
@@ -1126,7 +1151,7 @@ function regionKeys(
   return region.area === undefined
     ? {
         onEscapeWithoutSelection,
-        ...selectedRegionKeys(panels.selectedRegion),
+        ...selectedRegionKeys(panels.selectedRegion, set),
       }
     : { onEscapeWithoutSelection };
 }

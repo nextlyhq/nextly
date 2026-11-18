@@ -44,6 +44,7 @@ import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { APPEAR_REPLAY_RULES } from "./appear-replay";
 import { DEVICE_HIDDEN_ATTRIBUTE } from "./canvas-device-hidden";
+import { PAGE_PLACEHOLDER_ATTRIBUTE } from "./page-placeholder";
 import {
   EMPTY_CONTAINER_SELECTOR,
   EMPTY_DISCLOSURE_SELECTOR,
@@ -293,6 +294,28 @@ ${EMPTY_DISCLOSURE_SELECTOR}::after {
    published page never has it. */
 ${ROOT} > [data-nx-region="footer"] { margin-block-start: var(--nx-canvas-start-room, 0px); }
 ${ROOT}:not(:has(> [data-nx-region="footer"])) { padding-block-end: var(--nx-canvas-start-room, 0px); }
+
+/* Where a page goes, for a document with no page of its own: a grey box
+   between the header and the footer, roomy enough to read as a page's body,
+   in the page's own ink so it reads on a light site and a dark one alike.
+   At the admin's size whatever the zoom. A visitor's page never has it. */
+${ROOT} [${PAGE_PLACEHOLDER_ATTRIBUTE}] {
+  display: grid;
+  place-items: center;
+  min-block-size: 18rem;
+  margin: 1.5rem;
+  border: 1.5px dashed color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: var(--radius-md, 0.5rem);
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  font-family: var(--font-sans, system-ui), sans-serif;
+  font-size: calc(0.875rem / var(--nx-canvas-zoom, 1));
+  line-height: 1.4;
+  cursor: default;
+}
+
+${ROOT} [${PAGE_PLACEHOLDER_ATTRIBUTE}] > span {
+  color: color-mix(in srgb, currentColor 70%, transparent);
+}
 
 /* The cursor says what a press does: grab a block, place a caret in text being
    edited, and while dragging, whether the block can land. */

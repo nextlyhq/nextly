@@ -42,6 +42,7 @@ import { CanvasImageStates } from "./canvas-image-states";
 import { previewedCanvas } from "./canvas-preview-mode";
 import { DoubleHeaderNotice } from "./double-header-notice";
 import type { EditorView } from "./editor-view";
+import { PAGE_PLACEHOLDER_WORDS } from "./set-words";
 import { SiteLayoutNote } from "./site-canvas";
 import { EditorPageInserters } from "./starter-pages-client";
 
@@ -415,34 +416,9 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                   its search ready. An empty page's row of starter pages
                   fills the page from the one picked, as one undo step.
                 */}
-                <EditorPageInserters
-                  view={view}
-                  document={editor.document}
-                  selectedId={editor.selectedId}
-                  componentTitle={componentLibrary.titleOf}
-                  dragging={dragging}
-                  start={{
-                    ...(pageTitle === undefined ? {} : { title: pageTitle }),
-                    onStart: control =>
-                      insertPicker.open(
-                        {
-                          kind: "place",
-                          place: {
-                            at: { index: editor.document.nodes.length },
-                          },
-                        },
-                        elementAnchor(control)
-                      ),
-                    onSavedSection: () =>
-                      view.openInsertPanel(undefined, "sections"),
-                  }}
-                  onAddAfter={(nodeId, control) =>
-                    insertPicker.open(
-                      { kind: "place", place: { after: nodeId } },
-                      elementAnchor(control)
-                    )
-                  }
-                />
+                {/* The empty page's start area and the "+" in each gap; on
+                    a set's screen, none, its placeholder standing there. */}
+                {pageInserters(view)}
                 {/* A block just added that asks for a choice (Columns: its
                     layout) draws its chooser in place of its body until the
                     author picks or skips. Last, so it covers the "+" of the
@@ -527,10 +503,57 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
               // counterpart is the Enter binding, registered in the same
               // place so a surface cannot gain one without the other.
               onDoubleClick={view.preview.onDoubleClick}
+              // On a set's own screen, where any page goes, between its
+              // header and footer.
+              {...placeholderOf(view)}
             />
           </CanvasFrame>
         </BlockContextMenu>
       )}
     </>
   );
+}
+
+/**
+ * The empty page's start area and the "+" in each gap, which open the
+ * in-place picker at their place; none on a set's screen, which has no page
+ * to add to and draws its placeholder there.
+ */
+function pageInserters(view: EditorView): React.JSX.Element | null {
+  if (view.set !== undefined) return null;
+  const { editor, insertPicker, componentLibrary, dragging, pageTitle } = view;
+  return (
+    <EditorPageInserters
+      view={view}
+      document={editor.document}
+      selectedId={editor.selectedId}
+      componentTitle={componentLibrary.titleOf}
+      dragging={dragging}
+      start={{
+        ...(pageTitle === undefined ? {} : { title: pageTitle }),
+        onStart: control =>
+          insertPicker.open(
+            {
+              kind: "place",
+              place: {
+                at: { index: editor.document.nodes.length },
+              },
+            },
+            elementAnchor(control)
+          ),
+        onSavedSection: () => view.openInsertPanel(undefined, "sections"),
+      }}
+      onAddAfter={(nodeId, control) =>
+        insertPicker.open(
+          { kind: "place", place: { after: nodeId } },
+          elementAnchor(control)
+        )
+      }
+    />
+  );
+}
+
+/** The placeholder a set's screen draws where any page goes, or nothing. */
+function placeholderOf(view: EditorView): { placeholder?: string } {
+  return view.set === undefined ? {} : { placeholder: PAGE_PLACEHOLDER_WORDS };
 }
