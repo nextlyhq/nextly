@@ -55,6 +55,7 @@ import { respondList, type PaginationMeta } from "nextly";
 import { humanizeFieldName } from "nextly/field-label";
 import { z } from "nextly/zod";
 
+import { blocksFieldsOf } from "./class-usage-blocks-fields";
 import { labelOf, pluralLabelOf } from "./collection-labels";
 import { PAGES_SLUG } from "./collections/pages";
 import { ENTRIES_LOCALE_MAX } from "./entries-contract";
@@ -256,6 +257,12 @@ export interface LoopCollectionsReads {
     slug: string,
     locale?: string
   ): Promise<readonly BindingFieldShape[] | undefined>;
+  /**
+   * Whether the site serves this collection's entries at an address its
+   * code declares (`pageBuilder({ templates: { addresses } })`). Absent,
+   * none is.
+   */
+  servedInCode?(slug: string): boolean;
 }
 
 /** The meta of an answer that is the whole list on one page. */
@@ -329,6 +336,12 @@ async function collectionItem(
     // What a new list's item binds as its title: core's one title rule,
     // offered only where visitors may read that field.
     ...withTitleField(titleFieldIn(record)?.name, fields?.readable ?? []),
+    // Whether a new list's item links each title to its entry: a collection
+    // whose entries are pages (it holds a Page Builder field), or one its
+    // code serves at an address. An address set only in the admin is not
+    // known here; a link to an entry with no page draws as plain words.
+    entriesHavePages:
+      blocksFieldsOf(record).length > 0 || reads.servedInCode?.(slug) === true,
   };
 }
 
@@ -416,9 +429,11 @@ export function internalCollections(
 /** The reads the route binds: the registry listing and the caller's permissions. */
 function directLoopCollectionsReads(
   ctx: LoopCollectionsRouteContext,
-  store: ComponentStore
+  store: ComponentStore,
+  servedInCode: ReadonlySet<string>
 ): LoopCollectionsReads {
   return {
+    servedInCode: slug => servedInCode.has(slug),
     collections: () => registryRecords(ctx),
     internal: () => internalCollections(ctx, store),
     // No caller is no reader: the route is authenticated, so this is a guard
@@ -446,7 +461,9 @@ function directLoopCollectionsReads(
  * time, and each is asked of the caller above.
  */
 export function loopCollectionsRoute(
-  store: ComponentStore = DEFAULT_COMPONENT_STORE
+  store: ComponentStore = DEFAULT_COMPONENT_STORE,
+  /** The collections the site's code serves at an address. */
+  servedInCode: ReadonlySet<string> = new Set()
 ): {
   method: "GET";
   checksAccess: true;
@@ -465,7 +482,7 @@ export function loopCollectionsRoute(
         "loop collections route"
       );
       const answer = await readLoopCollections(
-        directLoopCollectionsReads(ctx, store),
+        directLoopCollectionsReads(ctx, store, servedInCode),
         query[LOOP_COLLECTIONS_PARAMS.locale]
       );
       return respondList([...answer.items], answer.meta);
