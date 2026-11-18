@@ -36,6 +36,7 @@ import {
   describe,
   expect,
   it,
+  vi,
 } from "vitest";
 
 import { useEditorState, type EditorState } from "./editor-state";
@@ -76,6 +77,7 @@ beforeEach(() => {
           color: true,
           dimensions: true,
           typography: true,
+          effects: true,
         },
         render: () => null,
       },
@@ -434,5 +436,181 @@ describe("the Style tab's typed fields", () => {
       void editor().undo();
     });
     expect(styleOf("lineHeight")).toBeUndefined();
+  });
+});
+
+describe("the Style tab's drags", () => {
+  /** The frames asked for and not yet drawn, run by `frame()`. */
+  let frames: FrameRequestCallback[] = [];
+  function frame(): void {
+    const due = frames;
+    frames = [];
+    act(() => {
+      for (const draw of due) draw(0);
+    });
+  }
+  beforeEach(() => {
+    frames = [];
+    vi.stubGlobal("requestAnimationFrame", (draw: FrameRequestCallback) => {
+      frames.push(draw);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+      frames[id - 1] = () => undefined;
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** A pointer event carrying the fields the gesture and React read. */
+  function pointer(type: string, clientX: number): Event {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.assign(event, {
+      pointerId: 1,
+      button: 0,
+      clientX,
+      clientY: 0,
+      pointerType: "mouse",
+      shiftKey: false,
+      altKey: false,
+    });
+    return event;
+  }
+
+  /** Press on padding's Block start label, and move to `x` from the press. */
+  function pressAndMove(...xs: number[]): HTMLInputElement {
+    mount();
+    openStyle();
+    const field = row("padding").getByLabelText(
+      "Block start"
+    ) as HTMLInputElement;
+    const label = document.querySelector(`label[for="${field.id}"]`);
+    if (!(label instanceof HTMLElement)) throw new Error("no label");
+    act(() => {
+      label.dispatchEvent(pointer("pointerdown", 100));
+    });
+    for (const x of xs) {
+      act(() => {
+        document.dispatchEvent(pointer("pointermove", 100 + x));
+      });
+    }
+    return field;
+  }
+
+  it("moves the canvas as a label is dragged, and the drag is one undo step", () => {
+    pressAndMove(10);
+    frame();
+    expect(styleOf("padding")).toEqual({ blockStart: "18px" });
+    act(() => {
+      document.dispatchEvent(pointer("pointermove", 120));
+    });
+    frame();
+    expect(styleOf("padding")).toEqual({ blockStart: "28px" });
+
+    act(() => {
+      document.dispatchEvent(pointer("pointerup", 125));
+    });
+    expect(styleOf("padding")).toEqual({ blockStart: "33px" });
+    expect(editor().undoDepth).toBe(1);
+    act(() => {
+      void editor().undo();
+    });
+    expect(styleOf("padding")).toEqual({ blockStart: "8px" });
+  });
+
+  it("moves the canvas as the line height's label is dragged", () => {
+    mount();
+    openStyle();
+    const field = screen.getByLabelText("Line height") as HTMLInputElement;
+    typeInto(field, "1.5");
+    fireEvent.blur(field);
+    const label = document.querySelector(`label[for="${field.id}"]`);
+    if (!(label instanceof HTMLElement)) throw new Error("no label");
+    act(() => {
+      label.dispatchEvent(pointer("pointerdown", 100));
+    });
+    act(() => {
+      document.dispatchEvent(pointer("pointermove", 110));
+    });
+    frame();
+    const dragged = styleOf("lineHeight");
+    expect(dragged).not.toBe(1.5);
+    expect(dragged).toBe(Number(field.value));
+
+    act(() => {
+      document.dispatchEvent(pointer("pointerup", 110));
+    });
+    // The typed value is one step, and the drag one more.
+    expect(editor().undoDepth).toBe(2);
+    act(() => {
+      void editor().undo();
+    });
+    expect(styleOf("lineHeight")).toBe(1.5);
+  });
+
+  it("moves the canvas as the opacity slider moves, as one undo step", () => {
+    mount();
+    openStyle();
+    row("opacity");
+    const thumb = screen.getByRole("slider", { name: "Opacity slider" });
+    // The slider's root: the outermost element with an orientation, since
+    // the thumb and the track carry one too.
+    let track: HTMLElement = thumb;
+    for (
+      let up = thumb.parentElement?.closest<HTMLElement>("[data-orientation]");
+      up !== null && up !== undefined;
+      up = up.parentElement?.closest<HTMLElement>("[data-orientation]")
+    ) {
+      track = up;
+    }
+    // The track is 100px wide from the left edge, so x is the percent; the
+    // pointer is captured, as a real press captures it.
+    track.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        right: 100,
+        width: 100,
+        top: 0,
+        bottom: 10,
+        height: 10,
+      }) as DOMRect;
+    const captured = Element.prototype as unknown as Record<string, unknown>;
+    captured.setPointerCapture = () => {};
+    captured.releasePointerCapture = () => {};
+    captured.hasPointerCapture = () => true;
+
+    act(() => {
+      track.dispatchEvent(pointer("pointerdown", 40));
+    });
+    frame();
+    expect(styleOf("opacity")).toBe(0.4);
+    act(() => {
+      track.dispatchEvent(pointer("pointermove", 30));
+    });
+    frame();
+    expect(styleOf("opacity")).toBe(0.3);
+    act(() => {
+      track.dispatchEvent(pointer("pointerup", 30));
+    });
+    expect(editor().undoDepth).toBe(1);
+    act(() => {
+      void editor().undo();
+    });
+    expect(styleOf("opacity")).toBeUndefined();
+  });
+
+  it("puts the canvas back on Escape mid-drag, and records nothing", () => {
+    const field = pressAndMove(10);
+    frame();
+    expect(styleOf("padding")).toEqual({ blockStart: "18px" });
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", cancelable: true })
+      );
+    });
+    expect(styleOf("padding")).toEqual({ blockStart: "8px" });
+    expect(editor().undoDepth).toBe(0);
+    expect(field.value).toBe("8");
   });
 });

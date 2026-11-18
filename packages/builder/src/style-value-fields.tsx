@@ -44,6 +44,7 @@ import { IconChoiceField } from "./icon-choice-field";
 import { InheritedValue, useUnsetHint } from "./inherited-value";
 import { useLabelScrub } from "./label-scrub";
 import { typedStyleText } from "./live-draft";
+import { useLiveGesture } from "./live-gesture";
 import { SectionHeld } from "./section-held";
 import {
   alignmentGroupFor,
@@ -446,7 +447,8 @@ function LengthOrNumberField({
 
 /**
  * A line height offered to its row's label to drag, as its kind steps: a
- * number or a length. Written once on release, as a typed value is.
+ * number or a length. Written as it moves where the panel writes as it is
+ * typed, and on release, as a typed value is: the drag is one undo step.
  *
  * @returns whether a drag owns the value now, so the field writes nothing of
  *   its own meanwhile
@@ -463,6 +465,7 @@ function useLineHeightLabelScrub({
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): () => boolean {
   const inherited = React.useContext(InheritedValue);
+  const typesLive = useTypesLive();
   return useLabelScrub({
     origin: lineHeightScrubOrigin(draft, inherited),
     at: (from, delta) => {
@@ -475,6 +478,9 @@ function useLineHeightLabelScrub({
     commit: value => {
       if (onCommit(value) === "unchanged") setDraft(storedText(stored));
     },
+    ...(typesLive
+      ? { preview: (value: string | number) => onCommit(value) }
+      : {}),
   });
 }
 
@@ -951,8 +957,10 @@ function percentReading(
 }
 
 /**
- * A percent's slider, 0 to 100: the thumb follows a drag, and the value is
- * written once it settles.
+ * A percent's slider, 0 to 100: the thumb follows a drag, and so does the
+ * canvas where the panel writes as it is typed, at most once a frame; the
+ * value it settles on is written in the same run, so the drag is one undo
+ * step. Elsewhere the value is written once it settles.
  */
 function PercentSlider({
   resting,
@@ -971,6 +979,8 @@ function PercentSlider({
   // Held with its section, as the fieldset holds the form controls; a
   // slider's thumb is not one, so it is told.
   const held = React.useContext(SectionHeld);
+  const typesLive = useTypesLive();
+  const gesture = useLiveGesture();
   const at = preview ?? resting;
   return (
     <Slider
@@ -979,10 +989,15 @@ function PercentSlider({
       max={100}
       step={1}
       disabled={held}
-      onValueChange={([next]) => setPreview(next)}
+      onValueChange={([next]) => {
+        setPreview(next);
+        if (typesLive && next !== undefined) gesture.move(() => onCommit(next));
+      }}
       onValueCommit={([next]) => {
         setPreview(undefined);
-        if (next !== undefined) onCommit(next);
+        if (next === undefined) gesture.end();
+        else if (typesLive) gesture.end(() => onCommit(next));
+        else onCommit(next);
       }}
       thumbs={[
         {
