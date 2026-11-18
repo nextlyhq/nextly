@@ -1030,6 +1030,73 @@ describe("a step's drops", () => {
     expect(component.nodes[1]?.bindings?.content).toEqual(follows("passage"));
   });
 
+  it("settle the followers of a setting a later pass drops, once settling lets its step run", () => {
+    // A drops setting `a`. B follows `a` and holds setting `b`; B's step
+    // throws on what B stored, so the first pass drops only `a`. Settling
+    // gives B `a`'s value, B's step then runs and drops `b`, and C, which
+    // follows `b`, is settled too rather than left bound to nothing.
+    const follows = (id: string): Binding => ({ $bind: id, source: "setting" });
+    const setting = (id: string, nodeId: string, propPath: string) => ({
+      id,
+      label: id,
+      nodeId,
+      propPath,
+      type: "text" as const,
+    });
+    const component: ComponentDocument = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        { id: "A", type: "a", version: 1, props: { x: "from a" } },
+        {
+          id: "B",
+          type: "b",
+          version: 1,
+          props: { trigger: "stored", legacy: "from b" },
+          bindings: { trigger: follows("a") },
+        },
+        {
+          id: "C",
+          type: "t",
+          version: 1,
+          props: { shown: "own" },
+          bindings: { shown: follows("b") },
+        },
+      ],
+      exposed: [setting("a", "A", "x"), setting("b", "B", "legacy")],
+    };
+    const { doc, failures, rewritten } = migrateDocument(
+      component,
+      source({
+        a: { version: 2, migrate: { 1: same }, drops: { 1: ["x"] } },
+        b: {
+          version: 2,
+          migrate: {
+            1: p => {
+              if (p.trigger === "stored") throw new Error("not yet");
+              return p;
+            },
+          },
+          drops: { 1: ["legacy"] },
+        },
+        t: { version: 1 },
+      })
+    );
+    expect(failures).toEqual([]);
+    expect(doc.nodes[1]?.props).toEqual({ trigger: "from a" });
+    expect(doc.nodes[2]?.props).toEqual({ shown: "from b" });
+    expect(doc.nodes[2]?.bindings).toBeUndefined();
+    expect(exposedOf(doc)).toEqual([]);
+    expect(
+      settingBindingIssues(doc).filter(issue => issue.severity === "error")
+    ).toEqual([]);
+    expect(rewritten.map(entry => entry.path)).toEqual([
+      "/nodes/0",
+      "/nodes/1",
+      "/nodes/2",
+    ]);
+  });
+
   it("keep a variant's value for an id another exposure still carries", () => {
     // Stored data can hold one id on two rows; while one remains, the field
     // is live and its variant values stay.

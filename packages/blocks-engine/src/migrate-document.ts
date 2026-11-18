@@ -44,17 +44,32 @@ export function migrateDocument(
   doc: BlockDocument,
   source: MigrationSource
 ): MigrateResult {
-  const result = migrateDocumentOnce(doc, source);
-  const gone = exposureIdsGone(exposedOf(doc), exposedOf(result.doc));
-  if (gone.size === 0) return result;
   // A block following a setting the upgrade drops keeps what it showed, and
   // follows nothing from then on, as removing the setting in the editor leaves
   // it (`withSettingDefaults`). Its value is read from the stored document,
   // while the dropped prop still holds it, and the upgrade then runs on that.
+  // Settling can let a step run that failed on what a follower stored, and
+  // that step may drop another setting, so this repeats until a pass drops
+  // none not yet settled. Each round settles at least one more of the
+  // document's own settings, so it ends.
+  let upgraded = migrateDocumentOnce(doc, source);
   let settled = doc;
-  for (const id of gone) settled = withSettingDefaults(settled, id);
-  if (settled === doc) return result;
-  const upgraded = migrateDocumentOnce(settled, source);
+  const done = new Set<string>();
+  for (;;) {
+    const gone = [
+      ...exposureIdsGone(exposedOf(doc), exposedOf(upgraded.doc)),
+    ].filter(id => !done.has(id));
+    if (gone.length === 0) break;
+    const before = settled;
+    for (const id of gone) {
+      settled = withSettingDefaults(settled, id);
+      done.add(id);
+    }
+    // Nothing followed those settings, so the pass already ran on this.
+    if (settled === before) break;
+    upgraded = migrateDocumentOnce(settled, source);
+  }
+  if (settled === doc) return upgraded;
   return {
     ...upgraded,
     rewritten: withSettled(upgraded.rewritten, doc.nodes, settled.nodes),
