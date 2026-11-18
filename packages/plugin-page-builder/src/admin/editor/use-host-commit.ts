@@ -14,6 +14,8 @@ import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import {
   documentAfter,
   endTypingRuns,
+  finishFieldEdit,
+  useFieldDraftHeld,
   type InlineEditOutcome,
 } from "@nextlyhq/builder/shell";
 import {
@@ -244,13 +246,18 @@ export function documentToStore(
  * call site, so "is this document dirty" is answered in one place. It is also
  * one fewer branch inside the largest component in this package, which the
  * complexity gate refuses to let grow.
+ *
+ * A draft still held in a block settings field counts too, from its first
+ * keystroke: it is in neither the history nor the form until the field is
+ * left, and the page shows its work as unsaved meanwhile.
  */
 export function useDocumentDirty<TFieldValues extends FieldValues>(
   control: Control<TFieldValues>,
   editorDirty: boolean
 ): boolean {
   const { dirtyFields } = useFormState({ control });
-  return editorDirty || Object.keys(dirtyFields).length > 0;
+  const draftHeld = useFieldDraftHeld();
+  return editorDirty || draftHeld || Object.keys(dirtyFields).length > 0;
 }
 
 /**
@@ -344,6 +351,38 @@ function useCommitOnUnmount(
 }
 
 /**
+ * Tell the form this editor holds work its values do not contain, so the
+ * navigation guard warns and the save shortcut works while the canvas is
+ * open. `undoDepth` rather than comparing documents: an edit and its undo
+ * leave a document equal to the original but not identical to it, so a
+ * reference comparison would report work that was taken back.
+ *
+ * Retracted when the editor unmounts, which is the same moment `done`
+ * commits the document and makes the form dirty for real.
+ *
+ * Reported under the field's address, not its form path: inside a
+ * repeater's row the path changes when the row moves under the open editor,
+ * and a report under the old path would stay behind with nothing left to
+ * retract it, keeping the document marked unsaved after a save or exit.
+ *
+ * A draft held in a block settings field is reported too, so the save
+ * shortcut works and leaving warns from its first keystroke.
+ */
+function useUnsavedWorkReport(
+  address: string,
+  editor: { undoDepth: number },
+  inline: { editing: unknown; editingRich: unknown },
+  savedAt: SavedAt,
+  otherUnsavedWork: boolean
+): void {
+  const draftHeld = useFieldDraftHeld();
+  useReportUnsavedWork(
+    `blocks:${address}`,
+    hasUnsavedWork(editor, inline, savedAt) || otherUnsavedWork || draftHeld
+  );
+}
+
+/**
  * Everything the open editor tells the form, in the order it tells it.
  *
  * One hook so the four channels below keep their order relative to one
@@ -410,24 +449,12 @@ export function useHostCommit<TFieldValues extends FieldValues>({
 } {
   useCheckpoints({ name, control, document: editor.document });
 
-  /*
-   * Tell the form this editor holds work its values do not contain, so the
-   * navigation guard warns and the save shortcut works while the canvas is
-   * open. `undoDepth` rather than comparing documents: an edit and its undo
-   * leave a document equal to the original but not identical to it, so a
-   * reference comparison would report work that was taken back.
-   *
-   * Retracted when this component unmounts, which is the same moment `done`
-   * commits the document and makes the form dirty for real.
-   *
-   * Reported under the field's address, not its form path: inside a
-   * repeater's row the path changes when the row moves under the open editor,
-   * and a report under the old path would stay behind with nothing left to
-   * retract it, keeping the document marked unsaved after a save or exit.
-   */
-  useReportUnsavedWork(
-    `blocks:${address}`,
-    hasUnsavedWork(editor, inline, savePoint.savedAt) || otherUnsavedWork
+  useUnsavedWorkReport(
+    address,
+    editor,
+    inline,
+    savePoint.savedAt,
+    otherUnsavedWork
   );
 
   /*
@@ -445,19 +472,29 @@ export function useHostCommit<TFieldValues extends FieldValues>({
    * open, so withholding the save would lose the rest of their work to protect
    * a paragraph that is not going anywhere: it stays in the editor, on screen,
    * and the message is what tells them it is still there.
+   *
+   * A draft still held in a block settings field is written first, as
+   * leaving the field would write it, with focus left where it is: Save from
+   * the keyboard is pressed from inside the field. The document is read after
+   * that, so it holds the draft.
    */
   // What the latest commit before a store handed the form, for a later
   // handler in the same action that asks what is being stored.
   const lastCommitted = useRef<BlockDocument | null>(null);
-  useBeforeDocumentAction(() => {
-    const committing = documentToStore(inline, editor.document, flushHeld);
-    savePoint.committing(committing);
-    onCommit(committing);
-    lastCommitted.current = committing;
-  });
   const latestDocument = useRef(editor.document);
   useEffect(() => {
     latestDocument.current = editor.document;
+  });
+  useBeforeDocumentAction(() => {
+    finishFieldEdit();
+    const committing = documentToStore(
+      inline,
+      latestDocument.current,
+      flushHeld
+    );
+    savePoint.committing(committing);
+    onCommit(committing);
+    lastCommitted.current = committing;
   });
   const storing = useCallback(
     () => lastCommitted.current ?? latestDocument.current,
@@ -509,9 +546,12 @@ export function useHostCommit<TFieldValues extends FieldValues>({
      * the caret still while an author types — so `editor.document` here is the
      * one from before it. Committing that would hand the form a document
      * missing the words the author was in the middle of writing, and the exit
-     * gesture is the most common way to leave a passage open.
+     * gesture is the most common way to leave a passage open. A draft still
+     * held in a block settings field is written before that, as a store
+     * writes it, and the document is read after it.
      */
-    const finished = finishInlineEdit(inline, editor.document);
+    finishFieldEdit();
+    const finished = finishInlineEdit(inline, latestDocument.current);
     /*
      * A REFUSED commit kept the passage open because the author's words are in
      * it and nowhere else. Closing unmounts the canvas and takes the editor
@@ -531,7 +571,7 @@ export function useHostCommit<TFieldValues extends FieldValues>({
     }
     markCommitted();
     onClose();
-  }, [editor.document, inline, onCommit, onClose, markCommitted]);
+  }, [inline, onCommit, onClose, markCommitted]);
 
   /*
    * The editor takes the window: the shell draws its own rail, panels, top bar
