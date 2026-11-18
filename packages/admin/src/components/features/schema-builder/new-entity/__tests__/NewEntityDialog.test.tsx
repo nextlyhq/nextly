@@ -119,6 +119,8 @@ describe("NewEntityDialog", () => {
     expect(onCreate).toHaveBeenCalledWith(
       expect.objectContaining({ startingFieldType: "blocks" }),
       // No template picked: Create hands over no template fields.
+      [],
+      // Nor anything it needs made too.
       []
     );
   });
@@ -248,6 +250,8 @@ describe("NewEntityDialog", () => {
         status: true,
       }),
       // No template picked: Create hands over no template fields.
+      [],
+      // Nor anything it needs made too.
       []
     );
   });
@@ -398,6 +402,8 @@ describe("NewEntityDialog", () => {
     expect(onCreate).toHaveBeenCalledWith(
       expect.objectContaining({ icon: "Camera" }),
       // No template picked: Create hands over no template fields.
+      [],
+      // Nor anything it needs made too.
       []
     );
   });
@@ -435,6 +441,8 @@ describe("NewEntityDialog", () => {
     expect(onCreate).toHaveBeenCalledWith(
       expect.objectContaining({ slug: "posts" }),
       // No template picked: Create hands over no template fields.
+      [],
+      // Nor anything it needs made too.
       []
     );
   });
@@ -459,6 +467,8 @@ describe("NewEntityDialog", () => {
     expect(onCreate).toHaveBeenLastCalledWith(
       expect.objectContaining({ description: "Shop items" }),
       // No template picked: Create hands over no template fields.
+      [],
+      // Nor anything it needs made too.
       []
     );
 
@@ -468,6 +478,8 @@ describe("NewEntityDialog", () => {
     expect(onCreate).toHaveBeenLastCalledWith(
       expect.objectContaining({ description: "" }),
       // No template picked: Create hands over no template fields.
+      [],
+      // Nor anything it needs made too.
       []
     );
   });
@@ -507,6 +519,8 @@ describe("NewEntityDialog", () => {
         description: "a".repeat(DESCRIPTION_MAX_LENGTH),
       }),
       // No template picked: Create hands over no template fields.
+      [],
+      // Nor anything it needs made too.
       []
     );
   });
@@ -519,6 +533,8 @@ describe("NewEntityDialog", () => {
     expect(single.onCreate).toHaveBeenCalledWith(
       expect.objectContaining({ status: true }),
       // No template picked: Create hands over no template fields.
+      [],
+      // Nor anything it needs made too.
       []
     );
   });

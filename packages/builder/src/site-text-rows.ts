@@ -27,10 +27,13 @@ import {
   type SiteTokenSet,
   type StyleValue,
   type TokenMode,
+  type NamedClass,
+  textStylesOf,
 } from "@nextlyhq/blocks-engine";
 
 import { declarationsText } from "./code-hints";
 import { fluidRange, lengthInPx } from "./fluid-size";
+import { sharedStyleName } from "./shared-style-library";
 import { variableGroups } from "./tokens-studio";
 
 /** What a row says while it writes nothing. */
@@ -63,6 +66,11 @@ export interface SiteTextRowView {
   readonly px: number | undefined;
   /** Whether the site states this row (it is not the built-in one). */
   readonly stated: boolean;
+  /**
+   * The text style the row follows ("Heading 1 uses Display"), while it
+   * follows one the site has: its id and name.
+   */
+  readonly follows?: { readonly id: string; readonly name: string };
 }
 
 /** A number as a designer writes a size: no trailing zeros, two places at most. */
@@ -137,15 +145,34 @@ export function valueText(
     : undefined;
 }
 
-/** Every row, as the panel draws it. */
+/**
+ * Every row, as the panel draws it. A row following one of the site's text
+ * styles (`classes`) says so, and is drawn at the text style's size.
+ */
 export function siteTextRowViews(
   tokens: SiteTokenSet,
-  mode: TokenMode
+  mode: TokenMode,
+  classes?: readonly NamedClass[]
 ): SiteTextRowView[] {
   const rows = resolveSiteText(tokens.siteText);
   const choices = typeSizeChoices(tokens, mode);
   return SITE_TEXT_ROLES.map(role => {
     const entry = rows[role];
+    const followed = followedTextStyle(role, entry, classes);
+    if (followed !== undefined) {
+      const values = followed.styles.base?.base;
+      const size = valueText(values?.fontSize, tokens, mode);
+      return {
+        role,
+        label: SITE_TEXT_LABELS[role],
+        entry,
+        pair: sharedStyleName(followed),
+        typeSize: undefined,
+        px: size === undefined ? undefined : lengthInPx(size),
+        stated: true,
+        follows: { id: followed.id, name: sharedStyleName(followed) },
+      };
+    }
     const size = valueText(entry?.fontSize, tokens, mode);
     const pointed = entry?.fontSize;
     return {
@@ -166,6 +193,38 @@ export function siteTextRowViews(
         tokens.siteText !== undefined && Object.hasOwn(tokens.siteText, role),
     };
   });
+}
+
+/**
+ * The text style a row follows, by the engine's own reading of the list the
+ * class tier is written from, or `undefined`; never for Links.
+ */
+function followedTextStyle(
+  role: SiteTextRole,
+  entry: SiteTextEntry | undefined,
+  classes: readonly NamedClass[] | undefined
+): NamedClass | undefined {
+  const id = entry?.textStyle;
+  if (role === "link" || id === undefined) return undefined;
+  return textStylesOf(classes).find(style => style.id === id);
+}
+
+/**
+ * The set with a row following a text style ("Heading 1 uses Display"),
+ * its own values kept, so they come back should it stop following one.
+ * Never Links, which has no text style.
+ */
+export function withRowTextStyle(
+  tokens: SiteTokenSet,
+  role: SiteTextRole,
+  id: string
+): SiteTokenSet {
+  if (role === "link") return tokens;
+  const own = resolveSiteText(tokens.siteText)[role] ?? {};
+  return {
+    ...tokens,
+    siteText: { ...tokens.siteText, [role]: { ...own, textStyle: id } },
+  };
 }
 
 /**
@@ -260,9 +319,11 @@ const ROW_SELECTOR: Readonly<Record<SiteTextRole, string>> = {
 export function siteTextWrites(
   tokens: SiteTokenSet,
   role: SiteTextRole,
-  entry: SiteTextEntry | undefined
+  entry: SiteTextEntry | undefined,
+  /** The site's classes: a row following a text style writes the style's. */
+  classes?: readonly NamedClass[]
 ): string {
-  const styles = siteTextStyles(role, entry);
+  const styles = siteTextStyles(role, entry, classes);
   if (styles === undefined) return "Nothing";
   const { prefix } = resolveTokenPrefix(tokens.prefix);
   const selector = ROW_SELECTOR[role];

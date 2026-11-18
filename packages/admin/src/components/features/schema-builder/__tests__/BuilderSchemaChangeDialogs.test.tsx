@@ -830,7 +830,7 @@ describe("BuilderSchemaChangeDialogs: the settings a save changes", () => {
 // A field group made from the field picker and not saved yet is created by this save, before the
 // entity: every review the save can open lists it first, so it is never created unseen.
 describe("field groups the save creates first", () => {
-  const HERO = { address: "hero", label: "Hero" };
+  const HERO = { kind: "field-group" as const, address: "hero", label: "Hero" };
   const ADDED_SUBTITLE = {
     added: [
       {
@@ -867,7 +867,7 @@ describe("field groups the save creates first", () => {
   /** The dialog's text, in order, from its first list of what the save creates. */
   function createsFirst(dialog: HTMLElement): void {
     const list = within(dialog).getByRole("list", {
-      name: "Field groups created first",
+      name: "Created first",
     });
     expect(
       within(list)

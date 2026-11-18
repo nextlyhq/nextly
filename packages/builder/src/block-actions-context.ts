@@ -49,6 +49,13 @@ export interface BlockActions {
   readonly cut: () => void;
   /** Paste copied blocks where a clicked block would land. */
   readonly paste: () => void;
+  /**
+   * Take the one selected block's look: its own values and the styles it
+   * wears. Optional, so a host built before it keeps compiling.
+   */
+  readonly copyStyle?: () => void;
+  /** Give every selected block the copied look, as one undo step. */
+  readonly pasteStyle?: () => void;
   /** Select the container holding the selection. */
   readonly selectParent: () => void;
   /**

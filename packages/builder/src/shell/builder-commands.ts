@@ -40,6 +40,12 @@ export interface CommandVerbs {
   readonly copy: () => void;
   readonly cut: () => void;
   readonly paste: () => void;
+  /**
+   * Copy one block's look, and give it to every selected block. Optional,
+   * so a host built before them keeps compiling; absent, they do nothing.
+   */
+  readonly copyStyle?: () => void;
+  readonly pasteStyle?: () => void;
   readonly selectParent: () => void;
   /**
    * Begin storing the selection in the pattern library.
@@ -153,6 +159,15 @@ const BLOCK_COMMAND_COPY: Record<
   paste: {
     label: "Paste blocks",
     keywords: ["paste", "clipboard", "insert"],
+  },
+  // Named exactly as the menu names them: the words say what is copied.
+  "copy-style": {
+    label: "Copy style",
+    keywords: ["copy style", "look", "format", "painter", "appearance"],
+  },
+  "paste-style": {
+    label: "Paste style",
+    keywords: ["paste style", "look", "format", "painter", "apply", "match"],
   },
   // Changing which of the three text blocks it is, kept apart in words from
   // turning a selection into a component.
@@ -272,6 +287,8 @@ export function blockActionRunners(
     copy: verbs.copy,
     cut: verbs.cut,
     paste: verbs.paste,
+    "copy-style": () => verbs.copyStyle?.(),
+    "paste-style": () => verbs.pasteStyle?.(),
     "turn-into-text": () =>
       verbs.turnInto?.(TURN_INTO_TARGETS["turn-into-text"]),
     "turn-into-rich-text": () =>

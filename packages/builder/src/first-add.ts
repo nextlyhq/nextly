@@ -23,14 +23,18 @@
  *
  * @module first-add
  */
-import { findNode, type BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  COLLECTION_LIST_TYPE,
+  findNode,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { EditorState } from "./editor-state";
 import { applyOps, type BuilderOp, type OpPosition } from "./op-vocabulary";
 
 /** The choosers a block can ask for when it is first added. */
-export type FirstAddChooser = "columns-layout";
+export type FirstAddChooser = "columns-layout" | "collection-source";
 
 /**
  * The core blocks that ask for a choice when they are first added, by type,
@@ -39,6 +43,8 @@ export type FirstAddChooser = "columns-layout";
  */
 const FIRST_ADD_CHOOSERS: ReadonlyMap<string, FirstAddChooser> = new Map([
   ["core/columns", "columns-layout"],
+  // A Collection list asks which entries it shows, then how they start out.
+  [COLLECTION_LIST_TYPE, "collection-source"],
 ]);
 
 /** The chooser a block of this type asks for when first added, if any. */

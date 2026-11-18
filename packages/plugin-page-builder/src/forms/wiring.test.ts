@@ -6,6 +6,10 @@ import { describe, expect, it } from "vitest";
 
 import { pageBuilder } from "../plugin";
 
+import {
+  EDITOR_FORM_ROUTE_PATH,
+  EDITOR_FORMS_ROUTE_PATH,
+} from "./editor-forms-contract";
 import { FORM_SERVICE } from "./providers";
 import { FORM_SEND_RULE } from "./receiver";
 import { FORM_RECEIVER_PATH, FORM_SEND_LIMITS } from "./route";
@@ -45,4 +49,18 @@ describe("the plugin's form receiver", () => {
     // The blocks service is still there: the spread kept every other.
     expect(Object.keys(contributes?.services ?? {})).toContain("blocks");
   });
+});
+
+describe("the editor's form routes", () => {
+  const routes = pageBuilder().contributes?.routes ?? [];
+
+  it.each([EDITOR_FORMS_ROUTE_PATH, EDITOR_FORM_ROUTE_PATH])(
+    "%s is one signed-in GET, judged as its caller",
+    path => {
+      const declared = routes.filter(route => route.path === path);
+      expect(declared).toHaveLength(1);
+      expect(declared[0]).toMatchObject({ method: "GET", checksAccess: true });
+      expect(declared[0]).not.toHaveProperty("public");
+    }
+  );
 });

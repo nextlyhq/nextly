@@ -114,6 +114,25 @@ export function visitorsSee(row: BindingsToFixRow): string {
   }
 }
 
+/** Words as one sentence: a full stop, unless a quotation already ends in one. */
+function sentence(words: string): string {
+  return /[.!?]["”]?$/.test(words) ? words : `${words}.`;
+}
+
+/**
+ * What changed about the binding and what visitors see until it is fixed,
+ * as one sentence: the chip's line under each binding, and Page checks'
+ * reason for it.
+ */
+export function changeSentence(
+  row: BindingsToFixRow,
+  entryLabel: string
+): string {
+  return sentence(
+    `${whatChanged(row, entryLabel)}. Visitors see ${visitorsSee(row)}`
+  );
+}
+
 /** Where the binding is: "Heading · Text", or the page's metadata field. */
 export function whereBound(row: BindingsToFixRow): string {
   return row.blockLabel === ""

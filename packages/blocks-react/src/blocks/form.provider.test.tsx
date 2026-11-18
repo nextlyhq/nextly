@@ -105,6 +105,24 @@ async function page(
   forms: PageForms | undefined,
   ...props: FormProps[]
 ): Promise<string> {
+  return drawn({ forms }, ...props);
+}
+
+/** The same page, drawn where an author is looking. */
+async function canvas(
+  forms: PageForms,
+  ...props: FormProps[]
+): Promise<string> {
+  return drawn({ forms, diagnostics: true }, ...props);
+}
+
+async function drawn(
+  {
+    forms,
+    diagnostics,
+  }: { forms: PageForms | undefined; diagnostics?: boolean },
+  ...props: FormProps[]
+): Promise<string> {
   return renderToHtml(
     <PageRenderer
       document={{
@@ -118,7 +136,10 @@ async function page(
         })),
       }}
       blocks={blocks}
-      context={createStandaloneContext(forms === undefined ? {} : { forms })}
+      context={createStandaloneContext({
+        ...(forms === undefined ? {} : { forms }),
+        ...(diagnostics === undefined ? {} : { diagnostics }),
+      })}
     />
   );
 }
@@ -295,6 +316,22 @@ describe("a provider's form on a published page", () => {
     );
     expect(gone).not.toContain("<form");
     expect(gone).not.toMatch(/error|placeholder/i);
+  });
+
+  it("draws an empty box for a form that is gone only where an author is looking", async () => {
+    const gone = () =>
+      formsAnswering(() => Promise.resolve({ unavailable: "missing" }));
+    // The box the editor says "This form was deleted." over, in the block's
+    // own classes so it takes the block's place.
+    const shown = await canvas(gone(), PICKED);
+    expect(shown).toMatch(
+      /<div class="[^"]*nx-bt-core--form[^"]*" data-nx-form-unavailable="missing"><\/div>/
+    );
+    expect(shown).not.toContain("<form");
+    // A visitor still gets nothing at all.
+    expect(await page(gone(), PICKED)).not.toContain(
+      "data-nx-form-unavailable"
+    );
   });
 
   it("draws nothing, and no error, where the provider fails", async () => {

@@ -541,7 +541,6 @@ import {
   collectionFields,
   collectionTableName,
   generateSlug,
-  normalizeSlugPath,
 } from "./collection-utils";
 import {
   entryStillReferenced,
@@ -558,6 +557,7 @@ import {
   WITHOUT_REVIEW_KEY,
   withoutReviewOfBody,
 } from "./save-door-gate";
+import { slugAsStored } from "./slug-as-stored";
 import {
   entryWriteContext,
   fieldAccessPass,
@@ -8763,11 +8763,9 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * `raw` as `collectionName` stores a slug: one segment, normalised by
-   * {@link generateSlug}, or, where the collection's `db.slugPaths` is on, a
-   * path of several, each normalised alike ({@link normalizeSlugPath}). A
-   * path that cannot be stored is refused as a validation error on `slug`
-   * when `refuse` is set, in words an author can act on, and is otherwise
+   * `raw` as `collectionName` stores a slug, by {@link slugAsStored}. A path
+   * that cannot be stored is refused as a validation error on `slug` when
+   * `refuse` is set, in words an author can act on, and is otherwise
    * returned as given for a later pass to refuse.
    */
   private slugAsStored(
@@ -8775,10 +8773,7 @@ export class CollectionMutationService extends BaseService {
     raw: string,
     refuse: boolean
   ): string {
-    if (collectionDbOptions(collectionName).slugPaths !== true) {
-      return generateSlug(raw);
-    }
-    const read = normalizeSlugPath(raw);
+    const read = slugAsStored(collectionName, raw);
     if ("slug" in read) return read.slug;
     if (!refuse) return raw;
     throw NextlyError.validation({

@@ -166,7 +166,7 @@ A translated field renamed in code is not yet carried over: the old column keeps
 
 ### Translated date fields on PostgreSQL
 
-The translations table keeps a translated date field as the main table does: a `timestamp` holding the UTC time. A PostgreSQL database from an earlier release keeps these columns with a time zone until `nextly upgrade` converts them, keeping each date as Nextly showed it; on a server not in UTC, run it as soon as the release serves every instance, and check recent translated dates after it. See [Translated date fields on PostgreSQL](/docs/guides/production-migrations#translated-date-fields-on-postgresql).
+The translations table keeps a translated date field as the main table does: a `timestamp` holding the UTC time. A PostgreSQL database from an earlier release keeps these columns with a time zone until `nextly i18n:convert-zoned-dates` converts them, keeping each date as Nextly showed it; on a server not in UTC, run it as soon as the release serves every instance, and check recent translated dates after it. See [Translated date fields on PostgreSQL](/docs/guides/production-migrations#translated-date-fields-on-postgresql).
 
 ## Fallback chains
 
@@ -216,7 +216,11 @@ await nextly.update({
   data: {
     title: "Hola",
     _provenance: {
-      title: { origin: "copy", sourceLocale: "en", sourceRevision: englishRead._rev },
+      title: {
+        origin: "copy",
+        sourceLocale: "en",
+        sourceRevision: englishRead._rev,
+      },
     },
   },
 });
@@ -290,10 +294,20 @@ await nextly.publish({
 });
 
 // Only Spanish: its own values go live, the shared part stays as it is.
-await nextly.publish({ collection: "posts", id, locales: ["es"], data: { _rev } });
+await nextly.publish({
+  collection: "posts",
+  id,
+  locales: ["es"],
+  data: { _rev },
+});
 
 // Take French down, leaving every other language live.
-await nextly.unpublish({ collection: "posts", id, locales: ["fr"], data: { _rev } });
+await nextly.unpublish({
+  collection: "posts",
+  id,
+  locales: ["fr"],
+  data: { _rev },
+});
 ```
 
 Over REST, send the same choice to `POST /api/collections/{slug}/entries/{id}/publish` or
