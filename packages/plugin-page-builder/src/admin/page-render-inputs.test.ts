@@ -34,22 +34,32 @@ describe("pageRenderInputs", () => {
     expect(inputs.styleContext?.breakpoints).toBeDefined();
   });
 
-  it("draws custom CSS through the page builder's one checker, as the live page does", () => {
-    // The canvas and every admin preview compile with the checker the
-    // published route uses, so what the author sees is what goes live.
+  it("draws custom CSS through the one checker on a surface with a frame of its own", () => {
+    // The canvas draws the page in a frame, so CSS styling `body` reaches the
+    // page and never the admin around it; it compiles with the checker the
+    // published route uses, so the author sees what goes live.
     const { customCss } = pageRenderInputs({
       ...base,
       siteStyle: NO_TIERS,
+      framed: true,
     }).styleContext;
     expect(customCss?.id).toBe(CUSTOM_CSS_CHECKER_ID);
     expect(customCss?.accepts("selector { color: red; }", "block")).toBe(true);
     expect(customCss?.accepts("@import url(/a.css);", "page")).toBe(false);
   });
 
-  it("draws the site's CSS where the surface was given it", () => {
+  it("draws no custom CSS on a surface drawn inside the admin's own page", () => {
+    // A miniature or a section picture is drawn in the admin document, where
+    // a page's `body { display: none; }` would hide the admin itself.
+    const inputs = pageRenderInputs({ ...base, siteStyle: NO_TIERS });
+    expect(inputs.styleContext).not.toHaveProperty("customCss");
+  });
+
+  it("draws the site's CSS where the framed surface was given it", () => {
     const inputs = pageRenderInputs({
       ...base,
       siteStyle: NO_TIERS,
+      framed: true,
       siteCss: "body { margin: 0; }",
     });
     expect(inputs.styleContext.customCss?.site).toBe("body { margin: 0; }");

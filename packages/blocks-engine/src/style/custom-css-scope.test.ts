@@ -93,6 +93,39 @@ describe("scopeBlockCss", () => {
     );
   });
 
+  it.each(["selector + p", "selector ~ *", "selector:hover + p"])(
+    "refuses %s, which reaches past the block to its neighbours",
+    rule => {
+      expect(scopeBlockCss(`${rule} { color: red; }`, BLOCK)).toEqual({
+        ok: false,
+        refusals: [
+          {
+            line: 1,
+            reason:
+              "A rule in a block's CSS can't reach the blocks beside it (+ or ~).",
+          },
+        ],
+      });
+    }
+  );
+
+  it("keeps a child combinator, which stays inside the block", () => {
+    expect(scoped("selector > a { color: red; }")).toBe(
+      `${BLOCK} > a { color: red; }`
+    );
+  });
+
+  it("keeps a sibling step taken inside the block", () => {
+    // `h2 + p` is two elements both inside the block: the step that left the
+    // block's own element was the descendant one.
+    expect(scoped("selector h2 + p { margin: 0; }")).toBe(
+      `${BLOCK} h2 + p { margin: 0; }`
+    );
+    expect(scoped("selector > a ~ b { color: red; }")).toBe(
+      `${BLOCK} > a ~ b { color: red; }`
+    );
+  });
+
   it("refuses a rule inside @media that does not start from `selector`", () => {
     const result = scopeBlockCss(
       "@media print {\n  selector { color: black; }\n  p { color: gray; }\n}",
