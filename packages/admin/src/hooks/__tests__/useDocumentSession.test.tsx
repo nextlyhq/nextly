@@ -804,6 +804,26 @@ describe("useDocumentSession: recovery point", () => {
     });
   });
 
+  it("keeps what a save stored for edits recorded before the read catches up", async () => {
+    // The save has landed; its read is still on its way. An edit recorded
+    // now must keep the saved title, the read in hand being from before it.
+    const { result } = await heldSession();
+    api.findByID.mockImplementation(() => new Promise(() => undefined));
+    await act(async () => {
+      await result.current.saveDraft({ title: "Saved title" });
+    });
+
+    act(() =>
+      result.current.record({ definition: { kind: "component", nodes: [] } })
+    );
+    await act(async () => void vi.advanceTimersByTime(DEBOUNCE_WAIT));
+
+    await waitFor(() => expect(api.saveAutosave).toHaveBeenCalledTimes(1));
+    expect(api.saveAutosave.mock.calls[0]?.[1]).toMatchObject({
+      title: "Saved title",
+    });
+  });
+
   it("takes the newer read over what a save sent, once the read has caught up", async () => {
     // After a save lands, the document is read again; that read holds the
     // fields as the server keeps them now, so a later recording follows it

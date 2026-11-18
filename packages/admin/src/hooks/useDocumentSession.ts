@@ -527,7 +527,9 @@ interface SessionRecording {
   readonly stored: (
     generation: number,
     /** The fields that write stored, which a later recording is rebased on. */
-    written: Readonly<Record<string, unknown>>
+    written: Readonly<Record<string, unknown>>,
+    /** The read they were stored over, until a newer one holds them. */
+    over: StoredDocument | undefined
   ) => void;
   readonly cancel: () => void;
   /**
@@ -643,7 +645,7 @@ function useSessionRecording(
     (stored: StoredDocument, changes: Readonly<Record<string, unknown>>) => {
       // The WHOLE document, since restoring a recovery point replaces every
       // value its editor holds: the read's values with the changes over them.
-      parts.edited(withoutId(stored), changes);
+      parts.edited(stored, changes);
       edits.bump();
       schedule();
     },
@@ -667,8 +669,12 @@ function useSessionRecording(
   }, [edits, cancel, scope, document, lastSent, locale]);
   const { generation, settle } = edits;
   const stored = useCallback(
-    (upTo: number, written: Readonly<Record<string, unknown>>) => {
-      parts.wrote(written);
+    (
+      upTo: number,
+      written: Readonly<Record<string, unknown>>,
+      over: StoredDocument | undefined
+    ) => {
+      parts.wrote(written, over);
       settle(upTo);
     },
     [parts, settle]
@@ -740,7 +746,10 @@ function useRecordedParts(): {
     base: Record<string, unknown>,
     changes: Readonly<Record<string, unknown>>
   ) => void;
-  readonly wrote: (written: Readonly<Record<string, unknown>>) => void;
+  readonly wrote: (
+    written: Readonly<Record<string, unknown>>,
+    over: StoredDocument | undefined
+  ) => void;
   readonly joined: () => Record<string, unknown>;
   readonly clear: () => void;
 } {
@@ -749,7 +758,7 @@ function useRecordedParts(): {
   const changes = useRef<Readonly<Record<string, unknown>>>({});
   // The read the written fields were stored over: a newer read already holds
   // them as the server stored them, so they are dropped then.
-  const writtenOver = useRef<Record<string, unknown> | null>(null);
+  const writtenOver = useRef<StoredDocument | null>(null);
   return useMemo(
     () => ({
       edited: (read, edits) => {
@@ -760,12 +769,12 @@ function useRecordedParts(): {
         base.current = read;
         changes.current = edits;
       },
-      wrote: fields => {
+      wrote: (fields, over) => {
         written.current = { ...written.current, ...fields };
-        writtenOver.current = base.current;
+        writtenOver.current = over ?? null;
       },
       joined: () => ({
-        ...base.current,
+        ...withoutId(base.current),
         ...written.current,
         ...changes.current,
       }),
@@ -923,7 +932,11 @@ function useSessionWrite(
         });
         if (!moved()) {
           versionRef.current = versionOf(result.item) ?? versionRef.current;
-          recording.stored(taken, storedValues(written, result.item));
+          recording.stored(
+            taken,
+            storedValues(written, result.item),
+            read.document
+          );
           readBehind.current = read.document;
         }
         return { ok: true, values: result.item };
