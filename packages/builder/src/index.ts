@@ -141,6 +141,13 @@ export {
 export type { BuilderShellProps, PanelView } from "./shell/builder-shell";
 
 /**
+ * @experimental What a host lends the inspector for a block's own custom CSS
+ * (`InspectorPanelProps.customCss`): its checker, given only to a person who
+ * may change the site's code. A type, so it costs this entry nothing.
+ */
+export type { BlockCustomCssAccess } from "./custom-css";
+
+/**
  * @experimental The shell's own decisions: which panels the rail offers, the
  * bounds handed to the panel library, and the preference port.
  *

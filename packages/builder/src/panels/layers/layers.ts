@@ -49,6 +49,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { gatedAsStored } from "../../conditions/condition-gate";
+import { holdsCustomCss } from "../../custom-css";
 import { storedComponentId } from "../../placement-props";
 import { blockLabel, type SavedComponent } from "../add/inserter";
 
@@ -126,6 +127,11 @@ export interface LayerNode {
    * says so in words a screen reader reads.
    */
   readonly notQuoted?: boolean;
+  /**
+   * The block holds custom CSS of its own, so its row is marked for everyone.
+   * Only that it does: the CSS itself is never part of the tree.
+   */
+  readonly customCss?: true;
   /**
    * The block is hidden at one or more breakpoints.
    *
@@ -416,6 +422,8 @@ export function layersOf(
         ...(locked || heldBy === undefined ? {} : { lockedBy: heldBy }),
         conditional: hasConditions(node),
         ...(node.nosnippet === true ? { notQuoted: true } : {}),
+        // The one answer the inspector's Style line and dot read too.
+        ...(holdsCustomCss(node) ? { customCss: true as const } : {}),
         breakpointHidden: hiddenAtSomeBreakpoint(node),
         ...(device === undefined ? {} : { hiddenHere }),
         // Kept on a row hidden itself as well: showing it here shows nothing
