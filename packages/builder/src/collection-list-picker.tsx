@@ -20,6 +20,7 @@
  *
  * @module collection-list-picker
  */
+import { findNode } from "@nextlyhq/blocks-engine";
 import { Button } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -43,6 +44,8 @@ const COLLECTION_PICKER_WORDS = {
   layout: (label: string) => `${label} · choose a starting layout`,
   skip: "Skip",
   back: "Back",
+  replaces:
+    "Choosing one replaces the blocks already in this list's item. Skip keeps them.",
 } as const;
 
 /** The starting layouts, in the order offered, with their words. */
@@ -199,6 +202,11 @@ export function CollectionListPicker({
   };
 
   if (source !== null) {
+    // A list whose item already holds blocks: a layout replaces them, so the
+    // step says so before the pick rather than after it.
+    const built =
+      (findNode(document.nodes, firstAdd.nodeId)?.slots?.children?.length ??
+        0) > 0;
     return (
       <div
         className="nx-first-add__body nx-list-picker"
@@ -233,6 +241,11 @@ export function CollectionListPicker({
             </button>
           ))}
         </div>
+        {built ? (
+          <p className="nx-list-picker__note">
+            {COLLECTION_PICKER_WORDS.replaces}
+          </p>
+        ) : null}
         <div className="nx-list-picker__actions">
           <Button
             type="button"

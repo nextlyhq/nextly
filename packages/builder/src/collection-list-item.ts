@@ -399,11 +399,15 @@ export function planStartingList(
           }),
     },
   };
+  // Skip sets the source and nothing else: an item the author already built
+  // stays. A layout replaces the item, which the picker says first and one
+  // Undo puts back.
+  if (layout === "skip") return [update];
   const removed: BuilderOp[] = (list.slots?.[ITEM_SLOT] ?? []).map(child => ({
     kind: "remove",
     id: child.id,
   }));
-  const item = layout === "skip" ? [] : startingItem(source, layout);
+  const item = startingItem(source, layout);
   const inserted: BuilderOp[] = item.map((node, index) => ({
     kind: "insert",
     node,

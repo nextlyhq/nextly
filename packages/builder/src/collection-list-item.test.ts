@@ -307,6 +307,49 @@ describe("planStartingList", () => {
     ],
   });
 
+  /** A list with no source whose item an author has already built. */
+  const authored = {
+    formatVersion: 1 as const,
+    kind: "page" as const,
+    nodes: [
+      {
+        id: "list",
+        type: "core/collection-loop",
+        version: 1,
+        props: { limit: 6 },
+        slots: {
+          children: [
+            {
+              id: "mine",
+              type: "core/heading",
+              version: 1,
+              props: { text: "Mine" },
+            },
+          ],
+        },
+      },
+    ],
+  };
+
+  it("on Skip sets only the source, keeping an item the author built", () => {
+    const ops =
+      planStartingList(authored, "list", { slug: "posts" }, "skip") ?? [];
+    expect(ops).toEqual([
+      expect.objectContaining({
+        kind: "update",
+        patch: expect.objectContaining({
+          props: expect.objectContaining({ collection: "posts" }),
+        }),
+      }),
+    ]);
+  });
+
+  it("on a layout replaces the item, as one list of ops", () => {
+    const ops = planStartingList(authored, "list", POSTS, "titles") ?? [];
+    expect(ops).toContainEqual({ kind: "remove", id: "mine" });
+    expect(ops.filter(op => op.kind === "insert")).not.toHaveLength(0);
+  });
+
   it("keeps Newest first for a collection that keeps its creation dates", () => {
     const [update] =
       planStartingList(

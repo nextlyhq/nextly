@@ -96,6 +96,17 @@ function chooser(page: Page) {
   return page.locator(".nx-first-add__plate");
 }
 
+/** A stored block's id and, for a list, its source; read as stored, unknown. */
+function idAndSource(node: Record<string, unknown>): [unknown, unknown] {
+  const props = node.props;
+  return [
+    node.id,
+    typeof props === "object" && props !== null && "collection" in props
+      ? props.collection
+      : undefined,
+  ];
+}
+
 test.describe("a Collection list in two clicks", () => {
   test.describe.configure({ timeout: 180_000 });
 
@@ -156,7 +167,7 @@ test.describe("a Collection list in two clicks", () => {
     await expect
       .poll(async () => {
         const nodes = await storedPageNodes(page.request, PAGES, id);
-        return nodes.map(node => [node.id, node.props?.collection]);
+        return nodes.map(idAndSource);
       })
       .toEqual([[titled, "posts"]]);
   });
@@ -190,7 +201,7 @@ test.describe("a Collection list in two clicks", () => {
     await expect
       .poll(async () => {
         const nodes = await storedPageNodes(page.request, PAGES, id);
-        return nodes.map(node => [node.id, node.props?.collection]);
+        return nodes.map(idAndSource);
       })
       .toEqual([[skipped, "posts"]]);
   });

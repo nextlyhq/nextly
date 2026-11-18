@@ -88,7 +88,11 @@ const DOCUMENT: BlockDocument = {
 };
 
 function mount(
-  options: { collections?: readonly LoopCollection[]; custom?: boolean } = {}
+  options: {
+    collections?: readonly LoopCollection[];
+    custom?: boolean;
+    document?: BlockDocument;
+  } = {}
 ) {
   const choose = vi.fn((_ops: readonly BuilderOp[]) => true);
   const skip = vi.fn();
@@ -101,7 +105,7 @@ function mount(
   render(
     <CollectionListPicker
       firstAdd={firstAdd}
-      document={DOCUMENT}
+      document={options.document ?? DOCUMENT}
       services={{
         listLoopCollections: () =>
           Promise.resolve(options.collections ?? [POSTS, AUTHORS]),
@@ -221,6 +225,47 @@ describe("the second step", () => {
     fireEvent.click(screen.getByRole("button", { name: "Titles only" }));
     const ops = choose.mock.calls[0]?.[0] ?? [];
     expect(JSON.stringify(ops.slice(1))).toContain('"$bind":"label"');
+  });
+
+  it("says a layout replaces an item the author built, which Skip keeps", async () => {
+    const built: BlockDocument = {
+      ...DOCUMENT,
+      nodes: [
+        {
+          id: "list",
+          type: "core/collection-loop",
+          version: 1,
+          props: { limit: 6 },
+          slots: {
+            children: [
+              {
+                id: "mine",
+                type: "core/heading",
+                version: 1,
+                props: { text: "Mine" },
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const { choose } = mount({ document: built });
+    await settled();
+    fireEvent.click(screen.getByRole("button", { name: "Posts" }));
+    expect(
+      screen.getByText(
+        /Choosing one replaces the blocks already in this list's item/
+      )
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    expect(choose.mock.calls[0]?.[0]).toHaveLength(1);
+  });
+
+  it("says nothing of replacing for a new list's empty item", async () => {
+    mount();
+    await settled();
+    fireEvent.click(screen.getByRole("button", { name: "Posts" }));
+    expect(screen.queryByText(/replaces the blocks already/)).toBeNull();
   });
 
   it("sets the source and leaves an empty item on Skip", async () => {
