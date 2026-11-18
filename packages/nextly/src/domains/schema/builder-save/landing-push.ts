@@ -192,31 +192,43 @@ function partlyAppliedChange(
   error: unknown,
   keptFiles: readonly string[]
 ): NextlyError {
-  const kept =
-    keptFiles.length === 0
-      ? "The database now holds part of this change."
-      : `The database now holds part of this change, so ${keptFiles.length === 1 ? "its migration file" : "its migration files"} ${keptFiles.join(", ")} ${keptFiles.length === 1 ? "was" : "were"} kept and not recorded as applied. ${nextSteps(keptFiles)}`;
-  if (NextlyError.is(error)) {
-    return new NextlyError({
-      code: error.code,
-      statusCode: error.statusCode,
-      publicMessage: `${error.publicMessage} ${kept}`,
-      ...(error.publicData === undefined
-        ? {}
-        : { publicData: error.publicData }),
-      ...(error.logMessage === undefined
-        ? {}
-        : { logMessage: error.logMessage }),
-      logContext: { ...error.logContext, keptFiles: [...keptFiles] },
-      cause: error,
-    });
-  }
+  const kept = keptFilesText(keptFiles);
+  if (NextlyError.is(error)) return withKeptFiles(error, kept, keptFiles);
   return new NextlyError({
     code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
     publicMessage: `The schema change failed part way. ${kept}`,
     logMessage: error instanceof Error ? error.message : String(error),
     logContext: { reason: "partially-applied", keptFiles: [...keptFiles] },
     ...(error instanceof Error ? { cause: error } : {}),
+  });
+}
+
+/** That the database holds part of the change, the files kept for it, and what to run next. */
+function keptFilesText(keptFiles: readonly string[]): string {
+  if (keptFiles.length === 0)
+    return "The database now holds part of this change.";
+  const one = keptFiles.length === 1;
+  return `The database now holds part of this change, so ${one ? "its migration file" : "its migration files"} ${keptFiles.join(", ")} ${one ? "was" : "were"} kept and not recorded as applied. ${nextSteps(keptFiles)}`;
+}
+
+/**
+ * `error` told with `kept` after its own words: its code, status, public data and log message
+ * unchanged, so a caller reading any of them reads what the failure said.
+ */
+function withKeptFiles(
+  error: NextlyError,
+  kept: string,
+  keptFiles: readonly string[]
+): NextlyError {
+  const { publicData, logMessage } = error;
+  return new NextlyError({
+    code: error.code,
+    statusCode: error.statusCode,
+    publicMessage: `${error.publicMessage} ${kept}`,
+    ...(publicData === undefined ? {} : { publicData }),
+    ...(logMessage === undefined ? {} : { logMessage }),
+    logContext: { ...error.logContext, keptFiles: [...keptFiles] },
+    cause: error,
   });
 }
 

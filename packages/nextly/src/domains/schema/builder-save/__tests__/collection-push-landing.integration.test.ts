@@ -203,8 +203,9 @@ for (const dialect of getConfiguredTestDialects()) {
     );
 
     // A refusal inside the push, before it runs any statement: a column on the table that no field
-    // describes, which the push would drop and nothing the save decides answers. MySQL and SQLite
-    // keep what a push ran, so whether this one changed anything is read from the tables.
+    // describes, beside the field the save adds, reads as a rename the save never answered, and the
+    // dialog's prompt refuses the apply rather than drop it. MySQL and SQLite keep what a push ran,
+    // so whether this one changed anything is read from the tables.
     it("leaves nothing when the push refuses before running any statement", async () => {
       const q = (name: string) =>
         dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
@@ -213,13 +214,16 @@ for (const dialect of getConfiguredTestDialects()) {
       );
       const before = await standing();
 
-      // The push's own refusal, in its words: the apply reports a refused push by its message.
-      await expect(save(SWITCHED)).rejects.toMatchObject({
-        publicMessage: expect.stringContaining(
-          'holds a column "legacy_notes" that no field describes'
-        ),
-      });
-
+      const refused: unknown = await save(SWITCHED).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      // Refused, and told as a refusal: never as a change the database holds part of.
+      expect(refused).toBeInstanceOf(Error);
+      expect(
+        (refused as { publicMessage?: string }).publicMessage
+      ).not.toContain("The database now holds part of this change");
+      // No file kept, no definition or ledger entry written, the table as it was.
       expect(await standing()).toEqual(before);
     }, 60_000);
 
