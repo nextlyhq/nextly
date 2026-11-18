@@ -425,6 +425,37 @@ describe("the block menu", () => {
     ).toBe(true);
   });
 
+  it("judges the turns under the editor's limits it is given", () => {
+    // More blocks than the default count, with the Text-only region last.
+    const many = Array.from({ length: DEFAULT_LIMITS.maxNodes + 10 }, (_, i) =>
+      text({ id: `x${i}`, props: { text: "x" } })
+    );
+    const notes: BlockNode = {
+      id: "n1",
+      type: "acme/notes",
+      version: 1,
+      props: {},
+      slots: { children: [text()] },
+    };
+    const host = { ...DEFAULT_LIMITS, maxNodes: DEFAULT_LIMITS.maxNodes * 4 };
+    const actions = toolbarActions(
+      page(...many, notes),
+      "t1",
+      ["t1"],
+      undefined,
+      true,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      true,
+      host
+    );
+    expect(
+      actions.find(action => action.id === "turn-into-rich-text")?.enabled
+    ).toBe(false);
+  });
+
   it("offers no turn for several blocks at once, nor for a block that turns into nothing", () => {
     const two = page(text(), text({ id: "t2" }));
     expect(

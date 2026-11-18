@@ -45,6 +45,7 @@ import {
   type BlockDocument,
   type BlockNode,
   type DefinitionsById,
+  type DocumentLimits,
   type NamedClass,
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
@@ -186,14 +187,16 @@ function turnIntoActions(
   nesting: NestingSource,
   ask: LockQuestion | undefined,
   planned: boolean,
-  library: readonly NamedClass[] | undefined
+  library: readonly NamedClass[] | undefined,
+  limits: DocumentLimits | undefined
 ): ToolbarAction[] {
   // Judged by the placement rules the rest of the menu is, which are the
-  // ones the verb runs by.
+  // ones the verb runs by, and under the editor's limits the verb runs with.
   return turnIntoOffers(document, selectedId, {
     ...(ask === undefined ? {} : { ask }),
     planned,
     nesting,
+    ...(limits === undefined ? {} : { limits }),
     // The site's styles, so a block style that gives way is said here too.
     ...(library === undefined ? {} : { library }),
   }).map(offer => ({
@@ -908,7 +911,13 @@ export function toolbarActions(
    * grant and Entry content still dim them, and a menu that opens, or the
    * verb when it runs, plans them and says why it refuses.
    */
-  planned: boolean = true
+  planned: boolean = true,
+  /**
+   * The editor's size limits, so a "Turn into" choice is judged on a page as
+   * large as the editor allows, as the verb that runs it is. Absent, the
+   * default limits.
+   */
+  limits?: DocumentLimits
 ): ToolbarAction[] {
   if (selectedId === null) return [];
 
@@ -1000,7 +1009,8 @@ export function toolbarActions(
       rules,
       lockRefusalFor,
       planned,
-      sharedStyles?.library
+      sharedStyles?.library,
+      limits
     ),
     saveAction(document, ids, rules, mayCreatePattern, planned),
     ...sharedStyleActions(document, ids, sharedStyles),

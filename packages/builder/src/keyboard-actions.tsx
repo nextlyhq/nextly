@@ -919,6 +919,7 @@ export function useBlockKeyboardActions({
     sharedStyles: sharedStyleOffer,
     movePosition,
     placementRefusal,
+    limits: editor.limits,
   });
   const selectionActions = offer.actions;
   /*
