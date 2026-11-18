@@ -47,6 +47,7 @@ import {
 import { isWebhookRecordingEnabled } from "./recording-policy";
 import type { EventRetentionClass } from "./retention-config";
 import {
+  componentRowPaths,
   sensitiveFieldPaths,
   type SensitiveFieldSource,
 } from "./sensitive-fields";
@@ -121,6 +122,7 @@ export function eventChangedFields(args: {
     data: args.data,
     previous: args.previous ?? null,
     sensitiveFields: sensitiveFieldPaths(args.fields),
+    componentRows: componentRowPaths(args.fields),
   }).changedFields;
 }
 
@@ -170,6 +172,7 @@ function prepareMutationEnvelope(args: RecordMutationEventArgs): {
     previous: args.previous ?? null,
     actor: webhookActorOf(args.actor),
     sensitiveFields: sensitiveFieldPaths(args.fields),
+    componentRows: componentRowPaths(args.fields),
     ...(args.site !== undefined ? { site: args.site } : {}),
     ...(args.statusChange !== undefined
       ? { statusChange: args.statusChange }
@@ -253,6 +256,9 @@ async function recordActivity(
       ...(resource.locale !== undefined ? { locale: resource.locale } : {}),
       data: args.data,
       previous: args.previous ?? null,
+      // The same component rows the event's own diff passes over, so the trail
+      // and the event name the same fields changed.
+      componentRows: componentRowPaths(args.fields),
       actor: webhookActorOf(args.actor),
       ...(args.publication !== undefined
         ? { publication: args.publication }

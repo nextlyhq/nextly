@@ -330,6 +330,7 @@ import {
   recordSingleSaveActivity,
 } from "../../webhooks/record-mutation-event";
 import { isOutboxRecordingActive } from "../../webhooks/recording-activation";
+import { componentRowPaths } from "../../webhooks/sensitive-fields";
 import type { WebhookResource } from "../../webhooks/types";
 import { workflowAttachedTo } from "../../workflows/registry";
 import { closeReviewOnDiscard } from "../../workflows/review-state-cleanup";
@@ -5983,7 +5984,13 @@ export class SingleMutationService extends BaseService {
             // Compared for the fields the save changed only when both were
             // assembled; the raw row stands in otherwise, and names none.
             ...(assembleDocuments
-              ? { data: dataDoc, previous: previousDoc }
+              ? {
+                  data: dataDoc,
+                  previous: previousDoc,
+                  // The component rows of the field tree the event strips by,
+                  // so the trail and the event name the same fields changed.
+                  componentRows: componentRowPaths(webhookFields),
+                }
               : {}),
             // This language's own statuses, as the transitions above read
             // them, and whether the save promoted the pending edits, which
@@ -7371,6 +7378,8 @@ export class SingleMutationService extends BaseService {
       actor,
       data,
       previous,
+      // The Single's component rows, whose own stamps are not a change.
+      componentRows: componentRowPaths(singleMeta.fields),
       publication: {
         statusAfter: undefined,
         statusBefore: undefined,
