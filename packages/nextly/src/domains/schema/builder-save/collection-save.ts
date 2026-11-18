@@ -54,7 +54,10 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { AddressKind } from "../../../shared/address-rule";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { statedMoment } from "../../dynamic-collections/services/stated-default";
-import { COMPANION_STRUCTURAL_COLUMNS } from "../../i18n/companion-columns";
+import {
+  COMPANION_LOCALE_COLUMN,
+  COMPANION_STRUCTURAL_COLUMNS,
+} from "../../i18n/companion-columns";
 import { appLanguageOrder } from "../../i18n/configured-locales";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
 import { companionUniqueIndexName } from "../../i18n/migration/companion-unique-indexes";
@@ -106,6 +109,7 @@ import type {
   TableSpec,
 } from "../pipeline/diff/types";
 import {
+  readIndexColumns,
   readIndexUniqueness,
   uniqueIndexNames,
 } from "../pipeline/live-table-facts";
@@ -1502,8 +1506,11 @@ async function companionDriftItems(
 
   const recorded = recordedTable.localizedColumns ?? [];
   const recordedKeys = new Set(recorded.map(key));
+  // The structural columns by the same key, so `_LOCALE` is the structural `_locale` where the
+  // dialect compares without case.
+  const structural = new Set([...COMPANION_STRUCTURAL_COLUMNS].map(key));
   const live = (await companionColumnNames(deps.adapter, table)).filter(
-    column => !COMPANION_STRUCTURAL_COLUMNS.has(column)
+    column => !structural.has(key(column))
   );
   const liveKeys = new Set(live.map(key));
   // A translated column the main table holds too, where the history records it on the
@@ -1541,8 +1548,13 @@ async function companionDriftItems(
 
 /**
  * The per-language unique indexes of the translated columns the history records, where the
- * database holds another set: a recorded one missing or not unique (`-`), or one under a
- * translated column's index name the history does not record (`+`). The file drops and creates
+ * database holds another set: a recorded one missing, not unique, or standing on whole columns
+ * other than its column and the language (`-`), or one under a translated column's index name the
+ * history does not record (`+`). An index of that name on `(title, _parent)` lets a title repeat
+ * within a language, and the file, which drops it by name and creates the right one, could fail
+ * on the create after its earlier statements committed. A text column's index is an expression
+ * (PostgreSQL, MySQL) or partial (SQLite), whose column the catalog does not name, so one of
+ * those under the name is taken as the per-language index. The file drops and creates
  * these indexes by name, without asking the database first, so it would fail part way over either.
  * Only the translated columns' own index names are judged: the table's structural indexes are not
  * the history's to record here.
@@ -1554,13 +1566,26 @@ async function companionIndexDriftItems(
 ): Promise<DriftItem[]> {
   const dialect = deps.adapter.getCapabilities().dialect;
   const key = (name: string) => identifierKey(dialect, name);
-  const indexes = await readIndexUniqueness(
-    deps.adapter.getDrizzle(),
-    dialect,
-    companion
-  );
+  const db = deps.adapter.getDrizzle();
+  const indexes = await readIndexUniqueness(db, dialect, companion);
   const liveAny = new Set([...indexes.keys()].map(key));
   const liveUnique = new Set([...uniqueIndexNames(indexes)].map(key));
+  // What each index stands on, where it stands on whole columns, by the same keys. An expression
+  // or partial index is not among them.
+  const keysOf = new Map(
+    [...(await readIndexColumns(db, dialect, companion))].map(
+      ([name, columns]) => [key(name), columns.map(key).sort()] as const
+    )
+  );
+  const perLanguage = (name: string, column: string): boolean => {
+    if (!liveUnique.has(key(name))) return false;
+    const keys = keysOf.get(key(name));
+    return (
+      keys === undefined ||
+      keys.join("\u0000") ===
+        [key(column), key(COMPANION_LOCALE_COLUMN)].sort().join("\u0000")
+    );
+  };
   const recordedUnique = new Set(
     (recordedTable.uniqueLocalizedColumns ?? []).map(entry =>
       key(typeof entry === "string" ? entry : entry.column)
@@ -1570,7 +1595,7 @@ async function companionIndexDriftItems(
     (column): DriftItem[] => {
       const name = companionUniqueIndexName(companion, column);
       if (recordedUnique.has(key(column))) {
-        return liveUnique.has(key(name))
+        return perLanguage(name, column)
           ? []
           : [
               {

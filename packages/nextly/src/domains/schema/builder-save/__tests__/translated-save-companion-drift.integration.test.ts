@@ -222,6 +222,27 @@ for (const dialect of getConfiguredTestDialects()) {
         }
       );
 
+      // The same for a structural column: `_LOCALE` is the translations table's `_locale` there.
+      it.skipIf(dialect === "postgresql")(
+        "is not refused as drift over a structural column the database holds under another case",
+        async () => {
+          await kind.create();
+          const companion = `${kind.table}_locales`;
+          await exec(
+            `ALTER TABLE ${q(companion)} RENAME COLUMN ${q(COMPANION_LOCALE_COLUMN)} TO ${q("_LOCALE")}`
+          );
+
+          await kind.save(t, [
+            ...FIELDS,
+            { name: "note", type: "text", localized: false },
+          ]);
+
+          expect(
+            (await definitionOf(kind.table)).columns.map(c => c.name)
+          ).toContain("note");
+        }
+      );
+
       // A translations table left with its structural columns alone, where the history records
       // none: the file turning translation on would create it again.
       it("is refused as drift before anything changes, when translation is turned on over a translations table the history does not record", async () => {
@@ -254,6 +275,70 @@ for (const dialect of getConfiguredTestDialects()) {
           dialect === "mysql"
             ? `DROP INDEX ${q(titleIndex())} ON ${q(companion)}`
             : `DROP INDEX ${q(titleIndex())}`
+        );
+        const main = await definitionOf(kind.table);
+        const translations = await definitionOf(companion);
+
+        await expect(
+          kind.save(
+            t,
+            [{ ...UNIQUE[0], name: "heading" }, UNIQUE[1]],
+            [
+              {
+                tableName: companion,
+                fromColumn: "title",
+                toColumn: "heading",
+                choice: "rename",
+              },
+            ]
+          )
+        ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+
+        expect(await definitionOf(kind.table)).toEqual(main);
+        expect(await definitionOf(companion)).toEqual(translations);
+      });
+
+      it("renames a translated unique field over its own per-language index", async () => {
+        await kind.create();
+        await kind.save(t, UNIQUE);
+        const companion = `${kind.table}_locales`;
+
+        await kind.save(
+          t,
+          [{ ...UNIQUE[0], name: "heading" }, UNIQUE[1]],
+          [
+            {
+              tableName: companion,
+              fromColumn: "title",
+              toColumn: "heading",
+              choice: "rename",
+            },
+          ]
+        );
+
+        const indexes = await readIndexUniqueness(
+          t.adapter.getDrizzle(),
+          dialect,
+          companion
+        );
+        expect(
+          indexes.get(companionUniqueIndexName(companion, "heading"))?.unique
+        ).toBe(true);
+      });
+
+      // An index under the per-language index's name that is unique on other keys leaves a title
+      // free to repeat within a language. The file would drop it by name and create the right one.
+      it("is refused as drift before anything changes, when a translated unique field's index stands on other keys and the field is renamed", async () => {
+        await kind.create();
+        await kind.save(t, UNIQUE);
+        const companion = `${kind.table}_locales`;
+        await exec(
+          dialect === "mysql"
+            ? `DROP INDEX ${q(titleIndex())} ON ${q(companion)}`
+            : `DROP INDEX ${q(titleIndex())}`
+        );
+        await exec(
+          `CREATE UNIQUE INDEX ${q(titleIndex())} ON ${q(companion)} (${q("_parent")}, ${q(COMPANION_LOCALE_COLUMN)})`
         );
         const main = await definitionOf(kind.table);
         const translations = await definitionOf(companion);
