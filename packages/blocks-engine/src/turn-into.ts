@@ -28,12 +28,15 @@ import {
   isComponentDocument,
   type BlockDocument,
   type BlockNode,
+  isTokenRef,
   type NodeStyles,
+  type StyleValue,
 } from "./document";
 import type { BuilderOp } from "./ops-vocabulary";
 import { getBlock } from "./registry";
 import { STYLE_CATALOG } from "./style/catalog";
 import { isLook, type NamedClass } from "./style/named-class";
+import { overlaidStyles } from "./style/overlaid-styles";
 import { supportsAllowStyleProperty } from "./style/supports-map";
 import { findNode } from "./tree";
 
@@ -159,9 +162,11 @@ export function planTurnInto(
     target,
     converter.carries ?? {}
   );
-  const worn = lookOf(node, to, library);
+  const worn = lookOf(node, library);
   const styles = supportedStyles(
-    worn.look === undefined ? node.styles : under(worn.look, node.styles),
+    worn.look === undefined
+      ? node.styles
+      : overlaidStyles(worn.look, node.styles),
     target
   );
   const turned: BlockNode = {
@@ -198,35 +203,42 @@ function offeredToPlacements(document: BlockDocument, id: string): boolean {
 }
 
 /**
- * The look the block wears that the new type cannot, merged in library order
- * when it wears several, and its classes without them; nothing when it wears
- * none the library names.
+ * The look the block was drawn with, as styles the new block can carry, and
+ * its classes without it; nothing when it wears none the library names.
  *
- * A look is drawn under every other class the block wears, so what a kept
- * class (a shared style) sets wins over it at any width that class applies
- * to. Written into the block's own styles the look would win instead, so a
- * value a kept class also sets, in the same state at any width, is left out
- * and `trimmed` says so: where the shared style did not apply, that part of
- * the look is lost, which is said rather than guessed around.
+ * A look belongs to one block type: on any other it is not drawn. So the
+ * block's own look (of its own type, the one it was drawn with) is folded in
+ * under its own styles (`overlaidStyles`, side by side for a composite), and
+ * its id is left off. Looks of other types were never drawn on it, and
+ * nothing of them is folded.
+ *
+ * Folding moves the look into the block's own tier, which every class and
+ * every width of the block's own values used to beat. So each look value is
+ * kept only where nothing that beat it sets the same thing:
+ * - a value a kept class (a shared style) or the block itself sets at
+ *   ANOTHER width goes, since one tier orders widths differently from two;
+ *   `trimmed` then says part of the look gave way, as it may have shown
+ *   where those did not apply;
+ * - at the same width, a kept class's sides are taken out of it (the class
+ *   still beats it), and the block's own are laid over it.
  */
 function lookOf(
   node: BlockNode,
-  to: string,
   library: readonly NamedClass[]
 ): { look?: NodeStyles; classes?: string[]; trimmed?: true } {
   const worn = new Set(node.classes ?? []);
   const wornHere = library.filter(cls => worn.has(cls.id));
   const looks = wornHere
-    .filter(cls => isLook(cls) && cls.blockType !== to)
+    .filter(cls => isLook(cls) && cls.blockType === node.type)
     .sort((a, b) => a.orderIndex - b.orderIndex);
   if (looks.length === 0) return {};
   const gone = new Set(looks.map(look => look.id));
-  const kept = wornHere.filter(cls => !gone.has(cls.id));
+  const kept = wornHere.filter(cls => !gone.has(cls.id)).map(cls => cls.styles);
   const look = looks.reduce<NodeStyles>(
-    (all, each) => under(all, each.styles),
+    (all, each) => overlaidStyles(all, each.styles),
     {}
   );
-  const left = without(look, kept);
+  const left = beatenOut(look, kept, node.styles);
   return {
     look: left.styles,
     classes: (node.classes ?? []).filter(cls => !gone.has(cls)),
@@ -234,51 +246,78 @@ function lookOf(
   };
 }
 
-/** Whether a class sets `property` in `state`, at any width. */
-function sets(cls: NamedClass, state: string, property: string): boolean {
-  const widths = (cls.styles as Record<string, Record<string, object>>)[state];
-  return Object.values(widths ?? {}).some(
-    values => values !== undefined && Object.hasOwn(values, property)
-  );
-}
-
-/** `styles` without each value one of `classes` sets in the same state. */
-function without(
-  styles: NodeStyles,
-  classes: readonly NamedClass[]
-): { styles: NodeStyles; trimmed: boolean } {
-  const out: Record<string, Record<string, Record<string, unknown>>> = {};
-  let trimmed = false;
-  for (const [state, breakpoints] of Object.entries(styles)) {
-    for (const [breakpoint, values] of Object.entries(breakpoints ?? {})) {
-      const all = Object.entries(values ?? {});
-      const left = all.filter(
-        ([property]) => !classes.some(cls => sets(cls, state, property))
-      );
-      if (left.length < all.length) trimmed = true;
-      if (left.length === 0) continue;
-      out[state] ??= {};
-      out[state][breakpoint] = Object.fromEntries(left);
-    }
-  }
-  return { styles: out, trimmed };
-}
-
-/** `below` with `above` laid over it, value by value: `above` wins. */
-function under(below: NodeStyles, above: NodeStyles | undefined): NodeStyles {
-  const out: Record<string, Record<string, Record<string, unknown>>> = {};
-  for (const layer of [below, above ?? {}]) {
-    for (const [state, breakpoints] of Object.entries(layer)) {
-      for (const [breakpoint, values] of Object.entries(breakpoints ?? {})) {
-        out[state] ??= {};
-        out[state][breakpoint] = {
-          ...out[state][breakpoint],
-          ...structuredClone(values),
-        };
-      }
+/** Each width's value of `property` in `state`, as an envelope sets it. */
+function widthsOf(
+  styles: NodeStyles | undefined,
+  state: string,
+  property: string
+): Map<string, StyleValue> {
+  const out = new Map<string, StyleValue>();
+  const byWidth = (
+    styles as Record<string, Record<string, object>> | undefined
+  )?.[state];
+  for (const [width, values] of Object.entries(byWidth ?? {})) {
+    if (values !== undefined && Object.hasOwn(values, property)) {
+      out.set(width, (values as Record<string, StyleValue>)[property]);
     }
   }
   return out;
+}
+
+/** `value` without what `taken` sets: the sides of a composite, or all. */
+function minus(value: StyleValue, taken: StyleValue): StyleValue | undefined {
+  const isSides = (each: StyleValue): each is Record<string, StyleValue> =>
+    typeof each === "object" && each !== null && !isTokenRef(each);
+  if (!isSides(value) || !isSides(taken)) return undefined;
+  const left = Object.entries(value).filter(
+    ([side]) => !Object.hasOwn(taken, side)
+  );
+  return left.length === 0 ? undefined : Object.fromEntries(left);
+}
+
+/** What is left of one look value once what beat it is taken out. */
+function leftOf(
+  value: StyleValue,
+  width: string,
+  setters: readonly Map<string, StyleValue>[],
+  classSetters: readonly Map<string, StyleValue>[]
+): { value?: StyleValue; trimmed: boolean } {
+  if (setters.some(set => [...set.keys()].some(other => other !== width))) {
+    return { trimmed: true };
+  }
+  let left: StyleValue | undefined = value;
+  for (const set of classSetters) {
+    const taken = set.get(width);
+    if (left !== undefined && taken !== undefined) left = minus(left, taken);
+  }
+  return left === undefined
+    ? { trimmed: false }
+    : { value: left, trimmed: false };
+}
+
+/** The look's values that nothing which beat it also sets. */
+function beatenOut(
+  look: NodeStyles,
+  kept: readonly NodeStyles[],
+  own: NodeStyles | undefined
+): { styles: NodeStyles; trimmed: boolean } {
+  const out: Record<string, Record<string, Record<string, StyleValue>>> = {};
+  let trimmed = false;
+  for (const [state, widths] of Object.entries(look)) {
+    for (const [width, values] of Object.entries(widths ?? {})) {
+      for (const [property, value] of Object.entries(values ?? {})) {
+        const classSetters = kept.map(cls => widthsOf(cls, state, property));
+        const setters = [...classSetters, widthsOf(own, state, property)];
+        const left = leftOf(value, width, setters, classSetters);
+        trimmed ||= left.trimmed;
+        if (left.value === undefined) continue;
+        out[state] ??= {};
+        out[state][width] ??= {};
+        out[state][width][property] = structuredClone(left.value);
+      }
+    }
+  }
+  return { styles: out, trimmed };
 }
 
 /** Whether any of the block's slots holds a block. */

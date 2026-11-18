@@ -166,7 +166,7 @@ describe("turnIntoOffers", () => {
     });
     const [toRichText] = turnIntoOffers(page(worn), "t1", { library });
     expect(toRichText?.note).toBe(
-      "Part of its block style gives way to its shared style"
+      "Part of its block style gives way to its other styles"
     );
   });
 
@@ -361,7 +361,7 @@ describe("the block menu", () => {
     );
     expect(
       actions.find(action => action.id === "turn-into-rich-text")?.note
-    ).toBe("Part of its block style gives way to its shared style");
+    ).toBe("Part of its block style gives way to its other styles");
   });
 
   it("judges the turns by the placement rules the menu is given", () => {

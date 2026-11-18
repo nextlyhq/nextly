@@ -101,7 +101,7 @@ const DEFINITIONS: ReadonlyMap<string, AnyBlockDefinition> = new Map(
       name: "test/passage",
       editor: { label: "Passage" },
       props: { passage: { type: "richText" } },
-      supports: { color: true, typography: true },
+      supports: { color: true, typography: true, spacing: true },
     }),
     definition({
       name: "test/box",
@@ -380,7 +380,7 @@ describe("a block style, which belongs to one block type", () => {
       hover: { desktop: { color: "#f00" } },
     });
     expect(plan.op.node.classes).toEqual(["shared-brand"]);
-    expect(plan.lookTrimmed).toBe(true);
+    expect(plan.lookTrimmed).toBeUndefined();
   });
 
   it("gives way to a shared style that sets the same thing at another width, and says so", () => {
@@ -406,6 +406,104 @@ describe("a block style, which belongs to one block type", () => {
       hover: { desktop: { color: "#f00" } },
     });
     expect(plan.lookTrimmed).toBe(true);
+  });
+
+  it("keeps the sides of a padding the block did not set itself", () => {
+    const padded: NamedClass = {
+      id: "look-padded",
+      slug: "padded",
+      orderIndex: 0,
+      blockType: "test/words",
+      styles: {
+        base: { desktop: { padding: { blockStart: "4px", blockEnd: "4px" } } },
+      },
+    };
+    const own = {
+      ...WORDS,
+      classes: ["look-padded"],
+      styles: { base: { desktop: { padding: { blockStart: "8px" } } } },
+    };
+    const plan = planTurnInto(page(own), "w1", "test/passage", lookup, [
+      padded,
+    ]);
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.op.node.styles).toEqual({
+      base: { desktop: { padding: { blockStart: "8px", blockEnd: "4px" } } },
+    });
+    expect(plan.lookTrimmed).toBeUndefined();
+  });
+
+  it("keeps a shared style's sides over the look's at the same width", () => {
+    const padded: NamedClass = {
+      id: "look-padded",
+      slug: "padded",
+      orderIndex: 0,
+      blockType: "test/words",
+      styles: {
+        base: { desktop: { padding: { blockStart: "4px", blockEnd: "4px" } } },
+      },
+    };
+    const roomy: NamedClass = {
+      id: "roomy",
+      slug: "roomy",
+      orderIndex: 1,
+      styles: { base: { desktop: { padding: { blockStart: "6px" } } } },
+    };
+    const worn = {
+      ...WORDS,
+      classes: ["look-padded", "roomy"],
+      styles: undefined,
+    };
+    const plan = planTurnInto(page(worn), "w1", "test/passage", lookup, [
+      padded,
+      roomy,
+    ]);
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.op.node.styles).toEqual({
+      base: { desktop: { padding: { blockEnd: "4px" } } },
+    });
+    expect(plan.op.node.classes).toEqual(["roomy"]);
+  });
+
+  it("gives way to the block's own value at another width, and says so", () => {
+    // The block's own size won at every width over the look's tablet size;
+    // in one tier the look's tablet size would win on tablets, so it goes.
+    const sized: NamedClass = {
+      id: "look-sized",
+      slug: "sized",
+      orderIndex: 0,
+      blockType: "test/words",
+      styles: { base: { tablet: { fontSize: "2rem" } } },
+    };
+    const own = {
+      ...WORDS,
+      classes: ["look-sized"],
+      styles: { base: { desktop: { fontSize: "1rem" } } },
+    };
+    const plan = planTurnInto(page(own), "w1", "test/passage", lookup, [sized]);
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.op.node.styles).toEqual({
+      base: { desktop: { fontSize: "1rem" } },
+    });
+    expect(plan.lookTrimmed).toBe(true);
+  });
+
+  it("folds only a look the block was drawn with", () => {
+    // A look of a third type was never drawn on this block, so nothing of it
+    // comes along.
+    const other: NamedClass = {
+      id: "look-other",
+      slug: "other",
+      orderIndex: 0,
+      blockType: "test/box",
+      styles: { base: { desktop: { color: "#123" } } },
+    };
+    const worn = { ...WORDS, classes: ["look-other"], styles: undefined };
+    const plan = planTurnInto(page(worn), "w1", "test/passage", lookup, [
+      other,
+    ]);
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.op.node.styles).toBeUndefined();
   });
 
   it("says nothing gave way when no kept class sets what the look sets", () => {

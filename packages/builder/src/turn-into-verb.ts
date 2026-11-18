@@ -65,7 +65,7 @@ const TURN_INTO_WORDS = {
   /** Said when a binding cannot move to the new block. */
   unbound: "Its bound field is removed",
   /** Said when part of a block style gives way to a shared style. */
-  lookTrimmed: "Part of its block style gives way to its shared style",
+  lookTrimmed: "Part of its block style gives way to its other styles",
   /** Said when the page refused the edit for a reason nothing judged first. */
   refused: "The page refused this edit, so nothing changed.",
   label: (name: string): string => `Turn into ${name}`,
