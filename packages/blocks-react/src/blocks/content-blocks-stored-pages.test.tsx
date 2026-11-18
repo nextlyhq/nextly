@@ -90,7 +90,9 @@ const STORED: readonly (readonly [string, BlockNode[], string])[] = [
         rel: "nofollow",
       }),
     ],
-    '<div class="nx-pb-page"><h1 class="nx-pb-2a4ezges7s8 nx-bt-core--heading">Plain</h1><h3 class="nx-pb-1dmcr9nzihr nx-bt-core--heading"><a href="/pricing" target="_blank" rel="nofollow noopener noreferrer">Linked</a></h3></div>',
+    // Each heading now carries its anchor in the page outline, the one
+    // change to this markup since the settings moved.
+    '<div class="nx-pb-page"><h1 class="nx-pb-2a4ezges7s8 nx-bt-core--heading" id="plain">Plain</h1><h3 class="nx-pb-1dmcr9nzihr nx-bt-core--heading" id="linked"><a href="/pricing" target="_blank" rel="nofollow noopener noreferrer">Linked</a></h3></div>',
   ],
   [
     "button",

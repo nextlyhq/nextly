@@ -19,6 +19,7 @@ import type {
   BuilderSaveSetup,
   CollectionSave,
   CollectionSaveDeps,
+  CollectionSavePreview,
 } from "../../domains/schema/builder-save/collection-save";
 import {
   saveOfSchemaChange,
@@ -201,8 +202,8 @@ export function landingPush(
 export async function reviewBuilderSchemaChange(
   deps: CollectionSaveDeps | undefined,
   change: Parameters<typeof writeBuilderSchemaChange>[2]
-): Promise<string[]> {
-  if (deps === undefined) return [];
+): Promise<BuilderSaveReview> {
+  if (deps === undefined) return NOTHING_TO_REVIEW;
   const { save } = saveOfSchemaChange({
     ...change,
     row: {
@@ -215,5 +216,26 @@ export async function reviewBuilderSchemaChange(
     }),
   });
   const { previewCollectionSave } = await loadCollectionSave();
-  return (await previewCollectionSave(deps, save)).notices;
+  return reviewOf(await previewCollectionSave(deps, save));
+}
+
+/**
+ * What a save's review shows beside the change: each line, and each conversion by the key its
+ * apply confirms it by (`acknowledgedConversions`), which the Builder sends back once the person
+ * confirms the review.
+ */
+export type BuilderSaveReview = Pick<
+  CollectionSavePreview,
+  "notices" | "conversions"
+>;
+
+/** The review of a save with no writer: nothing beyond the change. */
+export const NOTHING_TO_REVIEW: BuilderSaveReview = {
+  notices: [],
+  conversions: [],
+};
+
+/** The review a save's preview gives. */
+export function reviewOf(preview: CollectionSavePreview): BuilderSaveReview {
+  return { notices: preview.notices, conversions: preview.conversions };
 }

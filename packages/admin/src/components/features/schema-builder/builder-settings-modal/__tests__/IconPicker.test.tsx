@@ -1,6 +1,13 @@
 // Why: lock the contract for the extracted IconPicker — opens a popover with
 // the curated list, search filters in place, and selecting an icon fires
 // onChange with the icon name (a Lucide identifier).
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@nextlyhq/ui";
+import { fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -33,5 +40,36 @@ describe("IconPicker", () => {
     await user.click(starButton);
 
     expect(onChange).toHaveBeenCalledWith("Star");
+  });
+
+  // The picker opens inside the create and settings dialogs. A dialog locks
+  // scrolling outside its own content, and the popover is portalled outside
+  // it, so a wheel over the icon list was refused there: the list only moved
+  // by dragging its scrollbar. The lock refuses by cancelling the event, which
+  // is what this asks about. jsdom lays nothing out, so the list is given the
+  // overflow and the sizes a browser would give it.
+  it("scrolls its icon list by wheel when opened inside a dialog", async () => {
+    const user = userEvent.setup();
+    render(
+      <Dialog open>
+        <DialogContent>
+          <DialogTitle>New collection</DialogTitle>
+          <DialogDescription>Holds an icon picker.</DialogDescription>
+          <IconPicker onChange={() => {}} />
+        </DialogContent>
+      </Dialog>
+    );
+
+    await user.click(screen.getByRole("button", { name: /select icon/i }));
+    const list = screen
+      .getByTitle("Star")
+      .closest<HTMLElement>('[class*="overflow-y-auto"]');
+    if (!list) throw new Error("the icon list is not rendered");
+    list.style.overflowY = "auto";
+    Object.defineProperty(list, "scrollHeight", { value: 1200 });
+    Object.defineProperty(list, "clientHeight", { value: 280 });
+
+    // `fireEvent` answers false when a listener cancelled the event.
+    expect(fireEvent.wheel(list, { deltaY: 120 })).toBe(true);
   });
 });

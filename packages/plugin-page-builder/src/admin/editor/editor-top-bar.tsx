@@ -87,6 +87,8 @@ export function editorTopBar(
     siteStyleError,
     editedBreakpoint,
     chooseDevice,
+    previewWidth,
+    setPreviewWidth,
     editor,
     inline,
   } = view;
@@ -149,6 +151,10 @@ export function editorTopBar(
           selected={editedBreakpoint}
           onSelect={chooseDevice}
           status={siteStyleStatus(siteStylePending, siteStyleError)}
+          // A width previewed in place of the device's own: shown, typed
+          // and reset here, dragged at the canvas frame's edges.
+          previewWidth={previewWidth}
+          onPreviewWidth={setPreviewWidth}
         />
         {/* Beside the devices: the whole site in its dark values, offered
             while some variable has one. */}
@@ -165,7 +171,17 @@ export function editorTopBar(
           attention, opening the list. Never a reason to hold Save or
           Publish back, which read nothing of it. */}
         {editor.document.kind === "page" ? (
-          <PageChecksChip editor={editor} canvas={page.canvas} />
+          <PageChecksChip
+            editor={editor}
+            canvas={page.canvas}
+            // The site's header and footer, read with the page, so their
+            // headings count in the page's order.
+            regions={view.canvasRegions}
+            // The components the canvas draws the page's placements with.
+            {...(canvasRender.definitions === undefined
+              ? {}
+              : { definitions: canvasRender.definitions })}
+          />
         ) : null}
         {/* Last, at the bar's far end where the header kept them: Save and
           Publish, which say themselves whether the work is saved and

@@ -136,13 +136,59 @@ describe("an image the check leaves alone", () => {
     ).toEqual([]);
   });
 
-  it("has its picture bound to a field", () => {
+  it("is marked decorative while its picture is bound to a field", () => {
     expect(
       findingsOn([
         picture(
           "img",
-          { src: "/fallback.jpg" },
+          { decorative: true },
           { bindings: { mediaId: { source: "entry", path: "cover" } as never } }
+        ),
+      ])
+    ).toEqual([]);
+  });
+});
+
+describe("an image whose picture is bound to a field", () => {
+  it.each([
+    ["from the media library", "mediaId"],
+    ["by its address", "src"],
+  ])("may be missing its alt text, %s", (_case, prop) => {
+    // The picture each entry brings may come with no alt text, so the
+    // check says it may be missing rather than that it is.
+    const found = findingsOn([
+      picture(
+        "img",
+        { src: "/fallback.jpg" },
+        { bindings: { [prop]: { source: "entry", path: "cover" } as never } }
+      ),
+    ]);
+    expect(found).toEqual([
+      expect.objectContaining({
+        nodeId: "img",
+        part: "may-be-missing",
+        what: "Image may be missing alt text",
+        fix: { tab: "content", id: "alt" },
+      }),
+    ]);
+  });
+
+  it("is fine once the page gives it alt text, or binds its alt text too", () => {
+    const bound = { mediaId: { source: "entry", path: "cover" } as never };
+    expect(
+      findingsOn([picture("a", { alt: "Our office" }, { bindings: bound })])
+    ).toEqual([]);
+    expect(
+      findingsOn([
+        picture(
+          "b",
+          {},
+          {
+            bindings: {
+              ...bound,
+              alt: { source: "entry", path: "title" } as never,
+            },
+          }
         ),
       ])
     ).toEqual([]);

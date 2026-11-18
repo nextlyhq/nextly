@@ -118,9 +118,20 @@ so the inspector stays clear: **‹** and **›** move to the previous and next 
 unsaved changes included, so the count and the bar follow your fixes as you make them.
 When nothing is left, the bar says **All clear** and goes.
 
-The first check finds an image with an address but no alt text that isn't marked
-**Decorative, no alt text**. An image from the media library takes the library's alt text
-when the page stores none, so it isn't listed here.
+Under **Accessibility**, the checks find:
+
+- **Images with no alt text** that aren't marked **Decorative, no alt text**. An image from
+  the media library takes the library's alt text when the page stores none, so it isn't
+  listed. An image whose picture comes from a field is listed as **may be missing**, since
+  some entries' pictures may have none.
+- **Headings**: a page with no main heading (Heading 1), more than one, or a heading that
+  skips a level, like a Heading 2 followed by a Heading 4. They're read in the order a
+  visitor reads the page, so the site header's headings count before the page's and the
+  footer's after.
+- **Links and buttons** with no words, or only vague ones like "click here" or "read
+  more", and an icon that links somewhere with no **Screen reader label**. A button's
+  Screen reader label counts as its words.
+- **Form fields with no label**, and **embeds with no title** for screen readers.
 
 Checks never stop you saving or publishing. Automatic checks catch common problems; they
 don't replace an accessibility review.
@@ -1183,6 +1194,13 @@ The chip's menu has:
   different entry on every row.
 - **Unbind** keeps what visitors saw in the prop, and a note under it says what was
   kept and why. A field visitors can't read keeps the fallback instead.
+
+**A component's settings.** A component placed on the page has the same bind button
+on its text, link and image settings, in the placement's panel. Placed inside a
+Collection list, it lists the list's entries first, so a card's **Headline** can show
+each post's title, every row its own, on the canvas and on the published page. The
+binding belongs to this placement only, and fills the component's block the setting
+feeds. Unbinding keeps the value the placement already had for the setting.
 
 **Format.** A date or a number shows as text only through a format, so a text prop bound
 to one has a **Format** under its fallback. The picker names the format a date or a number

@@ -106,14 +106,14 @@ describe("requireRouteVersionReadAccess", () => {
     );
 
     // Without status:"all" a draft reads as absent and history 404s — exactly
-    // when an author needs it. routeAuthorized keeps a scoped API key from
-    // being re-checked against its creator's stored roles.
+    // when an author needs it. Nothing is attested by the route, so the
+    // collection's own read rule is asked in the language the read names.
     expect(getEntrySpy).toHaveBeenCalledWith(
       expect.objectContaining({
         collectionName: "posts",
         entryId: "entry-1",
         status: "all",
-        routeAuthorized: true,
+        routeAuthorized: false,
         overrideAccess: false,
       })
     );
@@ -252,7 +252,7 @@ describe("requireRouteVersionReadAccess", () => {
     expect(user.id).toBe("user-1");
     expect(singleGetSpy).toHaveBeenCalledWith(
       "settings",
-      expect.objectContaining({ routeAuthorized: true, status: "all" })
+      expect.objectContaining({ routeAuthorized: false, status: "all" })
     );
   });
 });
@@ -348,12 +348,14 @@ describe("assertVersionDocumentReadable", () => {
       assertVersionDocumentReadable("collection", "posts", "e1", {
         id: "user-1",
       })
-    ).resolves.toBeUndefined();
+      // No registered entity is localized: a history in no language.
+    ).resolves.toEqual(new Set());
 
-    // Same document rules as the standalone route: drafts visible, RBAC not
-    // re-checked, because the caller was already authorized upstream.
+    // Same document rules as the standalone route: drafts visible, and the
+    // read rule asked again rather than taken as answered upstream, since an
+    // upstream allow judged one language at most.
     expect(getEntrySpy).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "all", routeAuthorized: true })
+      expect.objectContaining({ status: "all", routeAuthorized: false })
     );
   });
 
