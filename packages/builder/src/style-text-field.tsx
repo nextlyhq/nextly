@@ -231,6 +231,11 @@ function typedWrite({
     // Asked even where the text reads as what is stored ("24px" after
     // "24p"), so the refusal of the text before it is cleared.
     const value = draftValue(control.kind, control.leaf, tokens, mode, typed);
+    // A variable's name is matched once, when the field is left. Written live,
+    // a whole name on the way to a longer one ("color.brand" before
+    // "color.brand.dark") would store that variable mid-word, and a field
+    // showing a variable is a chip, not the text being typed.
+    if (isTokenRef(value)) return false;
     return onType(value) === "applied";
   };
 }
