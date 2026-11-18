@@ -940,12 +940,17 @@ describe.each(getConfiguredTestDialects())(
       /** A create on a transaction the caller holds, as a plugin makes one; its answer or throw. */
       async function createdOnCallersTransaction(
         data: Doc,
-        collectionName: string = PAGES
+        collectionName: string = PAGES,
+        caller: { user?: { id: string } } = {}
       ): Promise<unknown> {
         const entries = handlerOf(app()).getEntryService() as unknown as {
           createEntryInTransaction(
             tx: unknown,
-            params: { collectionName: string; overrideAccess: boolean },
+            params: {
+              collectionName: string;
+              overrideAccess: boolean;
+              user?: { id: string };
+            },
             body: Doc
           ): Promise<unknown>;
         };
@@ -953,7 +958,11 @@ describe.each(getConfiguredTestDialects())(
           .adapter.transaction(tx =>
             entries.createEntryInTransaction(
               tx,
-              { collectionName, overrideAccess: true },
+              {
+                collectionName,
+                overrideAccess: caller.user === undefined,
+                ...caller,
+              },
               data
             )
           )
@@ -1011,6 +1020,27 @@ describe.each(getConfiguredTestDialects())(
 
         expect(JSON.stringify(answer)).toContain("NOT_APPROVED");
         expect(hookCalls.count).toBe(0);
+      });
+
+      it("tells a caller who may not publish only that, never what the workflow holds", async () => {
+        await boot(dialect);
+        // May read and create Pages, but not publish them.
+        await person(app(), "cora", [
+          ["read", PAGES],
+          ["create", PAGES],
+        ]);
+
+        const answer = await createdOnCallersTransaction(
+          { title: "Straight out", status: "published" },
+          PAGES,
+          { user: { id: "cora" } }
+        );
+
+        const told = JSON.stringify(answer);
+        expect(told).toMatch(/403|FORBIDDEN/);
+        expect(told).not.toContain("NOT_APPROVED");
+        expect(told).not.toContain("does not allow publishing");
+        expect(await storedPages()).toEqual([]);
       });
 
       it("keeps nothing of a batch item whose publish the gate fails to settle, and keeps the rest", async () => {
