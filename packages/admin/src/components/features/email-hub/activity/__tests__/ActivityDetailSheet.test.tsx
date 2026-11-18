@@ -199,7 +199,7 @@ describe("the detail sheet", () => {
     expect(screen.getByText("The site’s own template")).toBeTruthy();
   });
 
-  it("says a queued email that failed before any provider was asked never reached one", () => {
+  it("blames no provider for a queued failure with no attempt on record", () => {
     showing(
       queuedDetail({
         templateCaused: false,
@@ -212,8 +212,27 @@ describe("the detail sheet", () => {
     );
     renderSheet();
     const state = screen.getAllByRole("status")[0];
-    expect(state.textContent).toContain("Failed: it never reached a provider");
+    expect(state.textContent).not.toMatch(/the provider (couldn|refused)/i);
+    expect(state.textContent).not.toMatch(/never reached/i);
     expect(state.textContent).not.toMatch(/send it again/i);
+  });
+
+  it("warns that a queued email may have arrived when its newest attempt's answer was lost", () => {
+    showing(
+      queuedDetail({
+        state: "retrying",
+        templateCaused: false,
+        lastFailure: {
+          retryable: true,
+          reason: "The provider's answer was lost.",
+        },
+        timeline: [{ ...ATTEMPT, failureKind: "unknown" }],
+      })
+    );
+    renderSheet();
+    expect(screen.getAllByRole("status")[0].textContent).toContain(
+      "Retrying: it may have arrived"
+    );
   });
 
   it("treats a delivery with a queued email behind it as one of its attempts, never a direct send", () => {

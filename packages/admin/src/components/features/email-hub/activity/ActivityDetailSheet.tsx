@@ -47,7 +47,7 @@ export interface ActivityDetailSheetProps {
 }
 
 /** How many attempts the sheet draws, the newest; the rest are counted. */
-export const TIMELINE_SHOWN = 100;
+const TIMELINE_SHOWN = 100;
 
 /** A time in the site's zone, as every admin date is written. */
 function timeText(iso: string): string {
@@ -85,7 +85,7 @@ function stateInput(data: ActivityDetail): Parameters<typeof detailState>[0] {
       // Only a queued email knows its failure came from its template; a
       // delivery is a provider's answer.
       templateCaused: false,
-      reachedProvider: true,
+      attemptOnRecord: true,
       outcome: d.outcome,
       failureKind: d.failureKind,
       failureStatus: d.failureStatus,
@@ -96,12 +96,11 @@ function stateInput(data: ActivityDetail): Parameters<typeof detailState>[0] {
   return {
     source: "queued",
     templateCaused: d.templateCaused,
-    // With no attempt recorded, nothing was asked of a provider.
-    reachedProvider: d.timeline.length > 0,
+    attemptOnRecord: d.timeline.length > 0,
     outcome: d.state,
     // The queued email's own failure, which every way it can fail records,
-    // with or without an attempt behind it.
-    failureKind: failureKindOf(d.lastFailure),
+    // read with its newest attempt for an outcome that can't be known.
+    failureKind: failureKindOf(d.lastFailure, d.timeline.at(-1)),
     failureStatus: d.lastFailure?.status ?? null,
     failureReason: d.lastFailure?.reason ?? null,
   };

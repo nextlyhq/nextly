@@ -77,15 +77,27 @@ function retryableTodo(
 export type DetailSource = "delivery" | "attempt" | "queued";
 
 /**
- * A queued email's own failure as the kind the delivery log records, so a
- * failure with no attempt behind it is still classified: one whose outcome
- * can't be known, one worth trying again, or one refused for good.
+ * A queued email's own failure as the kind the delivery log records.
+ *
+ * The queue's row keeps only whether its failure is retryable, never that its
+ * outcome is unknown, so a lost or missing answer is read from its newest
+ * attempt: when that attempt failed with an unknown outcome and the row's
+ * failure is retryable too, the two are the same answer. Otherwise the row
+ * decides: worth trying again, or refused for good.
  */
 export function failureKindOf(
-  failure: EmailFailure | null
+  failure: EmailFailure | null,
+  newest?: DeliveryAttempt
 ): DeliveryFailureKind | null {
   if (failure === null) return null;
-  if (failure.unknown) return "unknown";
+  if (
+    failure.unknown ||
+    (failure.retryable &&
+      newest?.outcome === "failed" &&
+      newest.failureKind === "unknown")
+  ) {
+    return "unknown";
+  }
   return failure.retryable ? "retryable" : "refused";
 }
 
@@ -116,11 +128,12 @@ export function detailState(input: {
   source: DetailSource;
   templateCaused: boolean;
   /**
-   * Whether any provider was asked. A queued email can fail before that for
-   * a reason that isn't its template's, such as a held message that can't be
-   * read, and that is never worded as a provider's answer.
+   * Whether any attempt is on record. A queued email can fail before any
+   * provider is asked, and a short retention window can remove the attempts
+   * of one that was asked, so with none on record its failure is worded as
+   * neither the provider's nor proof that no provider was asked.
    */
-  reachedProvider: boolean;
+  attemptOnRecord: boolean;
   outcome: DeliveryOutcome | QueuedEmailState;
   failureKind: DeliveryFailureKind | null;
   failureStatus?: number | null;
@@ -146,12 +159,18 @@ export function detailState(input: {
     return {
       title: `${lead}: the template couldn’t be used`,
       ...why,
-      todo: "Fix the template, then send it again: sending it unchanged fails the same way.",
+      // A retrying email renders the template again on its next attempt, so
+      // fixing the template is enough; sending it by hand too would send it
+      // twice.
+      todo:
+        outcome === "retrying"
+          ? "Fix the template before its next attempt, which uses the template as it is then. Don’t send it again by hand: it tries again by itself."
+          : "Fix the template, then send it again: sending it unchanged fails the same way.",
     };
   }
-  if (!input.reachedProvider) {
+  if (!input.attemptOnRecord) {
     return {
-      title: `${lead}: it never reached a provider`,
+      title: lead,
       ...why,
       todo:
         outcome === "retrying"
@@ -159,7 +178,16 @@ export function detailState(input: {
           : "It won’t be tried again by itself. The reason above says what stopped it.",
     };
   }
-  const kind = failureKind ?? "retryable";
+  if (failureKind === null) {
+    // Recorded before failures were sorted by kind: the reason is all there
+    // is, so the sheet claims no kind and gives no advice that depends on one.
+    return {
+      title: lead,
+      ...why,
+      todo: "This was recorded before failures were sorted by kind, so read the reason above before sending it again.",
+    };
+  }
+  const kind = failureKind;
   return {
     title: `${kind === "unknown" && lead === "Failed" ? "Unknown" : lead}: ${FAILURE_TITLES[kind]}`,
     ...why,
@@ -186,14 +214,17 @@ export function versionText(version: TemplateVersion | null): {
   if (version.draft)
     return { label: "A draft test, never saved", digest: null };
   return {
-    // A template the site owns is its own; only another owner's template has
-    // a default the site can override.
+    // A template the site owns is its own, and one it defines in code is its
+    // code version; only another owner's template has a default the site can
+    // override.
     label:
       version.owner === "site"
         ? "The site’s own template"
-        : version.overridden
-          ? "The site’s version"
-          : "Owner’s default",
+        : version.owner === "code"
+          ? "The site’s code version"
+          : version.overridden
+            ? "The site’s version"
+            : "Owner’s default",
     digest: version.digest ? version.digest.slice(0, 8) : null,
   };
 }

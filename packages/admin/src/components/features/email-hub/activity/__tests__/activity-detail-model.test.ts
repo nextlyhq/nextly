@@ -20,12 +20,12 @@ describe("detailState", () => {
   const delivery = {
     source: "delivery" as const,
     templateCaused: false,
-    reachedProvider: true,
+    attemptOnRecord: true,
   };
   const queued = {
     source: "queued" as const,
     templateCaused: false,
-    reachedProvider: true,
+    attemptOnRecord: true,
   };
 
   it("says a sent email was sent, with nothing to do", () => {
@@ -121,19 +121,45 @@ describe("detailState", () => {
     expect(attempt.todo).toMatch(/queued email/i);
   });
 
-  it("says a queued email that failed before reaching any provider never reached one", () => {
-    // An unreadable sealed message fails before a provider is asked: no
-    // attempt, not the template's fault, and not to be retried.
+  it("words a queued failure with no attempt on record as neither the provider's nor proof none was asked", () => {
+    // No attempt on record: one may never have been made, or retention may
+    // have removed it, so the title claims neither.
     const state = detailState({
       ...queued,
-      reachedProvider: false,
+      attemptOnRecord: false,
       outcome: "failed",
       failureKind: "refused",
-      failureReason: "The held message couldn't be read.",
+      failureReason: "Mailbox unavailable",
     });
-    expect(state.title).toBe("Failed: it never reached a provider");
-    expect(state.title).not.toMatch(/provider (couldn|refused)/i);
+    expect(state.title).toBe("Failed");
+    expect(state.reason).toBe("Mailbox unavailable");
     expect(state.todo).not.toMatch(/send it again/i);
+  });
+
+  it("tells a retrying email whose template failed to fix it, never to send it by hand", () => {
+    const state = detailState({
+      ...queued,
+      templateCaused: true,
+      outcome: "retrying",
+      failureKind: "retryable",
+      failureReason: "The attempt failed before a provider was asked.",
+    });
+    expect(state.title).toBe("Retrying: the template couldn’t be used");
+    expect(state.todo).toMatch(/fix the template before its next attempt/i);
+    expect(state.todo).toMatch(/don’t send it again by hand/i);
+  });
+
+  it("claims no kind for a failure recorded before kinds were kept", () => {
+    const state = detailState({
+      ...delivery,
+      outcome: "failed",
+      failureKind: null,
+      failureReason: "Mailbox unavailable",
+    });
+    expect(state.title).toBe("Failed");
+    expect(state.reason).toBe("Mailbox unavailable");
+    expect(state.todo).toMatch(/recorded before failures were sorted by kind/i);
+    expect(state.todo).not.toMatch(/isn’t retried/i);
   });
 
   it("puts a cancelled email's state first and keeps its last failure", () => {
@@ -168,6 +194,10 @@ describe("versionText", () => {
     expect(
       versionText({ owner: "site", overridden: false, digest: "b0b0cafe11" })
     ).toEqual({ label: "The site’s own template", digest: "b0b0cafe" });
+    // The site's code-first version has no saved version to digest.
+    expect(
+      versionText({ owner: "code", overridden: false, digest: null })
+    ).toEqual({ label: "The site’s code version", digest: null });
     expect(
       versionText({
         owner: "site",
@@ -225,12 +255,32 @@ describe("attemptText", () => {
 });
 
 describe("failureKindOf", () => {
-  it("reads a queued email's own failure: unknown, retryable or refused", () => {
-    expect(failureKindOf({ retryable: true, reason: "x", unknown: true })).toBe(
-      "unknown"
+  const newest = (over: Partial<DeliveryAttempt>): DeliveryAttempt => ({
+    id: "d1",
+    createdAt: "2026-11-16T11:00:00.000Z",
+    outcome: "failed",
+    recipientKind: "to",
+    provider: { id: null, type: "resend" },
+    failureKind: "unknown",
+    failureStatus: null,
+    failureReason: "The provider's answer was lost.",
+    templateVersion: "none",
+    erased: false,
+    ...over,
+  });
+
+  it("reads an unknown outcome from the newest attempt, since the queue's row never keeps one", () => {
+    // The row's failure as the server sends it: retryable, with no unknown.
+    const lost = { retryable: true, reason: "The provider's answer was lost." };
+    expect(failureKindOf(lost, newest({}))).toBe("unknown");
+    expect(failureKindOf(lost, newest({ failureKind: "retryable" }))).toBe(
+      "retryable"
     );
-    expect(failureKindOf({ retryable: true, reason: "x" })).toBe("retryable");
-    expect(failureKindOf({ retryable: false, reason: "x" })).toBe("refused");
-    expect(failureKindOf(null)).toBeNull();
+    expect(failureKindOf(lost)).toBe("retryable");
+    // A refusal stays one, whatever an earlier attempt said.
+    expect(failureKindOf({ retryable: false, reason: "x" }, newest({}))).toBe(
+      "refused"
+    );
+    expect(failureKindOf(null, newest({}))).toBeNull();
   });
 });
