@@ -249,15 +249,10 @@ export interface VariablesHeader {
  * mode the canvas draws by itself.
  */
 export function useVariablesHeader({
-  onChange,
-  currentTokens,
-  readOnly,
   prefersDark,
   mode: hosted,
-}: {
-  onChange: (tokens: SiteTokenSet) => void;
-  currentTokens: () => SiteTokenSet | undefined;
-  readOnly: boolean;
+  ...transferring
+}: Parameters<typeof useVariablesTransfer>[0] & {
   prefersDark?: boolean;
   mode?: TokenMode;
 }): VariablesHeader {
@@ -269,7 +264,8 @@ export function useVariablesHeader({
    */
   const drawn = useCanvasTokenModeAt(null);
   const mode: TokenMode = hosted ?? statedMode(prefersDark) ?? drawn;
-  const transfer = useVariablesTransfer({ onChange, currentTokens, readOnly });
+  // The writers, and what an export and import carry beyond the variables.
+  const transfer = useVariablesTransfer(transferring);
   return {
     mode,
     controls: <div className="nx-vars__controls">{transfer.menu}</div>,
