@@ -239,7 +239,8 @@ export function blockActionRunners(
     "move-up": () => verbs.move("up"),
     "move-down": () => verbs.move("down"),
     duplicate: verbs.duplicate,
-    "turn-into-text": () => verbs.turnInto?.(TURN_INTO_TARGETS["turn-into-text"]),
+    "turn-into-text": () =>
+      verbs.turnInto?.(TURN_INTO_TARGETS["turn-into-text"]),
     "turn-into-rich-text": () =>
       verbs.turnInto?.(TURN_INTO_TARGETS["turn-into-rich-text"]),
     "turn-into-heading": () =>

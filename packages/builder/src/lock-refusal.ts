@@ -128,8 +128,8 @@ function verbOf(
     case "move":
       return "move";
     case "update":
-    // Turning a block into another type changes it in place.
     case "turnInto":
+      // Turning a block into another type changes it in place.
       return "change";
     case "insert":
       return "add";

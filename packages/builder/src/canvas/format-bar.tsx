@@ -191,11 +191,7 @@ function moveAmongChoices(event: React.KeyboardEvent): void {
  * remove, or dimmed with why not. Choosing one turns the block; Escape goes
  * back to the words.
  */
-function TurnChoices({
-  target,
-}: {
-  target: FormatTarget;
-}): React.JSX.Element {
+function TurnChoices({ target }: { target: FormatTarget }): React.JSX.Element {
   const choices = React.useMemo(
     () => target.turnInto?.choices() ?? [],
     [target]
@@ -426,7 +422,7 @@ function LinkButton(props: ButtonProps): React.JSX.Element {
 
 /** One button of the bar. */
 function ActionButton(props: ButtonProps): React.JSX.Element {
-  const { action, target } = props;
+  const { action } = props;
   if (action === "bold" || action === "italic") {
     return <MarkButton {...props} mark={action} />;
   }

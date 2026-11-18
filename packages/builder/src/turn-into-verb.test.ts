@@ -57,7 +57,11 @@ const rich = (...blocks: unknown[]) => ({
 
 /** "Read the bold news.", with "bold" bold. */
 const MARKED = rich(
-  paragraph(words("Read the "), words("bold", TEXT_FORMAT.BOLD), words(" news."))
+  paragraph(
+    words("Read the "),
+    words("bold", TEXT_FORMAT.BOLD),
+    words(" news.")
+  )
 );
 
 function text(over: Partial<BlockNode> = {}): BlockNode {
@@ -94,7 +98,9 @@ describe("turnIntoOffers", () => {
       id: "r1",
       type: "core/rich-text",
       version: 1,
-      props: { content: rich(paragraph(words("One")), paragraph(words("Two"))) },
+      props: {
+        content: rich(paragraph(words("One")), paragraph(words("Two"))),
+      },
     };
     const offers = turnIntoOffers(page(passage), "r1");
     expect(offers.map(offer => [offer.label, offer.enabled])).toEqual([
@@ -138,7 +144,10 @@ describe("turnIntoOffers", () => {
   });
 
   it("dims every turn of a locked block, with the lock's words", () => {
-    const offers = turnIntoOffers(page(text({ locked: true, name: "Intro" })), "t1");
+    const offers = turnIntoOffers(
+      page(text({ locked: true, name: "Intro" })),
+      "t1"
+    );
     for (const offer of offers) {
       expect(offer.enabled).toBe(false);
       expect(offer.reason).toMatch(/Intro/);
@@ -147,7 +156,7 @@ describe("turnIntoOffers", () => {
   });
 
   it("dims a turn the editor's lock question refuses, once judged in full", () => {
-    const ask = vi.fn(() => ({
+    const ask = vi.fn((_ops: readonly BuilderOp[]) => ({
       code: "locked-slot-altered" as const,
       holderType: "core/section",
       lock: "all" as const,
@@ -222,7 +231,9 @@ describe("runTurnInto", () => {
       id: "r1",
       type: "core/rich-text",
       version: 1,
-      props: { content: rich(paragraph(words("One")), paragraph(words("Two"))) },
+      props: {
+        content: rich(paragraph(words("One")), paragraph(words("Two"))),
+      },
     };
     const editor = editorOver(page(passage));
     const say = vi.fn();
@@ -235,7 +246,10 @@ describe("runTurnInto", () => {
 
   it("says the page refused when the editor does not take the op", () => {
     const say = vi.fn();
-    const editor: TurnIntoEditor = { document: page(text()), apply: () => null };
+    const editor: TurnIntoEditor = {
+      document: page(text()),
+      apply: () => null,
+    };
     expect(runTurnInto(editor, "t1", "core/heading", say)).toBe(false);
     expect(say).toHaveBeenCalledWith(
       "The page refused this edit, so nothing changed."
@@ -269,7 +283,12 @@ describe("the block menu", () => {
         isTurnIntoAction(action.id)
       )
     ).toBe(false);
-    const divider = page({ id: "d1", type: "core/divider", version: 1, props: {} });
+    const divider = page({
+      id: "d1",
+      type: "core/divider",
+      version: 1,
+      props: {},
+    });
     expect(
       toolbarActions(divider, "d1").some(action => isTurnIntoAction(action.id))
     ).toBe(false);

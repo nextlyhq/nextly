@@ -81,10 +81,14 @@ export function formatTurnInto(
   return {
     choices: () => {
       const editor = source.editor();
-      return turnIntoOffers(pageAsTyped(editor, source.typed()), editing.nodeId, {
-        ask: editor.lockRefusalFor,
-        planned: true,
-      });
+      return turnIntoOffers(
+        pageAsTyped(editor, source.typed()),
+        editing.nodeId,
+        {
+          ask: editor.lockRefusalFor,
+          planned: true,
+        }
+      );
     },
     run: to => {
       const editor = source.editor();

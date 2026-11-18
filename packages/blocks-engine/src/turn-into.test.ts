@@ -29,7 +29,9 @@ const TO_PASSAGE: BlockConverter = {
   carries: { words: "passage" },
   convert: props => ({
     props: { passage: { root: { type: "root", children: [] } } },
-    dropped: String(props.words).includes("*") ? "Stars are removed" : undefined,
+    dropped: String(props.words).includes("*")
+      ? "Stars are removed"
+      : undefined,
   }),
 };
 
@@ -164,9 +166,7 @@ describe("planTurnInto", () => {
       hover: { desktop: { color: "#900" } },
     });
     // The passage takes both, so every style stays.
-    expect(planned(WORDS, "test/passage").op.node.styles).toEqual(
-      WORDS.styles
-    );
+    expect(planned(WORDS, "test/passage").op.node.styles).toEqual(WORDS.styles);
   });
 
   it("keeps a binding where the new prop shows the same kind of value", () => {
@@ -211,9 +211,7 @@ describe("planTurnInto", () => {
     const { op } = planned(WORDS, "test/title");
     const applied = applyOp(before, op);
     expect(applied.document.nodes[0]).toEqual(op.node);
-    expect(applyOp(applied.document, applied.inverse).document).toEqual(
-      before
-    );
+    expect(applyOp(applied.document, applied.inverse).document).toEqual(before);
   });
 
   describe("refusals", () => {
@@ -230,9 +228,9 @@ describe("planTurnInto", () => {
     });
 
     it("refuses a type the block declares no converter to", () => {
-      expect(
-        planTurnInto(page(WORDS), "w1", "test/box", lookup)
-      ).toEqual({ refused: "Words can't be turned into Box." });
+      expect(planTurnInto(page(WORDS), "w1", "test/box", lookup)).toEqual({
+        refused: "Words can't be turned into Box.",
+      });
     });
 
     it("refuses a target that is not registered", () => {

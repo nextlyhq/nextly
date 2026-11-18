@@ -201,7 +201,11 @@ function headingInline(props: HeadingProps): {
   readonly inline: RichTextNode[];
   readonly dropped?: string;
 } {
-  const words: RichTextNode = { type: "text", text: text(props.text), format: 0 };
+  const words: RichTextNode = {
+    type: "text",
+    text: text(props.text),
+    format: 0,
+  };
   if (linksToEntry(props)) {
     return {
       inline: paragraphChildren(toOneParagraph(text(props.text)).value),

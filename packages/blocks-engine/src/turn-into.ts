@@ -21,8 +21,8 @@
  *
  * @module turn-into
  */
-import type { AnyBlockDefinition, PropSchema } from "./block";
 import { bindablePropKind } from "./binding-rules";
+import type { AnyBlockDefinition, PropSchema } from "./block";
 import type { BlockDocument, BlockNode, NodeStyles } from "./document";
 import type { BuilderOp } from "./ops-vocabulary";
 import { getBlock } from "./registry";
@@ -167,7 +167,7 @@ function keptFields(node: BlockNode): Partial<BlockNode> {
   for (const field of KEPT_FIELDS) {
     if (node[field] !== undefined) kept[field] = structuredClone(node[field]);
   }
-  return kept as Partial<BlockNode>;
+  return kept;
 }
 
 /**
@@ -244,5 +244,5 @@ function supportedStyles(
     }
     if (Object.keys(keptBreakpoints).length > 0) kept[state] = keptBreakpoints;
   }
-  return Object.keys(kept).length === 0 ? undefined : (kept as NodeStyles);
+  return Object.keys(kept).length === 0 ? undefined : kept;
 }

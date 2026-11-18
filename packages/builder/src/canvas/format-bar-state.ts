@@ -180,7 +180,5 @@ export const formatBar: FormatBarStore = createFormatBarStore();
  */
 export function formatBarShown(state: FormatBarSnapshot): boolean {
   if (state.target === null) return false;
-  return (
-    state.linking || state.turning || state.selection?.collapsed === false
-  );
+  return state.linking || state.turning || state.selection?.collapsed === false;
 }

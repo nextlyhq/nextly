@@ -75,7 +75,11 @@ function block(type: string, props: Record<string, unknown>): BlockNode {
 }
 
 function page(node: BlockNode): BlockDocument {
-  return { formatVersion: DOCUMENT_FORMAT_VERSION, kind: "page", nodes: [node] };
+  return {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [node],
+  };
 }
 
 function turn(node: BlockNode, to: string): TurnIntoPlan {
@@ -141,7 +145,10 @@ describe("Text → Heading", () => {
 
 describe("Rich text → Heading", () => {
   it("keeps one paragraph's words and says bold and links are removed", () => {
-    const plan = turn(block(RICH_TEXT_BLOCK, { content: MARKED }), HEADING_BLOCK);
+    const plan = turn(
+      block(RICH_TEXT_BLOCK, { content: MARKED }),
+      HEADING_BLOCK
+    );
     expect(plan.op.node.props).toEqual({
       text: "Read the bold news here.",
       level: "h2",
@@ -232,7 +239,11 @@ describe("Heading → Text and Rich text", () => {
   it("Rich text keeps the words as a heading of the same level", () => {
     const plan = turn(block(HEADING_BLOCK, HEADING_PROPS), RICH_TEXT_BLOCK);
     expect(plan.op.node.props).toEqual({
-      content: root({ type: "heading", tag: "h3", children: [words("Our team")] }),
+      content: root({
+        type: "heading",
+        tag: "h3",
+        children: [words("Our team")],
+      }),
     });
   });
 
@@ -301,7 +312,10 @@ describe("what a turned block keeps", () => {
   });
 
   it("keeps a binding to words where the new block shows words, and removes it where it cannot", () => {
-    const bound: BlockNode = { ...DRESSED, bindings: { text: { $bind: "title" } } };
+    const bound: BlockNode = {
+      ...DRESSED,
+      bindings: { text: { $bind: "title" } },
+    };
     const toHeading = turn(bound, HEADING_BLOCK);
     expect(toHeading.op.node.bindings).toEqual({ text: { $bind: "title" } });
     expect(toHeading.unbound).toEqual([]);
@@ -310,10 +324,7 @@ describe("what a turned block keeps", () => {
     expect(toRichText.op.node.bindings).toBeUndefined();
     expect(toRichText.unbound).toEqual(["text"]);
 
-    const back = turn(
-      { ...toHeading.op.node, version: 1 },
-      TEXT_BLOCK
-    );
+    const back = turn({ ...toHeading.op.node, version: 1 }, TEXT_BLOCK);
     expect(back.op.node.bindings).toEqual({ text: { $bind: "title" } });
   });
 

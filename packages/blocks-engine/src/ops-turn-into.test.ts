@@ -98,9 +98,7 @@ describe("the turnInto op", () => {
     const applied = applyOp(sectionPage(), stored);
     expect(applied.document).toEqual(applyOp(sectionPage(), TURN).document);
     const inverse = JSON.parse(JSON.stringify(applied.inverse)) as BuilderOp;
-    expect(applyOp(applied.document, inverse).document).toEqual(
-      sectionPage()
-    );
+    expect(applyOp(applied.document, inverse).document).toEqual(sectionPage());
   });
 
   it("does not share the op's block with the document", () => {
@@ -114,7 +112,11 @@ describe("the turnInto op", () => {
 
   it("refuses a block that is not in the document", () => {
     expect(() =>
-      applyOp(sectionPage(), { ...TURN, id: "gone", node: { ...HEADING, id: "gone" } })
+      applyOp(sectionPage(), {
+        ...TURN,
+        id: "gone",
+        node: { ...HEADING, id: "gone" },
+      })
     ).toThrow(/no node with id "gone"/);
   });
 
@@ -179,12 +181,9 @@ describe("the turnInto op", () => {
     it("stands down for a system transform", () => {
       const before = page([text("b", { locked: true })]);
       const node = { ...HEADING, locked: true };
-      const applied = applyOp(
-        before,
-        { ...TURN, node },
-        undefined,
-        { layersLocks: "ignore" }
-      );
+      const applied = applyOp(before, { ...TURN, node }, undefined, {
+        layersLocks: "ignore",
+      });
       expect(applied.document.nodes[0]?.type).toBe("core/heading");
     });
   });

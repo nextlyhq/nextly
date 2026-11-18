@@ -981,7 +981,15 @@ function useTurnIntoVerb(
         { nesting }
       );
     },
-    [document, selectedId, selection.ids, apply, lockRefusalFor, nesting, announce]
+    [
+      document,
+      selectedId,
+      selection.ids,
+      apply,
+      lockRefusalFor,
+      nesting,
+      announce,
+    ]
   );
 }
 

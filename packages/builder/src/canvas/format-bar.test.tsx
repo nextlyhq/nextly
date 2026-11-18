@@ -304,11 +304,11 @@ describe("the keyboard", () => {
   });
 });
 
-
 /** A host's "Turn into": Rich text open, Heading open and saying what goes. */
-function turning(
-  heading: Partial<TurnIntoOffer> = {}
-): { turnInto: FormatTurnInto; run: ReturnType<typeof vi.fn> } {
+function turning(heading: Partial<TurnIntoOffer> = {}): {
+  turnInto: FormatTurnInto;
+  run: ReturnType<typeof vi.fn>;
+} {
   const run = vi.fn();
   const offers: TurnIntoOffer[] = [
     {
