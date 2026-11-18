@@ -7,9 +7,12 @@
 import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
+  isComponentDocument,
   migrateDocument,
   type BlockDocument,
+  type ComponentDocument,
   type DefinitionsById,
+  type ExposedProperty,
 } from "@nextlyhq/blocks-engine";
 import { renderToReadableStream } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -117,25 +120,22 @@ describe("a Table of contents saved as version 1", () => {
   });
 
   it("drops a component's setting that exposed its passage", () => {
-    const exposure = (id: string, propPath: string) => ({
+    const exposure = (id: string, propPath: string): ExposedProperty => ({
       id,
       label: id,
       nodeId: "toc",
       propPath,
       type: "richText",
     });
-    const { doc } = migrateDocument(
-      {
-        formatVersion: DOCUMENT_FORMAT_VERSION,
-        kind: "component",
-        nodes: [v1],
-        exposed: [exposure("passage", "content"), exposure("name", "title")],
-      } as unknown as BlockDocument,
-      migrationSourceFor(resolver)
-    );
-    expect(
-      (doc as { exposed?: { id: string }[] }).exposed?.map(each => each.id)
-    ).toEqual(["name"]);
+    const component: ComponentDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [v1],
+      exposed: [exposure("passage", "content"), exposure("name", "title")],
+    };
+    const { doc } = migrateDocument(component, migrationSourceFor(resolver));
+    const exposed = isComponentDocument(doc) ? doc.exposed : undefined;
+    expect(exposed?.map(each => each.id)).toEqual(["name"]);
   });
 
   it("lists the page's own headings, as bullets, never the passage it held", async () => {

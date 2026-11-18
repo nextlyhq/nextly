@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import type { BlockDocument, BlockNode } from "./document";
+import {
+  isComponentDocument,
+  type BlockDocument,
+  type BlockNode,
+  type ComponentDocument,
+  type ExposedProperty,
+  type Variant,
+} from "./document";
 import type { MigrationSource } from "./migration";
 import {
   findMigrationGaps,
@@ -10,6 +17,16 @@ import {
   nodeAtPointer,
 } from "./migration";
 import { componentEnvelopeIssues } from "./validation-components";
+
+/** A migrated component's exposures; none for any other document. */
+function exposedOf(doc: BlockDocument): ExposedProperty[] | undefined {
+  return isComponentDocument(doc) ? doc.exposed : undefined;
+}
+
+/** A migrated component's variants; none for any other document. */
+function variantsOf(doc: BlockDocument): Record<string, Variant> | undefined {
+  return isComponentDocument(doc) ? doc.variants : undefined;
+}
 
 /** A migration source from a plain record of type → info. */
 function source(
@@ -632,8 +649,11 @@ describe("a step's renames", () => {
     migrate: { 1: same },
     renames: { 1: { citeUrl: "href" } },
   };
-  const page = (node: Record<string, unknown>): BlockDocument =>
-    ({ formatVersion: 1, kind: "page", nodes: [node] }) as BlockDocument;
+  const page = (node: BlockNode): BlockDocument => ({
+    formatVersion: 1,
+    kind: "page",
+    nodes: [node],
+  });
 
   it("move a prop's value to its new name before the step runs", () => {
     const seen: Record<string, unknown>[] = [];
@@ -649,14 +669,14 @@ describe("a step's renames", () => {
   });
 
   it("move a value bound to the renamed prop with it, in the same step", () => {
-    const binding = { source: "entry", field: "url" };
+    const binding = { $bind: "url", source: "entry" } as const;
     const { doc } = migrateDocument(
       page({
         id: "q",
         type: "core/quote",
         version: 1,
         props: { citeUrl: "/fallback" },
-        bindings: { citeUrl: binding, text: { source: "entry", field: "t" } },
+        bindings: { citeUrl: binding, text: { $bind: "t", source: "entry" } },
       }),
       source({ "core/quote": quote })
     );
@@ -665,7 +685,7 @@ describe("a step's renames", () => {
     expect(node?.props).toEqual({ href: "/fallback" });
     expect(node?.bindings).toEqual({
       href: binding,
-      text: { source: "entry", field: "t" },
+      text: { $bind: "t", source: "entry" },
     });
   });
 
@@ -687,7 +707,7 @@ describe("a step's renames", () => {
         type: "t",
         version: 1,
         props: { a: 1 },
-        bindings: { a: { source: "x" }, b: { source: "y" } },
+        bindings: { a: { $bind: "x" }, b: { $bind: "y" } },
       }),
       source({
         t: {
@@ -704,8 +724,8 @@ describe("a step's renames", () => {
     );
     // Step 1 ran, so `a` moved; step 2 failed, so `b` stays where it was.
     expect(doc.nodes[0]?.bindings).toEqual({
-      a2: { source: "x" },
-      b: { source: "y" },
+      a2: { $bind: "x" },
+      b: { $bind: "y" },
     });
   });
 
@@ -713,14 +733,12 @@ describe("a step's renames", () => {
     // A placement's override is written through the exposure's path, so an
     // exposure left on the old name writes where the upgraded block no longer
     // reads, and every placement's own value is lost.
-    const exposure = (id: string, nodeId: string, propPath: string) => ({
-      id,
-      label: id,
-      nodeId,
-      propPath,
-      type: "url",
-    });
-    const component = {
+    const exposure = (
+      id: string,
+      nodeId: string,
+      propPath: string
+    ): ExposedProperty => ({ id, label: id, nodeId, propPath, type: "link" });
+    const component: ComponentDocument = {
       formatVersion: 1,
       kind: "component",
       nodes: [
@@ -733,13 +751,12 @@ describe("a step's renames", () => {
         exposure("words", "q", "text"),
         exposure("elsewhere", "other", "citeUrl"),
       ],
-    } as unknown as BlockDocument;
+    };
     const { doc } = migrateDocument(
       component,
       source({ "core/quote": quote, t: { version: 1 } })
     );
-    const paths = (doc as { exposed?: { id: string; propPath: string }[] })
-      .exposed;
+    const paths = exposedOf(doc);
     expect(paths?.map(each => [each.id, each.propPath])).toEqual([
       ["link", "href"],
       ["deep", "href.label"],
@@ -747,9 +764,7 @@ describe("a step's renames", () => {
       ["elsewhere", "citeUrl"],
     ]);
     // The stored document is left as it was.
-    expect(
-      (component as { exposed: { propPath: string }[] }).exposed[0]?.propPath
-    ).toBe("citeUrl");
+    expect(component.exposed?.[0]?.propPath).toBe("citeUrl");
   });
 
   it("leave a component's exposures as the same list when nothing is renamed", () => {
@@ -861,14 +876,12 @@ describe("a step's drops", () => {
   it("remove a component's exposures into the dropped prop, on that node only", () => {
     // A placement writes its override through the exposure's path: one left
     // on a dropped prop writes where the upgraded block reads nothing.
-    const exposure = (id: string, nodeId: string, propPath: string) => ({
-      id,
-      label: id,
-      nodeId,
-      propPath,
-      type: "text",
-    });
-    const component = {
+    const exposure = (
+      id: string,
+      nodeId: string,
+      propPath: string
+    ): ExposedProperty => ({ id, label: id, nodeId, propPath, type: "text" });
+    const component: ComponentDocument = {
       formatVersion: 1,
       kind: "component",
       nodes: [
@@ -886,12 +899,12 @@ describe("a step's drops", () => {
         exposure("title", "toc", "title"),
         exposure("elsewhere", "other", "content"),
       ],
-    } as unknown as BlockDocument;
+    };
     const { doc } = migrateDocument(
       component,
       source({ "core/table-of-contents": contents, t: { version: 1 } })
     );
-    const left = (doc as { exposed?: { id: string }[] }).exposed;
+    const left = exposedOf(doc);
     expect(left?.map(each => each.id)).toEqual(["title", "elsewhere"]);
   });
 
@@ -899,14 +912,14 @@ describe("a step's drops", () => {
     // A variant naming a field the component no longer has fails the
     // component's save; one left with no values is kept, as removing a field
     // in the editor keeps it.
-    const exposure = (id: string, propPath: string) => ({
+    const exposure = (id: string, propPath: string): ExposedProperty => ({
       id,
       label: id,
       nodeId: "toc",
       propPath,
       type: "text",
     });
-    const component = {
+    const component: ComponentDocument = {
       formatVersion: 1,
       kind: "component",
       nodes: [
@@ -926,12 +939,12 @@ describe("a step's drops", () => {
         bare: { label: "Bare", overrides: { passage: "b" } },
         plain: { label: "Plain", overrides: { title: "In short" } },
       },
-    } as unknown as BlockDocument;
+    };
     const { doc } = migrateDocument(
       component,
       source({ "core/table-of-contents": contents })
     );
-    expect((doc as { variants?: unknown }).variants).toEqual({
+    expect(variantsOf(doc)).toEqual({
       compact: { label: "Compact", overrides: { title: "Contents" } },
       bare: { label: "Bare", overrides: {} },
       plain: { label: "Plain", overrides: { title: "In short" } },
@@ -946,7 +959,7 @@ describe("a step's drops", () => {
   it("keep a variant's value for an id another exposure still carries", () => {
     // Stored data can hold one id on two rows; while one remains, the field
     // is live and its variant values stay.
-    const component = {
+    const component: ComponentDocument = {
       formatVersion: 1,
       kind: "component",
       nodes: [
@@ -954,16 +967,28 @@ describe("a step's drops", () => {
         { id: "other", type: "t", version: 1, props: {} },
       ],
       exposed: [
-        { id: "shared", label: "S", nodeId: "toc", propPath: "content" },
-        { id: "shared", label: "S", nodeId: "other", propPath: "content" },
+        {
+          id: "shared",
+          label: "S",
+          nodeId: "toc",
+          propPath: "content",
+          type: "text",
+        },
+        {
+          id: "shared",
+          label: "S",
+          nodeId: "other",
+          propPath: "content",
+          type: "text",
+        },
       ],
       variants: { one: { label: "One", overrides: { shared: "kept" } } },
-    } as unknown as BlockDocument;
+    };
     const { doc } = migrateDocument(
       component,
       source({ "core/table-of-contents": contents, t: { version: 1 } })
     );
-    expect((doc as { variants?: unknown }).variants).toEqual({
+    expect(variantsOf(doc)).toEqual({
       one: { label: "One", overrides: { shared: "kept" } },
     });
   });
