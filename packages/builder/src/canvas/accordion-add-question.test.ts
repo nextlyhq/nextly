@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   accordionForSelection,
   addQuestionOp,
+  questionButtonBox,
   questionRoomRow,
 } from "./accordion-add-question";
 
@@ -127,5 +128,14 @@ describe("where '+ Add a question' sits", () => {
       width: 400,
       height: 88,
     });
+  });
+});
+
+describe("how wide '+ Add a question' may be", () => {
+  it("is never wider than the accordion's room, so it never covers a block beside it", () => {
+    // A narrow column, 120px wide, at x 40.
+    expect(
+      questionButtonBox({ x: 40, y: 300, width: 120, height: 44 })
+    ).toEqual({ left: 40, top: 300, maxWidth: 120 });
   });
 });

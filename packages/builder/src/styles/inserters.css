@@ -441,6 +441,19 @@
   box-shadow: 0 0 0 1px var(--nx-builder-border);
 }
 
+/* Kept within the accordion's width (maxWidth, set where it is placed): the
+   "+" stays whole and the words shorten. */
+.nx-add-question__button > svg {
+  flex-shrink: 0;
+}
+
+.nx-add-question__words {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .nx-add-question__button:hover {
   border-color: var(--nx-builder-select);
 }

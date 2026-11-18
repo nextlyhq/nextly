@@ -159,6 +159,19 @@ export function questionRoomRow(
   return shows ? row : null;
 }
 
+/**
+ * Where the button sits and how wide it may grow, in the overlay's pixels:
+ * at the room's start, and never wider than the room, so over a narrow
+ * accordion its words shorten rather than reach the block beside it.
+ */
+export function questionButtonBox(room: Rect): {
+  readonly left: number;
+  readonly top: number;
+  readonly maxWidth: number;
+} {
+  return { left: room.x, top: room.y, maxWidth: room.width };
+}
+
 /** Where the button is drawn: the accordion's room, and the zoom. */
 interface Place {
   readonly rect: Rect;
@@ -323,7 +336,11 @@ export function AccordionAddQuestion({
           className="nx-add-question__button"
           data-add-question={accordion.id}
           // In the room at the foot of the accordion, at the canvas's zoom.
-          style={{ left: place.rect.x, top: place.rect.y }}
+          style={questionButtonBox(place.rect)}
+          // Named in full, and told in full on hover, when a narrow
+          // accordion shortens the words it shows.
+          aria-label={ADD_QUESTION_WORDS}
+          title={ADD_QUESTION_WORDS}
           onClick={event => {
             // Kept off the canvas, which would select what lies under it.
             event.stopPropagation();
@@ -332,7 +349,7 @@ export function AccordionAddQuestion({
           onPointerDown={event => event.stopPropagation()}
         >
           <Plus size={14} aria-hidden="true" />
-          {ADD_QUESTION_WORDS}
+          <span className="nx-add-question__words">{ADD_QUESTION_WORDS}</span>
         </button>
       )}
     </div>
