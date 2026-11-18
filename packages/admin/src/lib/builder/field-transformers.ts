@@ -575,7 +575,10 @@ function storedOptionsMaxDepth(field: FieldDefinition): number | undefined {
 /**
  * The `options` a relationship's save writes: the stored ones, with `target` following the
  * collection the person picked (`relationTo`, one collection), so a many-to-many stays one and
- * links to what the field now names. Undefined where none were stored.
+ * links to what the field now names. Allow multiple turned off, on a field stored with it on
+ * (`storedHasMany`), makes a many-to-many link one entry (`manyToOne`), with no link table, so the
+ * stored relation type never outlives the control the person changed. One stored with it off keeps
+ * its relation type, since nothing was changed. Undefined where none were stored.
  */
 function relationshipOptionsToSave(
   field: BuilderField
@@ -583,9 +586,16 @@ function relationshipOptionsToSave(
   const stored = field.storedRelationOptions;
   if (stored === undefined) return undefined;
   const picked = field.relationTo;
-  return typeof picked === "string" && picked !== ""
-    ? { ...stored, target: picked }
-    : stored;
+  const targeted =
+    typeof picked === "string" && picked !== ""
+      ? { ...stored, target: picked }
+      : stored;
+  const turnedOff = field.storedHasMany === true && field.hasMany === false;
+  if (!turnedOff || targeted.relationType !== "manyToMany") {
+    return targeted;
+  }
+  const { junctionTable: _linkTable, ...single } = targeted;
+  return { ...single, relationType: "manyToOne" };
 }
 
 /**
@@ -708,6 +718,9 @@ export function convertToBuilderField(
   }
 
   builderField.storedRelationOptions = storedRelationOptionsOf(field);
+  if (field.type === "relationship" && field.hasMany === true) {
+    builderField.storedHasMany = true;
+  }
 
   return builderField;
 }

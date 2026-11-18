@@ -393,10 +393,16 @@ export interface BuilderField extends FieldConfig {
    * A relationship's stored `options` object, kept whole and written back by the save: the
    * collection it links to (`target`, which a relationship stored the earlier way names instead of
    * `relationTo`) and how its links are stored (`relationType`, `"manyToMany"` for one kept in a
-   * table of its own). The Builder edits neither, so a save that dropped them would make a
-   * many-to-many a single link and lose the table holding its links.
+   * table of its own). A save that dropped them would make a many-to-many a single link and lose
+   * the table holding its links.
    */
   storedRelationOptions?: Readonly<Record<string, unknown>>;
+  /**
+   * Whether a relationship was stored with Allow multiple on (`hasMany: true`). A stored
+   * many-to-many becomes a single link only when the person turns that control off
+   * (`relationshipOptionsToSave`), never because it was stored off.
+   */
+  storedHasMany?: true;
   /**
    * Maximum depth for populating related documents
    */

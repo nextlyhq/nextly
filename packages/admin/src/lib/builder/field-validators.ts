@@ -113,14 +113,28 @@ const needsOptions: FieldCheck = field => {
   return problem ? { kind: "bad-option", message: problem } : null;
 };
 
-/** A relationship needs a collection to link to (`linksSomewhere`). */
-const needsTarget: FieldCheck = field =>
-  field.type === "relationship" && !linksSomewhere(field)
+/**
+ * A relationship needs a collection to link to (`linksSomewhere`). A many-to-many it stores
+ * (`storedRelationOptions.relationType`) needs exactly one: its links are kept in a table made for
+ * one collection, so several picked would name none the save can keep them for.
+ */
+const needsTarget: FieldCheck = field => {
+  if (field.type !== "relationship") return null;
+  if (!linksSomewhere(field)) {
+    return {
+      kind: "no-target",
+      message: `Relationship field "${field.name}" must link to a collection`,
+    };
+  }
+  return field.storedRelationOptions?.relationType === "manyToMany" &&
+    Array.isArray(field.relationTo) &&
+    field.relationTo.length > 1
     ? {
         kind: "no-target",
-        message: `Relationship field "${field.name}" must link to a collection`,
+        message: `Relationship field "${field.name}" keeps its links for one collection: pick only one`,
       }
     : null;
+};
 
 /** A group or repeater stores its values in the fields inside it, so it needs at least one. */
 const needsInnerField: FieldCheck = field =>
