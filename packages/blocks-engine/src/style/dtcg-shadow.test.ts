@@ -239,6 +239,38 @@ describe("a shadow in the design-token file", () => {
     );
   });
 
+  it("reads a shadow that aliases a whole shadow whose layer colour is an alias", () => {
+    const read = dtcgToTokens({
+      color: {
+        brand: {
+          $type: "color",
+          $value: {
+            colorSpace: "srgb",
+            components: [0.2, 0.4, 0.6],
+            hex: "#336699",
+          },
+        },
+      },
+      shadow: {
+        card: {
+          $type: "shadow",
+          $value: {
+            color: "{color.brand}",
+            offsetX: px(0),
+            offsetY: px(1),
+            blur: px(2),
+            spread: px(0),
+          },
+        },
+        raised: { $type: "shadow", $value: "{shadow.card}" },
+      },
+    });
+    expect(read.issues).toEqual([]);
+    expect(read.tokens).toContainEqual(
+      shadow("shadow.raised", "0px 1px 2px 0px #336699")
+    );
+  });
+
   it("keeps a shadow as Nextly data where its colour variable isn't written as a token", () => {
     // `color.brand.tint` can't be written beside the token `color.brand`,
     // so an alias to it would point at nothing in the file.

@@ -358,6 +358,59 @@ describe("an import carrying the site's own design data", () => {
     expect(card?.values.light).toBe("0 2px 4px var(--brand-c-brand)");
   });
 
+  it("points each var() at its own variable once, where this site's prefix extends the file's", () => {
+    const source: SiteTokenSet = {
+      tokens: [
+        { name: "font.body", kind: "fontFamily", values: { light: "serif" } },
+        {
+          name: "new-font.body",
+          kind: "fontFamily",
+          values: { light: "sans-serif" },
+        },
+      ],
+      siteText: { h2: { fontFamily: "var(--site-font-body)" } },
+    };
+    const into: SiteTokenSet = { tokens: [], prefix: "--site-new-" };
+    const plan = ready(planImport(files(source, []), into, { textStyles: [] }));
+    expect(plan.extras.site?.siteText).toEqual({
+      h2: { fontFamily: "var(--site-new-font-body)" },
+    });
+  });
+
+  it("keeps this site's row where the file's uses a variable that isn't imported, saying so", () => {
+    const into: SiteTokenSet = {
+      tokens: [
+        {
+          id: "dest-size",
+          name: "font-size.custom",
+          kind: "dimension",
+          values: { light: "2rem" },
+        },
+      ],
+      siteText: { h2: { fontSize: "3rem" } },
+    };
+    const source: SiteTokenSet = {
+      tokens: [
+        {
+          id: "source-size",
+          name: "font-size.custom",
+          kind: "dimension",
+          values: { light: "1rem" },
+        },
+      ],
+      siteText: { h2: { fontSize: { $token: "source-size" } } },
+    };
+    const plan = ready(planImport(files(source, []), into, { textStyles: [] }));
+    expect(plan.extras.site?.siteText).toBeUndefined();
+    expect(plan.skipped).toContain(
+      "Site text: Heading 2 kept this site's own settings, because a variable it uses, “font-size.custom”, wasn't imported."
+    );
+    // Applied, or refused as changing nothing, the site keeps its own row.
+    const applied = applyImport(plan, into, new Map());
+    const h2 = applied.ok ? applied.tokens.siteText?.h2 : into.siteText?.h2;
+    expect(h2).toEqual({ fontSize: "3rem" });
+  });
+
   it("follows only the whole custom property of a merged variable, never one it begins", () => {
     const mine: SiteTokenSet = {
       tokens: [
