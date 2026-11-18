@@ -550,6 +550,33 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    it.runIf(dialect === "mysql")(
+      "refuses a file whose only statement restates a column that keeps a comment set by hand",
+      async () => {
+        // The whole UP of a type change as migrate:create writes it on MySQL: one MODIFY, which
+        // makes and removes no object.
+        const widen = `ALTER TABLE ${q(TABLE)} MODIFY COLUMN ${q("title")} varchar(300)`;
+        await query(`${widen} COMMENT 'kept by hand'`);
+        const generated = await readFile(sqlPath(two), "utf8");
+        const up = generated.indexOf("-- UP");
+        const down = generated.indexOf("-- DOWN");
+        expect(up).toBeGreaterThan(-1);
+        expect(down).toBeGreaterThan(up);
+        const upLine = generated.slice(up, generated.indexOf("\n", up) + 1);
+        const text = `${generated.slice(0, up)}${upLine}${widen};\n\n${generated.slice(down)}`;
+        await writeFile(sqlPath(two), text);
+        await rehash(two, text);
+        await retarget(two);
+
+        const error = await refusal();
+        expect(error.code).toBe("NEXTLY_MIGRATION_NOT_PROVEN");
+        expect(error.publicMessage).toContain(
+          `MODIFY COLUMN ${q("title")} varchar (the column keeps settings it would reset)`
+        );
+        expect(await ledger(two)).toEqual([]);
+      }
+    );
+
     it.runIf(dialect !== "sqlite").each([
       ["refuses it where the table's key is a plain integer", "plain"],
       ["records it where the database assigns the key", "assigned"],

@@ -292,8 +292,8 @@ function declaredIdentity(
 }
 
 /**
- * Whether every key the statement has the database assign is one the live table assigns, an
- * identity column in the mode declared: in a table it creates, or in a column it adds to one. The
+ * Whether every key the statement has the database assign is one the live table assigns in the
+ * way declared (an identity column in its mode, any other key as no identity column): in a table it creates, or in a column it adds to one. The
  * snapshot comparison reads such a key as its storage type, so a table made by hand with a plain
  * integer key stands where the file ends, and every insert that leaves the key out fails there.
  * Each key is asked about where the rest of the file leaves it (`whereItEnds`), so one made on a
@@ -310,8 +310,9 @@ function generatedKeysAssigned(
     if (end === undefined) return true;
     return (
       schema.generatesKey(end.table, end.column) &&
-      (key.identity === undefined ||
-        schema.identityMode(end.table, end.column) === key.identity)
+      // The mode declared, or none: a serial key or an AUTO_INCREMENT one is no identity column,
+      // which refuses or takes a written value by its own rule.
+      schema.identityMode(end.table, end.column) === key.identity
     );
   });
 }

@@ -52,8 +52,9 @@ export interface LiveColumnFacts {
   ): "always" | "by-default" | undefined;
   /**
    * Whether `untrackedSettings` reads everything a restatement of the table's columns would put
-   * back. False for a MySQL table whose engine keeps column attributes the catalog read here does
-   * not report (NDB's `COLUMN_FORMAT` and `STORAGE`): nothing then shows what a column holds.
+   * back. False for a MySQL table the read was not asked for, and for one whose engine keeps
+   * column attributes the catalog read here does not report (NDB's `COLUMN_FORMAT` and
+   * `STORAGE`): nothing then shows what a column holds, and an empty answer is not "none".
    */
   settingsReadable(table: string): boolean;
 }
@@ -243,6 +244,7 @@ export async function readLiveColumnFacts(
     identities: new Map(),
     unreadable: new Set(),
   };
+  const read = new Set(tableNames.map(name => name.toLowerCase()));
   if (tableNames.length > 0 && dialect !== "sqlite") {
     const namesIn = sql.join(
       tableNames.map(name => sql`${name}`),
@@ -257,6 +259,11 @@ export async function readLiveColumnFacts(
       facts.settings.get(keyOf(table, column)) ?? [],
     generatesKey: (table, column) => facts.generated.has(keyOf(table, column)),
     identityMode: (table, column) => facts.identities.get(keyOf(table, column)),
-    settingsReadable: table => !facts.unreadable.has(table.toLowerCase()),
+    // On MySQL only a table that was read, and read whole, has settings to answer with: a table
+    // the read never reached holds whatever it holds.
+    settingsReadable: table =>
+      dialect !== "mysql" ||
+      (read.has(table.toLowerCase()) &&
+        !facts.unreadable.has(table.toLowerCase())),
   };
 }

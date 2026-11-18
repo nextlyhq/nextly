@@ -741,7 +741,7 @@ const liveWith = (facts: {
   untrackedSettings: () => facts.settings ?? [],
   settingsReadable: () => facts.readable ?? true,
   generatesKey: () => facts.generatesKey ?? true,
-  identityMode: () => facts.identity ?? "always",
+  identityMode: () => facts.identity,
 });
 
 /** The statuses `proveStatements` gives one MySQL or PostgreSQL file against `schema`. */
@@ -938,18 +938,34 @@ describe("a key the database assigns, on a table the file creates", () => {
     }
   });
 
-  it("is proven where the database assigns the key", async () => {
+  it("is proven where the database assigns the key in the way declared", async () => {
     for (const [dialect, create] of CREATES) {
       expect(
         await statusesAgainst(
           [create],
           dialect,
-          liveWith({ generatesKey: true }),
+          liveWith({
+            generatesKey: true,
+            identity: create.includes("IDENTITY") ? "always" : undefined,
+          }),
           creating
         ),
         create
       ).toEqual(["shown"]);
     }
+  });
+
+  it("does not take an identity column for the serial key a file declares", async () => {
+    // Both read as an integer the database assigns; an identity column refuses a written value
+    // a serial one takes.
+    expect(
+      await statusesAgainst(
+        [CREATES[0][1]],
+        "postgresql",
+        liveWith({ generatesKey: true, identity: "always" }),
+        creating
+      )
+    ).toEqual(["not-done"]);
   });
 
   it("asks the same of a key a file adds to a table it changes", async () => {

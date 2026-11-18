@@ -297,5 +297,18 @@ describe.each(LOCK_DIALECTS.filter(dialect => dialect !== "sqlite"))(
         expect(live.untrackedSettings(plain, "label")).toEqual([]);
       }
     );
+
+    it.runIf(dialect === "mysql")(
+      "reads the table of a statement that only restates a column, which claims no object",
+      async () => {
+        // A `MODIFY` alone, as a type change is written: no table, column or index is made or
+        // removed, and the column's settings must still be read.
+        const live = await readLiveSchema(adapter.getDrizzle(), dialect, [
+          `ALTER TABLE ${assigned} MODIFY COLUMN noted varchar(40)`,
+        ]);
+        expect(live.settingsReadable(assigned)).toBe(true);
+        expect(live.untrackedSettings(assigned, "noted")).toEqual(["COMMENT"]);
+      }
+    );
   }
 );

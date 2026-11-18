@@ -86,4 +86,22 @@ describe("readLiveColumnFacts on a MySQL-dialect server", () => {
     );
     expect(innodb.settingsReadable("dc_posts")).toBe(true);
   });
+
+  it("answers for no table it was not asked to read", async () => {
+    // Nothing read of a table is not the same as nothing kept on it: a caller must not take a
+    // restated column there for one that holds no setting.
+    const facts = await readLiveColumnFacts(
+      server(true),
+      "mysql",
+      ["dc_posts"],
+      {
+        tables: [],
+      }
+    );
+    expect(facts.settingsReadable("dc_pages")).toBe(false);
+    const none = await readLiveColumnFacts(server(true), "mysql", [], {
+      tables: [],
+    });
+    expect(none.settingsReadable("dc_posts")).toBe(false);
+  });
 });

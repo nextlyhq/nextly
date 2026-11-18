@@ -43,6 +43,7 @@ import {
 import { readLiveColumnFacts, type LiveColumnFacts } from "./live-column-facts";
 import { scanSql } from "./sql-scan";
 import { cursorOf, StatementCursor } from "./statement-cursor";
+import { tablesChangedIn } from "./statement-targets";
 
 export type StatementVerdict = "done" | "not_done" | "unknown";
 
@@ -769,13 +770,18 @@ export async function readLiveSchema(
     const reading = readStatement(statement, dialect);
     return reading.kind === "schema" ? reading.claims.map(c => c.object) : [];
   });
-  // Every table a claim is about or is part of; the latter decides `no_table`.
-  const tableNames = distinct(
-    objects.flatMap(o => {
+  // Every table a claim is about or is part of; the latter decides `no_table`. And every table
+  // a statement changes without claiming an object: one that only restates a column (MySQL's
+  // `MODIFY`) makes and removes nothing, and its column's settings are still asked for.
+  const tableNames = distinct([
+    ...objects.flatMap(o => {
       const name = o.kind === "table" ? o.table : tableOf(o);
       return name === undefined ? [] : [name];
-    })
-  );
+    }),
+    ...statements.flatMap(
+      statement => tablesChangedIn(statement, dialect) ?? []
+    ),
+  ]);
   const indexNames = distinct(
     objects.flatMap(o =>
       o.kind === "index" || o.kind === "constraint" ? [o.name] : []
