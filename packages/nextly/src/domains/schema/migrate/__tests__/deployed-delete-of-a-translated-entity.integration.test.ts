@@ -752,6 +752,40 @@ describe.each(getConfiguredTestDialects())(
       expect(later.said).toMatch(removedLine);
     }, 180_000);
 
+    it("leaves a deleted collection's rows while a table stands under its name, and removes them once it is gone", async () => {
+      const { deployed, after } = await deleteNotesOnTheDeployedDatabase(() => {
+        leftovers.earlier = true;
+      });
+      leftovers.earlier = false;
+      // Positive control: the earlier delete left them.
+      expect(after).toMatchObject({
+        registryRow: 0,
+        values: 1,
+        archiveRows: 1,
+      });
+      // A table under the deleted collection's name: its rows may be that table's.
+      await deployed.adapter.executeQuery(
+        `CREATE TABLE ${q(notes.table)} (${q("id")} VARCHAR(36))`
+      );
+
+      const standing = await migrate();
+      expect(standing.code, standing.said).toBeUndefined();
+      expect(await sharedLeftOf(deployed.adapter), standing.said).toEqual(
+        after
+      );
+      expect(standing.said).not.toMatch(removedLine);
+
+      await deployed.adapter.executeQuery(`DROP TABLE ${q(notes.table)}`);
+      const gone = await migrate();
+      expect(await sharedLeftOf(deployed.adapter), gone.said).toEqual({
+        registryRow: 0,
+        values: 0,
+        archiveRows: 0,
+        keptValues: 1,
+      });
+      expect(gone.said).toMatch(removedLine);
+    }, 180_000);
+
     it("removes none of its rows in a run stopped part-way through them, and all of them in the next", async () => {
       const { deployed, before, deleted, after } =
         await deleteNotesOnTheDeployedDatabase(() => {
