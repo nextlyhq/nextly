@@ -70,6 +70,8 @@ import {
   LayoutTemplate,
   Lock,
   LockOpen,
+  Paintbrush,
+  PaintRoller,
   Palette,
   RefreshCw,
   Scissors,
@@ -479,6 +481,9 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   copy: ClipboardCopy,
   cut: Scissors,
   paste: ClipboardPaste,
+  // A brush picks a look up and puts it down, as a format painter does.
+  "copy-style": Paintbrush,
+  "paste-style": PaintRoller,
   // The marks the Add panel draws for the three blocks, so a verb shows what
   // the block becomes.
   "turn-into-text": Type,

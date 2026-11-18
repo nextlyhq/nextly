@@ -129,6 +129,8 @@ export type ToolbarActionId =
   | "copy"
   | "cut"
   | "paste"
+  | "copy-style"
+  | "paste-style"
   | TurnIntoActionId
   | "save-as-pattern"
   | "save-as-shared-style"
@@ -828,7 +830,7 @@ function manyBlockActions(
       ask,
       opsOf(selectionDuplication(document, ids))
     ),
-    ...clipboardActions(deleteItem),
+    ...clipboardActions(deleteItem, ids.length),
     saveAction(document, ids, nesting, mayCreate, planned),
     ...sharedStyleActions(document, ids, sharedStyles),
     ...compositionActions(document, ids, nesting, components, ask, planned),
@@ -1002,7 +1004,7 @@ export function toolbarActions(
       lockRefusalFor,
       duplication?.ops
     ),
-    ...clipboardActions(deleteItem),
+    ...clipboardActions(deleteItem, 1),
     ...turnIntoActions(
       document,
       selectedId,
@@ -1291,11 +1293,38 @@ export function depthMoveActions(
  * clipboard holds is read only when it is pressed; a paste the page refuses
  * says why then.
  */
-function clipboardActions(deleteItem: ToolbarAction): ToolbarAction[] {
+function clipboardActions(
+  deleteItem: ToolbarAction,
+  count: number
+): ToolbarAction[] {
   return [
     { id: "copy", label: "Copy", enabled: true, inMenu: true },
     { ...deleteItem, id: "cut", label: "Cut", inMenu: true },
     { id: "paste", label: "Paste", enabled: true, inMenu: true },
+    ...styleClipboardActions(count),
+  ];
+}
+
+/**
+ * Copy style and Paste style, beside Copy and Paste in the same group.
+ *
+ * Copy style takes one block's look, so it is dimmed for several. Paste style
+ * gives that look to every selected block, and like Paste it is always
+ * offered: what was copied is read when it is pressed, and a paste with
+ * nothing copied, or onto a held block, says why then.
+ */
+function styleClipboardActions(count: number): ToolbarAction[] {
+  return [
+    count > 1
+      ? {
+          id: "copy-style",
+          label: "Copy style",
+          enabled: false,
+          reason: oneAtATime(count),
+          inMenu: true,
+        }
+      : { id: "copy-style", label: "Copy style", enabled: true, inMenu: true },
+    { id: "paste-style", label: "Paste style", enabled: true, inMenu: true },
   ];
 }
 

@@ -42,6 +42,8 @@ function verbs(): CommandVerbs & Record<string, ReturnType<typeof vi.fn>> {
     copy: vi.fn(),
     cut: vi.fn(),
     paste: vi.fn(),
+    copyStyle: vi.fn(),
+    pasteStyle: vi.fn(),
     selectParent: vi.fn(),
     saveAsPattern: vi.fn(),
     editComponent: vi.fn(),
@@ -106,6 +108,19 @@ describe("builderCommands", () => {
     expect(paste).toHaveLength(1);
     paste[0]?.run();
     expect(run.paste).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Copy style and Paste style by name, and runs their verbs", () => {
+    const run = verbs();
+    const commands = build({ verbs: run }, { selectedId: "a" });
+    const copy = commands.find(command => command.id === "block.copy-style");
+    const paste = commands.find(command => command.id === "block.paste-style");
+    expect(copy?.label).toBe("Copy style");
+    expect(paste?.label).toBe("Paste style");
+    copy?.run();
+    paste?.run();
+    expect(run.copyStyle).toHaveBeenCalledTimes(1);
+    expect(run.pasteStyle).toHaveBeenCalledTimes(1);
   });
 
   it("omits a block verb the toolbar would show as unavailable", () => {
