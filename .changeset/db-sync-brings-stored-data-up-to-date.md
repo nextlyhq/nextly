@@ -31,6 +31,6 @@
 
 `nextly db:sync` now brings the data an earlier release stored up to date, as `nextly migrate` does, so a development database that has no migrations is not left behind. Once it has synced, it hashes passwords stored before this release, removes passwords kept in version history, and converts roles holding a retired `manage-` permission, under the schema lock.
 
-The steps rewrite stored values, so a run with work needs a backup confirmed: pass the new `--backup-confirmed`, or answer yes when it asks at a terminal. With no terminal and no flag it stops with `DATA_STEPS_BACKUP_NOT_CONFIRMED` before the sync changes anything. A database with nothing of the kind is never asked, and the flag is ignored there. `nextly db:sync --dry-run` lists each step with work and its count. With `--watch` the steps are taken once, after the first sync.
+The steps rewrite stored values, so a run with work needs a backup confirmed: pass the new `--backup-confirmed`, or answer yes when it asks at a terminal. With no terminal and no flag it stops with `DATA_STEPS_BACKUP_NOT_CONFIRMED` before the sync changes anything. A database with nothing of the kind is never asked, and the flag is ignored there. `nextly db:sync --dry-run` lists each step with work and its count. With `--watch` the steps are taken once, after the first sync, and `--no-auto-sync` takes none.
 
 The start warning for a role holding a retired manage permission now names both commands: `nextly migrate`, or `nextly db:sync` in development.

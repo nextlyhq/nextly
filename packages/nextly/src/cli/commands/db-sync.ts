@@ -81,7 +81,7 @@ import {
 import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fields";
 import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
-import { reportDryRun } from "../dry-run";
+import { reportDryRun, type DryRunPlan } from "../dry-run";
 import { exitWithError } from "../errors";
 import { CliError } from "../errors/cli-error";
 import {
@@ -351,10 +351,19 @@ export async function runDbSync(
     lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
   });
 
+  const takesDataSteps = options.autoSync !== false;
+
   try {
     // Step 3.4: Work of that kind whose backup nobody confirmed is refused
-    // here, before the core tables or the sync change anything.
-    await storedData.confirmBeforeSchemaChanges();
+    // here, before the core tables or the sync change anything. Counted with
+    // the field types this configuration registered, as every step below is.
+    // Not under `--no-auto-sync`, which leaves the tables as they are: the
+    // steps read them in the shape the configuration gives them.
+    if (takesDataSteps) {
+      await runWithFieldTypes(configResult.fieldTypes, () =>
+        storedData.confirmBeforeSchemaChanges()
+      );
+    }
 
     // Step 3.5: Ensure core tables exist.
     // For fresh databases, the system tables (users, roles, permissions,
@@ -471,7 +480,11 @@ export async function runDbSync(
     // schema lock, which the sync above has let go: once in a run, a watched
     // one included. A backup refusal made only now, for work the check before
     // the sync could not see, ends the run with the sync applied.
-    await storedData.takeAfterSchemaChanges();
+    if (takesDataSteps) {
+      await runWithFieldTypes(configResult.fieldTypes, () =>
+        storedData.takeAfterSchemaChanges()
+      );
+    }
     const storedDataRefused = storedData.refusal();
     if (storedDataRefused !== null) throw storedDataRefused;
 
@@ -538,6 +551,32 @@ function installStaticSchemaRegistry(
 }
 
 /**
+ * The sync's dry-run plan with the data steps a real run takes after it. They
+ * are left out where a real run would not reach them: under `--no-auto-sync`,
+ * where the sync itself would refuse, and where no step has work or refuses
+ * (a count that cannot be read, on a database the sync has yet to set up,
+ * says nothing here). A backup the real run would refuse for is named first,
+ * since that run refuses before it syncs.
+ */
+function withStoredData(
+  plan: DryRunPlan,
+  stored: DryRunPlan,
+  options: ResolvedDevOptions
+): DryRunPlan {
+  const syncRefusals = plan.refusals ?? [];
+  const storedRefusals = stored.refusals ?? [];
+  const nothingStored = stored.changes.length + storedRefusals.length === 0;
+  if (options.autoSync === false || syncRefusals.length > 0 || nothingStored) {
+    return plan;
+  }
+  return {
+    changes: [...plan.changes, ...stored.changes],
+    refusals: [...storedRefusals, ...syncRefusals],
+    notes: [...(plan.notes ?? []), ...(stored.notes ?? [])],
+  };
+}
+
+/**
  * The dry run of a sync: the database opened read-only (one that is not there has been said, and
  * ends the run), the schema registry set up in memory as a real run sets it up, and the plan
  * reported. Nothing is locked, asked or written.
@@ -566,18 +605,16 @@ async function reportSyncDryRun(
     const plan = await planDbSync(configResult, adapter, options, context);
     // The data steps a real run takes after its sync, counted read-only on
     // the database as it stands and listed after the sync's own changes.
-    const stored = await storedDataOfRun({
-      adapter: adapter as unknown as DrizzleAdapter,
-      command: "nextly db:sync",
-      logger,
-      backupConfirmed: options.backupConfirmed === true,
-      lockTtlSeconds: undefined,
-    }).plan();
-    reportDryRun(logger, {
-      changes: [...plan.changes, ...stored.changes],
-      refusals: [...(plan.refusals ?? []), ...(stored.refusals ?? [])],
-      notes: [...(plan.notes ?? []), ...(stored.notes ?? [])],
-    });
+    const stored = await runWithFieldTypes(configResult.fieldTypes, () =>
+      storedDataOfRun({
+        adapter: adapter as unknown as DrizzleAdapter,
+        command: "nextly db:sync",
+        logger,
+        backupConfirmed: options.backupConfirmed === true,
+        lockTtlSeconds: undefined,
+      }).plan()
+    );
+    reportDryRun(logger, withStoredData(plan, stored, options));
   } finally {
     await adapter.disconnect();
     clearConfigCache();

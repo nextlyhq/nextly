@@ -712,6 +712,15 @@ describe("a command run with no terminal", () => {
       );
       expect(holdsRetiredManage()).toBe(true);
 
+      // `--no-auto-sync` leaves the tables as they are, so it takes no data
+      // step and asks for no backup: it ends well with the role as it was.
+      const noAutoSync = await nextly(["db:sync", "--no-auto-sync"]);
+      expect(
+        noAutoSync.status,
+        `${noAutoSync.stdout}\n${noAutoSync.stderr}`
+      ).toBe(0);
+      expect(holdsRetiredManage()).toBe(true);
+
       const confirmed = await nextly(["db:sync", "--backup-confirmed"]);
       expect(confirmed.status, `${confirmed.stdout}\n${confirmed.stderr}`).toBe(
         0

@@ -619,7 +619,9 @@ describe.each(getConfiguredTestDialects())(
             )
           )
         ).toHaveLength(1);
-        expect(lines.join("\n")).toContain("`nextly migrate`");
+        // The remedy names no command: `nextly migrate` and `nextly db:sync`
+        // both take this step.
+        expect(lines.join("\n")).toContain("run it again");
       });
     });
   }

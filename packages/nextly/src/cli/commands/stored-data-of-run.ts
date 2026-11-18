@@ -77,7 +77,8 @@ function reportPlan(
   stepped: boolean
 ): void {
   const refusals = plan.refusals ?? [];
-  if (plan.changes.length === 0 && refusals.length === 0) return;
+  const notes = plan.notes ?? [];
+  if (plan.changes.length + refusals.length + notes.length === 0) return;
   logger.newline();
   logger.info(
     "Data stored by an earlier release, once the schema is up to date:"
@@ -96,7 +97,7 @@ function reportPlan(
   for (const refusal of refusals) {
     logger.info(`  ✖ a real run would refuse: ${refusal}`);
   }
-  for (const note of plan.notes ?? []) logger.info(`  ${note}`);
+  for (const note of notes) logger.info(`  ${note}`);
 }
 
 export function storedDataOfRun(args: {
@@ -144,36 +145,33 @@ export function storedDataOfRun(args: {
       : {}),
   });
 
+  // A count that cannot be read, on a database whose tables the run
+  // creates, is said so in a note rather than guessed.
+  const plan = async (): Promise<DryRunPlan> => {
+    try {
+      return await previewDataSteps(deps(false));
+    } catch (error) {
+      return {
+        changes: [],
+        notes: [
+          `Data stored by an earlier release could not be counted: ${describeError(error)}`,
+        ],
+      };
+    }
+  };
+  /** Puts back the resolver the command runs with, after a count or the steps replaced it. */
+  const restoreResolver =
+    args.restoreResolver ?? (() => installRegistryResolver(adapter));
+
   return {
     askBackedUp,
     refusal: () => refused,
 
-    plan: async () => {
-      try {
-        return await previewDataSteps(deps(false));
-      } catch (error) {
-        return {
-          changes: [],
-          notes: [
-            `Data stored by an earlier release could not be counted: ${describeError(error)}`,
-          ],
-        };
-      }
-    },
+    plan,
 
-    // A count that cannot be read, on a database whose tables the pending
-    // migrations create, is said so rather than guessed.
+    // The same plan, printed under a heading of its own.
     preview: async stepped => {
-      let plan: DryRunPlan;
-      try {
-        plan = await previewDataSteps(deps(false));
-      } catch (error) {
-        logger.info(
-          `  Data stored by an earlier release could not be counted: ${describeError(error)}`
-        );
-        return;
-      }
-      reportPlan(plan, logger, stepped);
+      reportPlan(await plan(), logger, stepped);
     },
 
     // Asked before anything changes, so a run that would be refused for the
@@ -191,7 +189,7 @@ export function storedDataOfRun(args: {
       } finally {
         // The run goes on with the resolver it started with, so nothing
         // after reads a table in the shape it had before the schema changed.
-        (args.restoreResolver ?? (() => installRegistryResolver(adapter)))();
+        restoreResolver();
       }
     },
 
@@ -206,6 +204,10 @@ export function storedDataOfRun(args: {
       } catch (error) {
         if (!isDataStepsBackupRefusal(error)) throw error;
         refused = error;
+      } finally {
+        // The steps read through a registry of their own. A command that
+        // goes on working, as a watched sync does, gets its own back.
+        if (args.restoreResolver !== undefined) restoreResolver();
       }
     },
 
