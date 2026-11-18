@@ -30,18 +30,12 @@ import type { SavedComponent, SavedPattern } from "@nextlyhq/builder";
 import type { HookWarning } from "nextly/config";
 
 import type { RemovalDryRun } from "./breakpoint-removal/dry-run";
-import type {
-  SharedStyleUsageHere,
-  SharedStyleUsageHereParts,
-  SharedStyleUsageKind,
-} from "./shared-style-usage-contract";
+import type { SharedStyleUsageKind } from "./shared-style-usage-contract";
 import type { CspAddition, CspCheck } from "./site-code/csp";
 
-export type {
-  SharedStyleUsageHere,
-  SharedStyleUsageHereParts,
-  SharedStyleUsageKind,
-} from "./shared-style-usage-contract";
+// The shared-style usage routes' contract, kept in its own file and named
+// here, where every caller imports the plugin's contract from.
+export * from "./shared-style-usage-contract";
 
 /**
  * The name this plugin registers under, which is also how its routes are
@@ -1103,157 +1097,6 @@ export const SHARED_STYLE_LOCK_ROUTE_PATH = "/shared-styles/lock";
 export interface SharedStyleLockRequest {
   readonly classId: string;
   readonly locked: boolean;
-}
-
-/**
- * Where the Design panel reads how widely its visible shared styles are used,
- * a page of rows at a time.
- *
- * @experimental Settles when the Shared styles tab ships.
- */
-export const SHARED_STYLE_USAGE_ROUTE_PATH = "/shared-styles/usage";
-
-/** The query parameter naming one shared style, by id; repeated for several. */
-export const SHARED_STYLE_ID_PARAM = "id";
-
-/** The most shared styles one usage read answers for: one page of rows. */
-export const SHARED_STYLE_USAGE_IDS_MAX = 50;
-
-/** How widely one shared style is used, from the class usage index. */
-export interface SharedStyleUsage {
-  /** How many documents apply it, gated and hidden content included. */
-  readonly documents: number;
-  /** The same documents, by kind. */
-  readonly byKind: Readonly<Record<SharedStyleUsageKind, number>>;
-  /**
-   * How many blocks wear it across those documents, a document's draft and
-   * published copies counted once. Absent where the index counts no blocks.
-   */
-  readonly blocks?: number;
-  /**
-   * The open document's saved blocks, in the parts the editor needs to count
-   * it from its live field instead: see {@link SharedStyleUsageHereParts}.
-   * Absent when no document was named, or the caller may not read it.
-   */
-  readonly here?: SharedStyleUsageHereParts;
-  /** False makes every number a floor: "at least". */
-  readonly complete: boolean;
-}
-
-/**
- * The code the remove route's issue carries when a stored document still uses
- * a style, so the editor can tell that refusal from one for a lock or a count
- * no longer whole. Carried only when every reason a removal is refused for is
- * a use: a refusal any of whose reasons is not (a lock, a style the site's
- * code defines, uses that could not all be counted) is a conflict naming
- * every reason, so the code never marks one that is not a use.
- *
- * @experimental Settles when the Shared styles tab ships.
- */
-export const SHARED_STYLE_IN_USE_CODE = "IN_USE";
-
-/**
- * What the usage read answers: the index's health once for the screen, what
- * this caller may do, and the usage of each style asked about.
- *
- * NOT A SECURITY BOUNDARY: every write is judged on its own.
- */
-export interface SharedStylesUsageResponse {
-  /** Whether the usage index covers the whole site, so counts can be exact. */
-  readonly whole: boolean;
-  /**
-   * Whether counts that are not whole may still become whole: the site is
-   * still being counted. False when they are whole, and when something the
-   * index cannot reach keeps them floors for good, so there is nothing to
-   * read again for.
-   */
-  readonly counting: boolean;
-  /** Whether this caller may lock and unlock shared styles. */
-  readonly mayLock: boolean;
-  /**
-   * Whether this caller may ask for the pages to be counted now, through
-   * {@link SHARED_STYLE_COUNT_ROUTE_PATH}: whoever may change Design, the
-   * people a whole count lets remove a style.
-   */
-  readonly mayCount: boolean;
-  /** Each style asked about, by id. */
-  readonly styles: Readonly<Record<string, SharedStyleUsage>>;
-}
-
-/**
- * Where the Design panel lists the documents a shared style is used on, read
- * as the caller: documents the caller may not read are counted, not named.
- * The answer is the canonical list envelope, paged twenty at a time with
- * `?page=` from 1: `meta.total` and the pages count the documents the caller
- * may read, and `meta.hiddenCount` the ones it may not.
- *
- * @experimental Settles when the Shared styles tab ships.
- */
-export const SHARED_STYLE_WHERE_USED_ROUTE_PATH = "/shared-styles/where-used";
-
-/** The most documents one where-used answer names. */
-export const SHARED_STYLE_WHERE_USED_MAX = 20;
-
-/** The query parameter naming which page of a where-used list, from 1. */
-export const SHARED_STYLE_PAGE_PARAM = "page";
-
-/**
- * The last page a where-used read may ask for: the most documents one usage
- * listing can name, twenty to a page.
- */
-export const SHARED_STYLE_WHERE_USED_PAGES_MAX = 250;
-
-/**
- * The query parameters naming what the editor has open, whose saved share of
- * each style's usage the route reports apart (`SharedStyleUsage.here`): the
- * document as `<collection>/<id>` or `single:<slug>`, the blocks field, the
- * language by code (absent for the site's default), the stored form the
- * editor edits, and whether that copy stays live as saved (`keepsSaved`).
- */
-export const SHARED_STYLE_HERE_PARAM = "here";
-export const SHARED_STYLE_HERE_FIELD_PARAM = "hereField";
-export const SHARED_STYLE_HERE_LOCALE_PARAM = "hereLocale";
-export const SHARED_STYLE_HERE_VARIANT_PARAM = "hereVariant";
-export const SHARED_STYLE_HERE_KEEPS_SAVED_PARAM = "hereKeepsSaved";
-
-/**
- * The usage route's path for some shared styles, each named by its own `id`
- * parameter, so the browser asks in the shape the route reads; with what the
- * editor has open named, when it has a saved document open.
- */
-export function sharedStyleUsagePath(
-  ids: readonly string[],
-  here?: SharedStyleUsageHere
-): string {
-  const params = new URLSearchParams();
-  for (const id of ids) params.append(SHARED_STYLE_ID_PARAM, id);
-  if (here !== undefined) {
-    const { document } = here;
-    params.set(
-      SHARED_STYLE_HERE_PARAM,
-      "single" in document
-        ? `single:${document.single}`
-        : `${document.collection}/${document.id}`
-    );
-    params.set(SHARED_STYLE_HERE_FIELD_PARAM, here.field);
-    if (here.locale !== undefined) {
-      params.set(SHARED_STYLE_HERE_LOCALE_PARAM, here.locale);
-    }
-    params.set(SHARED_STYLE_HERE_VARIANT_PARAM, here.variant);
-    if (here.keepsSaved === true) {
-      params.set(SHARED_STYLE_HERE_KEEPS_SAVED_PARAM, "1");
-    }
-  }
-  return `${SHARED_STYLE_USAGE_ROUTE_PATH}?${params.toString()}`;
-}
-
-/** The where-used route's path for one shared style and one page, from 1. */
-export function sharedStyleWhereUsedPath(id: string, page: number): string {
-  const params = new URLSearchParams({
-    [SHARED_STYLE_ID_PARAM]: id,
-    [SHARED_STYLE_PAGE_PARAM]: String(page),
-  });
-  return `${SHARED_STYLE_WHERE_USED_ROUTE_PATH}?${params.toString()}`;
 }
 
 /** One document a shared style is used on, as the where-used list names it. */
