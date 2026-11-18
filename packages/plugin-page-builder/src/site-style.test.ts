@@ -422,3 +422,50 @@ describe("the site's colour order across the tiers", () => {
     ).toEqual(order);
   });
 });
+
+describe("whether the built-in colours are shown, across the tiers", () => {
+  it("is stored where the site hides them, and read back over the code's", () => {
+    const hidden = tokenOverrideOf(
+      { tokens: [] },
+      { tokens: [], builtInColoursShown: false }
+    );
+    expect(hidden.builtInColoursShown).toBe(false);
+    expect(
+      resolveSiteStyle(
+        { tokens: { tokens: [] } },
+        { tokens: { tokens: [], builtInColoursShown: false } }
+      ).tokens?.builtInColoursShown
+    ).toBe(false);
+  });
+
+  it("stores nothing while they are shown as the code shows them", () => {
+    for (const builtInColoursShown of [true, undefined]) {
+      expect(
+        tokenOverrideOf(
+          { tokens: [] },
+          {
+            tokens: [],
+            ...(builtInColoursShown === undefined
+              ? {}
+              : { builtInColoursShown }),
+          }
+        )
+      ).not.toHaveProperty("builtInColoursShown");
+    }
+  });
+
+  it("stores them shown over a site's code that hides them", () => {
+    const code = { tokens: [], builtInColoursShown: false };
+    expect(
+      tokenOverrideOf(code, { tokens: [], builtInColoursShown: true })
+        .builtInColoursShown
+    ).toBe(true);
+    expect(
+      tokenOverrideOf(code, { tokens: [], builtInColoursShown: false })
+    ).not.toHaveProperty("builtInColoursShown");
+    expect(
+      resolveSiteStyle({ tokens: code }, { tokens: { tokens: [] } }).tokens
+        ?.builtInColoursShown
+    ).toBe(false);
+  });
+});

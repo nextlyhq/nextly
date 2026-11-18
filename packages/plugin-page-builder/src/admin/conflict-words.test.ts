@@ -307,6 +307,21 @@ describe("naming an entry", () => {
     );
   });
 
+  it("names the built-in colours setting in words", () => {
+    const shown: EntryConflict = {
+      key: "builtInColoursShown",
+      setting: true,
+      kind: "changed",
+      kept: "mine",
+      base: undefined,
+      mine: false,
+      theirs: true,
+    };
+    expect(conflictWords("tokens", bySam(shown))).toBe(
+      "Sam changed the built-in colours setting while you were editing. Your value was kept. Undo puts theirs back."
+    );
+  });
+
   it("names the fluid range in words", () => {
     const range: EntryConflict = {
       key: "fluidRange",

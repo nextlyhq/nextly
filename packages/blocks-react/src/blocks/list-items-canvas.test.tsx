@@ -8,6 +8,7 @@ import {
   DOCUMENT_FORMAT_VERSION,
   itemPropName,
   type BlockDocument,
+  type PropSchema,
 } from "@nextlyhq/blocks-engine";
 import { renderToReadableStream } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -64,7 +65,8 @@ describe("a List's items on the canvas", () => {
 });
 
 describe("propMarker, for an item's address", () => {
-  const markFor = (items: Record<string, unknown>) =>
+  // The prop as a block declares it, so each case is a schema a block could hold.
+  const markFor = (items: PropSchema) =>
     propMarker({ props: { items } }, true)?.(itemPropName("items", 0));
 
   it("marks an item of an inline array of words", () => {

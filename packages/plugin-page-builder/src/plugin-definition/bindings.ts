@@ -307,7 +307,10 @@ export function routesForBindings(
   return {
     // A collection loop's menus: the collections the author may read,
     // the plugin's own stores left out, with each one's sortable fields.
-    loopCollections: loopCollectionsRoute(componentStoreOf(opts)),
+    loopCollections: loopCollectionsRoute(
+      componentStoreOf(opts),
+      new Set(def.templateAddresses.keys())
+    ),
     // The site's named queries, without their run functions: what the
     // editor offers as a list's custom sources.
     namedQueries: namedQueriesRoute(namedQueryDeclarations),

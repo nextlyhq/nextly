@@ -29,7 +29,8 @@
  * - variables: the Variables panel, its editor and import.
  * - site-text: the Type tab's Site text rows and their popups, and a type
  *   size's line height under a block's field.
- * - text-styles: the Style tab's "Text style" picker and its menu.
+ * - text-styles: the Style tab's "Text style" picker and its menu, and
+ *   Design's Type → "Text styles" popup of parts.
  * - field-rows: attribute rows, where a value came from, a style field's row.
  * - inserters: the "+" on an empty container and between blocks.
  * - shared-styles: class chips, the Layers key hint, the zoom control, shared
@@ -128,6 +129,9 @@
 @import "./bindings.css";
 
 @import "./image-states.css";
+
+@import "./embed-states.css";
+@import "./form-states.css";
 
 @import "./form-fields.css";
 

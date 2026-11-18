@@ -34,11 +34,12 @@ export function registerMigrateCommand(program: Command): void {
       false
     )
     .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
-    // Read only on a database that still keeps its migration records the way
-    // an earlier release did: the run moves them once a backup is confirmed.
+    // Read only on a database an earlier release left work on: its migration
+    // records, which the run moves, and data it stored, which the run brings
+    // up to date, each only once a backup is confirmed.
     .option(
       "--backup-confirmed",
-      "Confirm the database is backed up, so the migration records of an earlier Nextly release can be moved (required without a terminal; ignored when there are none)",
+      "Confirm the database is backed up, so the run can move the migration records of an earlier Nextly release and bring the data it stored up to date: hash stored passwords, remove passwords from version history, convert retired manage permissions (required without a terminal; ignored when there is nothing of the kind)",
       false
     )
     // The earlier spelling, honoured for one release with a notice naming

@@ -37,7 +37,6 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { container } from "../../di/container";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
-import { countPasswordsStoredAsGiven } from "../../domains/field-groups/stored-plain-passwords";
 import {
   isLocalizationIntentRefusal,
   parseLocalizationIntent,
@@ -91,9 +90,12 @@ import {
   type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
 import {
+  appliedPluginSnapshots,
   appliedSnapshotsOf,
   databaseBehindError,
   missingFromDatabase,
+  type AppliedSnapshot,
+  type MissingFromDatabase,
 } from "../../domains/schema/migrate/database-behind-migrations";
 import {
   deployStepDeps,
@@ -171,6 +173,7 @@ import {
 import {
   readRegistryRecord,
   storeRegistryRecord,
+  takeOwnedPermissions,
   takeRegistryBaseline,
   type RegistryRecord,
 } from "../../domains/schema/migrate/registry-record";
@@ -298,7 +301,6 @@ import {
   readMigrationFolder,
   type DeclaredNames,
 } from "../utils/migration-discovery";
-import { askYesInTerminal } from "../utils/prompt-cancelled";
 import { installRegistryResolver } from "../utils/registry-resolver";
 
 import {
@@ -306,17 +308,12 @@ import {
   plainTextPasswordNotice,
 } from "./clear-plaintext-passwords";
 import { runPluginsOnMigrate } from "./migrate-hooks";
+import { migrateStoredData } from "./migrate-stored-data";
 import {
   CORE_UPGRADE_LABEL,
   coreUpgradeSource,
   judgeCoreDeletions,
 } from "./upgrade-steps/core-upgrade-consent";
-import {
-  storedPasswordsNotice,
-  storedPasswordsOn,
-  storedPasswordTotal,
-} from "./upgrade-steps/stored-passwords";
-
 // Re-exported for the callers that import it from this command. Other
 // commands import it from cli/utils, which does not pull this one in.
 export { installRegistryResolver };
@@ -372,10 +369,11 @@ export interface MigrateCommandOptions {
 
   /**
    * The operator's statement that the database is backed up
-   * (`--backup-confirmed`). Read only where the database still keeps its
-   * migration records the way an earlier release did: the run moves them into
-   * `nextly_schema_events` once this is given, or once a person at a terminal
-   * says yes, and otherwise changes nothing.
+   * (`--backup-confirmed`). Read only where an earlier release left work on
+   * the database: its migration records, which the run moves into
+   * `nextly_schema_events`, and data it stored, which the run brings up to
+   * date once its migrations have applied. Each is done once this is given,
+   * or once a person at a terminal says yes.
    * @default false
    */
   backupConfirmed?: boolean;
@@ -505,11 +503,12 @@ async function pluginsOnMigrateStep(args: {
 }
 
 /**
- * End the run through `fail` where a plugin's `onMigrate` failed, once every
- * other step has run: the schema it applied stays applied, and running it
- * again runs the hook again.
+ * End the run through `fail` with a failure kept until every other step has
+ * run: a plugin's `onMigrate` that failed, or the data steps' backup refusal.
+ * The schema the run applied stays applied, and running it again takes the
+ * hook, or the steps, again.
  */
-function endIfHooksFailed(
+function endIfFailed(
   failure: NextlyError | null,
   fail: (error: unknown) => never
 ): void {
@@ -570,6 +569,8 @@ async function moveEarlierRecords(args: {
   options: Pick<MigrateCommandOptions, "backupConfirmed" | "dryRun">;
   /** The run's `--force-unlock`, which clears a stale lock once in the whole run. */
   clearStaleLock: () => Promise<void>;
+  /** The run's one backup question, whose yes holds for the rest of the run. */
+  askBackedUp: () => Promise<boolean>;
   lockTtlSeconds: number | undefined;
   logger: CommandContext["logger"];
 }): Promise<boolean> {
@@ -599,8 +600,7 @@ async function moveEarlierRecords(args: {
     bounds: args.bounds,
     backupConfirmed,
     interactive: canPrompt(),
-    askBackedUp: () =>
-      askYesInTerminal("Have you backed up your database? [y/N]: "),
+    askBackedUp: args.askBackedUp,
     // A stale lock is cleared before this lock, and not again in this run.
     beforeLock: args.clearStaleLock,
     lockTtlSeconds: args.lockTtlSeconds,
@@ -715,12 +715,22 @@ export async function runMigrate(
     const clearStaleLock = oncePerRun(() =>
       maybeForceUnlock(options, db, dialect)
     );
+    // What the run does with data an earlier release stored, and its one
+    // backup question, shared with the move below so nobody is asked twice.
+    const storedData = migrateStoredData({
+      adapter: adapter as unknown as DrizzleAdapter,
+      logger,
+      backupConfirmed: options.backupConfirmed === true,
+      lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
+    });
+
     const ended = await moveEarlierRecords({
       adapter: adapter as unknown as DrizzleAdapter,
       dialect,
       bounds,
       options,
       clearStaleLock,
+      askBackedUp: storedData.askBackedUp,
       lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
       logger,
     });
@@ -791,9 +801,15 @@ export async function runMigrate(
         serverConstructs,
         extensionSchema,
       });
+      await storedData.preview(options.step !== undefined);
       logger.success("Dry run complete (no changes made).");
       return;
     }
+
+    // Data an earlier release stored is brought up to date once the
+    // migrations have applied, and only with a backup confirmed: work whose
+    // backup nobody confirmed is refused here, before anything changes.
+    await storedData.confirmBeforeMigrations(options.step).catch(fail);
 
     // The retired-table cleanup has flags of its own: removing those tables
     // and losing rows still in them are each a separate decision from
@@ -1002,6 +1018,11 @@ export async function runMigrate(
           adapter as unknown as DrizzleAdapter,
           serviceLoggerOf(logger)
         );
+        // Data an earlier release stored, brought up to date under the
+        // schema lock: with every migration applied, since each step reads
+        // the tables as this release keeps them, and after the permissions
+        // the run seeded, which a role's conversion gives.
+        await storedData.takeAfterMigrations();
         // The plugins' own deploy work, last, once every step above has
         // left the schema in step (`migrate-hooks`). Not where migrations
         // are still pending, as none of the steps above are.
@@ -1068,24 +1089,15 @@ export async function runMigrate(
     }
 
     // Read-only too: passwords an earlier release kept as given inside a
-    // container are counted, and `nextly upgrade`, which hashes them, is named.
-    try {
-      const notice = storedPasswordsNotice(
-        storedPasswordTotal(
-          await countPasswordsStoredAsGiven(
-            storedPasswordsOn(adapter as unknown as DrizzleAdapter)
-          )
-        )
-      );
-      if (notice) logger.warn(notice);
-    } catch (err) {
-      logger.warn(
-        `Could not check for passwords stored before this release: ${describeError(err)}`
-      );
-    }
+    // container, where this run did not reach the step that hashes them.
+    await storedData.warnOfPasswordsLeft();
+
+    // The data steps' backup refusal, made after the migrations applied:
+    // the run ends with it now that its other work is done.
+    endIfFailed(storedData.refusal(), fail);
 
     // Last, once the read-only notices above have run.
-    endIfHooksFailed(hooksFailed, fail);
+    endIfFailed(hooksFailed, fail);
 
     const duration = Date.now() - startTime;
     logger.divider();
@@ -2838,7 +2850,12 @@ export async function migrateCore(
       await new SchemaEventsRepository(db, deps.dialect).listFileApplies()
     );
     const record: RegistryRecord = pointCarriesMetadata(standings, point)
-      ? { point }
+      ? // No rows to keep, and the owned permissions all the same: that
+        // point's snapshot may predate recording them.
+        {
+          point,
+          ownedPermissions: await takeOwnedPermissions(db, deps.dialect),
+        }
       : {
           point,
           baseline: await takeRegistryBaseline({
@@ -3276,20 +3293,54 @@ function firstRunSteps(
 }
 
 /**
- * Each app migration in run order, with whether the ledger records it applied
- * and what its snapshot says of the registry (`snapshotMetadataOf`).
- */
-/**
  * Refuses, reading only, where the database lacks a table or column the newest
- * applied app snapshot records (`MigrateCoreDeps.refuseDatabaseBehind`).
- * Nextly's own tables are left to the core reconcile, which brings them to
- * this release whatever a snapshot froze of them; the columns the app's
- * migrations added to one are the app's, and are checked.
+ * applied snapshot of the app's stream, or of a declared plugin's, records
+ * (`MigrateCoreDeps.refuseDatabaseBehind`). Every stream is read before the
+ * refusal, so one run names everything missing.
  */
 async function refuseDatabaseBehindLedger(
   deps: MigrateCoreDeps
 ): Promise<void> {
   if (deps.refuseDatabaseBehind !== true) return;
+  const refusal = databaseBehindError([
+    ...(await missingFromAppStream(deps)),
+    ...(await missingFromPluginStreams(deps)),
+  ]);
+  if (refusal !== undefined) throw refusal;
+}
+
+/**
+ * What `snapshots`, one stream's applied snapshots in run order, record that
+ * the database lacks. A core table the reconcile makes again bare is marked
+ * (`remade`), so the stream's columns on it are named even where the whole
+ * table is gone.
+ */
+async function missingFromStream(
+  deps: Pick<MigrateCoreDeps, "db" | "dialect">,
+  snapshots: readonly AppliedSnapshot[]
+): Promise<MissingFromDatabase[]> {
+  const newest = snapshots.at(-1);
+  if (newest === undefined || newest.snapshot.tables.length === 0) return [];
+  const remade = coreTableNames(deps.dialect);
+  const live = await liveColumnNames(
+    deps.db,
+    deps.dialect,
+    newest.snapshot.tables.map(table => table.name)
+  );
+  return missingFromDatabase(
+    snapshots.map(entry => ({ ...entry, remade })),
+    live
+  );
+}
+
+/**
+ * The app's stream. Nextly's own tables are left to the core reconcile, which
+ * brings them to this release whatever a snapshot froze of them; the columns
+ * the app's migrations added to one are the app's, and are checked.
+ */
+async function missingFromAppStream(
+  deps: MigrateCoreDeps
+): Promise<MissingFromDatabase[]> {
   // The applied app migrations in run order, as the files are discovered.
   const appliedInOrder = (
     await listMigrationFiles(
@@ -3303,7 +3354,7 @@ async function refuseDatabaseBehindLedger(
   )
     .filter(entry => entry.applied)
     .map(entry => entry.file.name);
-  if (appliedInOrder.length === 0) return;
+  if (appliedInOrder.length === 0) return [];
   const applied = new Set(appliedInOrder);
   const core = coreTableNames(deps.dialect);
   const snapshots = (
@@ -3312,9 +3363,6 @@ async function refuseDatabaseBehindLedger(
     )
   ).map(entry => ({
     ...entry,
-    // The core reconcile makes a missing core table again without the app's
-    // columns, so those are named even where the whole table is gone.
-    remade: core,
     snapshot: {
       ...entry.snapshot,
       // A core table the app contributed to stays: `appOwnedTables` has
@@ -3326,22 +3374,52 @@ async function refuseDatabaseBehindLedger(
       ),
     },
   }));
-  const newest = snapshots.at(-1);
-  if (newest === undefined || newest.snapshot.tables.length === 0) return;
   // An applied migration with no snapshot of its own (`migrate:create --blank`, a translations
   // file) ordered after the newest applied snapshot may have dropped or renamed what that snapshot
   // records, and no snapshot says what it left. The database's end state cannot be read from the
   // files then, so nothing is named rather than a table or column it removed on purpose.
-  if (appliedInOrder.at(-1) !== newest.migration) return;
-  const live = await liveColumnNames(
-    deps.db,
-    deps.dialect,
-    newest.snapshot.tables.map(table => table.name)
-  );
-  const refusal = databaseBehindError(missingFromDatabase(snapshots, live));
-  if (refusal !== undefined) throw refusal;
+  if (appliedInOrder.at(-1) !== snapshots.at(-1)?.migration) return [];
+  return missingFromStream(deps, snapshots);
 }
 
+/**
+ * Each declared plugin's stream: what its newest applied module records. A
+ * plugin's modules all carry their snapshot, so the newest applied one is the
+ * stream's end state. Reads the ledger only when a plugin ships modules.
+ */
+async function missingFromPluginStreams(
+  deps: MigrateCoreDeps
+): Promise<MissingFromDatabase[]> {
+  const sets = deps.pluginMigrationSets ?? [];
+  if (sets.length === 0) return [];
+  // A module rewritten since it ran is refused as a changed history before
+  // its snapshot is read: what it now says it made is not what ran.
+  await assertPluginHistoriesHold(deps);
+  const applied = await (
+    deps.appliedPluginModulesFn ?? (() => appliedPluginModules(deps))
+  )();
+  if (applied.size === 0) return [];
+  const missing: MissingFromDatabase[] = [];
+  for (const set of sets) {
+    missing.push(
+      ...(await missingFromStream(
+        deps,
+        appliedPluginSnapshots({
+          pluginName: set.pluginName,
+          migrations: set.migrations,
+          isApplied: key => applied.has(key),
+          dialect: deps.dialect,
+        })
+      ))
+    );
+  }
+  return missing;
+}
+
+/**
+ * Each app migration in run order, with whether the ledger records it applied
+ * and what its snapshot says of the registry (`snapshotMetadataOf`).
+ */
 async function appMigrationStandings(
   deps: MigrateCoreDeps
 ): Promise<AppMigrationStanding[]> {

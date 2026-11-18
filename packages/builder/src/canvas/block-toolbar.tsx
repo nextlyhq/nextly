@@ -66,16 +66,20 @@ import {
   CornerLeftUp,
   Ellipsis,
   FileText,
+  Group,
   Heading,
   LayoutTemplate,
   Lock,
   LockOpen,
+  Paintbrush,
+  PaintRoller,
   Palette,
   RefreshCw,
   Scissors,
   SquarePen,
   Trash2,
   Type,
+  Ungroup,
   Unlink,
   type LucideIcon,
 } from "lucide-react";
@@ -479,6 +483,9 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   copy: ClipboardCopy,
   cut: Scissors,
   paste: ClipboardPaste,
+  // A brush picks a look up and puts it down, as a format painter does.
+  "copy-style": Paintbrush,
+  "paste-style": PaintRoller,
   // The marks the Add panel draws for the three blocks, so a verb shows what
   // the block becomes.
   "turn-into-text": Type,
@@ -496,6 +503,9 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   "detach-component": Unlink,
   "duplicate-component": CopyPlus,
   "update-pattern": RefreshCw,
+  // The grouping marks: blocks gathered into one, and one let go.
+  "wrap-in-box": Group,
+  unwrap: Ungroup,
   delete: Trash2,
 };
 

@@ -12,7 +12,7 @@
  *
  * @module page-checks/page-checks-list
  */
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, ExternalLink } from "lucide-react";
 import * as React from "react";
 
 import type { PageCheckGroupView, PageFinding } from "./page-checks";
@@ -68,6 +68,36 @@ function FindingItem({
     finding.block === undefined
       ? finding.what
       : `${finding.what}: ${finding.block}`;
+  const detail = (
+    <span id={describedBy} className="nx-page-checks__detail">
+      <span className="nx-page-checks__why">{finding.why}</span>{" "}
+      <span className="nx-page-checks__todo">{finding.todo}</span>
+    </span>
+  );
+  // A fix outside this editor (a header's block, changed in its own
+  // editor): the item is a link there, opened beside the page, as the
+  // data meter offers it.
+  if (finding.opens !== undefined) {
+    return (
+      <li>
+        <a
+          className="nx-page-checks__item"
+          href={finding.opens.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={`${name}. ${finding.opens.name}`}
+          aria-describedby={describedBy}
+        >
+          <span className="nx-page-checks__what">
+            <span className="nx-page-checks__title">{finding.what}</span>
+            <span className="nx-page-checks__block">{finding.opens.text}</span>
+          </span>
+          {detail}
+          <ExternalLink aria-hidden="true" className="nx-page-checks__go" />
+        </a>
+      </li>
+    );
+  }
   return (
     <li>
       <button
@@ -83,10 +113,7 @@ function FindingItem({
             <span className="nx-page-checks__block">{finding.block}</span>
           )}
         </span>
-        <span id={describedBy} className="nx-page-checks__detail">
-          <span className="nx-page-checks__why">{finding.why}</span>{" "}
-          <span className="nx-page-checks__todo">{finding.todo}</span>
-        </span>
+        {detail}
         <ChevronRight aria-hidden="true" className="nx-page-checks__go" />
       </button>
     </li>
@@ -113,6 +140,12 @@ function GroupSection({
           {group.findings.length}
         </span>
       </h3>
+      {/* Its standing lines first, which are read whatever is found. */}
+      {group.notes.map(note => (
+        <p key={note} className="nx-page-checks__note">
+          {note}
+        </p>
+      ))}
       {group.findings.length === 0 ? (
         <p className="nx-page-checks__none">Nothing found.</p>
       ) : (

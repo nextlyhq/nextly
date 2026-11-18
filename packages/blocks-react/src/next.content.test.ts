@@ -323,6 +323,36 @@ describe("the content route", () => {
     }
   );
 
+  it.each([
+    ["a page", ["about"], "The about page"],
+    ["an entry", ["blog", "hello"], "Hello world"],
+  ] as const)(
+    "draws what the provider draws around %s, before it and after it, asked of its own document",
+    async (_name, slug, text) => {
+      const asked: unknown[] = [];
+      const route = createContentPage(
+        config({
+          around: async ({ document }) => {
+            asked.push(document);
+            return {
+              before: createElement("i", { id: "before" }, "before"),
+              after: createElement("b", { id: "after" }, "after"),
+            };
+          },
+        })
+      );
+      const html = await renderToHtml(
+        await route.ContentPage({ params: { slug: [...slug] } })
+      );
+      const page = html.indexOf(text);
+      expect(page).toBeGreaterThan(-1);
+      expect(html.indexOf('id="before"')).toBeGreaterThan(-1);
+      expect(html.indexOf('id="before"')).toBeLessThan(page);
+      expect(html.indexOf('id="after"')).toBeGreaterThan(page);
+      expect(asked).toHaveLength(1);
+    }
+  );
+
   it("reads the entry as the public does, published only", async () => {
     const options = config();
     const nextly = options.pages.nextly as unknown as ReturnType<

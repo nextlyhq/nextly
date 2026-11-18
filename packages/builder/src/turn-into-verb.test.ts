@@ -359,7 +359,7 @@ describe("the block menu", () => {
     const ids = actions.map(action => action.id);
     const at = ids.indexOf("turn-into-rich-text");
     expect(ids.slice(at - 1, at + 3)).toEqual([
-      "paste",
+      "paste-style",
       "turn-into-rich-text",
       "turn-into-heading",
       "save-as-pattern",

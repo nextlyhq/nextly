@@ -65,6 +65,44 @@ describe("rewriteDocument", () => {
     expect(typed?.props).toEqual({ contained: true, contentWidth: "1400px" });
   });
 
+  it("keeps a page's custom CSS and each block's as the author wrote them", () => {
+    // The stored CSS keeps `selector`, so an imported block's CSS scopes to the
+    // block wherever it lands: nothing in it is a reference to map.
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      settings: { customCss: ".page-mark { color: teal; }" },
+      nodes: [
+        {
+          id: "band",
+          type: "core/section",
+          version: 1,
+          props: {},
+          customCss: "selector { border: 4px solid blue; }",
+          slots: {
+            children: [
+              {
+                id: "inner",
+                type: "core/text",
+                version: 2,
+                props: {},
+                customCss: "selector:hover { color: red; }",
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const rewritten = rewriteDocument(document, maps, lookups);
+    expect(rewritten.settings?.customCss).toBe(".page-mark { color: teal; }");
+    expect(rewritten.nodes[0]?.customCss).toBe(
+      "selector { border: 4px solid blue; }"
+    );
+    expect(rewritten.nodes[0]?.slots?.children?.[0]?.customCss).toBe(
+      "selector:hover { color: red; }"
+    );
+  });
+
   it("maps every reference and drops what sits under a breakpoint not kept", () => {
     const document: BlockDocument = {
       formatVersion: 1,

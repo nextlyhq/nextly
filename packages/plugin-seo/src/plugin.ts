@@ -107,6 +107,7 @@ import {
 import { problemsForCard } from "./problems/card-source";
 import { PROBLEMS_PAGE, PROBLEMS_PAGE_HREF } from "./problems/contract";
 import { watchSaves } from "./problems/hooks";
+import { registerSeoPageChecks } from "./problems/page-check-provider";
 import { problemRoutes } from "./problems/route";
 import { problemsCollection } from "./problems/store";
 import { RECEIVED_PAGE } from "./received/contract";
@@ -1238,6 +1239,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       keepSeoContext(ctx);
       // Each saved page checked again for the problem list.
       watchSaves(ctx, problemChecks);
+      // And what it found on a page, in the page builder's Page checks under
+      // Search, where the page builder runs.
+      registerSeoPageChecks(ctx, problemChecks);
       // Each saved page's sitemap date moved only where its content changed.
       watchContentDates(ctx, types);
       keepCodeRoutes(codeRoutes);
