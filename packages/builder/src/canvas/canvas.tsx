@@ -257,6 +257,18 @@ function useSelectionPointer({
 }
 
 /**
+ * The locked nodes of the document being edited: a region's while one is
+ * edited in place, whose blocks alone carry addresses then, else the page's.
+ */
+function useEditedLockMarks(
+  editing: CanvasProps["editingRegion"],
+  page: CanvasProps["document"]
+): ReturnType<typeof lockMarksOf> {
+  const edited = editing?.document ?? page;
+  return useMemo(() => lockMarksOf(edited), [edited]);
+}
+
+/**
  * The canvas.
  *
  * Selection is addressed by node ID and never by position. The engine's document
@@ -284,8 +296,9 @@ export function Canvas({
   conditionsUnchecked,
   conditionsApplied,
   composed,
-  // The selected region and the way to select one, for the regions alone.
-  ...regionSelection
+  // The selected region, the ways to select and edit one, and the one edited
+  // in place, for the regions alone.
+  ...regionUse
 }: CanvasProps): JSX.Element {
   const root = useRef<HTMLDivElement | null>(null);
   usePublishedRoot(root, rootRef, onRoot);
@@ -342,6 +355,7 @@ export function Canvas({
     document: deviceHidden.document,
     environment,
     applied: conditionsApplied,
+    addressed: regionUse.editingRegion === undefined,
   });
 
   /*
@@ -350,7 +364,7 @@ export function Canvas({
    * rendered tree: `own` for a block locked itself, `inherited` for one inside
    * a locked block, which the lock covers too.
    */
-  const lockedIds = useMemo(() => lockMarksOf(document), [document]);
+  const lockedIds = useEditedLockMarks(regionUse.editingRegion, document);
   const conditionMarks = useMemo(
     () =>
       conditionMarksOf(
@@ -473,7 +487,8 @@ export function Canvas({
         drawn={drawn}
         rendered={render}
         environment={environment}
-        selection={regionSelection}
+        selection={regionUse}
+        editing={regionUse.editingRegion}
       >
         {page}
       </RegionsAround>

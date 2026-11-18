@@ -682,6 +682,22 @@ ${EMPTY_LIST}[data-nx-list-visitors]:not([data-nx-list-still])::before {
     inset 0 0 0 4px var(--nx-builder-halo, #fff);
 }
 
+/* The part holding the page between its regions lays out as if it were not
+   there, so the page's own layout is the same with regions as without. */
+.nx-canvas-page-part {
+  display: contents;
+}
+
+/* A region edited in place is no longer one thing to select: its blocks take
+   the canvas's own marks, so its ring and its pointer go. */
+.nx-canvas-region[data-nx-region-edited] {
+  cursor: auto;
+}
+
+.nx-canvas-region[data-nx-region-edited]::after {
+  display: none;
+}
+
 /* The tag: the region's badge while the pointer or focus is on it, its name
    while it is selected, hidden otherwise, on the select hue as a hovered
    block's name is. In the admin's
