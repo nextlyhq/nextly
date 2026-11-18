@@ -8,7 +8,12 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { createStandaloneContext, type ListBatchReads } from "../context";
 
-import { fillItemBindings, itemReadDemand, readListAhead } from "./list-batch";
+import {
+  fillItemBindings,
+  itemReadDemand,
+  readListAhead,
+  withReadAhead,
+} from "./list-batch";
 import { withListEntry } from "./list-entries";
 
 const node = (
@@ -332,6 +337,69 @@ describe("a binding naming the list it reads, through a relation", () => {
     });
     // CONTROL: a list not told its own id cannot know the binding names it.
     expect((await ahead()).reads.related).not.toHaveBeenCalled();
+  });
+
+  it("reads ahead the image a binding naming its own list draws, not its fallback", async () => {
+    const run = createBindingRun({
+      sources: {},
+      props: {
+        get: type =>
+          type === "core/image"
+            ? { props: { mediaId: { type: "media" } } }
+            : undefined,
+      },
+    });
+    const media = vi.fn<NonNullable<ListBatchReads["media"]>>(
+      async () => undefined
+    );
+    const reads: ListBatchReads = {
+      related: vi.fn(async () => undefined),
+      entryPaths: vi.fn(async () => undefined),
+      media,
+    };
+    const image = node(
+      "cover",
+      "core/image",
+      {},
+      {
+        bindings: {
+          mediaId: {
+            $bind: "cover",
+            source: "item",
+            list: "posts",
+            fallback: "placeholder",
+          },
+        },
+      }
+    );
+    const items = [
+      { id: "p1", cover: "c1" },
+      { id: "p2", cover: "c2" },
+    ];
+    await withReadAhead(
+      {
+        outcome: { items },
+        itemContext: item =>
+          createStandaloneContext({
+            listReads: reads,
+            item,
+            itemSource: "posts",
+            itemBindingRun: run,
+          }),
+      },
+      node(
+        "posts",
+        "core/collection-loop",
+        { collection: "posts" },
+        {
+          slots: { children: [image] },
+        }
+      ),
+      createStandaloneContext({ listReads: reads }),
+      "posts"
+    );
+    expect(media).toHaveBeenCalledOnce();
+    expect(media.mock.calls[0]?.[0]).toEqual(["c1", "c2"]);
   });
 
   it("is read ahead by the list it names from that list's own template", () => {

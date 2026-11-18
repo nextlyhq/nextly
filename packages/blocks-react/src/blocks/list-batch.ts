@@ -45,7 +45,7 @@ import { conditionAllows } from "../visibility";
 
 import { ICON_TYPE, iconMayDraw } from "./icon";
 import { firstMediaRead, IMAGE_TYPE, imageFollowsLink } from "./image";
-import { enclosingListEntries } from "./list-entries";
+import { enclosingListEntries, withListEntry } from "./list-entries";
 import { readClaimOf } from "./props";
 
 /** Where a prop's value comes from: as set, or a list item's field path. */
@@ -295,7 +295,9 @@ export async function withReadAhead<
       // with, which each entry is recorded under.
       id: list.id,
       collection,
-      contextOf: read.itemContext,
+      // Each entry recorded as this list's, as the list draws it, so a
+      // binding naming this list is filled for the read-ahead as it renders.
+      contextOf: item => withListEntry(read.itemContext(item), list.id),
     }
   );
   return {
@@ -306,7 +308,10 @@ export async function withReadAhead<
     itemContext: item => {
       const { itemFollowed: _outer, ...drawn } = read.itemContext(item);
       const rows = followed.get(item);
-      return rows === undefined ? drawn : { ...drawn, itemFollowed: rows };
+      return withListEntry(
+        rows === undefined ? drawn : { ...drawn, itemFollowed: rows },
+        list.id
+      );
     },
   };
 }
@@ -568,13 +573,20 @@ async function readRun(
     readonly reads: NonNullable<PageContext["listReads"]>;
     readonly claim: { readonly nodeId: string };
     readonly contextOf: (item: Record<string, unknown>) => PageContext;
+    /** The list's own id, which a binding naming it spells. */
+    readonly listId?: string;
   }
 ): Promise<boolean> {
   const drawnWith = (item: Record<string, unknown>): PageContext => {
-    // Drawn with the rows read for it, as the list draws it.
+    // Drawn with the rows read for it, as the list draws it, and recorded
+    // as this list's entry with them, for a binding naming this list.
     const { itemFollowed: _outer, ...drawn } = how.contextOf(item);
     const read = rows.get(item);
-    return read === undefined ? drawn : { ...drawn, itemFollowed: read };
+    const withRows =
+      read === undefined ? drawn : { ...drawn, itemFollowed: read };
+    return how.listId === undefined
+      ? withRows
+      : withListEntry(withRows, how.listId);
   };
   const wanted = new Set(run.nodes.map(node => node.id));
   const entries = items.flatMap((item, index) => {
