@@ -207,6 +207,12 @@ describe("Backspace in a list item", () => {
     expect(itemsNow()).toEqual(["One", ""]);
   });
 
+  it("keeps a line break an item stores, opened and left untouched", () => {
+    open(["One\n", "Two"], 0);
+    press(0, "Escape");
+    expect(itemsNow()).toEqual(["One\n", "Two"]);
+  });
+
   it("leaves an item with words in it to the browser", () => {
     open(["One", "Two"], 1);
     caretAt(1, 0);

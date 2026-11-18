@@ -319,15 +319,26 @@ function wordsAroundCaret(element: HTMLElement): [string, string] {
 }
 
 /**
- * The words an open edit holds. An item of a list is one line, so the `<br>`
- * a browser leaves to hold an emptied line open is not a line break in it:
- * an item emptied that way holds nothing, and is stored as nothing.
+ * The words an open edit holds. A browser holds an emptied line open with a
+ * `<br>` as its last node; in an item of a list, which is one line, that
+ * placeholder is not a line break, so an item emptied that way holds
+ * nothing. Judged by the element's last node, not by the words: a line break
+ * the item stores is text, and opening and leaving it keeps it.
  */
 function editedWords(element: Node, editing: InlineTextEditing): string {
   const words = elementWords(element);
-  return itemOfPropName(editing.prop) !== null && words.endsWith("\n")
+  return itemOfPropName(editing.prop) !== null && endsInBreak(element)
     ? words.slice(0, -1)
     : words;
+}
+
+/** Whether an element's last node, however deep, is a `<br>`. */
+function endsInBreak(element: Node): boolean {
+  let last = element.lastChild;
+  while (last !== null && isElement(last) && last.localName !== "br") {
+    last = last.lastChild;
+  }
+  return last !== null && isElement(last) && last.localName === "br";
 }
 
 /** An edit to a list's items, planned against the document as it stands. */
