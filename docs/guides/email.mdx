@@ -223,7 +223,7 @@ Layout templates also support `{{variable}}` interpolation, so common variables 
 
 A template is either **coded**, written in HTML as described above (in Liquid, or on the older `{{variable}}` engine for a template kept on it), or **written**: a short list of content blocks, with variables placed as chips. A written template always renders as Liquid. A written template is drawn in its layout and your brand settings, and its HTML and plain text are written from its blocks each time it renders, so a preview, a test send and a real send of the same saved template, with the same layout, brand settings and data, are the same email.
 
-Every template you already have stays coded, unchanged. Nothing turns a coded template into blocks.
+Every template you already have stays coded, unchanged, and nothing turns a template you wrote or edited in code into blocks. A plugin's template the site hasn't changed follows the plugin's own version, written or coded, as its other updates do.
 
 Written templates are `@experimental`: `format`, `blocks` and the shapes below may still change. The admin has no editor for them yet, so create and change them through the Direct API or the REST routes.
 
@@ -245,14 +245,17 @@ A template holds up to 200 blocks at its top level, a list counting as one; a li
 
 A variable is a chip: `{ "type": "chip", "variable": "name", "fallback": "there" }`. Its fallback is used when the value is absent, `null` or an empty string, and never for `false` or `0`.
 
-Each chip is made safe for where it sits:
+Chips sit only in the blocks. Each is made safe for where it sits:
 
 - In headings, text and button labels, the value is escaped as text.
 - In a link, the value must be a complete `https`, `http` or `mailto` address, and in an image address a complete `https` or `http` one. It is escaped as an attribute, and any other value is left out.
+- In the plain-text body written from the blocks, it is plain text, without markup.
+
+The subject, preview text, From name and Reply-To are text fields beside the blocks, written with Liquid (`{{ name }}`) as in a coded template. A variable in them is made safe as well:
+
 - In the subject and From name, it is plain text with line breaks removed.
 - In the preview text, it is escaped as text, as the inbox's preview line is HTML.
-- In the plain-text body, it is plain text, without markup.
-- Reply-To must render as one email address. When it renders empty, the email has no Reply-To; anything else fails the send.
+- A Reply-To that uses a variable must render as one email address. When it renders empty, the email has no Reply-To; anything else fails the send.
 
 ### Showing a block only sometimes
 
