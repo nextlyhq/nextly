@@ -302,7 +302,12 @@ export interface BlocksPageConfig
    * standalone renderer was given.
    */
   hostPolicy?: BlockHostPolicy;
-  /** Shown in place of an asynchronous block until its output arrives. */
+  /**
+   * Shown in place of an asynchronous block until its output arrives. Given,
+   * each asynchronous block streams in a boundary of its own, which a visitor
+   * without JavaScript never sees revealed; absent, the page waits for its
+   * blocks and its HTML holds them (`PageRendererProps.blockFallback`).
+   */
   blockFallback?: ReactNode;
   /**
    * The time zone a bound date-time is shown in, as an IANA name such as

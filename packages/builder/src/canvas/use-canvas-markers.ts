@@ -1,7 +1,7 @@
 /**
  * The walk that writes the marks on the rendered page: the selection, the
- * drag's marks, the locked, conditioned and Entry content blocks, and the
- * forced interaction state, kept right as the rendered tree changes.
+ * drag's marks, the locked, conditioned and Entry content blocks, the blocks
+ * hidden on the device shown, and the forced interaction state, kept right as the rendered tree changes.
  *
  * @module use-canvas-markers
  */
@@ -29,7 +29,7 @@ import {
   DROP_PARENT_ATTRIBUTE,
   DROP_REFUSED_ATTRIBUTE,
   ENTRY_CONTENT_ATTRIBUTE,
-  entryContentMarkFor,
+  outermostMarkFor,
   LOCKED_ATTRIBUTE,
   SELECTED_ATTRIBUTE,
   setFlag,
@@ -37,6 +37,7 @@ import {
   type ConditionMarks,
   type LockMark,
 } from "./canvas-block-marks";
+import { DEVICE_HIDDEN_ATTRIBUTE } from "./canvas-device-hidden";
 import type { CanvasDragState } from "./canvas-drag";
 import { drawnRefusal } from "./canvas-drop-refusal";
 import {
@@ -72,7 +73,8 @@ export function useCanvasMarkers(
   drag: CanvasDragState | undefined,
   lockedIds: ReadonlyMap<string, LockMark>,
   conditionMarks: ConditionMarks,
-  entryContentMarks: ReadonlyMap<string, string>
+  entryContentMarks: ReadonlyMap<string, string>,
+  deviceHiddenMarks: ReadonlyMap<string, string>
 ): void {
   /*
    * The drag's three marks are read into plain ids here rather than inside the
@@ -138,6 +140,7 @@ export function useCanvasMarkers(
             `[${CONDITIONED_ATTRIBUTE}]`,
             `[${CONDITIONED_OWN_ATTRIBUTE}]`,
             `[${ENTRY_CONTENT_ATTRIBUTE}]`,
+            `[${DEVICE_HIDDEN_ATTRIBUTE}]`,
             ...STYLE_STATES.map(state => `.${previewStateClass(state)}`),
           ].join(", ")
         )
@@ -231,7 +234,13 @@ export function useCanvasMarkers(
         setMark(
           element,
           ENTRY_CONTENT_ATTRIBUTE,
-          entryContentMarkFor(element, container, entryContentMarks)
+          outermostMarkFor(element, container, entryContentMarks)
+        );
+        // A block hidden on the device shown, striped with its tag, alike.
+        setMark(
+          element,
+          DEVICE_HIDDEN_ATTRIBUTE,
+          outermostMarkFor(element, container, deviceHiddenMarks)
         );
         for (const [attribute, wanted] of dragMarks) {
           setFlag(element, attribute, id !== null && id === wanted);
@@ -359,5 +368,6 @@ export function useCanvasMarkers(
     lockedIds,
     conditionMarks,
     entryContentMarks,
+    deviceHiddenMarks,
   ]);
 }

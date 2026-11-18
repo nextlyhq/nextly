@@ -58,6 +58,8 @@ export interface ValueFieldProps {
   css?: string | undefined;
   /** Which of the variable's values this field edits. */
   mode?: "light" | "dark";
+  /** What an empty field shows: what CSS draws with nothing set. */
+  placeholder?: string | undefined;
 }
 
 /**
@@ -323,8 +325,11 @@ export function SizeInput({
   );
 }
 
-/** A size under its own label, as a variable's Light and Dark are laid out. */
-function SizeValue(props: ValueFieldProps): React.JSX.Element {
+/**
+ * A size under its own label, as a variable's Light and Dark are laid out,
+ * and as a shadow layer's offsets, blur and spread are.
+ */
+export function SizeValue(props: ValueFieldProps): React.JSX.Element {
   return <NumericValue {...props} control={SIZE_CONTROL} />;
 }
 
@@ -345,6 +350,7 @@ function NumericValue({
   onCommit,
   css,
   control,
+  placeholder,
 }: ValueFieldProps & { control: StyleControl | undefined }): React.JSX.Element {
   const id = React.useId();
   if (readOnly || control === undefined) {
@@ -367,7 +373,7 @@ function NumericValue({
         id={id}
         label={label}
         value={value}
-        placeholder={undefined}
+        placeholder={placeholder}
         refusedBy={refusedBy}
         onCommit={onCommit}
         control={control}

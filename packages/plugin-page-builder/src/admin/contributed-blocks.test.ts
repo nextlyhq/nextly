@@ -13,7 +13,7 @@
 import type { AnyBlockDefinition } from "@nextlyhq/blocks-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { PLUGIN_SOURCE } from "./editor/stored-document";
+import { PLUGIN_SOURCE } from "./plugin-source";
 
 type Module = typeof import("./contributed-blocks");
 

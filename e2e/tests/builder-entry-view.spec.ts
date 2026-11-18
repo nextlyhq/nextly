@@ -1,6 +1,6 @@
 /**
- * A page's entry screen: its sections listed under a large preview, each
- * opening the Page Builder at that section.
+ * A page's entry screen: its sections listed under a large preview, folded
+ * under their count, each opening the Page Builder at that section.
  *
  * Driven through the playground's homepage Single, whose `layout` field is a
  * blocks field. Five sections, each tall enough that the fourth starts well
@@ -78,6 +78,12 @@ async function seedFiveSections(page: Page): Promise<void> {
   );
 }
 
+/** The form's section list, opened from the fold it is kept under. */
+async function sectionList(page: Page) {
+  await page.getByRole("button", { name: "Sections (5)" }).click();
+  return page.getByRole("list", { name: "Sections (5)" });
+}
+
 /** The editor, opened at the fourth section: selected, in Layers, on screen. */
 async function expectOpenAtFourth(page: Page): Promise<void> {
   await expect(page).toHaveURL(AT_FOURTH);
@@ -98,7 +104,7 @@ test.describe("a page's entry screen", () => {
   }) => {
     await gotoAdmin(page, FORM_PATH);
 
-    const rows = page.getByRole("list", { name: "Sections" }).getByRole("link");
+    const rows = (await sectionList(page)).getByRole("link");
     await expect(rows).toHaveText([
       /^1\s*Section\s*Welcome/,
       /^2\s*Section\s*What we do/,
@@ -114,7 +120,11 @@ test.describe("a page's entry screen", () => {
     // The control for every case below: without a section in the address the
     // editor opens at the top, and the fourth section is below the fold.
     await gotoAdmin(page, FORM_PATH);
-    await page.getByRole("link", { name: "Open Page Builder" }).click();
+    await page
+      // The card's way in, not the document bar's of the same name.
+      .locator('[data-slot="page-builder-card"]')
+      .getByRole("link", { name: "Open in builder", exact: true })
+      .click();
     await expect(await block(page, "s1")).toBeVisible({ timeout: 30_000 });
 
     await expect(await block(page, `${FOURTH}-h`)).not.toBeInViewport();
@@ -124,8 +134,7 @@ test.describe("a page's entry screen", () => {
   test("opens the builder at a section from the list", async ({ page }) => {
     await gotoAdmin(page, FORM_PATH);
 
-    await page
-      .getByRole("list", { name: "Sections" })
+    await (await sectionList(page))
       .getByRole("link", { name: /^Edit section 4, Section: Pricing/ })
       .click();
 
@@ -150,8 +159,7 @@ test.describe("a page's entry screen", () => {
     const formUrl = page.url();
 
     const opened = context.waitForEvent("page");
-    await page
-      .getByRole("list", { name: "Sections" })
+    await (await sectionList(page))
       .getByRole("link", { name: /^Edit section 4/ })
       .click({ button: "middle" });
     const tab = await opened;

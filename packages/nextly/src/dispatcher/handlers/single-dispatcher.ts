@@ -1348,7 +1348,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // confirm, as a collection's does: each conversion an adoption makes, each fill and delete.
       const answers = body as SchemaChangeAnswers;
       const reviewDeps = builderSaveDeps();
-      const notices = await reviewBuilderSchemaChange(reviewDeps, {
+      const review = await reviewBuilderSchemaChange(reviewDeps, {
         kind: "single",
         slug,
         table: tableName,
@@ -1377,7 +1377,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               fields as FieldDefinition[]
             )),
       });
-      return respondData({ ...preview, notices });
+      return respondData({ ...preview, ...review });
     },
   },
 

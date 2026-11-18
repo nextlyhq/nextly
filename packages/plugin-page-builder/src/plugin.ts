@@ -29,7 +29,15 @@ import {
   installDefaultLayout,
   seedDefaultLayoutAtStart,
 } from "./default-layout/install";
+import { embedThumbnailRoute } from "./embed-thumbnail/route";
 import { blocksFieldType } from "./fields/blocksField";
+import {
+  createFormProviders,
+  FORM_SERVICE,
+  startFormProviders,
+} from "./forms/providers";
+import { FORM_SEND_LIMITS, formReceiverRoute } from "./forms/route";
+import { SITE_FORMS_SERVICE_NAME, siteForms } from "./forms/site-forms";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
 import { registerNamedQueriesAtBoot } from "./named-queries";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
@@ -133,6 +141,13 @@ export const pageBuilder = (
   // shared by every part below; a bad option refuses here, while the config
   // is read.
   const def = createDefinition(opts);
+  // The form providers other plugins register, read by the form receiver.
+  const formProviders = createFormProviders();
+  // What a routed page's forms need: where they post, and its providers' forms.
+  const pageForms = siteForms({
+    providers: formProviders,
+    componentStore: componentStoreOf(opts),
+  });
   const { state, templateAddresses, configStyle, configClassIds, fonts } = def;
   const { pagesCountOf, uncoveredPagesOf, usageSourceOf, countPlacements } =
     usageParts(def);
@@ -152,7 +167,9 @@ export const pageBuilder = (
   const layouts = routesForLayouts(def);
   const bindings = routesForBindings(def, bindingReportDeps);
   const usage = routesForUsage(def);
-  const breakpoints = routesForBreakpoints(def, breakpointRemoval);
+  const breakpoints = routesForBreakpoints(def, breakpointRemoval, {
+    usageSourceOf,
+  });
   const siteCode = routesForSiteCode(def);
   const siteStyle = routesForSiteStyle(def, {
     usageSourceOf,
@@ -257,6 +274,10 @@ export const pageBuilder = (
       });
       registerCoreBlocks(ctx, def.blocks);
       registerDeclaredBlocks(ctx, def.blocks);
+      // Starts this boot's form providers, so the last boot's are forgotten
+      // even when no plugin registers one.
+      startFormProviders(ctx.services);
+      pageForms.start(ctx.self);
       // The site's named queries and the ones plugins declare, into a
       // registry emptied for this boot.
       state.namedQueries = registerNamedQueriesAtBoot(ctx, opts.namedQueries);
@@ -284,7 +305,10 @@ export const pageBuilder = (
 
       // The site's one default Layout: refuse deleting or unpublishing it, and
       // queue the repair when a write gets past that.
-      state.defaultLayoutSetup = installDefaultLayout(ctx);
+      state.defaultLayoutSetup = installDefaultLayout(ctx, {
+        siteHeaderFooter: def.siteHeaderFooter,
+        componentStore: componentStoreOf(opts),
+      });
 
       // How a blocks value is judged, and judged again in each write's
       // transaction; with the site style reads the judgement uses.
@@ -375,7 +399,14 @@ export const pageBuilder = (
       // `contributes.blocks` key — a plugin contributing blocks is contributing
       // to the page builder, not to Nextly — so the registry is offered here and
       // reached via `ctx.services.plugins`.
-      services: pluginServices(def, { removalService, readRetiredFor }),
+      // And `forms`, the channel a plugin adds a form provider through.
+      services: {
+        ...pluginServices(def, { removalService, readRetiredFor }),
+        [FORM_SERVICE]: () => formProviders.start(),
+        [SITE_FORMS_SERVICE_NAME]: () => pageForms.service(),
+      },
+      // The form receiver's send limit per visitor address.
+      limits: FORM_SEND_LIMITS,
       // The backfill sweep. Contributed unconditionally beside the index it
       // fills: the work is owed from the moment this plugin meets existing
       // content, and no request or hook ever becomes the moment to enqueue it.
@@ -444,6 +475,7 @@ export const pageBuilder = (
         templates.templateCollectionRetarget,
         templates.templateCollectionChoices,
         templates.entryDesigns,
+        templates.templatesPanel,
         components.manifest,
         ...components.componentActions,
         pages.entries,
@@ -466,9 +498,13 @@ export const pageBuilder = (
         ...components.componentDelete,
         layouts.layoutChoices,
         layouts.layoutCounts,
+        layouts.fillNotices,
+        ...layouts.layoutWrites,
+        ...layouts.layoutArea,
         pages.pageCollection,
         breakpoints.siteSettings,
         breakpoints.siteBreakpoints,
+        breakpoints.siteCssPrefix,
         breakpoints.siteBreakpointRemoval,
         breakpoints.siteBreakpointUndo,
         breakpoints.siteBreakpointRemovalStatus,
@@ -480,6 +516,15 @@ export const pageBuilder = (
         ...siteStyle.sharedStyles,
         ...siteStyle.variables,
         startup.builderStartup,
+        // The Embed's "Use the video's thumbnail": copies a video's picture
+        // from its provider's fixed host into the media library.
+        embedThumbnailRoute(),
+        // The one public route every form on the site posts to.
+        formReceiverRoute({
+          providers: formProviders,
+          componentStore: componentStoreOf(opts),
+          ...(opts.limits === undefined ? {} : { limits: opts.limits }),
+        }),
       ],
       // The grant that lets a role change the site's settings in the editor's
       // Settings: its breakpoints, through the one route that changes them,

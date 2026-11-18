@@ -27,6 +27,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq } from "drizzle-orm";
 
 import { nextlyI18nArchiveTables } from "../../../schemas/nextly-i18n-archive";
+import {
+  TRANSLATION_PROVENANCE_TABLE,
+  translationProvenanceTables,
+} from "../../../schemas/translation-provenance";
 import { affectedRowCount } from "../../auth/services/auth-service";
 
 import { q } from "./ddl-types";
@@ -103,10 +107,16 @@ export interface TeardownEntityI18nResult {
   companionDropped: boolean;
   /** Archive rows removed for this slug (0 when the archive table does not exist). */
   archiveRowsPurged: number;
+  /**
+   * Records of where this entity's translated values came from, removed with it (0 when the
+   * table does not exist, or for an entity that keeps none).
+   */
+  provenanceRowsPurged: number;
 }
 
 /**
- * Drops `<tableName>_locales` and purges the entity's `nextly_i18n_archive` rows.
+ * Drops `<tableName>_locales` and purges the entity's `nextly_i18n_archive` rows and its records
+ * of where its translated values came from.
  *
  * Call this BEFORE dropping the entity's main table. Errors propagate: callers drop the
  * main table and delete the registry row only after this resolves, so a failure here
@@ -210,5 +220,31 @@ export async function teardownEntityI18n(
     );
   }
 
-  return { companionDropped, archiveRowsPurged };
+  // Where each translated value came from is kept per entity, by kind and slug, in a table no
+  // drop above reaches. Left behind, a later collection or Single of the same kind and slug would
+  // read a predecessor's origins. Scoped by kind as well as slug, as the archive is: a collection
+  // and a Single may share one. Guarded on the table's existence for the same reason too: it
+  // reaches an installation through `nextly migrate`, and its absence must not block the delete.
+  let provenanceRowsPurged = 0;
+  if (
+    slug !== null &&
+    (kind === "collection" || kind === "single") &&
+    (await adapter.tableExists(TRANSLATION_PROVENANCE_TABLE))
+  ) {
+    const db = adapter.getDrizzle<ArchiveDeleteCapableDb>();
+    const { nextlyTranslationProvenance } = translationProvenanceTables(
+      adapter.dialect
+    );
+    const result = await db
+      .delete(nextlyTranslationProvenance)
+      .where(
+        and(
+          eq(nextlyTranslationProvenance.scopeKind, kind),
+          eq(nextlyTranslationProvenance.scopeSlug, slug)
+        )
+      );
+    provenanceRowsPurged = affectedRowCount(result, adapter.dialect);
+  }
+
+  return { companionDropped, archiveRowsPurged, provenanceRowsPurged };
 }

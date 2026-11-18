@@ -96,6 +96,13 @@ export interface CanvasReading {
   readonly picture?: string | undefined;
   /** Where the canvas places that picture: its computed `object-position`. */
   readonly picturePosition?: string | undefined;
+  /**
+   * The words of the quotation the node draws, the node itself or the one
+   * inside it (a figure around a quotation and its caption), or `undefined`
+   * for none. What the canvas really shows, so a bound quotation reads as
+   * its value rather than its stored words.
+   */
+  readonly words?: string | undefined;
 }
 
 /**
@@ -183,6 +190,7 @@ function same(a: CanvasReading, b: CanvasReading): boolean {
     a.tag === b.tag &&
     a.picture === b.picture &&
     a.picturePosition === b.picturePosition &&
+    a.words === b.words &&
     a.orientation?.writingMode === b.orientation?.writingMode &&
     a.orientation?.direction === b.orientation?.direction &&
     // The layout too: alignment icons follow it, and it can change alone.
@@ -207,7 +215,22 @@ function readSelected(
     orientation: orientationOfElement(element),
     picture: addressOf(image),
     picturePosition: positionOf(image),
+    words: quotationOf(element),
   };
+}
+
+/**
+ * The words of the quotation an element draws as its own: itself when it is
+ * one, else the one it holds directly (a figure's, beside its caption), and
+ * never one a block inside it draws.
+ */
+function quotationOf(element: Element | undefined | null): string | undefined {
+  if (element == null) return undefined;
+  const quotation =
+    element.tagName === "BLOCKQUOTE"
+      ? element
+      : element.querySelector(":scope > blockquote");
+  return quotation?.textContent ?? undefined;
 }
 
 /**

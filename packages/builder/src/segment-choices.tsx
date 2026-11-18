@@ -58,7 +58,7 @@ export function SegmentChoices<T extends string>({
   options: readonly T[];
   /** The chosen one, or none while what is stored is no choice's value. */
   on: T | undefined;
-  labels: Readonly<Record<T, string>>;
+  labels: Readonly<Record<T, React.ReactNode>>;
   labelId: string;
   onChoose: (on: T) => void;
   /** What each choice writes, for its tooltip, where the caller knows. */

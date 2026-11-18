@@ -629,6 +629,50 @@
   white-space: nowrap;
 }
 
+/* A picture's value: small, square and cropped, before the field's name,
+   with a hairline so a white picture still reads as one on the list. */
+.nx-binding-option__thumb {
+  flex: none;
+  align-self: center;
+  inline-size: 20px;
+  block-size: 20px;
+  border: 1px solid var(--nx-border);
+  border-radius: calc(var(--radius-sm) - 2px);
+  object-fit: cover;
+  background: var(--nx-muted);
+}
+
+/* A field holding nothing: said in words, quieter than a value. */
+.nx-binding-option__empty {
+  font-style: italic;
+}
+
+/* A folded source (a Single, the site): one row naming it, which opens it in
+   place. Muted until it is the row Enter acts on, with the chevron saying it
+   leads somewhere. */
+.nx-choice-fold {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-choice-fold[aria-selected="true"],
+.nx-choice-fold:hover {
+  color: var(--nx-foreground);
+}
+
+.nx-choice-fold__label {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nx-choice-fold__icon {
+  flex: none;
+}
+
 .nx-binding-option__tag {
   display: inline-flex;
   align-items: center;

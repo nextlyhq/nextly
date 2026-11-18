@@ -26,6 +26,7 @@ import type { FieldGroupDataService } from "../field-groups/services/field-group
 import { resolveLocalizedFieldNames } from "../i18n/classify-fields";
 import { appLocalization } from "../i18n/configured-locales";
 import { liveColumnNames } from "../schema/pipeline/diff/introspect-live";
+import type { SingleRegistryService } from "../singles/services/single-registry-service";
 import { documentVersionOn } from "../versions/document-revision";
 import {
   VersionsRepository,
@@ -65,14 +66,31 @@ export async function documentTableOf(
       ],
     });
   }
-  const registry = container.get<CollectionRegistryService>(
-    "collectionRegistryService"
-  );
-  const record = await registry.getCollectionBySlug(document.scopeSlug);
+  return documentTableOn(document);
+}
+
+/**
+ * The table a collection's or a Single's document lives in, from its registry, read on
+ * `executor` when given (a transaction's Drizzle handle), so a reader inside a transaction takes
+ * no second connection.
+ */
+export async function documentTableOn(
+  document: Pick<ReviewDocument, "scopeKind" | "scopeSlug">,
+  executor?: unknown
+): Promise<DocumentTable> {
+  const record =
+    document.scopeKind === "single"
+      ? await container
+          .get<SingleRegistryService>("singleRegistryService")
+          .getSingleBySlug(document.scopeSlug, executor)
+      : await container
+          .get<CollectionRegistryService>("collectionRegistryService")
+          .getCollectionBySlug(document.scopeSlug, executor);
   if (!record) {
     throw NextlyError.notFound({
       logContext: {
-        reason: "workflow-step-collection",
+        reason: "workflow-document-table",
+        kind: document.scopeKind,
         slug: document.scopeSlug,
       },
     });

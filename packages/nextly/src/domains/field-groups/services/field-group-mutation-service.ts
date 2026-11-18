@@ -478,6 +478,18 @@ export function instanceWriteOf(
       ownFields.has(topLevelName(target.field)) && readsTheHost(host, target)
         ? Promise.resolve({ kind: "absent" as const })
         : host.readStored(allowedType, target),
+    // The same rule for each entry read: the host's own entry is left out of
+    // the read, so its answer holds nothing for it, and every other entry is
+    // the host's own read.
+    readStoredOf: (allowedType, target) =>
+      host.readStoredOf(
+        allowedType,
+        ownFields.has(topLevelName(target.field)) &&
+          host.kind === "collection" &&
+          target.collection === host.slug
+          ? { ...target, ids: target.ids.filter(id => id !== host.id) }
+          : target
+      ),
   };
 }
 

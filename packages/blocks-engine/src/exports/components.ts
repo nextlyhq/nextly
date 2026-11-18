@@ -73,6 +73,13 @@ export {
   // A component's own tree as one of its variants draws it, ids kept, for
   // the editor's canvas to preview the variant open in the component's view.
   variantPreview,
+  // The key a placement binds one of its settings under, the setting a key
+  // names, and whether a binding is one composing applies. Published because
+  // the editor writes and shows the binding and the resolver reads it, and a
+  // rule spelled twice is two spellings to drift.
+  boundSettingId,
+  keepsItsListWhenMoved,
+  settingBindingKey,
   // What a supplied definition has to be before the resolver inlines it.
   // Published because the editor's inspector draws from the same lookup the
   // canvas resolves against, and must refuse exactly what the canvas refuses.

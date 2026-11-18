@@ -84,7 +84,7 @@ import {
   type VersionRow,
 } from "../versions/versions-repository";
 
-import { approvalDigest } from "./approval-digest";
+import { approvalDigest, partExemptFields } from "./approval-digest";
 import {
   allowsSelfApproval,
   entersReview,
@@ -354,8 +354,12 @@ export function workflowEventKind(kind: WorkflowStepKind | "assign"): string {
   return WORKFLOW_CONTENT_EVENT_KINDS[kind].name;
 }
 
-/** Whether `stage` allows publishing. */
-function allowsPublish(workflow: Workflow, stage: string): boolean {
+/**
+ * Whether `stage` allows publishing: the one answer a step into it and a publish from it share.
+ *
+ * @experimental
+ */
+export function allowsPublish(workflow: Workflow, stage: string): boolean {
   return workflow.stages.some(
     candidate => candidate.name === stage && candidate.allowsPublish
   );
@@ -587,7 +591,12 @@ const seenRevision = (
   part: string | null
 ): number | undefined => seen.find(entry => entry.part === part)?.revision;
 
-function staleRefusal(parts: (string | null)[]): NextlyError {
+/**
+ * The refusal of a move whose parts changed since they were judged: a step's, or a publish's.
+ *
+ * @experimental
+ */
+export function staleRefusal(parts: (string | null)[]): NextlyError {
   const data: WorkflowRefusalPublicData = { reason: "stale", parts };
   return NextlyError.conflict({
     reason: "state",
@@ -1051,6 +1060,7 @@ async function readRecorded(
 /** Entering a stage that allows publishing approves the version shown, by a person. */
 function approvalChange(
   c: StepContext,
+  part: string | null,
   shown: VersionRow | undefined,
   now: Date
 ): ReviewStateChange {
@@ -1059,12 +1069,17 @@ function approvalChange(
   return {
     approval: {
       versionNo: shown.versionNo,
-      // Without the fields an edit may change while an approval stands, so a save compared with
-      // it leaves out the same ones.
+      // Without the fields an edit may change while an approval stands, and for the shared part
+      // of a translated document without its translations, so a save compared with it leaves out
+      // the same ones.
       digest: approvalDigest(
         shown.snapshot,
         "collection",
-        c.workflow.onEdit.exemptFields
+        partExemptFields(
+          c.workflow.onEdit.exemptFields,
+          part,
+          c.table.translated
+        )
       ),
       by,
       at: now,
@@ -1089,7 +1104,7 @@ function stepChange(
       : {}),
     // Leaving a stage that allows publishing withdraws the approval it held.
     ...(allowsPublish(c.workflow, entry.stage) ? { approval: null } : {}),
-    ...approvalChange(c, shown, now),
+    ...approvalChange(c, entry.part, shown, now),
     ...(c.reviewer.reviewer ? { assignee: c.reviewer.reviewer } : {}),
   };
 }

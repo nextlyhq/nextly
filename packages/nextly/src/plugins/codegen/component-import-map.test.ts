@@ -101,6 +101,35 @@ describe("buildComponentImportMap", () => {
     );
   });
 
+  it("registers each document view's create dialog, so the list can open it", () => {
+    const p = plugin({
+      views: {
+        pages: {
+          documentViews: [
+            {
+              path: "builder",
+              component: "@acme/x/admin#Builder",
+              createDialog: "@acme/x/admin#NewPage",
+            },
+          ],
+        },
+      },
+      documentViews: [
+        {
+          path: "canvas",
+          fieldType: "blocks",
+          component: "@acme/x/admin#Canvas",
+          createDialog: "@acme/x/admin#NewCanvasPage",
+        },
+      ],
+    });
+    const code = buildComponentImportMap([p]);
+    // The list resolves the dialog by this string; one missing from the map
+    // would leave "+ New" opening nothing.
+    expect(code).toContain('"@acme/x/admin#NewPage": _p0.NewPage,');
+    expect(code).toContain('"@acme/x/admin#NewCanvasPage": _p0.NewCanvasPage,');
+  });
+
   it("dedupes repeated paths and maps a default export (no #) to .default", () => {
     const p = plugin({
       pages: [

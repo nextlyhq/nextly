@@ -2,10 +2,14 @@
  * `/api/dashboard/pins` — the signed-in person's pinned entries and Singles.
  *
  *   GET    /api/dashboard/pins   their pins they may read, newest first, titled,
- *                                 and `unreadable`: their pins of documents
- *                                 they may no longer read, by target alone
+ *                                 and `unreadableCount`: how many of their pins
+ *                                 name documents they may no longer read (a
+ *                                 count alone; no target of one is answered)
  *   POST   /api/dashboard/pins   pin `{ targetType, targetSlug, entryId? }`
  *   DELETE /api/dashboard/pins   unpin the same body
+ *   DELETE /api/dashboard/pins?unreadable=1
+ *                                 remove their pins of documents they may not
+ *                                 read now, asked again per pin; no body
  *
  * The person is ALWAYS the signed-in user, never a parameter. An API key is
  * refused: pins are a person's own dashboard, and a key has none.
@@ -67,7 +71,7 @@ export const getDashboardPins = withErrorHandler(async (req: Request) => {
   const caller = await readCaller(
     await signedInPerson(req, "have dashboard pins")
   );
-  const { shown, unreadable } = await service().read(caller);
+  const { shown, unreadableCount } = await service().read(caller);
   return respondData(
     {
       items: shown,
@@ -80,8 +84,9 @@ export const getDashboardPins = withErrorHandler(async (req: Request) => {
         hasNext: false,
         hasPrev: false,
       },
-      // Still counted toward the limit, so the reader may remove them.
-      unreadable,
+      // Still counted toward the limit, so the reader may remove them; a
+      // count alone, since `DELETE ?unreadable=1` finds them on the server.
+      unreadableCount,
     },
     { headers: PRIVATE_NO_STORE_HEADERS }
   );
@@ -96,10 +101,41 @@ export const postDashboardPin = withErrorHandler(async (req: Request) => {
   return respondAction("Pinned.", { pinned: true });
 });
 
+/**
+ * Whether a DELETE asks to remove every pin the caller may no longer read
+ * (`?unreadable=1`) rather than unpin the one target its body names; any
+ * other value of `unreadable` is refused, so a typo never falls through to
+ * the body.
+ */
+function removesUnreadable(req: Request): boolean {
+  const asked = new URL(req.url).searchParams.get("unreadable");
+  if (asked === null) return false;
+  if (asked !== "1") {
+    throw NextlyError.invalidInput({
+      message:
+        "`unreadable` must be 1, to remove the pins you can no longer open.",
+    });
+  }
+  return true;
+}
+
+/** How a removal of the caller's closed pins says what it did. */
+function removedMessage(removed: number): string {
+  return removed === 1
+    ? "Removed 1 pin you could no longer open."
+    : `Removed ${removed} pins you could no longer open.`;
+}
+
 export const deleteDashboardPin = withErrorHandler(async (req: Request) => {
   const caller = await readCaller(
     await signedInPerson(req, "have dashboard pins")
   );
+  if (removesUnreadable(req)) {
+    // The service asks again, as the caller, which of their own pins they
+    // may not read, and removes those alone; the request names none.
+    const removed = await service().removeUnreadable(caller);
+    return respondAction(removedMessage(removed), { removed });
+  }
   const target = await targetOf(req);
   const removed = await service().unpin(caller, target);
   return respondAction(removed ? "Unpinned." : "Not pinned.", {

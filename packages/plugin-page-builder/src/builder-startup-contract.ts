@@ -42,6 +42,11 @@ export interface BuilderStartupAnswer {
 /** The start-up read's answer: each read it named, by its path. */
 export interface BuilderStartupResponse {
   readonly reads: Readonly<Record<string, BuilderStartupAnswer>>;
+  /**
+   * The signed-in person the reads were made for, by id; `null` for nobody.
+   * The editor hands the answers only to that person.
+   */
+  readonly readFor: string | null;
 }
 
 /** The start-up read's path, naming each read by its own route's path. */

@@ -42,24 +42,35 @@
  * - `canvas-drop-refusal.tsx`: why a dragged block can't land.
  * - `canvas-layout-parts.tsx`: the Layout's regions around the page.
  * - `canvas-drawn-page.tsx`: the page as the canvas draws it.
+ * - `canvas-device-hidden.ts`: the blocks hidden on the device shown, drawn
+ *   striped.
  *
  * @module canvas
  */
 
 import { cn } from "@nextlyhq/ui/utils";
-import { type JSX, useCallback, useEffect, useMemo, useRef } from "react";
+import {
+  type DragEvent,
+  type JSX,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+} from "react";
 
+import { isElement } from "../dom-kind";
 import { usePreviewedCollection } from "../previewed-entry";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
-import {
-  conditionMarksOf,
-  entryContentMarksOf,
-  lockMarksOf,
-} from "./canvas-block-marks";
+import { conditionMarksOf, entryContentMarksOf } from "./canvas-block-marks";
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
+import {
+  drawnBreakpoints,
+  useDeviceHiddenDrawing,
+} from "./canvas-device-hidden";
 import { useCanvasEnvironment, useDrawnPage } from "./canvas-drawn-page";
 import { drawnRefusal } from "./canvas-drop-refusal";
+import { useEditedRegionDrawing } from "./canvas-edited-region";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { RegionsAround } from "./canvas-layout-parts";
 import { guardCanvasNavigation } from "./canvas-link-guard";
@@ -121,6 +132,19 @@ export {
 } from "./canvas-entry-content-inert";
 export { contextMenuTargetOf } from "./canvas-pointer";
 export type { CanvasProps } from "./canvas-props";
+
+/**
+ * Refuse the browser's own drag of a picture or a link on the page, which
+ * would take the pointer from the canvas's block drag; text being edited
+ * keeps it, where dragging selected words moves them.
+ */
+function refuseNativeDrag(event: DragEvent<HTMLElement>): void {
+  const target = event.target;
+  if (!isElement(target)) return;
+  const editing = '[contenteditable="true"], [contenteditable=""]';
+  if (target.closest(editing) !== null) return;
+  if (target.closest("img, a, picture, svg") !== null) event.preventDefault();
+}
 
 /**
  * The canvas root's style, with the scale the page is painted at published as
@@ -257,6 +281,9 @@ export function Canvas({
   conditionsUnchecked,
   conditionsApplied,
   composed,
+  // The selected region, the ways to select and edit one, and the one edited
+  // in place, for the regions alone.
+  ...regionUse
 }: CanvasProps): JSX.Element {
   const root = useRef<HTMLDivElement | null>(null);
   usePublishedRoot(root, rootRef, onRoot);
@@ -299,13 +326,21 @@ export function Canvas({
     composed,
     render
   );
+  // The blocks the page hides on the device shown, drawn anyway and striped;
+  // none while the page is shown as a visitor gets it.
+  const deviceHidden = useDeviceHiddenDrawing(
+    appliedDrawing ?? composedPage,
+    drawnBreakpoints(render, siteStyles),
+    conditionsApplied === undefined
+  );
   const { drawn, page } = useDrawnPage({
     regions,
     rendered: entryDrawing.render,
     sheet: siteStyles,
-    document: appliedDrawing ?? composedPage,
+    document: deviceHidden.document,
     environment,
     applied: conditionsApplied,
+    addressed: regionUse.editingRegion === undefined,
   });
 
   /*
@@ -314,7 +349,6 @@ export function Canvas({
    * rendered tree: `own` for a block locked itself, `inherited` for one inside
    * a locked block, which the lock covers too.
    */
-  const lockedIds = useMemo(() => lockMarksOf(document), [document]);
   const conditionMarks = useMemo(
     () =>
       conditionMarksOf(
@@ -351,6 +385,20 @@ export function Canvas({
     [shownDocument, previewedCollection, render?.limits]
   );
 
+  // The region edited in place, drawn as the page is, and the marks of the
+  // document the canvas edits: the region's then, else the page's.
+  const edited = useEditedRegionDrawing(
+    regionUse.editingRegion,
+    render,
+    siteStyles,
+    {
+      document,
+      conditions: conditionMarks,
+      entryContent: entryContentMarks,
+      deviceHidden: deviceHidden.marks,
+    }
+  );
+
   useCanvasMarkers(
     root,
     marked,
@@ -358,9 +406,10 @@ export function Canvas({
     page,
     forcedState,
     drag,
-    lockedIds,
-    conditionMarks,
-    entryContentMarks
+    edited.marks.locks,
+    edited.marks.conditions,
+    edited.marks.entryContent,
+    edited.marks.deviceHidden
   );
 
   // The refusal the cursor shows, asked of the same rule the notice draws by.
@@ -425,6 +474,10 @@ export function Canvas({
       // over the top, drag first so its behaviour is exactly what it was.
       {...dragHandlers}
       onPointerDown={pointerDown}
+      // A picture or a link pressed and moved would start the browser's own
+      // drag of it, which cancels the pointer the canvas's block drag follows,
+      // so a picture in a gallery could not be dragged to a new place.
+      onDragStart={refuseNativeDrag}
       onPointerMove={hover.onPointerMove}
       onPointerLeave={hover.onPointerLeave}
     >
@@ -432,7 +485,8 @@ export function Canvas({
         drawn={drawn}
         rendered={render}
         environment={environment}
-        selection={marked}
+        selection={regionUse}
+        editing={edited.drawn}
       >
         {page}
       </RegionsAround>

@@ -141,7 +141,13 @@ export function useCopyFromLanguage(): CopyFromLanguage {
       }
       // Noted, so the save says these were copied from that language
       // rather than written by the person.
-      copiedValuesFor(form.control).record(patch, pending);
+      // With the version of the source the read gave, so the server can tell a copy of the source
+      // as it stands from one of a source that has moved since.
+      copiedValuesFor(form.control).record(
+        patch,
+        pending,
+        typeof source._rev === "string" ? source._rev : undefined
+      );
       toast.success(
         `Copied ${count} field${count === 1 ? "" : "s"} from ${pendingLabel}. Review, then save.`
       );

@@ -284,6 +284,8 @@ vi.mock("../dev-server", () => ({
   performComponentsAutoSync: async () => {},
   performSinglesAutoSync: async () => {},
   performSinglesReconcile: async () => {},
+  // These runs are not in production, so db:sync has no refusal to give.
+  productionSyncRefusal: () => undefined,
 }));
 vi.mock("../dev-watcher", () => ({ createDebouncedSync: () => () => {} }));
 

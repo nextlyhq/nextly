@@ -637,6 +637,7 @@ export {
   type PluginFieldWrite,
   type PluginStoredValue,
   type PluginStoredValueTarget,
+  type PluginStoredValuesTarget,
   type PluginFieldInstance,
   type PluginFieldIssue,
   type PluginFieldValidationResult,

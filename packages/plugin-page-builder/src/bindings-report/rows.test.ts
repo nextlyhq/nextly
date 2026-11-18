@@ -102,6 +102,34 @@ describe("a document's bindings to fix", () => {
     expect(rows[0]?.codes).toContain("binding-fallback-invalid");
   });
 
+  it("quotes a Text's own one paragraph by its words", async () => {
+    const { rows } = await report([
+      node(
+        "x",
+        "core/text",
+        {
+          text: {
+            root: {
+              type: "root",
+              children: [
+                {
+                  type: "paragraph",
+                  children: [
+                    { type: "text", text: "Opening ", format: 0 },
+                    { type: "text", text: "hours", format: 1 },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        // The field is gone and there is no fallback: the block's own shows.
+        { text: { $bind: "headline" } }
+      ),
+    ]);
+    expect(rows[0]?.shows).toEqual({ kind: "own", value: "Opening hours" });
+  });
+
   it("names the site setting a misfit reaches, and its type", async () => {
     const { rows } = await report([
       node(

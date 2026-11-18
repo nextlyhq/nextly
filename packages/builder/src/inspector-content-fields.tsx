@@ -16,7 +16,10 @@ import {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import { SettingSlot } from "./settings-filter";
+
 import { BindableField } from "./binding-controls";
+import { ListMarkerNote } from "./list-marker-note";
 import {
   PropExposeControl,
   type ComponentFieldsBinding,
@@ -38,6 +41,7 @@ import {
   type BindableOptions,
   type BindableWrapper,
 } from "./prop-groups";
+import { TOC_NOTE_PROP, TocLeftOutNote } from "./toc-left-out-note";
 import {
   useVisitorUnreadable,
   VisitorUnreadableNote,
@@ -226,121 +230,152 @@ export function ContentFields({
     };
   return (
     <div className="nx-inspector__fields">
-      {drawn.map(prop => {
-        const group = leads.get(prop.name);
-        if (group === undefined && grouped.has(prop.name)) {
-          // Drawn inside its group, but in a component's view still a prop of
-          // its own to expose: named, with its icon, as a prop the inspector
-          // leaves out is, so a placement may still set it.
-          return fields === undefined ? null : (
-            <div
-              key={`${inspection.nodeId}:${prop.name}`}
-              className="nx-inspector__prop"
-            >
-              <p className="nx-inspector__note">
-                {propLabel(prop.name, prop.schema)}
-              </p>
-              <PropExposeControl
-                binding={fields}
-                nodeId={inspection.nodeId}
-                prop={prop}
-              />
-            </div>
-          );
-        }
-        const groupField =
-          group === undefined ? undefined : (
-            <React.Fragment key={`${inspection.nodeId}:${prop.name}`}>
-              {group.render({
-                props: inspection.props,
-                writable,
-                reasonId,
-                services,
-                placedWith: inspection.placedWith,
-                onCommitMany,
-                document,
-                nodeId: inspection.nodeId,
-                ...listGroupView(listView),
-                bindable: bindableIn(group.bindable),
-              })}
-            </React.Fragment>
-          );
-        // Under the field: the props it draws whose bound value a visitor
-        // will not see, a group's included.
-        const note = (
-          <VisitorUnreadableNote
-            bindings={unreadable}
-            props={group === undefined ? new Set([prop.name]) : group.drawn}
-            // A library fallback named by its file, as the image row names it.
-            services={services}
-          />
-        );
-        // Named as the block names it, so its icon is not drawn bare.
-        const field = !prop.offered ? (
-          <p className="nx-inspector__note">
-            {propLabel(prop.name, prop.schema)}
-          </p>
-        ) : (
-          (groupField ?? (
-            <HeldByLock
-              // Keyed by node AND prop: a bare prop name would let React reuse
-              // one block's field for the next block's same-named prop, so the
-              // input would keep the previous block's uncommitted text.
-              key={`${inspection.nodeId}:${prop.name}`}
-              // A held field points at the reason in the card.
-              reasonId={writable(prop.name) ? undefined : reasonId}
-            >
-              <BindableField
-                nodeId={inspection.nodeId}
-                prop={prop}
-                blockLabel={inspection.label}
-                binding={bindings?.[prop.name]}
-                document={document}
-                services={services}
-                disabled={!writable(prop.name)}
-                onApply={onApply}
-              >
-                <PropField
-                  prop={prop}
-                  disabled={!writable(prop.name)}
-                  onCommit={onCommit}
-                  services={services}
-                  values={values}
-                />
-              </BindableField>
-            </HeldByLock>
-          ))
-        );
-        if (fields === undefined) {
-          // Always a fragment under one key, so a note appearing or going
-          // never remounts the field above it and its uncommitted text.
-          return (
-            <React.Fragment key={`${inspection.nodeId}:${prop.name}`}>
-              {field}
-              {note}
-            </React.Fragment>
-          );
-        }
-        // The switch sits OUTSIDE the lock's fieldset: a prop a lock holds is
-        // still one a designer may try to expose, and the refusal that says
-        // why is the answer they need, which a disabled switch would withhold.
-        return (
-          <div
-            key={`${inspection.nodeId}:${prop.name}`}
-            className="nx-inspector__prop"
-          >
-            {field}
-            {note}
-            <PropExposeControl
-              binding={fields}
-              nodeId={inspection.nodeId}
-              prop={prop}
-            />
-          </div>
-        );
-      })}
+      {drawn.map(prop => (
+        // Hidden while the panel's filter keeps none of what it draws; a
+        // group is kept by any of its props.
+        <SettingSlot
+          key={`${inspection.nodeId}:${prop.name}`}
+          ids={[...(leads.get(prop.name)?.drawn ?? [prop.name])]}
+        >
+          {rowOf(prop)}
+        </SettingSlot>
+      ))}
     </div>
   );
+
+  /**
+   * A prop drawn inside its group: in a component's view still a prop of
+   * its own to expose, named, with its icon, as a prop the inspector leaves
+   * out is, so a placement may still set it; elsewhere nothing.
+   */
+  function exposedOnly(prop: EditableProp): React.ReactNode {
+    if (fields === undefined) return null;
+    return (
+      <div
+        key={`${inspection.nodeId}:${prop.name}`}
+        className="nx-inspector__prop"
+      >
+        <p className="nx-inspector__note">
+          {propLabel(prop.name, prop.schema)}
+        </p>
+        <PropExposeControl
+          binding={fields}
+          nodeId={inspection.nodeId}
+          prop={prop}
+        />
+      </div>
+    );
+  }
+
+  function rowOf(prop: EditableProp): React.ReactNode {
+    const group = leads.get(prop.name);
+    if (group === undefined && grouped.has(prop.name)) return exposedOnly(prop);
+    const groupField =
+      group === undefined ? undefined : (
+        <React.Fragment key={`${inspection.nodeId}:${prop.name}`}>
+          {group.render({
+            props: inspection.props,
+            writable,
+            reasonId,
+            services,
+            placedWith: inspection.placedWith,
+            onCommitMany,
+            document,
+            nodeId: inspection.nodeId,
+            ...listGroupView(listView),
+            bindable: bindableIn(group.bindable),
+          })}
+        </React.Fragment>
+      );
+    // Under the field: the props it draws whose bound value a visitor
+    // will not see, a group's included.
+    const note = (
+      <VisitorUnreadableNote
+        bindings={unreadable}
+        props={group === undefined ? new Set([prop.name]) : group.drawn}
+        // A library fallback named by its file, as the image row names it.
+        services={services}
+      />
+    );
+    // Named as the block names it, so its icon is not drawn bare.
+    const field = !prop.offered ? (
+      <p className="nx-inspector__note">{propLabel(prop.name, prop.schema)}</p>
+    ) : (
+      (groupField ?? (
+        <HeldByLock
+          // Keyed by node AND prop: a bare prop name would let React reuse
+          // one block's field for the next block's same-named prop, so the
+          // input would keep the previous block's uncommitted text.
+          key={`${inspection.nodeId}:${prop.name}`}
+          // A held field points at the reason in the card.
+          reasonId={writable(prop.name) ? undefined : reasonId}
+        >
+          <BindableField
+            nodeId={inspection.nodeId}
+            prop={prop}
+            blockLabel={inspection.label}
+            binding={bindings?.[prop.name]}
+            document={document}
+            services={services}
+            disabled={!writable(prop.name)}
+            onApply={onApply}
+          >
+            <PropField
+              prop={prop}
+              disabled={!writable(prop.name)}
+              onCommit={onCommit}
+              services={services}
+              values={values}
+            />
+          </BindableField>
+        </HeldByLock>
+      ))
+    );
+    // Under a List's "List as": whether a marker of its own overrides it.
+    // Held as "List as" is: a design prop may be set exactly where the
+    // block's styles may change, so the same lock check (Layers, a block it
+    // sits inside, a content-only area) holds the Clear that writes them.
+    // Under a Table of contents' "Headings": where a heading is left out.
+    const marker =
+      prop.name === "kind" ? (
+        <ListMarkerNote
+          node={findNode(document.nodes, inspection.nodeId)}
+          disabled={!writable(prop.name)}
+          onApply={onApply}
+        />
+      ) : prop.name === TOC_NOTE_PROP ? (
+        <TocLeftOutNote node={findNode(document.nodes, inspection.nodeId)} />
+      ) : null;
+    if (fields === undefined) {
+      // Always a fragment under one key, so a note appearing or going
+      // never remounts the field above it and its uncommitted text.
+      return (
+        <React.Fragment key={`${inspection.nodeId}:${prop.name}`}>
+          {field}
+          {note}
+          {marker}
+        </React.Fragment>
+      );
+    }
+    // The switch sits OUTSIDE the lock's fieldset: a prop a lock holds is
+    // still one a designer may try to expose, and the refusal that says
+    // why is the answer they need, which a disabled switch would withhold.
+    return (
+      <div
+        key={`${inspection.nodeId}:${prop.name}`}
+        className="nx-inspector__prop"
+      >
+        {field}
+        {note}
+        {marker}
+        <PropExposeControl
+          binding={fields}
+          nodeId={inspection.nodeId}
+          prop={prop}
+        />
+      </div>
+    );
+  }
 }
 
 function PropField({

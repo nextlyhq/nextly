@@ -22,6 +22,8 @@
 import {
   findNode,
   getBlock,
+  isInlineItemsProp,
+  itemPropName,
   type BlockDocument,
   type BlockNode,
   type PropSchema,
@@ -29,7 +31,11 @@ import {
 
 import { lockBlockingEdit } from "../locking";
 
-import { inlinePropKind, type InlinePropKind } from "./inline-prop-kind";
+import {
+  inlinePropKindAt,
+  inlineSchemaAt,
+  type InlinePropKind,
+} from "./inline-prop-kind";
 
 /** A node and the values on it a given surface may edit. */
 export interface InlineProps {
@@ -55,17 +61,46 @@ export interface InlineProps {
 export function inlinePropsOfKind(
   document: BlockDocument,
   nodeId: string,
-  kind: InlinePropKind
+  kind: InlinePropKind | readonly InlinePropKind[]
 ): InlineProps | null {
   const found = editableNode(document, nodeId);
   if (found === null) return null;
   const { props } = found;
+  const kinds: readonly InlinePropKind[] =
+    typeof kind === "string" ? [kind] : kind;
   return {
     node: found.node,
-    entries: Object.keys(props)
-      .filter(name => inlinePropKind(props[name]) === kind)
-      .map(name => [name, props[name]] as const),
+    entries: inlineNamesOf(found.node, props)
+      .filter(name => {
+        const own = inlinePropKindAt(props, name);
+        return own !== null && kinds.includes(own);
+      })
+      .map(name => [name, inlineSchemaAt(props, name)] as const),
   };
+}
+
+/**
+ * The names a node's canvas values go by, in the order the block declared its
+ * props: each prop's own, and for a list of words each item it holds now
+ * (`items.0`, `items.1`), so every item is a line of its own.
+ */
+function inlineNamesOf(
+  node: BlockNode,
+  props: Partial<Record<string, PropSchema>>
+): string[] {
+  const names: string[] = [];
+  for (const name of Object.keys(props)) {
+    if (!isInlineItemsProp(props[name])) {
+      names.push(name);
+      continue;
+    }
+    const stored = (node.props as Record<string, unknown> | undefined)?.[name];
+    const count = Array.isArray(stored) ? stored.length : 0;
+    for (let index = 0; index < count; index++) {
+      names.push(itemPropName(name, index));
+    }
+  }
+  return names;
 }
 
 /**
@@ -121,8 +156,8 @@ export function firstInlineProp(
   const found = editableNode(document, nodeId);
   if (found === null) return null;
   const { props } = found;
-  for (const prop of Object.keys(props)) {
-    const kind = inlinePropKind(props[prop]);
+  for (const prop of inlineNamesOf(found.node, props)) {
+    const kind = inlinePropKindAt(props, prop);
     if (kind !== null) return { prop, kind };
   }
   return null;

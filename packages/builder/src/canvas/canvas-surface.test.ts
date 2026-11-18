@@ -117,7 +117,26 @@ describe("the canvas's frame as a sheet on the editor's surface", () => {
     expect(declared(frame, "outline")).toBe(
       "1px solid var(--nx-builder-frame-edge)"
     );
-    expect(declared(frame, "box-shadow")).toBe("var(--shadow-md)");
+  });
+
+  it("casts no shadow, so the page reads as the page and not a card", () => {
+    // The frame meets the panels' dividers, and a narrower one is told from
+    // the well by its hairline edge alone.
+    const frame = ruleFor(".nx-canvas-frame");
+    // The control: this is the frame's own rule, the one stating its edge.
+    expect(declared(frame, "outline")).toBeDefined();
+    expect(frame).not.toMatch(/(?:^|\s)box-shadow\s*:/);
+  });
+
+  it("keeps the chrome drawn past the frame from scrolling the region", () => {
+    /*
+     * The layer the editor's chrome is drawn in reaches a ring's distance
+     * past the frame. With the frame at the region's own width, that reach
+     * was content past the region's edge: the region scrolled by it and took
+     * focus as a scroller, which F6 and Tab then stopped on instead of
+     * passing into the page.
+     */
+    expect(declared(ruleFor(".nx-canvas-stage"), "overflow")).toBe("clip");
   });
 
   it("draws that edge OUTSIDE the box the frame is fitted into", () => {
@@ -142,6 +161,33 @@ describe("the canvas's frame as a sheet on the editor's surface", () => {
     expect(declared(ruleFor(".nx-canvas-frame__page"), "color-scheme")).toBe(
       "normal"
     );
+  });
+});
+
+describe("the insertion line's label", () => {
+  it("moves to the left of its line wherever it is marked to, for a line across or down", () => {
+    // The label is told to go left where the right has no room for it; a
+    // marking with no rule to move it would leave it cut off at the edge.
+    expect(
+      declared(
+        ruleFor('.nx-insertion-line__label[data-axis="x"][data-before]'),
+        "transform"
+      )
+    ).toBe("translateX(calc(-100% - 4px))");
+    expect(
+      declared(
+        ruleFor('.nx-insertion-line__label[data-axis="y"][data-before]'),
+        "transform"
+      )
+    ).toBe("translate(-100%, calc(-100% - 3px))");
+    expect(
+      declared(
+        ruleFor(
+          '.nx-insertion-line__label[data-axis="y"][data-below][data-before]'
+        ),
+        "transform"
+      )
+    ).toBe("translate(-100%, 3px)");
   });
 });
 
@@ -206,13 +252,20 @@ describe("the canvas surface is the site's, not the admin's", () => {
      * exceptions are the admin's words on the page, which take the tokens the
      * frame hands them: a Layout region's badge and tag, a collection list's
      * note to its author and its "When empty" tag, and the danger hue of an
-     * Entry content block's failed note to its author.
+     * Entry content block's failed note to its author. A hidden block's
+     * edge reads a value the sheet itself sets on that block, never the
+     * admin's.
      */
     expect(CANVAS_FRAME_SHEET).toContain("var(--nx-canvas-site-ground");
     const naming = [
       ...CANVAS_FRAME_SHEET.matchAll(/([^{}]+)\{([^{}]*)\}/g),
     ].filter(([, , body]) =>
-      /var\(--nx-(?!canvas-site-|canvas-zoom)/.test(body ?? "")
+      // The empty body's room is a length the overlay measures, not a
+      // colour: it paints nothing. A hidden block's edge is the page's own
+      // Canvas and CanvasText, set by the sheet itself.
+      /var\(--nx-(?!canvas-site-|canvas-zoom|canvas-start-room|canvas-hidden-)/.test(
+        body ?? ""
+      )
     );
     // The control: the region's rules are found, so the scan reads rules.
     expect(naming.length).toBeGreaterThan(0);
@@ -231,9 +284,11 @@ describe("the canvas surface is the site's, not the admin's", () => {
     }
   });
 
-  it("sets the page in the site's body font, not the admin's face", () => {
+  it("sets the page in a plain base face, neither the admin's nor a site variable", () => {
+    // The site's Body font is the page sheet's rule on the page root, on
+    // every surface, so the blank frame reads no font variable of its own.
     const family = declared(canvasRule(), "font-family");
-    expect(family).toBe("var(--nx-canvas-site-font, system-ui), sans-serif");
+    expect(family).toBe("system-ui, sans-serif");
     expect(family?.includes("--font-sans"), "the admin's own face").toBe(false);
   });
 
@@ -504,19 +559,47 @@ describe("a canvas mounted outside the editor shell", () => {
 
 describe("a Layout region drawn in the canvas frame", () => {
   it("is styled by the frame's own sheet, in the admin's tokens, at the admin's size", () => {
-    const lock = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region__lock");
-    expect(declared(lock, "background")).toBe(
-      "var(--nx-builder-surface-raised)"
-    );
-    expect(declared(lock, "color")).toBe("var(--nx-builder-text-muted)");
-    const words = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region__mark-body");
-    expect(declared(words, "zoom")).toBe("calc(1 / var(--nx-canvas-zoom, 1))");
-    expect(declared(words, "font-family")).toBe(
-      "var(--font-sans, system-ui), sans-serif"
-    );
+    const tag = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region__tag");
+    expect(declared(tag, "background")).toBe("var(--nx-region-mark)");
+    expect(declared(tag, "color")).toBe("var(--nx-region-mark-text)");
+    expect(declared(tag, "zoom")).toBe("calc(1 / var(--nx-canvas-zoom, 1))");
+    expect(declared(tag, "font")).toContain("var(--font-sans, system-ui)");
     // One home: the editor's own sheet never reaches the frame, so it holds
     // none of these rules.
     expect(CHROME.includes(".nx-canvas-region")).toBe(false);
+  });
+
+  it("marks it in the select hue for the page's ground, its tag's words passing AA in both", () => {
+    const region = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region");
+    expect(declared(region, "--nx-region-mark")).toBe(
+      "var(--nx-builder-select-on-light)"
+    );
+    const dark = ruleIn(
+      CANVAS_FRAME_SHEET,
+      '.nx-canvas-region[data-nx-page-scheme="dark"]'
+    );
+    expect(declared(dark, "--nx-region-mark")).toBe(
+      "var(--nx-builder-select-on-dark)"
+    );
+    expect(declared(dark, "--nx-region-mark-text")).toBe(
+      "var(--nx-builder-select-text-on-dark)"
+    );
+    const constants = ruleFor(CONSTANTS);
+    for (const scheme of ["light", "dark"]) {
+      const hue = hexOf(constants, `--nx-builder-select-on-${scheme}`);
+      const text = hexOf(constants, `--nx-builder-select-text-on-${scheme}`);
+      // The tag's words on its hue (WCAG 2.2 SC 1.4.3).
+      expect(contrast(text, hue), `tag on ${scheme}`).toBeGreaterThanOrEqual(
+        4.5
+      );
+    }
+    // The outline on the ground each hue is for (SC 1.4.11).
+    expect(
+      contrast(hexOf(constants, "--nx-builder-select-on-light"), "#ffffff")
+    ).toBeGreaterThanOrEqual(3);
+    expect(
+      contrast(hexOf(constants, "--nx-builder-select-on-dark"), "#0b0f19")
+    ).toBeGreaterThanOrEqual(3);
   });
 });
 
