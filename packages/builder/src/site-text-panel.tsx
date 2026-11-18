@@ -174,7 +174,7 @@ function SiteTextRow({
   return (
     <PopupRow open={open} onOpen={setOpen}>
       <div className="nx-vars__line">
-        <CssHint writes={siteTextWrites(tokens, row.role, row.entry)}>
+        <CssHint writes={siteTextWrites(tokens, row.role, row.entry, classes)}>
           <PopoverTrigger asChild>
             <button
               type="button"

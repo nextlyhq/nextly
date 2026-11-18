@@ -319,9 +319,11 @@ const ROW_SELECTOR: Readonly<Record<SiteTextRole, string>> = {
 export function siteTextWrites(
   tokens: SiteTokenSet,
   role: SiteTextRole,
-  entry: SiteTextEntry | undefined
+  entry: SiteTextEntry | undefined,
+  /** The site's classes: a row following a text style writes the style's. */
+  classes?: readonly NamedClass[]
 ): string {
-  const styles = siteTextStyles(role, entry);
+  const styles = siteTextStyles(role, entry, classes);
   if (styles === undefined) return "Nothing";
   const { prefix } = resolveTokenPrefix(tokens.prefix);
   const selector = ROW_SELECTOR[role];
