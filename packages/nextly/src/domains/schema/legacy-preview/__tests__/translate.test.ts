@@ -697,3 +697,92 @@ describe("a removal the preview cannot count, and where it counts", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// A many-to-many made something else drops its link table: the preview counts the links there and
+// names what the field becomes.
+
+describe("a many-to-many leaving its link table", () => {
+  const manyToMany = (options: Record<string, unknown> = {}) =>
+    ({
+      name: "tags",
+      type: "relationship",
+      relationTo: "tags",
+      options: { target: "tags", relationType: "manyToMany", ...options },
+    }) as FieldDefinition;
+  const singleLink = {
+    name: "tags",
+    type: "relationship",
+    relationTo: "tags",
+  } as FieldDefinition;
+
+  /** A SQLite double answering every count with `answer`, recording each query. */
+  function linkCountDb(answer: number | Error) {
+    const queries: string[] = [];
+    const db = {
+      all: vi.fn().mockImplementation((query: unknown) => {
+        queries.push(JSON.stringify(query));
+        if (answer instanceof Error) throw answer;
+        return [{ count: answer }];
+      }),
+    };
+    return { db, queries };
+  }
+
+  async function leaving(
+    before: FieldDefinition,
+    after: FieldDefinition,
+    db: unknown
+  ) {
+    return translatePipelinePreviewToLegacy(emptyPreview, {
+      tableName: "dc_posts",
+      currentFields: [before],
+      newFields: [after],
+      db,
+      dialect: "sqlite",
+    });
+  }
+
+  it("counts the links in a link table whose name the database must quote", async () => {
+    const { db, queries } = linkCountDb(2);
+    const result = await leaving(
+      manyToMany({ junctionTable: "post-tag-links" }),
+      singleLink,
+      db
+    );
+    expect(queries.some(query => query.includes("post-tag-links"))).toBe(true);
+    expect(result.changes.changed[0]).toMatchObject({
+      rowCount: 2,
+      classification: "destructive",
+    });
+    expect(result.changes.changed[0]).not.toHaveProperty("rowCountUnknown");
+  });
+
+  it("keeps a link count it could not read unknown on the changed row", async () => {
+    const { db } = linkCountDb(new Error("locked"));
+    const result = await leaving(manyToMany(), singleLink, db);
+    expect(result.changes.changed[0]).toMatchObject({
+      rowCount: 0,
+      rowCountUnknown: true,
+      classification: "destructive",
+    });
+    expect(result.warnings).toContain(
+      "Changing 'tags' from many-to-many to a single link drops its link table and every link it holds: could not count them."
+    );
+  });
+
+  it("names what the field becomes when it is no longer a link", async () => {
+    const { db } = linkCountDb(2);
+    const result = await leaving(
+      manyToMany(),
+      { name: "tags", type: "text" } as FieldDefinition,
+      db
+    );
+    expect(result.warnings).toContain(
+      "Changing 'tags' from many-to-many to a text field drops its link table and the 2 links it holds."
+    );
+    expect(
+      result.warnings.some(warning => warning.includes("a single link"))
+    ).toBe(false);
+  });
+});
