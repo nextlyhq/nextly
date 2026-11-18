@@ -15,7 +15,8 @@
  *   storage type, so a table made by hand with a plain integer key compares equal to one whose
  *   key the database assigns (`generatesKey`).
  *
- * Read-only, one query per dialect that needs one.
+ * Read-only: one query on PostgreSQL, two on MySQL (the first asks whether the catalog has the
+ * spatial-reference column), none on SQLite.
  *
  * @module domains/schema/migrate/live-column-facts
  */
@@ -97,6 +98,20 @@ export function mysqlUntrackedSettings(row: MysqlColumnRow): string[] {
   ];
 }
 
+/** Whether this server's `information_schema.COLUMNS` has `SRS_ID`, which MySQL's alone has. */
+async function mysqlCatalogHasSrid(runner: QueryRunner): Promise<boolean> {
+  const [row] = rowsOf(
+    await runner.execute(
+      sql`SELECT COUNT(*) AS found
+          FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = 'information_schema'
+            AND TABLE_NAME = 'COLUMNS'
+            AND COLUMN_NAME = 'SRS_ID'`
+    )
+  );
+  return Number(row?.found ?? 0) > 0;
+}
+
 /**
  * Reads the facts for every column of `tableNames` (their live spellings). `snapshot` is the
  * introspection of the same tables: PostgreSQL's owned-sequence default is the one it already
@@ -142,6 +157,11 @@ export async function readLiveColumnFacts(
         }
       }
     } else {
+      // `SRS_ID` is MySQL's column: a server of the same dialect without it (MariaDB) refuses a
+      // query naming it, so it is read only where the catalog has it.
+      const srid = (await mysqlCatalogHasSrid(runner))
+        ? sql`c.SRS_ID`
+        : sql`NULL`;
       const rows = rowsOf(
         await runner.execute(
           sql`SELECT c.TABLE_NAME AS \`table\`, c.COLUMN_NAME AS \`column\`,
@@ -149,7 +169,7 @@ export async function readLiveColumnFacts(
                      t.TABLE_COLLATION AS table_collation,
                      c.COLUMN_COMMENT AS comment, c.EXTRA AS extra,
                      c.GENERATION_EXPRESSION AS \`generated\`,
-                     c.SRS_ID AS srid
+                     ${srid} AS srid
               FROM information_schema.COLUMNS c
               JOIN information_schema.TABLES t
                 ON t.TABLE_SCHEMA = c.TABLE_SCHEMA

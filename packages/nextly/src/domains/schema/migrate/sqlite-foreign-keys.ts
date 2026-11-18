@@ -107,35 +107,54 @@ async function danglingReferenceCounts(
   return counts;
 }
 
-/** The referencing columns of each foreign key of `table`, by the key's `id`, in key order. */
+/** One foreign key's columns, in key order: its own, and the parent's it references. */
+interface KeyColumns {
+  columns: string[];
+  /** Empty where the key names none: it references its parent's primary key. */
+  referencesColumns: string[];
+}
+
+/** The columns of each foreign key of `table`, by the key's `id`. */
 async function foreignKeyColumns(
   session: Pick<SqliteForeignKeySession, "read">,
   table: string
-): Promise<Map<number, string[]>> {
-  const rows = await session.read<{ id: number; seq: number; from: string }>(
-    `PRAGMA foreign_key_list("${table.replace(/"/g, '""')}")`
-  );
-  const columns = new Map<number, string[]>();
+): Promise<Map<number, KeyColumns>> {
+  const rows = await session.read<{
+    id: number;
+    seq: number;
+    from: string;
+    to: string | null;
+  }>(`PRAGMA foreign_key_list("${table.replace(/"/g, '""')}")`);
+  const keys = new Map<number, KeyColumns>();
   for (const row of [...rows].sort((a, b) => Number(a.seq) - Number(b.seq))) {
     const id = Number(row.id);
-    columns.set(id, [...(columns.get(id) ?? []), row.from]);
+    const key = keys.get(id) ?? { columns: [], referencesColumns: [] };
+    key.columns.push(row.from);
+    if (typeof row.to === "string") key.referencesColumns.push(row.to);
+    keys.set(id, key);
   }
-  return columns;
+  return keys;
 }
 
 /**
  * The rows `PRAGMA foreign_key_check` reports, by table, the parent it references and the key the
- * rows dangle through, named by its referencing columns: what a check of the database as it
- * stands finds, for a caller judging a change it did not run. Two keys between the same two
- * tables are counted apart, so rows dangling through one are not laid on the other.
+ * rows dangle through, named by its columns and the parent's it references: what a check of the
+ * database as it stands finds, for a caller judging a change it did not run. Two keys between the
+ * same two tables are counted apart, so rows dangling through one are not laid on the other.
  */
 export async function danglingReferences(
   session: Pick<SqliteForeignKeySession, "read">
 ): Promise<
-  Array<{ table: string; parent: string; rows: number; columns: string[] }>
+  Array<{
+    table: string;
+    parent: string;
+    rows: number;
+    columns: string[];
+    referencesColumns: string[];
+  }>
 > {
   const found = await danglingThroughKeys(session);
-  const keysOf = new Map<string, Map<number, string[]>>();
+  const keysOf = new Map<string, Map<number, KeyColumns>>();
   for (const table of new Set(found.map(entry => entry.table))) {
     keysOf.set(table, await foreignKeyColumns(session, table));
   }
@@ -143,7 +162,8 @@ export async function danglingReferences(
     table,
     parent,
     rows,
-    columns: keysOf.get(table)?.get(key) ?? [],
+    columns: keysOf.get(table)?.get(key)?.columns ?? [],
+    referencesColumns: keysOf.get(table)?.get(key)?.referencesColumns ?? [],
   }));
 }
 

@@ -101,9 +101,53 @@ describe("danglingReferences", () => {
       )
     );
     expect(byKey).toEqual([
-      { table: "child", parent: "parent", rows: 1, columns: ["parent_id"] },
-      { table: "pair", parent: "parent", rows: 2, columns: ["a"] },
-      { table: "pair", parent: "parent", rows: 1, columns: ["b"] },
+      {
+        table: "child",
+        parent: "parent",
+        rows: 1,
+        columns: ["parent_id"],
+        referencesColumns: ["id"],
+      },
+      {
+        table: "pair",
+        parent: "parent",
+        rows: 2,
+        columns: ["a"],
+        referencesColumns: ["id"],
+      },
+      {
+        table: "pair",
+        parent: "parent",
+        rows: 1,
+        columns: ["b"],
+        referencesColumns: ["id"],
+      },
+    ]);
+  });
+
+  it("names the columns each key references, telling two keys from one column apart", async () => {
+    sqlite.exec(`
+      CREATE TABLE owner (id TEXT PRIMARY KEY, email TEXT UNIQUE);
+      INSERT INTO owner VALUES ('o1', 'gone');
+      CREATE TABLE note (id TEXT PRIMARY KEY, who TEXT, FOREIGN KEY (who) REFERENCES owner (id), FOREIGN KEY (who) REFERENCES owner (email));
+    `);
+    // `gone` is an owner's email and no owner's id: it dangles through the first key only.
+    sqlite.pragma("foreign_keys = OFF");
+    sqlite.exec(`INSERT INTO note VALUES ('n1', 'gone')`);
+    sqlite.pragma("foreign_keys = ON");
+
+    const found = await danglingReferences({
+      read: <T>(statement: string) =>
+        Promise.resolve(sqlite.prepare(statement).all() as T[]),
+    });
+    expect(found.filter(entry => entry.table === "note")).toEqual([
+      {
+        table: "note",
+        parent: "owner",
+        rows: 1,
+        columns: ["who"],
+        referencesColumns: ["id"],
+      },
     ]);
   });
 });

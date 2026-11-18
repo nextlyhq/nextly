@@ -109,9 +109,10 @@ export interface LiveFacts {
  * only here.
  *
  * Two more things the snapshot comparison cannot see are asked of the live database: that a key a
- * `CREATE TABLE` has the database assign is assigned there (`generatedKeysAssigned`), and that a
- * MySQL column a statement restates holds nothing the statement would put back
- * (`restatedColumnsKeep`).
+ * statement has the database assign is assigned there (`generatedKeysAssigned`), and that a MySQL
+ * column a statement restates holds nothing the statement would put back (`restatedColumnsKeep`).
+ * Both ask about the column where the rest of the file leaves it: a later rename moves the
+ * question with the column, and only a later drop ends it.
  */
 export async function proveStatements(args: {
   statements: readonly string[];
@@ -129,10 +130,7 @@ export async function proveStatements(args: {
   );
   for (const [at, proof] of proofs.entries()) {
     if (proof.status !== "shown") continue;
-    // A column or table a later statement of the file renames, drops or changes again no longer
-    // stands as this one named it, so the live database is not asked about it under that name:
-    // where the file ends is what the snapshot comparison held the database to.
-    if (judged[at]?.reason === "undone") continue;
+    const later = statements.slice(at + 1);
     if (
       !inlineConstraintsUsable(
         statements[at],
@@ -140,10 +138,16 @@ export async function proveStatements(args: {
         args.sides,
         live.schema
       ) ||
-      !generatedKeysAssigned(statements[at], dialect, args.sides, live.schema)
+      !generatedKeysAssigned(statements[at], later, {
+        dialect,
+        sides: args.sides,
+        schema: live.schema,
+      })
     ) {
       proofs[at] = { ...proof, status: "not-done" };
-    } else if (restatedColumnsKeep(statements[at], dialect, live.schema)) {
+    } else if (
+      restatedColumnsKeep(statements[at], later, dialect, live.schema)
+    ) {
       proofs[at] = { ...proof, status: "keeps" };
     }
   }
@@ -251,18 +255,102 @@ function declaresGeneratedKey(
  * Whether every key the statement has the database assign is one the live table assigns: on a
  * table it creates that the target snapshot holds, or in a column it adds to a table. The snapshot
  * comparison reads such a key as its storage type, so a table made by hand with a plain integer
- * key stands where the file ends, and every insert that leaves the key out fails there. True for
- * any other statement.
+ * key stands where the file ends, and every insert that leaves the key out fails there. Each key
+ * is asked about under the name the rest of the file leaves it with (`whereItEnds`). True for any
+ * other statement.
  */
 function generatedKeysAssigned(
   statement: string,
-  dialect: SupportedDialect,
-  sides: { target: NextlySchemaSnapshot },
-  schema: LiveSchemaWithColumnFacts
+  later: readonly string[],
+  file: {
+    dialect: SupportedDialect;
+    sides: { target: NextlySchemaSnapshot };
+    schema: LiveSchemaWithColumnFacts;
+  }
 ): boolean {
-  return generatedKeysOf(statement, dialect, sides).every(({ table, column }) =>
-    schema.generatesKey(table, column)
-  );
+  return generatedKeysOf(statement, file.dialect, file.sides).every(key => {
+    const end = whereItEnds(key, later, file.dialect);
+    return end === undefined || file.schema.generatesKey(end.table, end.column);
+  });
+}
+
+/** What one statement does to the names of a table's columns, and of the table itself. */
+interface NameMoves {
+  /** Tables renamed, as `[from, to]`. */
+  tables: Array<[string, string]>;
+  /** Tables dropped. */
+  droppedTables: string[];
+  /** The table whose columns the statement renames or drops, where it does. */
+  table?: string;
+  /** Columns of `table` renamed, as `[from, to]`. */
+  columns: Array<[string, string]>;
+  /** Columns of `table` dropped. */
+  droppedColumns: string[];
+}
+
+/**
+ * The renames and drops one statement makes: a table renamed (`tableRenamesOf`) or dropped, and
+ * within an `ALTER TABLE` each `RENAME [COLUMN] a TO b`, MySQL `CHANGE [COLUMN] a b` and `DROP
+ * [COLUMN] a`.
+ */
+function nameMovesOf(statement: string, dialect: SupportedDialect): NameMoves {
+  const moves: NameMoves = {
+    tables: tableRenamesOf(cursorOf(statement, dialect, EXACT), dialect) ?? [],
+    droppedTables: droppedBy(statement, dialect),
+    columns: [],
+    droppedColumns: [],
+  };
+  const cursor = cursorOf(statement, dialect, EXACT);
+  if (moves.tables.length > 0 || !cursor.accept("ALTER", "TABLE")) return moves;
+  cursor.acceptCondition();
+  if (dialect === "postgresql") cursor.accept("ONLY");
+  moves.table = cursor.name();
+  for (const tokens of cursor.clauses()) {
+    const clause = new StatementCursor(tokens);
+    if (clause.accept("DROP")) {
+      if (!clause.accept("COLUMN") && addsAnotherElement(clause, dialect)) {
+        continue;
+      }
+      clause.acceptCondition();
+      const dropped = clause.name();
+      if (dropped !== undefined) moves.droppedColumns.push(dropped);
+      continue;
+    }
+    const changes = dialect === "mysql" && clause.accept("CHANGE");
+    if (!changes && !clause.accept("RENAME")) continue;
+    if (!clause.accept("COLUMN") && addsAnotherElement(clause, dialect)) {
+      continue;
+    }
+    clause.acceptCondition();
+    const from = clause.name();
+    if (!changes) clause.accept("TO");
+    const to = clause.name();
+    if (from !== undefined && to !== undefined) moves.columns.push([from, to]);
+  }
+  return moves;
+}
+
+/**
+ * The table and name a column stands under once the later statements of the file have run:
+ * followed through each rename of it or of its table, or undefined where one of them drops it.
+ * The live database is asked about a column there, since that is where the file leaves it.
+ */
+function whereItEnds(
+  start: FilledColumn,
+  later: readonly string[],
+  dialect: SupportedDialect
+): FilledColumn | undefined {
+  let table = start.table.toLowerCase();
+  let column = start.column.toLowerCase();
+  for (const statement of later) {
+    const moves = nameMovesOf(statement, dialect);
+    if (moves.droppedTables.includes(table)) return undefined;
+    table = moves.tables.find(([from]) => from === table)?.[1] ?? table;
+    if (moves.table !== table) continue;
+    if (moves.droppedColumns.includes(column)) return undefined;
+    column = moves.columns.find(([from]) => from === column)?.[1] ?? column;
+  }
+  return { table, column };
 }
 
 /** The columns a statement declares with a key the database assigns (`declaresGeneratedKey`). */
@@ -315,16 +403,22 @@ function restatedColumns(
 /**
  * Whether a column the statement restates holds, in the live database, a setting the statement
  * would put back: the file was not run, so the column still has it, and a database the file did
- * run on does not.
+ * run on does not. The column is asked about under the name the rest of the file leaves it with
+ * (`whereItEnds`).
  */
 function restatedColumnsKeep(
   statement: string,
+  later: readonly string[],
   dialect: SupportedDialect,
   schema: LiveSchemaWithColumnFacts
 ): boolean {
-  return restatedColumns(statement, dialect).some(
-    ({ table, column }) => schema.untrackedSettings(table, column).length > 0
-  );
+  return restatedColumns(statement, dialect).some(restated => {
+    const end = whereItEnds(restated, later, dialect);
+    return (
+      end !== undefined &&
+      schema.untrackedSettings(end.table, end.column).length > 0
+    );
+  });
 }
 
 /**
@@ -954,6 +1048,30 @@ const TYPES_BEYOND_SNAPSHOT = new Set([
 /** Words that are part of a type after its name: `double precision`, `bigint unsigned`. */
 const TYPE_WORDS = new Set(["PRECISION", "UNSIGNED", "SIGNED", "ZEROFILL"]);
 
+/** What a parenthesised group reads as once it is taken for one token (`groupsAsOne`). */
+const GROUP = "()";
+
+/**
+ * The tokens with each parenthesised group outside any other taken for one (`GROUP`): a type's
+ * size, a function's arguments, an expression. What stands after a group stays where it stood, so
+ * an attribute after a default written in parentheses is still read.
+ */
+function groupsAsOne(tokens: readonly StatementToken[]): StatementToken[] {
+  const read: StatementToken[] = [];
+  let depth = 0;
+  for (const token of tokens) {
+    if (token === "(") {
+      if (depth === 0) read.push(GROUP);
+      depth += 1;
+    } else if (token === ")") {
+      depth = Math.max(0, depth - 1);
+    } else if (depth === 0) {
+      read.push(token);
+    }
+  }
+  return read;
+}
+
 /**
  * MySQL's `MODIFY [COLUMN] c ...` and `CHANGE [COLUMN] a b ...`: a column's definition restated,
  * in the one shape `migrate:create` writes, which names only what the snapshot records of a
@@ -971,14 +1089,12 @@ function restatedColumnShown(
   clause.acceptCondition();
   if (clause.name() === undefined) return false;
   if (renames && clause.name() === undefined) return false;
-  return statesOnlyWhatSnapshotRecords(outsideParentheses(clause.rest()));
+  return statesOnlyWhatSnapshotRecords(groupsAsOne(clause.rest()));
 }
 
 /**
- * Whether a restated column's definition, read outside parentheses, is a type followed by nothing
- * but its nullability and its default. A default's value is one word or one literal, signed or
- * not; one written in parentheses (an expression, or a function's arguments) has been left out
- * with them.
+ * Whether a restated column's definition, each parenthesised group read as one token, is a type
+ * followed by nothing but its nullability and its default.
  */
 function statesOnlyWhatSnapshotRecords(
   declared: readonly StatementToken[]
@@ -986,19 +1102,35 @@ function statesOnlyWhatSnapshotRecords(
   const [type, ...after] = declared;
   if (typeof type !== "string" || TYPES_BEYOND_SNAPSHOT.has(type)) return false;
   const rest = new StatementCursor(after);
-  while (nextIn(rest, TYPE_WORDS)) rest.accept(String(rest.peek()));
+  // The type's size and the words that belong to it: `decimal(10,2) unsigned`.
+  while (rest.accept(GROUP) || nextIn(rest, TYPE_WORDS)) {
+    if (nextIn(rest, TYPE_WORDS)) rest.at += 1;
+  }
   while (!rest.done()) {
     if (rest.accept("NOT", "NULL") || rest.accept("NULL")) continue;
-    if (!rest.accept("DEFAULT")) return false;
-    if (!rest.accept("-")) rest.accept("+");
-    // One word (`NULL`, `CURRENT_TIMESTAMP`), or a literal: a quoted one, or a number in as many
-    // pieces as the reading gives it. A second word is not part of the value.
-    if (isKeyword(rest.peek())) {
-      if (rest.isWord("NOT") || rest.isWord("DEFAULT")) return false;
-      rest.at += 1;
-    } else {
-      while (!rest.done() && !isKeyword(rest.peek())) rest.at += 1;
-    }
+    if (!rest.accept("DEFAULT") || !defaultValueRead(rest)) return false;
+  }
+  return true;
+}
+
+/**
+ * Reads a default's value, after `DEFAULT`: one word with any arguments (`NULL`,
+ * `CURRENT_TIMESTAMP(3)`), or one literal, signed or not, in as many pieces as the reading gives a
+ * number, or an expression in parentheses. False where no value stands there. A word after the
+ * value is not part of it, and is left for the caller to refuse.
+ */
+function defaultValueRead(rest: StatementCursor): boolean {
+  if (!rest.accept("-")) rest.accept("+");
+  if (rest.done()) return false;
+  if (isKeyword(rest.peek())) {
+    if (rest.isWord("NOT") || rest.isWord("DEFAULT")) return false;
+    rest.at += 1;
+    rest.accept(GROUP);
+    return true;
+  }
+  if (rest.accept(GROUP)) return true;
+  while (!rest.done() && !isKeyword(rest.peek()) && !rest.isWord(GROUP)) {
+    rest.at += 1;
   }
   return true;
 }
@@ -1287,6 +1419,11 @@ interface DanglingReference {
    * (`danglingReferences`): two keys between the same two tables are then told apart.
    */
   columns?: readonly string[];
+  /**
+   * The columns of `parent` that key references, where the count names them: two keys from the
+   * same columns to different columns of one parent are then told apart.
+   */
+  referencesColumns?: readonly string[];
 }
 
 /**
@@ -1309,11 +1446,13 @@ export function danglingOnAddedKeys(
       .map(key => ({
         pair: `${table.name}\u0000${key.referencesTable}`.toLowerCase(),
         columns: columnsKey(key.columns),
+        references: columnsKey(key.referencesColumns),
       }))
   );
-  // A count that names its key is the file's only where an added key has those columns; one that
-  // names none, or whose key could not be read, is read by its table pair, which a key the
-  // database already had can share: it refuses where it cannot tell.
+  // A count that names its key is the file's only where an added key has those columns and
+  // references the same ones; what a count does not name (a key that could not be read, a key
+  // written to its parent's primary key without naming it) is not compared, so the count is laid
+  // on any added key it could be: it refuses where it cannot tell.
   return dangling.filter(entry => {
     const pair = `${entry.table}\u0000${entry.parent}`.toLowerCase();
     return added.some(
@@ -1321,7 +1460,10 @@ export function danglingOnAddedKeys(
         key.pair === pair &&
         (entry.columns === undefined ||
           entry.columns.length === 0 ||
-          key.columns === columnsKey(entry.columns))
+          key.columns === columnsKey(entry.columns)) &&
+        (entry.referencesColumns === undefined ||
+          entry.referencesColumns.length === 0 ||
+          key.references === columnsKey(entry.referencesColumns))
     );
   });
 }

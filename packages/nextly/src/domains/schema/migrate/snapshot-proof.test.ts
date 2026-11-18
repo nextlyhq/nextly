@@ -762,6 +762,11 @@ describe("a MySQL column restated by MODIFY or CHANGE", () => {
       "int AUTO_INCREMENT",
       "int GENERATED ALWAYS AS (1) STORED",
       "point SRID 4326",
+      "int DEFAULT (1) INVISIBLE",
+      "int DEFAULT (1) FIRST",
+      "int NOT NULL DEFAULT (1) COMMENT 'by hand'",
+      "datetime(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)",
+      "int DEFAULT",
       "varchar(500) NOT SECONDARY",
       "bigint SERIAL DEFAULT VALUE",
       "national varchar(500)",
@@ -934,22 +939,88 @@ describe("a key the database assigns, on a table the file creates", () => {
     }
   });
 
-  it("asks nothing of a key a later statement of the file renames or drops", async () => {
-    // The column no longer stands under the name the statement gave it: the file's end is what
-    // the snapshot comparison already held the database to.
-    const renamedAway: LiveSchemaWithColumnFacts = {
-      ...liveWith({ generatesKey: false, gone: "position" }),
+  /** A live schema whose only assigned key is `table.column`, noting each one asked about. */
+  const assignedOnly = (table: string, column: string) => {
+    const asked: string[] = [];
+    const schema: LiveSchemaWithColumnFacts = {
+      ...liveWith({}),
+      hasColumn: (_table, name) => name !== "position",
+      generatesKey: (on, name) => {
+        asked.push(`${on}.${name}`);
+        return on === table && name === column;
+      },
     };
+    return { schema, asked };
+  };
+
+  it("asks about a key under the name later statements of the file leave it with", async () => {
+    const ADD = 'ALTER TABLE "dc_posts" ADD COLUMN "position" serial';
+    const RENAME = 'ALTER TABLE "dc_posts" RENAME COLUMN "position" TO "slug"';
+    // The column the file ends with is a plain integer: the key is not assigned there.
+    const plain = assignedOnly("dc_posts", "title");
+    expect(
+      await statusesAgainst([ADD, RENAME], "postgresql", plain.schema)
+    ).toEqual(["not-done", "shown"]);
+    expect(plain.asked).toEqual(["dc_posts.slug"]);
+    // The same file against a database that assigns it under its last name.
+    const assigned = assignedOnly("dc_posts", "slug");
+    expect(
+      await statusesAgainst([ADD, RENAME], "postgresql", assigned.schema)
+    ).toEqual(["shown", "shown"]);
+  });
+
+  it("follows a key through a renamed table, and MySQL's CHANGE", async () => {
+    const renamedTable = assignedOnly("dc_pages", "position");
     expect(
       await statusesAgainst(
         [
           'ALTER TABLE "dc_posts" ADD COLUMN "position" serial',
-          'ALTER TABLE "dc_posts" RENAME COLUMN "position" TO "slug"',
+          'ALTER TABLE "dc_posts" RENAME TO "dc_pages"',
         ],
         "postgresql",
-        renamedAway
+        {
+          ...renamedTable.schema,
+          hasColumn: () => true,
+          // The table stands under its new name alone.
+          hasTable: name => name !== "dc_posts",
+        },
+        {
+          before: sides.before,
+          target: {
+            tables: [...sides.target.tables, { ...posts(), name: "dc_pages" }],
+          },
+        }
       )
     ).toEqual(["shown", "shown"]);
+    expect(renamedTable.asked).toEqual(["dc_pages.position"]);
+
+    const changed = assignedOnly("dc_posts", "title");
+    expect(
+      await statusesAgainst(
+        [
+          "ALTER TABLE `dc_posts` ADD COLUMN `position` int NOT NULL AUTO_INCREMENT UNIQUE",
+          "ALTER TABLE `dc_posts` CHANGE COLUMN `position` `slug` int NOT NULL",
+        ],
+        "mysql",
+        changed.schema
+      )
+    ).toEqual(["not-done", "shown"]);
+    expect(changed.asked).toEqual(["dc_posts.slug"]);
+  });
+
+  it("asks nothing of a key a later statement of the file drops", async () => {
+    const dropped = assignedOnly("dc_posts", "title");
+    expect(
+      await statusesAgainst(
+        [
+          'ALTER TABLE "dc_posts" ADD COLUMN "position" serial',
+          'ALTER TABLE "dc_posts" DROP COLUMN "position"',
+        ],
+        "postgresql",
+        dropped.schema
+      )
+    ).toEqual(["shown", "shown"]);
+    expect(dropped.asked).toEqual([]);
   });
 
   it("asks nothing of a key the file leaves plain, or of SQLite's rowid key", async () => {
@@ -1001,6 +1072,30 @@ describe("rows dangling through one of two keys between the same tables", () => 
     expect(
       danglingOnAddedKeys(between, [throughAuthor, throughEditor])
     ).toEqual([throughEditor]);
+  });
+
+  it("tells two keys from the same column to different columns of the parent apart", () => {
+    const toId = key("fk_dc_posts_author", "author");
+    const toEmail = {
+      ...key("fk_dc_posts_author_email", "author"),
+      referencesColumns: ["email"],
+    };
+    const twoTargets = {
+      before: { tables: [{ ...posts("title"), foreignKeys: [toId] }] },
+      target: { tables: [{ ...posts("title"), foreignKeys: [toId, toEmail] }] },
+    };
+    const through = (referencesColumns: string[]) => ({
+      table: "dc_posts",
+      parent: "users",
+      rows: 2,
+      columns: ["author"],
+      referencesColumns,
+    });
+    // Rows dangling through the key the database had are not the added key's.
+    expect(danglingOnAddedKeys(twoTargets, [through(["id"])])).toEqual([]);
+    expect(danglingOnAddedKeys(twoTargets, [through(["email"])])).toEqual([
+      through(["email"]),
+    ]);
   });
 
   it("still reads a count that names no key by its table pair", () => {
