@@ -221,7 +221,7 @@ Layout templates also support `{{variable}}` interpolation, so common variables 
 
 ## Templates written in blocks
 
-A template is either **coded**, HTML with Liquid as described above, or **written**: a short list of content blocks, with variables placed as chips. A written template is drawn in its layout and your brand settings, and its HTML and plain text are written from its blocks each time it renders, so a preview, a test send and a real send of the same data are the same email.
+A template is either **coded**, written in HTML as described above (in Liquid, or on the older `{{variable}}` engine for a template kept on it), or **written**: a short list of content blocks, with variables placed as chips. A written template always renders as Liquid. A written template is drawn in its layout and your brand settings, and its HTML and plain text are written from its blocks each time it renders, so a preview, a test send and a real send of the same data are the same email.
 
 Every template you already have stays coded, unchanged. Nothing turns a coded template into blocks.
 
