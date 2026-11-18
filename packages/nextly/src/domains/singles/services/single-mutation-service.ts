@@ -62,7 +62,7 @@ import {
 import {
   LIFECYCLE_STATUSES,
   isLifecycleStatus,
-  resolvePublishTransition,
+  transitionGrantNeeded,
   stripUndefinedStatus,
 } from "../../../lib/status-transition";
 import {
@@ -235,6 +235,7 @@ import {
   resolveDraftOverlay,
 } from "../../versions/draft-overlay";
 import { storeDraftSave } from "../../versions/draft-save";
+import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
 import {
   assertRewritableField,
   refuseRewrittenValue,
@@ -2930,6 +2931,19 @@ export class SingleMutationService extends BaseService {
         singleMeta.versions?.drafts?.enabled === true
           ? await resolveComponentSchemas(fieldConfigs)
           : null;
+      // Whether this Single holds a working draft for an edit, by the same
+      // predicate as its hold below and the admin's `draftsEnabled`: where it
+      // does, a save naming published over its published row needs publish
+      // (`transitionGrantNeeded`).
+      const singleHoldsWorkingDrafts = isDraftSplitEligible({
+        collectionHasStatus:
+          (singleMeta as { status?: boolean }).status === true,
+        draftsVersioningEnabled: singleMeta.versions?.drafts?.enabled === true,
+        documentLocalized: singleMeta.localized === true,
+        entityKind: "single",
+        fields: fieldConfigs,
+        componentSchemas: singleComponentSchemas,
+      });
 
       // 6.1. Field-level access + beforeValidate hooks (functions resolved
       // via the field-level registry; serialized field defs drop them).
@@ -3644,13 +3658,17 @@ export class SingleMutationService extends BaseService {
             // makes the guarded transition against its row-locked prior status.
             const firesOnMainRow =
               mainNextStatus !== undefined &&
-              resolvePublishTransition(lockedMainStatus, mainNextStatus) ===
-                transitionGuard.op;
+              transitionGrantNeeded(
+                lockedMainStatus,
+                mainNextStatus,
+                singleHoldsWorkingDrafts
+              ) === transitionGuard.op;
             const firesOnCompanion =
               companionNextStatus !== undefined &&
-              resolvePublishTransition(
+              transitionGrantNeeded(
                 lockedCompanionStatus,
-                companionNextStatus
+                companionNextStatus,
+                singleHoldsWorkingDrafts
               ) === transitionGuard.op;
             // The sweep moves companion rows NEITHER test above can see, so a
             // wildcard write is judged as the lifecycle move it is,
