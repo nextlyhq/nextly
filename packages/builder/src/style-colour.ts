@@ -956,6 +956,30 @@ export function contrastObscuredIn(
 }
 
 /**
+ * What on one node stands over a pair, split by how far it reaches: `local`
+ * (a background image or gradient, a shadow) is painted behind the node's
+ * content and stops mattering under a child that paints an opaque
+ * background of its own; `subtree` (opacity, a filter, a blend) alters
+ * everything inside. Any state or width, as {@link contrastObscuredIn} reads.
+ */
+export function contrastObscuringIn(styles: NodeStyles | undefined): {
+  readonly local?: string;
+  readonly subtree?: string;
+} {
+  const subtree = obscuringAnywhereIn(styles, SUBTREE_OBSCURING_PROPERTIES);
+  const local = obscuringAnywhereIn(
+    styles,
+    OBSCURING_PROPERTIES.filter(
+      property => !SUBTREE_OBSCURING_PROPERTIES.includes(property)
+    )
+  );
+  return {
+    ...(local === undefined ? {} : { local }),
+    ...(subtree === undefined ? {} : { subtree }),
+  };
+}
+
+/**
  * Any of `properties` set at any address on one node, or `undefined`.
  *
  * The sweep both callers need, written once: the node's own verdict asks it

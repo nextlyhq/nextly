@@ -132,6 +132,12 @@ Under **Accessibility**, the checks find:
   more", and an icon that links somewhere with no **Screen reader label**. A button's
   Screen reader label counts as its words.
 - **Form fields with no label**, and **embeds with no title** for screen readers.
+- **Text with too little contrast** against its background: below 4.5:1, or 3:1 for large
+  text (a Heading 1 or 2, or text you sized 24px or more), with the ratio. Only colours you chose on the block or a container around it
+  are judged, and where the site has dark values that change them, dark mode too. Text
+  over a background image or gradient is listed as **Contrast not checked**, since no one
+  ratio can be measured there, and a block whose colours come from a shared style isn't
+  judged.
 
 Checks never stop you saving or publishing. Automatic checks catch common problems; they
 don't replace an accessibility review.
