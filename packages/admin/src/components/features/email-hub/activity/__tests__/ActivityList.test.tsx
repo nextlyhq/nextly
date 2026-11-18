@@ -10,6 +10,13 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { deliveryRow, queuedRow } from "../activity-model";
+
+// The admin's own formatter, which writes times in the General Settings time
+// zone; marked here so a row shown in the browser's zone can't pass.
+vi.mock("@admin/hooks/useAdminDateFormatter", () => ({
+  formatDateWithAdminTimezone: (value: Date | string) =>
+    `ADMIN-TZ ${new Date(value).toISOString()}`,
+}));
 import { ActivityList, type ActivityListProps } from "../ActivityList";
 
 const NOW = new Date("2026-11-16T12:00:00.000Z");
@@ -116,6 +123,12 @@ describe("the Activity list", () => {
     expect(compact?.className).toContain("xl:hidden");
     expect(compact?.textContent).toContain("Resend (main)");
     expect(compact?.textContent).toContain("Cc");
+  });
+
+  it("writes each row's time with the admin's formatter, in the site's time zone", () => {
+    renderList();
+    const firstRow = within(screen.getByRole("table")).getAllByRole("row")[1];
+    expect(firstRow.textContent).toContain("ADMIN-TZ 2026-11-16T11:00:00.000Z");
   });
 
   it("draws a phone card per row carrying the same", () => {

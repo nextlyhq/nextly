@@ -18,8 +18,11 @@ vi.mock("@admin/hooks/queries/useEmailActivity", () => ({
   useEmailActivity: vi.fn(),
   useQueuedEmailOverdue: () => ({ data: undefined }),
 }));
+// What the template read holds in its cache: TanStack Query keeps answering
+// it after the query is disabled, as when a reader's grant ends.
+const cachedTemplates: { data: unknown } = { data: undefined };
 vi.mock("@admin/hooks/queries/useEmailTemplates", () => ({
-  useEmailTemplates: () => ({ data: undefined }),
+  useEmailTemplates: () => cachedTemplates,
 }));
 vi.mock("@admin/hooks/queries/useEmailProviders", () => ({
   useEmailProviders: () => ({ data: undefined }),
@@ -84,5 +87,20 @@ describe("the note shown while a provider is chosen", () => {
   it("is not shown while no provider is chosen", () => {
     const { container } = render(<ProviderFilterNote provider={undefined} />);
     expect(container.textContent).toBe("");
+  });
+});
+
+describe("names from a list the reader may no longer read", () => {
+  it("never shows a cached template name once the template grant is gone", () => {
+    // The reader holds only read-email-deliveries (the permissions mock), yet
+    // the template list is still in the cache from when they held its grant.
+    cachedTemplates.data = [
+      { slug: "password-reset", name: "Password reset", kind: "template" },
+    ];
+    activity({ rows: [ROW] });
+    render(<ActivityScreen />);
+    expect(screen.queryAllByText("Password reset")).toHaveLength(0);
+    expect(screen.getAllByText("password-reset").length).toBeGreaterThan(0);
+    cachedTemplates.data = undefined;
   });
 });

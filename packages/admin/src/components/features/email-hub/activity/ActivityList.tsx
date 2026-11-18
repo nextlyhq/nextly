@@ -4,6 +4,7 @@ import { Badge, Button, Skeleton } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
 import { Lock, User } from "@admin/components/icons";
+import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 import { formatRelativeTime } from "@admin/lib/dashboard";
 
 import { notStoredLabel } from "./activity-choices";
@@ -35,13 +36,23 @@ export interface ActivityListProps {
   onLoadMore: () => void;
 }
 
-/** "16 Nov, 12:30", in the reader's own time zone. */
-const WHEN = new Intl.DateTimeFormat(undefined, {
-  day: "numeric",
-  month: "short",
-  hour: "2-digit",
-  minute: "2-digit",
-});
+/**
+ * "Nov 16, 12:30 PM", in the time zone General Settings names, as every
+ * admin date is written, so a row's time and its "1d" agree on the day.
+ */
+function whenText(at: Date): string {
+  return formatDateWithAdminTimezone(
+    at,
+    {
+      locale: "en",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    },
+    ""
+  );
+}
 
 /** Everything one row shows, worked out once for the table and the card alike. */
 interface RowView {
@@ -108,7 +119,7 @@ function attemptOf(row: ActivityRow): string | null {
 function viewOf(row: ActivityRow, names: ActivityNames, now: Date): RowView {
   return {
     key: `${row.source}:${row.id}`,
-    when: WHEN.format(row.at),
+    when: whenText(row.at),
     ago: formatRelativeTime(row.at.toISOString(), now.getTime(), "short"),
     badge: outcomeBadge(row),
     attempt: attemptOf(row),

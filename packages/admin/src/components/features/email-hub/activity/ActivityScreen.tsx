@@ -128,24 +128,35 @@ function useActivityLists(): {
   names: ActivityNames;
 } {
   const { hasPermission } = useCurrentUserPermissions();
-  const templates = useEmailTemplates({
-    enabled: holdsAny(hasPermission, EMAIL_TEMPLATE_READ_PERMISSIONS),
-  });
-  const providers = useEmailProviders(
-    { page: 0, pageSize: PROVIDERS_READ, search: "" },
-    { enabled: holdsAny(hasPermission, EMAIL_PROVIDER_READ_PERMISSIONS) }
+  const readsTemplates = holdsAny(
+    hasPermission,
+    EMAIL_TEMPLATE_READ_PERMISSIONS
   );
+  const readsProviders = holdsAny(
+    hasPermission,
+    EMAIL_PROVIDER_READ_PERMISSIONS
+  );
+  const templateRead = useEmailTemplates({ enabled: readsTemplates });
+  const providerRead = useEmailProviders(
+    { page: 0, pageSize: PROVIDERS_READ, search: "" },
+    { enabled: readsProviders }
+  );
+  // Used only while the reader still holds the grant: a disabled query keeps
+  // answering from its cache, so a grant that ended would otherwise leave the
+  // names it read on screen.
+  const templates = readsTemplates ? templateRead.data : undefined;
+  const providers = readsProviders ? providerRead.data?.data : undefined;
   const templateNames = useMemo(
-    () => new Map((templates.data ?? []).map(t => [t.slug, t.name])),
-    [templates.data]
+    () => new Map((templates ?? []).map(t => [t.slug, t.name])),
+    [templates]
   );
   const providerNames = useMemo(
-    () => new Map((providers.data?.data ?? []).map(p => [p.id, p.name])),
-    [providers.data]
+    () => new Map((providers ?? []).map(p => [p.id, p.name])),
+    [providers]
   );
   return {
-    templates: templates.data,
-    providers: providers.data?.data,
+    templates,
+    providers,
     names: {
       template: slug => templateNames.get(slug),
       provider: id => providerNames.get(id),
