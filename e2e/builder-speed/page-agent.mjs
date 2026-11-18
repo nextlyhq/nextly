@@ -199,9 +199,11 @@ export function pageChecks() {
       const state = document.querySelector(
         '[data-testid="save-state-indicator"]'
       );
+      // The button says it has nothing left to do by `aria-disabled`, kept
+      // focusable to explain why, rather than by `disabled`.
       return (
         button instanceof HTMLButtonElement &&
-        button.disabled &&
+        (button.disabled || button.getAttribute("aria-disabled") === "true") &&
         state?.getAttribute("data-tone") === "saved"
       );
     },
