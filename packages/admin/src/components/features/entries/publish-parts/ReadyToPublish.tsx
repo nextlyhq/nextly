@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * The publish dialog's "Ready to publish?": what holds the chosen parts, with each one's fix or
- * who can unblock it.
+ * The publish dialog's workflow parts: "Ready to publish?", what holds the chosen parts with each
+ * one's fix or who can unblock it, and the reason a person gives to publish without review.
  *
  * @experimental Until publishing per language is complete.
  *
@@ -13,12 +13,15 @@ import type { JSX } from "react";
 import { useId } from "react";
 
 import { AlertTriangle } from "@admin/components/icons";
-import { Button, toast } from "@admin/components/ui";
+import { Button, Label, Textarea, toast } from "@admin/components/ui";
 import { useTakeStep } from "@admin/hooks/queries/useReviewState";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
 
 import type { ReadyProblem } from "./ready-to-publish";
+
+/** The longest reason the publish route takes, as its body schema bounds it. */
+export const WITHOUT_REVIEW_REASON_MAX = 2000;
 
 /** What holds Publish, each with its fix or who can unblock it. Nothing where nothing does. */
 export function ReadyToPublish({
@@ -94,5 +97,37 @@ export function ReadyToPublish({
         ))}
       </ul>
     </section>
+  );
+}
+
+/**
+ * The reason a person gives to publish past the workflow: required, and sent trimmed, as the
+ * route requires it (1 to 2000 characters once trimmed).
+ */
+export function WithoutReviewReason({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  disabled: boolean;
+}): JSX.Element {
+  const fieldId = useId();
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={fieldId}>Reason</Label>
+      <p className="text-sm text-muted-foreground">
+        Publishing without review skips the approval this document waits for.
+        Say why; the reason is kept with the publish.
+      </p>
+      <Textarea
+        id={fieldId}
+        value={value}
+        maxLength={WITHOUT_REVIEW_REASON_MAX}
+        disabled={disabled}
+        onChange={event => onChange(event.target.value)}
+      />
+    </div>
   );
 }

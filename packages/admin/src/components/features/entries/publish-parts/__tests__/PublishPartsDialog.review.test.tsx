@@ -250,3 +250,97 @@ describe("Ready to publish?", () => {
     expect(screen.getByRole("button", { name: "Publish" })).toBeEnabled();
   });
 });
+
+describe("Publish without review", () => {
+  it("offers a holder publishing without review, with a required, trimmed reason", async () => {
+    const user = userEvent.setup();
+    open(review([IN_REVIEW_ES], true));
+    await screen.findByText("Goes live for the first time.");
+
+    await user.click(
+      screen.getByRole("button", { name: "Publish without review…" })
+    );
+    const send = screen.getByRole("button", { name: "Publish without review" });
+    // A reason is required: nothing is sent without one, nor with spaces alone.
+    expect(send).toBeDisabled();
+    const reason = screen.getByRole("textbox", { name: "Reason" });
+    await user.type(reason, "   ");
+    expect(send).toBeDisabled();
+    await user.type(reason, " Legal deadline today. ");
+    await user.click(send);
+
+    await waitFor(() =>
+      expect(moves()).toEqual([
+        expect.objectContaining({
+          locales: ["es"],
+          withoutReview: { reason: "Legal deadline today." },
+        }),
+      ])
+    );
+  });
+
+  it("does not offer it to a person who does not hold it", async () => {
+    open(review([IN_REVIEW_ES], false));
+    await screen.findByText("Goes live for the first time.");
+    expect(
+      screen.queryByRole("button", { name: "Publish without review…" })
+    ).toBeNull();
+  });
+
+  it("does not offer it once every chosen part is approved", async () => {
+    open(
+      review(
+        [
+          part({
+            stage: "approved",
+            stageLabel: "Approved",
+            publishable: true,
+          }),
+        ],
+        true
+      )
+    );
+    await screen.findByText("Goes live for the first time.");
+    expect(
+      screen.queryByRole("button", { name: "Publish without review…" })
+    ).toBeNull();
+  });
+
+  it("shows a refused publish without review beside the part it names", async () => {
+    const user = userEvent.setup();
+    const refused = refusal([
+      {
+        path: "es",
+        code: "WITHOUT_REVIEW_REFUSED",
+        message: "Publishing without review was refused for Spanish.",
+      },
+    ]);
+    api.publishParts.mockImplementation(
+      (_s: string, _i: string, _d: string, choice: PublishPartsChoice) =>
+        choice.describe === true
+          ? Promise.resolve(describing(choice))
+          : Promise.reject(refused)
+    );
+    open(review([IN_REVIEW_ES], true));
+    await screen.findByText("Goes live for the first time.");
+    await user.click(
+      screen.getByRole("button", { name: "Publish without review…" })
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "Reason" }),
+      "Legal deadline today."
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Publish without review" })
+    );
+
+    const spanish = screen.getByRole("checkbox", { name: "Spanish" });
+    await waitFor(() =>
+      expect(spanish).toHaveAccessibleDescription(
+        expect.stringContaining(
+          "Publishing without review was refused for Spanish."
+        )
+      )
+    );
+  });
+});
