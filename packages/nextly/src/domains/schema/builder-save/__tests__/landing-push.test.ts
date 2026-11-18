@@ -1,25 +1,10 @@
 // A schema dialog's push tells `writeBuilderSchemaChange` whether it may have
 // changed the database: a push that succeeded did, and on MySQL, which commits
 // each schema statement as it runs, a push refused part way may have too. A
-// busy table's stop says itself whether anything of the change ran, and the
-// tables the change reaches, read before and after the push, say whether a
-// failed one changed anything.
+// busy table's stop says itself whether anything of the change ran, and a push
+// refused at its first question, asked before any statement, ran nothing.
 
-import { describe, expect, it, vi } from "vitest";
-
-// The tables as the database answers each read, in turn: the test sets what each read returns.
-const live = vi.hoisted(() => ({ reads: [] as unknown[], fail: false }));
-vi.mock("../../pipeline/diff/introspect-live", () => ({
-  introspectLiveSnapshot: () => {
-    if (live.fail) return Promise.reject(new Error("the read failed"));
-    return Promise.resolve(live.reads.shift() ?? { tables: [] });
-  },
-}));
-// Compared by content here; the reconcile's own diff is what the integration tests use.
-vi.mock("../../migrate/drift-reconcile", () => ({
-  snapshotsEquivalent: (a: unknown, b: unknown) =>
-    JSON.stringify(a) === JSON.stringify(b),
-}));
+import { describe, expect, it } from "vitest";
 
 import { tableBusyError } from "../../busy-table/report";
 import type { BusyTableOutcome, BusyTableStop } from "../../busy-table/types";
@@ -221,35 +206,31 @@ describe("partWayPush", () => {
   });
 });
 
-// Whether a failed push changed anything, read from the tables it can reach: before the push and
-// after. A push the pipeline refused before any statement ran leaves them as they were.
-describe("landingPush, reading the tables the change reaches", () => {
-  const table = (columns: string[]) => ({
-    tables: [{ name: "dc_posts", columns }],
-  });
-  const reached = {
-    adapter: {
-      getDrizzle: () => ({}),
-      getCapabilities: () => ({ dialect: "mysql" as const }),
-      tableExists: () => Promise.resolve(true),
-    },
-    tables: ["dc_posts"],
+// A push refused at its first question ran nothing: the pipeline asks it before any statement.
+// Any other failure on MySQL or SQLite may have run some, data-only statements included.
+describe("landingPush, a push refused at its first question", () => {
+  const watch = (stopped: boolean) => {
+    const watched = {
+      starts: 0,
+      starting: () => {
+        watched.starts += 1;
+      },
+      stopped: () => stopped,
+    };
+    return watched;
   };
 
   it.each(["mysql", "sqlite"] as const)(
-    "counts a failed push on %s that left the tables as they were as nothing applied",
+    "counts a failed push on %s that stopped at its first question as nothing applied",
     async dialect => {
-      live.fail = false;
-      live.reads = [table(["id", "title"]), table(["id", "title"])];
-      const refused = landingPush(answered(false), dialect, reached);
+      const refused = landingPush(answered(false), dialect, watch(true));
       await refused.push();
       expect(refused.landed()).toBe(false);
 
-      live.reads = [table(["id", "title"]), table(["id", "title"])];
       const thrown = landingPush(
-        () => Promise.reject(new Error("refused before any statement")),
+        () => Promise.reject(new Error("cancelled at the first question")),
         dialect,
-        reached
+        watch(true)
       );
       await expect(thrown.push()).rejects.toThrow();
       expect(thrown.landed()).toBe(false);
@@ -257,31 +238,25 @@ describe("landingPush, reading the tables the change reaches", () => {
   );
 
   it.each(["mysql", "sqlite"] as const)(
-    "counts a failed push on %s that changed a table as landed",
+    "counts a failed push on %s that went past its first question as landed",
     async dialect => {
-      live.fail = false;
-      live.reads = [table(["id", "title"]), table(["id", "title", "body"])];
-      const refused = landingPush(answered(false), dialect, reached);
+      const refused = landingPush(answered(false), dialect, watch(false));
       await refused.push();
       expect(refused.landed()).toBe(true);
     }
   );
 
-  it("counts a failed push as landed where the tables cannot be read", async () => {
-    live.fail = true;
-    const refused = landingPush(answered(false), "mysql", reached);
-    await refused.push();
-    expect(refused.landed()).toBe(true);
-    live.fail = false;
+  it("counts a push that succeeded as landed whatever the watch says", async () => {
+    const pushed = landingPush(answered(true), "sqlite", watch(true));
+    await pushed.push();
+    expect(pushed.landed()).toBe(true);
   });
 
-  it("reads nothing on PostgreSQL, whose failed push leaves nothing", async () => {
-    live.fail = false;
-    live.reads = [table(["id"]), table(["id", "body"])];
-    const refused = landingPush(answered(false), "postgresql", reached);
-    await refused.push();
-    expect(refused.landed()).toBe(false);
-    // Both reads still waiting: neither was taken.
-    expect(live.reads).toHaveLength(2);
+  it("starts the watch afresh for each push", async () => {
+    const watched = watch(false);
+    const tracked = landingPush(answered(true), "mysql", watched);
+    await tracked.push();
+    await tracked.push();
+    expect(watched.starts).toBe(2);
   });
 });

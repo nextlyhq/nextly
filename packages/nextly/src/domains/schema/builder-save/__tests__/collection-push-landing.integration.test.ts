@@ -31,7 +31,28 @@ import {
 import type { ServiceContainer } from "../../../../services";
 import { readTableDefinition } from "../../__tests__/helpers/table-definition";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
+import { RealPreCleanupExecutor } from "../../pipeline/pre-cleanup/executor";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
+
+// The test's seam on the pipeline's pre-resolution phase (renames, drops, a relation's values
+// rewritten), which runs its statements on the transaction itself rather than through the
+// statement executor: each call is counted, and runs as it would.
+const preResolution = vi.hoisted(() => ({ calls: 0 }));
+vi.mock("../../pipeline/pre-resolution/executor", async importOriginal => {
+  const original =
+    await importOriginal<
+      typeof import("../../pipeline/pre-resolution/executor")
+    >();
+  return {
+    ...original,
+    executePreResolutionOps: (
+      ...args: Parameters<typeof original.executePreResolutionOps>
+    ) => {
+      preResolution.calls += 1;
+      return original.executePreResolutionOps(...args);
+    },
+  };
+});
 
 type Field = Record<string, unknown>;
 
@@ -204,8 +225,9 @@ for (const dialect of getConfiguredTestDialects()) {
 
     // A refusal inside the push, before it runs any statement: a column on the table that no field
     // describes, beside the field the save adds, reads as a rename the save never answered, and the
-    // dialog's prompt refuses the apply rather than drop it. MySQL and SQLite keep what a push ran,
-    // so whether this one changed anything is read from the tables.
+    // dialog's prompt refuses the apply at its first question rather than drop it. MySQL and SQLite
+    // keep what a push ran, so the push counts as having changed nothing only because it stopped at
+    // that first question, asked before any statement.
     it("leaves nothing when the push refuses before running any statement", async () => {
       const q = (name: string) =>
         dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
@@ -213,11 +235,22 @@ for (const dialect of getConfiguredTestDialects()) {
         `ALTER TABLE ${q("dc_posts")} ADD COLUMN ${q("legacy_notes")} text`
       );
       const before = await standing();
+      const sent = vi.spyOn(
+        DrizzleStatementExecutor.prototype,
+        "executeStatements"
+      );
+      const cleanup = vi.spyOn(RealPreCleanupExecutor.prototype, "execute");
+      preResolution.calls = 0;
 
       const refused: unknown = await save(SWITCHED).then(
         () => undefined,
         (error: unknown) => error
       );
+      // What the rule rests on: the first question comes before any statement. No phase that runs
+      // one was reached, so a pipeline that asked after running some would fail here first.
+      expect(sent).not.toHaveBeenCalled();
+      expect(cleanup).not.toHaveBeenCalled();
+      expect(preResolution.calls).toBe(0);
       // Refused, and told as a refusal: never as a change the database holds part of.
       expect(refused).toBeInstanceOf(Error);
       expect(
@@ -395,6 +428,62 @@ for (const dialect of getConfiguredTestDialects()) {
         60_000
       );
     }
+
+    // On SQLite a relation switched from one entry to many keeps its text column and has only its
+    // values rewritten, before the statements that change the table's shape. A push that fails at
+    // the first of those has changed rows and no shape: its files stay all the same.
+    it.runIf(dialect === "sqlite")(
+      "keeps the files of a push that rewrote values and then failed before changing the table's shape",
+      async () => {
+        const writer = await t.nextly.create({
+          collection: "authors",
+          data: { name: "Writer" },
+        } as never);
+        await t.nextly.create({
+          collection: "posts",
+          data: {
+            title: "One",
+            code: "one",
+            author: (writer.item as { id: string }).id,
+          },
+        } as never);
+        // An older table whose relation column carries no index: the switch then drops none, and
+        // what runs before the failure is the values' rewrite alone.
+        await exec('DROP INDEX "idx_dc_posts_author"');
+        const rows = () => exec("SELECT * FROM dc_posts");
+        const rowsBefore = await rows();
+        const filesBefore = Object.keys(filesIn(migrationsDir(), ".sql"));
+        const tableBefore = await definitionOf();
+        // The first statement handed to the executor fails: what ran before it is the
+        // pre-resolution phase's alone.
+        const failing = vi
+          .spyOn(DrizzleStatementExecutor.prototype, "executeStatements")
+          .mockRejectedValue(new Error("the first schema statement failed"));
+
+        const failure = await save(SWITCHED).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+        failing.mockRestore();
+
+        // The case reaches its mechanism: the rows changed and the table's shape did not.
+        expect(await rows()).not.toEqual(rowsBefore);
+        expect(await definitionOf()).toEqual(tableBefore);
+        const kept = Object.keys(filesIn(migrationsDir(), ".sql")).filter(
+          name => !filesBefore.includes(name)
+        );
+        expect(kept).not.toEqual([]);
+        const applied = (await ledger().listFileApplies())
+          .filter(entry => entry.status === "applied")
+          .map(entry => String(entry.filename));
+        for (const file of kept) expect(applied).not.toContain(file);
+        expect(
+          (failure as { publicMessage?: string } | undefined)?.publicMessage,
+          String(failure)
+        ).toContain("The database now holds part of this change");
+      },
+      60_000
+    );
 
     // PostgreSQL's push runs in one transaction, which the failure rolls back whole: nothing of
     // the change stays, so its files are withdrawn and the admin is not told of a part held.

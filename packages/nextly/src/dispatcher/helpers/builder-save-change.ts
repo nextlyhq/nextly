@@ -21,6 +21,7 @@ import type {
   CollectionSaveDeps,
   CollectionSavePreview,
 } from "../../domains/schema/builder-save/collection-save";
+import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
@@ -105,7 +106,8 @@ export async function writeBuilderSchemaChange(
    * Whether `apply`'s push has landed (`landingPush`): a failure after it,
    * such as a companion reconcile, leaves the main table changed, so the
    * files describing that change are kept, recorded applied nowhere, and the
-   * failure is still thrown.
+   * failure is thrown saying the database holds part of the change, naming
+   * the kept files and what to run next.
    */
   landed?: () => boolean,
   /**
@@ -145,19 +147,17 @@ export async function writeBuilderSchemaChange(
     await fileRoad.afterFile();
     return;
   }
-  // Held in an object, as the apply below sets it from inside the writer.
-  const failed: { error?: unknown } = {};
-  await writeEntitySave(deps, save, async () => {
+  // A failure after the push landed keeps the files, and is told as a collection's is: what the
+  // database holds, the files kept and what to run next (`partWayPush`).
+  const pushed = partWayPush(async onLanded => {
     try {
       await apply();
-      return undefined;
-    } catch (error) {
-      if (landed?.() !== true) throw error;
-      failed.error = error;
-      return "partly-applied";
+    } finally {
+      if (landed?.() === true) onLanded();
     }
   });
-  if ("error" in failed) throw failed.error;
+  const written = await writeEntitySave(deps, save, pushed.appliedBy);
+  pushed.throwIfFailed(written?.files ?? []);
 }
 
 /**

@@ -8,15 +8,14 @@
  * one transaction that a failure rolls back whole: MySQL commits each schema
  * statement as it runs, and SQLite's push keeps the statements that ran before
  * the one that failed, so on either a push that failed may have changed it.
- * Whether it did is read from the database: the tables the change reaches, as
- * they stood before the push and as they stand after it.
+ * Whether a failure changed nothing is known only where the push stopped at
+ * its first question, which the pipeline asks before any statement runs
+ * (`stoppedBeforeAnyStatement`), or where a busy table's stop says so.
  *
  * @module domains/schema/builder-save/landing-push
  */
 import { NextlyError } from "../../../errors/nextly-error";
 import { busyTableLeftNothing } from "../busy-table/report";
-import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
-import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 
 type Dialect = "postgresql" | "mysql" | "sqlite";
 
@@ -26,46 +25,16 @@ interface PushOutcome {
   error?: { details?: unknown };
 }
 
-/** What reads a table's shape from the database: the adapter a push runs on. */
-export interface TableReader {
-  getDrizzle(): unknown;
-  getCapabilities(): { dialect: Dialect };
-  tableExists(name: string): Promise<boolean>;
-}
-
-/**
- * `names` as the database holds them now: those that exist, read in one snapshot, and only those
- * (an introspection can return a table whose name a requested one starts with).
- */
-export async function liveTablesOf(
-  adapter: TableReader,
-  names: readonly string[]
-): Promise<NextlySchemaSnapshot> {
-  const unique = [...new Set(names)];
-  const present: string[] = [];
-  for (const name of unique) {
-    if (await adapter.tableExists(name)) present.push(name);
-  }
-  const snapshot = await introspectLiveSnapshot(
-    adapter.getDrizzle(),
-    adapter.getCapabilities().dialect,
-    present
-  );
-  return {
-    ...snapshot,
-    tables: snapshot.tables.filter(t => unique.includes(t.name)),
-  };
-}
-
 /**
  * `push`, noting once one of its runs may have changed the database: a run
- * that succeeded, and outside PostgreSQL a run that failed after changing
- * something. A failure counts as having changed nothing where a busy table's
- * stop says itself nothing ran (`leftNothing`), or where `reached`, the tables
- * the change can touch, read the same after the push as before it: a push the
- * pipeline refused before any statement ran (a question unanswered, a
- * precondition) withdraws its files, as a refusal on PostgreSQL does. Without
- * `reached`, any failure outside PostgreSQL counts as landed.
+ * that succeeded, and outside PostgreSQL every run that failed but one known
+ * to have changed nothing. That is a busy table's stop that says nothing ran
+ * (`leftNothing`), or a run that `stoppedBeforeAnyStatement` answers for: one
+ * refused at its first question (a rename declined, a question unanswered),
+ * which the pipeline asks before it runs any statement. Any other failure
+ * counts as landed, data-only statements included, so its files are kept: a
+ * push that asks no question, or one refused by a check of its own before any
+ * statement, keeps them too.
  *
  * Only what wraps the push itself is judged: a refusal raised before the push
  * runs is never counted as landed.
@@ -73,76 +42,37 @@ export async function liveTablesOf(
 export function landingPush<A extends unknown[], R extends PushOutcome>(
   push: (...args: A) => Promise<R>,
   dialect: Dialect,
-  reached?: { adapter: TableReader; tables: readonly string[] }
+  stoppedBeforeAnyStatement?: {
+    /** Called as each run starts, so the answer is about that run alone. */
+    starting: () => void;
+    stopped: () => boolean;
+  }
 ): {
   push: (...args: A) => Promise<R>;
   landed: () => boolean;
 } {
   let landed = false;
-  // Read only where a failure can keep part of the push: PostgreSQL's leaves nothing.
-  const read =
-    reached === undefined || rollsBackWhole(dialect)
-      ? undefined
-      : () => liveTablesOf(reached.adapter, reached.tables);
-  const failureLanded = async (
-    stop: unknown,
-    before: NextlySchemaSnapshot | undefined
-  ): Promise<boolean> => {
-    if (rollsBackWhole(dialect) || leftNothing(stop)) return false;
-    return read === undefined || before === undefined
-      ? true
-      : changedSince(before, read);
-  };
+  const failureLanded = (stop: unknown): boolean =>
+    !rollsBackWhole(dialect) &&
+    !leftNothing(stop) &&
+    stoppedBeforeAnyStatement?.stopped() !== true;
   return {
     push: async (...args: A) => {
-      const before = await readOrUndefined(read);
+      stoppedBeforeAnyStatement?.starting();
       let result: R;
       try {
         result = await push(...args);
       } catch (error) {
-        if (await failureLanded(error, before)) landed = true;
+        if (failureLanded(error)) landed = true;
         throw error;
       }
-      if (
-        result.success ||
-        (await failureLanded(result.error?.details, before))
-      ) {
+      if (result.success || failureLanded(result.error?.details)) {
         landed = true;
       }
       return result;
     },
     landed: () => landed,
   };
-}
-
-/**
- * The tables before a push, or undefined where they could not be read: the push then runs as it
- * would have, and a failure of it counts as landed, as a change may stand.
- */
-async function readOrUndefined(
-  read: (() => Promise<NextlySchemaSnapshot>) | undefined
-): Promise<NextlySchemaSnapshot | undefined> {
-  try {
-    return await read?.();
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Whether the tables differ from `before`, by the reconcile's own test (`snapshotsEquivalent`). A
- * read that fails says nothing either way, so it counts as changed: the files are kept.
- */
-async function changedSince(
-  before: NextlySchemaSnapshot,
-  read: () => Promise<NextlySchemaSnapshot>
-): Promise<boolean> {
-  const { snapshotsEquivalent } = await import("../migrate/drift-reconcile");
-  try {
-    return !snapshotsEquivalent(before, await read());
-  } catch {
-    return true;
-  }
 }
 
 /**

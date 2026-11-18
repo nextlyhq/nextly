@@ -905,13 +905,14 @@ describe.each(getConfiguredTestDialects())(
               });
 
             // A type change, which keeps the push, and a field added: two statements.
-            await expect(
-              kind.change(t, [
-                { name: "heading", type: "number" },
-                text("body"),
-              ])
-            ).rejects.toBeInstanceOf(Error);
+            const refused: unknown = await kind
+              .change(t, [{ name: "heading", type: "number" }, text("body")])
+              .then(
+                () => undefined,
+                (error: unknown) => error
+              );
             failing.mockRestore();
+            expect(refused).toBeInstanceOf(Error);
 
             expect(sent.length, sent.join("\n")).toBeGreaterThan(1);
             // The first statement stayed: the table is no longer as it was.
@@ -920,6 +921,15 @@ describe.each(getConfiguredTestDialects())(
             expect(kept).not.toEqual([]);
             const applied = await appliedFiles(t);
             for (const file of kept) expect(applied).not.toContain(file);
+            // The admin is told, as for a collection: the database holds part of the change,
+            // each kept file, and what to run next.
+            const message = (refused as { publicMessage?: string })
+              .publicMessage;
+            expect(message).toContain(
+              "The database now holds part of this change"
+            );
+            for (const file of kept) expect(message).toContain(file);
+            expect(message).toContain("nextly migrate:resolve --applied");
           },
           60_000
         );

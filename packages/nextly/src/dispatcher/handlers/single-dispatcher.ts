@@ -75,10 +75,7 @@ import {
   fieldsAsStored,
   recordedFieldsOf,
 } from "../../domains/schema/services/collection-schema-apply";
-import {
-  collectionOwnTables,
-  getSingleRowColumnDescriptor,
-} from "../../domains/schema/services/field-column-descriptor";
+import { getSingleRowColumnDescriptor } from "../../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
@@ -1626,22 +1623,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 legacyBundle,
               ],
             }),
-            dialect,
-            // Whether a failed push changed anything is read from the tables it can reach: the
-            // main table, its translations table and any junction, before the save and after.
-            {
-              adapter,
-              tables: [
-                ...collectionOwnTables(
-                  tableName,
-                  (single.fields ?? []) as unknown as FieldDefinition[]
-                ),
-                ...collectionOwnTables(
-                  tableName,
-                  fields as unknown as FieldDefinition[]
-                ),
-              ],
-            }
+            dialect
           );
           // Notes once the push may have changed the database, so a failure after it keeps the
           // files that record it.

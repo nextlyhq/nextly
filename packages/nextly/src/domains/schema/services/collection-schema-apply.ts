@@ -98,7 +98,7 @@ import type { DesiredCollection, DesiredSchema } from "../pipeline/types";
 
 import { DrizzleStatementExecutor } from "./drizzle-statement-executor";
 import { withStoredRelationshipOptions } from "./editor-relationship-fields";
-import { collectionOwnTables, toSnakeCase } from "./field-column-descriptor";
+import { toSnakeCase } from "./field-column-descriptor";
 import { withSchemaChangeExcluded } from "./schema-change-exclusion";
 
 /**
@@ -156,6 +156,44 @@ class DriftWatchingDispatcher implements PromptDispatcher {
       ),
     ];
     return result;
+  }
+}
+
+/**
+ * Whether a push stopped at its first question: the pipeline asks it in planning, before the
+ * push runs any statement, and a later try of the same push asks only questions not asked yet, so
+ * a refusal there (an answer not to proceed, or a throw) means nothing of the push ran. A refusal
+ * at a later question may follow statements an earlier try kept, so it is never answered for.
+ * `starting` begins each push afresh (`landingPush`).
+ */
+class FirstQuestionWatch implements PromptDispatcher {
+  private asked = 0;
+  private refusedFirst = false;
+
+  constructor(private readonly inner: PromptDispatcher) {}
+
+  starting(): void {
+    this.asked = 0;
+    this.refusedFirst = false;
+  }
+
+  stopped(): boolean {
+    return this.refusedFirst;
+  }
+
+  async dispatch(
+    args: Parameters<PromptDispatcher["dispatch"]>[0]
+  ): ReturnType<PromptDispatcher["dispatch"]> {
+    const first = this.asked === 0;
+    this.asked += 1;
+    try {
+      const result = await this.inner.dispatch(args);
+      if (first && !result.proceed) this.refusedFirst = true;
+      return result;
+    } catch (error) {
+      if (first) this.refusedFirst = true;
+      throw error;
+    }
   }
 }
 
@@ -580,13 +618,15 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
         .map(resolution => resolution.eventId)
     )
   );
+  // Notes a push refused at its first question, which ran no statement (`landingPush`).
+  const firstQuestion = new FirstQuestionWatch(promptDispatcher);
   const apply = createApplyDesiredSchema({
     applyPipeline: (desiredArg, sourceArg, channelArg) => {
       const pipeline = new PushSchemaPipeline({
         executor: new DrizzleStatementExecutor(dialect, db),
         renameDetector: new RegexRenameDetector(),
         classifier: new RealClassifier(),
-        promptDispatcher,
+        promptDispatcher: firstQuestion,
         preRenameExecutor: noopPreRenameExecutor,
         preCleanupExecutor: new RealPreCleanupExecutor(),
         // The real journal from DI, with a noop fallback for callers that bypass DI.
@@ -621,7 +661,7 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
       return out;
     },
   });
-  return { apply, promptDispatcher, defaultLocale };
+  return { apply, promptDispatcher, defaultLocale, firstQuestion };
 }
 
 /**
@@ -806,18 +846,9 @@ async function applyHoldingSchemaLock(
   const changed = changeApply(change, deps);
   const { promptDispatcher, defaultLocale } = changed;
   // Every push below, the settings push and the companion's included, tells the caller once it
-  // may have changed the database; the checks before them change nothing. Whether a failed one
-  // did is read from the tables the change can reach: the collection's own, before and after.
-  const landing = landingPush(changed.apply, dialect, {
-    adapter,
-    tables: [
-      ...collectionOwnTables(
-        tableName,
-        (collection.fields ?? []) as unknown as FieldDefinition[]
-      ),
-      ...collectionOwnTables(tableName, fields),
-    ],
-  });
+  // may have changed the database; the checks before them change nothing. A failed one changed
+  // nothing where it stopped at its first question, asked before any statement.
+  const landing = landingPush(changed.apply, dialect, changed.firstQuestion);
   const apply: ApplyDesired = async (...args) => {
     try {
       return await landing.push(...args);
