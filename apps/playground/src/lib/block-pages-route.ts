@@ -67,7 +67,7 @@ export const blockPagesRoute: BlocksPageConfig = {
   styleContext: SITE_STYLE_CONTEXT,
   // The CSS authors write for the site, a page or a block, through the page
   // builder's checker. Without it the route draws none of it.
-  customCss: pageBuilderCustomCss({ nextly: siteReader }),
+  customCss: pageBuilderCustomCss(),
   // Resolved per request: defaults with the stored Site Style layered on top.
   // The same statement the page-builder route makes, because both routes serve
   // documents of one engine and a site sheet that differed between them would

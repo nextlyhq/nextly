@@ -124,10 +124,7 @@ export { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
 // page inside its Layout without importing this plugin.
 export { pageBuilderLayouts } from "./page-layouts";
 // A pages route's custom CSS: the one checker and the site's CSS read.
-export {
-  pageBuilderCustomCss,
-  type PageBuilderCustomCssOptions,
-} from "./custom-css";
+export { pageBuilderCustomCss } from "./custom-css";
 export type {
   PageBuilderLayoutsOptions,
   PageBuilderLayoutsProvider,

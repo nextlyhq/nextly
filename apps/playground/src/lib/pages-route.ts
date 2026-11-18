@@ -52,7 +52,7 @@ export const pagesRoute: BlocksPageConfig = {
   styleContext: SITE_STYLE_CONTEXT,
   // The CSS authors write for the site, a page or a block, through the page
   // builder's checker. Without it the route draws none of it.
-  customCss: pageBuilderCustomCss({ nextly: siteReader }),
+  customCss: pageBuilderCustomCss(),
   // The one provider, shared with the single-page routes so every route
   // resolves its tokens the same way. See `SITE_STYLES`.
   siteStyles: SITE_STYLES,

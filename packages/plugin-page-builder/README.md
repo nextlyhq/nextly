@@ -254,7 +254,7 @@ newer definition than this build registers is left exactly as found.
 
 - Text is escaped; image/link/video URLs are scheme-validated (rejects `javascript:` /
   `vbscript:` / `data:`, including control-char-obfuscated variants).
-- Custom CSS (the site's, a page's `settings.customCss` and a block's `customCss`)
+- Custom CSS (a page's `settings.customCss` and a block's `customCss`)
   reaches a page only through one checker, which the admin and the server share: it
   refuses `@import`, any `url(…)` that isn't a path on the site, anything that would
   end the style element and anything that can run script, naming the line. A block's

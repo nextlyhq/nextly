@@ -1,15 +1,15 @@
 ---
 title: Custom CSS
-description: Add your own CSS where the builder's controls stop, for one block, one page or the whole site, checked and scoped before it reaches a page.
+description: Add your own CSS where the builder's controls stop, for one block or one page, checked and scoped before it reaches a page.
 ---
 
 Custom CSS is your own CSS, for the cases the builder's style controls don't cover. It
-can be written for one block, for one page, or for the whole site, and it is drawn on
-the published page, in previews and on the canvas.
+can be written for one page or for one block, and it is drawn on the published page, in
+previews and on the canvas.
 
 <Callout type="warn">
-  Custom CSS is experimental: the `customCss` route option, `pageBuilderCustomCss` and
-  the checker may change before they are stable.
+  Custom CSS is experimental: the `customCss` route option,
+  `pageBuilderCustomCss` and the checker may change before they are stable.
 </Callout>
 
 ## Show it on your site
@@ -33,14 +33,13 @@ A route without `customCss` draws none of it, at any level. The canvas and the a
 previews always draw it, through the same checker, so they show what the live page shows
 once the route has the line.
 
-## The three levels
+## Page and block CSS
 
-- **The whole site**: drawn on every page, first.
-- **One page**: drawn on that page, after the site's.
-- **One block**: drawn last, on that block only.
+- **One page**: drawn on that page.
+- **One block**: drawn after the page's, on that block only.
 
-All three come after the builder's own styles, so your CSS wins a tie with them, and the
-narrower level wins a tie with the wider one.
+Both come after the builder's own styles, so your CSS wins a tie with them, and a block's
+wins a tie with its page's.
 
 ## A block's CSS starts from `selector`
 
@@ -70,7 +69,7 @@ component, still styles itself wherever it lands.
 
 A rule that doesn't start from `selector` is refused, naming its line, and so is an
 at-rule that can't be confined to one block, like `@font-face` or `@keyframes`. Put
-those in the page's or the site's CSS.
+those in the page's CSS.
 
 ## What the checker refuses
 
