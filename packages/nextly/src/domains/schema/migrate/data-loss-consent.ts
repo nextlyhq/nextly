@@ -427,54 +427,74 @@ function consentHint(
   consent: DataLossConsent,
   flag: boolean
 ): string {
-  const blanket = deletions.some(onlyBlanketCovers);
-  const forms = (value: string | null): string => {
-    const env =
-      value === null
-        ? `${ACCEPT_DATA_LOSS_ENV}=1`
-        : `${ACCEPT_DATA_LOSS_ENV}=${value}`;
-    if (!flag) return env;
-    const cli =
-      value === null
-        ? ACCEPT_DATA_LOSS_FLAG
-        : `${ACCEPT_DATA_LOSS_FLAG}=${value}`;
-    return `${cli} (or ${env})`;
-  };
-  if (blanket) return forms(null);
+  if (deletions.some(onlyBlanketCovers)) return consentForms(null, flag);
+  return consentForms(consentTokens(deletions, consent).join(","), flag);
+}
+
+/**
+ * A consent value as the variable spells it, and as the flag does too where
+ * the command takes one; `null` is the form without targets.
+ */
+function consentForms(value: string | null, flag: boolean): string {
+  const env = `${ACCEPT_DATA_LOSS_ENV}=${value ?? "1"}`;
+  if (!flag) return env;
+  const cli =
+    value === null
+      ? ACCEPT_DATA_LOSS_FLAG
+      : `${ACCEPT_DATA_LOSS_FLAG}=${value}`;
+  return `${cli} (or ${env})`;
+}
+
+/**
+ * The targets naming every one of `deletions` besides those the given consent
+ * names: tables first, then each column whose table is not named.
+ */
+function consentTokens(
+  deletions: readonly Deletion[],
+  consent: DataLossConsent
+): string[] {
   const named = consent.given?.targets;
-  const tables = new Set(
-    named === undefined || named === "all" ? [] : named.tables
-  );
-  const columns = new Set(
-    named === undefined || named === "all" ? [] : named.columns
-  );
+  const given = named === undefined || named === "all" ? undefined : named;
+  const tables = new Set(given?.tables ?? []);
+  const columns = new Set(given?.columns ?? []);
   // An entity's rows in a shared table are named by the entity's main table:
   // naming the shared table would agree to every other entity's rows there.
   // Its other deletions are named by their own table, the narrowest
   // consent, unless the owner is named already.
-  const owned: Deletion[] = [];
+  const owned: NamedDeletion[] = [];
   for (const d of deletions) {
     if (d.kind === "unnamed") continue;
     if (d.kind === "rows" && d.of !== undefined && d.owner !== undefined) {
       tables.add(d.owner);
     } else if (d.owner !== undefined) {
       owned.push(d);
-    } else if (d.kind === "column") {
-      columns.add(`${d.table}.${d.column}`);
     } else {
-      tables.add(d.table);
+      nameByOwnTable(d, tables, columns);
     }
   }
   for (const d of owned) {
-    if (d.kind === "unnamed" || tables.has(d.owner ?? "")) continue;
-    if (d.kind === "column") columns.add(`${d.table}.${d.column}`);
-    else tables.add(d.table);
+    if (!tables.has(d.owner ?? "")) nameByOwnTable(d, tables, columns);
   }
-  const tokens = [
+  return [
     ...tables,
     ...[...columns].filter(column => !tables.has(column.split(".")[0])),
   ];
-  return forms(tokens.join(","));
+}
+
+/** A deletion a consent can name by its table. */
+type NamedDeletion = Exclude<Deletion, { kind: "unnamed" }>;
+
+/** Names `deletion` by its own table: a column as `table.column`, anything else as its table. */
+function nameByOwnTable(
+  deletion: NamedDeletion,
+  tables: Set<string>,
+  columns: Set<string>
+): void {
+  if (deletion.kind === "column") {
+    columns.add(`${deletion.table}.${deletion.column}`);
+  } else {
+    tables.add(deletion.table);
+  }
 }
 
 /**

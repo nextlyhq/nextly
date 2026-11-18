@@ -259,32 +259,48 @@ export async function withEntityCoverage(
   const covered = coverRunDeletions(perUnit, owners, reader.retires);
   const counted: Deletion[][] = [];
   for (const list of covered) {
-    // Each of the entity's own tables is listed with its rows: the main table and every table it
-    // owns. Another deletion keeps what its reading gave it.
-    const tablesCounted: Deletion[] = [];
-    for (const deletion of list) {
-      const ofEntity =
-        deletion.kind === "table" &&
-        deletion.count === undefined &&
-        (deletion.owner !== undefined ||
-          owners.mainOf(deletion.table) !== undefined);
-      if (!ofEntity) {
-        tablesCounted.push(deletion);
-        continue;
-      }
-      const count = await boundedCount(
-        reader,
-        deletion.table,
-        undefined,
-        deadline
-      );
-      tablesCounted.push(
-        count === undefined ? deletion : { ...deletion, count }
-      );
-    }
+    const tablesCounted = await countEntityTables(
+      list,
+      owners,
+      reader,
+      deadline
+    );
     counted.push(await countEntityRows(tablesCounted, reader, deadline));
   }
   return counted;
+}
+
+/**
+ * `deletions` with each of an entity's own tables listed with its rows: the
+ * main table and every table it owns, counted within `deadline`. Another
+ * deletion keeps what its reading gave it.
+ */
+async function countEntityTables(
+  deletions: readonly Deletion[],
+  owners: EntityOwners,
+  reader: SharedRowsReader,
+  deadline: number
+): Promise<Deletion[]> {
+  const listed: Deletion[] = [];
+  for (const deletion of deletions) {
+    const ofEntity =
+      deletion.kind === "table" &&
+      deletion.count === undefined &&
+      (deletion.owner !== undefined ||
+        owners.mainOf(deletion.table) !== undefined);
+    if (!ofEntity) {
+      listed.push(deletion);
+      continue;
+    }
+    const count = await boundedCount(
+      reader,
+      deletion.table,
+      undefined,
+      deadline
+    );
+    listed.push(count === undefined ? deletion : { ...deletion, count });
+  }
+  return listed;
 }
 
 /**
