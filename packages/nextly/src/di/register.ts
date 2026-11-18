@@ -90,7 +90,7 @@ import type { LanguageRegistry } from "../domains/i18n/language-registry";
 import {
   mainTableFields,
   publishesPerLanguage,
-  setPerLanguageStorage,
+  warnPerLanguageStorageSetting,
   storesPerLanguage,
 } from "../domains/i18n/per-language-storage";
 import { LanguageSettingsService } from "../domains/i18n/services/language-settings-service";
@@ -1675,7 +1675,12 @@ async function resolveBootConfig(
   // registry registers no table before this either, and the choice is made here once: a reload
   // refuses to change it. A site restarted over the database it laid out would otherwise register
   // its tables as if the setting were off, naming translatable columns its main tables lack.
-  setPerLanguageStorage(transformedSetupConfig.perLanguageStorage === true);
+  // Every installation keeps its translatable fields per language: the setting no longer chooses
+  // a layout, and a site that still sets it is told so.
+  warnPerLanguageStorageSetting(
+    transformedSetupConfig.perLanguageStorage,
+    message => resolvedLogger.warn?.(message)
+  );
   const {
     config: contributedConfig,
     deferredExtends,

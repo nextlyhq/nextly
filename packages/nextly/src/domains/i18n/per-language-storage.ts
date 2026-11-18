@@ -9,7 +9,6 @@
  * @module domains/i18n/per-language-storage
  * @experimental
  */
-import { NextlyError } from "../../errors/nextly-error";
 import { isFieldGroupFieldType } from "../field-groups/storage/field-group-field-type";
 
 import {
@@ -30,46 +29,57 @@ const globalForStorage = globalThis as unknown as {
   };
 };
 globalForStorage.__nextly_perLanguageStorage ??= {
-  enabled: false,
+  enabled: true,
   chosen: false,
 };
 const state = globalForStorage.__nextly_perLanguageStorage;
 
-/** Publish, at boot, whether every translatable field is kept per language from the start. */
+/**
+ * For tests only: lay tables out as a release from before per-language storage did, keeping an
+ * entity's translatable values on its main table unless it is translated. Every installation keeps
+ * them per language now, and nothing a site configures reaches this: `experimental.perLanguageStorage`
+ * only warns at the start (`warnPerLanguageStorageSetting`). A test that stands in for an earlier
+ * release, such as the upgrade's, sets it before booting and resets it (`_resetPerLanguageStorage`)
+ * when done; so does a test of a code path only such a database still reaches.
+ *
+ * @internal
+ */
 export function setPerLanguageStorage(enabled: boolean): void {
   state.enabled = enabled;
   state.chosen = true;
-  state.adopted = false;
 }
 
 /**
- * Adopt a configuration's choice in a process that reads its config without booting a site, such
- * as a CLI command, whose DDL must lay tables out as the site does. A later read of the config in
- * the same process, as `db:sync --watch` reloading an edited config, is refused when it changes the
- * choice, as a running site's reload is. A process that chose at boot keeps its choice: a running
- * site's reload reads the config again, and it is the reload that decides whether a changed choice
- * is refused.
- */
-export function adoptPerLanguageStorage(enabled: boolean | undefined): void {
-  if (!state.chosen) {
-    setPerLanguageStorage(enabled === true);
-    state.adopted = true;
-    return;
-  }
-  if (state.adopted === true) assertPerLanguageStorageUnchanged(enabled);
-}
-
-/**
- * Forget the choice, as a process that has not booted yet holds none. For tests: the choice is
- * process-wide, so a test that publishes one puts this back when it is done.
+ * Put the layout back to the one every installation runs, after a test that stood in for an
+ * earlier release.
  */
 export function _resetPerLanguageStorage(): void {
-  state.enabled = false;
+  state.enabled = true;
   state.chosen = false;
   state.adopted = false;
 }
 
-/** Whether every translatable field is kept per language from the start. Defaults to false. */
+/**
+ * The start's word on `experimental.perLanguageStorage`: the setting no longer chooses a layout,
+ * every installation keeping its translatable fields per language, so a site that still sets it
+ * (to either value) is told it is deprecated and does nothing. A site that leaves it out hears
+ * nothing.
+ */
+export function warnPerLanguageStorageSetting(
+  setting: boolean | undefined,
+  warn: (message: string) => void
+): void {
+  if (setting === undefined) return;
+  warn(
+    "experimental.perLanguageStorage is deprecated and has no effect: every installation keeps " +
+      "its translatable fields per language. Remove it from the configuration."
+  );
+}
+
+/**
+ * Whether every translatable field is kept per language from the start: always, for every
+ * installation, but in a test standing in for an earlier release (`setPerLanguageStorage`).
+ */
 export function perLanguageStorageEnabled(): boolean {
   return state.enabled;
 }
@@ -214,21 +224,4 @@ export function translationLayoutChange(flags: {
     languagesMustAgreeWithEntry:
       wasPublishedPerLanguage && wasLocalized && !isLocalized && hasStatus,
   };
-}
-
-/**
- * Refuses a reloaded config that turns per-language storage on or off: the tables the running
- * site reads and writes were laid out for the choice it started with.
- */
-export function assertPerLanguageStorageUnchanged(
-  requested: boolean | undefined
-): void {
-  if ((requested === true) === state.enabled) return;
-  throw new NextlyError({
-    code: "NEXTLY_PER_LANGUAGE_STORAGE_CHANGED",
-    publicMessage:
-      "experimental.perLanguageStorage is chosen when the site starts, so a running site keeps the " +
-      "choice it started with. Restart the site to change it.",
-    logContext: { running: state.enabled, requested: requested === true },
-  });
 }

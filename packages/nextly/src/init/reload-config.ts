@@ -51,7 +51,6 @@ import { withMigrationExcluded } from "../domains/field-groups/migration/sync-gu
 import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
 import {
-  assertPerLanguageStorageUnchanged,
   publishesPerLanguage,
   storesPerLanguage,
 } from "../domains/i18n/per-language-storage";
@@ -2007,10 +2006,6 @@ async function applyReloadHolding(
         };
       }
     ).config;
-
-    // The tables the running site reads and writes were laid out for the per-language storage
-    // choice it started with, so a config that changes it is refused until the site restarts.
-    assertPerLanguageStorageUnchanged(newConfig?.perLanguageStorage);
 
     // The reload repopulates the field-type registry through `loadConfig` but
     // never goes back through `registerServices`, so the boot gate does not run

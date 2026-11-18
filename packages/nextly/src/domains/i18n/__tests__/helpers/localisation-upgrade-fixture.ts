@@ -1,6 +1,6 @@
 /**
  * A database laid out as an installation from before per-language storage keeps it, for the
- * upgrade's tests: booted once as that installation (`experimental.perLanguageStorage` off), filled
+ * upgrade's tests: booted once as that installation (the test-only `setPerLanguageStorage(false)`), filled
  * through the services it wrote with, and booted again after the upgrade as every installation now
  * runs (per-language storage on).
  *
@@ -44,7 +44,10 @@ import {
   type VersionRow,
 } from "../../../versions/versions-repository";
 import { workingDraftKey } from "../../../versions/working-draft-key";
-import { _resetPerLanguageStorage } from "../../per-language-storage";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../per-language-storage";
 
 /** The languages of the site, its default first. */
 export const LANGUAGES = ["en", "es", "fr"] as const;
@@ -181,6 +184,8 @@ export async function bootSite(
 ): Promise<TestNextly> {
   clearServices();
   _resetPerLanguageStorage();
+  // An earlier release's layout is a test's to stand in for: nothing a site configures selects it.
+  if (layout === "legacy") setPerLanguageStorage(false);
   return createTestNextly({
     adapter: database.adapter as never,
     collections: [...site.collections],
@@ -189,7 +194,6 @@ export async function bootSite(
       locales: [...site.localization.locales],
       defaultLocale: site.localization.defaultLocale,
     },
-    perLanguageStorage: layout === "upgraded",
     ...(logger === undefined ? {} : { logger }),
   });
 }
