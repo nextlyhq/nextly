@@ -91,32 +91,15 @@ async function chooseTab(inspector: Locator, name: string): Promise<void> {
   await expect(tab).toHaveAttribute("aria-selected", "true");
 }
 
-/** The focused element as a stop: its role and accessible name. */
+/**
+ * The focused element as a stop: its role and accessible name, as the
+ * browser's accessibility tree gives them.
+ */
 async function focusedStop(page: Page): Promise<string> {
-  return page.evaluate(() => {
-    const element = document.activeElement;
-    if (element === null) return "(nothing)";
-    const role =
-      element.getAttribute("role") ??
-      (element.tagName === "INPUT" ? "input" : element.tagName.toLowerCase());
-    const labelled = element.getAttribute("aria-labelledby");
-    const name =
-      element.getAttribute("aria-label") ??
-      (labelled === null
-        ? null
-        : labelled
-            .split(" ")
-            .map(id => document.getElementById(id)?.textContent ?? "")
-            .join(" ")) ??
-      (element.id === ""
-        ? null
-        : document.querySelector(`label[for="${CSS.escape(element.id)}"]`)
-            ?.textContent) ??
-      element.getAttribute("placeholder") ??
-      element.textContent ??
-      "";
-    return `${role} ${name.replace(/\s+/g, " ").trim()}`;
-  });
+  const snapshot = await page.locator("*:focus").first().ariaSnapshot();
+  const first = snapshot.split("\n")[0] ?? "";
+  const match = /^- ([a-z]+)(?: "([^"]*)")?/.exec(first);
+  return match === null ? first : `${match[1]} ${match[2] ?? ""}`.trim();
 }
 
 /** The first `count` stops Tab reaches from the block card's menu. */
@@ -217,7 +200,7 @@ test.describe("the block panel", () => {
         expect(stops.slice(0, 5), `${tab}: the panel's head`).toEqual([
           "button Actions for Heading",
           `tab ${tab}`,
-          "input Find a setting",
+          "searchbox Find a setting",
           "button Only changed",
           "button Panel options",
         ]);
