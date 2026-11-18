@@ -12,7 +12,8 @@
  *
  * Read from the AST, as the builder's `user-words.test` does, so comments are
  * never findings. Skipped as not shown to an author: module specifiers,
- * literal types, object keys, lower-case code names with no space, the
+ * literal types, object keys, lower-case code names with no space (except
+ * where a string is always shown: a header, a label, an accessible name), the
  * attributes that only code reads (`className`, `data-*` and the rest), and
  * any argument of a `console` call. A JSX element's own text and the
  * expressions between it are read as one text, `{…}` standing for each
@@ -154,6 +155,41 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
 /** A lower-case code name: a slug, an id, a path, a CSS class. */
 const CODE_NAME = /^[a-z0-9_\-:./#@*${}…[\]]*$/;
 
+/**
+ * Where a string is always shown, a lone lower-case word included: a value
+ * under one of these keys, or one of these attributes on an element.
+ */
+const SHOWN_PLACE =
+  /^(?:header|heading|label|title|placeholder|description|tooltip|hint|note|caption|message|alt|aria-label|aria-description|aria-valuetext)$/;
+
+/** The name of a property's key or an element's attribute, when plain. */
+function placeName(holder: AstNode): string | null {
+  if (holder.type === "Property") {
+    if (holder.key.type === "Identifier") return holder.key.name;
+    if (holder.key.type === "Literal") return String(holder.key.value);
+    return null;
+  }
+  if (holder.type === "JSXAttribute" && holder.name.type === "JSXIdentifier") {
+    return holder.name.name;
+  }
+  return null;
+}
+
+/**
+ * Whether a string sits where it is shown however it is spelled: the value
+ * of a shown key (`header: "slug"`), or a shown attribute, given directly or
+ * as an expression (`aria-label="slug"`, `aria-label={"slug"}`).
+ */
+function inShownPlace(node: AstNode, ancestors: readonly AstNode[]): boolean {
+  const parent = ancestors.at(-1);
+  const holder =
+    parent?.type === "JSXExpressionContainer" ? ancestors.at(-2) : parent;
+  if (holder === undefined) return false;
+  if (holder.type === "Property" && holder.value !== node) return false;
+  const name = placeName(holder);
+  return name !== null && SHOWN_PLACE.test(name);
+}
+
 /** The attributes only code reads; anything else on an element may be shown. */
 const CODE_ATTRIBUTE =
   /^(?:className|class|style|id|key|ref|role|type|name|value|href|to|src|htmlFor|form|method|target|rel|tabIndex|autoComplete|inputMode|pattern|side|align|variant|size|data-.*|aria-(?:controls|describedby|labelledby|owns|haspopup|live|current|expanded|selected|pressed|hidden|modal|atomic|relevant|orientation|sort))$/;
@@ -236,7 +272,9 @@ export function shownTexts(source: string, fileName: string): string[] {
     }
     if (text === null) return;
     const trimmed = tidy(text);
-    if (trimmed === "" || CODE_NAME.test(trimmed)) return;
+    if (trimmed === "") return;
+    // A lower-case code name is skipped, unless it stands where it is shown.
+    if (CODE_NAME.test(trimmed) && !inShownPlace(node, ancestors)) return;
     if (notShown(node, ancestors)) return;
     texts.push(trimmed);
   });
@@ -310,6 +348,10 @@ describe("the entry and settings screens' words", () => {
         "const b = `Every ${1} field type`;",
         'const C = () => <p className="slug field" data-x="a slug">Blocks field {n} here</p>;',
         'const D = () => <button aria-label="Copy the slug" title="Document view" />;',
+        // A lone lower-case word is still read where it is shown: a column's
+        // header, a label, an accessible name. Elsewhere it is a code name.
+        'const column = { name: "slug", header: "slug", label: "slugs" };',
+        'const E = () => <input aria-label="slug" name="slug" />;',
       ].join("\n"),
       "probe.tsx"
     );
@@ -319,6 +361,9 @@ describe("the entry and settings screens' words", () => {
       "Blocks field {…} here",
       "Copy the slug",
       "Document view",
+      "slug",
+      "slugs",
+      "slug",
     ]);
   });
 });
