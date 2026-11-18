@@ -1,11 +1,14 @@
 /**
  * Site code: the routes that read, check and save the code every published
- * page carries.
+ * page carries, and the site's CSS.
  */
 import type { PluginRoute } from "@nextlyhq/plugin-sdk";
 
 import { siteCodeRoutes } from "../site-code/route";
 import { MANAGE_SITE_PERMISSION } from "../site-settings";
+import { mayReadSiteStyle } from "../site-style-route";
+
+import { componentStoreOf } from "./options";
 
 import type { Definition } from "./state";
 
@@ -37,6 +40,9 @@ export function routesForSiteCode(def: Definition): {
           ? person.name
           : null;
       },
+      // The canvas draws the site's CSS for whoever may read the site style
+      // it draws with: anyone who may edit something the builder opens.
+      mayDrawCss: ctx => mayReadSiteStyle(ctx, componentStoreOf(opts)),
     }),
   };
 }

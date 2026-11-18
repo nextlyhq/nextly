@@ -49,6 +49,7 @@ import {
   type CspCheck,
   type SiteCodeFacts,
 } from "./csp";
+import { siteCssRoutes, type SiteCssRouteDeps } from "./css-route";
 import { describeSiteCode } from "./describe";
 import {
   SITE_CODE_LIMITS,
@@ -120,6 +121,11 @@ export interface SiteCodeRouteDeps {
    * it can't be read. Absent, no name is given.
    */
   readonly personName?: (id: string) => Promise<string | null>;
+  /**
+   * Whether a caller may read the site's CSS to draw it on the canvas: who
+   * may read the site style. Absent, nobody may.
+   */
+  readonly mayDrawCss?: SiteCssRouteDeps["mayDraw"];
 }
 
 /** The audit kind a save writes. */
@@ -580,7 +586,10 @@ async function changeSiteCode(
   );
 }
 
-/** The site code routes: read, and check or save. */
+/**
+ * The site code routes: read, and check or save; and the site's CSS, read
+ * and saved under the same permission (`css-route`), its only writer.
+ */
 export function siteCodeRoutes(deps: SiteCodeRouteDeps): PluginRoute[] {
   return [
     {
@@ -595,5 +604,10 @@ export function siteCodeRoutes(deps: SiteCodeRouteDeps): PluginRoute[] {
       requiredPermission: deps.permission,
       handler: (req, ctx) => changeSiteCode(req, ctx, deps),
     },
+    ...siteCssRoutes({
+      permission: deps.permission,
+      mayDraw: deps.mayDrawCss ?? (async () => false),
+      ...(deps.personName === undefined ? {} : { personName: deps.personName }),
+    }),
   ];
 }

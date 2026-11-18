@@ -91,6 +91,29 @@ describe("routeStyleContext", () => {
     expect(given.readSite).toHaveBeenCalledTimes(1);
   });
 
+  it("tags a public route's read with the cache tags the source names too", async () => {
+    await routeStyleContext(
+      {
+        ...route,
+        styleContext: BASE,
+        customCss: {
+          ...source("body { margin: 0; }"),
+          singles: [],
+          tags: ["nextly:plugin:@acme/builder:site-css"],
+        },
+      },
+      true,
+      undefined
+    );
+    expect(runtime.reads[0]?.tags).toEqual([
+      "nextly:plugin:@acme/builder:site-css",
+    ]);
+    // Named in the cache key too, so two sources' reads never share an entry.
+    expect(runtime.reads[0]?.keyParts.join("\n")).toContain(
+      "nextly:plugin:@acme/builder:site-css"
+    );
+  });
+
   it("reads a draft route's site CSS fresh, uncached", async () => {
     await routeStyleContext(
       { ...route, styleContext: BASE, customCss: source("x{}") },
