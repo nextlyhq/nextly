@@ -804,6 +804,47 @@ describe("a many-to-many leaving its link table", () => {
     ).toBe(false);
   });
 
+  // Kept a many-to-many but pointed at another collection: the save drops the old link table and
+  // starts an empty one for the new target, so the links go.
+  it("calls a many-to-many pointed at another collection destructive, counting the links it drops", async () => {
+    const { db } = linkCountDb(4);
+    const result = await leaving(
+      manyToMany(),
+      {
+        name: "tags",
+        type: "relationship",
+        relationTo: "topics",
+        options: { target: "topics", relationType: "manyToMany" },
+      } as FieldDefinition,
+      db
+    );
+    expect(result.changes.changed[0]).toMatchObject({
+      rowCount: 4,
+      classification: "destructive",
+    });
+    expect(result.warnings).toContain(
+      "Changing 'tags' to link to 'topics' instead drops its link table and the 4 links it holds; its new link table starts empty."
+    );
+  });
+
+  // A list of links kept in its column holds several links in each entry, so the warning names
+  // the entries whose links it drops rather than counting them as links.
+  it("names the entries whose list of links goes when the list becomes a many-to-many", async () => {
+    const { db } = countingDb({ dc_posts: { rows: 5, nulls: { tags: 3 } } });
+    const result = await leaving(
+      { ...singleLink, hasMany: true } as FieldDefinition,
+      manyToMany(),
+      db
+    );
+    expect(result.changes.changed[0]).toMatchObject({
+      rowCount: 2,
+      classification: "destructive",
+    });
+    expect(result.warnings).toContain(
+      "Changing 'tags' from a list of links to many-to-many drops the column holding the links of its 2 entries; its new link table starts empty."
+    );
+  });
+
   it("names what the field becomes when it is no longer a link", async () => {
     const { db } = linkCountDb(2);
     const result = await leaving(
