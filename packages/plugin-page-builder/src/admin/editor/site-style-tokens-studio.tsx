@@ -11,6 +11,7 @@
 import {
   resolveSiteTokens,
   type BlockDocument,
+  type BreakpointSet,
   type ComponentLookup,
   type DocumentLimits,
   type NamedClass,
@@ -21,10 +22,12 @@ import {
   DESIGN_TAB_GROUPS,
   TokensPanel,
   type DesignTab,
+  type EditClasses,
   type TokensPanelProps,
   useVariablesHeader,
   variableMatchesByTab,
 } from "@nextlyhq/builder/shell";
+import { usePluginClientConfig } from "@nextlyhq/plugin-sdk/admin";
 import { useCan } from "@nextlyhq/plugin-sdk/client";
 import {
   createContext,
@@ -48,9 +51,11 @@ import {
 } from "../../site-style-record";
 import { sameStoredValue } from "../../stored-json";
 import { conflictWords } from "../conflict-words";
+import { PLUGIN_SOURCE } from "../plugin-source";
 import {
   SiteStyleHistoryContext,
   SiteStylePreviewContext,
+  useFontCatalogueClient,
   useHeldSiteStyle,
   useSaveSiteStyle,
 } from "../site-style-client";
@@ -93,6 +98,7 @@ export function TokensStudio({
   supplied,
   pending,
   classes,
+  importing = {},
   opens,
   mode,
   children,
@@ -108,6 +114,16 @@ export function TokensStudio({
    * it. Absent while they are being read.
    */
   classes?: readonly NamedClass[];
+  /** What an import's text styles are stored through and matched with. */
+  importing?: {
+    /**
+     * The editor's one class writer, which they are stored through, as one
+     * step of the style history. Absent: an import brings in none.
+     */
+    onEditClasses?: EditClasses;
+    /** The site's breakpoints once read. Absent while being read. */
+    breakpoints?: BreakpointSet;
+  };
   /** Where a shared style or a block look using a variable opens. */
   opens?: StyleOpeners;
   /**
@@ -152,11 +168,8 @@ export function TokensStudio({
    * take the value back unsaved.
    */
   const editable = editableTokens(preview.underneath(merged));
-  const { edits, shownNow, issue, notice, commit, cleanUp } = useTokenCommits(
-    baseline,
-    editable,
-    supplied
-  );
+  const { edits, shownNow, issue, notice, commit, commitNow, cleanUp } =
+    useTokenCommits(baseline, editable, supplied);
 
   /*
    * The set as it is at the moment an import needs it, rather than the one
@@ -168,9 +181,10 @@ export function TokensStudio({
     withReadPrefix(shownNow(), editable);
   const header = useVariablesHeader({
     onChange: commit,
+    storeTokensNow: commitNow,
     currentTokens,
     readOnly: !mayChange,
-    ...(mode === undefined ? {} : { mode }),
+    ...useTransferInputs({ classes, ...importing, mode }),
   });
   // Memoised, so a set whose prefix was replaced is the same object until
   // the edits or the read change, as `edits ?? editable` was.
@@ -210,6 +224,45 @@ export function TokensStudio({
       </SharedStyleToOpen.Provider>
     </VariablesStudio.Provider>
   );
+}
+
+/**
+ * What the ⋯ menu's export and import carry beyond the variables: the
+ * site's classes as they are when one is asked for (their text styles are
+ * exported and matched on import), the class writer an import's text styles
+ * are stored through, the Google Fonts catalogue a missing font is added
+ * from, unless the host turned it off, and the site's breakpoints, which an
+ * import's text styles are matched with. The catalogue is read through the
+ * site-style client, so the fonts panel stays unloaded until it is drawn.
+ */
+function useTransferInputs({
+  classes,
+  onEditClasses,
+  breakpoints,
+  mode,
+}: {
+  classes: readonly NamedClass[] | undefined;
+  onEditClasses?: EditClasses;
+  breakpoints?: BreakpointSet;
+  /** The host's mode, which the header's swatches show where it is given. */
+  mode: TokenMode | undefined;
+}): Pick<
+  Parameters<typeof useVariablesHeader>[0],
+  "currentClasses" | "onEditClasses" | "catalogue" | "breakpoints" | "mode"
+> {
+  const latest = useRef(classes);
+  useEffect(() => {
+    latest.current = classes;
+  }, [classes]);
+  const catalogue = useFontCatalogueClient();
+  const off = usePluginClientConfig(PLUGIN_SOURCE)?.fontCatalogue === false;
+  return {
+    currentClasses: () => latest.current,
+    ...(onEditClasses === undefined ? {} : { onEditClasses }),
+    ...(off ? {} : { catalogue }),
+    ...(breakpoints === undefined ? {} : { breakpoints }),
+    ...(mode === undefined ? {} : { mode }),
+  };
 }
 
 /**
@@ -344,6 +397,11 @@ function useTokenCommits(
   /** What the last save met of someone else's, with the way to read again. */
   notice: TokensPanelProps["notice"];
   commit: (next: SiteTokenSet) => void;
+  /**
+   * An edit saved at once rather than at the author's pause, answering
+   * whether it was stored: what an import's text styles are stored after.
+   */
+  commitNow: (next: SiteTokenSet) => Promise<boolean>;
   /** "Clean up unused…": see {@link useCleanUp}. */
   cleanUp: CleanUpThrough;
 } {
@@ -376,7 +434,16 @@ function useTokenCommits(
     show(next);
     setIssue(undefined);
     setConflict(undefined);
-    send(next, shownBefore, { hold: true, keepIssue: false });
+    void send(next, shownBefore, { hold: true, keepIssue: false });
+  };
+
+  const commitNow = (next: SiteTokenSet): Promise<boolean> => {
+    // As `commit`, written without waiting for the author's pause.
+    const shownBefore = shownNow() ?? editable;
+    show(next);
+    setIssue(undefined);
+    setConflict(undefined);
+    return send(next, shownBefore, { hold: false, keepIssue: false });
   };
 
   /*
@@ -388,7 +455,7 @@ function useTokenCommits(
     next: SiteTokenSet,
     from: SiteTokenSet | undefined,
     how: { hold: boolean; keepIssue: boolean }
-  ): void => {
+  ): Promise<boolean> => {
     latest.current = next;
     const base =
       from === undefined ? undefined : tokenOverrideOf(baseline, from);
@@ -398,7 +465,7 @@ function useTokenCommits(
      * the database on the first edit and mask the site's code from then on.
      */
     const sent = tokenOverrideOf(baseline, next);
-    void save("tokens", sent, {
+    return save("tokens", sent, {
       hold: how.hold,
       ...(base === undefined ? {} : { base }),
     }).then(result => {
@@ -419,11 +486,12 @@ function useTokenCommits(
           persisted.current
         ).issue;
         setIssue(said ?? undefined);
-        send(kept, persisted.current ?? undefined, {
+        void send(kept, persisted.current ?? undefined, {
           hold: false,
           keepIssue: true,
         });
-        return;
+        // Refused in part: what was asked for wasn't stored as asked.
+        return false;
       }
       settleTokenSave(
         result,
@@ -450,6 +518,7 @@ function useTokenCommits(
         ? conflictWords("tokens", result.conflicts)
         : undefined;
       if (words !== undefined) setConflict(words);
+      return result.saved;
     });
   };
   /*
@@ -479,7 +548,7 @@ function useTokenCommits(
       show(adopted);
     };
   });
-  return { edits, shownNow, issue, notice, commit, cleanUp };
+  return { edits, shownNow, issue, notice, commit, commitNow, cleanUp };
 }
 
 /**

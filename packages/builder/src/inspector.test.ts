@@ -32,6 +32,7 @@ import {
   designIsWritable,
   designReadOnlyReason,
   blockIsReadOnly,
+  writablePropsOf,
 } from "./inspector";
 
 const base = {
@@ -368,6 +369,10 @@ describe("a block inside an area locked to its content", () => {
     expect(designLockOf(page, "t", { composed })).toBeDefined();
     expect(propIsWritable(page, "t", "align", { composed })).toBe(false);
     expect(propIsWritable(page, "t", "text", { composed })).toBe(true);
+    // Read once for the block, each prop answers as it does asked alone.
+    const writable = writablePropsOf(page, "t", { composed });
+    expect([writable("align"), writable("text")]).toEqual([false, true]);
+    expect(writablePropsOf(page, "t")("align")).toBe(true);
     expect(
       inspectSelection(page, "t", { composed })?.props.map(prop => [
         prop.name,
@@ -651,6 +656,7 @@ describe("lockStatusOf and designIsWritable", () => {
     });
     expect(blockIsReadOnly(doc, "a")).toBe(true);
     expect(propIsWritable(doc, "a", "text")).toBe(false);
+    expect(writablePropsOf(doc, "a")("text")).toBe(false);
     expect(designReadOnlyReason(doc, "a")).toBe(
       "Locked by Hero: this block is inside it, so it can't be moved, deleted or edited. Unlock Hero to change it."
     );

@@ -37,6 +37,11 @@ vi.mock("../site-style-client", async () => ({
   // Outside an editor: no history, and nothing drawn over the read.
   SiteStyleHistoryContext: (await import("react")).createContext(null),
   SiteStylePreviewContext: (await import("react")).createContext(new Map()),
+  // The catalogue a missing font is added from; no test here imports.
+  useFontCatalogueClient: () => ({
+    load: async () => ({ families: [], previewBase: "", fetchedAt: "" }),
+    add: async () => undefined,
+  }),
   useSaveSiteStyle: () => ({
     save: async () => ({ saved: true, issues: {} }),
     reserve: () => ({ save: async () => ({}), cancel: () => {} }),
