@@ -42,7 +42,11 @@ import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import { toSnakeCase } from "../../../shared/lib/case-conversion";
 import type { UpgradeReport, UpgradeStepContext } from "../upgrade-step";
 
-import { siteEntities, siteLanguages } from "./localisation-site";
+import {
+  siteEntities,
+  siteLanguages,
+  versionHistoryReady,
+} from "./localisation-site";
 
 /** A document whose pending changes are kept whole, with what splitting them needs. */
 interface DocumentToSplit {
@@ -77,6 +81,8 @@ async function documentsToSplit(
 ): Promise<DocumentToSplit[]> {
   const adapter = context.adapter as unknown as DrizzleAdapter;
   const found: DocumentToSplit[] = [];
+  // An earlier release's version history is split once `nextly migrate` has laid it out.
+  if (!(await versionHistoryReady(context))) return found;
   for (const entity of await siteEntities(context)) {
     // Only collection entries and Singles keep pending changes; a component's are its parent's.
     if (entity.kind === "component") continue;

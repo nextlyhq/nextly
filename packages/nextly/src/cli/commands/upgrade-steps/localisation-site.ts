@@ -17,7 +17,9 @@ import {
 } from "../../../domains/i18n/config/stored-languages";
 import type { LaidOutEntity } from "../../../domains/i18n/per-language-storage-layout";
 import { storedLanguageReader } from "../../../domains/i18n/stored-language-reader";
+import { introspectLiveColumns } from "../../../domains/schema/pipeline/diff/introspect-live";
 import type { ColumnOrigin } from "../../../domains/schema/services/field-column-descriptor";
+import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { UpgradeStepContext } from "../upgrade-step";
 
 /** The site's languages in its order, its default first among equals. */
@@ -90,6 +92,34 @@ export async function siteEntities(
       new Set(declared.map(entity => entity.tableName))
     )),
   ];
+}
+
+/** The version-history columns the steps that rewrite pending changes read and write. */
+const PENDING_CHANGE_COLUMNS = [
+  "draft_key",
+  "changed_locales",
+  "shared_changed",
+] as const;
+
+/**
+ * Whether the version history is laid out as this release keeps it: the steps that rewrite
+ * pending changes read and write its newer columns, which an earlier release's table lacks until
+ * `nextly migrate` adds them. Where it is not, those steps wait for a second `nextly upgrade`.
+ */
+export async function versionHistoryReady(
+  context: UpgradeStepContext
+): Promise<boolean> {
+  if (!(await context.adapter.tableExists(VERSIONS_TABLE))) return false;
+  const adapter = context.adapter as unknown as DrizzleAdapter;
+  const { tables } = await introspectLiveColumns(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    [VERSIONS_TABLE]
+  );
+  const present = new Set(
+    (tables[0]?.columns ?? []).map(column => column.name)
+  );
+  return PENDING_CHANGE_COLUMNS.every(column => present.has(column));
 }
 
 /**

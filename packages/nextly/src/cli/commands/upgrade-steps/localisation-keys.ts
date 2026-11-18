@@ -21,7 +21,7 @@ import { workingDraftKey } from "../../../domains/versions/working-draft-key";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { UpgradeReport, UpgradeStepContext } from "../upgrade-step";
 
-import { siteEntities } from "./localisation-site";
+import { siteEntities, versionHistoryReady } from "./localisation-site";
 
 /** A working draft as the step reads it. */
 interface DraftRow {
@@ -54,6 +54,8 @@ function savedAt(row: DraftRow): number {
 async function slotsToKey(context: UpgradeStepContext): Promise<SlotToKey[]> {
   const adapter = context.adapter as unknown as DrizzleAdapter;
   const slots: SlotToKey[] = [];
+  // An earlier release's version history is keyed once `nextly migrate` has laid it out.
+  if (!(await versionHistoryReady(context))) return slots;
   for (const entity of await siteEntities(context)) {
     // Only collection entries and Singles keep pending changes.
     if (entity.kind === "component") continue;
@@ -133,6 +135,14 @@ export async function draftKeysReport(
   context: UpgradeStepContext
 ): Promise<UpgradeReport> {
   const report: UpgradeReport = { move: [], conflicts: [], check: [] };
+  if (
+    (await context.adapter.tableExists(VERSIONS_TABLE)) &&
+    !(await versionHistoryReady(context))
+  ) {
+    report.check.push(
+      "the version history is from an earlier release: run `nextly migrate`, then `nextly upgrade` again, to key each pending change and keep it by part"
+    );
+  }
   for (const { entity, ref, locale, earlier } of await slotsToKey(context)) {
     const named = `the ${entity.kind} "${entity.slug}" entry ${ref.entryId}`;
     const language = locale ?? "its shared part";
