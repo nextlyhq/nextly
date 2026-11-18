@@ -29,10 +29,11 @@ function hooked() {
   const write = vi.fn(
     async (_event: { metadata?: Record<string, unknown> }) => {}
   );
+  const logger = { error: vi.fn() };
   registerPageCodeAudit({
     ctx: {
       hooks: { on: (_phase, _collection, handler) => handlers.push(handler) },
-      logger: { error: vi.fn() },
+      logger,
       audit: { write },
     },
     mayHoldBlocks: () => true,
@@ -50,7 +51,7 @@ function hooked() {
       user: { id: "u1" },
     });
   };
-  return { commit, write };
+  return { commit, write, logger };
 }
 
 describe("the page code audit", () => {
@@ -88,6 +89,18 @@ describe("the page code audit", () => {
       expect(JSON.stringify(event)).not.toContain("pageCodeTest");
     }
   );
+
+  it("writes every field's row though one fails, and logs the one it couldn't write", async () => {
+    const { commit, write, logger } = hooked();
+    write.mockRejectedValueOnce(new Error("audit store down"));
+    await commit(
+      { content: doc(CODE), sidebar: doc(CODE) },
+      { content: doc(), sidebar: doc() }
+    );
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(logger.error.mock.calls[0]?.[1]).toMatchObject({ field: "content" });
+  });
 
   it("records nothing for a write that leaves the code as it was", async () => {
     const { commit, write } = hooked();

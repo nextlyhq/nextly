@@ -39,6 +39,7 @@ import {
   type OpenRemovalReader,
 } from "../breakpoint-removal/lock-acceptance";
 import { formsChangedBy } from "../component-cycle-guard";
+import { pageCodeOf } from "../site-code/page-code";
 import { siteBreakpoints } from "../site-style";
 
 import { storedFormsFor } from "./added-undefined-ids";
@@ -62,7 +63,7 @@ import {
 } from "./layers-lock-judgement";
 import { newConditionIssues, newListQueryIssues } from "./list-query-judgement";
 import { readStoredForms } from "./lock-baselines";
-import { pageCodeIssues } from "./page-code-judgement";
+import { pageCodeBaseline, pageCodeIssues } from "./page-code-judgement";
 import { newTokenReferenceIssues } from "./token-reference-judgement";
 
 /** The engine's issue for a child of a contentOnly slot changed besides content. */
@@ -594,15 +595,25 @@ function withPageCodeJudged(
   if (judged === undefined) return type;
   return {
     ...type,
+    // Run on every write, whatever else is set up: with no write behind the
+    // value, code is refused as from nobody; before the setup is installed,
+    // a change to it is refused rather than let through unjudged.
     validate: (value, args) => {
       const answered = judged(value, args);
+      // No write and no code: nothing of the page's code to judge.
+      if (args.write === undefined && pageCodeOf(value) === null) {
+        return answered;
+      }
       const pageCode = composition?.()?.pageCode;
-      if (pageCode === undefined || args.write === undefined) return answered;
       const label =
         typeof args.field.label === "string" ? args.field.label : args.path;
       return Promise.resolve(answered).then(verdict =>
-        pageCodeIssues(value, args, label, pageCode, () =>
-          storedFormsFor(args)
+        pageCodeIssues(
+          value,
+          args,
+          label,
+          pageCode,
+          pageCodeBaseline(args)
         ).then(found => withLockIssues(verdict, found, args.path))
       );
     },

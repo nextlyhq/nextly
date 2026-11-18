@@ -56,10 +56,10 @@ afterEach(() => {
 function loadAsDocument(navigation: DocumentNavigation, strict = false) {
   const tree = strict ? (
     <StrictMode>
-      <PageCodeBoundary navigation={navigation} />
+      <PageCodeBoundary owner="head:1" navigation={navigation} />
     </StrictMode>
   ) : (
-    <PageCodeBoundary navigation={navigation} />
+    <PageCodeBoundary owner="head:1" navigation={navigation} />
   );
   host = document.createElement("div");
   host.innerHTML = renderToString(tree);
@@ -75,7 +75,7 @@ function reachByClient(navigation: DocumentNavigation) {
   document.body.append(host);
   act(() => {
     root = createRoot(host as HTMLElement);
-    root.render(<PageCodeBoundary navigation={navigation} />);
+    root.render(<PageCodeBoundary owner="head:1" navigation={navigation} />);
   });
 }
 
@@ -103,6 +103,36 @@ describe("<PageCodeBoundary>", () => {
     at.go("https://site.test/next");
     act(() => root?.unmount());
     root = undefined;
+    at.settle();
+    expect(at.navigation.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("reloads where a refresh at the same address takes the page's code away", () => {
+    const at = navigationAt("https://site.test/page");
+    loadAsDocument(at.navigation);
+    // The server's new output has no boundary: the code is gone, the
+    // address unmoved.
+    act(() => root?.unmount());
+    root = undefined;
+    at.settle();
+    expect(at.navigation.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("reloads where a refresh at the same address changes the page's code, and not where it keeps it", () => {
+    const at = navigationAt("https://site.test/page");
+    loadAsDocument(at.navigation);
+    act(() =>
+      root?.render(
+        <PageCodeBoundary owner="head:1" navigation={at.navigation} />
+      )
+    );
+    at.settle();
+    expect(at.navigation.reload).not.toHaveBeenCalled();
+    act(() =>
+      root?.render(
+        <PageCodeBoundary owner="head:2" navigation={at.navigation} />
+      )
+    );
     at.settle();
     expect(at.navigation.reload).toHaveBeenCalledTimes(1);
   });

@@ -12,8 +12,13 @@
  *
  * @module fields/page-code-judgement
  */
-import type { PluginFieldIssue } from "@nextlyhq/plugin-sdk";
+import { isPlainRecord } from "@nextlyhq/blocks-engine";
+import type {
+  PluginFieldIssue,
+  PluginFieldValidateArgs,
+} from "@nextlyhq/plugin-sdk";
 
+import { formsChangedBy } from "../component-cycle-guard";
 import {
   pageCodeOf,
   samePageCode,
@@ -22,6 +27,7 @@ import {
 import { judgeCode, type PageBuilderSiteCodeOptions } from "../site-code/route";
 
 import type { JudgedField, StoredForms } from "./added-undefined-ids";
+import { readStoredForms } from "./lock-baselines";
 
 /** The issue code a refused change to page code carries. */
 export const PAGE_CODE_REFUSED = "PAGE_CODE_REFUSED";
@@ -56,6 +62,38 @@ async function changesCode(
   // A new page holds nothing yet: no code is no change.
   if (held.length === 0) return written !== null;
   return !held.some(code => samePageCode(code, written));
+}
+
+/**
+ * The stored forms a write's code is compared with: the ones it changes, as
+ * the reference check reads them (`formsChangedBy`). A draft-only save is
+ * compared with the draft alone, so it can't put the published code back
+ * over the draft's own unasked; a publish with both, so promoting an
+ * approved draft asks nothing.
+ */
+export function pageCodeBaseline(
+  args: JudgedField & Pick<PluginFieldValidateArgs, "data">
+): () => Promise<StoredForms> {
+  const status = (args.data as { status?: unknown } | undefined)?.status;
+  return () =>
+    readStoredForms(
+      args.write,
+      args.path,
+      formsChangedBy(typeof status === "string" ? status : undefined),
+      (args.field as { localized?: unknown } | undefined)?.localized === true
+    );
+}
+
+/** Whether a blocks value is a page's, the one kind that keeps code. */
+function isPage(value: unknown): boolean {
+  if (typeof value === "string") {
+    try {
+      return isPage(JSON.parse(value) as unknown);
+    } catch {
+      return false;
+    }
+  }
+  return isPlainRecord(value) && value.kind === "page";
 }
 
 /**
@@ -103,7 +141,8 @@ export async function pageCodeIssues(
   value: unknown,
   args: JudgedField,
   label: string,
-  deps: PageCodeJudgeDeps,
+  /** Absent before the plugin's setup is installed: a change is refused. */
+  deps: PageCodeJudgeDeps | undefined,
   stored: () => Promise<StoredForms>
 ): Promise<PluginFieldIssue[]> {
   const written = pageCodeOf(value);
@@ -121,10 +160,30 @@ export async function pageCodeIssues(
           ),
         ];
   }
+  // Only a page keeps code of its own: a collection template's, a saved
+  // section's or a component's would run on every page drawn from it.
+  if (written !== null && !isPage(value)) {
+    return [
+      refusal(
+        args,
+        `${label}: only a page keeps code of its own, not a collection template, a saved section or a component.`
+      ),
+    ];
+  }
   if (!(await changesCode(written, stored))) return [];
   // The caller first, before anything about the code is read out.
   const refused = await callerRefusal(args);
   if (refused !== null) return [refusal(args, `${label}: ${refused}`)];
+  // Before the plugin's setup is installed (a dev server's config reload
+  // builds the field again), the site's policy isn't known to judge by.
+  if (deps === undefined) {
+    return [
+      refusal(
+        args,
+        `${label}: this page's code can't be checked until the site has finished starting. Try again in a moment.`
+      ),
+    ];
+  }
   if (written === null) return [];
   const judged = await judgeCode(
     { head: written.head, body: written.body },

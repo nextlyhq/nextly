@@ -193,14 +193,23 @@ async function auditWrite(
     id: typeof data.id === "string" ? data.id : "",
     actor: typeof hook.user?.id === "string" ? hook.user.id : null,
   };
+  // Each field's row on its own: one that can't be written leaves the
+  // others to be written, and the log names the field whose row is missing.
   const record = async (): Promise<void> => {
-    try {
-      for (const change of changes) await writeRow(args, change, where);
-    } catch (error) {
-      args.ctx.logger.error(
-        "[page-builder] a change to a page's code was saved, but its audit row could not be written",
-        { collection, entryId: where.id, error: String(error) }
-      );
+    for (const change of changes) {
+      try {
+        await writeRow(args, change, where);
+      } catch (error) {
+        args.ctx.logger.error(
+          "[page-builder] a change to a page's code was saved, but its audit row could not be written",
+          {
+            collection,
+            entryId: where.id,
+            field: change.field,
+            error: String(error),
+          }
+        );
+      }
     }
   };
   await (hook.afterCommit ? hook.afterCommit(record) : record());

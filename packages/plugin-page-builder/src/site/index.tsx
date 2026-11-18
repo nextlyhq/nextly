@@ -315,13 +315,29 @@ function CodeOutput({
   );
 }
 
+/**
+ * A short digest of a place's code, which names it to its boundary: the same
+ * code gives the same name, so the boundary can tell code kept from code
+ * changed or dropped without carrying the code itself.
+ */
+function digestOf(text: string): string {
+  // FNV-1a, 32 bits: a name, not a guard.
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
 /** What `<PageCode>` is given. */
 export interface PageCodeProps {
   /** The place on the page: the head, or the end of the body. */
   readonly slot: SiteCodeSlot;
   /**
-   * The page's published blocks value, in the site's default language: a
-   * page's code is kept there only.
+   * The page's published blocks value, as the route draws it: in the
+   * page's language where its Page Builder field is kept per language, each
+   * language keeping code of its own.
    */
   readonly document: unknown;
   /** The site's per-request nonce, as `<SiteCode>` takes it. */
@@ -373,7 +389,9 @@ export async function PageCode(
       />
       {/* What the loader starts is outside React, so the page is reached and
           left as a whole document (`PageCodeBoundary`). */}
-      {entries.some(isGatedSiteCode) ? <PageCodeBoundary /> : null}
+      {entries.some(isGatedSiteCode) ? (
+        <PageCodeBoundary owner={`${props.slot}:${digestOf(text)}`} />
+      ) : null}
     </>
   );
 }

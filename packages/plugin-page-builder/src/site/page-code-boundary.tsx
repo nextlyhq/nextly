@@ -14,7 +14,11 @@
  * - reached by client-side navigation, it loads again as a document, so its
  *   loader runs;
  * - left by client-side navigation, the next page loads as a document, so
- *   nothing the code added stays.
+ *   nothing the code added stays;
+ * - taken away at the same address (a refresh whose new output drops or
+ *   changes the code), the page loads again as a document, for the same
+ *   reason. Each boundary names the code it guards (`owner`), and a reload
+ *   follows once no boundary for that code is mounted any more.
  *
  * Loaded as a document, it does nothing. It tells the two apart by whether
  * React is hydrating the server's HTML (a document load) or rendering on the
@@ -43,12 +47,29 @@ const BROWSER: DocumentNavigation = {
   },
 };
 
+/**
+ * How many boundaries are mounted for each code, by `owner`, in this
+ * document: React's development re-run of effects mounts the same code again
+ * at once, and a refresh that drops or changes it leaves none.
+ */
+const MOUNTED = new Map<string, number>();
+
+function mountedFor(owner: string, by: number): number {
+  const count = (MOUNTED.get(owner) ?? 0) + by;
+  if (count <= 0) MOUNTED.delete(owner);
+  else MOUNTED.set(owner, count);
+  return count;
+}
+
 /** Nothing to subscribe to: the answer is only which snapshot React asks. */
 const NOTHING_TO_WATCH = (): (() => void) => () => {};
 
 export function PageCodeBoundary({
+  owner,
   navigation = BROWSER,
 }: {
+  /** Which code this guards: its place and a digest of its text. */
+  readonly owner: string;
   /** The browser's own, outside tests. */
   readonly navigation?: DocumentNavigation;
 }): null {
@@ -66,13 +87,17 @@ export function PageCodeBoundary({
       return undefined;
     }
     const here = navigation.href();
-    // Left: the next page is loaded as a document. Only where the address
-    // moved, so React's development re-run of effects reloads nothing.
+    mountedFor(owner, 1);
+    // Left, or taken away: the next document is loaded whole. Not where
+    // React's development re-run of effects mounted the same code again at
+    // the same address.
     return () => {
+      mountedFor(owner, -1);
       navigation.later(() => {
-        if (navigation.href() !== here) navigation.reload();
+        const gone = (MOUNTED.get(owner) ?? 0) === 0;
+        if (navigation.href() !== here || gone) navigation.reload();
       });
     };
-  }, [navigation]);
+  }, [owner, navigation]);
   return null;
 }

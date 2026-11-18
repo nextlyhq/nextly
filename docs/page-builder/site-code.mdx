@@ -74,11 +74,12 @@ elements.
 People who may change the site's settings can also add code to **one page**, from the
 **Code** tab in that page's **Page settings**. It is checked exactly as site code is, with
 the same rules and the same Content Security Policy check, and kept in the page's own
-document (`settings.code`), in the site's default language: it is saved in the page's
+document (`settings.code`): it is saved in the page's
 draft, goes live when the page is published, is kept in the page's history, and comes
-back when an older version is restored. Only a page's own Page Builder field, at the top
+back when an older version is restored. Where the page's Page Builder field is kept per
+language, each language keeps code of its own, and a translated page draws its own. Only a page's own Page Builder field, at the top
 of the page, keeps code: a field inside a group, a list or a field group offers no Code tab,
-and the server refuses code there.
+and the server refuses code there, as it does on a collection template, a saved section or a component.
 
 The server judges it again on every write that changes it, however the write was made:
 it refuses the change from anyone without the **Manage page builder site settings**
@@ -95,7 +96,10 @@ then the site's end of body, then the page's end of body. Nothing runs under dra
 for site code. A route of your own can draw it with `<PageCode slot="head" document={...} />`
 from `@nextlyhq/plugin-page-builder/site`. On a site with a nonce-only policy, give the route's
 `pageBuilderContent({ nonce: () => ... })` the request's nonce, as you give it to
-`<SiteCode nonce={nonce} />`; both places of the page's code carry it.
+`<SiteCode nonce={nonce} />`; both places of the page's code carry it. Reading the nonce makes
+every page the route serves request-time, so with Cache Components the route must render under a
+`<Suspense>` boundary, as any route reading the request does. A site whose policy allows the
+loaders by hash leaves `nonce` out, and its pages stay prerendered.
 
 A page whose code starts scripts or styles is loaded, and left, as a whole document. Reached
 from another page by a link the site follows without a full load, it loads again so its code
