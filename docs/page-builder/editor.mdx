@@ -1511,6 +1511,16 @@ can't take the setting, for instance because someone changed it since, the bindi
 off this page, the Save stops with a message that says why, and **Save again** saves the
 page without it.
 
+**In the component's own view.** Editing a component on its own, a block's bind button
+lists **This component's settings** first: the settings that can fill the prop, each
+with its default beside it. Then come the Singles and the site, folded. There's no
+**This page** group, since a component has no page of its own. A line above the
+settings says how many pages use the component, as the banner counts them, such as
+**Used on 4 pages**. Pick a setting and the block follows it: on each page, it shows
+what that page gives the setting, or the setting's default where it gives nothing, so
+the chip has no **Fallback**. A prop that holds a setting's own value can't follow
+one, and a setting of another kind isn't listed: an image setting can't fill a text.
+
 **Format.** A date or a number shows as text only through a format, so a text prop bound
 to one has a **Format** under its fallback. The picker names the format a date or a number
 starts with, **Long date** or **Number**, and a pick writes it with the binding; change it

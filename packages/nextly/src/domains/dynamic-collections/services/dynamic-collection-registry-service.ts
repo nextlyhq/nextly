@@ -6,7 +6,10 @@ import { eq, and, sql } from "drizzle-orm";
 
 import { resolveRelations } from "../../../database/resolve-relations";
 import { NextlyError } from "../../../errors";
-import type { RevalidateConfig } from "../../../revalidation/types";
+import type {
+  RevalidateConfig,
+  RevalidationIntent,
+} from "../../../revalidation/types";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
@@ -25,18 +28,18 @@ import {
 } from "../../../shared/lib/registry-listing-page";
 import type { Logger } from "../../../shared/types";
 import type { DatabaseAdapter } from "../../../shared/types/database-adapter";
+import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
+import { transactionTableProbe } from "../../dashboard/table-presence";
 import {
   moveWebhookRecording,
   renameEntity,
 } from "../../entity-rename/rename-entity";
+import { flushContentChange } from "../../flush-content-change";
+import { writeRegistryRows } from "../../schema/schema-version";
 import {
-  deletedEntityIntent,
-  flushContentChange,
-} from "../../flush-content-change";
-import {
-  countRegistryWriteOn,
-  writeRegistryRows,
-} from "../../schema/schema-version";
+  deleteEntityRegistryRow,
+  mediaUsageTablePresent,
+} from "../../versions/entity-teardown";
 import {
   clearWebhookRecording,
   setWebhookRecording,
@@ -193,10 +196,14 @@ function normalizeCollectionBooleans(
   };
 }
 
-/** What removing a collection's registry row found: how many rows went, and the cache setting the row held. */
+/**
+ * What removing a collection's registry row found: how many rows went, and
+ * the intent that expires its cached reads (`undefined` when nothing went or
+ * the collection opted out), read from the row's own setting as it went.
+ */
 export interface UnregisteredCollectionRow {
   removed: number;
-  stored: unknown;
+  expire: RevalidationIntent | undefined;
 }
 
 export class DynamicCollectionRegistryService extends BaseService {
@@ -771,34 +778,54 @@ export class DynamicCollectionRegistryService extends BaseService {
   }
 
   /**
-   * Remove a collection's registry row inside `tx`, so it goes with whatever
-   * else that transaction removes or not at all. The setting and the delete
-   * run with the row locked between them: the expiry after the commit uses
-   * the setting the deleted row held, and a second delete racing this one
-   * waits, then finds nothing to remove. What the process remembers about the
-   * collection is the caller's to forget once `tx` has committed
-   * (`forgetUnregisteredCollection`, given what this returns): forgotten
-   * earlier, a rollback would leave the row and lose what was known about it.
+   * Remove a collection's registry row inside `tx`, with what goes with it:
+   * its autosaves, the pins held on its versions, its readers' "seen" markers
+   * and dashboard pins, and the record of the media its entries use
+   * (`deleteEntityRegistryRow`, the one sweep every path deleting a registry
+   * row runs). All of it goes with whatever else that transaction removes or
+   * not at all, and after the delete's table drops have run in it, so a drop
+   * that fails on MySQL, where each drop commits, leaves the collection
+   * registered with all of these for a second delete to finish.
+   *
+   * The setting and the delete run with the row locked between them: the
+   * expiry after the commit uses the setting the deleted row held, and a
+   * second delete racing this one waits, then finds nothing to remove. What
+   * the process remembers about the collection is the caller's to forget once
+   * `tx` has committed (`forgetUnregisteredCollection`, given what this
+   * returns): forgotten earlier, a rollback would leave the row and lose what
+   * was known about it.
    */
   async unregisterCollectionIn(
     tx: TransactionContext,
     slug: string
   ): Promise<UnregisteredCollectionRow> {
-    const where = {
-      and: [{ column: "slug", op: "=" as const, value: slug }],
+    // Whether the dashboard's and the media library's tables exist, asked on
+    // `tx`'s own connection: a statement against a missing one would abort the
+    // transaction on PostgreSQL, and the pool may have no second connection.
+    const probe = transactionTableProbe(this.adapter, tx);
+    const tables = {
+      dashboardPinsPresent: await dashboardPinsPresent(
+        this.adapter,
+        this.logger,
+        probe
+      ),
+      mediaUsagePresent: await mediaUsageTablePresent(
+        this.adapter,
+        this.logger,
+        probe
+      ),
     };
-    const [row] = await tx.select<{ revalidate: unknown }>(
-      "dynamic_collections",
-      { columns: ["revalidate"], where, forUpdate: true }
+    // Counts the registry write and clears the cached rows as the row goes,
+    // so a read later in `tx` does not find it; the recording decision stays
+    // the caller's to forget once `tx` commits.
+    const { deleted, expire } = await deleteEntityRegistryRow(
+      tx,
+      "collection",
+      slug,
+      tables,
+      this.dialect
     );
-    const removed = await tx.delete("dynamic_collections", where);
-    // The stored schema version's count moves in the same transaction.
-    if (removed > 0) await countRegistryWriteOn(tx, this.dialect);
-    // Cleared as it is removed, so a read later in `tx` does not find the row
-    // the transaction read before; the recording decision stays the caller's
-    // to forget once `tx` commits.
-    clearRegistryRowCache();
-    return { removed, stored: row?.revalidate };
+    return { removed: deleted, expire };
   }
 
   /**
@@ -822,7 +849,7 @@ export class DynamicCollectionRegistryService extends BaseService {
     if (unregistered.removed > 0) {
       await this.afterCommit(() =>
         flushContentChange(
-          deletedEntityIntent("collection", slug, unregistered.stored),
+          unregistered.expire,
           this.logger,
           "a collection was deleted"
         )
