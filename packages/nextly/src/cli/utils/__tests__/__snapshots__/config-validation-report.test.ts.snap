@@ -1,0 +1,9 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`a configuration that does not parse > names the file, line and column once, with the offending line 1`] = `
+"✗ \`nextly.config.ts\` has a syntax error, so it could not be read.
+  Why:  nextly.config.ts:4:12: Expected "}" but found "]"
+          /* éé */ ],
+  Next: Fix the code shown in \`nextly.config.ts\`, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-syntax-error  (CONFIG_SYNTAX_ERROR)"
+`;

@@ -11,30 +11,18 @@
 import { basename } from "node:path";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import {
+  type BuildMessage,
+  buildMessagesOf,
+  editorPlaceOf,
+} from "../../../shared/lib/build-messages";
 import { CliError } from "../cli-error";
 import { defineCodes } from "../define";
 import { deepestMessage } from "../messages";
 
-/** One message of esbuild's build failure, as far as these codes read it. */
-interface BuildMessage {
-  text: string;
-  location: { file: string; line: number; column: number } | null;
-}
-
 /** The messages of the esbuild failure behind `error`, or none when something else failed. */
 function buildMessages(error: NextlyError): BuildMessage[] {
-  const cause: unknown = error.cause;
-  if (typeof cause !== "object" || cause === null || !("errors" in cause)) {
-    return [];
-  }
-  const { errors } = cause;
-  if (!Array.isArray(errors)) return [];
-  return errors.filter(
-    (message): message is BuildMessage =>
-      typeof message === "object" &&
-      message !== null &&
-      typeof (message as { text?: unknown }).text === "string"
-  );
+  return buildMessagesOf(error.cause);
 }
 
 /**
@@ -62,14 +50,19 @@ function missingModule(error: NextlyError): string | undefined {
 const isUnresolved = (message: BuildMessage) =>
   message.text.startsWith("Could not resolve");
 
-/** Each message as `file:line:column: text`, one per line, as the user's editor names it. */
+/**
+ * Each message as `file:line:column: text`, at the place the user's editor shows (`editorPlaceOf`),
+ * followed by the line itself where esbuild kept it. The place is named here and nowhere else in
+ * the error, so a reader meets it once.
+ */
 function located(messages: readonly BuildMessage[]): string {
   return messages
-    .map(({ text, location }) =>
-      location === null
-        ? text
-        : `${location.file}:${location.line}:${location.column}: ${text}`
-    )
+    .map(message => {
+      const place = editorPlaceOf(message);
+      if (place === undefined) return message.text;
+      const at = `${place.file}:${place.line}:${place.column}: ${message.text}`;
+      return place.lineText === undefined ? at : `${at}\n${place.lineText}`;
+    })
     .join("\n");
 }
 
@@ -118,18 +111,13 @@ export const CONFIG_CODES = defineCodes({
           const messages = buildMessages(error);
           return messages.length > 0 && !messages.some(isUnresolved);
         },
-        describe: error => {
-          const messages = buildMessages(error);
-          const first = messages[0]?.location;
-          return {
-            what: `\`${configFile(error)}\` has a syntax error, so it could not be read.`,
-            why: located(messages),
-            next:
-              first === null || first === undefined
-                ? `Fix the code esbuild names in \`${configFile(error)}\`, then run the command again.`
-                : `Fix line ${first.line} of \`${first.file}\`, then run the command again.`,
-          };
-        },
+        // The place is named once, in Why with its line: Next says what to do without
+        // naming it again.
+        describe: error => ({
+          what: `\`${configFile(error)}\` has a syntax error, so it could not be read.`,
+          why: located(buildMessages(error)),
+          next: `Fix the code shown in \`${configFile(error)}\`, then run the command again.`,
+        }),
       },
     ],
   },
