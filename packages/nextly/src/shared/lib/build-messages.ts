@@ -8,6 +8,7 @@
  * @module shared/lib/build-messages
  */
 
+import { inCi } from "../../domains/schema/migrate/can-prompt";
 import { redactCredentialsInText } from "../../observability/mask-emails";
 
 /** One of esbuild's build messages, as far as the readers here use it. */
@@ -185,7 +186,9 @@ function shownLine(lineText: string, column: number): string {
 /**
  * Each message as `file:line:column: text` at the place an editor shows (`editorPlaceOf`),
  * followed by the line itself where esbuild kept it (`shownLine`: an excerpt, its strings
- * masked), one per line. Every surface that prints a build failure renders it here, so the
+ * masked), one per line. Under `CI` (`inCi`) no source text is shown at all: a CI log is read by
+ * others, and a line can hold a credential with nothing on it saying so (one inside a template
+ * literal has no quote of its own), so there the place and the message are shown alone. Every surface that prints a build failure renders it here, so the
  * error's reason and its verbose context name one place.
  */
 export function formatBuildMessages(messages: readonly BuildMessage[]): string {
@@ -194,7 +197,7 @@ export function formatBuildMessages(messages: readonly BuildMessage[]): string {
       const place = editorPlaceOf(message);
       if (place === undefined) return message.text;
       const at = `${place.file}:${place.line}:${place.column}: ${message.text}`;
-      return place.lineText === undefined
+      return place.lineText === undefined || inCi()
         ? at
         : `${at}\n${shownLine(place.lineText, place.column)}`;
     })

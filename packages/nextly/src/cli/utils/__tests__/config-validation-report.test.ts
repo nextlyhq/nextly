@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { toCliError } from "../../errors";
 import { formatCliError } from "../../errors/render";
@@ -20,9 +20,13 @@ let dir: string;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "nextly-config-report-"));
   clearConfigCache();
+  // A developer's machine unless a test says otherwise: under `CI` the source line is not shown,
+  // and the runner that runs these sets it.
+  vi.stubEnv("CI", "");
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   clearConfigCache();
   rmSync(dir, { recursive: true, force: true });
 });
@@ -182,6 +186,37 @@ describe("the offending line of a configuration that does not parse", () => {
     expect(report, report).toContain("broken");
     expect(report, report).toContain("…");
     expect(report.length, report.slice(0, 400)).toBeLessThan(1500);
+  });
+});
+
+describe("a configuration that does not parse, under CI", () => {
+  // A CI log is read by others. A line inside a template literal has no quote of its own, so
+  // nothing on it says it is a string, and it can hold a key: under `CI` no source text is
+  // shown, the place and esbuild's message, redacted, alone. The error is on that line, in the
+  // template's `${}`.
+  const TEMPLATE_KEY = [
+    "export default {",
+    "  note: `begin",
+    "  Kq7v9not9a9real9secret9Zx ${ a b }",
+    "  end`,",
+    "};",
+    "",
+  ].join("\n");
+
+  it("shows the place alone, no source text, for a line inside a template literal", async () => {
+    // The control: on a developer's machine the line is shown, so the fixture reaches it.
+    const shown = await reportFor(TEMPLATE_KEY);
+    expect(shown, shown).toContain("a b }");
+
+    vi.stubEnv("CI", "true");
+    for (const verbose of [false, true]) {
+      const report = await reportFor(TEMPLATE_KEY, { verbose });
+
+      expect(report, report).toContain("CONFIG_SYNTAX_ERROR");
+      expect(report, report).toContain("nextly.config.ts:3:");
+      expect(report, report).not.toContain("Kq7v9not9a9real9secret9Zx");
+      expect(report, report).not.toContain("a b }");
+    }
   });
 });
 
