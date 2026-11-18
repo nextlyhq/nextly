@@ -29,6 +29,7 @@ import { CompactSides, fieldDescribedBy } from "./spacing-box";
 import type { StyleControl, StyleControlKind } from "./style-controls";
 import {
   StyleTargetContext,
+  TypesLiveContext,
   type CommitOutcome,
 } from "./style-field-surroundings";
 import { CSS_NUMBER } from "./style-numeric";
@@ -594,8 +595,16 @@ function useTypedChange({
  * written when the edit ends (see the `live` prop of {@link TextField}).
  */
 function useTypedLive(live: LiveDraft | undefined): LiveDraft | undefined {
+  return useTypesLive() ? live : undefined;
+}
+
+/**
+ * Whether a field here writes as it is typed: where the panel drawing it
+ * says so, and never for a shared style, which changes every page using it.
+ */
+export function useTypesLive(): boolean {
   const target = React.useContext(StyleTargetContext);
-  return target.kind === "shared" ? undefined : live;
+  return React.useContext(TypesLiveContext) && target.kind !== "shared";
 }
 
 /**

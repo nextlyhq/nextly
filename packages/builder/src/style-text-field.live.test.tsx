@@ -16,6 +16,7 @@ import { styleControlsFor } from "./style-controls";
 import {
   BLOCK_TARGET,
   StyleTargetContext,
+  TypesLiveContext,
   type CommitOutcome,
 } from "./style-field-surroundings";
 import { TextField, useDraft } from "./style-text-field";
@@ -77,13 +78,16 @@ function Field({
   );
 }
 
-function mount(target: StyleTarget) {
+/** The field as a block's panel draws it, or as a variable's editor does. */
+function mount(target: StyleTarget, typesLive = true) {
   const onCommit = vi.fn(
     (_value: StyleValue | null): CommitOutcome => "applied"
   );
   render(
     <StyleTargetContext.Provider value={target}>
-      <Field onCommit={onCommit} />
+      <TypesLiveContext.Provider value={typesLive}>
+        <Field onCommit={onCommit} />
+      </TypesLiveContext.Provider>
     </StyleTargetContext.Provider>
   );
   return { onCommit, field: screen.getByRole("textbox") as HTMLInputElement };
@@ -95,6 +99,17 @@ describe("a typed style value", () => {
     fireEvent.change(field, { target: { value: "0.8" } });
     expect(onCommit).toHaveBeenCalledWith(0.8);
     expect(field.value).toBe("0.8");
+  });
+
+  it("is written only when the edit ends where no panel draws a block's fields", () => {
+    // A site variable's editor reuses the field: what it holds changes every
+    // page that uses it, so it is written when the field is left.
+    const { onCommit, field } = mount(BLOCK_TARGET, false);
+    fireEvent.change(field, { target: { value: "0.8" } });
+    expect(onCommit).not.toHaveBeenCalled();
+    fireEvent.blur(field);
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(onCommit).toHaveBeenCalledWith(0.8);
   });
 
   it("is written into a shared style only when the edit ends", () => {

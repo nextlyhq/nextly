@@ -52,10 +52,7 @@ import {
 } from "./style-alignment-icons";
 import { foldedLeaf, type SiteVariable } from "./style-colour";
 import type { StyleControl } from "./style-controls";
-import {
-  StyleTargetContext,
-  type CommitOutcome,
-} from "./style-field-surroundings";
+import type { CommitOutcome } from "./style-field-surroundings";
 import {
   fontWeightOptions,
   lineHeightFromText,
@@ -74,7 +71,12 @@ import {
 } from "./style-numeric";
 import { textNumber, UnitWords, NumericField } from "./style-numeric-field";
 import { BOX_SHADOW, drawsShadow, ShadowField } from "./style-shadow-field";
-import { useDraft, arrowStep, storedText } from "./style-text-field";
+import {
+  useDraft,
+  arrowStep,
+  storedText,
+  useTypesLive,
+} from "./style-text-field";
 import { tokenForTypedName } from "./style-variables";
 import {
   focusVariableAfterPick,
@@ -379,7 +381,7 @@ function LengthOrNumberField({
   // The refusal, and the CSS names while they are shown.
   const described = useFieldDescription(describedBy);
   const { draft, setDraft, live } = useDraft(stored);
-  const typedLive = React.useContext(StyleTargetContext).kind !== "shared";
+  const typedLive = useTypesLive();
   const mode = useCanvasTokenMode();
   const hint = useUnsetHint("1.5, 24px or 150%");
   // A variable's name typed here is that variable, asked before the text is
