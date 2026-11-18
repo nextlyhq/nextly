@@ -1323,7 +1323,10 @@
   margin: 0;
   padding: 0;
   list-style: none;
-  color: var(--nx-destructive);
+  /* The admin's field error text (its form message), which reads at 4.5:1 on
+     the panel in both themes; the plain destructive red is lighter than that
+     in the light theme. */
+  color: var(--nx-danger-text);
   font-size: var(--text-xs);
   line-height: 1.4;
   overflow-wrap: anywhere;
