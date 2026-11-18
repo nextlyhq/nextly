@@ -9,6 +9,10 @@
  * field the save renames is judged once the renames are answered (`refuseRenamedUiTypeChanges`),
  * since only the answers say which old column the new field's values come from.
  *
+ * A code-first apply (a reload under `next dev`, `nextly db:sync`) states its old fields too, from
+ * the registry row: its field type changes that keep their column's type are judged the same way
+ * (`refuseConfiguredTypeChanges`), since no statement, and so no other rule, sees them.
+ *
  * @module domains/schema/pipeline/ui-type-changes
  */
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
@@ -20,6 +24,8 @@ import {
 import {
   entityLabel,
   type EntityTypeChangeInput,
+  type FieldTypeChange,
+  fieldTypeChangesOf,
   perLanguageBefore,
   refuseFieldTypeChanges,
 } from "../value-conversion/type-change/field-type-changes";
@@ -44,8 +50,14 @@ interface SavedEntity {
   next: FieldDefinition[];
 }
 
-/** The entities the save states its old fields for and may change: none of code's. */
-function builderSaved(desired: DesiredSchema): SavedEntity[] {
+/**
+ * The entities an apply states its old fields for and may change: a Schema Builder save's (none of
+ * code's), or a code-first apply's (none of the Builder's), as `owner` says.
+ */
+function savedEntities(
+  desired: DesiredSchema,
+  owner: "builder" | "configured"
+): SavedEntity[] {
   const all: { kind: EntityKind; entity: SavedEntity["entity"] }[] = [
     ...Object.values(desired.collections).map(entity => ({
       kind: "collection" as const,
@@ -60,8 +72,12 @@ function builderSaved(desired: DesiredSchema): SavedEntity[] {
       entity,
     })),
   ];
+  const changes = (entity: SavedEntity["entity"]) =>
+    owner === "builder"
+      ? entity.locked !== true
+      : entity.builderOwned !== true;
   return all.flatMap(({ kind, entity }) =>
-    entity.recordedFields === undefined || entity.locked === true
+    entity.recordedFields === undefined || !changes(entity)
       ? []
       : [
           {
@@ -104,7 +120,7 @@ export async function refuseUiTypeChanges(
   db: unknown,
   dialect: SupportedDialect
 ): Promise<void> {
-  for (const saved of builderSaved(desired)) {
+  for (const saved of savedEntities(desired, "builder")) {
     const input = entityInput(saved);
     const renamed = await landedRenames(saved, input.builtBy, db, dialect);
     await refuseFieldTypeChanges(db, dialect, {
@@ -114,6 +130,54 @@ export async function refuseUiTypeChanges(
       ...(renamed.size > 0 ? { renamed } : {}),
     });
   }
+}
+
+/**
+ * Refuse a code-first apply's blocked and lossy type changes of fields whose column keeps its name
+ * and its type on the database, entity by entity. Such a change plans no statement, so nothing
+ * else judges it: the column takes the new type's definition over the values it already holds. A
+ * change that alters the column's type is judged by the conversion rule the classifier asks, and
+ * is left to it.
+ *
+ * @throws {NextlyError} a validation error naming each refused field of the first entity that has
+ *   one
+ */
+export async function refuseConfiguredTypeChanges(
+  desired: DesiredSchema,
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<void> {
+  for (const saved of savedEntities(desired, "configured")) {
+    const input = entityInput(saved);
+    const sameColumn = fieldTypeChangesOf({
+      previous: saved.previous,
+      next: saved.next,
+      dialect,
+      builtBy: input.builtBy,
+    }).filter(change => keepsColumn(change, dialect, input.builtBy));
+    if (sameColumn.length === 0) continue;
+    await refuseFieldTypeChanges(db, dialect, {
+      ...input,
+      previous: sameColumn.map(change => change.from),
+      next: sameColumn.map(change => change.to),
+    });
+  }
+}
+
+/** Whether a type change keeps its column: the same name and the same type on the database. */
+function keepsColumn(
+  change: FieldTypeChange,
+  dialect: SupportedDialect,
+  builtBy: EntityTypeChangeInput["builtBy"]
+): boolean {
+  const from = getColumnDescriptor(change.from, dialect, builtBy);
+  const to = getColumnDescriptor(change.to, dialect, builtBy);
+  return (
+    from !== null &&
+    to !== null &&
+    from.name === to.name &&
+    from.dialectType.toLowerCase() === to.dialectType.toLowerCase()
+  );
 }
 
 /**
@@ -180,7 +244,7 @@ export async function refuseRenamedUiTypeChanges(
 ): Promise<void> {
   // A code-first apply's type changes are judged by its own rule, in the classifier.
   if (source !== "ui" || renames.length === 0) return;
-  for (const saved of builderSaved(desired)) {
+  for (const saved of savedEntities(desired, "builder")) {
     const input = entityInput(saved);
     const columnOf = (field: FieldDefinition) =>
       getColumnDescriptor(field, dialect, input.builtBy)?.name.toLowerCase();
