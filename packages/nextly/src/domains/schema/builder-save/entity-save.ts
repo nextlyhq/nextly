@@ -121,17 +121,26 @@ export async function writeEntityDelete(
     junctions?: NonNullable<CollectionSave["junctions"]>;
     keys?: NonNullable<CollectionSave["keys"]>;
   },
-  apply: () => Promise<unknown>
+  apply: () => Promise<unknown>,
+  options: {
+    /**
+     * Whether `apply` runs in one transaction that a failure undoes whole, as
+     * a Single's or a field group's delete does on PostgreSQL and SQLite: a
+     * failure then changed nothing, so the files are withdrawn as a refused
+     * save's are, rather than kept for a delete that never ran.
+     */
+    rollsBackWhole?: boolean;
+  } = {}
 ): Promise<void> {
   if (deps === undefined) {
     await apply();
     return;
   }
-  // A delete tears down in steps that cannot be rolled back (MySQL commits
-  // each drop, and the teardowns before the drop are not reversible), so a
-  // failure may come after some of them ran: its files are kept, recorded
-  // applied nowhere, and the failure is still thrown. The next `nextly migrate`
-  // finishes the delete from them, as a retried delete would.
+  // Otherwise a delete tears down in steps that cannot be rolled back (MySQL
+  // commits each drop, and what ran before it), so a failure may come after
+  // some of them ran: its files are kept, recorded applied nowhere, and the
+  // failure is still thrown. The next `nextly migrate` finishes the delete
+  // from them, as a retried delete would.
   const failed: { error?: unknown } = {};
   await writeEntitySave(
     deps,
@@ -152,6 +161,12 @@ export async function writeEntityDelete(
       ...(removed.keys === undefined ? {} : { keys: removed.keys }),
     },
     async () => {
+      // Thrown through where it undid everything, so the writer withdraws the
+      // files; kept as part-way otherwise.
+      if (options.rollsBackWhole === true) {
+        await apply();
+        return undefined;
+      }
       try {
         await apply();
         return undefined;

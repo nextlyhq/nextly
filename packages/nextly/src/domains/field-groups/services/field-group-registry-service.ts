@@ -25,6 +25,7 @@ import {
   withUnsaidKept,
   type RecordedWriteOptions,
 } from "../../collections/services/collection-registry-service";
+import type { TeardownAdapter } from "../../collections/services/teardown-adapter-in-transaction";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import type { BuilderSaveSetup } from "../../schema/builder-save/collection-save";
@@ -856,7 +857,9 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       await writeEntityDelete(
         deps,
         { kind: "fieldGroup", slug, stored: fieldGroupEntity(existing) },
-        () => this.removeComponent(slug, existing.tableName)
+        () => this.removeComponent(slug, existing.tableName),
+        // A failure undone whole changed nothing, so the delete's files are withdrawn with it.
+        { rollsBackWhole: this.dialect !== "mysql" }
       );
 
       this.logger.info("Component deleted", { slug });
@@ -871,8 +874,52 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     }
   }
 
-  /** The field group's data, translations, table and registry row, removed in that order. */
+  /**
+   * The field group's data, translations, table and registry row, removed in that order.
+   *
+   * On PostgreSQL and SQLite all of it runs in one transaction, as a collection's delete does:
+   * those databases undo a table drop with the rest, so a failure at any step leaves the whole
+   * field group, its translations and its row. MySQL commits each drop as it runs, and what ran
+   * before it, so there the steps run one by one; a failure part way leaves the row, and retrying
+   * the delete (every step is existence-guarded) finishes it.
+   */
   private async removeComponent(
+    slug: string,
+    tableName: string
+  ): Promise<void> {
+    const table = await this.resolveRegistryTableName();
+    if (this.dialect === "mysql") {
+      await this.tearDownAndDrop(this.adapter, slug, tableName);
+      // PG RETURNING-less DELETE always returns 0 rows, so no post-delete count check.
+      // With the stored schema version's count (`writeRegistry`).
+      await this.writeRegistry(() =>
+        this.adapter.delete(table, this.whereEq("slug", slug))
+      );
+    } else {
+      const { teardownAdapterIn } = await import(
+        "../../collections/services/teardown-adapter-in-transaction"
+      );
+      await this.adapter.transaction(async tx => {
+        await this.tearDownAndDrop(
+          teardownAdapterIn(this.adapter, tx),
+          slug,
+          tableName
+        );
+        await tx.delete(table, this.whereEq("slug", slug));
+        // The stored schema version's count, on the same transaction.
+        await this.countWriteOn(tx);
+      });
+    }
+    // The cached registry row is now out of date: cleared once the removal has committed.
+    clearRegistryRowCache();
+  }
+
+  /**
+   * Remove the field group's nested data and translations, then drop its table, through
+   * `adapter`: the adapter itself, or one bound to the delete's transaction.
+   */
+  private async tearDownAndDrop(
+    adapter: TeardownAdapter,
     slug: string,
     tableName: string
   ): Promise<void> {
@@ -884,48 +931,23 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     // table via `_parent_table`, so dropping it below would strand them. Deletion is
     // blocked while anything references this component, but nothing blocks the reverse
     // direction, so the nested rows are this delete's responsibility.
-    await teardownEntityComponentData({
-      adapter: this.adapter,
-      parentTable: tableName,
-    });
+    await teardownEntityComponentData({ adapter, parentTable: tableName });
 
     await teardownEntityI18n({
       kind: "fieldGroup",
-      adapter: this.adapter,
+      adapter,
       slug,
       tableName,
     });
 
     // Drop the data table after its dependents, since both hold references into it.
-    // A failure here leaves the component present but its nested instances, companion
-    // table and archived translations already removed — the teardowns above are not
-    // reversible. A transaction would not close that window portably: MySQL commits
-    // implicitly on DDL, so the drop could not roll back there. Retrying the delete is
-    // safe (every step is existence-guarded) and is the intended recovery.
-    await this.dropComponentTable(tableName);
-
-    // PG RETURNING-less DELETE always returns 0 rows, so no post-delete count check.
-    const table = await this.resolveRegistryTableName();
-    // With the stored schema version's count (`writeRegistry`).
-    await this.writeRegistry(() =>
-      this.adapter.delete(table, this.whereEq("slug", slug))
-    );
-    // The cached registry row is now out of date.
-    clearRegistryRowCache();
-  }
-
-  // Uses IF EXISTS so the operation is safe even if the table was never created.
-  // PostgreSQL uses CASCADE to drop any dependent objects.
-  private async dropComponentTable(tableName: string): Promise<void> {
-    const q = this.dialect === "mysql" ? "`" : '"';
-    const quotedName = `${q}${tableName}${q}`;
-    const sql =
-      this.dialect === "postgresql"
-        ? `DROP TABLE IF EXISTS ${quotedName} CASCADE`
-        : `DROP TABLE IF EXISTS ${quotedName}`;
-
+    // IF EXISTS so the delete is safe where the table was never created; CASCADE on
+    // PostgreSQL for any dependent objects.
     this.logger.debug("Dropping component table", { tableName });
-    await this.adapter.executeQuery(sql);
+    await adapter.dropTable(tableName, {
+      ifExists: true,
+      cascade: this.dialect === "postgresql",
+    });
     this.logger.info("Component table dropped", { tableName });
   }
 
