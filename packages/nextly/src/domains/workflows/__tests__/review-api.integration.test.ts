@@ -99,6 +99,19 @@ const briefs = defineCollection({
   fields: [text({ name: "title" })],
 });
 
+/** Under the editorial workflow, with a read rule that shows its readers the public rows only. */
+const CIRCULARS = "circulars";
+const circulars = defineCollection({
+  slug: CIRCULARS,
+  status: true,
+  versions: { drafts: true },
+  workflow: editorial,
+  access: {
+    read: () => ({ team: { equals: "public" } }) as unknown as boolean,
+  },
+  fields: [text({ name: "title" }), text({ name: "team" })],
+});
+
 /** No workflow attached. */
 const PLAIN = "plain";
 const plain = defineCollection({
@@ -902,6 +915,134 @@ describe.each(getConfiguredTestDialects())(
             expect.objectContaining({ name: "holds-bob" }),
           ])
         );
+      });
+
+      it("names the holders of the step when the assignee no longer holds it", async () => {
+        // Work assigned to someone who has since lost the step waits for everyone who may take it,
+        // never for the assignee alone: they can no longer move it.
+        current = await bootSteps(dialect);
+        await people();
+        const id = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, id, null), "legal", {
+          definitionHash: HASH,
+          assignee: { kind: "user", id: "alice" },
+        });
+
+        const waiting = (await onlyPart(door, id)).waitingFor as Doc;
+
+        expect(waiting.kind).toBe("roles");
+        expect(waiting.roles).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ name: "holds-bob" }),
+          ])
+        );
+      });
+
+      it("lists work whose assignee no longer holds the step for everyone who does", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        const id = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, id, null), "legal", {
+          definitionHash: HASH,
+          assignee: { kind: "user", id: "alice" },
+        });
+
+        const forBob = await door.waiting(BOB, { page: 1, limit: 10 });
+        expect(
+          forBob.items.map(item => (item.document as Doc).entryId)
+        ).toEqual([id]);
+        expect(forBob.meta).toMatchObject({ total: 1 });
+      });
+
+      it("lists unassigned work for every holder, or for the stage's default reviewer alone", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        const open = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, open, null), "legal", {
+          definitionHash: HASH,
+        });
+        const ids = async (who: Who) =>
+          (await door.waiting(who, { page: 1, limit: 10 })).items
+            .map(item => (item.document as Doc).entryId)
+            .sort();
+        // No one is set for Legal check: it waits for everyone who may sign off.
+        expect(await ids(BOB)).toEqual([open]);
+
+        // Once Rita is its default reviewer, it waits for her alone.
+        await person(app(), "rita", [["sign-off", PAGES]]);
+        await defaultReviewer("legal", "rita");
+        expect(await ids({ kind: "person", id: "rita" })).toEqual([open]);
+        expect(await ids(BOB)).toEqual([]);
+      });
+
+      it("lists nothing for an API key in a stage whose next step it may never take", async () => {
+        // Legal check's next step is an approval, which a key never takes, whatever it holds: the
+        // list shows a caller only work it could move, as the read marks each step it may take.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "kim", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        const id = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, id, null), "legal", {
+          definitionHash: HASH,
+        });
+        const key: Who = {
+          kind: "key",
+          owner: "kim",
+          grants: [
+            ["read", PAGES],
+            ["sign-off", PAGES],
+          ],
+        };
+
+        const waiting = await door.waiting(key, { page: 1, limit: 10 });
+        expect(waiting.items).toEqual([]);
+        expect(waiting.meta).toMatchObject({ total: 0 });
+        // Its owner, a person, may approve: the same part waits for them.
+        const forKim = await door.waiting(
+          { kind: "person", id: "kim" },
+          { page: 1, limit: 10 }
+        );
+        expect(
+          forKim.items.map(item => (item.document as Doc).entryId)
+        ).toEqual([id]);
+      });
+
+      it("counts only the work its caller may read", async () => {
+        // A row a read rule hides is neither listed nor counted: a count that took it in would tell
+        // the caller it exists.
+        current = await bootSteps(dialect, undefined, {
+          collections: [circulars],
+        });
+        await person(app(), "bea", [
+          ["read", CIRCULARS],
+          ["sign-off", CIRCULARS],
+        ]);
+        const created = async (team: string) =>
+          (
+            (await app().nextly.create({
+              collection: CIRCULARS,
+              data: { title: team, team },
+            })) as unknown as { item: { id: string } }
+          ).item.id;
+        const open = await created("public");
+        const hidden = await created("private");
+        for (const id of [open, hidden]) {
+          await seedState(app(), partOf(CIRCULARS, id, null), "legal", {
+            definitionHash: HASH,
+          });
+        }
+
+        const waiting = await door.waiting(
+          { kind: "person", id: "bea" },
+          { page: 1, limit: 10 }
+        );
+        expect(
+          waiting.items.map(item => (item.document as Doc).entryId)
+        ).toEqual([open]);
+        expect(waiting.meta).toMatchObject({ total: 1 });
       });
 
       it("names no one for a part in a stage with no step out of it", async () => {
