@@ -18,8 +18,13 @@
  *
  * @module canvas/first-add-choosers
  */
+import { COLLECTION_LIST_TYPE, findNode } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import {
+  CollectionListPicker,
+  type CollectionPickerServices,
+} from "../collection-list-picker";
 import { ColumnsLayoutPicker } from "../columns-layout-picker";
 import { isHTMLElement } from "../dom-kind";
 import type { EditorState } from "../editor-state";
@@ -48,6 +53,61 @@ export interface FirstAddChoosersProps {
    * the canvas beneath. The step itself holds.
    */
   readonly hidden?: boolean;
+  /**
+   * The host's collections, for a Collection list's first step. Absent, the
+   * step says the collections couldn't be listed, and Skip still leaves a
+   * blank list.
+   */
+  readonly services?: CollectionPickerServices | undefined;
+}
+
+/**
+ * Whether a list has no source: no collection, no custom source and no
+ * related entries. Such a list asks which entries it shows whenever it is
+ * selected, not only just after it is added, so a reload or an Escape lands
+ * on the same question.
+ */
+function hasNoSource(props: Readonly<Record<string, unknown>>): boolean {
+  const collection = props.collection;
+  return (
+    (typeof collection !== "string" || collection.trim() === "") &&
+    props.namedQuery === undefined &&
+    props.relation === undefined
+  );
+}
+
+/**
+ * The selected list's question, where the editor holds no first-add step:
+ * a pick is its own step of the history, and Skip puts the question away
+ * until the list is selected again.
+ */
+function useSourcelessListAsk(
+  editor: EditorState,
+  dismissed: string | undefined,
+  dismiss: (nodeId: string) => void
+): FirstAdd | undefined {
+  const selected = editor.selectedId;
+  const node =
+    selected === null ? undefined : findNode(editor.document.nodes, selected);
+  const asks =
+    node !== undefined &&
+    node.type === COLLECTION_LIST_TYPE &&
+    node.id !== dismissed &&
+    hasNoSource(node.props);
+  const nodeId = asks ? node.id : undefined;
+  const { applyAll } = editor;
+  return React.useMemo(
+    () =>
+      nodeId === undefined
+        ? undefined
+        : {
+            nodeId,
+            chooser: "collection-source",
+            choose: ops => applyAll(ops) !== null,
+            skip: () => dismiss(nodeId),
+          },
+    [nodeId, applyAll, dismiss]
+  );
 }
 
 /** The block's minimum height while its chooser shows, and what it had. */
@@ -182,6 +242,7 @@ function revealOnce(
 export function FirstAddChoosers({
   editor,
   hidden = false,
+  services,
 }: FirstAddChoosersProps): React.JSX.Element {
   const layer = React.useRef<HTMLDivElement | null>(null);
   const body = React.useRef<HTMLDivElement | null>(null);
@@ -191,7 +252,14 @@ export function FirstAddChoosers({
   // The block last scrolled out from under a box that hid it, likewise.
   const unhiddenFor = React.useRef<string | undefined>(undefined);
   const [rect, setRect] = React.useState<Rect | null>(null);
-  const firstAdd = hidden ? undefined : editor.firstAdd;
+  // A list put away with Skip, until another block is selected.
+  const [dismissed, setDismissed] = React.useState<string | undefined>();
+  const dismiss = React.useCallback((id: string) => setDismissed(id), []);
+  React.useEffect(() => {
+    if (editor.selectedId !== dismissed) setDismissed(undefined);
+  }, [editor.selectedId, dismissed]);
+  const sourceless = useSourcelessListAsk(editor, dismissed, dismiss);
+  const firstAdd = hidden ? undefined : (editor.firstAdd ?? sourceless);
   const nodeId = firstAdd?.nodeId;
 
   // Read by the measure, which outlives the render that made it.
@@ -299,7 +367,12 @@ export function FirstAddChoosers({
           onContextMenu={event => event.stopPropagation()}
         >
           <div ref={body} className="nx-first-add__room">
-            <Chooser editor={editor} firstAdd={firstAdd} onDone={done} />
+            <Chooser
+              editor={editor}
+              firstAdd={firstAdd}
+              services={services}
+              onDone={done}
+            />
           </div>
         </div>
       )}
@@ -311,13 +384,24 @@ export function FirstAddChoosers({
 function Chooser({
   editor,
   firstAdd,
+  services,
   onDone,
 }: {
   editor: EditorState;
   firstAdd: FirstAdd;
+  services: CollectionPickerServices | undefined;
   onDone: () => void;
 }): React.JSX.Element | null {
   switch (firstAdd.chooser) {
+    case "collection-source":
+      return (
+        <CollectionListPicker
+          firstAdd={firstAdd}
+          document={editor.document}
+          services={services}
+          onDone={onDone}
+        />
+      );
     case "columns-layout":
       return (
         <ColumnsLayoutPicker
