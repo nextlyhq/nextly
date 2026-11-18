@@ -18,6 +18,13 @@ import {
   type FilteredRead,
   type RuleFilter,
 } from "../../../auth/access/rule-answer";
+import {
+  currentRuleLanguage,
+  ruleLanguageKey,
+  type RuleLanguage,
+  withRuleLanguage,
+} from "../../../auth/access/rule-language";
+import { ruleLanguageKeyOf } from "../../../auth/access/rule-language-key";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import { canReadSystemResource } from "../../../auth/resource-readable";
@@ -244,6 +251,14 @@ interface NestedHookStateBase {
      * its own relationships expanded where the deeper one has bare ids.
      */
     depth: number;
+    /**
+     * The language the row's rules and hooks were told when the walk reached
+     * it: the read's own, or, for a row in one language's values beside a read
+     * of every language, that language. The finalize step re-judges the row in
+     * it, and keeps its authoritative version under it, so one language's
+     * answer is never another's.
+     */
+    language: RuleLanguage;
   }>;
   /**
    * The AUTHORITATIVE version of each related row, keyed by collection and id: a
@@ -679,22 +694,34 @@ function holdsOwnRows(field: FieldDefinition): boolean {
 
 /**
  * Each language's value of each of `fields` beside `entry` (`_allLocales`,
- * `{ field: { code: value } }`), with the map that holds it, so the walk reads
- * it and the reprojection replaces it in the same places.
+ * `{ field: { code: value } }`), with the map that holds it and the rule
+ * language that value is answered in, so the walk reads it and the
+ * reprojection replaces it in the same places, each in its own language: the
+ * frame the read's own field pipeline judges that language's values in.
  */
 function eachLanguageValue(
   entry: Record<string, unknown>,
   fields: readonly FieldDefinition[]
-): { field: FieldDefinition; values: Record<string, unknown>; code: string }[] {
+): {
+  field: FieldDefinition;
+  values: Record<string, unknown>;
+  code: string;
+  language: RuleLanguage;
+}[] {
   const every = valuesBesideRow(entry);
   if (!every) return [];
-  return fields.flatMap(field => {
+  return fieldsStoredOnRow(fields).flatMap(field => {
     const keyed = every[field.name];
     if (keyed === null || typeof keyed !== "object" || Array.isArray(keyed)) {
       return [];
     }
     const values = keyed as Record<string, unknown>;
-    return Object.keys(values).map(code => ({ field, values, code }));
+    return Object.keys(values).map(code => ({
+      field,
+      values,
+      code,
+      language: { locale: code, locales: [code] },
+    }));
   });
 }
 
@@ -1313,12 +1340,19 @@ function declaredLabelField(field: FieldDefinition): string {
 function relatedRowSnapshotKey(
   collection: string,
   id: string,
-  field: FieldDefinition
+  field: FieldDefinition,
+  /**
+   * The rule language the row was answered in (`ruleLanguageKeyOf`). A read of
+   * every language populates one target in each language's values beside it,
+   * each with that language's values, hooks and rules, so the same row is a
+   * different answer in each and keeps a version of its own per language.
+   */
+  language: string
 ): string {
   // The same NUL separator {@link relationKey} uses, and for the same reason: it
-  // cannot appear in a slug, an id, or a field name, so no two distinct triples
-  // can collapse onto one key.
-  return `${relationKey(collection, id)}\u0000${declaredLabelField(field)}`;
+  // cannot appear in a slug, an id, a field name or a language key, so no two
+  // distinct tuples can collapse onto one key.
+  return `${relationKey(collection, id)}\u0000${declaredLabelField(field)}\u0000${language}`;
 }
 
 /**
@@ -3936,8 +3970,13 @@ export class CollectionRelationshipService extends BaseService {
     state: NestedHookState
   ): Promise<void> {
     await this.walkFields(entry, fields, access, state, 0);
-    for (const { field, values, code } of eachLanguageValue(entry, fields)) {
-      await this.walkFieldValue(values[code], field, access, state, 0);
+    for (const { field, values, code, language } of eachLanguageValue(
+      entry,
+      fields
+    )) {
+      await withRuleLanguage(language, () =>
+        this.walkFieldValue(values[code], field, access, state, 0)
+      );
     }
   }
 
@@ -3975,12 +4014,15 @@ export class CollectionRelationshipService extends BaseService {
     access: RelatedRowAccess
   ): Promise<void> {
     if (!access.enforceFieldAccess) return;
-    for (const { row, collection } of state.pending) {
-      await this.applyRelatedRowReadAccess(
-        collection,
-        [row],
-        access,
-        state.redactions
+    // Each row re-judged in the language the walk judged it in.
+    for (const { row, collection, language } of state.pending) {
+      await withRuleLanguage(language, () =>
+        this.applyRelatedRowReadAccess(
+          collection,
+          [row],
+          access,
+          state.redactions
+        )
       );
     }
     for (const { row, collection, field } of state.pending) {
@@ -3991,9 +4033,14 @@ export class CollectionRelationshipService extends BaseService {
     // rebuilt from. Taken here rather than during the walk because a row is not
     // final until the loops above have re-judged it — a sibling parent's hooks,
     // in a listing that shares one row object between entries, run before this.
-    for (const { row, collection, field, depth } of state.pending) {
+    for (const { row, collection, field, depth, language } of state.pending) {
       if (typeof row.id !== "string") continue;
-      const key = relatedRowSnapshotKey(collection, row.id, field);
+      const key = relatedRowSnapshotKey(
+        collection,
+        row.id,
+        field,
+        ruleLanguageKeyOf(language)
+      );
       // The NEAREST occurrence wins. A row reached deeper in the document was
       // expanded with less depth remaining, so restoring that version into a
       // shallower field would strip a level of expansion the response had — and
@@ -4087,8 +4134,13 @@ export class CollectionRelationshipService extends BaseService {
     const rebuilt = new Map<string, Record<string, unknown>>();
     for (const entry of entries) {
       await this.reprojectFields(entry, fields, state, rebuilt);
-      for (const { field, values, code } of eachLanguageValue(entry, fields)) {
-        await this.reprojectValueAt(values, code, field, state, rebuilt);
+      for (const { field, values, code, language } of eachLanguageValue(
+        entry,
+        fields
+      )) {
+        await withRuleLanguage(language, () =>
+          this.reprojectValueAt(values, code, field, state, rebuilt)
+        );
       }
     }
   }
@@ -4103,7 +4155,8 @@ export class CollectionRelationshipService extends BaseService {
     state: NestedHookState,
     rebuilt: Map<string, Record<string, unknown>>
   ): Promise<void> {
-    for (const field of fields) {
+    // The fields stored at this level, as the walk reads them (`walkFields`).
+    for (const field of fieldsStoredOnRow(fields)) {
       if (!field.name) continue;
       // A hook can hand a container or a populated hasMany back as the JSON string
       // storage keeps it as; left a string there is no value here to rebuild.
@@ -4202,7 +4255,14 @@ export class CollectionRelationshipService extends BaseService {
       id,
       discriminated: shape.discriminated,
     };
-    const key = relatedRowSnapshotKey(ref.collection, ref.id, field);
+    // The version kept in the language this value is answered in: the read's
+    // own, or the side language the reprojection entered for it.
+    const key = relatedRowSnapshotKey(
+      ref.collection,
+      ref.id,
+      field,
+      ruleLanguageKey()
+    );
 
     const already = rebuilt.get(key);
     if (already) return withReferenceIdentity(already, ref);
@@ -4364,7 +4424,8 @@ export class CollectionRelationshipService extends BaseService {
   ): Promise<void> {
     if (depth > MAX_RELATIONSHIP_DEPTH) return;
     const fields = await this.fieldsForNestedWalk(collectionName, state);
-    for (const field of fields) {
+    // The fields stored at this level, as the walk reads them (`walkFields`).
+    for (const field of fieldsStoredOnRow(fields)) {
       await this.reapplyFieldValueAccess(
         entry[field.name],
         field,
@@ -4396,7 +4457,9 @@ export class CollectionRelationshipService extends BaseService {
       // A container: its rows belong to THIS collection; descend to reach any
       // relationship inside them, a component's by the walk's own fields.
       for (const row of rows) {
-        for (const inner of await this.containedFields(field, row, state)) {
+        for (const inner of fieldsStoredOnRow(
+          await this.containedFields(field, row, state)
+        )) {
           await this.reapplyFieldValueAccess(
             row[inner.name],
             inner,
@@ -4477,7 +4540,10 @@ export class CollectionRelationshipService extends BaseService {
     state: NestedHookState,
     depth: number
   ): Promise<void> {
-    for (const field of fields) {
+    // The fields stored at this level, as the read's expansion reads them: a
+    // group with no name only lays fields out, so the fields inside it are
+    // held here, under their own names, and never under the group's.
+    for (const field of fieldsStoredOnRow(fields)) {
       this.decodeJsonBackedFieldInPlace(entry, field);
       await this.walkFieldValue(entry[field.name], field, access, state, depth);
     }
@@ -4712,6 +4778,7 @@ export class CollectionRelationshipService extends BaseService {
         collection: resolved.collection,
         field,
         depth,
+        language: currentRuleLanguage(),
       });
 
       // Secrets are stripped from a related row when it is fetched, but a hook

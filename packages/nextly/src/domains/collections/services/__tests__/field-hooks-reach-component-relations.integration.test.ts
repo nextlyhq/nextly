@@ -9,10 +9,19 @@
  * read answering the stored value instead has skipped the hook for that row.
  * A document whose own read hook (collection-level or field-level) rewrites a
  * related row still answers it as the related collection's hooks return it.
+ * Beside a read of every language, each language's related row is answered
+ * in that language: its own values, its hooks and its field rules.
  *
  * @module domains/collections/services/__tests__/field-hooks-reach-component-relations.integration.test
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+import { grantPublic } from "../../../../__tests__/helpers/public-role";
+import { currentRuleLanguage } from "../../../../auth/access/rule-language";
 
 import {
   defineCollection,
@@ -27,6 +36,11 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
+import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
+import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
+import { clearCachedSnapshot } from "../../../../init/schema-snapshot-cache";
+import type { ServiceContainer } from "../../../../services";
+import { _resetEnvCache } from "../../../../shared/lib/env";
 
 const PEOPLE = "fhc_people";
 const PAGES = "fhc_pages";
@@ -38,6 +52,11 @@ const FIELD_HOOKED_HOME = "fhc_field_hooked_home";
 const BYLINE = "fhc_byline";
 const QUOTE = "fhc_quote";
 const NOTE = "fhc_note";
+const SPEAKERS = "fhc_speakers";
+const CREDIT = "fhc_credit";
+const CREDITED_PAGES = "fhc_credited_pages";
+const CREDITED_HOME = "fhc_credited_home";
+const LANGUAGES = ["en", "fr", "es"] as const;
 
 const MASKED = "masked-secret";
 
@@ -164,6 +183,18 @@ describe.each(getConfiguredTestDialects())(
             slug: NOTE,
             fields: [text({ name: "body" })],
           }),
+          // Each language's credit names a speaker, the same one in all.
+          defineFieldGroup({
+            slug: CREDIT,
+            localized: true,
+            fields: [
+              relationship({
+                name: "speaker",
+                relationTo: SPEAKERS,
+                localized: true,
+              }),
+            ],
+          }),
         ],
         collections: [
           // A person's secret is masked on every read by its field hook.
@@ -176,6 +207,39 @@ describe.each(getConfiguredTestDialects())(
                 name: "secret",
                 hooks: { afterRead: [() => MASKED] },
               }),
+            ],
+          }),
+          // A speaker's name is translated; its mask names the language its
+          // hook ran in; its nickname is withheld from Spanish by its rule.
+          defineCollection({
+            slug: SPEAKERS,
+            localized: true,
+            access: { read: () => true },
+            fields: [
+              text({ name: "name" }),
+              text({
+                name: "mask",
+                localized: false,
+                hooks: {
+                  afterRead: [
+                    () => `masked-${currentRuleLanguage().locale ?? "none"}`,
+                  ],
+                },
+              }),
+              text({
+                name: "nickname",
+                localized: false,
+                access: { read: ({ locale }) => locale !== "es" },
+              }),
+            ],
+          }),
+          defineCollection({
+            slug: CREDITED_PAGES,
+            localized: true,
+            access: { read: () => true },
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "credit", component: CREDIT }),
             ],
           }),
           defineCollection({
@@ -202,6 +266,15 @@ describe.each(getConfiguredTestDialects())(
         ],
         singles: [
           defineSingle({
+            slug: CREDITED_HOME,
+            localized: true,
+            access: { read: () => true },
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "credit", component: CREDIT }),
+            ],
+          }),
+          defineSingle({
             slug: HOME,
             localized: true,
             access: { read: () => true },
@@ -221,7 +294,7 @@ describe.each(getConfiguredTestDialects())(
             fields: [rewritingTitle(), ...holders()],
           }),
         ],
-        localization: { locales: ["en", "fr"], defaultLocale: "en" },
+        localization: { locales: [...LANGUAGES], defaultLocale: "en" },
       });
 
       const person = async (name: string) =>
@@ -271,6 +344,54 @@ describe.each(getConfiguredTestDialects())(
           slug,
           locale: "fr",
           data: { title: "Accueil", ...heldBy(bea), _overwrite: true },
+        } as never);
+      }
+
+      // One speaker, named in each language, credited by every language.
+      const cy = String(
+        (
+          await t.nextly.create({
+            collection: SPEAKERS,
+            locale: "en",
+            data: { name: "Cy-en", mask: "stored mask", nickname: "Cyclone" },
+          })
+        ).item.id
+      );
+      for (const locale of ["fr", "es"] as const) {
+        await t.nextly.update({
+          collection: SPEAKERS,
+          id: cy,
+          locale,
+          data: { name: `Cy-${locale}`, _overwrite: true },
+        });
+      }
+      for (const locale of LANGUAGES) {
+        const data = { title: `Page ${locale}`, credit: { speaker: cy } };
+        if (locale === "en") {
+          pageIds.set(
+            CREDITED_PAGES,
+            String(
+              (
+                await t.nextly.create({
+                  collection: CREDITED_PAGES,
+                  locale,
+                  data,
+                })
+              ).item.id
+            )
+          );
+        } else {
+          await t.nextly.update({
+            collection: CREDITED_PAGES,
+            id: pageIds.get(CREDITED_PAGES) ?? "",
+            locale,
+            data: { ...data, _overwrite: true },
+          });
+        }
+        await t.nextly.updateSingle({
+          slug: CREDITED_HOME,
+          locale,
+          data: { ...data, _overwrite: true },
         } as never);
       }
     }, 120_000);
@@ -363,6 +484,261 @@ describe.each(getConfiguredTestDialects())(
         // Under no key of the field, in any language, is a stored or
         // rewritten secret.
         expect(JSON.stringify(held)).not.toMatch(/stored (Ann|Bea)|rewritten/);
+      },
+      60_000
+    );
+
+    const creditReads: Record<string, () => Promise<Record<string, unknown>>> =
+      {
+        "an entry read by id": async () =>
+          (await t.nextly.findByID({
+            collection: CREDITED_PAGES,
+            id: pageIds.get(CREDITED_PAGES) ?? "",
+            ...visitor("all"),
+          })) as Record<string, unknown>,
+        "an entry listed": async () =>
+          (
+            await t.nextly.find({
+              collection: CREDITED_PAGES,
+              ...visitor("all"),
+            })
+          ).items[0] as Record<string, unknown>,
+        "a Single read": async () =>
+          (await t.nextly.findSingle({
+            slug: CREDITED_HOME,
+            ...visitor("all"),
+          } as never)) as unknown as Record<string, unknown>,
+      };
+
+    // Every language credits the same speaker. Beside a read of every
+    // language, each language's speaker is that language's: its translated
+    // name, its mask as its hook answered in that language, and its nickname
+    // withheld in Spanish alone, where its rule refuses it.
+    it.each(Object.keys(creditReads))(
+      "%s carries each language's related row as that language answers it",
+      async read => {
+        const answer = await creditReads[read]();
+        const every = answer._allLocales as
+          | Record<string, Record<string, unknown>>
+          | undefined;
+        const speakers = Object.fromEntries(
+          LANGUAGES.map(locale => [
+            locale,
+            (every?.credit?.[locale] as { speaker?: unknown } | undefined)
+              ?.speaker as Record<string, unknown> | undefined,
+          ])
+        );
+        const seen = JSON.stringify(speakers);
+        for (const locale of LANGUAGES) {
+          expect(speakers[locale]?.name, seen).toBe(`Cy-${locale}`);
+          expect(speakers[locale]?.mask, seen).toBe(`masked-${locale}`);
+        }
+        expect(speakers.en?.nickname, seen).toBe("Cyclone");
+        expect(speakers.fr?.nickname, seen).toBe("Cyclone");
+        expect(speakers.es, seen).not.toHaveProperty("nickname");
+        expect(JSON.stringify(answer)).not.toContain("stored mask");
+      },
+      60_000
+    );
+  }
+);
+
+const LAID_PEOPLE = "fhc_laid_people";
+const LAID_PAGES = "fhc_laid_pages";
+const LAID_HOME = "fhc_laid_home";
+
+/**
+ * A group with no name only lays fields out: the relationship inside it is
+ * stored and read at the level the group sits in, here inside `meta`, as
+ * `meta.keeper`. A field with no name is refused at the top of a document and
+ * by the code-first config, so the Builder creates the shape inside a group.
+ */
+const laidOut = () => [
+  { name: "title", type: "text" },
+  {
+    name: "meta",
+    type: "group",
+    fields: [
+      {
+        type: "group",
+        label: "Layout",
+        fields: [
+          { name: "keeper", type: "relationship", relationTo: LAID_PEOPLE },
+        ],
+      },
+    ],
+  },
+];
+
+/**
+ * A Builder save as a development server runs it, where a save applies its
+ * DDL at once, failing with what it answered when it did not succeed.
+ */
+async function builderSaved(save: () => Promise<unknown>): Promise<void> {
+  const previous = process.env.NODE_ENV;
+  vi.stubEnv("NODE_ENV", "development");
+  try {
+    const response = (await save()) as Response;
+    expect(response.status, await response.clone().text()).toBeLessThan(300);
+  } finally {
+    vi.stubEnv("NODE_ENV", previous);
+  }
+}
+
+describe.each(getConfiguredTestDialects())(
+  "a related row inside a group with no name (integration, %s)",
+  dialect => {
+    let laid: TestNextly;
+    let laidPageId = "";
+    let projectRoot = "";
+
+    beforeAll(async () => {
+      // What a development save writes beside the app goes to a project of
+      // its own, never into this package.
+      projectRoot = await mkdtemp(join(tmpdir(), "nextly-laid-out-"));
+      vi.spyOn(process, "cwd").mockReturnValue(projectRoot);
+      clearCachedSnapshot();
+      laid = await createTestNextly({
+        dialect,
+        seedPublic: true,
+        collections: [
+          defineCollection({
+            slug: LAID_PEOPLE,
+            access: { read: () => true },
+            fields: [
+              text({ name: "name" }),
+              text({
+                name: "secret",
+                hooks: { afterRead: [() => MASKED] },
+              }),
+            ],
+          }),
+        ],
+        localization: { locales: ["en", "fr"], defaultLocale: "en" },
+      });
+      await builderSaved(() =>
+        dispatchCollections(
+          {} as ServiceContainer,
+          "createCollection",
+          {},
+          {
+            name: LAID_PAGES,
+            label: "Laid pages",
+            localized: true,
+            fields: laidOut(),
+          }
+        )
+      );
+      await builderSaved(() =>
+        dispatchSingles(
+          "createSingle",
+          {},
+          {
+            slug: LAID_HOME,
+            label: "Laid home",
+            localized: true,
+            fields: laidOut(),
+          }
+        )
+      );
+      // A visitor reads them by the Public role's grants, which the Builder
+      // leaves to the site.
+      await grantPublic(laid, [`read-${LAID_PAGES}`, `read-${LAID_HOME}`]);
+      const person = async (name: string) =>
+        String(
+          (
+            await laid.nextly.create({
+              collection: LAID_PEOPLE,
+              data: { name, secret: `stored ${name}` },
+            })
+          ).item.id
+        );
+      const ann = await person("Ann");
+      await person("Bea");
+      laidPageId = String(
+        (
+          await laid.nextly.create({
+            collection: LAID_PAGES,
+            locale: "en",
+            data: { title: "Page", meta: { keeper: ann } },
+          })
+        ).item.id
+      );
+      await laid.nextly.update({
+        collection: LAID_PAGES,
+        id: laidPageId,
+        locale: "fr",
+        data: { title: "Page en français", _overwrite: true },
+      });
+      await laid.nextly.updateSingle({
+        slug: LAID_HOME,
+        locale: "en",
+        data: { title: "Home", meta: { keeper: ann }, _overwrite: true },
+      } as never);
+      await laid.nextly.updateSingle({
+        slug: LAID_HOME,
+        locale: "fr",
+        data: { title: "Accueil", _overwrite: true },
+      } as never);
+    }, 120_000);
+
+    afterAll(async () => {
+      await laid?.destroy();
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+      _resetEnvCache();
+      clearCachedSnapshot();
+      if (projectRoot) await rm(projectRoot, { recursive: true, force: true });
+    });
+
+    const visitor = (locale: "en" | "all") => ({
+      locale,
+      depth: 2,
+      overrideAccess: false,
+    });
+    const laidReads: Record<
+      string,
+      (locale: "en" | "all") => Promise<Record<string, unknown>>
+    > = {
+      "an entry read by id": async locale =>
+        (await laid.nextly.findByID({
+          collection: LAID_PAGES,
+          id: laidPageId,
+          ...visitor(locale),
+        })) as Record<string, unknown>,
+      "an entry listed": async locale =>
+        (await laid.nextly.find({ collection: LAID_PAGES, ...visitor(locale) }))
+          .items[0] as Record<string, unknown>,
+      "a Single read": async locale =>
+        (await laid.nextly.findSingle({
+          slug: LAID_HOME,
+          ...visitor(locale),
+        } as never)) as unknown as Record<string, unknown>,
+    };
+
+    // Ann, where the read stores her, inside `meta`. An entry's read populates
+    // her; a Single's read carries her reference there, which holds no field
+    // to mask. Wherever she is populated, her secret reads as her hook returns
+    // it, and her stored secret appears nowhere.
+    it.each(
+      Object.keys(laidReads).flatMap(read =>
+        (["en", "all"] as const).map(locale => ({ read, locale }))
+      )
+    )(
+      "$read in locale $locale answers the related row as its field hook returns it",
+      async ({ read, locale }) => {
+        const answer = await laidReads[read](locale);
+        const own = peopleIn(answer.meta, "$.meta");
+        if (read !== "a Single read") {
+          expect(
+            own.map(p => p.name),
+            JSON.stringify(answer.meta)
+          ).toContain("Ann");
+        }
+        expect(own, JSON.stringify(own)).toEqual(
+          own.map(p => ({ ...p, secret: MASKED }))
+        );
+        expect(JSON.stringify(answer)).not.toMatch(/stored (Ann|Bea)/);
       },
       60_000
     );
