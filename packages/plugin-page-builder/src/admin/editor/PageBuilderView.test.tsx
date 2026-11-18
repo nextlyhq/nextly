@@ -42,6 +42,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BlocksFieldConfig } from "../../fields/blocks-options";
+import { closedDocumentSession } from "../../__tests__/closed-document-session";
 
 /** Each document the editor was seeded with, in mount order. */
 const seeded: BlockDocument[] = [];
@@ -210,6 +211,9 @@ vi.mock("../site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The empty page's starter pages read, offering none: no case here starts
+  // a page from one.
+  readPluginRoute: async () => ({ items: [] }),
   // The canvas's media read, answering nothing: these cases draw no image.
   // One function for every call, as the admin's own hook keeps it.
   useMediaResolver: (
@@ -275,6 +279,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // The form's storing gate, which site style writes are tracked with.
   useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
+  // The session a header edited in place opens; none is opened here.
+  useDocumentSession: () => closedDocumentSession(),
   // The header's controls the bar places; drawn by the admin, not here.
   DocumentSaveAndPublish: () => null,
   useDocumentLifeStage: () => null,
@@ -660,7 +666,9 @@ describe("the Previewing strip", () => {
   it("is not drawn for a page (the control)", () => {
     render(<Host />);
     expect(screen.getByRole("banner", { name: "Editor actions" })).toBeTruthy();
-    expect(screen.queryByTestId("canvas-strip")).toBeNull();
+    // The strip holds only the live region that announces editing a header
+    // in place, which says nothing until then: no row is drawn for a page.
+    expect(screen.queryByTestId("canvas-strip")?.textContent ?? "").toBe("");
     expect(screen.queryByText("Previewing")).toBeNull();
   });
 });

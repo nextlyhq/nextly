@@ -35,6 +35,10 @@ import {
 import { uniqueColumnRepeatsError } from "../../../domains/schema/migrate/unique-column-guard";
 import { parseSnapshotFile } from "../../../domains/schema/migrate-create/snapshot-io";
 import type { NextlySchemaSnapshot } from "../../../domains/schema/pipeline/diff/types";
+import {
+  writerHeldError,
+  writerLostError,
+} from "../../../domains/schema/migrate-create/writer-hold";
 import { describeHolder } from "../../../domains/schema/pipeline/schema-lock";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
@@ -191,6 +195,23 @@ export const MIGRATION_CASES = {
       },
     });
   },
+  // As a command that waited its whole wait for the migration files is refused.
+  MIGRATIONS_WRITER_BUSY: () =>
+    writerHeldError({
+      command: "migrate:create",
+      whenHeld: "wait",
+      holder: {
+        owner: "build-01:4242",
+        command: "migrate:baseline",
+        heldForSeconds: 75,
+        lapsesInSeconds: 45,
+      },
+      waitedMs: 60_000,
+      now: NOW,
+    }),
+  // As a command that stalled past its lease finds another holding the files.
+  MIGRATIONS_WRITER_OVERTAKEN: () =>
+    writerLostError("migrate:create", "migrate:baseline"),
   // As `tableBusyError` builds it once a migration's tries for a busy table run out with nothing
   // of the file left, the holder a PostgreSQL session.
   TABLE_BUSY: () =>

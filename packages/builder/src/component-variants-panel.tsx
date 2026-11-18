@@ -93,18 +93,30 @@ export const ComponentVariantsContext: React.Context<
 > = React.createContext<ComponentVariantsHost | undefined>(undefined);
 
 /**
- * The variants section of a component's own view, under its exposed fields.
+ * The variants section of a component's own view, under its exposed fields;
+ * nothing where the host keeps them to that view (`editedInOwnView`).
  *
  * @experimental Settles when the component editor ships.
  */
-export function ComponentVariantsSection({
+export function ComponentVariantsSection(props: {
+  editor: EditorState;
+  component: ComponentDocument;
+}): React.JSX.Element | null {
+  const host = React.useContext(ComponentVariantsContext);
+  if (host?.editedInOwnView === true) return null;
+  return <VariantsSection {...props} host={host} />;
+}
+
+/** The section itself, given its host. */
+function VariantsSection({
   editor,
   component,
+  host,
 }: {
   editor: EditorState;
   component: ComponentDocument;
+  host: ComponentVariantsHost | undefined;
 }): React.JSX.Element {
-  const host = React.useContext(ComponentVariantsContext);
   const taken = useSeenKeys(component);
   const context: VariantEditContext = { editor, component, taken };
   const options = variantOptions(component);

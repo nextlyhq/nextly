@@ -34,8 +34,9 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../i18n/localization-source";
+import { perLanguageFieldNames } from "../../i18n/per-language-fields";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
-import { ALL_LOCALES_KEY } from "../../i18n/read-in-language";
+import { ALL_LOCALES_KEY, detachedCopy } from "../../i18n/read-in-language";
 import {
   resolveLocaleChain,
   resolveRequestedLocale,
@@ -736,6 +737,23 @@ export class FieldGroupQueryService extends BaseService {
     );
   }
 
+  /**
+   * Whether the field group `slug` keeps translations: its values are stored per language
+   * (`storesPerLanguage`) and it has a translatable field to store so (`companionOf`). Not one
+   * that is not defined.
+   */
+  private async holdsTranslations(
+    slug: string,
+    executor?: unknown
+  ): Promise<boolean> {
+    const meta = await this.registryService.getComponentBySlug(slug, executor);
+    return (
+      meta !== null &&
+      storesPerLanguage(meta) &&
+      this.companionOf(meta) !== null
+    );
+  }
+
   /** The component's per-language table, or null when it has no translatable field. */
   private companionOf(
     meta: DynamicFieldGroupRecord
@@ -1261,8 +1279,13 @@ export class FieldGroupQueryService extends BaseService {
    * every entry, so a page costs as many reads as there are languages, never one per entry. A
    * language an entry's document is not published in (`skipLanguagesOf`) is not read for it and
    * holds `null`, as the entry's own translated fields hold such a language. Only the field groups
-   * a populate of `fields` and `select` reads (`fieldGroupFieldsToPopulate`); none, or no
-   * localization, reads nothing.
+   * a populate of `fields` and `select` reads (`fieldGroupFieldsToPopulate`) that reach a field
+   * group keeping translations (`holdsTranslations`): one with none has a single value for every
+   * language, the one the entry carries. None, or no localization, reads nothing.
+   *
+   * `pending` is a change shown in place of one language's stored values (a working draft): the
+   * field groups it holds are put beside the entry for that language as it holds them, not as
+   * stored.
    */
   async populateComponentDataBesideEntries(
     params: Omit<
@@ -1271,14 +1294,27 @@ export class FieldGroupQueryService extends BaseService {
     > & {
       /** Who each language's related rows are read for, asked in that language. */
       accessIn: (locale: string) => ComponentReadAccess;
+      /** One language's pending change, by top-level field, shown in place of its stored values. */
+      pending?: { locale: string; values: Record<string, unknown> };
     }
   ): Promise<void> {
-    const { entries, skipLanguagesOf } = params;
+    const { entries, skipLanguagesOf, pending } = params;
     const localization = this.localization;
-    const names = fieldGroupFieldsToPopulate(params.fields, params.select).map(
-      field => field.name
+    if (!localization || entries.length === 0) return;
+    const populated = fieldGroupFieldsToPopulate(params.fields, params.select);
+    if (populated.length === 0) return;
+    const translated = await perLanguageFieldNames(
+      populated,
+      new Set(),
+      slug => this.holdsTranslations(slug, params.executor),
+      async slug =>
+        (await this.registryService.getComponentBySlug(slug, params.executor))
+          ?.fields ?? null
     );
-    if (!localization || names.length === 0 || entries.length === 0) return;
+    const names = populated
+      .map(field => field.name)
+      .filter(name => translated.has(name));
+    if (names.length === 0) return;
     for (const { code } of localization.locales) {
       // The entries published in this language: only theirs are read in it.
       const readIn = entries.filter(
@@ -1315,6 +1351,12 @@ export class FieldGroupQueryService extends BaseService {
             : {};
         entry[ALL_LOCALES_KEY] = every;
         const values = inLanguage.get(entry);
+        // The pending change's language holds what the change holds, where it holds a value; a
+        // language the entry is not read in holds nothing, as it does for stored values.
+        const shown =
+          pending?.locale === code && values !== undefined
+            ? pending.values
+            : undefined;
         for (const name of names) {
           const keyed = every[name];
           const byLanguage: Record<string, unknown> =
@@ -1322,7 +1364,10 @@ export class FieldGroupQueryService extends BaseService {
               ? (keyed as Record<string, unknown>)
               : {};
           every[name] = byLanguage;
-          byLanguage[code] = values?.[name] ?? null;
+          byLanguage[code] =
+            shown !== undefined && name in shown
+              ? detachedCopy(shown[name] ?? null)
+              : (values?.[name] ?? null);
         }
       }
     }

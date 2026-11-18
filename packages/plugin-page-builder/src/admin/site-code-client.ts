@@ -10,14 +10,16 @@ import { readPluginRoute, writePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 import {
   PAGE_BUILDER_PLUGIN_NAME,
   SITE_CODE_ROUTE_PATH,
-  SITE_CSS_ROUTE_PATH,
   type SiteCodeChecked,
   type SiteCodeRequest,
   type SiteCodeSaved,
+} from "../library-contract";
+import {
+  SITE_CSS_ROUTE_PATH,
   type SiteCssRead,
   type SiteCssRequest,
   type SiteCssSaved,
-} from "../library-contract";
+} from "../site-css-contract";
 
 /** The policy a page of the site is served with, as a check is sent it. */
 export type LivePolicy = NonNullable<SiteCodeRequest["livePolicy"]>;

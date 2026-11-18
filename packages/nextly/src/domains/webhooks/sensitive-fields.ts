@@ -21,6 +21,8 @@
  * @module domains/webhooks/sensitive-fields
  */
 
+import { isFieldGroupFieldType } from "../field-groups/storage/field-group-field-type";
+
 /** The minimal field-config shape this policy reads. */
 export interface SensitiveFieldSource {
   /** Optional: presentational groups can be nameless and store children inline. */
@@ -113,5 +115,57 @@ export function sensitiveFieldPaths(
     }
   };
   walk(fields, "", false);
+  return [...paths];
+}
+
+/**
+ * The dotted paths whose values are component rows: each named component
+ * field of the tree, at any depth, in the same path spelling as
+ * {@link sensitiveFieldPaths} (a nameless container adds no segment, array
+ * elements add none, a dynamic zone's members sit under their type-tagged
+ * segment once `expandComponentFields` has grafted them).
+ *
+ * A component instance is a stored row of its own, carrying system timestamp
+ * columns that a write rewrites whether or not the row's content changed. A
+ * diff passes over those columns at these paths only: the same key inside a
+ * JSON or group value is content the user wrote. Only references expanded into
+ * the tree are seen, so a component nested in an unexpanded one is not named
+ * and its stamps count, which over-reports a change rather than hiding one.
+ */
+export function componentRowPaths(
+  fields: readonly SensitiveFieldSource[]
+): string[] {
+  const paths = new Set<string>();
+  const walk = (
+    list: readonly SensitiveFieldSource[],
+    prefix: string
+  ): void => {
+    for (const field of list) {
+      const path = field.name
+        ? prefix
+          ? `${prefix}.${field.name}`
+          : field.name
+        : prefix;
+      if (field.name && isFieldGroupFieldType(field.type)) paths.add(path);
+      if (Array.isArray(field.fields)) walk(field.fields, path);
+      if (Array.isArray(field.blocks)) {
+        for (const block of field.blocks) {
+          if (typeof block !== "object" || block === null) continue;
+          const nested = (block as { fields?: unknown }).fields;
+          if (!Array.isArray(nested)) continue;
+          // Checked per element, as the sensitive walk does: the tree comes
+          // from stored schema data and one malformed entry must not stop it.
+          walk(
+            nested.filter(
+              (entry): entry is SensitiveFieldSource =>
+                typeof entry === "object" && entry !== null
+            ),
+            path
+          );
+        }
+      }
+    }
+  };
+  walk(fields, "");
   return [...paths];
 }
