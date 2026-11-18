@@ -33,8 +33,11 @@ import {
   useNoticeQueue,
   type BuilderShellProps,
   type ComponentVerbsHost,
+  type EditingTargetState,
+  type RegionStateArgs,
   type TurnIntoChoice,
   type InlineEditOutcome,
+  useEditingTarget,
 } from "@nextlyhq/builder/shell";
 import {
   loadInlineRichTextEditor,
@@ -453,35 +456,36 @@ export function useEditorMount(
    * raises into it from here.
    */
   const notices = useNoticeQueue();
+  // What the page's edits and a header's edited in place are judged by beside
+  // their own document: the site's caps, and the refusals said in words.
+  const judged = useJudgedEdits(documentLimits, componentLibrary, notices);
   // With a recovery point's restore as one edit, so the author can undo it.
-  const editor = useRestorableEditorState(
+  const page = useRestorableEditorState(
     {
       initialDocument,
-      limits: documentLimits,
+      ...judged,
       // The SAME map the canvas draws with, so an edit is refused when the page
       // would no longer compose with it in — every surface reaches the page
       // through this apply, and this is the one place the reason is known.
       definitions: componentLibrary.definitions,
-      onRefused: refusal => notices.raise(refusal.sentence),
-      // A lock refusal, said the same way: the author reads why, in words.
-      onLockRefused: refusal => notices.raise(refusal.sentence),
-      // A block a component locks is refused naming the component, as the
-      // panel's held row names it, from the library the canvas draws with.
-      componentName: id =>
-        componentLibrary.components.find(component => component.id === id)
-          ?.title,
       // What the next save judges locks against, so the editor refuses exactly
       // what that save would.
       stored,
-      // An edit that would put a block where it may not go is refused by the op
-      // store whichever surface asked for it, so the author is told why here
-      // rather than seeing the edit silently not happen.
-      onPlacementRefused: refusal => notices.raise(placementSentence(refusal)),
     },
     kinds
   );
-  // A shared style change saved while this editor is open is a step of its
-  // history, so the editor connects the history to the style writers.
+  /*
+   * Which document the editor edits: the page, or a header or footer of its
+   * layout edited in place while the page stays on screen. Everything below
+   * that edits is handed the ACTIVE state, so one switch moves the inline
+   * typing, the verbs and the style history to the header together, and the
+   * page's own state is left exactly as it was.
+   */
+  const editing = useEditingTarget(page, judged);
+  const editor = editing.active;
+  // A shared style change saved while this editor is open is a step of the
+  // history of what is being edited, so the editor connects that history to
+  // the style writers: the header's while it is edited, the page's otherwise.
   useConnectStyleHistory(editor.recordStep);
 
   /*
@@ -541,6 +545,8 @@ export function useEditorMount(
     componentLibrary,
     notices,
     editor,
+    page,
+    editing,
     inline,
     passages,
     locale,
@@ -563,7 +569,15 @@ export type EditorMount = {
   documentLimits: DocumentLimits;
   componentLibrary: ComponentLibraryRead;
   notices: NoticeQueue;
+  /**
+   * The state of the document being edited now: the header's or footer's
+   * while one is edited in place, else the page's.
+   */
   editor: EditorState;
+  /** The page's own state, frozen while a header or footer is edited. */
+  page: EditorState;
+  /** What is being edited, and the ways to switch (`useEditingTarget`). */
+  editing: EditingTargetState;
   /** The inspector's open passages; see `createOpenPassages`. */
   passages: OpenPassages;
   /** The language being edited, by code, when the document has one. */
@@ -585,6 +599,37 @@ export type EditorMount = {
   /** Give the "Part of" toast the opener its Edit component action calls. */
   offerEditComponent: (open: OpenComponent | undefined) => void;
 };
+
+/**
+ * What every edit is judged by beside its own document, the page's and a
+ * header's alike: the site's caps, and each refusal said in words, through
+ * the notice queue the shell draws.
+ */
+function useJudgedEdits(
+  limits: DocumentLimits,
+  componentLibrary: ComponentLibraryRead,
+  notices: NoticeQueue
+): RegionStateArgs {
+  const { raise } = notices;
+  const { components } = componentLibrary;
+  return useMemo(
+    () => ({
+      limits,
+      onRefused: refusal => raise(refusal.sentence),
+      // A lock refusal, said the same way: the author reads why, in words.
+      onLockRefused: refusal => raise(refusal.sentence),
+      // A block a component locks is refused naming the component, as the
+      // panel's held row names it, from the library the canvas draws with.
+      componentName: id =>
+        components.find(component => component.id === id)?.title,
+      // An edit that would put a block where it may not go is refused by the
+      // op store whichever surface asked for it, so the author is told why
+      // here rather than seeing the edit silently not happen.
+      onPlacementRefused: refusal => raise(placementSentence(refusal)),
+    }),
+    [limits, raise, components]
+  );
+}
 
 /**
  * A placement refusal as the author reads it: the engine's wording, which the

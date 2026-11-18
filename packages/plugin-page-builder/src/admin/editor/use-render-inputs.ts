@@ -909,6 +909,9 @@ export function useCanvasInputs(
 ): CanvasInputs {
   const render = useCanvasRender({
     ...mount,
+    // The page's lists, read as the page: a header edited in place leaves
+    // the page's list choices as they were.
+    editor: mount.page,
     ...style,
     ...(asVisitor === undefined ? {} : { asVisitor }),
   });

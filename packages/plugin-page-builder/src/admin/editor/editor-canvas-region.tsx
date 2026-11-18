@@ -12,6 +12,7 @@ import {
   BlockContextMenu,
   BlockToolbar,
   Canvas,
+  canvasEditingOf,
   CanvasFrame,
   CanvasMarks,
   InsertionLine,
@@ -20,6 +21,7 @@ import {
   elementAnchor,
   EmptyContainerAppenders,
   PageInserters,
+  RegionEditingScrim,
   RepairNotice,
   SpacingOverlay,
   VisitorUnreadableBadges,
@@ -257,6 +259,18 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
             pinned={previewed.tags}
             overlay={
               <>
+                {/* While a header or footer is edited in place, the dim over
+                    the rest of the canvas: a press on it changes nothing and
+                    highlights Done. First, so the header's marks are drawn
+                    over it. */}
+                <RegionEditingScrim
+                  area={
+                    view.editing.target.kind === "region"
+                      ? view.editing.target.area
+                      : undefined
+                  }
+                  onPress={view.editing.pulseDone}
+                />
                 {/* An Image with no picture: "Add an image" with Upload,
                     Media library and Link, and a file dropped on it, through
                     the admin's media library. First, so the marks, the drop
@@ -422,6 +436,16 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
               regions={view.canvasRegions}
               selectedRegion={view.selectedRegion.selection.area}
               onSelectRegion={view.selectedRegion.selection.select}
+              // A double-click on a region, or Enter on it while selected,
+              // edits it in place, for someone who may edit components.
+              {...(view.regionEditing.requestEdit === undefined
+                ? {}
+                : { onEditRegion: view.regionEditing.requestEdit })}
+              // The region being edited, drawn from its live document with
+              // its blocks addressed; the page around it inert under the dim.
+              {...(view.editing.target.kind === "region"
+                ? { editingRegion: canvasEditingOf(view.editing) }
+                : {})}
               // The conditioned blocks visitors never see, because the page
               // can't check their conditions: badged in red on the canvas.
               conditionsUnchecked={view.conditionsUnchecked}

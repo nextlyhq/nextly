@@ -583,10 +583,12 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   const pageLayout = usePageLayoutSettings(page.control);
   // From the form's unsaved values, so a change of Layout redraws at once,
   // with the header or footer selected on the canvas or in Layers.
+  // The region selection follows the PAGE's blocks: a block chosen inside a
+  // header being edited leaves the header chosen, to come back to at Done.
   const layoutRegions = usePageRegions(
     page.control,
     page.canvasRoot,
-    editor,
+    { page: mount.page, active: editor },
     useLookEditing(editor)
   );
 
@@ -608,7 +610,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   );
   const identity = useDocumentIdentity();
   const checklist = useBuilderChecklist({
-    document: editor.document,
+    document: mount.page.document,
     documentKey: identityKey(identity),
     // Not until the author is known: their own dismissal is the one to read,
     // and a card drawn before it arrives would flash for an author who
@@ -840,6 +842,7 @@ export type EditorPanels = OfferedLibrary &
  */
 export function editorPanelRenderer({
   editor,
+  editing,
   documentLimits,
   componentLibrary,
   componentVerbs,
@@ -878,7 +881,11 @@ export function editorPanelRenderer({
   pictureSession,
 }: Pick<
   EditorMount,
-  "editor" | "componentLibrary" | "componentVerbs" | "documentLimits"
+  | "editor"
+  | "editing"
+  | "componentLibrary"
+  | "componentVerbs"
+  | "documentLimits"
 > & {
   /** The look edited on its own, which the Design panel's Block looks choose. */
   lookEditing?: LookEditingState;
@@ -1023,6 +1030,11 @@ export function editorPanelRenderer({
           moveHints
           definitions={offered.definitions}
           regions={layersRegions}
+          // While a header or footer is edited in place: its blocks, under
+          // "Layers · Site header".
+          {...(editing.target.kind === "region"
+            ? { editedRegion: editing.target }
+            : {})}
           // Its titles come with the read, so a placement of a component
           // the panel does not offer (the one being edited) is still named.
           componentTitle={offered.titleOf}

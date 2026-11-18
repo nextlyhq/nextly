@@ -69,6 +69,11 @@ export function editorInspector<TFieldValues extends FieldValues>(
   return (
     <InspectorPanel
       editor={editor}
+      // While a header or footer is edited in place, its blocks are said to
+      // be in it: "Navigation · in Site header".
+      {...(view.editing.target.kind === "region"
+        ? { editingIn: view.editing.target.label }
+        : {})}
       // The SAME ref the canvas publishes its root through, so the style
       // tab reads the element a node is actually drawn as rather than
       // inferring one from the document. Two refs would let the panel
@@ -195,13 +200,17 @@ export function editorInspector<TFieldValues extends FieldValues>(
  */
 function regionCardOf(view: EditorView): { regionCard?: React.ReactNode } {
   const facts = view.selectedRegion.card;
-  if (facts === undefined) return {};
+  // While it is edited, the inspector edits its blocks instead.
+  if (facts === undefined || view.regionEditing.area !== undefined) return {};
+  const { requestEdit } = view.regionEditing;
   return {
     regionCard: (
       <SelectedRegionCard
         key={`${facts.area}:${facts.componentId}`}
         facts={facts}
-        onEditComponent={view.componentView.onEditComponent}
+        onEdit={
+          requestEdit === undefined ? undefined : () => requestEdit(facts.area)
+        }
         onOpenSettings={view.pages.openSettings}
       />
     ),
