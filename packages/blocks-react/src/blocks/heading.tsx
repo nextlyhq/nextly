@@ -7,6 +7,11 @@
  * headings exist to prevent: the level describes the content's structure, not
  * the editor's.
  *
+ * Every heading with words carries an id, its anchor in the page outline
+ * (`../outline`): unique on the whole page, so a link to a section lands on
+ * the right one. A heading an author leaves out of the table of contents
+ * (`tocExclude`) keeps its anchor; only the contents list skips it.
+ *
  * @module blocks/heading
  */
 import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
@@ -14,8 +19,10 @@ import { createElement } from "react";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
+import { headingAnchors } from "../outline";
 
 import { CONTENT } from "./categories";
+import { rankOfTag } from "./heading-anchors";
 import {
   addressLinkFor,
   boundText,
@@ -23,7 +30,6 @@ import {
   LINK_PROPS,
   linkFor,
   linksToEntry,
-  oneOf,
   readClaimOf,
   text,
   type LinkAttributes,
@@ -46,6 +52,11 @@ export interface HeadingProps extends LinkProps {
   text?: string;
   /** Which heading level to render. */
   level?: HeadingLevel;
+  /**
+   * Left out of a table of contents. The heading keeps its anchor, so a link
+   * written by hand still reaches it.
+   */
+  tocExclude?: boolean;
 }
 
 /**
@@ -68,10 +79,21 @@ export function renderHeading(
 
 /** The heading element, with its words inside the link where it has one. */
 function drawHeading(
-  { props, className, markProp, bound }: BlockRenderArgs<HeadingProps>,
+  {
+    props,
+    className,
+    markProp,
+    bound,
+    ctx,
+    node,
+  }: BlockRenderArgs<HeadingProps>,
   link: LinkAttributes | undefined
 ): ReactElement {
-  const level = oneOf(props.level, HEADING_LEVELS, "h2");
+  // Drawn at the level the page outline lists it at: `h1` to `h6`, else `h2`.
+  const level: HeadingLevel = `h${rankOfTag(props.level)}`;
+  // Its anchor in the page outline. An author's own CSS id is that anchor,
+  // and the boundary draws it on the same element.
+  const [anchor] = headingAnchors(ctx, node, text(props.text));
   // A bound date keeps its machine-readable value, inside the anchor or the
   // heading itself.
   const label = boundText(text(props.text), bound?.text);
@@ -92,7 +114,11 @@ function drawHeading(
 
   return createElement(
     level,
-    { className, ...(link === undefined ? mark : {}) },
+    {
+      className,
+      ...(anchor === undefined ? {} : { id: anchor }),
+      ...(link === undefined ? mark : {}),
+    },
     content
   );
 }
@@ -141,6 +167,13 @@ export const heading: BlockDefinition<HeadingProps, PageContext> = defineBlock({
     entryId: { ...LINK_PROPS.entryId, section: "Link" },
     target: { ...LINK_PROPS.target, section: "Link" },
     rel: LINK_PROPS.rel,
+    // Off by default: every heading is listed until its author says not.
+    tocExclude: {
+      label: "Leave out of table of contents",
+      type: "checkbox",
+      group: "advanced",
+      section: "Visibility",
+    },
   },
   defaultProps: { text: "", level: "h2" },
   // No `seo` offer: a heading never sets the page's title. The browser tab and
