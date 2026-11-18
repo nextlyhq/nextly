@@ -75,13 +75,13 @@ import { EditorSearch } from "./editor-search";
 import { editorSettings, usePageFacts } from "./editor-settings";
 import { editorTopBar } from "./editor-top-bar";
 import type { CardVerbs, EditorView } from "./editor-view";
+import { EditorHiddenColours } from "./hidden-colours";
 import {
   useMediaSearchReader,
   useMediaSummaryReader,
 } from "./media-summary-reader";
 import { usePageDataCount } from "./page-read-meter";
 import { useReadBack } from "./read-back";
-import { EditorHiddenColours } from "./hidden-colours";
 import { recentColoursStore } from "./recent-colours-store";
 import { regionRefusal } from "./region-card";
 import { useReveal } from "./reveal-hidden";

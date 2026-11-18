@@ -48,7 +48,7 @@ export function builtInColoursShown(tokens: SiteTokenSet | undefined): boolean {
 }
 
 /** The site's variables with the setting changed, everything else as it was. */
-export function withBuiltInColoursShown(
+function withBuiltInColoursShown(
   tokens: SiteTokenSet,
   shown: boolean
 ): SiteTokenSet {

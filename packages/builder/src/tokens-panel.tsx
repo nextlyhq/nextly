@@ -347,22 +347,13 @@ function VariablesView({
   const { shown: matched, held } = searched(groups, needle, fresh);
   const usage = useUsageOfRows(hosted, groups, issue);
   // The built-in colours the site hides, while it does: none otherwise.
-  const builtInsShown = builtInColoursShown(tokens);
-  const builtIn = (identity: string): boolean =>
-    suppliedFor(supplied, identity) !== undefined;
-  const colours = colourIdentities(groups);
-  const hidden = hiddenColours(colours, {
-    shown: builtInsShown,
-    stateOf: identity => usageState(usage?.reachOf(identity)),
-    builtIn,
-    onPage: hosted.usedOnPage,
-  });
-  useHiddenReadAgain(
-    builtInsShown,
+  const { hidden, marksBuiltIn } = useHiddenOfView({
     tokens,
-    colours.filter(builtIn),
-    usage?.readAgain
-  );
+    groups,
+    usage,
+    supplied,
+    usedOnPage: hosted.usedOnPage,
+  });
   // The Colours tab's usage filter, over what the search matched.
   const colourFilter = useColourFilter({
     shown: matched,
@@ -453,17 +444,15 @@ function VariablesView({
             search,
             focus,
             hidden,
-            marksBuiltIn: !builtInsShown,
+            marksBuiltIn,
           })}
         />
-        {/* The Colours tab ends with the site's built-in colours setting. */}
-        {groups.some(group => group.group === "colours") ? (
-          <BuiltInColoursSetting
-            tokens={tokens}
-            readOnly={readOnly}
-            onChange={commitFrom(BUILT_IN_COLOURS_KEY)}
-          />
-        ) : null}
+        <ColoursTabEnd
+          groups={groups}
+          tokens={tokens}
+          readOnly={readOnly}
+          onChange={commitFrom(BUILT_IN_COLOURS_KEY)}
+        />
       </ViewBody>
     </div>
   );
@@ -875,6 +864,52 @@ function useUsageOfRows(
           },
     [access, values, readAgain, classes]
   );
+}
+
+/**
+ * The built-in colours the view leaves out while the site hides them, read
+ * by the one rule the pickers read too, and whether a listed built-in
+ * colour's row says so. Their use is read again a moment after the site's
+ * variables change, since a variable naming one makes it used.
+ */
+function useHiddenOfView({
+  tokens,
+  groups,
+  usage,
+  supplied,
+  usedOnPage,
+}: {
+  tokens: SiteTokenSet | undefined;
+  groups: Parameters<typeof colourIdentities>[0];
+  usage: VariableUsageHere | undefined;
+  supplied: SiteTokenSet | undefined;
+  usedOnPage: ReadonlySet<string> | undefined;
+}): { hidden: ReadonlySet<string>; marksBuiltIn: boolean } {
+  const shown = builtInColoursShown(tokens);
+  const builtIn = (identity: string): boolean =>
+    suppliedFor(supplied, identity) !== undefined;
+  const colours = colourIdentities(groups);
+  useHiddenReadAgain(shown, tokens, colours.filter(builtIn), usage?.readAgain);
+  return {
+    hidden: hiddenColours(colours, {
+      shown,
+      stateOf: identity => usageState(usage?.reachOf(identity)),
+      builtIn,
+      onPage: usedOnPage,
+    }),
+    marksBuiltIn: !shown,
+  };
+}
+
+/** The site's built-in colours setting, which ends the Colours tab. */
+function ColoursTabEnd({
+  groups,
+  ...setting
+}: React.ComponentProps<typeof BuiltInColoursSetting> & {
+  groups: readonly { readonly group: VariableGroup }[];
+}): React.JSX.Element | null {
+  if (!groups.some(group => group.group === "colours")) return null;
+  return <BuiltInColoursSetting {...setting} />;
 }
 
 /** The identities of the colours the view lists. */
