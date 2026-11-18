@@ -31,6 +31,9 @@ const STARTS_WITH: Readonly<Record<string, readonly string[]>> = {
   List: ["First", "Second"],
 };
 
+/** The fields a new Form starts with, by their labels. */
+const FORM_STARTS_WITH = ["Name", "Email", "Message"] as const;
+
 /** An empty draft page, and its id. */
 async function createPage(page: Page): Promise<string> {
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -146,16 +149,22 @@ test("every core block starts at a visible size, real or with its next step, and
         `${name}: drawn at ${Math.round(box?.width ?? 0)}x${Math.round(box?.height ?? 0)}px`
       );
     }
-    // The blocks that start with parts of their own, as the spec counts them.
-    const parts: Readonly<Record<string, [string, number]>> = {
-      Accordion: ["summary", 3],
-      Form: ["input, textarea, select", 3],
-    };
-    const counted = parts[name];
-    if (counted !== undefined) {
-      const found = await block.locator(counted[0]).count();
-      if (found < counted[1]) {
-        problems.push(`${name}: starts with ${found}, not ${counted[1]}`);
+    // An Accordion starts with three questions.
+    if (name === "Accordion") {
+      const found = await block.locator("summary").count();
+      if (found < 3) {
+        problems.push(`Accordion: starts with ${found} questions, not 3`);
+      }
+    }
+    // A Form starts with its three fields, each found by its label. Asked by
+    // role, so the hidden spam trap (aria-hidden) is never one of them.
+    for (const field of name === "Form" ? FORM_STARTS_WITH : []) {
+      // The label's start: a required field's label may end with a mark.
+      const control = block.getByRole("textbox", {
+        name: new RegExp(`^${field}\\b`),
+      });
+      if (!(await control.isVisible())) {
+        problems.push(`Form: does not start with a visible "${field}" field`);
       }
     }
     if (name === "Quote" && (await block.innerText()).trim() === "") {
