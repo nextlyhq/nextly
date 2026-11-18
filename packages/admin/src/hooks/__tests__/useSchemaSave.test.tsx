@@ -400,7 +400,7 @@ describe("confirmApply", () => {
 
     await waitFor(() => expect(onApplied).toHaveBeenCalledWith(FIELDS));
     // The version applied is the one the user was shown, not a re-read.
-    expect(applyFn).toHaveBeenCalledWith(FIELDS, 9, {}, []);
+    expect(applyFn).toHaveBeenCalledWith(FIELDS, 9, {}, [], []);
     expect(startRestart).toHaveBeenCalledTimes(1);
     expect(stopRestart).toHaveBeenCalledWith(
       true,
@@ -409,6 +409,47 @@ describe("confirmApply", () => {
     expect(confirmation.settle).toHaveBeenCalledTimes(1);
     expect(confirmation.beginApply).toHaveBeenCalledTimes(1);
     expect(confirmation.endApply).toHaveBeenCalledTimes(1);
+  });
+
+  // The review listed what the save brings up to date in a table an earlier version made, and its
+  // Save confirmed them: the apply sends the key of every conversion that preview named, so the
+  // server writes those and no other.
+  it("confirms each conversion the reviewed preview named, by its key", async () => {
+    const pending = preview({
+      conversions: [
+        {
+          table: "dc_posts",
+          column: "dc_posts",
+          from: "as an earlier version made it",
+          to: "as Nextly declares it (add index)",
+          change: "adds an index on created_at",
+          deletesValues: false,
+        },
+        {
+          table: "dc_posts",
+          column: "body",
+          from: "text",
+          to: "varchar(255)",
+          change: "changes body from text to varchar(255)",
+          deletesValues: false,
+        },
+      ],
+    });
+    const { result, applyFn } = setup({
+      confirmation: confirmationStub(pending),
+    });
+
+    await act(async () => result.current.confirmApply({}, []));
+
+    await waitFor(() =>
+      expect(applyFn).toHaveBeenCalledWith(
+        FIELDS,
+        9,
+        {},
+        [],
+        ["dc_posts", "body"]
+      )
+    );
   });
 
   // "no changes" is the server saying the apply was a no-op, which reads as

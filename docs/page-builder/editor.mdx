@@ -132,6 +132,12 @@ Under **Accessibility**, the checks find:
   more", and an icon that links somewhere with no **Screen reader label**. A button's
   Screen reader label counts as its words.
 - **Form fields with no label**, and **embeds with no title** for screen readers.
+- **Text with too little contrast** against its background: below 4.5:1, or 3:1 for large
+  text (a Heading 1 or 2, or text you sized 24px or more), with the ratio. Only colours you chose on the block or a container around it
+  are judged, and where the site has dark values that change them, dark mode too. Text
+  over a background image or gradient is listed as **Contrast not checked**, since no one
+  ratio can be measured there, and a block whose colours come from a shared style isn't
+  judged.
 
 Checks never stop you saving or publishing. Automatic checks catch common problems; they
 don't replace an accessibility review.
@@ -1194,6 +1200,13 @@ The chip's menu has:
   different entry on every row.
 - **Unbind** keeps what visitors saw in the prop, and a note under it says what was
   kept and why. A field visitors can't read keeps the fallback instead.
+
+**A component's settings.** A component placed on the page has the same bind button
+on its text, link and image settings, in the placement's panel. Placed inside a
+Collection list, it lists the list's entries first, so a card's **Headline** can show
+each post's title, every row its own, on the canvas and on the published page. The
+binding belongs to this placement only, and fills the component's block the setting
+feeds. Unbinding keeps the value the placement already had for the setting.
 
 **Format.** A date or a number shows as text only through a format, so a text prop bound
 to one has a **Format** under its fallback. The picker names the format a date or a number
