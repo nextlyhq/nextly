@@ -48,7 +48,12 @@ export function RegionEditingBar({
   const pulsing = usePulsing(editing.pulse);
   return (
     <>
-      <div role="status" aria-live="polite" className="nx-sr-only">
+      <div
+        role="status"
+        aria-live="polite"
+        className="nx-sr-only"
+        data-nx-region-announcer=""
+      >
         {editing.announcement}
       </div>
       {target.kind !== "region" ? null : (

@@ -66,6 +66,17 @@
   }
 }
 
+/* Layers' heading while a region is edited in place, "Layers · Site header":
+   the panel's one title, in the editor's section title. */
+.nx-layers-panel__heading {
+  margin: 0;
+  padding: 0.5rem 0.75rem 0;
+  color: var(--nx-builder-text);
+  font-size: var(--nx-builder-title-size);
+  font-weight: var(--nx-builder-title-weight);
+  line-height: var(--nx-builder-line-height);
+}
+
 /* The dim: boxes over the page and the other region, laid in the chrome
    layer, which take the pointer so nothing under them is reached. */
 .nx-region-scrim {
