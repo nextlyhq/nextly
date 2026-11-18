@@ -35,11 +35,14 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
+import { randomUUID } from "node:crypto";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import { apiKeyScope } from "../../../auth/authenticated-scope";
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
+import { statementsOf } from "../../../database/__tests__/integration/helpers/count-statements";
 import { permissionSlug } from "../../../schemas/_zod/rbac";
 import {
   getConfiguredTestDialects,
@@ -1335,6 +1338,133 @@ describe.each(getConfiguredTestDialects())(
           page.items.map(item => (item.document as Doc).entryId).sort()
         ).toEqual([first, second].sort());
         expect(page.meta).toMatchObject({ total: 2, hasNext: false });
+      });
+
+      it("lists work its assignee brought into a stage whose step refuses that for every other holder", async () => {
+        // Rita holds Clear, but brought this part into Legal check, and Clear refuses self-approval:
+        // she cannot move it, so it waits for everyone who may, as though she had lost the step.
+        current = await bootSteps(dialect);
+        await people();
+        for (const id of ["rita", "sam"]) {
+          await person(app(), id, [
+            ["read", PAGES],
+            ["sign-off", PAGES],
+          ]);
+        }
+        const id = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, id, null), "legal", {
+          definitionHash: HASH,
+          assignee: { kind: "user", id: "rita" },
+          enteredBy: "rita",
+        });
+        const ids = async (who: Who) =>
+          (await door.waiting(who, { page: 1, limit: 10 })).items.map(
+            item => (item.document as Doc).entryId
+          );
+
+        expect(await ids({ kind: "person", id: "sam" })).toEqual([id]);
+        expect(await ids({ kind: "person", id: "rita" })).toEqual([]);
+        // The read names the same: everyone who may, not Rita.
+        const waiting = (await onlyPart(door, id)).waitingFor as Doc;
+        expect(waiting.kind).toBe("roles");
+      });
+
+      it("pages past work its caller may not move without a short page", async () => {
+        // Three parts Sam brought into Legal check come first, and Clear refuses him those. They take
+        // no place on a page: the two he may move fill page one, and there is no page two.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        const earlier = new Date("2026-11-01T10:00:00.000Z");
+        for (let n = 0; n < 3; n += 1) {
+          await seedState(
+            app(),
+            partOf(PAGES, await entry(app(), PAGES), null),
+            "legal",
+            { definitionHash: HASH, enteredBy: "sam", enteredAt: earlier }
+          );
+        }
+        const movable: string[] = [];
+        for (let n = 0; n < 2; n += 1) {
+          const id = await entry(app(), PAGES);
+          movable.push(id);
+          await seedState(app(), partOf(PAGES, id, null), "legal", {
+            definitionHash: HASH,
+          });
+        }
+
+        const page = await door.waiting(
+          { kind: "person", id: "sam" },
+          { page: 1, limit: 2 }
+        );
+        expect(
+          page.items.map(item => (item.document as Doc).entryId).sort()
+        ).toEqual([...movable].sort());
+        expect(page.meta).toMatchObject({ total: 2, hasNext: false });
+        expect(page.meta.totalCapped).toBeUndefined();
+      });
+
+      it("reads review states only a bounded number at a time", async () => {
+        // Work assigned to someone who lost the step, to one who brought it in, and to no one: every
+        // read of review states the list makes carries a LIMIT, however many rows a stage holds.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        await seedState(
+          app(),
+          partOf(PAGES, await entry(app(), PAGES), null),
+          "legal",
+          { definitionHash: HASH, assignee: { kind: "user", id: "alice" } }
+        );
+        await seedState(
+          app(),
+          partOf(PAGES, await entry(app(), PAGES), null),
+          "legal",
+          { definitionHash: HASH }
+        );
+        const SAM: Who = { kind: "person", id: "sam" };
+
+        const reads = (
+          await statementsOf(dialect, () =>
+            door.waiting(SAM, { page: 1, limit: 10 })
+          )
+        ).filter(
+          statement =>
+            /^\s*select/i.test(statement) &&
+            statement.includes("nextly_review_states")
+        );
+        expect(reads.length).toBeGreaterThan(0);
+        for (const statement of reads) expect(statement).toMatch(/\blimit\b/i);
+      });
+
+      it("marks the total a floor when there is more waiting than it reads", async () => {
+        // More parts wait than one list reads: the total counts those read, and says it is a floor.
+        // None of these documents exists, so none is readable, and the total read is 0 — yet more
+        // may wait past the cap, which `totalCapped` says rather than a bare 0.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        for (let n = 0; n <= 1000; n += 1) {
+          await seedState(app(), partOf(PAGES, randomUUID(), null), "legal", {
+            definitionHash: HASH,
+          });
+        }
+
+        const page = await door.waiting(
+          { kind: "person", id: "sam" },
+          { page: 1, limit: 10 }
+        );
+        expect(page.items).toEqual([]);
+        expect(page.meta).toMatchObject({ total: 0, totalCapped: true });
       });
 
       it("lists for a key scoped to one role only that role's work", async () => {

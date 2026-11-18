@@ -1026,12 +1026,12 @@ A document whose collection or Single has no workflow attached answers `200` wit
 `GET /admin/api/workflows/waiting?page=1&limit=20` lists the parts that wait for the caller, as a [list envelope](#list), oldest entry into their stage first. Each item names its document, part and stage, and its `assignee`. A part waits for the caller in a stage whose primary step they may take (its permission, and who may take it: an approval is never a key's, nor that of the person who brought the part into a stage that refuses self-approval), when it is:
 
 - assigned to them, or to a role they hold;
-- assigned to someone who can no longer take that step: such work waits for everyone who can;
-- assigned to no one (`assignee: null`), where the stage's default reviewer is them, or the stage has no default reviewer who may take the step.
+- assigned to someone who can't take that step on this part, because they lost it or brought the part into a stage that refuses self-approval: such work waits for everyone who can;
+- assigned to no one (`assignee: null`), where the stage's default reviewer is them, or the stage has no default reviewer who may take the step on this part.
 
 **API keys see work assigned to their roles, not to their owner personally.** A key, full-access or scoped to a role, stands for its roles alone.
 
-Only parts the caller may read are listed and counted: a hidden part never takes a place on a page, and `total` never counts one. The list reads at most the first 1,000 waiting parts; past that, `total` is the count of those it read.
+Only parts the caller may read are listed and counted: a hidden part never takes a place on a page, and `total` never counts one. The list reads a bounded number of parts, oldest first: at most 1,000 of the caller's own work and 1,000 of the rest. When more are there, the list ends at the last part it read, `total` counts what it found, and `meta.totalCapped` is `true`. That total is a floor, so show it as "N+".
 
 #### Settings
 

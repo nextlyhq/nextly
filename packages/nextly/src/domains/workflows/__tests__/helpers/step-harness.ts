@@ -305,7 +305,10 @@ export function seedState(
   t: TestNextly,
   part: ReviewPart,
   stage: string,
-  fields: Partial<Pick<ReviewState, "enteredBy" | "approval" | "assignee">> & {
+  // `enteredAt` orders a waiting list; a case about that order names its own, others take AT.
+  fields: Partial<
+    Pick<ReviewState, "enteredBy" | "enteredAt" | "approval" | "assignee">
+  > & {
     definitionHash: string;
   }
 ): Promise<ReviewState> {

@@ -584,7 +584,7 @@ export const workflowOperations = {
           : { authenticatedScope: asker.scope }),
       })
     );
-    const { items, total } = await waitingFor(adapter(), {
+    const { items, total, totalCapped } = await waitingFor(adapter(), {
       caller: asker.caller,
       limit: query.limit,
       offset: (query.page - 1) * query.limit,
@@ -604,6 +604,8 @@ export const workflowOperations = {
         totalPages,
         hasNext: query.page < totalPages,
         hasPrev: query.page > 1,
+        // More may wait than the list read: its total is a floor ("1000+"), as a capped count's is.
+        ...(totalCapped ? { totalCapped: true as const } : {}),
       },
     };
   },
