@@ -134,6 +134,7 @@ export function TextStyleEditor(
             tokens={props.tokens}
             readOnly={readOnly}
             onValue={value => set(device.id, "fontSize", value)}
+            onClear={() => set(device.id, "fontSize", null)}
             onTokens={props.onTokens}
           />
         ))}
@@ -305,6 +306,7 @@ function SizePart({
   tokens,
   readOnly,
   onValue,
+  onClear,
   onTokens,
 }: {
   device: TextStyleDevice;
@@ -312,40 +314,57 @@ function SizePart({
   tokens: SiteTokenSet | undefined;
   readOnly: boolean;
   onValue: (value: StyleValue) => void;
+  /** Take the device's own size away, so it follows Desktop's again. */
+  onClear: () => void;
   onTokens: ((tokens: SiteTokenSet) => void) | undefined;
 }): React.JSX.Element {
   const range = tokens === undefined ? undefined : fluidRangeOf(tokens);
   const size = plain(value);
+  // A device other than Desktop holding a size of its own can give it up:
+  // an emptied field writes nothing, so this is the way back.
+  const own = !readOnly && device.id !== TEXT_STYLE_BASE && value !== undefined;
   return (
-    <VariablePart
-      label={device.label}
-      leaf={LEAVES.fontSize}
-      value={value}
-      tokens={tokens}
-      readOnly={readOnly}
-      onValue={onValue}
-    >
-      <SizeInput
-        label={`Size on ${device.label}`}
-        value={size}
+    <>
+      <VariablePart
+        label={device.label}
+        leaf={LEAVES.fontSize}
+        value={value}
+        tokens={tokens}
         readOnly={readOnly}
-        onCommit={onValue}
-        css={`
-          font-size: ${size};
-        `}
-      />
-      {readOnly || range === undefined || tokens === undefined ? null : (
-        <FluidButton
-          hook={{
-            sizes: undefined,
-            value: size,
-            range,
-            onFluid: sizes => onValue(fluidValue(sizes, range)),
-            onRange: next => onTokens?.(setFluidRange(tokens, next)),
-          }}
+        onValue={onValue}
+      >
+        <SizeInput
+          label={`Size on ${device.label}`}
+          value={size}
+          readOnly={readOnly}
+          onCommit={onValue}
+          css={`
+            font-size: ${size};
+          `}
         />
-      )}
-    </VariablePart>
+        {readOnly || range === undefined || tokens === undefined ? null : (
+          <FluidButton
+            hook={{
+              sizes: undefined,
+              value: size,
+              range,
+              onFluid: sizes => onValue(fluidValue(sizes, range)),
+              onRange: next => onTokens?.(setFluidRange(tokens, next)),
+            }}
+          />
+        )}
+      </VariablePart>
+      {own ? (
+        <button
+          type="button"
+          className="nx-style-inspector__breakpoint-action"
+          aria-label={`Reset the size on ${device.label}`}
+          onClick={onClear}
+        >
+          Reset
+        </button>
+      ) : null}
+    </>
   );
 }
 

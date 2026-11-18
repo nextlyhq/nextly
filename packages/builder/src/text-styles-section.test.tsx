@@ -314,6 +314,40 @@ describe("a text style's parts", () => {
   });
 });
 
+describe("a device's own size", () => {
+  const withMobile: NamedClass = {
+    ...eyebrow,
+    styles: {
+      base: {
+        ...eyebrow.styles.base,
+        mobile: { fontSize: "10px" },
+      },
+    } as NodeStyles,
+  };
+
+  it("is reset, so the device follows Desktop's size again", () => {
+    const { writeStyles } = mount({ library: [withMobile] });
+    fireEvent.click(row(/^Text styles: Eyebrow/));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Reset the size on Mobile" })
+    );
+    const after = written(writeStyles, withMobile.styles);
+    expect(after?.base?.mobile?.fontSize).toBeUndefined();
+    expect(after?.base?.[BASE_BREAKPOINT]).toMatchObject({ fontSize: "12px" });
+  });
+
+  it("offers no Reset where a device holds no size of its own, nor on Desktop", () => {
+    mount({ library: [withMobile] });
+    fireEvent.click(row(/^Text styles: Eyebrow/));
+    expect(
+      screen.queryByRole("button", { name: "Reset the size on Tablet" })
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Reset the size on Desktop" })
+    ).toBeNull();
+  });
+});
+
 describe("read-only", () => {
   it("offers no add, no menu and no changes to a role that may not change design", () => {
     const { writeStyles } = mount({ readOnly: true });
