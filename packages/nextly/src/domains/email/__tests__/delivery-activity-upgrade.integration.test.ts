@@ -35,7 +35,17 @@ const DELIVERY_INDEXES = {
 };
 
 /** The delivery log's columns this change adds, none of them required. */
+/** The queued email's columns this change adds, none of them required. */
+const QUEUE_COLUMNS = [
+  "message_kind",
+  "recipient_kinds",
+  "provider_type",
+  "provider_id",
+  "provider_origin",
+];
+
 const DELIVERY_COLUMNS = [
+  "provider_origin",
   "queued_id",
   "template_owner",
   "template_overridden",
@@ -61,6 +71,9 @@ async function removeActivitySchema(fresh: FreshDatabase): Promise<void> {
     );
   }
   await fresh.exec(`ALTER TABLE email_queue DROP COLUMN template_slug`);
+  for (const column of QUEUE_COLUMNS) {
+    await fresh.exec(`ALTER TABLE email_queue DROP COLUMN ${column}`);
+  }
   for (const column of DELIVERY_COLUMNS) {
     await fresh.exec(`ALTER TABLE email_deliveries DROP COLUMN ${column}`);
   }
@@ -105,6 +118,9 @@ describe.each(availableDialects())(
           await fresh.indexColumnsOf("email_deliveries", TEMPLATE_INDEX)
         ).toEqual(["template_slug", "status", "created_at"]);
         expect(await fresh.columnsOf("email_queue")).toContain("template_slug");
+        expect(await fresh.columnsOf("email_queue")).toEqual(
+          expect.arrayContaining(QUEUE_COLUMNS)
+        );
         expect(await fresh.columnsOf("email_deliveries")).toEqual(
           expect.arrayContaining(DELIVERY_COLUMNS)
         );
