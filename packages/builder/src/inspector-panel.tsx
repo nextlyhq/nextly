@@ -525,11 +525,14 @@ function SelectedBlockCard({
   editor,
   verbs,
   reasonId,
+  editingIn,
 }: {
   block: BlockInspection;
   editor: InspectorPanelProps["editor"];
   verbs: InspectorPanelProps["verbs"];
   reasonId: string;
+  /** The region edited in place, which the card's title names. */
+  editingIn: string | undefined;
 }): React.JSX.Element {
   const lock = lockStatusOf(editor.document, block.nodeId, lockViewOf(editor));
   // A picture in a gallery reads by its place there, with a way back to it.
@@ -546,6 +549,7 @@ function SelectedBlockCard({
               onBack: () => editor.select(inGallery.galleryId),
             }
       }
+      inRegion={editingIn}
       icon={block.icon}
       type={block.label}
       name={block.identity.name}
@@ -730,6 +734,7 @@ function SelectionInspector({
         editor={editor}
         verbs={verbs}
         reasonId={reasonId}
+        editingIn={styleOnly.editingIn}
       />
 
       {/*
@@ -804,8 +809,7 @@ function SelectionInspector({
                   editor={editor}
                   styleNode={styleNode}
                   renderedTag={canvas.tag}
-                  renderedPicture={canvas.picture}
-                  renderedPicturePosition={canvas.picturePosition}
+                  rendered={canvas}
                   sideOrientation={canvas.orientation}
                   styleState={styleState}
                   breakpoint={breakpoint}

@@ -9,6 +9,7 @@
  */
 import {
   findNode,
+  PADDING_PRESET_PROP,
   paintsBackgroundImage,
   type NodeStyles,
   type StyleValues,
@@ -39,6 +40,7 @@ import {
 } from "./plain-layout-controls";
 import { InsideParentFields, useDrawnChildRows } from "./plain-parent-controls";
 import { SectionHeld } from "./section-held";
+import { SectionPaddingFields } from "./section-padding-fields";
 import {
   SettingSlot,
   sectionShown,
@@ -275,6 +277,9 @@ const SPACING_IDS: readonly string[] = ["margin", "padding"];
 /** The block's settings Content width draws, which the filter keeps it by. */
 const CONTENT_WIDTH_IDS: readonly string[] = ["contained", "contentWidth"];
 
+/** A Section's Padding, which the filter keeps it by. */
+const PADDING_PRESET_IDS: readonly string[] = [PADDING_PRESET_PROP];
+
 /** The Size shortcuts, which the filter keeps them by. */
 const SHORTCUTS: readonly string[] = Object.values(SHORTCUT_IDS);
 
@@ -419,7 +424,8 @@ function NothingSetNote({
 
 /**
  * What a section draws above its rows: Layout's Content width and Arrange,
- * Inside its parent's Width and Height, Size's shortcuts.
+ * Inside its parent's Width and Height, a Section's Padding above the spacing
+ * box, Size's shortcuts.
  */
 function SectionLead({
   sectionKey,
@@ -437,6 +443,13 @@ function SectionLead({
   }
   if (sectionKey === "inside-parent") {
     return <InsideParentFields surroundings={surroundings} />;
+  }
+  if (sectionKey === "spacing") {
+    return (
+      <SettingSlot tab="style" ids={PADDING_PRESET_IDS}>
+        <SectionPaddingFields surroundings={surroundings} />
+      </SettingSlot>
+    );
   }
   if (sectionKey !== "size") return null;
   return (

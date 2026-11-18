@@ -108,6 +108,7 @@ import {
   PAGE_ROOT_SELECTOR,
 } from "./node-class";
 import { OVERLAY_PREFIX, OVERLAY_RESET } from "./overlay";
+import { paddingPresetStyles } from "./padding-preset";
 import { partRouting } from "./part-routing";
 import { type CssRule, serializeRules } from "./serialize";
 import { SITE_TEXT_ROOT } from "./site-text";
@@ -779,7 +780,33 @@ export function compilePageCss(
     }
     const selector = `${pageRoot} .${className}`;
     const traceBeforeNode = trace?.length ?? 0;
+    const preset = paddingPresetStyles(node, {
+      path,
+      warnings,
+      warningAllowance,
+    });
     const nodeRules = [
+      // A Section's padding preset: a default of this one block, weightless
+      // and after its type's, so a block style and its own values still win.
+      ...(preset === undefined
+        ? []
+        : envelopeRules(
+            preset,
+            `.${className}`,
+            pointer(path, "props"),
+            contexts,
+            tokenPrefix,
+            warnings,
+            budget,
+            warningAllowance,
+            {
+              origin: { kind: "blockType", type: node.type, node: node.id },
+              trace,
+              mayFetchUrl,
+              previewStates,
+              weightlessAnchor: defaultsAnchor,
+            }
+          )),
       ...envelopeRules(
         node.styles,
         selector,

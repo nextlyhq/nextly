@@ -594,6 +594,13 @@ function classParts(entry: unknown, reading: Reading): unknown {
     ...(entry.starred === undefined
       ? []
       : [["starred", structural(entry.starred, reading)]]),
+    // A text style's role decides its tier and the name it is written under,
+    // so a class becoming one moves the stamp and a stored sheet written for
+    // the shared style is compiled again. Spread, so a class with no role
+    // stamps exactly as before.
+    ...(entry.role === undefined
+      ? []
+      : [["role", structural(entry.role, reading)]]),
   ] as unknown;
 }
 
