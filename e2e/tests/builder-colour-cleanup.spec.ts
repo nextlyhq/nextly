@@ -121,6 +121,11 @@ test("lists the colours the site made that nothing uses, removes them in one ste
     await seed(page, { tokens: [SPARE_ONE, SPARE_TWO] });
     await page.setViewportSize({ width: 1280, height: 720 });
     await openEditorWith(page, NODES, "cleanup-text");
+    // The control: Primary is a colour the list holds, read before the
+    // dialog, which hides the panel from role queries while it is open.
+    await expect.poll(async () => listed(await openColours(page))).toContain(
+      "Primary"
+    );
     const { panel, dialog } = await openCleanUp(page);
 
     const boxes = dialog.getByRole("checkbox");
@@ -130,8 +135,7 @@ test("lists the colours the site made that nothing uses, removes them in one ste
     for (const box of await boxes.all()) {
       await expect(box).toHaveAttribute("aria-checked", "true");
     }
-    // The control: Primary is a colour the list holds, and never offered.
-    await expect.poll(() => listed(panel)).toContain("Primary");
+    // ... and never offered.
     await expect(dialog.getByRole("checkbox", { name: "Primary" })).toHaveCount(
       0
     );
