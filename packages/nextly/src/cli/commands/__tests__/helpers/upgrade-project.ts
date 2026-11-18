@@ -201,7 +201,11 @@ export async function createProject(args: {
         "unsafeHttpWhitelist:",
         '  - "127.0.0.1"',
         "enableTelemetry: false",
-        "enableGlobalCache: false",
+        // Yarn keeps what a registry said of a package in a folder shared by
+        // every project. Each test's registry has an address of its own, so
+        // a document remembered from another would name tarballs at an
+        // address nothing answers on any more.
+        `globalFolder: "${join(dir, ".cache", "yarn")}"`,
         "",
       ].join("\n")
     );
