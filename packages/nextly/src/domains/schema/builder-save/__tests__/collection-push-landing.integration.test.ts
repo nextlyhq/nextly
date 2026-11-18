@@ -390,6 +390,9 @@ for (const dialect of getConfiguredTestDialects()) {
             author: (writer.item as { id: string }).id,
           },
         } as never);
+        // An older table whose relation column carries no index: the switch then drops none, and
+        // what runs before the failure is the values' rewrite alone.
+        await exec('DROP INDEX "idx_dc_posts_author"');
         const rows = () => exec("SELECT * FROM dc_posts");
         const rowsBefore = await rows();
         const filesBefore = Object.keys(filesIn(migrationsDir(), ".sql"));
