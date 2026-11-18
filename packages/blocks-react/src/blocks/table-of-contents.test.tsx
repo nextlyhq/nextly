@@ -295,6 +295,33 @@ describe("headings a table of contents leaves out", () => {
     ]);
   });
 
+  it("reads a heading's devices by the breakpoints the page is drawn with", async () => {
+    // Hidden from the widest device down and shown again on phones: listed
+    // where the page knows the phone breakpoint, as the page then draws it.
+    const breakpoints = {
+      viewport: [{ id: "mobile", label: "Mobile", maxWidth: 640 }],
+      container: [],
+    };
+    const html = await settled(
+      <PageRenderer
+        document={page(
+          contents(),
+          heading("Phones only", "h2", {
+            visibility: { devices: { base: false, mobile: true } },
+          }),
+          heading("Everywhere")
+        )}
+        blocks={resolver}
+        context={createStandaloneContext({})}
+        styleContext={{ breakpoints, namedClasses: [] }}
+      />
+    );
+    expect(links(html)).toEqual([
+      ["phones-only", "Phones only"],
+      ["everywhere", "Everywhere"],
+    ]);
+  });
+
   it("leaves out the Layout's header and footer, listing the page's own", async () => {
     const region = (area: "header" | "footer", nodes: BlockNode[]) => ({
       region: { area, componentId: `${area}-component` },

@@ -935,10 +935,19 @@ describe("pageOutline", () => {
 });
 
 describe("which headings a table of contents lists", () => {
+  /** A site with two narrower devices and a card-sized container. */
+  const BREAKPOINTS = {
+    viewport: [
+      { id: "tablet", label: "Tablet", maxWidth: 1024 },
+      { id: "mobile", label: "Mobile", maxWidth: 640 },
+    ],
+    container: [{ id: "card-wide", label: "Card wide", maxWidth: 480 }],
+  };
+
   const listedOf = (...list: [OutlinePart["area"], BlockNode[]][]) =>
-    pageOutline(list.map(([area, nodes]) => ({ area, nodes }))).headings.map(
-      ({ text, listed }) => [text, listed]
-    );
+    pageOutline(
+      list.map(([area, nodes]) => ({ area, nodes, breakpoints: BREAKPOINTS }))
+    ).headings.map(({ text, listed }) => [text, listed]);
 
   const holding = (type: string, children: BlockNode[]): BlockNode => ({
     id: nextId("c"),
@@ -1024,6 +1033,12 @@ describe("which headings a table of contents lists", () => {
           // Hidden on phones only: still read on every other device.
           heading("Not on phones", shownOn({ mobile: false })),
           heading("Shown", shownOn({ base: true })),
+          // A container breakpoint is about a box, not a device: it does not
+          // show again a block every device hides.
+          heading(
+            "Container only",
+            shownOn({ base: false, "card-wide": true })
+          ),
         ],
       ])
     ).toEqual([
@@ -1032,6 +1047,22 @@ describe("which headings a table of contents lists", () => {
       ["Phones only", true],
       ["Not on phones", true],
       ["Shown", true],
+      ["Container only", false],
     ]);
+  });
+
+  it("reads hiding by the breakpoints the page is drawn with", () => {
+    // With none stated, the page is compiled for the base device alone, so
+    // a `true` stored for a phone shows nothing there and the heading is
+    // hidden everywhere it is drawn.
+    const phonesOnly = heading(
+      "Phones only",
+      shownOn({ base: false, mobile: true })
+    );
+    expect(
+      pageOutline([{ area: "content", nodes: [phonesOnly] }]).headings.map(
+        ({ listed }) => listed
+      )
+    ).toEqual([false]);
   });
 });

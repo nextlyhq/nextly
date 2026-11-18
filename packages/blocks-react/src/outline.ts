@@ -46,10 +46,11 @@
  * @module outline
  */
 import {
-  BASE_BREAKPOINT,
+  deviceVisibility,
   renderedDomId,
   walkNodes,
   type BlockNode,
+  type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
 
 import {
@@ -69,6 +70,12 @@ export interface OutlinePart {
   readonly area: OutlineArea;
   /** The part's tree as the renderer draws it. */
   readonly nodes: readonly BlockNode[];
+  /**
+   * The breakpoints the part's styles are compiled under, which decide on
+   * which devices a block is hidden. Absent, the base one alone, as the
+   * compiler reads it then.
+   */
+  readonly breakpoints?: BreakpointSet;
 }
 
 /** One heading the page draws. @experimental */
@@ -122,22 +129,20 @@ const UNLISTED_WITHIN: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Whether a block is hidden on every device: hidden from the widest down,
- * with no narrower device showing it again. Read from what it stores, so it
- * holds whatever breakpoints the site defines: a `false` at the base hides
- * the block everywhere (`style/visibility-cascade`) until a narrower
- * breakpoint stores `true`, and a block with no `true` stored has none that
- * does.
+ * Whether a block is hidden on every device: at every viewport breakpoint
+ * the part's styles are compiled under, read through the engine's one
+ * statement of the cascade (`deviceVisibility`), as the compiler and the
+ * Layers panel read it. Container breakpoints answer about a box, not a
+ * device, so they neither hide a block everywhere nor show one again.
  */
-function hiddenOnEveryDevice(node: BlockNode): boolean {
-  const devices: unknown = node.visibility?.devices;
-  if (typeof devices !== "object" || devices === null) return false;
-  const stored = devices as Readonly<Record<string, unknown>>;
-  return (
-    Object.hasOwn(stored, BASE_BREAKPOINT) &&
-    stored[BASE_BREAKPOINT] === false &&
-    !Object.values(stored).includes(true)
-  );
+function hiddenOnEveryDevice(
+  node: BlockNode,
+  breakpoints: BreakpointSet | undefined
+): boolean {
+  if (node.visibility?.devices === undefined) return false;
+  return deviceVisibility(node.visibility, breakpoints)
+    .filter(device => device.axis === "viewport")
+    .every(device => !device.visible);
 }
 
 /** Whether a heading with these facts is one a table of contents lists. */
@@ -218,19 +223,24 @@ interface NodePlace {
  * Reads each block's place from its parent's, for a walk that visits a
  * parent before its children.
  */
-function placeReader(): (
-  node: BlockNode,
-  parent: BlockNode | undefined
-) => NodePlace {
+function placeReader(
+  breakpoints: BreakpointSet | undefined
+): (node: BlockNode, parent: BlockNode | undefined) => NodePlace {
   const places = new Map<BlockNode, NodePlace>();
   return (node, parent) => {
     const around = parent === undefined ? undefined : places.get(parent);
     const place: NodePlace =
       parent === undefined
-        ? { within: NONE, hidden: hiddenOnEveryDevice(node), list: undefined }
+        ? {
+            within: NONE,
+            hidden: hiddenOnEveryDevice(node, breakpoints),
+            list: undefined,
+          }
         : {
             within: [...(around?.within ?? NONE), parent.type],
-            hidden: (around?.hidden ?? false) || hiddenOnEveryDevice(node),
+            hidden:
+              (around?.hidden ?? false) ||
+              hiddenOnEveryDevice(node, breakpoints),
             list: parent.type === COLLECTION_LIST_BLOCK ? parent : around?.list,
           };
     places.set(node, place);
@@ -301,7 +311,7 @@ export function pageOutline(parts: readonly OutlinePart[]): PageOutline {
   for (const part of parts) {
     const byNode = byPart.get(part.area) ?? new Map<string, string[]>();
     byPart.set(part.area, byNode);
-    const placeOf = placeReader();
+    const placeOf = placeReader(part.breakpoints);
     walkNodes([...part.nodes], (node, parent) => {
       const { within, hidden, list } = placeOf(node, parent);
       if (list !== undefined) countEntryPassage(passageInList, part.area, node);
