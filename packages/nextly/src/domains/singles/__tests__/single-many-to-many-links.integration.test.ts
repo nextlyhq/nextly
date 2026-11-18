@@ -257,7 +257,8 @@ for (const shape of SHAPES)
       await save([a!, b!]);
 
       // A save that sends no links leaves them, and its hooks see them stored.
-      await t.nextly.updateSingle({ slug: HERO, data: { title: "Renamed" } });
+      await t.nextly.updateSingle({ slug: HERO, data: { title: "Renamed", _overwrite: true },
+      });
 
       expect(await linked()).toEqual([a, b].sort());
       expect(idsOf(original.beforeUpdate)).toEqual([a, b].sort());
