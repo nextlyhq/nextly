@@ -449,8 +449,11 @@ describeEachDialect("a field that stops being translated", dialect => {
     },
   ];
 
-  /** A translated collection whose two entries hold different values of `code`. */
-  async function seedCodes(code: Record<string, unknown>): Promise<void> {
+  /** A translated collection whose two entries hold different values of `code`: `values`. */
+  async function seedCodes(
+    code: Record<string, unknown>,
+    values: readonly string[] = ["A-1", "B-2"]
+  ): Promise<void> {
     const created = await handler().createCollection({
       name: "posts",
       label: "Post",
@@ -459,7 +462,7 @@ describeEachDialect("a field that stops being translated", dialect => {
     });
     expect(created.success, JSON.stringify(created)).toBe(true);
     const entries = handler().getEntryService();
-    for (const value of ["A-1", "B-2"]) {
+    for (const value of values) {
       const entry = await entries.createEntry(
         { collectionName: "posts", overrideAccess: true, locale: "en" },
         { code: value }
@@ -531,6 +534,9 @@ describeEachDialect("a field that stops being translated", dialect => {
         reshape: "a text field becoming a number",
         from: { name: "code", type: "text" },
         to: { name: "code", type: "number", localized: false },
+        // Values the new type reads pass the judgement of the values, so this refusal is the
+        // one reached on every path.
+        values: ["1", "2"],
       },
       // The schema dialog's payload has no way to declare a short text field's width (its
       // `options` is a choice list), so the narrowing is made through the save.
@@ -552,17 +558,18 @@ describeEachDialect("a field that stops being translated", dialect => {
                 validation: { maxLength: 2 },
                 localized: false,
               },
+              values: ["A-1", "B-2"],
             },
           ]
         : []),
     ])
   )(
     "refuses $reshape as it leaves and changes nothing when $path",
-    async ({ change, from, to }) => {
+    async ({ change, from, to, values }) => {
       // The values are copied as they are into a column of another shape: text into a number
       // column fails part-way or is coerced, and "A-1" into a two-character column is refused or
       // truncated.
-      await seedCodes(from);
+      await seedCodes(from, values);
 
       const refusal = await change([to]).then(
         () => undefined,
@@ -578,9 +585,37 @@ describeEachDialect("a field that stops being translated", dialect => {
       const kept = await query<{ code: string }>(
         `SELECT ${quote(dialect, "code")} AS code FROM ${quote(dialect, "dc_posts_locales")} ORDER BY ${quote(dialect, "code")}`
       );
-      expect(kept.map(row => row.code)).toEqual(["A-1", "B-2"]);
+      expect(kept.map(row => row.code)).toEqual(values);
     }
   );
+
+  it("refuses first a text field becoming a number whose values the new type cannot read, as it leaves, through the collection's schema dialog", async () => {
+    // "A-1" is no number: the collection's dialog judges the values before the translation's own
+    // check, so its refusal names the field and the values, and nothing changes.
+    const dialog = COLLECTION_CHANGES.find(
+      c => c.path === "the builder applies the change with the schema dialog"
+    );
+    if (!dialog) throw new Error("the collection dialog path is missing");
+    await seedCodes({ name: "code", type: "text" });
+
+    const refusal = await dialog
+      .change([{ name: "code", type: "number", localized: false }])
+      .then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+    const reported =
+      refusal instanceof Error
+        ? `${refusal.message} ${JSON.stringify((refusal as { publicData?: unknown }).publicData ?? null)}`
+        : String(refusal);
+    expect(reported).toMatch(/TYPE_CHANGE_LOSES_VALUES/);
+    expect(await columnsOf("dc_posts")).not.toContain("code");
+    const kept = await query<{ code: string }>(
+      `SELECT ${quote(dialect, "code")} AS code FROM ${quote(dialect, "dc_posts_locales")} ORDER BY ${quote(dialect, "code")}`
+    );
+    expect(kept.map(row => row.code)).toEqual(["A-1", "B-2"]);
+  });
 
   it("brings the archived values back once the field is translated again", async () => {
     const id = await seedCollection();
