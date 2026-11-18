@@ -156,7 +156,7 @@ import {
   emptyNoteOf,
   layersTitleOf,
   RegionRow,
-  useFocusFirstRowOf,
+  useEditedRegionLayers,
   type LayersEditedRegion,
   type LayersRegionRow,
 } from "./layers-regions";
@@ -1156,7 +1156,9 @@ export function LayersPanel({
   ...region
 }: LayersPanelProps): React.JSX.Element {
   const { editedRegion } = region;
-  const [query, setQuery] = React.useState("");
+  // Its own search for each document Layers shows, and the tree's element,
+  // whose first row takes focus as a region's editing starts.
+  const { query, setQuery, body } = useEditedRegionLayers(region.editedRegion);
   const [opened, setOpened] = React.useState<readonly string[]>([]);
 
   // Memoised on what was supplied, so the drag is not handed a new rule
@@ -1178,9 +1180,8 @@ export function LayersPanel({
       ),
   });
 
-  // The tree's own element: where a rename's focus returns, and where the
-  // row keystrokes are scoped.
-  const body = React.useRef<HTMLDivElement | null>(null);
+  // The tree's own element (`body`, above): where a rename's focus returns,
+  // and where the row keystrokes are scoped.
   const rows = useRowVerbs(editor, device, body);
   const setHovered = useHoveredBlockSetter();
   // Nothing stays pointed at once the panel goes, or the canvas would keep
@@ -1193,7 +1194,6 @@ export function LayersPanel({
   }, [drag.draggingId, setHovered]);
 
   const revealChosen = useRevealChosen(canvasRoot);
-  useFocusFirstRowOf(editedRegion, body);
   // What the panel and its tree are called: "Layers", or "Layers · Site
   // header" while a region is edited in place.
   const title = layersTitleOf(editedRegion);

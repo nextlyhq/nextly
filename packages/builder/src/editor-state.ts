@@ -983,9 +983,11 @@ function useSessionDocument(
 ) {
   const [document, setDocument] = useState<BlockDocument>(initialDocument);
   const [selection, setSelection] = useState<BlockSelection>(EMPTY_SELECTION);
-  const [held, setHeld] = useState(session);
+  // Held through functions, so a session named by a function is stored as
+  // it is rather than called as an initializer or an updater.
+  const [held, setHeld] = useState(() => session);
   if (!Object.is(held, session)) {
-    setHeld(session);
+    setHeld(() => session);
     setDocument(initialDocument);
     setSelection(EMPTY_SELECTION);
     clearHistory();
@@ -1022,7 +1024,7 @@ function useDocumentState({
   };
   const composition = useRef(atApply(host, initialDocument));
   composition.current = atApply(host, initialDocument);
-  const { depths, push, pop, remove, withdraw, settle, clear } =
+  const { depths, push, pop, remove, record, settle, clear } =
     useHistoryStacks();
   const { document, setDocument, selection, setSelection } = useSessionDocument(
     initialDocument,
@@ -1237,14 +1239,8 @@ function useDocumentState({
   );
   const undo = useCallback(() => replay("undo"), [replay]);
   const redo = useCallback(() => replay("redo"), [replay]);
-  // Bounded and branch-ending exactly as a fresh document edit is.
-  const recordStep = useCallback(
-    (step: HistoryStep) => {
-      const dropped = push({ kind: "step", step, origin: step }, "new");
-      return () => withdraw(step, dropped);
-    },
-    [push, withdraw]
-  );
+  // Recorded by the history, which knows the session it belongs to.
+  const recordStep = record;
 
   const select = useCallback(
     (id: string | null, mode: SelectionMode = "replace") =>

@@ -296,6 +296,27 @@ describe("editing the site header in place", () => {
     expect(document.activeElement).toBe(rows[0]);
   });
 
+  it("starts Layers' search afresh in the header, so a page search hides none of its rows", () => {
+    render(<TestHost />);
+    const layers = within(
+      screen.getByRole("complementary", { name: "Layers panel" })
+    );
+    fireEvent.change(layers.getByRole("textbox", { name: "Search layers" }), {
+      target: { value: "Text" },
+    });
+    enterHeader();
+    expect(
+      (
+        layers.getByRole("textbox", {
+          name: "Search layers",
+        }) as HTMLInputElement
+      ).value
+    ).toBe("");
+    const rows = layers.getAllByRole("treeitem");
+    expect(rows).toHaveLength(1);
+    expect(document.activeElement).toBe(rows[0]);
+  });
+
   it("edits a header block in the inspector, which says where it is", () => {
     render(<TestHost />);
     enterHeader();

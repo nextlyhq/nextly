@@ -174,11 +174,18 @@ ${BLANK} ${ROOT}[data-nx-site-dark-ground][data-nx-site-theme="dark"] {
    where that ground is opaque, so a blended block mixes with it as on the
    published page. The ground at no weight, so a background the page gives its
    own root wins. On a page the site serves, a blend mixes with the site's own
-   ground, as it does published. */
+   ground, as it does published. The page is the root's child, or its page
+   part's where the canvas draws regions around it. */
 ${BLANK} ${ROOT} > .nx-pb-page {
   isolation: isolate;
 }
 :where(${BLANK} ${ROOT}[data-nx-site-ground-opaque] > .nx-pb-page) {
+  background-color: var(--nx-canvas-site-ground, Canvas);
+}
+${BLANK} ${ROOT} > .nx-canvas-page-part > .nx-pb-page {
+  isolation: isolate;
+}
+:where(${BLANK} ${ROOT}[data-nx-site-ground-opaque] > .nx-canvas-page-part > .nx-pb-page) {
   background-color: var(--nx-canvas-site-ground, Canvas);
 }
 

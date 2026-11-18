@@ -265,7 +265,7 @@ export function EditedRegionFrame({
 }
 
 /** The attribute a region carries while it is edited in place. */
-const REGION_EDITED_ATTRIBUTE = "data-nx-region-edited";
+export const REGION_EDITED_ATTRIBUTE = "data-nx-region-edited";
 
 /**
  * State on the region the page's ground it is drawn over, so its marks take

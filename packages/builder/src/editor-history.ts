@@ -75,7 +75,12 @@ export function useHistoryStacks(): {
   ) => HistoryEntry | undefined;
   pop: (from: "undo" | "redo") => HistoryEntry | undefined;
   remove: (entry: HistoryEntry) => void;
-  withdraw: (origin: HistoryStep, dropped: HistoryEntry | undefined) => void;
+  /**
+   * Record a step from outside the document, answering the function that
+   * withdraws it again: a no-op once the history has been cleared since, so
+   * a change refused after its session ended cannot reach the next one.
+   */
+  record: (step: HistoryStep) => () => void;
   /** A replay of the step took effect; the branch it ended is gone. */
   settle: (origin: HistoryStep) => void;
   /** Forget everything: both stacks, and what fell off the old end. */
@@ -215,7 +220,25 @@ export function useHistoryStacks(): {
    * or redo, no run of steps or of typing to join, and no edit forgotten, so
    * the save point counts from the session's own start.
    */
+  /*
+   * Which history a recorded step belongs to: counted up by every clear, so a
+   * withdrawal from before it finds its history gone rather than putting the
+   * entry it once pushed off back into a new one.
+   */
+  const generation = useRef(0);
+  const record = useCallback(
+    (step: HistoryStep) => {
+      // Bounded and branch-ending exactly as a fresh document edit is.
+      const dropped = push({ kind: "step", step, origin: step }, "new");
+      const recordedIn = generation.current;
+      return () => {
+        if (generation.current === recordedIn) withdraw(step, dropped);
+      };
+    },
+    [push, withdraw]
+  );
   const clear = useCallback(() => {
+    generation.current += 1;
     undoStack.current = [];
     redoStack.current = [];
     forgotten.current = 0;
@@ -223,7 +246,7 @@ export function useHistoryStacks(): {
     typing.current = null;
     sync();
   }, [sync]);
-  return { depths, push, pop, remove, withdraw, settle, clear };
+  return { depths, push, pop, remove, record, settle, clear };
 }
 
 /** A run of recorded steps, the redo branch it ended, and what lay below it. */

@@ -225,6 +225,10 @@ export function useDrawnPage({
           // selection for the whole canvas. Withheld only while a region is
           // edited in place, when the page is not the document being edited.
           nodeAttribute={addressed}
+          // What its images and lists drew is kept as it is while it is not
+          // addressed, as it is while it is: the node attribute alone would
+          // otherwise run them again on every edit in the region.
+          {...(addressed ? {} : { keepAsyncOutputs: true })}
         />
       </BlockEnvironmentProvider>
     ),

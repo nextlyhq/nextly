@@ -2391,3 +2391,62 @@ describe("a new session", () => {
     expect(calls).toEqual([]);
   });
 });
+
+describe("a new session, and what the one before it left pending", () => {
+  it("keeps a step withdrawn after the restart out of the new history", () => {
+    const calls: string[] = [];
+    const { result, rerender } = renderHook(
+      ({ session }: { session: object }) =>
+        useEditorState({ initialDocument: doc([node("a")]), session }),
+      { initialProps: { session: {} } }
+    );
+    // A full history, so recording the style save pushes the oldest edit off.
+    for (let index = 0; index < MAX_HISTORY; index += 1) {
+      act(() => {
+        result.current.apply({
+          kind: "insert",
+          node: node(`n${index}`),
+          at: { index: 1 },
+        });
+      });
+    }
+    let withdraw = () => undefined as void;
+    act(() => {
+      withdraw = result.current.recordStep(step(calls, "style"));
+    });
+
+    rerender({ session: {} });
+    // The save is refused only now, after the session it was made in ended.
+    act(() => withdraw());
+
+    expect(result.current.canUndo).toBe(false);
+    expect(result.current.undoDepth).toBe(0);
+    act(() => {
+      result.current.undo();
+    });
+    expect(ids(result.current.document)).toEqual(["a"]);
+  });
+
+  it("takes a function as a session's name, never calling it", () => {
+    const named = vi.fn();
+    const other = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ session }: { session: () => void }) =>
+        useEditorState({ initialDocument: doc([node("a")]), session }),
+      { initialProps: { session: named } }
+    );
+    act(() => {
+      result.current.apply({
+        kind: "insert",
+        node: node("b"),
+        at: { index: 1 },
+      });
+    });
+    rerender({ session: named });
+    expect(result.current.canUndo).toBe(true);
+    rerender({ session: other });
+    expect(result.current.canUndo).toBe(false);
+    expect(named).not.toHaveBeenCalled();
+    expect(other).not.toHaveBeenCalled();
+  });
+});

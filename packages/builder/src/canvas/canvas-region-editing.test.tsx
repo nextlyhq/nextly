@@ -12,8 +12,17 @@ import {
   registerBlocks,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
-import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  createStandaloneContext,
+  NODE_ID_ATTRIBUTE,
+} from "@nextlyhq/blocks-react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { createElement } from "react";
 import {
   afterAll,
@@ -25,12 +34,15 @@ import {
   vi,
 } from "vitest";
 
-import { CHROME_ATTRIBUTE, Canvas } from "./canvas";
+import { CHROME_ATTRIBUTE, CONDITIONED_ATTRIBUTE, Canvas } from "./canvas";
 import { CANVAS_FRAME_SHEET } from "./canvas-frame-sheet";
 import type { CanvasProps } from "./canvas-props";
 import { REGION_ATTRIBUTE, type CanvasRegion } from "./canvas-regions";
 
 afterEach(cleanup);
+
+/** How often the async block has run, across every draw. */
+const lateRuns = { count: 0 };
 
 beforeAll(() => {
   registerBlocks(
@@ -47,6 +59,17 @@ beforeAll(() => {
           className: string;
           props: { text?: string };
         }) => createElement("p", { className }, props.text),
+      },
+      {
+        name: "acme/late",
+        version: 1,
+        description: "A block that draws after a promise, as an image does.",
+        example: { props: {} },
+        render: async ({ className }: { className: string }) => {
+          lateRuns.count += 1;
+          await Promise.resolve();
+          return createElement("img", { className, alt: "Logo" });
+        },
       },
     ] as never,
     { source: "canvas-region-editing-test" }
@@ -155,6 +178,17 @@ describe("a region edited in place", () => {
     );
   });
 
+  it("keeps the page one stacking context on the site's ground inside its part", () => {
+    // The page sits in its part whenever regions are drawn, so the rules
+    // that read the page as the root's child read it there too.
+    expect(CANVAS_FRAME_SHEET).toMatch(
+      /> \.nx-canvas-page-part > \.nx-pb-page[^{]*\{\s*isolation: isolate;/
+    );
+    expect(CANVAS_FRAME_SHEET).toMatch(
+      /\[data-nx-site-ground-opaque\] > \.nx-canvas-page-part > \.nx-pb-page\)\s*\{\s*background-color/
+    );
+  });
+
   it("keeps the page and the other region drawn, inert, hidden from assistive technology and unaddressed", () => {
     renderCanvas({ editingRegion: editingHeader });
     for (const text of ["Page body", "Bottom"]) {
@@ -206,6 +240,75 @@ describe("a region edited in place", () => {
     view.redraw({ selectedRegion: "header" });
     fireEvent.keyDown(frameOf("header"), { key: "Enter" });
     expect(onEditRegion).toHaveBeenCalledWith("header");
+  });
+
+  it("keeps what the page's async blocks drew while the region is edited", async () => {
+    const withLogo = {
+      ...page,
+      nodes: [
+        ...page.nodes,
+        { id: "logo", type: "acme/late", version: 1, props: {} },
+      ],
+    } as BlockDocument;
+    // One context for the canvas's life, as a host hands it: what async
+    // blocks drew is kept per context.
+    const context = createStandaloneContext();
+    const view = renderCanvas({
+      document: withLogo,
+      editingRegion: editingHeader,
+      render: { styleContext: sheet, context } as never,
+    });
+    await act(async () => undefined);
+    const runs = lateRuns.count;
+    expect(runs).toBeGreaterThan(0);
+    // An edit in the header: new render inputs of the same values, and the
+    // region's next document. The page under the dim is not run again.
+    view.redraw({
+      document: withLogo,
+      render: { styleContext: sheet, context } as never,
+      editingRegion: {
+        ...editingHeader,
+        document: textDoc("component", [["nav", "Navigation, edited"]]),
+      },
+    });
+    await act(async () => undefined);
+    expect(lateRuns.count).toBe(runs);
+  });
+
+  it("draws a conditioned block of the region, marked, and keeps the page's marks off it", async () => {
+    // The page's block "t" is conditioned; the header's "t" is not, and its
+    // "deal" is.
+    const conditioned = { conditions: [[{ field: "tier", op: "exists" }]] };
+    const conditionedPage = {
+      ...page,
+      nodes: [{ ...page.nodes[0], visibility: conditioned }],
+    } as BlockDocument;
+    renderCanvas({
+      document: conditionedPage,
+      editingRegion: {
+        area: "header",
+        document: {
+          ...textDoc("component", [
+            ["t", "Draft top"],
+            ["deal", "Members' deal"],
+          ]),
+          nodes: [
+            textDoc("component", [["t", "Draft top"]]).nodes[0],
+            {
+              ...textDoc("component", [["deal", "Members' deal"]]).nodes[0],
+              visibility: conditioned,
+            },
+          ],
+        } as BlockDocument,
+      },
+    });
+    await act(async () => undefined);
+    // Drawn whoever a visitor is, so the author can see and select it.
+    const deal = drawn("Members' deal");
+    expect(deal.getAttribute(NODE_ID_ATTRIBUTE)).toBe("deal");
+    expect(deal.hasAttribute(CONDITIONED_ATTRIBUTE)).toBe(true);
+    // The header's own "t" carries none of the page's "t" marks.
+    expect(drawn("Draft top").hasAttribute(CONDITIONED_ATTRIBUTE)).toBe(false);
   });
 
   it("draws the page exactly as before when no region is edited", () => {

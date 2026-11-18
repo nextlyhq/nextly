@@ -69,7 +69,7 @@ export function RegionRow({
  * editing it starts: rows are drawn a frame after the panel, so it is asked
  * after paint.
  */
-export function useFocusFirstRowOf(
+function useFocusFirstRowOf(
   region: LayersEditedRegion | undefined,
   body: React.RefObject<HTMLDivElement | null>
 ): void {
@@ -109,4 +109,38 @@ export function EditedRegionHeading({
   return region === undefined ? null : (
     <h2 className="nx-layers-panel__heading">{title}</h2>
   );
+}
+
+/**
+ * Layers' search, started afresh whenever the document it searches changes:
+ * entering a region edited in place, or leaving it. Cleared in the render
+ * that sees the change, so the region's rows are never drawn filtered by the
+ * page's words, and the first of them is there to take focus.
+ */
+function useSearchOf(
+  region: LayersEditedRegion | undefined
+): [string, (query: string) => void] {
+  const [query, setQuery] = React.useState("");
+  const [searched, setSearched] = React.useState(region);
+  if (searched !== region) {
+    setSearched(region);
+    setQuery("");
+  }
+  return [query, setQuery];
+}
+
+/**
+ * What Layers keeps per document it shows: its search, started afresh on
+ * entering or leaving a region edited in place, and the tree's element,
+ * whose first row takes focus once as the region's editing starts.
+ */
+export function useEditedRegionLayers(region: LayersEditedRegion | undefined): {
+  query: string;
+  setQuery: (query: string) => void;
+  body: React.RefObject<HTMLDivElement | null>;
+} {
+  const [query, setQuery] = useSearchOf(region);
+  const body = React.useRef<HTMLDivElement | null>(null);
+  useFocusFirstRowOf(region, body);
+  return { query, setQuery, body };
 }
