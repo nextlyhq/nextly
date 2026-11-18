@@ -14,10 +14,7 @@ import {
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import {
-  accordionForSelection,
-  addQuestionOp,
-} from "./accordion-add-question";
+import { accordionForSelection, addQuestionOp } from "./accordion-add-question";
 
 beforeEach(() => registerBlocks(coreBlocks as never, { source: "core" }));
 afterEach(() => clearBlocks());

@@ -142,7 +142,9 @@ test.describe("an Accordion's titles and icon", () => {
     await summary.focus();
     await page.keyboard.press("Enter");
     await expect
-      .poll(async () => decodeURIComponent((await icon.evaluate(iconLook)).mask))
+      .poll(async () =>
+        decodeURIComponent((await icon.evaluate(iconLook)).mask)
+      )
       .not.toContain("M8 3.5v9");
     expect(decodeURIComponent((await icon.evaluate(iconLook)).mask)).toContain(
       "M3.5 8h9"

@@ -233,7 +233,8 @@ for (const script of [false, true]) {
           const box = glyph?.getBoundingClientRect();
           return {
             width: box?.width ?? 0,
-            paint: glyph === null ? "" : getComputedStyle(glyph).backgroundColor,
+            paint:
+              glyph === null ? "" : getComputedStyle(glyph).backgroundColor,
             text: getComputedStyle(element).color,
           };
         });

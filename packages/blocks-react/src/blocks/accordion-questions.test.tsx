@@ -248,11 +248,7 @@ describe("Many, on the page", () => {
         ])
       )
     );
-    expect(tags.map(tag => /\bopen=""/.test(tag))).toEqual([
-      true,
-      true,
-      false,
-    ]);
+    expect(tags.map(tag => /\bopen=""/.test(tag))).toEqual([true, true, false]);
   });
 });
 

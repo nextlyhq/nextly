@@ -1054,24 +1054,16 @@ export interface PageContext {
    */
   accordionTitles?: AccordionTitleLevel;
   /**
-   * How the sections of the accordion being rendered open, set by the
-   * accordion for its own sections as {@link accordionTitles} is:
-   *
-   * - `name`, present while one section opens at a time: the name every
-   *   section's `<details>` shares, which makes the browser close the others
-   *   when one opens, with no script. Unique to the accordion on the page,
-   *   its copies in a list's entries included.
-   * - `opens`, the id of the section that starts open, while the accordion
-   *   opens its first one.
-   *
-   * Absent outside an accordion, where a section opens by its own setting.
+   * How the accordion being rendered opens its sections, set for its own
+   * sections as {@link accordionTitles} is: `name`, while one opens at a
+   * time, the name every section's `<details>` shares (the browser closes
+   * the others, with no script), unique on the page, list copies included;
+   * `opens`, the section starting open while the first one does. Absent
+   * outside an accordion, where a section opens by its own setting.
    *
    * @experimental
    */
-  accordionGroup?: {
-    readonly name?: string;
-    readonly opens?: string;
-  };
+  accordionGroup?: { readonly name?: string; readonly opens?: string };
   /**
    * The editor's canvas, drawing a template: what an Entry content block
    * says to its author where it has none of the entry's content to draw (no

@@ -83,9 +83,7 @@ describe("an Accordion's icon", () => {
     // value the validator accepts, and it draws exactly what Plus draws.
     const out = written({ disclosureIcon: "browser" });
     const plus = written({ disclosureIcon: "plus" });
-    expect(out).toEqual(
-      plus.map(each => each.replace(": plus", ": browser"))
-    );
+    expect(out).toEqual(plus.map(each => each.replace(": plus", ": browser")));
     expect(out.join("\n")).not.toContain("revert");
   });
 

@@ -182,7 +182,9 @@ test.describe("an Accordion in the editor", () => {
     await expect(content.getByRole("combobox", { name: "Open" })).toHaveText(
       "One at a time"
     );
-    await expect(content.getByRole("switch", { name: "First open" })).toBeChecked();
+    await expect(
+      content.getByRole("switch", { name: "First open" })
+    ).toBeChecked();
     await expect(
       content.getByRole("combobox", { name: "Titles as" })
     ).toHaveText("Heading 3");
@@ -195,7 +197,9 @@ test.describe("an Accordion in the editor", () => {
       "true"
     );
     const style = await tab(page, "Style");
-    await expect(style.getByRole("radiogroup", { name: "Icon" })).toHaveCount(0);
+    await expect(style.getByRole("radiogroup", { name: "Icon" })).toHaveCount(
+      0
+    );
 
     // A question is called Question: in the Add panel, the header and Layers.
     await selectQuestion(page, String(questions[1]));
@@ -217,11 +221,14 @@ test.describe("an Accordion in the editor", () => {
 
     // Its Open by default shows only once the accordion opens Many.
     const own = await tab(page, "Content");
-    await expect(own.getByRole("switch", { name: "Open by default" })).toHaveCount(
-      0
-    );
+    await expect(
+      own.getByRole("switch", { name: "Open by default" })
+    ).toHaveCount(0);
     // The accordion selected from its own Layers row.
-    await page.locator(`[data-nx-layer="${String(added)}"]`).first().click();
+    await page
+      .locator(`[data-nx-layer="${String(added)}"]`)
+      .first()
+      .click();
     await expect.poll(() => selection(page)).toEqual([added]);
     const behaviour = await tab(page, "Content");
     await behaviour.getByRole("combobox", { name: "Open" }).click();
@@ -277,14 +284,16 @@ test.describe("an Accordion in the editor", () => {
     // Open on the canvas, its answer shown; with one at a time, the others
     // closed.
     await expect
-      .poll(() => added.evaluate(element => (element as HTMLDetailsElement).open))
+      .poll(() =>
+        added.evaluate(element => (element as HTMLDetailsElement).open)
+      )
       .toBe(true);
     await expect(added.getByText("Write the answer here.")).toBeVisible();
     for (const n of [1, 2, 3]) {
       expect(
-        await (await block(page, question(n))).evaluate(
-          element => (element as HTMLDetailsElement).open
-        )
+        await (
+          await block(page, question(n))
+        ).evaluate(element => (element as HTMLDetailsElement).open)
       ).toBe(false);
     }
     // The cursor in its title.
@@ -324,7 +333,12 @@ test.describe("an Accordion in the editor", () => {
           | undefined;
         return accordion?.slots?.children?.map(child => child.props.title);
       })
-      .toEqual(["Question 1", "Question 2", "Question 3", "Do you ship abroad?"]);
+      .toEqual([
+        "Question 1",
+        "Question 2",
+        "Question 3",
+        "Do you ship abroad?",
+      ]);
   });
 
   test("a question holds any block, and an emptied one draws the empty start", async ({
@@ -335,7 +349,9 @@ test.describe("an Accordion in the editor", () => {
     // The first question is open (First open) and holds nothing.
     const first = await block(page, question(1));
     await expect
-      .poll(() => first.evaluate(element => (element as HTMLDetailsElement).open))
+      .poll(() =>
+        first.evaluate(element => (element as HTMLDetailsElement).open)
+      )
       .toBe(true);
     const start = await first.evaluate(element => {
       const after = getComputedStyle(element, "::after");
@@ -373,9 +389,11 @@ test.describe("an Accordion in the editor", () => {
       await page.getByRole("option", { name, exact: true }).click();
     }
     await expect.poll(inAnswer).toHaveLength(3);
-    await expect(page.getByRole("button", {
-      name: /Add a block, or drop one here, in Question/,
-    })).toHaveCount(0);
+    await expect(
+      page.getByRole("button", {
+        name: /Add a block, or drop one here, in Question/,
+      })
+    ).toHaveCount(0);
     expect(
       await first.evaluate(
         element => getComputedStyle(element, "::after").content

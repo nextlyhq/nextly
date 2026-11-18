@@ -192,7 +192,9 @@ export function AccordionAddQuestion({
   const selected = accordionForSelection(editor.document, editor.selection.ids);
   // Not offered where a lock refuses the insert, as the Add panel's are not.
   const op =
-    selected === undefined ? undefined : addQuestionOp(editor.document, selected);
+    selected === undefined
+      ? undefined
+      : addQuestionOp(editor.document, selected);
   const accordion =
     op === undefined || editor.lockRefusalFor([op]) !== undefined
       ? undefined
@@ -227,7 +229,9 @@ export function AccordionAddQuestion({
     const rect =
       visible === null || visible === "hidden" ? null : space.place(visible);
     const next = rect === null ? null : { rect, scale: space.scale };
-    setPlace(current => (placeKey(current) === placeKey(next) ? current : next));
+    setPlace(current =>
+      placeKey(current) === placeKey(next) ? current : next
+    );
   }, []);
 
   const canvasFrame = useCanvasFrame();

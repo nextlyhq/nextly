@@ -83,9 +83,11 @@ function offered(document: BlockDocument, id: string, name: string): boolean {
 
 describe("an Accordion's Behaviour", () => {
   it("offers Open, First open and Titles as, in that order", () => {
-    expect(contentRows(page({ openMode: "one" }), "acc", "Behaviour")).toEqual(
-      ["openMode", "firstOpen", "titlesAs"]
-    );
+    expect(contentRows(page({ openMode: "one" }), "acc", "Behaviour")).toEqual([
+      "openMode",
+      "firstOpen",
+      "titlesAs",
+    ]);
   });
 
   it("reads a stored accordion with none set as it draws: Many, Plain text, first closed", () => {
