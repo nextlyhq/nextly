@@ -13,11 +13,11 @@
  */
 import { usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 
+import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import {
-  PAGE_BUILDER_PLUGIN_NAME,
   SITE_CSS_DRAWN_ROUTE_PATH,
   type SiteCssDrawn,
-} from "../library-contract";
+} from "../site-css-contract";
 
 /** The site's CSS as the canvas draws it, or `undefined` while there is none to draw. */
 export function useDrawnSiteCss(): string | undefined {
