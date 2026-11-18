@@ -769,6 +769,41 @@ describe("useDocumentSession: recovery point", () => {
     });
   });
 
+  it("rebases edits recorded during a save on what that save stored", async () => {
+    // A save of the title is on its way when an edit to the definition is
+    // recorded: the point must hold the saved title, or restoring it would
+    // undo the save.
+    let finish: (value: unknown) => void = () => undefined;
+    api.update.mockImplementationOnce(
+      () => new Promise(resolve => (finish = resolve))
+    );
+    const { result } = await heldSession();
+
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = result.current.saveDraft({ title: "New title" });
+    });
+    await waitFor(() => expect(api.update).toHaveBeenCalledTimes(1));
+    act(() =>
+      result.current.record({ definition: { kind: "component", nodes: [] } })
+    );
+    await act(async () => {
+      finish({
+        item: { ...STORED, title: "New title", _rev: "v2" },
+        warnings: [],
+      });
+      await saving;
+    });
+    await act(async () => void vi.advanceTimersByTime(DEBOUNCE_WAIT));
+
+    await waitFor(() => expect(api.saveAutosave).toHaveBeenCalledTimes(1));
+    expect(api.saveAutosave.mock.calls[0]?.[1]).toMatchObject({
+      title: "New title",
+      definition: { kind: "component", nodes: [] },
+      _rev: "v2",
+    });
+  });
+
   it("never records one document's edits into the next one named", async () => {
     let finish: (value: unknown) => void = () => undefined;
     api.update.mockImplementationOnce(

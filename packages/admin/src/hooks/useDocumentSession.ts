@@ -507,7 +507,11 @@ interface SessionRecording {
    */
   readonly generation: () => number;
   /** Edits up to `generation` were stored: nothing more to record for them. */
-  readonly stored: (generation: number) => void;
+  readonly stored: (
+    generation: number,
+    /** The fields that write stored, which a later recording is rebased on. */
+    written: Readonly<Record<string, unknown>>
+  ) => void;
   readonly cancel: () => void;
   /**
    * A write is on its way: nothing is recorded until it lands, since the
@@ -583,7 +587,7 @@ function useSessionRecording(
     [slug, id]
   );
   const document = documentRecordingKey(scope);
-  const snapshotRef = useRef<Record<string, unknown>>({});
+  const parts = useRecordedParts();
   // What this recorder last stored, so a discard empties the point only
   // while it still holds that: another tab of the same person writes the
   // same point.
@@ -595,7 +599,7 @@ function useSessionRecording(
   // the one before is not this one's, so none of it can be recorded here.
   useStartAfreshOn(identity, () => {
     writes.clear();
-    snapshotRef.current = {};
+    parts.clear();
     storedRef.current = null;
     edits.reset();
   });
@@ -605,7 +609,7 @@ function useSessionRecording(
     save: () =>
       recordSnapshot(
         scope,
-        snapshotRef.current,
+        parts.joined(),
         versionRef.current,
         locale,
         storedRef
@@ -622,11 +626,11 @@ function useSessionRecording(
     (stored: StoredDocument, changes: Readonly<Record<string, unknown>>) => {
       // The WHOLE document, since restoring a recovery point replaces every
       // value its editor holds: the read's values with the changes over them.
-      snapshotRef.current = { ...withoutId(stored), ...changes };
+      parts.edited(withoutId(stored), changes);
       edits.bump();
       schedule();
     },
-    [edits, schedule]
+    [parts, edits, schedule]
   );
   const { pause, resume } = writes;
   const discard = useCallback(async () => {
@@ -644,7 +648,14 @@ function useSessionRecording(
       })
     );
   }, [edits, cancel, scope, document, lastSent, locale]);
-  const { generation, settle: stored } = edits;
+  const { generation, settle } = edits;
+  const stored = useCallback(
+    (upTo: number, written: Readonly<Record<string, unknown>>) => {
+      parts.wrote(written);
+      settle(upTo);
+    },
+    [parts, settle]
+  );
   return useMemo(
     () => ({
       document,
@@ -698,6 +709,49 @@ function useWritesOnTheirWay(): {
   );
   const clear = useCallback(() => setWrites({ pending: 0, landed: 0 }), []);
   return { ...writes, pause, resume, clear };
+}
+
+/**
+ * What a recording is made of: the document as read, the fields this
+ * session's own writes stored since, and the latest edits over both. Kept
+ * apart and joined as it is sent, so edits recorded while a write was on its
+ * way are rebased on what that write stored rather than on the read from
+ * before it, which restoring would otherwise put back.
+ */
+function useRecordedParts(): {
+  readonly edited: (
+    base: Record<string, unknown>,
+    changes: Readonly<Record<string, unknown>>
+  ) => void;
+  readonly wrote: (written: Readonly<Record<string, unknown>>) => void;
+  readonly joined: () => Record<string, unknown>;
+  readonly clear: () => void;
+} {
+  const base = useRef<Record<string, unknown>>({});
+  const written = useRef<Record<string, unknown>>({});
+  const changes = useRef<Readonly<Record<string, unknown>>>({});
+  return useMemo(
+    () => ({
+      edited: (read, edits) => {
+        base.current = read;
+        changes.current = edits;
+      },
+      wrote: fields => {
+        written.current = { ...written.current, ...fields };
+      },
+      joined: () => ({
+        ...base.current,
+        ...written.current,
+        ...changes.current,
+      }),
+      clear: () => {
+        base.current = {};
+        written.current = {};
+        changes.current = {};
+      },
+    }),
+    []
+  );
 }
 
 /** What a recording of `document` in `locale` is keyed by, as the form's is. */
@@ -835,14 +889,15 @@ function useSessionWrite(
         const version = versionRef.current;
         if (moved()) return refused("moved");
         if (!holding.current) return refused("locked");
+        const written = changedFields(changes);
         const result = await mutateAsync({
-          ...changedFields(changes),
+          ...written,
           ...statusFor(intent, verdict.published, read.hasStatus),
           ...(version === undefined ? {} : { [DOCUMENT_VERSION_KEY]: version }),
         });
         if (!moved()) {
           versionRef.current = versionOf(result.item) ?? versionRef.current;
-          recording.stored(taken);
+          recording.stored(taken, written);
           readBehind.current = read.document;
         }
         return { ok: true, values: result.item };
