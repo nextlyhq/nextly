@@ -16,6 +16,7 @@
 import type { BlockDocument, BlockNode } from "./document";
 import { isPlainRecord } from "./plain-record";
 import { defineEntry } from "./safe-record";
+import { variantPrunes } from "./variant-prune";
 
 /** Upgrade a node's props from one schema version to the next. Must be pure. */
 export type MigrateFn = (
@@ -645,35 +646,26 @@ function exposureIdsGone(held: unknown, left: unknown): ReadonlySet<string> {
 
 /**
  * A component's variants without the values of the exposures an upgrade
- * removed: a variant naming a field the component no longer has fails the
- * component's save (`variant-unknown-target`). A variant left with no values
- * is kept, as removing a field in the editor keeps it. The same record when
- * nothing goes.
+ * removed, as `variantPrunes` states it for every removal of a field. A
+ * variant left with no values is kept, as removing a field in the editor keeps
+ * it. The same record when nothing goes.
  */
 function variantsWithout(
   variants: unknown,
   gone: ReadonlySet<string>
 ): unknown {
-  if (gone.size === 0 || !isPlainRecord(variants)) return variants;
-  let changed = false;
+  const prunes = new Map(
+    variantPrunes(variants, gone).map(prune => [prune.variant, prune])
+  );
+  if (prunes.size === 0 || !isPlainRecord(variants)) return variants;
   // Built through `fromEntries`, which defines each key as the record's own,
-  // so a stored key such as `__proto__` stays a variant rather than a prototype.
-  const next = Object.fromEntries(
+  // so a stored key such as `__proto__` stays a variant, not a prototype.
+  return Object.fromEntries(
     Object.entries(variants).map(([key, variant]) => {
-      if (!isPlainRecord(variant)) return [key, variant];
-      const overrides = variant.overrides;
-      if (
-        !isPlainRecord(overrides) ||
-        ![...gone].some(id => Object.hasOwn(overrides, id))
-      ) {
-        return [key, variant];
-      }
-      const pruned = Object.fromEntries(
-        Object.entries(overrides).filter(([id]) => !gone.has(id))
-      );
-      changed = true;
-      return [key, { ...variant, overrides: pruned }];
+      const prune = prunes.get(key);
+      return prune === undefined || !isPlainRecord(variant)
+        ? [key, variant]
+        : [key, { ...variant, overrides: prune.overrides }];
     })
   );
-  return changed ? next : variants;
 }
