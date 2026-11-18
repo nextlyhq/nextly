@@ -10,9 +10,9 @@ import {
   type Variant,
 } from "./document";
 import type { MigrationSource } from "./migration";
+import { migrateDocument } from "./migrate-document";
 import {
   findMigrationGaps,
-  migrateDocument,
   migrateProps,
   migrationInfoOf,
   nodeAtPointer,
