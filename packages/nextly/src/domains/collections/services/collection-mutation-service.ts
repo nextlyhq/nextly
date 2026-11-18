@@ -280,10 +280,12 @@ import { reachesLocalizedFieldGroup } from "../../i18n/per-language-fields";
 import { publishesPerLanguage } from "../../i18n/per-language-storage";
 import {
   assertClaimsAllowed,
+  assertCopySources,
   provenanceClaimsOf,
   type ProvenanceClaims,
 } from "../../i18n/provenance/provenance-claims";
 import {
+  copySourceRevisions,
   discardDraftProvenance,
   forgetDocumentProvenance,
   recordWrittenValues,
@@ -336,6 +338,7 @@ import {
   documentVersionOn,
   mainRowBump,
   revisionBumpColumns,
+  type SelectsRows,
   setDocumentVersion,
   translationChangeColumns,
   translationRevisionBumpColumns,
@@ -3823,6 +3826,8 @@ export class CollectionMutationService extends BaseService {
     // parent so the read-shape snapshot carries this locale's translatable
     // values instead of dropping them.
     localizedFieldValues: Record<string, unknown>;
+    // Which of those values are JSON, which some databases hand back as text.
+    jsonFields: string[];
     // Whether the companion carries a per-locale `_status` column. Reading that
     // column on a collection without it fails the whole write, so every read of
     // it must be gated on this.
@@ -3971,6 +3976,11 @@ export class CollectionMutationService extends BaseService {
       writeLocale,
       companionData,
       localizedFieldValues,
+      // Which of those values are JSON, which some databases hand back as text: provenance reads
+      // only their text back to the value it encodes.
+      jsonFields: companion.localizedFields
+        .filter(field => field.json === true)
+        .map(field => field.name),
       hasStatus: companion.hasStatus,
       companionTable: companion.table,
     };
@@ -8859,7 +8869,8 @@ export class CollectionMutationService extends BaseService {
     // read before the key is dropped with the version.
     const provenance = this.provenanceOf(
       body,
-      actorForWrite(params.actor, params.user)
+      actorForWrite(params.actor, params.user),
+      params.locale
     );
     if ("refused" in provenance) return provenance.refused;
     // A version sent with the body is the server's to decide; see updateEntry.
@@ -14768,6 +14779,10 @@ export class CollectionMutationService extends BaseService {
       translation: {
         writeLocale: string;
         localizedFieldValues?: Record<string, unknown>;
+        /** The fields among the values whose storage is JSON. */
+        jsonFields?: readonly string[];
+        /** The translation table the values are written to. */
+        companionTableName?: string;
       } | null;
       savedBy: RequestActor;
       provenance?: {
@@ -14792,6 +14807,18 @@ export class CollectionMutationService extends BaseService {
       ...document,
       partState: provenance.partState ?? "live",
       values: translation.localizedFieldValues ?? {},
+      jsonFields: new Set(translation.jsonFields ?? []),
+      // Each language's counter as it stands, for a copy to be judged against the version of its
+      // source it says it read.
+      languageRevisions: await copySourceRevisions(
+        tx.getDrizzle<SelectsRows>(),
+        {
+          dialect: this.dialect,
+          languagesTable: translation.companionTableName ?? null,
+          entryId: args.entryId,
+          claims: provenance.claims,
+        }
+      ),
       promotesDraft: provenance.promotesDraft,
       defaultLocale: this.localization.defaultLocale,
       savedBy: args.savedBy,
@@ -16318,13 +16345,24 @@ export class CollectionMutationService extends BaseService {
    */
   private provenanceOf(
     body: Record<string, unknown>,
-    savedBy: RequestActor
+    savedBy: RequestActor,
+    /** The language the write is in, as the caller named it. */
+    locale: string | undefined
   ):
     | { claims: ProvenanceClaims | undefined }
     | { refused: CollectionServiceResult } {
     try {
       const claims = provenanceClaimsOf(body);
       assertClaimsAllowed(claims, savedBy);
+      // A copy's source must be another of the site's languages: checked here, before the save
+      // writes anything, rather than found out of date against nothing once it has.
+      assertCopySources(claims, {
+        configured: this.localization?.locales.map(l => l.code) ?? [],
+        target:
+          locale === EVERY_LOCALE
+            ? null
+            : (locale ?? this.localization?.defaultLocale ?? null),
+      });
       return { claims };
     } catch (error) {
       return {
@@ -16656,7 +16694,8 @@ export class CollectionMutationService extends BaseService {
     // before the key is dropped below.
     const provenance = this.provenanceOf(
       body,
-      actorForWrite(rawParams.actor, rawParams.user)
+      actorForWrite(rawParams.actor, rawParams.user),
+      rawParams.locale
     );
     if ("refused" in provenance) return provenance.refused;
     const provenanceClaims = provenance.claims;
@@ -22027,7 +22066,9 @@ export class CollectionMutationService extends BaseService {
     // read before the key is dropped with the version.
     const provenance = this.provenanceOf(
       body,
-      actorForWrite(params.actor, params.user)
+      actorForWrite(params.actor, params.user),
+      // A write in a caller's transaction names no language: it writes the default one.
+      undefined
     );
     if ("refused" in provenance) return provenance.refused;
     // A version sent with the body is the server's to decide; see updateEntry.
@@ -22845,7 +22886,9 @@ export class CollectionMutationService extends BaseService {
     // read before the key is dropped with the version.
     const provenance = this.provenanceOf(
       body,
-      actorForWrite(params.actor, params.user)
+      actorForWrite(params.actor, params.user),
+      // A write in a caller's transaction names no language: it writes the default one.
+      undefined
     );
     if ("refused" in provenance) return provenance.refused;
     // A version sent with the body is the server's to decide; see updateEntry.
