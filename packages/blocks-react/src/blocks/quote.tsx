@@ -18,7 +18,7 @@
  * @module blocks/quote
  */
 import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
@@ -92,9 +92,6 @@ function drawQuote(
   const source = text(props.source);
   const cite = link === undefined ? {} : { cite: link.href };
   const markText = markProp?.("text");
-  // The source's words are marked where they are drawn: inside its link
-  // when it has one, else on the `<cite>` itself.
-  const markSource = markProp?.("source");
 
   // With nothing to attribute, the blockquote IS the block and takes the class.
   if (attribution === "" && source === "") {
@@ -124,18 +121,39 @@ function drawQuote(
         )}
         {attribution !== "" && source !== "" ? ", " : null}
         {source === "" ? null : (
-          <cite {...(link === undefined ? markSource : {})}>
-            {link === undefined ? (
-              boundText(source, bound?.source)
-            ) : (
-              <a {...link} {...markSource}>
-                {boundText(source, bound?.source)}
-              </a>
-            )}
-          </cite>
+          <QuoteSource
+            words={boundText(source, bound?.source)}
+            link={link}
+            mark={markProp?.("source")}
+          />
         )}
       </figcaption>
     </figure>
+  );
+}
+
+/**
+ * The source's title, as a `<cite>`, linked where the quote has a source
+ * link. Its words are marked where they are drawn: inside the link when there
+ * is one, else on the `<cite>` itself, so the canvas edits the text and not
+ * the link around it.
+ */
+function QuoteSource({
+  words,
+  link,
+  mark,
+}: {
+  words: ReactNode;
+  link: LinkAttributes | undefined;
+  mark: Record<string, string> | undefined;
+}): ReactElement {
+  if (link === undefined) return <cite {...mark}>{words}</cite>;
+  return (
+    <cite>
+      <a {...link} {...mark}>
+        {words}
+      </a>
+    </cite>
   );
 }
 
