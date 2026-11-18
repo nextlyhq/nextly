@@ -19,6 +19,7 @@ process.env.NEXTLY_SECRET =
 import {
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
+  dtcgToTokens,
 } from "@nextlyhq/blocks-engine";
 import { getCachedNextly, type PluginDefinition } from "@nextlyhq/plugin-sdk";
 import {
@@ -1013,6 +1014,57 @@ describe.each(getConfiguredTestDialects())(
       expect(await write({ tokens: variables })).toBe(200);
       expect(await write({ classes })).toBe(200);
       expect(await write({ tokens: site })).toBe(200);
+    });
+
+    it("stores a shadow another tool's file aliases whole, its layer colour an alias too", async () => {
+      const { t } = await boot();
+      const designer = await holding(t, ...DESIGN);
+      const px = (value: number) => ({ value, unit: "px" });
+      const read = dtcgToTokens({
+        color: {
+          brand: {
+            $type: "color",
+            $value: {
+              colorSpace: "srgb",
+              components: [0.2, 0.4, 0.6],
+              hex: "#336699",
+            },
+          },
+        },
+        shadow: {
+          card: {
+            $type: "shadow",
+            $value: {
+              color: "{color.brand}",
+              offsetX: px(0),
+              offsetY: px(1),
+              blur: px(2),
+              spread: px(0),
+            },
+          },
+          raised: { $type: "shadow", $value: "{shadow.card}" },
+        },
+      });
+      expect(read.issues).toEqual([]);
+      const doc = (await t.nextly.findSingle({
+        slug: SITE_STYLE_SLUG,
+        overrideAccess: true,
+      })) as Record<string, unknown> | null;
+      const raw = doc?.tokens;
+      const site = ((typeof raw === "string" ? JSON.parse(raw) : raw) ?? {
+        tokens: [],
+      }) as { tokens: unknown[] };
+      const written = await call("PATCH", SINGLE, designer, {
+        tokens: { ...site, tokens: [...site.tokens, ...read.tokens] },
+        _overwrite: true,
+      });
+      expect(written.status).toBe(200);
+      const stored = JSON.parse(await storedSection(t)) as {
+        tokens: { name: string; values: { light: string } }[];
+      };
+      expect(
+        stored.tokens.find(token => token.name === "shadow.raised")?.values
+      ).toEqual({ light: "0px 1px 2px 0px #336699" });
     });
 
     it("refuses a design token import's writes to a role that may read Design but not change it", async () => {
