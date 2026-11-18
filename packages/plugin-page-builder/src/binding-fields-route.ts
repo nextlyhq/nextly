@@ -373,7 +373,12 @@ async function sourceFields(
 ): Promise<readonly PickerField[]> {
   return Promise.all(
     read.shapes.map(async shape => {
-      const field = pickerField(shape, read);
+      const field = await withGroupPictures(
+        pickerField(shape, read),
+        shape,
+        read.row[shape.name],
+        { reads, budget }
+      );
       const target = followable(shape);
       const id = relatedId(read.row[shape.name]);
       if (target === undefined || id === undefined) return field;
@@ -401,6 +406,58 @@ async function sourceFields(
       };
     })
   );
+}
+
+/** What following one more relation needs: the reads, and what is left. */
+interface FollowTerms {
+  readonly reads: BindingFieldsReads;
+  readonly budget: FollowBudget;
+}
+
+/**
+ * A group's field with each picture inside it that is stored by its id
+ * shown by its media's thumbnail (`seo.ogImage`), the media read as the
+ * caller within the follow budget, as a top-level picture's is.
+ */
+async function withGroupPictures(
+  field: PickerField,
+  shape: BindingFieldShape,
+  row: unknown,
+  terms: FollowTerms
+): Promise<PickerField> {
+  const inside = field.fields;
+  if (shape.fields === undefined || inside === undefined) return field;
+  if (!isPlainRecord(row)) return field;
+  const declared = shape.fields;
+  const fields = await Promise.all(
+    inside.map(inner =>
+      innerPicture(
+        inner,
+        declared.find(each => each.name === inner.name),
+        row[inner.name],
+        terms
+      )
+    )
+  );
+  return { ...field, fields };
+}
+
+/** One field inside a group, with its picture's thumbnail where it holds one by id. */
+async function innerPicture(
+  inner: PickerField,
+  shape: BindingFieldShape | undefined,
+  value: unknown,
+  { reads, budget }: FollowTerms
+): Promise<PickerField> {
+  if (shape?.type !== "upload" || !inner.public) return inner;
+  const target = followable(shape);
+  const id = relatedId(value);
+  if (target === undefined || id === undefined) return inner;
+  if (budget.followed >= MOST_RELATIONS) return inner;
+  budget.followed += 1;
+  const related = await readOrFailed({ collection: target, id }, reads);
+  if (related === undefined || related === "failed") return inner;
+  return { ...inner, ...followedThumbnail(inner, related.row) };
 }
 
 /**
