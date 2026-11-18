@@ -26,7 +26,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { boundField } from "./binding-bound-names";
+import { boundField, boundNames } from "./binding-bound-names";
 import type { BindingFieldSource } from "./binding-services";
 import { settingBoundFrom, settingSource } from "./binding-setting-source";
 import type { ComponentFieldsHost } from "./component-fields";
@@ -406,5 +406,31 @@ describe("a bound setting's field, as the chip and the image controls read it", 
       boundField(binding, from ?? { name: undefined, fields: undefined })?.type
     ).toBe("upload");
     expect(listed?.type).toBe("upload");
+  });
+});
+
+describe("a setting whose id holds a dot, named by its whole id", () => {
+  const dotted = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "component",
+    nodes: [block("pic", undefined), block("h", "")],
+    exposed: [setting("hero.picture", "Hero picture", "pic", "media", "image")],
+  } as BlockDocument;
+  const binding = { $bind: "hero.picture", source: "setting" } as const;
+
+  it("finds the setting's field, not a nested one", () => {
+    const from = settingBoundFrom(binding, dotted);
+    expect(
+      boundField(binding, from ?? { name: undefined, fields: undefined })
+    ).toMatchObject({ name: "hero.picture", type: "upload" });
+  });
+
+  it("names it by its label on the chip", () => {
+    const from = settingBoundFrom(binding, dotted);
+    expect(
+      boundNames(binding, from ?? { name: undefined, fields: undefined }, {
+        prop: "media",
+      })
+    ).toEqual({ field: "Hero picture", source: "This component's settings" });
   });
 });

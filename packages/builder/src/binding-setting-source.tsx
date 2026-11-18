@@ -159,6 +159,8 @@ export function settingBoundFrom(
   | {
       readonly name: string;
       readonly fields: readonly { name: string; type: string; label: string }[];
+      /** A setting is named by its whole id, never read as a path. */
+      readonly whole: true;
     }
   | undefined {
   if (binding.source !== "setting") return undefined;
@@ -169,7 +171,7 @@ export function settingBoundFrom(
       return setting === undefined ? [] : [settingField(setting)];
     }
   );
-  return { name: COMPONENT_SETTINGS_SOURCE, fields };
+  return { name: COMPONENT_SETTINGS_SOURCE, fields, whole: true };
 }
 
 /** What a setting does for the pages using the component. */
