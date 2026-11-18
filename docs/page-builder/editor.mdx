@@ -301,7 +301,10 @@ Hover already chosen, it opens on Style.
 
 **Style** starts with **Block style** on a block whose type has saved styles: a Section's
 Plain and Hero, a Button's Primary, Secondary, Outline and Text, an Image's Square,
-Rounded and Circle. Each is a picture tile drawn in your site's own colours and fonts.
+Rounded and Circle, a Quote's Line, Plain and Large. Each is a picture tile drawn in your
+site's own colours and fonts. An Image's tiles show its own picture in each shape (a
+picture's outline while it has none), a Quote's show its own words in each style, and a
+Section's show a band of the page, so a Hero reads as the tall, centred band it is.
 The block's own style is marked **Default**, and the one the block wears is ticked. Pick
 a tile to change the block's style. A block style is shared by every block of the type
 that wears it, so the line under the tiles says so ("A saved style for every Section.").
@@ -322,7 +325,11 @@ Open the first chip to choose between this block and each shared style it uses, 
 **Detach** or **Remove** one, or to **Apply a shared style…** or **Save as shared
 style…**. These items are always there, in the same order: one you can't use yet is
 greyed out with the reason under it. While a shared style is chosen, a line under the
-chips says where it's used and that changes there change all of them. While a state
+chips says how widely it's used, "used on 12 blocks on 4 pages and 1 component", and
+that changes there change all of them. The open page is counted as you see it, unsaved
+changes included. Until every page has been counted (right after an upgrade, say), the
+numbers read "at least", and "Counting where it's used…" shows before the first answer.
+While a state
 other than Normal is chosen, the settings below are tinted and say which look you're
 editing. This line and the tabs stay in view as you scroll the panel.
 
@@ -940,6 +947,21 @@ gap above it; give that block a top margin of 0 on that device to remove it.
 A new Section's padding comes from the site: its sides read `space.section-y` and
 `space.gutter`, and **Style → Spacing** says so under the box, "Site default: Section
 spacing", with each side named by its variable. A new Box has no padding.
+
+A Section's **Padding** sits above the box: **Compact**, **Normal** or **Roomy**. Normal is
+the padding above, and a Section left at Normal stores nothing. Compact and Roomy pad the
+Section from their own pair of site variables, `space.section-y-compact` and
+`space.gutter-compact`, or `space.section-y-roomy` and `space.gutter-roomy`. **Design →
+Spacing** lists them next to "Section padding" as "Section padding, compact (top and
+bottom)", "Section padding, compact (sides)", "Section padding, roomy (top and bottom)" and
+"Section padding, roomy (sides)". They start at 24–40px and 72–120px above and below, and
+at the same 16–32px as Normal at the sides. Change one there and every Section using that
+preset follows.
+
+A side you give a value of its own in the box wins over the preset, and Padding then reads
+**Custom**. Choosing a preset again clears the Section's own padding on every device, as
+one step that a single undo brings back. A block style that sets padding also wins over
+the preset.
 
 ### Setting margin and padding
 

@@ -222,8 +222,15 @@ function reachesNode(entry: StyleTraceEntry, subject: StyleSubject): boolean {
     // the subject names, because a subject has no way to say which part it is:
     // the answer would have to be guessed, and the quiet answer is the one this
     // module already gives a caller that cannot state its tag.
+    //
+    // A default written for one block of the type (a Section's padding
+    // preset) reaches that block alone.
     case "blockType":
-      return origin.part === undefined && origin.type === subject.blockType;
+      return (
+        origin.part === undefined &&
+        origin.type === subject.blockType &&
+        (origin.node === undefined || origin.node === subject.nodeId)
+      );
     case "class":
       return classReaches(origin, subject);
     // The baseline lands on the ELEMENT, so only a node rendering that element
