@@ -140,6 +140,21 @@ describe("putting a component in a set's area", () => {
     });
   });
 
+  it("asks again that the component is published right before writing, and writes nothing once it is not", async () => {
+    const { fake, calls } = writes();
+    let asked = 0;
+    fake.publishedComponent = vi.fn(async id => {
+      calls.push(`component ${id}`);
+      asked += 1;
+      // Published when first asked, unpublished by the time of the write.
+      return asked === 1 ? { id, title: "Ridgeline" } : null;
+    });
+    await expect(
+      putInArea("main", "header", "ridgeline", fake)
+    ).rejects.toSatisfy(error => NextlyError.isNotFound(error));
+    expect(calls).not.toContain("update main");
+  });
+
   it("refuses a set whose areas the caller may not read, and writes nothing", async () => {
     const { areas: _withheld, ...redacted } = MAIN;
     const { fake, calls } = writes({ set: redacted });
@@ -224,7 +239,7 @@ describe("the components marked for an area", () => {
     );
   });
 
-  it("asks whether the caller may change any set, so a rule over some sets still offers the choice", async () => {
+  it("asks update of any set, and publish of every set, before offering the choice", async () => {
     const given = ctx();
     await readAreaComponents(given as never, nextly([]) as never, {
       area: "header",
@@ -236,9 +251,10 @@ describe("the components marked for an area", () => {
     expect(given.caller.can).toHaveBeenCalledWith("update", "layouts", {
       anyEntry: true,
     });
-    expect(given.caller.can).toHaveBeenCalledWith("publish", "layouts", {
-      anyEntry: true,
-    });
+    // Publish is asked of the whole collection: a set already published is
+    // written without a publish transition, so no later gate would refuse a
+    // caller whose publish rule leaves this set out.
+    expect(given.caller.can).toHaveBeenCalledWith("publish", "layouts");
   });
 
   it("says the caller may not choose without both update and publish on sets", async () => {

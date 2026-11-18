@@ -106,9 +106,13 @@ const AREA_WORDS: Readonly<Record<LayoutArea, string>> = {
 };
 
 /**
- * Whether the caller may update AND publish sets: the right to choose. Asked
- * of any set, so a rule that lets an author change only some sets still
- * offers the choice; the write, made as the caller, judges the set itself.
+ * Whether the caller may update AND publish sets: the right to choose.
+ *
+ * Update is asked of any set: a rule that lets an author change only some
+ * sets still offers the choice, and the write, made as the caller, judges the
+ * set itself. Publish is asked of the whole collection: the set is already
+ * published, so the write moves no status and core's publish gate would not
+ * judge it, and a publish rule that leaves this set out must refuse here.
  */
 async function mayChangeSets(
   ctx: Pick<PluginRouteContext, "caller" | "self">
@@ -118,7 +122,7 @@ async function mayChangeSets(
   return (
     caller !== null &&
     (await caller.can("update", sets, { anyEntry: true })) &&
-    (await caller.can("publish", sets, { anyEntry: true }))
+    (await caller.can("publish", sets))
   );
 }
 
@@ -261,6 +265,15 @@ export async function putInArea(
         });
       }
       refuseUnlessPublishedAsSaved(saved, area);
+      // Asked again right before the write: a component unpublished since
+      // the first ask would leave the published set naming one no visitor
+      // can see.
+      if ((await writes.publishedComponent(component.id)) === null) {
+        throw NextlyError.notFound({
+          message: "That component isn't published, or isn't there any more.",
+          logContext: { route: LAYOUT_AREA_ROUTE_PATH },
+        });
+      }
       // The set's areas, whole: a caller who may write them but not read
       // them gets the field withheld, and writing the one area chosen over a
       // value it cannot see would drop the other area.
