@@ -431,7 +431,7 @@ const EMBED_BASE_STYLES = {
       backgroundColor: { $token: "color.surface" },
       // An iframe's default inset border, which a player hides and a poster
       // would not.
-      borderStyle: "none",
+      border: { style: "none" },
     },
   },
 } as const;
@@ -463,15 +463,16 @@ export const embed: BlockDefinition<EmbedProps, PageContext> = defineBlock({
     // When a known provider's player loads. The editor offers it only for a
     // link a provider owns: any other link is a plain frame, loaded with the
     // page.
+    // A setting of the frame rather than what it shows, so a design lock
+    // holds it as it holds the block's other settings.
     load: {
       label: "Load",
-      role: "content",
       type: "select",
       options: [...EMBED_LOADS],
       optionLabels: { click: "When played", page: "Right away" },
     },
     // Offered by the editor only for a provider with a privacy-enhanced player.
-    privacy: { label: "Privacy mode", role: "content", type: "checkbox" },
+    privacy: { label: "Privacy mode", type: "checkbox" },
     poster: {
       label: "Poster",
       role: "content",
@@ -508,8 +509,13 @@ export const embed: BlockDefinition<EmbedProps, PageContext> = defineBlock({
     effects: true,
     position: true,
   },
-  // An `<iframe>` is interactive content.
-  contentModel: () => ({ is: ["flow", "interactive"] }),
+  // An `<iframe>` is interactive content. An Embed with no link draws no
+  // frame (on a visitor's page, nothing at all), so it is only flow content
+  // and may sit where interactive content may not, inside a link.
+  contentModel: props =>
+    url(props.src) === undefined
+      ? { is: ["flow"] }
+      : { is: ["flow", "interactive"] },
   render: renderEmbed,
   // No `rendersNothing`. An Embed with no link draws nothing on a page a
   // visitor is served, but on the canvas it draws the box the editor's
