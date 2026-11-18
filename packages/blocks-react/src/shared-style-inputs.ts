@@ -175,8 +175,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * width, and its reset sets that property to the site's width on every
  * element, so a width of one container stays its own. A sheet stored before
  * reads the site's width alone: refused, not served.
+ *
+ * `v11`: a site with dark values states its `color-scheme` in each token
+ * block, light on the root and the light marker, dark in both dark blocks, so
+ * the browser draws checkboxes, radios and scrollbars in the scheme the colours
+ * are in. A sheet stored before states none, and a dark page draws them light:
+ * refused, not served.
+ *
+ * `v12`: the links inside a container take its text colour. For each rule
+ * giving a container a text colour, while the site's Links row sets none, the
+ * compiler writes a zero-specificity rule making the links inside inherit it.
+ * A sheet stored before has none, and its links keep the browser's colour in
+ * a dark section: refused, not served.
  */
-const ENCODING = "v10";
+const ENCODING = "v12";
 
 /**
  * Whether a stored stamp was written under the current {@link ENCODING}.

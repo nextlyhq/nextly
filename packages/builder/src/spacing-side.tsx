@@ -30,10 +30,14 @@ import * as React from "react";
 
 import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { ChromeTooltip } from "./chrome-tooltip";
+import { variableRead } from "./site-default-source";
 import { SpacingSidePopover, type SideClose } from "./spacing-side-popover";
 import { variableFor, variableLabel, variablesFor } from "./style-colour";
 import type { StyleControl } from "./style-controls";
-import type { CommitOutcome } from "./style-field-surroundings";
+import {
+  TokenPrefixContext,
+  type CommitOutcome,
+} from "./style-field-surroundings";
 import { sideOf, type LogicalSide, type SideBox } from "./style-sides";
 import { storedText } from "./style-text-field";
 
@@ -104,7 +108,8 @@ function pairLabel(
 ): "Top & bottom" | "Left & right" {
   const side = box === undefined ? undefined : sideOf(box, control);
   const block = side === undefined || side.startsWith("block");
-  const across = (box?.axes?.writingMode ?? "horizontal-tb") === "horizontal-tb";
+  const across =
+    (box?.axes?.writingMode ?? "horizontal-tb") === "horizontal-tb";
   return block === across ? "Top & bottom" : "Left & right";
 }
 
@@ -124,6 +129,7 @@ function useSideText(
   tokens: SiteTokenSet | undefined
 ): SideText {
   const mode = useCanvasTokenMode();
+  const tokenPrefix = React.useContext(TokenPrefixContext);
   if (isTokenRef(stored)) {
     const variable = variableFor(stored.$token, tokens, mode);
     const named =
@@ -131,18 +137,38 @@ function useSideText(
         ? stored.$token
         : variableLabel(variable, variablesFor(control.leaf, tokens, mode));
     const text =
-      stored.times === undefined
-        ? named
-        : `${named} × ${String(stored.times)}`;
+      stored.times === undefined ? named : `${named} × ${String(stored.times)}`;
     return { text, spoken: text, bound: true, unset: false };
   }
   if (stored === undefined) {
-    return inherited === undefined
-      ? { text: "–", spoken: "not set", bound: false, unset: true }
-      : { text: inherited, spoken: inherited, bound: false, unset: true };
+    if (inherited === undefined) {
+      return { text: "–", spoken: "not set", bound: false, unset: true };
+    }
+    const text = inheritedText(control, inherited, tokens, mode, tokenPrefix);
+    return { text, spoken: text, bound: false, unset: true };
   }
   const text = storedText(stored);
   return { text, spoken: text, bound: false, unset: false };
+}
+
+/**
+ * What a side shows of a value reaching it from another tier: a site setting
+ * is named as its variable, as a value set from one is, rather than as the
+ * CSS that reads it; anything else as it was written.
+ */
+function inheritedText(
+  control: StyleControl,
+  inherited: string,
+  tokens: SiteTokenSet | undefined,
+  mode: ReturnType<typeof useCanvasTokenMode>,
+  tokenPrefix: string
+): string {
+  const read = variableRead(inherited, tokenPrefix);
+  const variable =
+    read === undefined ? undefined : variableFor(read, tokens, mode);
+  return variable === undefined
+    ? inherited
+    : variableLabel(variable, variablesFor(control.leaf, tokens, mode));
 }
 
 /** A digit, a point or a minus sign: the start of a value typed on a side. */

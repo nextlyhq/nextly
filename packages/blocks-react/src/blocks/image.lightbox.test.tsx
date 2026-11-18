@@ -25,6 +25,7 @@ import { imageSizingFor, type ImageCopy } from "../image-slot";
 import { PageRenderer } from "../page-renderer";
 import { createBlockResolver } from "../resolver";
 import { renderImage } from "./image";
+import { cssUrl } from "./lightbox";
 import { coreBlocks } from "./index";
 
 const BREAKPOINTS = {
@@ -192,6 +193,15 @@ describe("an Image set to Enlarge, on a published page", () => {
     expect(full?.getAttribute("style")).toContain(
       String.raw`url("/media/a\"b\\c.jpg")`
     );
+  });
+
+  it("writes a form feed or a line break in an address as its code, which a CSS string can't hold", () => {
+    // Each ends a CSS string, so each is written as its escape, never as
+    // itself. Asked of the writer directly: the page's own address check
+    // refuses such an address before it is drawn, so no render reaches it.
+    expect(cssUrl("/a\fb.jpg")).toBe(String.raw`url("/a\c b.jpg")`);
+    expect(cssUrl("/a\nb\rc.jpg")).toBe(String.raw`url("/a\a b\d c.jpg")`);
+    expect(cssUrl('/a"b\\c.jpg')).toBe(String.raw`url("/a\"b\\c.jpg")`);
   });
 
   it("gives each Image's popover an id of its own, from its node", async () => {

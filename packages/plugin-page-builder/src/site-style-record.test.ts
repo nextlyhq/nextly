@@ -1042,6 +1042,33 @@ describe("the site's text", () => {
     expect(checked.issues.join(" ")).toContain('"quote" is not a row');
   });
 
+  it("keeps the Body and Headings fonts a save writes, and refuses a font on Links", () => {
+    const siteText = {
+      body: { fontFamily: { $token: "font.body" } },
+      h2: {
+        fontSize: { $token: "font-size.h2" },
+        lineHeight: { $token: "line-height.h2" },
+        fontFamily: { $token: "font.heading" },
+      },
+    };
+    const tokens = [
+      {
+        name: "font.body",
+        kind: "fontFamily",
+        values: { light: '"Lora", serif' },
+      },
+    ];
+    const checked = checkStoredTokens({ tokens, siteText });
+    expect(checked.issues).toEqual([]);
+    expect(checked.value?.siteText).toEqual(siteText);
+    expect(
+      checkStoredTokens({
+        tokens: [],
+        siteText: { link: { fontFamily: "serif" } },
+      }).issues.join(" ")
+    ).toContain("Links has no");
+  });
+
   it("is read back keeping the rows that can be read, and dropping the rest", () => {
     const read = readSiteStyleRecord({
       tokens: {
