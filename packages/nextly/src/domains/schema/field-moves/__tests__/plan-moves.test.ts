@@ -455,6 +455,53 @@ describe("planEntityMoves", () => {
     );
   });
 
+  it("refuses a move whose name another field also leaves its place with, which no move pairs", () => {
+    // Which `title` went where is not known from the definitions; one hint leaves the other
+    // field's values at a place nothing reads.
+    const before = [
+      group("a", [text("title")]),
+      group("b", [text("title")]),
+      group("c", []),
+      group("d", []),
+    ];
+    const after = [
+      group("a", []),
+      group("b", []),
+      group("c", [text("title")]),
+      group("d", [text("title")]),
+    ];
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before,
+        after,
+        moves: [{ from: ["a", "title"], to: ["d", "title"] }],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "FIELD_MOVE_REFUSED",
+              message: expect.stringContaining(
+                "Another field named title (b.title) also leaves its place"
+              ),
+            }),
+          ],
+        },
+      })
+    );
+    // A field of that name leaving with a field at its own path still there is no rival.
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [group("a", [text("title")]), group("d", []), text("title")],
+        after: [group("a", []), group("d", [text("title")]), text("title")],
+        moves: [{ from: ["a", "title"], to: ["d", "title"] }],
+      })
+    ).not.toThrow();
+  });
+
   it("refuses a move into a nested group that was another kind of field before this save", () => {
     const json = (name: string) =>
       ({ name, label: name, type: "json" }) as FieldDefinition;

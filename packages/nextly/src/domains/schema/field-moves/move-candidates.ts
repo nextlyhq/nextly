@@ -15,7 +15,8 @@ import { addressableFields } from "../../../shared/addressable-fields";
 
 import type { FieldMoveRequest } from "./check-move";
 
-interface NamedAt {
+/** A named field and its path of names from the entity's top. */
+export interface NamedAt {
   path: readonly string[];
   field: FieldDefinition;
 }
@@ -63,6 +64,19 @@ function everyField(fields: readonly FieldDefinition[]): NamedAt[] {
 
 const key = (path: readonly string[]) => path.join("\u0000");
 
+/**
+ * The named fields `before` has at a path `after` does not: each one moved, deleted, or inside a
+ * container that was. A move's planning reads them too, to know when a hinted move's name also
+ * left another place.
+ */
+export function fieldsThatLeft(
+  before: readonly FieldDefinition[],
+  after: readonly FieldDefinition[]
+): NamedAt[] {
+  const nowAt = new Set(everyField(after).map(each => key(each.path)));
+  return everyField(before).filter(each => !nowAt.has(key(each.path)));
+}
+
 /** The moves `before` to `after` may hold, to be asked about one by one. */
 export function moveCandidates(
   before: readonly FieldDefinition[],
@@ -72,7 +86,7 @@ export function moveCandidates(
   const now = everyField(after);
   const wasAt = new Set(was.map(each => key(each.path)));
   const nowAt = new Set(now.map(each => key(each.path)));
-  const gone = was.filter(each => !nowAt.has(key(each.path)));
+  const gone = fieldsThatLeft(before, after);
   const arrived = now.filter(each => !wasAt.has(key(each.path)));
   const leaf = (each: NamedAt) => each.path[each.path.length - 1];
   const parent = (each: NamedAt) => each.path.slice(0, -1);

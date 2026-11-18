@@ -32,6 +32,7 @@ import {
   type FieldMoveRequest,
   type PlannedMove,
 } from "./check-move";
+import { fieldsThatLeft } from "./move-candidates";
 import { moveDataStatements, type MoveColumn } from "./move-statements";
 
 /** Statements for the start and the end of one direction of a migration file. */
@@ -148,6 +149,39 @@ function refuseSameNames(moves: readonly FieldMoveRequest[]): void {
       );
     }
     seen.add(name);
+  }
+}
+
+/**
+ * Refuses a move whose field's name another field also leaves its place with, in a save that
+ * gives that field no move of its own: which of the two moved is not known from the definitions,
+ * and the other's values would stay at a place nothing reads.
+ */
+function refuseUnpairedNames(
+  given: {
+    before: readonly FieldDefinition[];
+    after: readonly FieldDefinition[];
+    moves: readonly FieldMoveRequest[];
+  },
+  renames: readonly { from: string; to: string }[]
+): void {
+  // A field the save renames left its place under another name, which no move takes.
+  const renamed = new Set(renames.map(r => toSnakeCase(r.from)));
+  const left = fieldsThatLeft(given.before, given.after).filter(
+    each => !(each.path.length === 1 && renamed.has(toSnakeCase(each.path[0])))
+  );
+  const moved = new Set(given.moves.map(request => request.from.join(".")));
+  for (const request of given.moves) {
+    if (samePath(request.from, request.to)) continue;
+    const name = request.from.at(-1) ?? "";
+    const rival = left.find(
+      each => each.path.at(-1) === name && !moved.has(each.path.join("."))
+    );
+    if (rival === undefined) continue;
+    throw refused(
+      request,
+      `Another field named ${name} (${rival.path.join(".")}) also leaves its place in this save, so which one moves here is not certain. Move ${name} in a save of its own.`
+    );
   }
 }
 
@@ -408,6 +442,7 @@ export function planEntityMoves(args: {
   };
   refuseOverlapping(args.moves);
   refuseSameNames(args.moves);
+  refuseUnpairedNames(args, args.renames ?? []);
   for (const request of args.moves) {
     // A field that keeps its path (moved into or out of a group with no name) keeps its place.
     if (samePath(request.from, request.to)) continue;
