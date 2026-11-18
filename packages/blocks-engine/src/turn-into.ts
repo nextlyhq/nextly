@@ -176,33 +176,59 @@ export function planTurnInto(
     target,
     converter.carries ?? {}
   );
+  const { turned, trimmed } = turnedNode(
+    node,
+    { type: to, definition: target, props: converted.props, bindings },
+    library
+  );
+  return {
+    op: { kind: "turnInto", id: node.id, node: turned },
+    ...(converted.dropped === undefined ? {} : { dropped: converted.dropped }),
+    unbound,
+    ...(trimmed ? { lookTrimmed: true as const } : {}),
+    ...(defaultLookChanges(node, to, library)
+      ? { defaultLookChanges: true as const }
+      : {}),
+  };
+}
+
+/** What the turned block is made of, beside the block it was. */
+interface TurnedParts {
+  readonly type: string;
+  readonly definition: AnyBlockDefinition;
+  readonly props: BlockNode["props"];
+  readonly bindings: BlockNode["bindings"];
+}
+
+/**
+ * The turned block: the new type's props and bindings, the block's own
+ * styles with its block style folded in (what the new type supports), and
+ * the fields it keeps. `trimmed` says part of the block style gave way.
+ */
+function turnedNode(
+  node: BlockNode,
+  parts: TurnedParts,
+  library: readonly NamedClass[]
+): { readonly turned: BlockNode; readonly trimmed: boolean } {
   const worn = lookOf(node, library);
   const styles = supportedStyles(
     worn.look === undefined
       ? node.styles
       : overlaidStyles(worn.look, node.styles),
-    target
+    parts.definition
   );
   const turned: BlockNode = {
     id: node.id,
-    type: to,
-    version: target.version,
-    props: converted.props,
-    ...(bindings === undefined ? {} : { bindings }),
+    type: parts.type,
+    version: parts.definition.version,
+    props: parts.props,
+    ...(parts.bindings === undefined ? {} : { bindings: parts.bindings }),
     ...(styles === undefined ? {} : { styles }),
     ...keptFields(node),
     ...(worn.classes === undefined ? {} : { classes: worn.classes }),
   };
   if (worn.classes?.length === 0) delete turned.classes;
-  return {
-    op: { kind: "turnInto", id: node.id, node: turned },
-    ...(converted.dropped === undefined ? {} : { dropped: converted.dropped }),
-    unbound,
-    ...(worn.trimmed === true ? { lookTrimmed: true as const } : {}),
-    ...(defaultLookChanges(node, to, library)
-      ? { defaultLookChanges: true as const }
-      : {}),
-  };
+  return { turned, trimmed: worn.trimmed === true };
 }
 
 /** What an author calls a block type: its label, else its name. */
@@ -323,6 +349,7 @@ function minus(value: StyleValue, taken: StyleValue): StyleValue | undefined {
   }
   return left.length === 0 ? undefined : Object.fromEntries(left);
 }
+
 /** Whether a stored value holds named sides (a token reference does not). */
 function isSides(each: StyleValue): each is Record<string, StyleValue> {
   return typeof each === "object" && each !== null && !isTokenRef(each);
@@ -336,6 +363,7 @@ function overlaps(value: StyleValue, taken: StyleValue): boolean {
       Object.hasOwn(taken, side) && overlaps(inner, taken[side] as StyleValue)
   );
 }
+
 /** Whether two places are one state at one width. */
 function samePlace(
   a: Omit<Placed, "value">,
