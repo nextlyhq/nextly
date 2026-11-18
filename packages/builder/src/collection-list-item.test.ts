@@ -85,17 +85,20 @@ describe("itemFieldsOf", () => {
     ).toEqual({ title: "heading", summary: "notes", link: false });
   });
 
-  it("takes a single media relation as the picture, but not an upload that holds no images or many files", () => {
+  it("takes the first single upload of images, and nothing the image binding rule refuses", () => {
     expect(
       itemFieldsOf({
         slug: "albums",
         readable: [
           { name: "files", type: "upload", relationTo: "media", hasMany: true },
           { name: "brief", type: "upload", relationTo: "media", takesImages: false },
+          // A relation to the library is a reference, which an Image's
+          // picture does not take: the save would refuse it.
           { name: "photo", type: "relationship", relationTo: "media" },
+          { name: "cover", type: "upload", relationTo: "media" },
         ],
       }).picture
-    ).toBe("photo");
+    ).toBe("cover");
   });
 
   it("passes over a declared title field that holds a number or a date", () => {

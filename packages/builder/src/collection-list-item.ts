@@ -25,9 +25,11 @@
  */
 import {
   BASE_BREAKPOINT,
+  fieldFitsProp,
   findNode,
   getBlock,
   makeNode,
+  type PropSchema,
   type BlockDocument,
   type BlockNode,
   type NodeStyles,
@@ -79,17 +81,8 @@ export interface ItemFields {
   readonly link: boolean;
 }
 
-/** The media library's collection, which a picture relation points at. */
-const MEDIA_COLLECTION = "media";
-
-/** The field types that hold one line of words. */
-const TEXT_TYPES = new Set(["text"]);
-
 /** The field types that hold longer words, as plain text. */
 const LONG_TEXT_TYPES = new Set(["textarea"]);
-
-/** The field types a heading's text may be bound to as they are. */
-const TITLE_TYPES = new Set(["text", "textarea", "email"]);
 
 /** Names a title field goes by, where the collection names none. */
 const TITLE_NAMES = ["title", "name"];
@@ -97,51 +90,69 @@ const TITLE_NAMES = ["title", "name"];
 /** Names a summary goes by, best first. */
 const SUMMARY_NAMES = ["excerpt", "summary", "description", "intro", "subtitle"];
 
-/** Whether `field` points at the media library. */
-function pointsAtMedia(field: ItemField): boolean {
-  const to = field.relationTo;
-  return typeof to === "string"
-    ? to === MEDIA_COLLECTION
-    : Array.isArray(to) && to.length === 1 && to[0] === MEDIA_COLLECTION;
+/**
+ * Whether `field` may fill `prop` of `blockType` as it is: the engine's one
+ * binding rule (`fieldFitsProp`), the rule a save judges the page by, so the
+ * item never carries a binding the save refuses.
+ */
+function fits(field: ItemField, blockType: string, prop: string): boolean {
+  const schema = (getBlock(blockType)?.props as Record<string, PropSchema | undefined> | undefined)?.[prop];
+  if (schema === undefined) return false;
+  return fieldFitsProp(
+    {
+      name: field.name,
+      type: field.type,
+      ...(field.hasMany === true ? { hasMany: true } : {}),
+      ...(field.relationTo === undefined ? {} : { relationTo: field.relationTo }),
+    },
+    schema
+  );
 }
 
-/** Whether `field` holds one picture. */
+/** Whether `field` fills an Image's picture: the rule's answer, and an upload that takes images. */
 function holdsPicture(field: ItemField): boolean {
-  if (field.hasMany === true) return false;
-  if (field.type === "upload") return field.takesImages !== false;
-  return field.type === "relationship" && pointsAtMedia(field);
+  return field.takesImages !== false && fits(field, "core/image", "mediaId");
+}
+
+/** Whether `field` fills a Heading's words. */
+function fillsTitle(field: ItemField): boolean {
+  return fits(field, "core/heading", "text");
+}
+
+/** Whether `field` fills a Text's words. */
+function fillsSummary(field: ItemField): boolean {
+  return fits(field, "core/text", "text");
 }
 
 /** The fields the rule binds, read from the collection's readable fields. */
 export function itemFieldsOf(source: ItemSource): ItemFields {
   const readable = source.readable ?? [];
   const single = readable.filter(field => field.hasMany !== true);
-  const named = (names: readonly string[], types: ReadonlySet<string>) => {
+  const named = (
+    names: readonly string[],
+    takes: (field: ItemField) => boolean
+  ): string | undefined => {
     for (const name of names) {
       const found = single.find(
-        field => field.name.toLowerCase() === name && types.has(field.type)
+        field => field.name.toLowerCase() === name && takes(field)
       );
       if (found !== undefined) return found.name;
     }
     return undefined;
   };
-  // The admin's title field, where it holds words: a heading's text takes
-  // text, and a number or a date bound to it with no format is refused when
-  // the page is saved.
-  const declaredTitle =
-    source.titleField !== undefined &&
-    single.some(
-      field =>
-        field.name === source.titleField && TITLE_TYPES.has(field.type)
-    )
-      ? source.titleField
-      : undefined;
-  const title = declaredTitle ?? named(TITLE_NAMES, TEXT_TYPES);
-  const words = new Set([...TEXT_TYPES, ...LONG_TEXT_TYPES]);
+  // The admin's title field, where a heading may show it as it is: a number
+  // or a date bound with no format is refused when the page is saved.
+  const declaredTitle = single.find(
+    field => field.name === source.titleField && fillsTitle(field)
+  )?.name;
+  const title = declaredTitle ?? named(TITLE_NAMES, fillsTitle);
   const summary =
-    named(SUMMARY_NAMES, words) ??
+    named(SUMMARY_NAMES, fillsSummary) ??
     single.find(
-      field => LONG_TEXT_TYPES.has(field.type) && field.name !== title
+      field =>
+        LONG_TEXT_TYPES.has(field.type) &&
+        field.name !== title &&
+        fillsSummary(field)
     )?.name;
   const picture = single.find(holdsPicture)?.name;
   return {
