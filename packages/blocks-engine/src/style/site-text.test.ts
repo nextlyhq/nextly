@@ -429,6 +429,19 @@ describe("a row that follows a text style", () => {
     expect(JSON.stringify(unusable.h2)).not.toContain("red");
   });
 
+  it("keeps its own values when the compiler drops the text style it names", () => {
+    // Two text styles claiming one name: the compiler writes the first and
+    // drops the second, so a row following the second follows nothing, just
+    // as a block wearing it takes no rule.
+    const first = { ...display, id: "t-first", orderIndex: 0 };
+    const dropped = { ...display, id: "t-dropped", orderIndex: 1 };
+    const bases = siteTextElementBases(
+      { h2: { fontSize: "40px", textStyle: "t-dropped" } },
+      [first as never, dropped as never]
+    );
+    expect(bases.h2?.base?.base?.fontSize).toBe("40px");
+  });
+
   it("is refused on Links, and as anything but a text style's id", () => {
     const issues = siteTextIssues({
       h1: { textStyle: "t-display" },

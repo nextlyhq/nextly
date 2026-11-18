@@ -41,9 +41,8 @@ import type { TypographicElement } from "./compile-page-states";
 import { customPropertiesReferenced } from "./css-value-check";
 import type { FluidSizes } from "./fluid-value";
 import {
-  isTextStyle,
-  isUsableNamedClass,
   MAX_NAMED_CLASS_NAME_LENGTH,
+  textStylesOf,
   type NamedClass,
 } from "./named-class";
 import { validateStyleValues } from "./validate-style-value";
@@ -336,19 +335,19 @@ export function siteTextStyles(
 }
 
 /**
- * The text style a row follows, when the row names one and the site holds it
- * usable: the first usable text style with that id, as the class tier reads
- * a library, so a row and a block wearing the same id get the same look.
+ * The text style a row follows, when the row names one the compiler writes.
+ * Read from `textStylesOf`, the list the class tier is written from, so a row
+ * and a block wearing the same id get the same look: a text style past the
+ * cap, or dropped for a name or id another class claimed, is followed by
+ * neither, and the row keeps its own values.
  */
 function textStyleOf(
   entry: SiteTextEntry,
   classes: readonly NamedClass[] | undefined
 ): NamedClass | undefined {
   const id = entry.textStyle;
-  if (typeof id !== "string" || classes === undefined) return undefined;
-  return classes.find(
-    cls => isUsableNamedClass(cls) && isTextStyle(cls) && cls.id === id
-  );
+  if (typeof id !== "string") return undefined;
+  return textStylesOf(classes).find(cls => cls.id === id);
 }
 
 /** A text row's font, size and line height, where it states them. */
