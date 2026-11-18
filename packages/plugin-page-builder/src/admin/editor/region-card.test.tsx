@@ -11,13 +11,31 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { RegionCardFacts } from "../page-layout";
 
-import { RegionCard, regionRefusal } from "./region-card";
+vi.mock("../component-facts-client", () => ({
+  useComponentFacts: () => ({ pages: { count: 3, complete: true } }),
+}));
+
+// The menu stands for itself: its reads and write are its own test.
+vi.mock("./use-a-component", () => ({
+  UseAComponent: (props: { area: string; setId: string; current: string }) => (
+    <button
+      type="button"
+      data-testid="use-a-component"
+      data-props={JSON.stringify(props)}
+    >
+      Use a component
+    </button>
+  ),
+}));
+
+import { RegionCard, regionRefusal, SelectedRegionCard } from "./region-card";
 
 afterEach(cleanup);
 
 const header: RegionCardFacts = {
   area: "header",
   componentId: "h",
+  setId: "main",
   setTitle: "Main",
   starter: false,
 };
@@ -112,6 +130,56 @@ describe("the selected header's card", () => {
     expect(screen.getByRole("region").textContent).toContain(
       "Draft changes not live: header component"
     );
+  });
+});
+
+describe("the starter's card", () => {
+  it("offers a way to replace it beside Edit header, and keeps the rest of the card", () => {
+    const shown = card({
+      replace: <button type="button">Use a component</button>,
+    });
+    const edit = screen.getByRole("button", { name: "Edit header" });
+    const replace = screen.getByRole("button", { name: "Use a component" });
+    expect(edit.parentElement).toBe(replace.parentElement);
+    expect(shown.textContent).toContain("It shows on 11 pages");
+  });
+
+  it("offers it even to someone who may not edit components, whose set rights the menu asks", () => {
+    card({
+      onEdit: undefined,
+      replace: <button type="button">Use a component</button>,
+    });
+    expect(screen.queryByRole("button", { name: "Edit header" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Use a component" })
+    ).toBeTruthy();
+  });
+
+  it("is offered on the selected region's card while it shows the starter, for the set it comes from", () => {
+    render(
+      <SelectedRegionCard
+        facts={{ ...header, starter: true, componentId: "starter-h" }}
+        onEditComponent={vi.fn()}
+        onOpenSettings={vi.fn()}
+      />
+    );
+    expect(
+      JSON.parse(
+        screen.getByTestId("use-a-component").getAttribute("data-props") ?? ""
+      )
+    ).toEqual({ area: "header", setId: "main", current: "starter-h" });
+  });
+
+  it("is not offered for a header that is not the starter", () => {
+    render(
+      <SelectedRegionCard
+        facts={header}
+        onEditComponent={vi.fn()}
+        onOpenSettings={vi.fn()}
+      />
+    );
+    expect(screen.queryByTestId("use-a-component")).toBeNull();
+    expect(screen.getByRole("button", { name: "Edit header" })).toBeTruthy();
   });
 });
 
