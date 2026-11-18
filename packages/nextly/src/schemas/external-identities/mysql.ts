@@ -1,40 +1,29 @@
 /**
  * `nextly_external_identities` on MySQL. See `postgres.ts` for what each
- * column is for, and for why `issuer` is "" rather than NULL where a
- * provider has no issuer.
+ * column is for, for the digest that enforces uniqueness, and for why
+ * `issuer` is "" rather than NULL where a provider has no issuer.
  *
- * Every column the unique index reads is a bounded `varchar`: MySQL cannot
- * index `text`, and the lengths keep the index inside its 3072-byte key
- * limit — 191 characters for the provider key and 255 each for the issuer
- * and the subject, 2804 bytes at utf8mb4's four bytes a character.
+ * The provider key, the issuer and the subject are UNBOUNDED `text` here,
+ * as they are on PostgreSQL and SQLite: an issuer is a URL whose length the
+ * provider chooses and OIDC permits a subject of up to 255 ASCII
+ * characters, so any bound this table picked would refuse a valid identity
+ * on MySQL alone. Nothing indexes them, so `text` costs nothing.
  *
- * The provider key, the issuer and the subject compare EXACTLY, byte for
- * byte: each carries `utf8mb4_bin`, overriding whatever collation the
- * database or the table was given. An install's MySQL defaults to a
- * case-insensitive collation (`utf8mb4_unicode_ci` where this repo's own
- * docker-compose.yml starts it), under which the unique index would treat
- * `Alice` and `alice` as the same subject and refuse a distinct, valid
- * identity — OIDC's `sub` is case-sensitive, and PostgreSQL and SQLite
- * compare text exactly, so MySQL alone would break the promise that the
- * uniqueness is enforced identically on every dialect. There is no
- * precedent for a per-column collation under `schemas/`; this module sets
- * one, `utf8mb4_bin` rather than a merely case-sensitive collation, because
- * byte comparison is the strongest form of exact and cannot grow
- * accent-sensitivity exceptions. The address carries none: it names no key
- * of this table, and addresses compare case-insensitively wherever else
- * they are held.
- *
- * The issuer and the subject are 255 characters: OIDC permits a `sub` of up
- * to 255 ASCII characters, and an issuer is a URL whose length the provider
- * chooses, so a 191 bound would refuse valid identities on MySQL alone —
- * PostgreSQL and SQLite hold them as unbounded text.
+ * Uniqueness lives in `key_digest`, 64 hex characters, indexed alone: tiny
+ * enough for every InnoDB page size (an index over the key's three columns
+ * would pass 1024 bytes on an 8 KiB-page instance and fail there), and
+ * exact by construction — MySQL's collations compare TEXT case- and
+ * pad-insensitively (`utf8mb4_bin` folds `Alice` and `Alice ` as PAD
+ * SPACE), where a digest of the bytes has nothing to fold. See
+ * `externalIdentityKeyDigest` in this module's barrel for how it is
+ * computed and why it is plain SHA-256, never keyed.
  *
  * @module schemas/external-identities/mysql
  */
 // The same table in another dialect's Drizzle builders: each dialect's
 // column functions are distinct, so the declarations cannot be shared.
 // fallow-ignore-next-line code-duplication
-import { mysqlTable, varchar, datetime } from "drizzle-orm/mysql-core";
+import { mysqlTable, varchar, text, datetime } from "drizzle-orm/mysql-core";
 
 import {
   EXTERNAL_IDENTITIES_INDEXES,
@@ -48,15 +37,13 @@ export const nextlyExternalIdentitiesMysql = mysqlTable(
   EXTERNAL_IDENTITIES_TABLE,
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    // 191 is the bound the codebase gives a provider and an id.
-    providerKey: varchar("provider_key", { length: 191 })
-      .notNull()
-      // Compares exactly, for the reason this file's header gives.
-      .collate("utf8mb4_bin"),
-    issuer: varchar("issuer", { length: 255 }).notNull().collate("utf8mb4_bin"),
-    subject: varchar("subject", { length: 255 })
-      .notNull()
-      .collate("utf8mb4_bin"),
+    providerKey: text("provider_key").notNull(),
+    issuer: text("issuer").notNull(),
+    subject: text("subject").notNull(),
+    // The digest the unique index holds, from `externalIdentityKeyDigest`.
+    // `varchar(64)`, the codebase's spelling of a hex digest, because MySQL
+    // cannot index `text` — and this is the one column that is indexed.
+    keyDigest: varchar("key_digest", { length: 64 }).notNull(),
     // As wide as `users.email`, whose value the provider's assertion
     // competes with.
     address: varchar("address", { length: 255 }),

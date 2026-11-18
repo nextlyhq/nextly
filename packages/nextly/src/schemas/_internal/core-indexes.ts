@@ -190,17 +190,19 @@ export const DASHBOARD_PREFERENCES_INDEXES = [
 ] as const satisfies readonly CoreIndex<string>[];
 
 export const EXTERNAL_IDENTITIES_INDEXES = [
-  // One identity per provider key, issuer and subject. The issuer column is
-  // NOT NULL and holds "" where the provider has no issuer, so this holds on
-  // every dialect: NULLs are distinct in a unique index on PostgreSQL and
-  // SQLite alike, and only MySQL treats repeated NULLs as equal, so a scheme
-  // that leaned on a missing issuer would let the same issuerless subject in
-  // twice on two of the three. With "", one subject from two issuers of one
-  // key is two rows, and a second row for an issuerless key and subject is
-  // refused everywhere.
+  // One identity per provider key, issuer and subject, enforced by the
+  // digest of the three rather than by the three themselves
+  // (`externalIdentityKeyDigest`): a digest has nothing a collation could
+  // fold — MySQL compares TEXT case-insensitively and even its `_bin`
+  // collations pad trailing spaces away — and one 64-character index fits
+  // every InnoDB page size, where an index over the columns would not. The
+  // digest is plain SHA-256, so it survives any secret rotation; with
+  // "no issuer" spelled "" once, one subject from two issuers of one key is
+  // two rows, and a second row for an issuerless key and subject is refused
+  // on every dialect alike.
   {
     name: "nextly_external_identities_key_uidx",
-    columns: ["providerKey", "issuer", "subject"],
+    columns: ["keyDigest"],
     unique: true,
   },
   // One user's identities: listed by their owner, and removed with the

@@ -1043,20 +1043,21 @@ export function generateSqliteCoreTableStatements(): string[] {
     `CREATE INDEX IF NOT EXISTS "email_queue_recipients_hash_idx"
       ON "${EMAIL_QUEUE_RECIPIENTS_TABLE}" ("recipient_hash")`,
     // The external identities a person signed in with. Columns match
-    // schemas/external-identities/sqlite.ts; `issuer` is "" where the
-    // provider has no issuer, so the unique index holds without leaning on
-    // how the database compares missing values.
+    // schemas/external-identities/sqlite.ts; uniqueness holds by the
+    // key_digest column, the plain SHA-256 of the provider key, issuer and
+    // subject, computed by `externalIdentityKeyDigest`.
     `CREATE TABLE IF NOT EXISTS "${EXTERNAL_IDENTITIES_TABLE}" (
       "id" TEXT PRIMARY KEY NOT NULL,
       "provider_key" TEXT NOT NULL,
       "issuer" TEXT NOT NULL,
       "subject" TEXT NOT NULL,
+      "key_digest" TEXT NOT NULL,
       "address" TEXT,
       "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
       "created_at" INTEGER NOT NULL
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_external_identities_key_uidx"
-      ON "${EXTERNAL_IDENTITIES_TABLE}" ("provider_key", "issuer", "subject")`,
+      ON "${EXTERNAL_IDENTITIES_TABLE}" ("key_digest")`,
     `CREATE INDEX IF NOT EXISTS "nextly_external_identities_user_idx"
       ON "${EXTERNAL_IDENTITIES_TABLE}" ("user_id")`,
   ];

@@ -1,7 +1,7 @@
 /**
  * `nextly_external_identities` on SQLite. See `postgres.ts` for what each
- * column is for, and for why `issuer` is "" rather than NULL where a
- * provider has no issuer.
+ * column is for, for the digest that enforces uniqueness, and for why
+ * `issuer` is "" rather than NULL where a provider has no issuer.
  *
  * Instants are stored as whole seconds (timestamp mode), as every other core
  * table here stores them.
@@ -28,6 +28,8 @@ export const nextlyExternalIdentitiesSqlite = sqliteTable(
     providerKey: text("provider_key").notNull(),
     issuer: text("issuer").notNull(),
     subject: text("subject").notNull(),
+    // The digest the unique index holds, from `externalIdentityKeyDigest`.
+    keyDigest: text("key_digest").notNull(),
     address: text("address"),
     userId: text("user_id")
       .notNull()
