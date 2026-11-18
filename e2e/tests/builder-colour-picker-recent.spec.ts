@@ -42,9 +42,9 @@ async function addHeading(page: Page): Promise<void> {
 async function showColour(page: Page): Promise<Locator> {
   const inspector = page.getByTestId("inspector");
   await inspector.getByRole("tab", { name: "Style" }).click();
+  // "has changes" follows the name while the section holds a value.
   const typography = inspector.getByRole("button", {
-    name: "Text",
-    exact: true,
+    name: /^Text(\s?has changes)?$/,
   });
   if ((await typography.getAttribute("aria-expanded")) !== "true") {
     await typography.click();
