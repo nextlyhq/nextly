@@ -1012,7 +1012,13 @@ export type { DocumentField } from "@nextlyhq/admin/kit/document";
  * A contributed tab receives `PlaceTabProps`: the place's `context` and
  * `entry`, and `setBadge`, which shows a count beside the tab's label
  * (`PlaceTabBadge`) or none with `null`. A tab stays mounted while another is
- * open, so its count stays current and what it holds is kept.
+ * open, so its count stays current and what it holds is kept. A tab that
+ * applies to some of the place's documents only calls `setLeftOut(true)` to
+ * leave the row, and `setLeftOut(false)` to come back.
+ *
+ * A plugin's place has no built-in parts, so `TargetSlot` takes a `fallback`,
+ * drawn while nothing contributed is drawn there, and `blockProps`, handed to
+ * every block beside the place's `context`.
  */
 export { PlaceTabs, TargetSlot } from "@nextlyhq/admin/kit/plugin-parts";
 export type {
@@ -1038,6 +1044,30 @@ export type {
   PlaceTabEntry,
   UsePlaceTabsOptions,
 } from "@nextlyhq/admin/kit/plugin-parts";
+
+/**
+ * Whether the admin would draw a contribution at a place for a document
+ * (@experimental): `useContributionApplies(place, id, document)`, `true`
+ * exactly where the place's own page draws it, for this reader, now. For a
+ * plugin that draws the same thing somewhere else, such as a tab its edit
+ * page shows that it also offers in another editor, so the two never
+ * disagree and the plugin keeps no copy of the rule.
+ *
+ * The `document` is a collection's entry or a Single, by the slug the admin
+ * serves it under (`ContributionDocument`). A tab that edits fields of the
+ * document is judged against the document's top-level fields: those of the
+ * document form around the caller where it edits the same document, or the
+ * `fieldNames` passed.
+ *
+ * ```tsx
+ * const edits = useContributionApplies("collection.edit", "acme-seo.tab", {
+ *   kind: "collection",
+ *   slug: "pages",
+ * });
+ * ```
+ */
+export { useContributionApplies } from "@nextlyhq/admin/kit/plugin-parts";
+export type { ContributionDocument } from "@nextlyhq/admin/kit/plugin-parts";
 
 /**
  * Templates for a new collection, Single or field group, offered in the Schema

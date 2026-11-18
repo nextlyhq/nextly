@@ -361,6 +361,34 @@ export function listOf(
   return found;
 }
 
+/**
+ * The list an item binding reads the entry of: the one it names (`list`),
+ * where that list holds the node in its entries, or else the nearest.
+ * `undefined` where the named list does not hold the node.
+ */
+function readListOf(
+  document: BlockDocument,
+  nodeId: string,
+  named: string | undefined
+): BlockNode | undefined {
+  if (named === undefined) return listOf(document, nodeId);
+  const list = findNode(document.nodes, named);
+  if (list?.type !== COLLECTION_LIST_TYPE) return undefined;
+  let inside = false;
+  walkNodes(list.slots?.[LIST_ENTRY_SLOT] ?? [], child => {
+    if (child.id === nodeId) inside = true;
+  });
+  return inside ? list : undefined;
+}
+
+/** A list's entry an unbind reads: its collection and id, and the list named. */
+export interface ItemRead {
+  readonly collection: string;
+  readonly id: string;
+  /** The enclosing list the binding names (`list`), when it names one. */
+  readonly list?: string;
+}
+
 /** The entry a page's bindings read: a collection's entry, or a Single. */
 interface EntryRead {
   readonly collection: string;
@@ -379,14 +407,17 @@ function readsOf(
 ):
   | {
       readonly entry: EntryRead;
-      readonly item?: { readonly collection: string; readonly id: string };
+      readonly item?: ItemRead;
     }
   | UnbindNeeds {
-  const kind = node.bindings?.[prop]?.source ?? DEFAULT_BINDING_SOURCE;
+  const binding = node.bindings?.[prop];
+  const kind = binding?.source ?? DEFAULT_BINDING_SOURCE;
   const entry = entryOf(source, keep, kind);
   if ("needs" in entry) return entry;
   if (kind !== "item") return { entry };
-  const item = itemOf(document, node.id, keep);
+  const named =
+    binding !== undefined && "list" in binding ? binding.list : undefined;
+  const item = itemOf(document, node.id, keep, named);
   return "needs" in item ? item : { entry, item };
 }
 
@@ -573,7 +604,11 @@ export function outOfReachOf(
         "This date and time is shown in the time zone the site's pages are set to, which can't be read here: give the value to keep.",
     };
   }
-  if (binding.source === "item" && followsRelation(binding, run, refs.item)) {
+  // The named list's schema for a binding naming the list it reads, as the
+  // check itself judged it by.
+  const itemRef =
+    binding.list === undefined ? refs.item : refs.lists?.get(binding.list);
+  if (binding.source === "item" && followsRelation(binding, run, itemRef)) {
     return {
       needs:
         "This binding reads through a relation of the list's items, which the list reads ahead: give the value to keep.",
@@ -599,18 +634,21 @@ function followsRelation(
 }
 
 /** The pass the node is filled in: the page's, or its list item's, read as a visitor. */
-async function scopeOf(
+export async function scopeOf(
   reader: Parameters<typeof publicItem>[0],
-  item: { readonly collection: string; readonly id: string } | undefined
+  item: ItemRead | undefined
 ): Promise<BindingScope | UnbindNeeds> {
   if (item === undefined) return { phase: "page" };
   const row = await publicItem(reader, item);
-  return "needs" in row
-    ? row
+  if ("needs" in row) return row;
+  const itemRef = { collection: item.collection };
+  // A binding naming the list it reads reads that list's entry, so the item
+  // read is given as that list's, the one entry this unbind reads.
+  return item.list === undefined
+    ? { phase: "item", item: row.item, itemRef }
     : {
         phase: "item",
-        item: row.item,
-        itemRef: { collection: item.collection },
+        lists: new Map([[item.list, { item: row.item, itemRef }]]),
       };
 }
 
@@ -642,12 +680,16 @@ function entryOf(
   return { collection: source.collection, id: named ?? source.id };
 }
 
-/** The list item a list child's value is read from: named, of a collection list. */
-function itemOf(
+/**
+ * The list item a list child's value is read from: named, of a collection
+ * list, the one the binding names (`list`) or else the nearest.
+ */
+export function itemOf(
   document: BlockDocument,
   nodeId: string,
-  keep: ReadKeep
-): { readonly collection: string; readonly id: string } | UnbindNeeds {
+  keep: ReadKeep,
+  namedList: string | undefined
+): ItemRead | UnbindNeeds {
   const named =
     typeof keep === "object" && "item" in keep ? keep.item : undefined;
   if (named === undefined) {
@@ -656,7 +698,13 @@ function itemOf(
         "Each item of the list shows its own value: name the item whose value to keep, or give the value.",
     };
   }
-  const list = listOf(document, nodeId);
+  const list = readListOf(document, nodeId, namedList);
+  if (list === undefined && namedList !== undefined) {
+    return {
+      needs:
+        "This binding reads the entries of a list this block isn't inside: give the value to keep.",
+    };
+  }
   const collection =
     list === undefined ? undefined : readListQuery(list.props).query.collection;
   if (collection === undefined) {
@@ -664,7 +712,11 @@ function itemOf(
       needs: "This list's items can't be read by id: give the value to keep.",
     };
   }
-  return { collection, id: named };
+  return {
+    collection,
+    id: named,
+    ...(namedList === undefined ? {} : { list: namedList }),
+  };
 }
 
 /** One published item, with the fields the public may read. */

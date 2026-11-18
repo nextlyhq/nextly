@@ -4,73 +4,37 @@
  * without manual host imports. */
 
 import { registerComponentMap } from "@nextlyhq/admin";
-import { registerBlockEditorModules } from "@nextlyhq/plugin-page-builder/admin";
 import * as _p0 from "../../src/dashboard/site-notes";
-import * as _p1 from "@/plugins/block-fixture/editor";
-import * as _p2 from "@/plugins/contributions-fixture/components";
-import * as _p3 from "@/plugins/widget-kit-fixture/admin";
-import * as _p4 from "@nextlyhq/plugin-form-builder/admin";
-import * as _p5 from "@nextlyhq/plugin-page-builder/admin";
-import * as _p6 from "@nextlyhq/plugin-seo/admin";
+import * as _p1 from "@nextlyhq/plugin-form-builder/admin";
+import * as _p2 from "@nextlyhq/plugin-page-builder/admin";
 import { registeredComponentPaths as listed } from "./plugin-admin-components.generated";
 import type { DeclaredComponentMap } from "nextly";
 import type * as siteConfig from "../../nextly.config";
 
 const registered = {
   "./src/dashboard/site-notes#SiteNotesCard": _p0.SiteNotesCard, // widget "playground/site-notes" of the site config
-  "@/plugins/block-fixture/editor#FixtureInspector": _p1.FixtureInspector,
-  "@/plugins/contributions-fixture/components#FixtureActionDialog": _p2.FixtureActionDialog,
-  "@/plugins/contributions-fixture/components#FixtureBlock": _p2.FixtureBlock,
-  "@/plugins/contributions-fixture/components#FixtureCell": _p2.FixtureCell,
-  "@/plugins/contributions-fixture/components#FixtureGatedBlock": _p2.FixtureGatedBlock,
-  "@/plugins/contributions-fixture/components#FixtureReplacement": _p2.FixtureReplacement,
-  "@/plugins/contributions-fixture/components#FixtureSection": _p2.FixtureSection,
-  "@/plugins/contributions-fixture/components#FixtureTab": _p2.FixtureTab,
-  "@/plugins/widget-kit-fixture/admin#KitCard": _p3.KitCard, // widget "widget-kit-fixture/kit" of plugin "widget-kit-fixture"
-  "@/plugins/widget-kit-fixture/admin#ThrowingCard": _p3.ThrowingCard, // widget "widget-kit-fixture/throws" of plugin "widget-kit-fixture"
-  "@/plugins/widget-kit-fixture/admin#UnlabelledControlCard": _p3.UnlabelledControlCard, // widget "widget-kit-fixture/unlabelled-control" of plugin "widget-kit-fixture"
-  "@nextlyhq/plugin-form-builder/admin#FormBuilderView": _p4.FormBuilderView,
-  "@nextlyhq/plugin-form-builder/admin#NewSubmissionsCard": _p4.NewSubmissionsCard, // widget "form-builder/new-submissions" of plugin "@nextlyhq/plugin-form-builder"
-  "@nextlyhq/plugin-form-builder/admin#SubmissionPage": _p4.SubmissionPage,
-  "@nextlyhq/plugin-form-builder/admin#SubmissionsView": _p4.SubmissionsView,
-  "@nextlyhq/plugin-page-builder/admin#BindingsToFixCard": _p5.BindingsToFixCard, // widget "page-builder/bindings-to-fix" of plugin "@nextlyhq/plugin-page-builder"
-  "@nextlyhq/plugin-page-builder/admin#BindingsToFixPage": _p5.BindingsToFixPage,
-  "@nextlyhq/plugin-page-builder/admin#BlocksField": _p5.BlocksField,
-  "@nextlyhq/plugin-page-builder/admin#ComponentListTools": _p5.ComponentListTools,
-  "@nextlyhq/plugin-page-builder/admin#DeleteComponentReplacement": _p5.DeleteComponentReplacement,
-  "@nextlyhq/plugin-page-builder/admin#EntryDesignSection": _p5.EntryDesignSection,
-  "@nextlyhq/plugin-page-builder/admin#LayoutListTools": _p5.LayoutListTools,
-  "@nextlyhq/plugin-page-builder/admin#PageBuilderOverview": _p5.PageBuilderOverview,
-  "@nextlyhq/plugin-page-builder/admin#PageBuilderView": _p5.PageBuilderView,
-  "@nextlyhq/plugin-page-builder/admin#RemoveLayoutToolbarSlot": _p5.RemoveLayoutToolbarSlot,
-  "@nextlyhq/plugin-page-builder/admin#ShownOnSection": _p5.ShownOnSection,
-  "@nextlyhq/plugin-page-builder/admin#TemplateDeleteAction": _p5.TemplateDeleteAction,
-  "@nextlyhq/plugin-page-builder/admin#TemplateDesignDetails": _p5.TemplateDesignDetails,
-  "@nextlyhq/plugin-page-builder/admin#TemplateOwnDesigns": _p5.TemplateOwnDesigns,
-  "@nextlyhq/plugin-page-builder/admin#TransferImport": _p5.TransferImport,
-  "@nextlyhq/plugin-seo/admin#PageBuilderSeoTab": _p6.PageBuilderSeoTab,
-  "@nextlyhq/plugin-seo/admin#SeoBulkMoved": _p6.SeoBulkMoved,
-  "@nextlyhq/plugin-seo/admin#SeoDisplaySection": _p6.SeoDisplaySection,
-  "@nextlyhq/plugin-seo/admin#SeoImportPage": _p6.SeoImportPage,
-  "@nextlyhq/plugin-seo/admin#SeoInspectPage": _p6.SeoInspectPage,
-  "@nextlyhq/plugin-seo/admin#SeoOverviewPage": _p6.SeoOverviewPage,
-  "@nextlyhq/plugin-seo/admin#SeoPagesPage": _p6.SeoPagesPage,
-  "@nextlyhq/plugin-seo/admin#SeoProblemsPage": _p6.SeoProblemsPage,
-  "@nextlyhq/plugin-seo/admin#SeoReceivedMoved": _p6.SeoReceivedMoved,
-  "@nextlyhq/plugin-seo/admin#SeoRedirectsPage": _p6.SeoRedirectsPage,
-  "@nextlyhq/plugin-seo/admin#SeoSettingsPage": _p6.SeoSettingsPage,
-  "@nextlyhq/plugin-seo/admin#SeoStatusSection": _p6.SeoStatusSection,
-  "@nextlyhq/plugin-seo/admin#SeoTab": _p6.SeoTab,
+  "@nextlyhq/plugin-form-builder/admin#FormBuilderView": _p1.FormBuilderView,
+  "@nextlyhq/plugin-form-builder/admin#NewSubmissionsCard": _p1.NewSubmissionsCard, // widget "form-builder/new-submissions" of plugin "@nextlyhq/plugin-form-builder"
+  "@nextlyhq/plugin-form-builder/admin#SubmissionPage": _p1.SubmissionPage,
+  "@nextlyhq/plugin-form-builder/admin#SubmissionsView": _p1.SubmissionsView,
+  "@nextlyhq/plugin-page-builder/admin#BindingsToFixCard": _p2.BindingsToFixCard, // widget "page-builder/bindings-to-fix" of plugin "@nextlyhq/plugin-page-builder"
+  "@nextlyhq/plugin-page-builder/admin#BindingsToFixPage": _p2.BindingsToFixPage,
+  "@nextlyhq/plugin-page-builder/admin#BlocksField": _p2.BlocksField,
+  "@nextlyhq/plugin-page-builder/admin#ComponentListTools": _p2.ComponentListTools,
+  "@nextlyhq/plugin-page-builder/admin#DeleteComponentReplacement": _p2.DeleteComponentReplacement,
+  "@nextlyhq/plugin-page-builder/admin#EntryDesignSection": _p2.EntryDesignSection,
+  "@nextlyhq/plugin-page-builder/admin#LayoutListTools": _p2.LayoutListTools,
+  "@nextlyhq/plugin-page-builder/admin#PageBuilderOverview": _p2.PageBuilderOverview,
+  "@nextlyhq/plugin-page-builder/admin#PageBuilderView": _p2.PageBuilderView,
+  "@nextlyhq/plugin-page-builder/admin#RemoveLayoutToolbarSlot": _p2.RemoveLayoutToolbarSlot,
+  "@nextlyhq/plugin-page-builder/admin#ShownOnSection": _p2.ShownOnSection,
+  "@nextlyhq/plugin-page-builder/admin#TemplateDeleteAction": _p2.TemplateDeleteAction,
+  "@nextlyhq/plugin-page-builder/admin#TemplateDesignDetails": _p2.TemplateDesignDetails,
+  "@nextlyhq/plugin-page-builder/admin#TemplateOwnDesigns": _p2.TemplateOwnDesigns,
+  "@nextlyhq/plugin-page-builder/admin#TransferImport": _p2.TransferImport,
 } satisfies DeclaredComponentMap<typeof siteConfig>;
 
-/** The modules exporting each plugin's block definitions, for the page builder's editor. */
-const blockEditorEntries = {
-  "@/plugins/block-fixture/editor#blockFixtureEditor": _p1.blockFixtureEditor,
-};
-
-type Registered =
-  | keyof typeof registered
-  | keyof typeof blockEditorEntries;
+type Registered = keyof typeof registered;
 type Listed = (typeof listed)[number];
 /** `true` only while this map registers exactly the paths its list names. */
 type Agrees = [Registered] extends [Listed]
@@ -81,9 +45,7 @@ type Agrees = [Registered] extends [Listed]
 export const componentMapAgreesWithList: Agrees = true;
 
 if (
-  JSON.stringify(
-    [...Object.keys(registered), ...Object.keys(blockEditorEntries)].sort()
-  ) !==
+  JSON.stringify(Object.keys(registered).sort()) !==
   JSON.stringify([...listed].sort())
 ) {
   throw Object.assign(
@@ -93,10 +55,4 @@ if (
 }
 
 registerComponentMap(registered);
-registerBlockEditorModules({
-  entries: blockEditorEntries,
-  components: {
-    "@/plugins/block-fixture/editor#FixtureInspector": _p1.FixtureInspector,
-  },
-});
 export const registeredComponentPaths = listed;

@@ -39,7 +39,7 @@
  * @module use-inline-text
  */
 
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import { itemOfPropName, type BlockDocument } from "@nextlyhq/blocks-engine";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { isElement } from "../dom-kind";
@@ -58,7 +58,15 @@ import {
   type InlineEditRefusal,
 } from "./inline-edit-outcome";
 import { namedTarget } from "./inline-target";
-import { inlineTarget, inlineTargets, inlineTextOp } from "./inline-text";
+import {
+  inlineTarget,
+  inlineTargets,
+  inlineTextOp,
+  removeItemOp,
+  splitItemOp,
+  type ItemCaret,
+  type ItemEdit,
+} from "./inline-text";
 
 /** The attribute naming the element an author is currently typing into. */
 export const EDITING_ATTRIBUTE = "data-nx-editing";
@@ -263,14 +271,261 @@ export function editableElement(
   return found;
 }
 
-/** Put the caret across the whole value, so typing replaces it. */
-function selectAll(element: HTMLElement): void {
+/**
+ * Where the caret goes as an edit opens: across the whole value, so typing
+ * replaces it, as a double-click or a key opens one; or at its start or end,
+ * as Enter and Backspace move it from one item of a list to the next.
+ */
+type CaretPlace = "all" | ItemCaret["caret"];
+
+function placeCaret(element: HTMLElement, at: CaretPlace): void {
   const selection = element.ownerDocument.defaultView?.getSelection();
   if (!selection) return;
   const range = element.ownerDocument.createRange();
   range.selectNodeContents(element);
+  if (at !== "all") range.collapse(at === "start");
   selection.removeAllRanges();
   selection.addRange(range);
+}
+
+/**
+ * An element's words either side of the caret, a selection's words dropped as
+ * typing over them would drop them. All of them before it when the caret is
+ * not in the element.
+ */
+function wordsAroundCaret(element: HTMLElement): [string, string] {
+  const selection = element.ownerDocument.defaultView?.getSelection();
+  const range =
+    selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+  if (
+    range === null ||
+    !element.contains(range.startContainer) ||
+    !element.contains(range.endContainer)
+  ) {
+    return [withoutPlaceholder(element, elementWords(element)), ""];
+  }
+  const before = element.ownerDocument.createRange();
+  before.selectNodeContents(element);
+  before.setEnd(range.startContainer, range.startOffset);
+  const after = element.ownerDocument.createRange();
+  after.selectNodeContents(element);
+  after.setStart(range.endContainer, range.endOffset);
+  // Read as the element is, a `<br>` as the line break it stands for, so a
+  // split changes nothing either side of the caret; the placeholder an
+  // emptied line holds is the element's last node, so it ends whichever side
+  // reaches the element's end, and is no line break in either.
+  const head = elementWords(before.cloneContents());
+  const tail = elementWords(after.cloneContents());
+  return range.collapsed && tail === "" && !before.collapsed
+    ? [withoutPlaceholder(element, head), tail]
+    : [head, withoutPlaceholder(element, tail)];
+}
+
+/**
+ * Words read up to an element's end, without the `<br>` a browser leaves as
+ * its last node to hold an emptied line open. Judged by the element's last
+ * node, not by the words: a line break stored as text is kept.
+ */
+function withoutPlaceholder(element: Node, words: string): string {
+  return endsInBreak(element) && words.endsWith("\n")
+    ? words.slice(0, -1)
+    : words;
+}
+
+/**
+ * The words an open edit holds. A browser holds an emptied line open with a
+ * `<br>` as its last node; in an item of a list, which is one line, that
+ * placeholder is not a line break, so an item emptied that way holds
+ * nothing. Judged by the element's last node, not by the words: a line break
+ * the item stores is text, and opening and leaving it keeps it.
+ */
+function editedWords(element: Node, editing: InlineTextEditing): string {
+  const words = elementWords(element);
+  return itemOfPropName(editing.prop) !== null
+    ? withoutPlaceholder(element, words)
+    : words;
+}
+
+/** Whether an element's last node, however deep, is a `<br>`. */
+function endsInBreak(element: Node): boolean {
+  let last = element.lastChild;
+  while (last !== null && isElement(last) && last.localName !== "br") {
+    last = last.lastChild;
+  }
+  return last !== null && isElement(last) && last.localName === "br";
+}
+
+/** An edit to a list's items, planned against the document as it stands. */
+type ItemPlan = () => ItemEdit<ItemCaret | null> | null;
+
+/**
+ * What Enter or Backspace does in an item of a list, or `null` when the key
+ * is not the list's: Enter adds the next item with the words after the caret,
+ * and Backspace in an empty item removes it. Read when the key is pressed;
+ * planned when it is written, against the document then.
+ */
+function itemKeyPlan(
+  event: KeyboardEvent,
+  element: HTMLElement,
+  editing: InlineTextEditing,
+  documentNow: () => BlockDocument
+): ItemPlan | null {
+  if (editing.exposure !== undefined || event.isComposing) return null;
+  if (itemOfPropName(editing.prop) === null) return null;
+  const { nodeId, prop } = editing;
+  if (event.key === "Enter") {
+    const [head, tail] = wordsAroundCaret(element);
+    return () => {
+      const split = splitItemOp(documentNow(), nodeId, prop, head, tail);
+      return split === null
+        ? null
+        : { op: split.op, next: { prop: split.next, caret: "start" } };
+    };
+  }
+  if (event.key !== "Backspace" || editedWords(element, editing) !== "") {
+    return null;
+  }
+  return () => removeItemOp(documentNow(), nodeId, prop);
+}
+
+/**
+ * Why the open value may not be written now, or `null`: it stopped being
+ * editable here (a lock arrived, so there is nowhere to write it), or it moved
+ * on while it was typed (writing would replace newer words with older ones).
+ * Every write an edit makes asks this first.
+ *
+ * @param opened - the value as it was when the caret went in
+ */
+function stalenessOf(
+  editor: EditorState,
+  current: InlineTextEditing,
+  opened: string | null
+): InlineEditRefusal | null {
+  const live = liveValueOf(editor, current);
+  if (live === undefined) return "no-longer-editable";
+  return opened !== null && live !== opened ? "moved-on" : null;
+}
+
+/**
+ * The edit's side of moving through a list's items, read afresh each time a
+ * key lands, so a key is judged against the editor and the session as they
+ * stand then.
+ */
+function itemMoveHostOf(
+  editor: { readonly current: EditorState },
+  editing: InlineTextEditing,
+  session: {
+    readonly current: {
+      readonly finished?: ((outcome: InlineEditOutcome) => void) | undefined;
+      readonly opened: string | null;
+    };
+  },
+  edit: ItemEditHandles
+): () => ItemMoveHost {
+  return () => itemMoveHost(editor.current, editing, session.current, edit);
+}
+
+/** What the edit hands over to open the next item. */
+interface ItemEditHandles {
+  readonly release: () => void;
+  readonly session: { current: { caretAt: CaretPlace } };
+  readonly setEditing: (next: InlineTextEditing) => void;
+}
+
+/** The edit's side of moving through a list's items, as it stands now. */
+function itemMoveHost(
+  editor: EditorState,
+  editing: InlineTextEditing,
+  session: {
+    readonly finished?: ((outcome: InlineEditOutcome) => void) | undefined;
+    readonly opened: string | null;
+  },
+  edit: ItemEditHandles
+): ItemMoveHost {
+  return {
+    editor,
+    stale: stalenessOf(editor, editing, session.opened),
+    refused: reason => session.finished?.({ status: "refused", reason }),
+    release: edit.release,
+    open: next => {
+      edit.session.current.caretAt = next.caret;
+      edit.setEditing({ nodeId: editing.nodeId, prop: next.prop });
+    },
+  };
+}
+
+/** What moving through a list's items needs of the edit it moves from. */
+interface ItemMoveHost {
+  readonly editor: EditorState;
+  /** Why the open value may not be written now, or `null`. */
+  readonly stale: InlineEditRefusal | null;
+  /** Told when the write is refused, the line staying open with its words. */
+  readonly refused: (reason: InlineEditRefusal) => void;
+  /** Ends the open edit. */
+  readonly release: () => void;
+  /** Opens the item the caret goes to. */
+  readonly open: (next: ItemCaret) => void;
+}
+
+/**
+ * A planned edit to a list's items, written, then the caret moved on: the
+ * refusal said when it cannot be written (the value moved on or stopped being
+ * editable, or the page refused the write). The item the caret goes to is
+ * asked of the document the write produced: the editor's own holds it only
+ * from its next render, and an item Enter added is not in it yet.
+ */
+function moveThroughItems(
+  host: ItemMoveHost,
+  element: HTMLElement,
+  editing: InlineTextEditing,
+  plan: ItemPlan
+): void {
+  if (host.stale !== null) return host.refused(host.stale);
+  const planned = plan();
+  if (planned === null) return host.refused("no-longer-editable");
+  const written = host.editor.apply(planned.op);
+  if (written === null) return host.refused("rejected");
+  // The element the author typed into, given back holding what its item now
+  // holds. Its item's stored words may not have changed (a split at the end
+  // of words typed after them), and then nothing redraws it: the words after
+  // the caret would show in it and in the item that took them.
+  element.textContent =
+    inlineTarget(written, editing.nodeId, editing.prop)?.value ?? "";
+  host.release();
+  const { next } = planned;
+  if (next === null) return;
+  if (inlineTarget(written, editing.nodeId, next.prop) === null) return;
+  host.open(next);
+}
+
+/**
+ * Listen for Enter and Backspace in an item of a list being typed, and move
+ * through its items by them. A key the list takes goes no further, so the
+ * edit's own keys (Enter leaving a line) never see it. Returns the way to
+ * stop listening.
+ */
+function listenForItemKeys(
+  element: HTMLElement,
+  editing: InlineTextEditing,
+  host: () => ItemMoveHost
+): () => void {
+  const onKey = (event: KeyboardEvent) => {
+    const current = host();
+    const plan = itemKeyPlan(
+      event,
+      element,
+      editing,
+      () => current.editor.document
+    );
+    if (plan === null) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    // A held Enter's auto-repeat adds no run of empty items.
+    if (event.repeat && event.key === "Enter") return;
+    moveThroughItems(current, element, editing, plan);
+  };
+  element.addEventListener("keydown", onKey);
+  return () => element.removeEventListener("keydown", onKey);
 }
 
 /**
@@ -314,7 +569,12 @@ export function useInlineText(
     finished?: (outcome: InlineEditOutcome) => void;
     opened: string | null;
     openedFor: InlineTextEditing | null;
-  }>({ opened: null, openedFor: null });
+    /*
+     * Where the caret goes in the next edit opened: across its value, unless
+     * Enter or Backspace moved it there from the item beside it.
+     */
+    caretAt: CaretPlace;
+  }>({ opened: null, openedFor: null, caretAt: "all" });
   session.current.finished = onFinished;
 
   /** Take the element back, whatever else happens. */
@@ -365,12 +625,11 @@ export function useInlineText(
     // than `innerText` or `innerHTML`: the first is what
     // the value IS regardless of what the element ended up containing, and the
     // last would store markup this value cannot hold.
-    const next = elementWords(element);
+    const next = editedWords(element, current);
     const opened = session.current.opened;
     if (next === opened || !element.isConnected) return NOTHING_TO_WRITE;
-    const live = liveValueOf(editorRef.current, current);
-    if (live === undefined) return { refused: "no-longer-editable" };
-    if (opened !== null && live !== opened) return { refused: "moved-on" };
+    const refused = stalenessOf(editorRef.current, current, opened);
+    if (refused !== null) return { refused };
     const op = commitOp(current, next);
     return op === null ? NOTHING_TO_WRITE : { op };
   }, [commitOp]);
@@ -503,7 +762,8 @@ export function useInlineText(
     element.setAttribute("contenteditable", "plaintext-only");
     element.setAttribute(EDITING_ATTRIBUTE, editing.prop);
     element.focus();
-    selectAll(element);
+    placeCaret(element, session.current.caretAt);
+    session.current.caretAt = "all";
 
     /*
      * The words a keyboard exit's write was refused with, while the line
@@ -528,6 +788,19 @@ export function useInlineText(
       }
       tryToLeave();
     };
+    /*
+     * Enter and Backspace in an item of a list: a listener of their own,
+     * added before the one below so a key the list takes goes no further.
+     */
+    const stopItemKeys = listenForItemKeys(
+      element,
+      editing,
+      itemMoveHostOf(editorRef, editing, session, {
+        release,
+        session,
+        setEditing,
+      })
+    );
     const onKeyDown = (event: KeyboardEvent) => {
       // Escape keeps what was typed and ends the edit, as Enter does on a
       // line: the editor's design asks for it, and an author pressing Escape
@@ -567,13 +840,14 @@ export function useInlineText(
     element.addEventListener("click", swallow);
     element.addEventListener("dblclick", swallow);
     return () => {
+      stopItemKeys();
       element.removeEventListener("keydown", onKeyDown);
       element.removeEventListener("blur", tryToLeave);
       element.removeEventListener("pointerdown", swallow);
       element.removeEventListener("click", swallow);
       element.removeEventListener("dblclick", swallow);
     };
-  }, [editing, cancel, commit, commitOrHold, canvasDocument]);
+  }, [editing, cancel, commit, commitOrHold, canvasDocument, release]);
 
   return { editing, begin, commit, cancel, onDoubleClick };
 }

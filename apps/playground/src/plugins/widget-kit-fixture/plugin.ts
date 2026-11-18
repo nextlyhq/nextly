@@ -7,22 +7,21 @@
  * one whose data function throws, one its `shows` leaves out, and the layout
  * cases the other dashboard specs need.
  *
- * Always registered, unlike the gated fixtures: a widget drawn by its own
- * component must be in the committed component map, which is generated with
- * the gated fixtures off. Neither card is placed on a dashboard by default (a
- * declared widget never is); a contributor meets them only in the add panel,
- * named as test fixtures.
+ * Registered only on the e2e suite's own server (`NEXTLY_E2E_STYLE_FIXTURE`),
+ * like the other test fixtures, so a contributor's dashboard never offers it.
+ * The committed component map is generated with the fixtures off, so it does
+ * not import these cards: `admin.tsx` registers them itself, through a
+ * side-effect import in the playground's admin route.
  */
 // Through the plugin SDK, as a plugin imports them, so this fixture proves
 // the SDK's own exports.
 import { definePlugin, defineWidget, setting } from "@nextlyhq/plugin-sdk";
 
-/** The two components, as the generated component map imports them. */
-const KIT_CARD_COMPONENT = "@/plugins/widget-kit-fixture/admin#KitCard";
-const THROWING_CARD_COMPONENT =
-  "@/plugins/widget-kit-fixture/admin#ThrowingCard";
-const UNLABELLED_CONTROL_COMPONENT =
-  "@/plugins/widget-kit-fixture/admin#UnlabelledControlCard";
+import {
+  KIT_CARD_COMPONENT,
+  THROWING_CARD_COMPONENT,
+  UNLABELLED_CONTROL_COMPONENT,
+} from "./constants";
 
 /** A card built only from the widget kit: a figure and a chart of groups. */
 export const kitCardWidget = defineWidget({
