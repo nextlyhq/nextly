@@ -127,35 +127,71 @@ let browser: { teardown: (global: object) => unknown } | undefined;
 /** The browser's `window`, while its globals are installed. */
 let browserWindow: unknown;
 
-/** The site's code supplies Brand; nothing is stored yet. */
-const MERGED = {
+/** The site's code supplies Brand and Ratio; nothing is stored yet. */
+const SUPPLIED = {
   tokens: [
     { name: "color.brand", kind: "color", values: { light: "#1d2b6b" } },
+    { name: "custom.ratio", kind: "custom", values: { light: "4 / 3" } },
   ],
 };
 
-/** What the canvas draws Brand's light value as, read as the canvas reads. */
-function Canvas(): React.JSX.Element {
-  const { siteStyle } = ui.useSiteStyle();
-  const brand = siteStyle.tokens?.tokens.find(
-    token => token.name === "color.brand"
-  );
-  return createElement(
-    "output",
-    { "data-testid": "canvas" },
-    brand?.values.light ?? "none"
+/** The site's code, under whatever is stored, as the editor reads the site. */
+const CONFIG = { tokens: SUPPLIED };
+
+/** A variable's light value as the canvas draws it. */
+function drawnValue(
+  tokens: { tokens: readonly { name: string; values: { light: string } }[] },
+  name: string
+): string {
+  return (
+    tokens.tokens.find(token => token.name === name)?.values.light ?? "none"
   );
 }
 
+/** What the canvas draws Brand's and Ratio's values as, read as it reads. */
+function Canvas(): React.JSX.Element {
+  const { siteStyle } = ui.useSiteStyle(CONFIG);
+  const tokens = siteStyle.tokens ?? { tokens: [] };
+  return createElement(
+    "div",
+    null,
+    createElement(
+      "output",
+      { "data-testid": "canvas" },
+      drawnValue(tokens, "color.brand")
+    ),
+    createElement(
+      "output",
+      { "data-testid": "canvas-ratio" },
+      drawnValue(tokens, "custom.ratio")
+    )
+  );
+}
+
+/**
+ * The studio as the editor's panels mount it: the variables it edits are the
+ * ones the canvas draws, read through the same preview, so a value drawn
+ * before it is stored reaches the studio as the editor's does.
+ */
+function Studio({ tabs }: { tabs: React.ReactNode }): React.JSX.Element {
+  const { siteStyle } = ui.useSiteStyle(CONFIG);
+  return createElement(ui.TokensStudio, {
+    merged: siteStyle.tokens ?? { tokens: [] },
+    supplied: SUPPLIED,
+    pending: false,
+    children: tabs,
+  });
+}
+
 /** The Design panel inside the editor's style history, as the editor mounts it. */
-function Editor(): React.JSX.Element {
+function Editor({ tab = "colours" }: { tab?: string }): React.JSX.Element {
   const style = ui.useSiteStyleHistory();
   const { connect } = style;
   useEffect(() => {
     connect(() => () => undefined);
     return () => connect(null);
   }, [connect]);
-  const [current, choose] = useState<string | null>("colours");
+  const [current, choose] = useState<string | null>(tab);
   return createElement(
     ui.SiteStyleHistoryContext.Provider,
     { value: style.history },
@@ -168,13 +204,7 @@ function Editor(): React.JSX.Element {
         { value: style.replay },
         createElement(ui.DesignPanel, {
           view: { current, choose },
-          frame: (tabs: React.ReactNode) =>
-            createElement(ui.TokensStudio, {
-              merged: MERGED,
-              supplied: undefined,
-              pending: false,
-              children: tabs,
-            }),
+          frame: (tabs: React.ReactNode) => createElement(Studio, { tabs }),
           tabs: {
             colours: () => createElement(ui.VariablesTab, { tab: "colours" }),
             type: () => createElement(ui.VariablesTab, { tab: "type" }),
@@ -189,6 +219,8 @@ function Editor(): React.JSX.Element {
 
 const canvas = (): string | null =>
   ui.dom.screen.getByTestId("canvas").textContent;
+const canvasRatio = (): string | null =>
+  ui.dom.screen.getByTestId("canvas-ratio").textContent;
 
 /**
  * Longer than a held write waits for the author's pause, so a value handed
@@ -203,34 +235,47 @@ async function pause(ms: number): Promise<void> {
   });
 }
 
-/** Open Brand's editor. */
-async function openBrand(): Promise<HTMLElement> {
+/** Open a variable's editor by its row's name. */
+async function openRow(name: RegExp): Promise<HTMLElement> {
   const { act, fireEvent, screen } = ui.dom;
   act(() => {
-    // The row, not the "Brand" group's heading, which reads "Brand, <count>".
-    fireEvent.click(screen.getByRole("button", { name: /^Brand, (?!\d+$)/ }));
+    fireEvent.click(screen.getByRole("button", { name }));
   });
   return screen.findByRole("dialog");
 }
 
+/** Open Brand's editor. */
+function openBrand(): Promise<HTMLElement> {
+  // The row, not the "Brand" group's heading, which reads "Brand, <count>".
+  return openRow(/^Brand, (?!\d+$)/);
+}
+
+/** A stored or written token set's light value for `name`. */
+function lightOf(tokens: unknown, name: string): unknown {
+  const set = tokens as {
+    tokens?: { name: string; values: { light: string } }[];
+  } | null;
+  return set?.tokens?.find(token => token.name === name)?.values.light;
+}
+
+/** A variable's light value in each write the Single was asked to make. */
+function written(name = "color.brand"): unknown[] {
+  return database.writes.map(write => lightOf(write.tokens, name));
+}
+
 /** Brand's light value in each write the Single was asked to make. */
 function brandsWritten(): unknown[] {
-  return database.writes.map(write => {
-    const tokens = write.tokens as
-      | { tokens?: { name: string; values: { light: string } }[] }
-      | undefined;
-    return tokens?.tokens?.find(token => token.name === "color.brand")?.values
-      .light;
-  });
+  return written();
+}
+
+/** A variable's light value as the database holds it. */
+function storedValue(document: Record<string, unknown>, name: string): unknown {
+  return lightOf(document.tokens, name);
 }
 
 /** Brand's light value as the database holds it. */
 function brandStored(document: Record<string, unknown>): unknown {
-  const tokens = document.tokens as {
-    tokens?: { name: string; values: { light: string } }[];
-  } | null;
-  return tokens?.tokens?.find(token => token.name === "color.brand")?.values
-    .light;
+  return storedValue(document, "color.brand");
 }
 
 beforeAll(async () => {
@@ -326,8 +371,8 @@ describe.each(getConfiguredTestDialects())(
       // Each colour drawn as it is typed; half of one (`#f`, `#ff`,
       // `#ff000`) keeps the last valid one drawn.
       expect(drawn).toEqual([
-        "none",
-        "none",
+        "#1d2b6b",
+        "#1d2b6b",
         "#ff0",
         "#ff00",
         "#ff00",
@@ -388,6 +433,36 @@ describe.each(getConfiguredTestDialects())(
       const last = drawn.at(-1);
       expect(brandsWritten()).toEqual([last]);
       expect(brandStored(await stored())).toBe(last);
+    });
+
+    it("draws a text value typed slowly as it goes, and stores it once, on Enter", async () => {
+      const stored = await boot();
+      const { act, fireEvent, render, waitFor, within } = ui.dom;
+      render(createElement(Editor, { tab: "spacing" }));
+      const editor = await openRow(/^Custom ratio/);
+      const field = within(editor).getByRole("textbox", { name: "Light" });
+
+      const drawn: (string | null)[] = [];
+      for (const typed of ["16", "16 / 9"]) {
+        act(() => {
+          fireEvent.change(field, { target: { value: typed } });
+        });
+        drawn.push(canvasRatio());
+        await pause(slow());
+      }
+      expect(drawn).toEqual(["16", "16 / 9"]);
+      expect(database.writes).toEqual([]);
+
+      act(() => {
+        fireEvent.keyDown(field, { key: "Enter" });
+      });
+      await waitFor(() => expect(database.writes).toHaveLength(1), {
+        timeout: 5000,
+      });
+      await pause(1500);
+      expect(written("custom.ratio")).toEqual(["16 / 9"]);
+      expect(storedValue(await stored(), "custom.ratio")).toBe("16 / 9");
+      expect(canvasRatio()).toBe("16 / 9");
     });
   }
 );
