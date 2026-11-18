@@ -322,7 +322,7 @@ describe("where a setting binding may be saved", () => {
 
   it("is judged by the document's own validation", () => {
     const judged = (doc: BlockDocument) =>
-      validateDocument(doc, { breakpoints: FIXTURE_BREAKPOINTS })
+      validateDocument(doc, { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" })
         .issues.filter(issue => issue.path.includes("/bindings"))
         .map(issue => [issue.path, issue.code, issue.severity]);
     const card = component(
