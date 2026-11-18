@@ -21,7 +21,6 @@ import {
   type DtcgSiteData,
   type FontFaceDef,
   type NamedClass,
-  type SiteTextMap,
   type SiteToken,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
@@ -145,7 +144,7 @@ export function withSiteData(
     ...into,
     ...(site.siteText === undefined
       ? {}
-      : { siteText: { ...into.siteText, ...site.siteText } as SiteTextMap }),
+      : { siteText: { ...into.siteText, ...site.siteText } }),
     ...(site.order === undefined ? {} : { order: site.order }),
     ...(site.fluidRange === undefined ? {} : { fluidRange: site.fluidRange }),
     ...(site.builtInColoursShown === undefined

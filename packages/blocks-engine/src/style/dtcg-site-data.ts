@@ -61,7 +61,7 @@ export function readSiteData(
       );
     }
   }
-  return Object.keys(read).length === 0 ? undefined : (read as DtcgSiteData);
+  return Object.keys(read).length === 0 ? undefined : read;
 }
 
 /** Each part the file keeps, what it is called, and the shape it must take. */

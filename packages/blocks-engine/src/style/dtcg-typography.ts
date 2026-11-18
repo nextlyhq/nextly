@@ -151,7 +151,7 @@ export function keptTextStyle(style: NamedClass): DtcgNode {
     slug: style.slug,
     ...(style.label === undefined ? {} : { label: style.label }),
     orderIndex: style.orderIndex,
-    styles: style.styles as DtcgNode,
+    styles: style.styles,
     ...(style.locked === true ? { locked: true } : {}),
   };
 }

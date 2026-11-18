@@ -50,6 +50,7 @@ import {
 } from "../../site-style-record";
 import { sameStoredValue } from "../../stored-json";
 import { conflictWords } from "../conflict-words";
+import { PLUGIN_SOURCE } from "../plugin-source";
 import {
   useFontCatalogueClient,
   useHeldSiteStyle,
@@ -63,7 +64,6 @@ import {
 } from "../variables-client";
 
 import { useDesignBrowse, useDesignHeaderSlot } from "./design-panel";
-import { PLUGIN_SOURCE } from "../plugin-source";
 import { usedOnPage } from "./used-on-page";
 
 /**

@@ -79,6 +79,7 @@
  */
 import type { ValidationIssue } from "../validation";
 
+import { tokenCustomProperty } from "./declarations";
 import { resolveAliases } from "./dtcg-aliases";
 import {
   type DtcgNode,
@@ -89,6 +90,7 @@ import {
   statedExtensions,
 } from "./dtcg-format";
 import { read, readToken } from "./dtcg-read";
+import { unreadIn } from "./dtcg-report";
 import { type DtcgSiteData, readSiteData, siteDataOf } from "./dtcg-site-data";
 import {
   keptTextStyle,
@@ -97,7 +99,6 @@ import {
   textStyleToDtcg,
   typographyContext,
 } from "./dtcg-typography";
-import { unreadIn } from "./dtcg-report";
 import {
   fluidNoteFor,
   isKind,
@@ -105,7 +106,6 @@ import {
   type TypedValue,
   withFluidNote,
 } from "./dtcg-values";
-import { tokenCustomProperty } from "./declarations";
 import { isTextStyle, type NamedClass } from "./named-class";
 import {
   MAX_TOKEN_NAME_LENGTH,
