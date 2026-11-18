@@ -50,7 +50,7 @@ export interface FamilyUsesHere {
 
 /** A family nothing is known to use. */
 const UNUSED: FamilyUsesHere = {
-  uses: { roles: [], variables: [] },
+  uses: { roles: [], variables: [], counted: [] },
   reach: undefined,
 };
 
@@ -72,24 +72,19 @@ export function useFamiliesUses(
     [families, tokens]
   );
   const identities = React.useMemo(
-    () => [
-      ...new Set(
-        [...byKey.values()].flatMap(uses =>
-          uses.variables.map(variable => variable.identity)
-        )
-      ),
-    ],
+    () => [...new Set([...byKey.values()].flatMap(uses => uses.counted))],
     [byKey]
   );
   const reads = useVariableUsage(usage, identities);
   return (key: string): FamilyUsesHere => {
     const uses = byKey.get(key);
     if (uses === undefined) return UNUSED;
+    // Every variable naming it counts, a role's own included.
     const reach =
-      uses.variables.length === 0
+      uses.counted.length === 0
         ? undefined
         : combinedReach(
-            uses.variables.map(variable => reads.values.get(variable.identity))
+            uses.counted.map(identity => reads.values.get(identity))
           );
     return { uses, reach };
   };

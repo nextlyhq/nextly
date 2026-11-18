@@ -171,6 +171,17 @@ describe("where a font is used", () => {
     expect(onOpenTokens).toHaveBeenCalledTimes(1);
   });
 
+  it("counts the places that use the Body font's own variable", async () => {
+    panel({
+      tokens: withFontRole(TOKENS, "body", '"Inter", sans-serif'),
+      usage: access({ "font.body": reach(4) }),
+    });
+    const open = await details("Inter");
+    const used = within(open).getByRole("list", { name: "Where it’s used" });
+    expect(within(used).getByText("Body font")).toBeTruthy();
+    expect(await within(used).findByText("Used in 4 places")).toBeTruthy();
+  });
+
   it("says nothing of places for a font no variable names", async () => {
     panel({ usage: access({ "font.display": reach(9) }) });
     const open = await details("Inter");
@@ -232,6 +243,26 @@ describe("removing a font in use", () => {
     expect(
       within(open).queryByRole("button", { name: "Remove Lora" })
     ).toBeNull();
+    expect(onRemoveFamily).not.toHaveBeenCalled();
+  });
+
+  it("refuses a font one heading row draws, though the headings are mixed", async () => {
+    const onRemoveFamily = vi.fn(async () => undefined);
+    panel({
+      tokens: {
+        ...TOKENS,
+        siteText: {
+          h1: { fontFamily: '"Lora", serif' },
+          h2: { fontFamily: '"Inter", sans-serif' },
+        },
+      },
+      onRemoveFamily,
+    });
+    const open = await details("Lora");
+    fireEvent.click(within(open).getByRole("button", { name: "Remove" }));
+    expect(
+      within(open).getByRole("group", { name: "Lora can’t be removed" })
+    ).toBeTruthy();
     expect(onRemoveFamily).not.toHaveBeenCalled();
   });
 

@@ -36,7 +36,11 @@ const BASE: SiteTokenSet = {
 
 describe("where a font is used", () => {
   it("names nothing for a font nothing uses", () => {
-    expect(familyUses("brand", BASE)).toEqual({ roles: [], variables: [] });
+    expect(familyUses("brand", BASE)).toEqual({
+      roles: [],
+      variables: [],
+      counted: [],
+    });
   });
 
   it("names the font variables whose first family it is, in either mode, with each one's fallback", () => {
@@ -85,6 +89,45 @@ describe("where a font is used", () => {
     ).toEqual(["font.display", "font.quote"]);
   });
 
+  it("names Headings for a font any one heading row draws, the rows mixed or partly set", () => {
+    // h1 in Lora and h2 in Inter: the picker reads them as mixed, and each
+    // font is still a heading's.
+    const mixed: SiteTokenSet = {
+      ...BASE,
+      siteText: {
+        h1: { fontFamily: '"Lora", serif' },
+        h2: { fontFamily: "Inter, sans-serif" },
+      },
+    };
+    expect(familyUses("lora", mixed).roles).toEqual(["heading"]);
+    expect(familyUses("inter", mixed).roles).toEqual(["heading"]);
+    // Only h3 names a font, through a variable whose dark value is Lora.
+    const partly: SiteTokenSet = {
+      ...BASE,
+      siteText: { h3: { fontFamily: { $token: "font.quote" } } },
+    };
+    expect(familyUses("lora", partly).roles).toEqual(["heading"]);
+    expect(
+      familyUses("lora", partly).variables.map(each => each.identity)
+    ).toEqual(["font.display"]);
+  });
+
+  it("counts the places of every variable naming it, a role's own included", () => {
+    const body = withFontRole(BASE, "body", '"Lora", serif');
+    const uses = familyUses("lora", body);
+    expect(uses.roles).toEqual(["body"]);
+    // The role's variable is said as the role, and its places still count.
+    expect(uses.variables.map(each => each.identity)).toEqual([
+      "font.display",
+      "font.quote",
+    ]);
+    expect([...uses.counted].sort()).toEqual([
+      "font.body",
+      "font.display",
+      "font.quote",
+    ]);
+  });
+
   it("matches a family however its case is written", () => {
     const body = withFontRole(BASE, "body", '"LORA", serif');
     expect(familyUses("lora", body).roles).toEqual(["body"]);
@@ -105,6 +148,7 @@ describe("where a font is used", () => {
     expect(familyUses("lora", undefined)).toEqual({
       roles: [],
       variables: [],
+      counted: [],
     });
   });
 });

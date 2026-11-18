@@ -2,9 +2,9 @@
  * Where one of the site's fonts is used, as the Fonts screen says it, and
  * what the screen says when removing or using one.
  *
- * A font is used by the site's Body or Headings font, read from the rows
- * they are written on (`fontRoleSetting`) in either mode, and by the font variables whose
- * first family it is, in either mode: blocks, text styles and shared styles
+ * A font is used by the site's Body or Headings font, read from each row
+ * they are written on in either mode (`fontRoleStacks`), and by the font
+ * variables whose first family it is, in either mode: blocks, text styles and shared styles
  * reach a font through those variables, and the variables' own usage says
  * how widely. A font a block names as plain text is not a use the site can
  * count, and never breaks a page: the text falls back.
@@ -12,9 +12,7 @@
  * @module font-uses
  */
 import {
-  isTokenRef,
   readFamilyList,
-  resolveSiteText,
   resolveSiteTokens,
   tokenDisplayLabel,
   tokenIdentity,
@@ -24,8 +22,8 @@ import {
 import { FONT_ROLE_WORDS } from "./editor-words";
 import {
   firstFamily,
-  fontRoleSetting,
-  type FontMode,
+  fontRoleStacks,
+  fontRoleVariables,
   type FontRole,
 } from "./site-font-roles-model";
 
@@ -45,6 +43,11 @@ export interface FamilyUses {
   readonly roles: readonly FontRole[];
   /** The font variables naming it first, other than the roles' own. */
   readonly variables: readonly FontVariableUse[];
+  /**
+   * Every font variable naming it first, the roles' own included, by
+   * identity: the variables whose places say how widely it is used.
+   */
+  readonly counted: readonly string[];
 }
 
 /** The fallback of a stack once its first family is gone. */
@@ -57,21 +60,8 @@ function fallbackOf(stack: string): string | undefined {
   return rest.length === 0 ? undefined : rest.join(", ");
 }
 
-/** The modes a role's font is drawn in. */
-const MODES: readonly FontMode[] = ["light", "dark"];
-
 /** What a stack with nothing after the font falls back to, in words. */
 const BROWSER_FONT = "the browser’s own font";
-
-/** The variable a role's rows point at, when they point at one. */
-function roleVariable(
-  tokens: SiteTokenSet,
-  role: FontRole
-): string | undefined {
-  const rows = resolveSiteText(tokens.siteText);
-  const font = (role === "body" ? rows.body : rows.h1)?.fontFamily;
-  return font !== undefined && isTokenRef(font) ? font.$token : undefined;
-}
 
 /**
  * Where the font a family key names (lower-cased, as CSS matches it) is
@@ -79,45 +69,42 @@ function roleVariable(
  *
  * @param key - The family, lower-cased
  * @param tokens - The site's variables and Site text, or `undefined` unread
- * @returns The roles it is, and the other font variables naming it first
+ * @returns The roles it is, the other font variables naming it first, and
+ *   every variable whose places count towards it
  */
 export function familyUses(
   key: string,
   tokens: SiteTokenSet | undefined
 ): FamilyUses {
-  if (tokens === undefined) return { roles: [], variables: [] };
-  // In either mode: a role whose variable draws the font only in dark mode
-  // still loses it for dark-mode visitors.
+  if (tokens === undefined) return { roles: [], variables: [], counted: [] };
+  // Row by row and in both modes: a heading row the others disagree with,
+  // or a variable's dark value, still loses the font when it goes.
   const roles = (["body", "heading"] as const).filter(role =>
-    MODES.some(mode => {
-      const setting = fontRoleSetting(tokens, role, mode);
-      return setting.kind === "set" && firstFamily(setting.stack) === key;
-    })
+    fontRoleStacks(tokens, role).some(stack => firstFamily(stack) === key)
   );
-  // A role's own variable is said as the role, not a second time.
-  const held = new Set(
-    roles
-      .map(role => roleVariable(tokens, role))
-      .filter((identity): identity is string => identity !== undefined)
-  );
-  const variables = resolveSiteTokens(tokens)
+  const naming = resolveSiteTokens(tokens)
     .tokens.filter(token => token.kind === "fontFamily")
     .flatMap((token): FontVariableUse[] => {
-      const identity = tokenIdentity(token);
-      if (held.has(identity)) return [];
-      const naming = [token.values.light, token.values.dark].find(
-        stack => stack !== undefined && firstFamily(stack) === key
+      const stack = [token.values.light, token.values.dark].find(
+        each => each !== undefined && firstFamily(each) === key
       );
-      if (naming === undefined) return [];
+      if (stack === undefined) return [];
       return [
         {
-          identity,
+          identity: tokenIdentity(token),
           label: tokenDisplayLabel(token),
-          fallback: fallbackOf(naming) ?? BROWSER_FONT,
+          fallback: fallbackOf(stack) ?? BROWSER_FONT,
         },
       ];
     });
-  return { roles, variables };
+  // A role's own variable is said as the role, not a second time, and its
+  // places still count: blocks may name it too.
+  const held = new Set(roles.flatMap(role => fontRoleVariables(tokens, role)));
+  return {
+    roles,
+    variables: naming.filter(each => !held.has(each.identity)),
+    counted: naming.map(each => each.identity),
+  };
 }
 
 /** "body", "headings" or "body and headings", as a sentence names roles. */

@@ -73,7 +73,7 @@ export type FontRoleSetting =
   | { readonly kind: "mixed" };
 
 /** The colour mode a variable's value is read in. */
-export type FontMode = "light" | "dark";
+type FontMode = "light" | "dark";
 
 /**
  * A variable's value in a mode, a built-in's included. A variable with no
@@ -101,15 +101,12 @@ function drawnStack(
 }
 
 /**
- * What a role is set to, read from the rows it is written on.
- *
- * @param mode - The mode its variables are read in: light, as the picker
- *   shows them, unless asked for dark
+ * What a role is set to, read from the rows it is written on, in light mode
+ * as the picker shows it.
  */
 export function fontRoleSetting(
   tokens: SiteTokenSet,
-  role: FontRole,
-  mode: FontMode = "light"
+  role: FontRole
 ): FontRoleSetting {
   const rows = resolveSiteText(tokens.siteText);
   const fonts = rowsOf(role).map(row => rows[row]?.fontFamily);
@@ -119,12 +116,47 @@ export function fontRoleSetting(
   // Compared by the font each row draws, so a row holding the font as written
   // and one pointing at a variable of that font read as one setting.
   const stacks = fonts.map(font =>
-    font === undefined ? undefined : drawnStack(tokens, font, mode)
+    font === undefined ? undefined : drawnStack(tokens, font, "light")
   );
   const [stack] = stacks;
   return stack !== undefined && stacks.every(each => each === stack)
     ? { kind: "set", stack }
     : { kind: "mixed" };
+}
+
+/**
+ * Every font a role's rows draw, each row on its own and in both modes, as
+ * stacks: what removing a font takes from the role, whether its rows agree
+ * or not. A row with no font of its own adds none.
+ */
+export function fontRoleStacks(
+  tokens: SiteTokenSet,
+  role: FontRole
+): readonly string[] {
+  const rows = resolveSiteText(tokens.siteText);
+  const stacks = new Set<string>();
+  for (const row of rowsOf(role)) {
+    const font = rows[row]?.fontFamily;
+    if (font === undefined) continue;
+    for (const mode of ["light", "dark"] as const) {
+      const stack = drawnStack(tokens, font, mode);
+      if (stack !== undefined) stacks.add(stack);
+    }
+  }
+  return [...stacks];
+}
+
+/** The variables a role's rows point at, by identity. */
+export function fontRoleVariables(
+  tokens: SiteTokenSet,
+  role: FontRole
+): readonly string[] {
+  const rows = resolveSiteText(tokens.siteText);
+  const identities = rowsOf(role).flatMap(row => {
+    const font = rows[row]?.fontFamily;
+    return font !== undefined && isTokenRef(font) ? [font.$token] : [];
+  });
+  return [...new Set(identities)];
 }
 
 /** Two rows holding the same values, whatever order they hold them in. */
