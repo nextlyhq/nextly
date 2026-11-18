@@ -2,9 +2,10 @@
  * A value still being typed in the block settings panel is kept by every
  * action that reads the page, with focus still in the field:
  *
- * 1. Save from the keyboard saves what the field shows: a Form field's
- *    label, which the field writes when it is left, and a Heading's text,
- *    which it writes as it is typed. Focus stays in the field.
+ * 1. Save from the keyboard (`mod` is Control in the suite's browser) saves
+ *    what the field shows: a Form field's label, which the field writes when
+ *    it is left, and a Heading's text, which it writes as it is typed. Focus
+ *    stays in the field.
  * 2. On a published page, the first letter typed shows the page as having
  *    unsaved work, on Save, with focus still in the field; Publish then
  *    publishes what the field shows.
@@ -30,13 +31,9 @@ const ENTRIES = "/admin/api/collections/pages/entries";
 const HEADING = "00000000-0000-4000-8000-00000000c731";
 const FORM = "00000000-0000-4000-8000-00000000c732";
 
+// The Form first: a selected block's toolbar and the Form's own notice sit
+// above it, where they would cover a Heading drawn there.
 const NODES = [
-  {
-    id: HEADING,
-    type: "core/heading",
-    version: 1,
-    props: { text: "Typed heading", level: "h2" },
-  },
   {
     id: FORM,
     type: "core/form",
@@ -46,6 +43,12 @@ const NODES = [
       submitText: "Send",
       fields: [{ label: "Name", name: "name", type: "text", required: true }],
     },
+  },
+  {
+    id: HEADING,
+    type: "core/heading",
+    version: 1,
+    props: { text: "Typed heading", level: "h2" },
   },
 ];
 
@@ -169,7 +172,7 @@ test.describe("a value still being typed in the panel", () => {
     // A label, which its field writes when it is left.
     const label = await typeInLabel(page, " here");
     let written = pageWrite(page, id);
-    await page.keyboard.press("ControlOrMeta+s");
+    await page.keyboard.press("Control+s");
     await written;
     await expect(label).toBeFocused();
     await expect(label).toHaveValue("Name here");
@@ -178,7 +181,7 @@ test.describe("a value still being typed in the panel", () => {
     // A Heading's text, which its field writes as it is typed.
     const text = await typeInHeading(page, " kept");
     written = pageWrite(page, id);
-    await page.keyboard.press("ControlOrMeta+s");
+    await page.keyboard.press("Control+s");
     await written;
     await expect(text).toBeFocused();
     expect(await savedWords(page, id)).toEqual({
