@@ -12,7 +12,8 @@
  *   page", and the page menu's. It makes the page in the collection of the
  *   page on screen, offers "Type" where more than one kind of page opens in
  *   the builder, and first asks about unsaved work on the page on screen.
- *   Below 600 px wide it is a full-height sheet.
+ *
+ * Below 600 px wide it is a full-height sheet from either place.
  *
  * @module admin/new-page/new-page-dialog
  */
@@ -118,7 +119,7 @@ export function useNewPageDialog(onScreen: PageOnScreen): NewPageDialogControl {
       >
         <DialogContent
           data-slot="new-page-dialog"
-          className="sm:max-w-[560px] max-sm:left-0 max-sm:top-0 max-sm:flex max-sm:h-[100dvh] max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:flex-col max-sm:rounded-none max-sm:border-0"
+          className="sm:max-w-[560px]"
           onCloseAutoFocus={event => {
             // Back to the control that opened it, which a dialog opened
             // without a trigger of its own would otherwise lose.

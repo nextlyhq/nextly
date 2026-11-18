@@ -4,6 +4,7 @@
  *
  * @module admin/new-page/new-page-words
  */
+import { inSentence } from "../entry-designs-client";
 
 export const NEW_PAGE_WORDS = {
   type: "Type",
@@ -32,21 +33,6 @@ export const NEW_PAGE_WORDS = {
 /** The dialog's title: "New page", the collection's name in a sentence. */
 export function newPageTitle(singular: string): string {
   return `New ${inSentence(singular)}`;
-}
-
-/**
- * A collection's name inside a sentence: lowered where it is an ordinary
- * word ("Page" → "page"), kept where it reads as a name or an acronym
- * ("FAQ"), as the admin titles its own create dialog.
- */
-function inSentence(label: string): string {
-  const [first, second] = [...label];
-  if (first === undefined) return label;
-  const ordinary =
-    first === first.toUpperCase() &&
-    first !== first.toLowerCase() &&
-    (second === undefined || second === second.toLowerCase());
-  return ordinary ? first.toLowerCase() + label.slice(first.length) : label;
 }
 
 /** Said under the address where the one made from the title is in use. */

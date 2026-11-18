@@ -95,7 +95,7 @@ interface Refusal {
 }
 
 /** Sort a create's refusal into the places the dialog shows it. */
-export function refusalOf(error: unknown): Refusal {
+function refusalOf(error: unknown): Refusal {
   const issues = validationIssues(error).map(issue => ({
     path: issue.path ?? "",
     message: issue.message ?? "",
@@ -128,71 +128,87 @@ export function refusalOf(error: unknown): Refusal {
   };
 }
 
+/**
+ * Below 600 px wide the dialog is a full-height sheet, whichever frame holds
+ * it: the admin's, from a list, or the builder's own. Carried by the form,
+ * since the list's frame is the admin's to draw; matched only where this
+ * form is inside, so no other dialog changes.
+ */
+const SHEET_BELOW_600 = `@media (max-width: 599.98px) {
+  [data-slot="dialog-content"]:has([data-slot="new-page-form"]) {
+    inset: 0;
+    translate: none;
+    width: 100%;
+    max-width: none;
+    height: 100dvh;
+    border-width: 0;
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  [data-slot="new-page-form"] {
+    flex: 1 1 auto;
+    align-content: start;
+  }
+  [data-slot="new-page-footer"] {
+    margin-top: auto;
+  }
+}`;
+
 /** The header & footer choice, as the dialog's own small form holds it. */
 interface LayoutValues {
   layout: string | null;
   noHeaderFooter: boolean;
 }
 
-export function NewPageForm({
-  collection: startIn,
-  offerType = false,
-  unsaved,
-  onCancel,
-  onCreated,
-  onFacts,
-}: NewPageFormProps): JSX.Element {
-  const id = useId();
-  const [collection, setCollection] = useState(startIn);
-  const [title, setTitle] = useState("");
-  const [typed, setTyped] = useState<string | undefined>(undefined);
-  const [starter, setStarter] = useState<string | undefined>(undefined);
+/** What a create is made from, as the form holds it. */
+interface CreateInputs {
+  readonly collection: string;
+  readonly title: string;
+  readonly typedSlug: string | undefined;
+  readonly starter: string | undefined;
+  readonly facts: NewPageFacts | undefined;
+  readonly layout: () => LayoutValues;
+}
+
+/** The create body for what is in the form. */
+function requestOf(inputs: CreateInputs): CreatePageRequest {
+  const values = inputs.layout();
+  return {
+    collection: inputs.collection,
+    title: inputs.title.trim(),
+    ...(inputs.typedSlug === undefined || inputs.typedSlug === ""
+      ? {}
+      : { slug: inputs.typedSlug }),
+    ...(inputs.facts?.headerFooter === true
+      ? { layout: values.layout, noHeaderFooter: values.noHeaderFooter }
+      : {}),
+    ...(inputs.starter === undefined ? {} : { starter: inputs.starter }),
+  };
+}
+
+/**
+ * The create: asked about unsaved work first where there is any, so Keep
+ * editing makes nothing; then made; and on Discard, only once made, the
+ * move to it let go without the leave guard asking again.
+ */
+function useCreate(
+  unsaved: UnsavedWorkAsk | undefined,
+  onCreated: (page: CreatedPageItem) => void
+): {
+  busy: boolean;
+  refusal: Refusal | undefined;
+  setRefusal: (refusal: Refusal | undefined) => void;
+  create: (request: () => CreatePageRequest) => Promise<void>;
+} {
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<Refusal | undefined>(undefined);
-  const layout = useForm<LayoutValues>({
-    defaultValues: { layout: null, noHeaderFooter: false },
-  });
-  const typedSlug = typed === undefined ? undefined : pageSlugOfTyped(typed);
-  const read = useNewPageFacts({
-    collection,
-    title,
-    ...(typedSlug === undefined || typedSlug === "" ? {} : { slug: typedSlug }),
-  });
-  const facts = read.facts;
-  useEffect(() => {
-    if (facts !== undefined) onFacts?.(facts);
-  }, [facts, onFacts]);
-
-  const titled = title.trim() !== "";
-  const mayUpdate = facts?.mayUpdate ?? true;
-  const primaryWords = busy
-    ? NEW_PAGE_WORDS.creating
-    : mayUpdate
-      ? NEW_PAGE_WORDS.createAndOpen
-      : NEW_PAGE_WORDS.create;
-  const reasonId = `${id}-reason`;
-
-  const request = (): CreatePageRequest => {
-    const values = layout.getValues();
-    return {
-      collection,
-      title: title.trim(),
-      ...(typedSlug === undefined || typedSlug === ""
-        ? {}
-        : { slug: typedSlug }),
-      ...(facts?.headerFooter === true
-        ? { layout: values.layout, noHeaderFooter: values.noHeaderFooter }
-        : {}),
-      ...(starter === undefined ? {} : { starter }),
-    };
-  };
-
-  const submit = async (): Promise<void> => {
-    if (!titled || busy) return;
+  const create = async (request: () => CreatePageRequest): Promise<void> => {
+    if (busy) return;
     setRefusal(undefined);
     setBusy(true);
     try {
-      // Asked before the create, so Keep editing makes nothing.
       const answer = unsaved === undefined ? "saved" : await unsaved.ask();
       if (answer === "keep") return;
       let page: CreatedPageItem;
@@ -208,6 +224,67 @@ export function NewPageForm({
       setBusy(false);
     }
   };
+  return { busy, refusal, setRefusal, create };
+}
+
+/** What the author has put in the dialog, and what the read says about it. */
+function useInputs(
+  startIn: string,
+  onFacts: ((facts: NewPageFacts) => void) | undefined
+) {
+  const [collection, setCollection] = useState(startIn);
+  const [title, setTitle] = useState("");
+  const [typed, setTyped] = useState<string | undefined>(undefined);
+  const [starter, setStarter] = useState<string | undefined>(undefined);
+  const layout = useForm<LayoutValues>({
+    defaultValues: { layout: null, noHeaderFooter: false },
+  });
+  const typedSlug = typed === undefined ? undefined : pageSlugOfTyped(typed);
+  const asked =
+    typedSlug === undefined || typedSlug === "" ? {} : { slug: typedSlug };
+  const read = useNewPageFacts({ collection, title, ...asked });
+  const facts = read.facts;
+  useEffect(() => {
+    if (facts !== undefined) onFacts?.(facts);
+  }, [facts, onFacts]);
+  const request = (): CreatePageRequest =>
+    requestOf({
+      collection,
+      title,
+      typedSlug,
+      starter,
+      facts,
+      layout: () => layout.getValues(),
+    });
+  return {
+    collection,
+    setCollection,
+    title,
+    setTitle,
+    typed,
+    setTyped,
+    starter,
+    setStarter,
+    layout,
+    read,
+    facts,
+    request,
+  };
+}
+
+export function NewPageForm({
+  collection: startIn,
+  offerType = false,
+  unsaved,
+  onCancel,
+  onCreated,
+  onFacts,
+}: NewPageFormProps): JSX.Element {
+  const id = useId();
+  const inputs = useInputs(startIn, onFacts);
+  const { facts } = inputs;
+  const { busy, refusal, setRefusal, create } = useCreate(unsaved, onCreated);
+  const titled = inputs.title.trim() !== "";
 
   return (
     <form
@@ -216,114 +293,232 @@ export function NewPageForm({
       noValidate
       onSubmit={event => {
         event.preventDefault();
-        void submit();
+        if (titled) void create(inputs.request);
       }}
     >
-      {offerType && facts !== undefined && facts.collections.length > 1 ? (
-        <div className="grid gap-1.5">
-          <Label htmlFor={`${id}-type`}>{NEW_PAGE_WORDS.type}</Label>
-          <Select
-            value={collection}
-            onValueChange={next => {
-              setCollection(next);
-              setRefusal(undefined);
-            }}
-          >
-            <SelectTrigger id={`${id}-type`} className="h-9">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {facts.collections.map(option => (
-                <SelectItem key={option.slug} value={option.slug}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      ) : null}
-      <div className="grid gap-1.5">
-        <Label htmlFor={`${id}-title`}>{NEW_PAGE_WORDS.title}</Label>
-        <Input
-          id={`${id}-title`}
-          value={title}
-          autoFocus
-          autoComplete="off"
-          aria-invalid={refusal?.title === undefined ? undefined : true}
-          aria-describedby={
-            refusal?.title === undefined ? undefined : `${id}-title-problem`
-          }
-          onChange={event => setTitle(event.target.value)}
-          className="h-9"
-        />
-        {refusal?.title === undefined ? null : (
-          <p
-            id={`${id}-title-problem`}
-            role="alert"
-            className="text-xs text-destructive"
-          >
-            {refusal.title}
-          </p>
-        )}
-      </div>
-      {facts !== undefined && facts.address === null ? null : (
-        <NewPageAddressField
-          address={facts?.address ?? undefined}
-          current={read.current}
-          fromTitle={titled ? pageSlugOfTitle(title) : ""}
-          typed={typed}
-          onType={next => {
-            setTyped(next);
-            if (refusal?.address !== undefined) {
-              setRefusal({ ...refusal, address: undefined });
-            }
+      {offerType ? (
+        <TypeRow
+          id={`${id}-type`}
+          facts={facts}
+          collection={inputs.collection}
+          onChoose={next => {
+            inputs.setCollection(next);
+            setRefusal(undefined);
           }}
-          refused={refusal?.address}
         />
-      )}
+      ) : null}
+      <TitleRow
+        id={`${id}-title`}
+        title={inputs.title}
+        onTitle={inputs.setTitle}
+        problem={refusal?.title}
+      />
+      <AddressRow
+        facts={facts}
+        current={inputs.read.current}
+        title={inputs.title}
+        typed={inputs.typed}
+        onType={next => {
+          inputs.setTyped(next);
+          if (refusal?.address !== undefined) {
+            setRefusal({ ...refusal, address: undefined });
+          }
+        }}
+        refused={refusal?.address}
+      />
       {facts?.headerFooter === true ? (
-        <NewPageLayoutPicker control={layout.control} />
+        <NewPageLayoutPicker control={inputs.layout.control} />
       ) : null}
       <NewPageStarters
         starters={facts?.starters ?? []}
-        chosen={starter}
-        onChoose={setStarter}
+        chosen={inputs.starter}
+        onChoose={inputs.setStarter}
       />
+      <Refused collection={inputs.collection} refusal={refusal} />
+      <style>{SHEET_BELOW_600}</style>
+      <Footer
+        reasonId={`${id}-reason`}
+        facts={facts}
+        titled={titled}
+        busy={busy}
+        onCancel={onCancel}
+      />
+    </form>
+  );
+}
+
+/** The Address, where the collection's pages have one. */
+function AddressRow({
+  facts,
+  current,
+  title,
+  typed,
+  onType,
+  refused,
+}: {
+  facts: NewPageFacts | undefined;
+  current: boolean;
+  title: string;
+  typed: string | undefined;
+  onType: (typed: string) => void;
+  refused: string | undefined;
+}): JSX.Element | null {
+  if (facts !== undefined && facts.address === null) return null;
+  return (
+    <NewPageAddressField
+      address={facts?.address ?? undefined}
+      current={current}
+      fromTitle={title.trim() === "" ? "" : pageSlugOfTitle(title)}
+      typed={typed}
+      onType={onType}
+      refused={refused}
+    />
+  );
+}
+
+/** A refusal shown above the buttons: fields the page also needs, or the server's reason. */
+function Refused({
+  collection,
+  refusal,
+}: {
+  collection: string;
+  refusal: Refusal | undefined;
+}): JSX.Element {
+  return (
+    <>
       <AlsoNeeded collection={collection} fields={refusal?.fields ?? []} />
       {refusal?.general === undefined ? null : (
         <p role="alert" className="text-sm text-destructive">
           {refusal.general}
         </p>
       )}
-      <div className="-mx-6 -mb-6 mt-1 flex flex-wrap items-center gap-2 border-t border-border px-6 py-3 max-sm:mt-auto">
-        <p className="mr-auto text-xs text-muted-foreground">
-          {facts === undefined
-            ? NEW_PAGE_WORDS.loading
-            : facts.drafts
-              ? NEW_PAGE_WORDS.savedAsDraft
-              : NEW_PAGE_WORDS.visibleAtOnce}
-        </p>
-        <Button type="button" variant="outline" onClick={onCancel}>
-          {NEW_PAGE_WORDS.cancel}
-        </Button>
-        <Button
-          type="submit"
-          disabled={!titled || busy}
-          aria-describedby={titled ? undefined : reasonId}
-        >
-          {primaryWords}
-        </Button>
-        {titled ? null : (
-          <p
-            id={reasonId}
-            className="basis-full text-right text-xs text-muted-foreground"
-          >
-            {NEW_PAGE_WORDS.titleNeeded}
-          </p>
-        )}
-      </div>
-    </form>
+    </>
   );
+}
+
+/** "Type", first, where more than one kind of page opens in the builder. */
+function TypeRow({
+  id,
+  facts,
+  collection,
+  onChoose,
+}: {
+  id: string;
+  facts: NewPageFacts | undefined;
+  collection: string;
+  onChoose: (collection: string) => void;
+}): JSX.Element | null {
+  if (facts === undefined || facts.collections.length < 2) return null;
+  return (
+    <div className="grid gap-1.5">
+      <Label htmlFor={id}>{NEW_PAGE_WORDS.type}</Label>
+      <Select value={collection} onValueChange={onChoose}>
+        <SelectTrigger id={id} className="h-9">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {facts.collections.map(option => (
+            <SelectItem key={option.slug} value={option.slug}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+/** "Title", focused when the dialog opens, with a refusal of it under it. */
+function TitleRow({
+  id,
+  title,
+  onTitle,
+  problem,
+}: {
+  id: string;
+  title: string;
+  onTitle: (title: string) => void;
+  problem: string | undefined;
+}): JSX.Element {
+  const problemId = `${id}-problem`;
+  return (
+    <div className="grid gap-1.5">
+      <Label htmlFor={id}>{NEW_PAGE_WORDS.title}</Label>
+      <Input
+        id={id}
+        value={title}
+        autoFocus
+        autoComplete="off"
+        aria-invalid={problem === undefined ? undefined : true}
+        aria-describedby={problem === undefined ? undefined : problemId}
+        onChange={event => onTitle(event.target.value)}
+        className="h-9"
+      />
+      {problem === undefined ? null : (
+        <p id={problemId} role="alert" className="text-xs text-destructive">
+          {problem}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** How the page is saved, Cancel, and the button that makes it. */
+function Footer({
+  reasonId,
+  facts,
+  titled,
+  busy,
+  onCancel,
+}: {
+  reasonId: string;
+  facts: NewPageFacts | undefined;
+  titled: boolean;
+  busy: boolean;
+  onCancel: () => void;
+}): JSX.Element {
+  return (
+    <div
+      className="-mx-6 -mb-6 mt-1 flex flex-wrap items-center gap-2 border-t border-border px-6 py-3"
+      data-slot="new-page-footer"
+    >
+      <p className="mr-auto text-xs text-muted-foreground">
+        {savedWords(facts)}
+      </p>
+      <Button type="button" variant="outline" onClick={onCancel}>
+        {NEW_PAGE_WORDS.cancel}
+      </Button>
+      <Button
+        type="submit"
+        disabled={!titled || busy}
+        aria-describedby={titled ? undefined : reasonId}
+      >
+        {primaryWords(busy, facts?.mayUpdate ?? true)}
+      </Button>
+      {titled ? null : (
+        <p
+          id={reasonId}
+          className="basis-full text-right text-xs text-muted-foreground"
+        >
+          {NEW_PAGE_WORDS.titleNeeded}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The line saying how the page is saved, once the collection is known. */
+function savedWords(facts: NewPageFacts | undefined): string {
+  if (facts === undefined) return NEW_PAGE_WORDS.loading;
+  return facts.drafts
+    ? NEW_PAGE_WORDS.savedAsDraft
+    : NEW_PAGE_WORDS.visibleAtOnce;
+}
+
+/** The primary button's words: "Create" for an author who may not change the page. */
+function primaryWords(busy: boolean, mayUpdate: boolean): string {
+  if (busy) return NEW_PAGE_WORDS.creating;
+  return mayUpdate ? NEW_PAGE_WORDS.createAndOpen : NEW_PAGE_WORDS.create;
 }
 
 /**

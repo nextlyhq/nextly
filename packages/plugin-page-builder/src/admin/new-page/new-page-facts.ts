@@ -15,7 +15,7 @@ import { PAGE_BUILDER_PLUGIN_NAME } from "../../library-contract";
 import { newPagePath, type NewPageFacts } from "../../pages-write-contract";
 
 /** How long typing pauses before the address is asked about again. */
-export const NEW_PAGE_ASK_PAUSE_MS = 250;
+const NEW_PAGE_ASK_PAUSE_MS = 250;
 
 /** What the dialog asks about: a collection, its title and a typed address. */
 export interface NewPageAsk {
