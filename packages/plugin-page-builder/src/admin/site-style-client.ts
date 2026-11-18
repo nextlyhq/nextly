@@ -981,13 +981,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
             }),
             inverse: undefined,
           });
-          // What the section holds now, for the writes after it, until the
-          // read moves on and is believed instead.
-          const chain = chainOf(settled, section);
-          if (chain.pending === 0) {
-            chain.held = after;
-            chain.tail = Promise.resolve(after);
-          }
+          holdsNow(chainOf(settled, section), after);
         },
         save: async (value, inverse, options) => {
           const chain = chainOf(settled, section);
@@ -1154,13 +1148,12 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       change: (before: unknown) => Promise<unknown>
     ): Promise<void> =>
       changedThrough(
-        history === null
-          ? undefined
-          : {
-              slot: reserve(section),
-              tail: () => chainOf(history.settled, section).tail,
-            },
-        () => storedSection(stored.current, section),
+        {
+          history,
+          take: () => reserve(section),
+          tail: settled => chainOf(settled, section).tail,
+          read: () => storedSection(stored.current, section),
+        },
         change
       ),
     [history, reserve, chainOf]
@@ -1180,28 +1173,45 @@ export function useSaveSiteStyle(): SiteStyleWrite {
 }
 
 /**
+ * What a section holds once a route stored `after`, for the writes after it,
+ * until the read moves on and is believed instead. Left alone while writes
+ * of its own are in flight: their answers say what it holds.
+ */
+function holdsNow(chain: SectionChain, after: unknown): void {
+  if (chain.pending > 0) return;
+  chain.held = after;
+  chain.tail = Promise.resolve(after);
+}
+
+/**
  * A route's change, run after the writes before it and filled into the
  * place taken for it: given up when it stored nothing or refused. Outside
  * the editor it runs against the section as read, and is no step.
  */
 async function changedThrough(
-  place:
-    | { readonly slot: SiteStyleSlot; readonly tail: () => Promise<unknown> }
-    | undefined,
-  read: () => unknown,
+  editor: {
+    readonly history: SiteStyleHistory | null;
+    /** Takes the change's place in the history. */
+    readonly take: () => SiteStyleSlot;
+    /** The section once every write before the change has answered. */
+    readonly tail: (settled: SiteStyleHistory["settled"]) => Promise<unknown>;
+    /** The section as read, outside the editor. */
+    readonly read: () => unknown;
+  },
   change: (before: unknown) => Promise<unknown>
 ): Promise<void> {
-  if (place === undefined) {
-    await change(read());
+  if (editor.history === null) {
+    await change(editor.read());
     return;
   }
+  const slot = editor.take();
   try {
-    const before = await place.tail();
+    const before = await editor.tail(editor.history.settled);
     const after = await change(before);
-    if (after === undefined) place.slot.cancel();
-    else place.slot.stored(before, after);
+    if (after === undefined) slot.cancel();
+    else slot.stored(before, after);
   } catch (refused) {
-    place.slot.cancel();
+    slot.cancel();
     throw refused;
   }
 }
