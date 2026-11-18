@@ -96,6 +96,10 @@ export interface BlockActions {
   readonly detachComponent?: () => void;
   readonly duplicateComponent?: () => void;
   readonly updatePattern?: () => void;
+  /** Put the selected blocks in a new Box at their place, as one step. */
+  readonly wrapInBox?: () => void;
+  /** Replace the selected container by its blocks, as one step. */
+  readonly unwrap?: () => void;
   /**
    * Turn the selected block into another type (`"core/heading"`), as one undo
    * step, saying what it removes or why it cannot. Optional, so a host built

@@ -79,6 +79,10 @@ export interface CommandVerbs {
   readonly detachComponent?: () => void;
   /** Begin duplicating the selected placement's component. */
   readonly duplicateComponent?: () => void;
+  /** Put the selected blocks in a new Box at their place. */
+  readonly wrapInBox?: () => void;
+  /** Replace the selected container by its blocks. */
+  readonly unwrap?: () => void;
   /** Begin replacing a pattern's content with the selection. */
   readonly updatePattern?: () => void;
   /** Begin saving the block's look as a shared style; the host owns the form. */
@@ -238,6 +242,14 @@ const BLOCK_COMMAND_COPY: Record<
       "save over",
     ],
   },
+  "wrap-in-box": {
+    label: "Wrap blocks in a box",
+    keywords: ["wrap", "box", "group", "container", "nest"],
+  },
+  unwrap: {
+    label: "Unwrap block (keep what's inside)",
+    keywords: ["unwrap", "ungroup", "unnest", "remove container", "flatten"],
+  },
   delete: {
     label: "Delete block",
     keywords: ["delete", "remove", "destroy", "clear"],
@@ -290,6 +302,8 @@ export function blockActionRunners(
     "detach-component": () => verbs.detachComponent?.(),
     "duplicate-component": () => verbs.duplicateComponent?.(),
     "update-pattern": () => verbs.updatePattern?.(),
+    "wrap-in-box": () => verbs.wrapInBox?.(),
+    unwrap: () => verbs.unwrap?.(),
     delete: verbs.delete,
   };
 }

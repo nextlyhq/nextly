@@ -88,6 +88,12 @@ import {
   saveAsSharedStyleRefusal,
   type SharedStyleOffer,
 } from "../shared-style-target";
+import {
+  isUnwrappable,
+  planUnwrap,
+  planWrap,
+  WRAP_WORDS,
+} from "../selection-wrap";
 import { turnIntoOffers, type TurnIntoActionId } from "../turn-into-verb";
 
 import type { RefusalWording } from "./drag-refusal";
@@ -139,6 +145,8 @@ export type ToolbarActionId =
   | "detach-component"
   | "duplicate-component"
   | "update-pattern"
+  | "wrap-in-box"
+  | "unwrap"
   | "delete";
 
 /** One button's worth of decision. */
@@ -834,6 +842,7 @@ function manyBlockActions(
     saveAction(document, ids, nesting, mayCreate, planned),
     ...sharedStyleActions(document, ids, sharedStyles),
     ...compositionActions(document, ids, nesting, components, ask, planned),
+    ...wrapActions(document, ids, nesting, ask),
     deleteItem,
   ];
 }
@@ -1025,8 +1034,52 @@ export function toolbarActions(
       lockRefusalFor,
       planned
     ),
+    ...wrapActions(document, ids, rules, lockRefusalFor),
     deleteItem,
   ];
+}
+
+/**
+ * "Wrap in a box" for a selection side by side in one place, and "Unwrap
+ * (keep what's inside)" for one Box, Section, Column or Card, each from the
+ * menu. A result the placement rules forbid is offered dimmed with the
+ * reason, and a lock that holds a block it moves dims it too.
+ */
+function wrapActions(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  ask: LockQuestion | undefined
+): ToolbarAction[] {
+  const items: ToolbarAction[] = [];
+  const wrap = planWrap(document, ids, nesting);
+  if (wrap !== null) {
+    items.push(
+      isRefusal(wrap)
+        ? { id: "wrap-in-box", label: WRAP_WORDS.wrap, enabled: false, reason: wrap.reason, inMenu: true }
+        : heldByLock(
+            { id: "wrap-in-box", label: WRAP_WORDS.wrap, enabled: true, inMenu: true },
+            ask,
+            wrap.ops
+          )
+    );
+  }
+  const [only] = ids;
+  if (ids.length === 1 && only !== undefined && isUnwrappable(findNode(document.nodes, only))) {
+    const unwrap = planUnwrap(document, only, nesting);
+    if (unwrap !== null) {
+      items.push(
+        isRefusal(unwrap)
+          ? { id: "unwrap", label: WRAP_WORDS.unwrap, enabled: false, reason: unwrap.reason, inMenu: true }
+          : heldByLock(
+              { id: "unwrap", label: WRAP_WORDS.unwrap, enabled: true, inMenu: true },
+              ask,
+              unwrap.ops
+            )
+      );
+    }
+  }
+  return items;
 }
 
 /**

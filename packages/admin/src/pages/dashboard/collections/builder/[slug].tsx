@@ -199,8 +199,10 @@ export default function CollectionBuilderEditPage({
     resolver: zodResolver(collectionFormSchema),
     defaultValues: { singularName: "", pluralName: "" },
   });
-  const { handleDuplicateField, getValidatedFields } =
-    useBuilderFieldActions(builder);
+  const { handleDuplicateField, getValidatedFields } = useBuilderFieldActions(
+    builder,
+    "collection"
+  );
 
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
   const confirmation = useSchemaChangeConfirmation();
@@ -222,6 +224,7 @@ export default function CollectionBuilderEditPage({
     pinSettings,
     moveAddress,
   } = useBuilderEntityState({
+    kind: "collection",
     entity: collection,
     builder,
     toFields: getCollectionFields,
