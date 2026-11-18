@@ -598,12 +598,82 @@ export function migrateDocument(
     : doc.nodes;
 
   // A component's exposures name a node's prop by path: re-pointed where the
-  // node's prop was renamed. `exposed` is left out of a document that has none.
+  // node's prop was renamed, and removed where it was dropped, with their
+  // values in the variants. `exposed` is left out of a document that has none.
   const held = (doc as { exposed?: unknown }).exposed;
   const exposed = exposuresRenamed(held, renamedOn);
+  const heldVariants = (doc as { variants?: unknown }).variants;
+  const variants =
+    exposed === held
+      ? heldVariants
+      : variantsWithout(heldVariants, exposureIdsGone(held, exposed));
   return {
-    doc: { ...doc, nodes, ...(exposed === held ? {} : { exposed }) },
+    doc: {
+      ...doc,
+      nodes,
+      ...(exposed === held ? {} : { exposed }),
+      ...(variants === heldVariants ? {} : { variants }),
+    },
     failures,
     rewritten,
   };
+}
+
+/** The ids on a list of exposures, each once. */
+function exposureIds(exposed: unknown): Set<string> {
+  const ids = new Set<string>();
+  if (!Array.isArray(exposed)) return ids;
+  for (const exposure of exposed as unknown[]) {
+    if (isPlainRecord(exposure) && typeof exposure.id === "string") {
+      ids.add(exposure.id);
+    }
+  }
+  return ids;
+}
+
+/**
+ * The exposure ids an upgrade removed: on a row it held and on no row left.
+ * Stored data can hold one id on two rows, and while one remains the field is
+ * live.
+ */
+function exposureIdsGone(held: unknown, left: unknown): ReadonlySet<string> {
+  const kept = exposureIds(left);
+  const gone = new Set<string>();
+  for (const id of exposureIds(held)) if (!kept.has(id)) gone.add(id);
+  return gone;
+}
+
+/**
+ * A component's variants without the values of the exposures an upgrade
+ * removed: a variant naming a field the component no longer has fails the
+ * component's save (`variant-unknown-target`). A variant left with no values
+ * is kept, as removing a field in the editor keeps it. The same record when
+ * nothing goes.
+ */
+function variantsWithout(
+  variants: unknown,
+  gone: ReadonlySet<string>
+): unknown {
+  if (gone.size === 0 || !isPlainRecord(variants)) return variants;
+  let changed = false;
+  // Built through `fromEntries`, which defines each key as the record's own,
+  // so a stored key such as `__proto__` stays a variant rather than a prototype.
+  const next = Object.fromEntries(
+    Object.entries(variants).map(([key, variant]) => {
+      if (!isPlainRecord(variant)) return [key, variant];
+      const overrides = variant.overrides;
+      if (
+        !isPlainRecord(overrides) ||
+        ![...gone].some(id => Object.hasOwn(overrides, id))
+      ) {
+        return [key, variant];
+      }
+      const pruned = Object.fromEntries(
+        Object.entries(overrides).filter(([id]) => !gone.has(id))
+      );
+      changed = true;
+      return [key, { ...variant, overrides: pruned }];
+    })
+  );
+  return changed ? next : variants;
 }

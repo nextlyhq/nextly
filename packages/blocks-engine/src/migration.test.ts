@@ -9,6 +9,7 @@ import {
   migrationInfoOf,
   nodeAtPointer,
 } from "./migration";
+import { componentEnvelopeIssues } from "./validation-components";
 
 /** A migration source from a plain record of type → info. */
 function source(
@@ -892,6 +893,79 @@ describe("a step's drops", () => {
     );
     const left = (doc as { exposed?: { id: string }[] }).exposed;
     expect(left?.map(each => each.id)).toEqual(["title", "elsewhere"]);
+  });
+
+  it("take a dropped exposure's values out of every variant, so the component still saves", () => {
+    // A variant naming a field the component no longer has fails the
+    // component's save; one left with no values is kept, as removing a field
+    // in the editor keeps it.
+    const exposure = (id: string, propPath: string) => ({
+      id,
+      label: id,
+      nodeId: "toc",
+      propPath,
+      type: "text",
+    });
+    const component = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        {
+          id: "toc",
+          type: "core/table-of-contents",
+          version: 1,
+          props: { content: {}, title: "On this page" },
+        },
+      ],
+      exposed: [exposure("passage", "content"), exposure("title", "title")],
+      variants: {
+        compact: {
+          label: "Compact",
+          overrides: { passage: "a", title: "Contents" },
+        },
+        bare: { label: "Bare", overrides: { passage: "b" } },
+        plain: { label: "Plain", overrides: { title: "In short" } },
+      },
+    } as unknown as BlockDocument;
+    const { doc } = migrateDocument(
+      component,
+      source({ "core/table-of-contents": contents })
+    );
+    expect((doc as { variants?: unknown }).variants).toEqual({
+      compact: { label: "Compact", overrides: { title: "Contents" } },
+      bare: { label: "Bare", overrides: {} },
+      plain: { label: "Plain", overrides: { title: "In short" } },
+    });
+    expect(
+      componentEnvelopeIssues(doc).filter(
+        issue => issue.code === "variant-unknown-target"
+      )
+    ).toEqual([]);
+  });
+
+  it("keep a variant's value for an id another exposure still carries", () => {
+    // Stored data can hold one id on two rows; while one remains, the field
+    // is live and its variant values stay.
+    const component = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        { id: "toc", type: "core/table-of-contents", version: 1, props: {} },
+        { id: "other", type: "t", version: 1, props: {} },
+      ],
+      exposed: [
+        { id: "shared", label: "S", nodeId: "toc", propPath: "content" },
+        { id: "shared", label: "S", nodeId: "other", propPath: "content" },
+      ],
+      variants: { one: { label: "One", overrides: { shared: "kept" } } },
+    } as unknown as BlockDocument;
+    const { doc } = migrateDocument(
+      component,
+      source({ "core/table-of-contents": contents, t: { version: 1 } })
+    );
+    expect((doc as { variants?: unknown }).variants).toEqual({
+      one: { label: "One", overrides: { shared: "kept" } },
+    });
   });
 
   it("reach every migration source through the one reading of a definition", () => {
