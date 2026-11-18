@@ -49,6 +49,9 @@ export function FontsPage(): JSX.Element {
     [config]
   );
   const read = useSiteStyle(configSiteStyle);
+  // The text styles Site text rows follow, so a font one draws is guarded
+  // here as in the builder.
+  const classes = read.siteStyle?.classes;
   return (
     <div className="min-h-[calc(100vh-4rem)] w-full max-w-full px-4 py-6 @sm/content:px-6 @sm/content:py-8 @2xl/content:px-8">
       <PageBuilderBreadcrumb page={FONTS_PAGE_NAME} />
@@ -67,17 +70,18 @@ export function FontsPage(): JSX.Element {
           merged={offerableTokens(read.siteStyle, read.pending, read.error)}
           supplied={configSiteStyle.tokens}
           pending={read.pending}
+          {...(classes === undefined ? {} : { classes })}
         >
-        <SiteFontsScreen
-          labelledBy={heading}
-          faces={offerableFaces(read.siteStyle, read.pending, read.error)}
-          codeFaces={configSiteStyle.fonts}
-          tokens={renderedTokens(read.siteStyle, read.pending, read.error)}
-          absence={read.error !== null ? "failed" : "pending"}
-          storedFaces={read.stored?.fonts}
-          storedPending={read.pending}
-          unreadableFonts={read.unreadableFonts}
-        />
+          <SiteFontsScreen
+            labelledBy={heading}
+            faces={offerableFaces(read.siteStyle, read.pending, read.error)}
+            codeFaces={configSiteStyle.fonts}
+            tokens={renderedTokens(read.siteStyle, read.pending, read.error)}
+            absence={read.error !== null ? "failed" : "pending"}
+            storedFaces={read.stored?.fonts}
+            storedPending={read.pending}
+            unreadableFonts={read.unreadableFonts}
+          />
         </TokensStudio>
       </div>
     </div>
