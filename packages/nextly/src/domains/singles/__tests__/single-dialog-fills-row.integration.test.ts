@@ -213,5 +213,127 @@ describeEachDialect(
       });
       expect((await row()).headline).toBe("kept");
     });
+
+    it("fills a date field's default as the moment it names, in the form the dialect stores", async () => {
+      const moment = "2026-01-02T03:04:05.000Z";
+      await save([
+        BODY,
+        { name: "launch", type: "date", defaultValue: moment },
+      ]);
+      const stored = (await row()).launch;
+      if (dialect === "sqlite") {
+        // SQLite keeps a date as epoch seconds, never the ISO text.
+        expect(Number(stored)).toBe(Date.parse(moment) / 1000);
+      }
+      const read = (await t.nextly.findSingle({ slug: "sdf_home" })) as {
+        launch?: unknown;
+      };
+      expect(new Date(read.launch as string).toISOString()).toBe(moment);
+    });
+
+    it("refuses a default the field's own rules refuse, changing nothing", async () => {
+      const columns = Object.keys(await row());
+      await expect(
+        save([
+          BODY,
+          {
+            name: "count",
+            type: "number",
+            defaultValue: 0,
+            validation: { min: 1 },
+          },
+        ])
+      ).rejects.toMatchObject({
+        publicData: {
+          errors: [
+            expect.objectContaining({ code: "DEFAULT_FAILS_FIELD_RULES" }),
+          ],
+        },
+      });
+      expect(Object.keys(await row())).toEqual(columns);
+    });
+
+    it("fills a field named after an object member, which is no answer the person gave", async () => {
+      await save([
+        BODY,
+        { name: "constructor", type: "text", defaultValue: "C" },
+      ]);
+      expect((await row()).constructor).toBe("C");
+    });
+  }
+);
+
+describeEachDialect(
+  "a translated Single's dialog save and its row",
+  dialect => {
+    let t: TestNextly;
+    let basePath: string;
+
+    beforeEach(async () => {
+      basePath = await mkdtemp(join(tmpdir(), "nextly-single-fill-i18n-"));
+      vi.stubEnv("NODE_ENV", "development");
+      t = await createTestNextly({
+        dialect: dialect as TestDialect,
+        basePath,
+        db: DB,
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "sdf_home",
+          label: "Home",
+          fields: [BODY],
+          localized: true,
+        }
+      );
+      await t.nextly.updateSingle({
+        slug: "sdf_home",
+        locale: "en",
+        data: { body: "kept", _overwrite: true },
+      });
+    });
+
+    afterEach(async () => {
+      await t?.destroy();
+      vi.unstubAllEnvs();
+      await rm(basePath, { recursive: true, force: true });
+    });
+
+    // A translated field's values live in the Single's translations table, one row per language,
+    // not on its main row: its default is no fill for the main row.
+    it("saves a translated field added with a default, filling nothing on the main row", async () => {
+      const [found] = (await (
+        t.adapter as unknown as {
+          executeQuery<R>(statement: string): Promise<R[]>;
+        }
+      ).executeQuery<{ v: unknown }>(
+        `SELECT ${dialect === "mysql" ? "`schema_version`" : '"schema_version"'} AS v FROM ${dialect === "mysql" ? "`dynamic_singles`" : '"dynamic_singles"'} WHERE ${dialect === "mysql" ? "`slug`" : '"slug"'} = 'sdf_home'`
+      )) as { v: unknown }[];
+      await dispatchSingles(
+        "applySingleSchemaChanges",
+        { slug: "sdf_home" },
+        {
+          fields: [
+            BODY,
+            {
+              name: "motto",
+              type: "text",
+              localized: true,
+              defaultValue: "Hi",
+            },
+          ],
+          confirmed: true,
+          schemaVersion: Number(found?.v ?? 1),
+          localized: true,
+        }
+      );
+      const read = (await t.nextly.findSingle({
+        slug: "sdf_home",
+        locale: "en",
+      })) as { body?: unknown };
+      expect(read.body).toBe("kept");
+    });
   }
 );
