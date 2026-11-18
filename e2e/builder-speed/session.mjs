@@ -80,6 +80,16 @@ export async function publishes(page, watcher, id, count) {
       }
     );
     out.saved.push(saved.ms);
+    if (saved.ms === null) {
+      // Which part of "saved" never arrived: the answered save, the button's
+      // finished state, or the indicator's tone.
+      const parts = await page.evaluate(
+        () => window.__builderSpeed.savedParts ?? null
+      );
+      console.error(
+        `[builder-speed] publish not seen as saved: ${JSON.stringify(parts)}`
+      );
+    }
     const request = await page.evaluate(
       ({ sentBefore, id }) =>
         window.__builderSpeed.sent
