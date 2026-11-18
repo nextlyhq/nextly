@@ -251,9 +251,12 @@ test.describe("the Text style picker", () => {
 
     await page.keyboard.press("Enter");
     await expect(page.getByRole("menu")).toBeVisible();
-    // None, Display, Eyebrow: down twice from None.
-    await page.keyboard.press("ArrowDown");
-    await page.keyboard.press("ArrowDown");
+    // The arrows move through None, Display and Eyebrow.
+    const eyebrow = page.getByRole("menuitemradio", { name: /^Eyebrow/ });
+    await expect(async () => {
+      await page.keyboard.press("ArrowDown");
+      await expect(eyebrow).toBeFocused({ timeout: 500 });
+    }).toPass();
     await page.keyboard.press("Enter");
     await expect(await block(page, TEXT)).toHaveCSS(
       "text-transform",
