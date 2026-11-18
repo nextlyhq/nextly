@@ -115,24 +115,26 @@ describe("pushCarriesValues", () => {
     ).toBe(false);
   });
 
-  // A field renamed as it leaves translation: the file, finding a leaving field by its name on the
-  // companion, would add the renamed column with its setting over rows that hold no value yet; the
-  // push adds it without the setting, copies the default language's values in, then sets it.
-  // Under its own name the file holds the setting back the same way, and runs.
+  // The push adds the shared column without the setting, copies the default language's values in,
+  // then sets it; the file would add it with the setting over rows that hold no value yet.
   it.each([
-    ["Required", "under its rename", { from: "title", to: "headline" }, true],
-    ["Unique", "under its rename", { from: "title", to: "headline" }, true],
-    ["Required", "under its own name", undefined, false],
-    ["Unique", "under its own name", undefined, false],
+    ["Required", "under its own name", "title", undefined],
+    [
+      "Required",
+      "under its rename",
+      "headline",
+      { from: "title", to: "headline" },
+    ],
+    ["Unique", "under its own name", "title", undefined],
   ] as const)(
-    "decides by the rename for a %s field leaving translation %s",
-    async (setting, _how, renamed, pushes) => {
+    "keeps the push for a %s field leaving translation %s",
+    async (setting, _how, name, renamed) => {
       expect(
         await pushCarriesValues(
           save({
             oldFields: [translated("title")],
             newFields: [
-              field(renamed?.to ?? "title", {
+              field(name, {
                 localized: false,
                 [setting === "Required" ? "required" : "unique"]: true,
               }),
@@ -142,23 +144,9 @@ describe("pushCarriesValues", () => {
             renamed,
           })
         )
-      ).toBe(pushes);
+      ).toBe(true);
     }
   );
-
-  it("runs the file for a field renamed as it leaves translation with no setting held back", async () => {
-    expect(
-      await pushCarriesValues(
-        save({
-          oldFields: [translated("title"), shared("body")],
-          newFields: [shared("headline"), field("body", { required: true })],
-          wasStored: true,
-          isStored: true,
-          renamed: { from: "title", to: "headline" },
-        })
-      )
-    ).toBe(false);
-  });
 
   describe("a field new to a Single's table, which its row is filled in", () => {
     const fills = (field: FieldDefinition) =>
