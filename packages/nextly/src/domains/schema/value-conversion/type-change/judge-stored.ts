@@ -146,19 +146,10 @@ class TypeChangeTally {
 
   /** One value's verdict, counted, with the text the database stores it as. */
   add(key: RowKey, verdict: ValueVerdict, stored: string | null): void {
-    // An empty list is stored as `[]`: empty to the new type only where it keeps a list.
     if (
-      verdict.reason === "empty" &&
-      stored !== null &&
-      !(this.read.emptyListHeld && stored.trim() === "[]")
-    ) {
-      this.counts.blocked += 1;
-      this.note("needs-rewrite", key);
-      return;
-    }
-    if (
-      verdict.readsAs !== undefined &&
-      this.blocks(key, verdict.outcome, verdict.readsAs, stored)
+      this.emptyNotHeld(key, verdict, stored) ||
+      (verdict.readsAs !== undefined &&
+        this.blocks(key, verdict.outcome, verdict.readsAs, stored))
     ) {
       this.counts.blocked += 1;
       return;
@@ -186,6 +177,21 @@ class TypeChangeTally {
       cleared: this.cleared,
       counts: this.counts,
     };
+  }
+
+  /**
+   * Whether an empty value the database stores as something blocks the change, noting why: an
+   * empty list is stored as `[]`, empty to the new type only where it keeps a list.
+   */
+  private emptyNotHeld(
+    key: RowKey,
+    verdict: ValueVerdict,
+    stored: string | null
+  ): boolean {
+    if (verdict.reason !== "empty" || stored === null) return false;
+    if (this.read.emptyListHeld && stored.trim() === "[]") return false;
+    this.note("needs-rewrite", key);
+    return true;
   }
 
   /**

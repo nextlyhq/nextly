@@ -471,37 +471,47 @@ async function refuseSaveTypeChanges(
   const dialect = deps.adapter.getCapabilities().dialect;
   const previous = save.previous.fields as unknown as FieldDefinition[];
   const next = save.entity.fields as unknown as FieldDefinition[];
-  const renamed =
-    save.renamedFields !== undefined && save.renamedFields.length > 0
-      ? new Map(save.renamedFields.map(r => [r.from, r.to]))
-      : undefined;
+  const renamed = new Map(
+    (save.renamedFields ?? []).map(r => [r.from, r.to] as const)
+  );
   // Asked only of a save that changes a field's type, so no other save reads its folder.
   const changes = fieldTypeChangesOf({
     previous,
     next,
-    ...(renamed !== undefined ? { renamed } : {}),
+    renamed,
     dialect,
     builtBy: kind.builtBy,
   });
   if (changes.length === 0) return;
-  const pending =
-    save.migrationStatus !== undefined
-      ? save.migrationStatus
-      : (await unappliedFileChanges(deps, table))
-        ? "pending"
-        : undefined;
   await refuseFieldTypeChanges(deps.adapter.getDrizzle(), dialect, {
     label: entityLabel(kind.kind, save.slug),
     table,
     ...perLanguageBefore(save.previous, table, previous),
     previous,
     next,
-    ...(renamed !== undefined ? { renamed } : {}),
-    ...(pending !== undefined ? { migrationStatus: pending } : {}),
+    renamed,
+    ...(await migrationStatusOf(deps, save, table)),
     // No consent is taken here: a lossy type change is refused until the save clears the
     // consented values before it converts the column.
     builtBy: kind.builtBy,
   });
+}
+
+/**
+ * The status the save's entity is judged under: the registry row's, where the caller read it;
+ * `pending` where a file not yet applied changes the table; none otherwise.
+ */
+async function migrationStatusOf(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): Promise<{ migrationStatus?: string | null }> {
+  if (save.migrationStatus !== undefined) {
+    return { migrationStatus: save.migrationStatus };
+  }
+  return (await unappliedFileChanges(deps, table))
+    ? { migrationStatus: "pending" }
+    : {};
 }
 
 /**
