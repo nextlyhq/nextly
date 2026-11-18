@@ -167,7 +167,7 @@ test("an export for Figma lists the shadow it left out, and why", async ({
     await expect(row).toHaveCount(1);
     await expect(row).toContainText("Left out");
     await expect(row).toContainText(
-      "Figma keeps shadows as effect styles, not variables."
+      "Figma keeps these as effect styles and text styles; the variables they use are in the file"
     );
     await spellMissingColourComponents(page);
     await expectNoAxeViolations(page, { include: ".nx-design-gaps" });

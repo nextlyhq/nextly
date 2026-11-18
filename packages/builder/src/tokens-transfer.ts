@@ -46,12 +46,34 @@ import {
   tokenDisplayLabel,
   tokenIdentity,
   tokensToDtcg,
+  isTextStyle,
+  type ModesRead,
+  type NamedClass,
   type SiteToken,
   type SiteTokenSet,
   type TokenKind,
 } from "@nextlyhq/blocks-engine";
 
+import type { ClassListEdit } from "./block-style-actions";
+import { DESIGN_ACTION_WORDS } from "./editor-words";
+import { sharedStyleName } from "./shared-style-library";
 import { labelClashes } from "./tokens-studio";
+import {
+  missingFonts,
+  planTextStyles,
+  siteDataChanges,
+  textStylesEdit,
+  textStylesTaken,
+  withSiteData,
+  type ImportContext,
+  type ImportExtras,
+} from "./tokens-transfer-extras";
+
+export type {
+  ImportContext,
+  ImportExtras,
+  TextStylesPlan,
+} from "./tokens-transfer-extras";
 
 /** What an import did, or why it could not begin. */
 export type ImportResult =
@@ -63,6 +85,13 @@ export type ImportResult =
       readonly imported: number;
       /** What the file held that this site cannot, in the engine's words. */
       readonly skipped: readonly string[];
+      /** How many text styles the import stores, through {@link classes}. */
+      readonly textStyles?: number;
+      /**
+       * The class edit that stores the file's text styles, for the host's
+       * one class writer. Absent when there are none to store.
+       */
+      readonly classes?: ClassListEdit;
     }
   | {
       readonly ok: false;
@@ -183,6 +212,8 @@ export type ImportPlan =
       readonly skipped: readonly string[];
       /** Every token read, in file order, for {@link applyImport}. */
       readonly incoming: readonly SiteToken[];
+      /** What the files carry beyond the variables. */
+      readonly extras: ImportExtras;
     }
   | {
       readonly ok: false;
@@ -202,7 +233,8 @@ export type ConflictChoice = "keep" | "use";
  */
 export function planImport(
   files: readonly ImportFile[],
-  into: SiteTokenSet
+  into: SiteTokenSet,
+  context: ImportContext = {}
 ): ImportPlan {
   const parsed: { name: string; document: unknown }[] = [];
   for (const file of files) {
@@ -219,7 +251,7 @@ export function planImport(
       };
     }
   }
-  let read: ReturnType<typeof dtcgToTokens>;
+  let read: ModesRead;
   try {
     read = readChosen(parsed);
   } catch {
@@ -232,12 +264,37 @@ export function planImport(
     };
   }
   const skipped = read.issues.map(entry => entry.message);
-  if (read.tokens.length === 0) {
+  const refusedStyles: string[] = [];
+  const textStyles = planTextStyles(
+    read.textStyles,
+    context.textStyles ?? [],
+    refusedStyles
+  );
+  const extras: ImportExtras = {
+    ...(read.site === undefined ? {} : { site: read.site }),
+    textStyles,
+    missingFonts:
+      context.faces === undefined
+        ? []
+        : missingFonts(
+            read.tokens,
+            read.textStyles ?? [],
+            read.site,
+            context.faces
+          ),
+  };
+  const carriesMore =
+    read.site !== undefined ||
+    textStyles.added.length +
+      textStyles.updated.length +
+      textStyles.unchanged.length >
+      0;
+  if (read.tokens.length === 0 && !carriesMore) {
     return {
       ok: false,
       error:
         "No variables in those files could be used by this site. Nothing was changed.",
-      skipped,
+      skipped: [...skipped, ...refusedStyles],
     };
   }
   // One entry per identity, chosen once, so the preview shows exactly what
@@ -249,8 +306,9 @@ export function planImport(
   ];
   return {
     ok: true,
-    skipped: [...skipped, ...dropped],
+    skipped: [...skipped, ...refusedStyles, ...dropped],
     ...planned(unique, into),
+    extras,
   };
 }
 
@@ -285,7 +343,7 @@ function newLabelClashes(before: SiteTokenSet, after: SiteTokenSet): string[] {
 /** Which reader the chosen files call for. */
 function readChosen(
   parsed: readonly { name: string; document: unknown }[]
-): ReturnType<typeof dtcgToTokens> {
+): ModesRead {
   const theme = parsed.find(file => isThemeFile(file.document));
   if (theme !== undefined) {
     const others = new Map(
@@ -358,10 +416,18 @@ function laidOnto(held: SiteToken, stated: SiteToken): SiteToken {
   const description = stated.description ?? held.description;
   const extensions = stated.extensions ?? held.extensions;
   const unreadExtension = stated.unreadExtension ?? held.unreadExtension;
+  const group = stated.group ?? held.group;
+  // The sizes a fluid size was made from belong to its value: a file that
+  // changes the value without them leaves a size typed by hand.
+  const fluid =
+    stated.fluid ??
+    (stated.values.light === held.values.light ? held.fluid : undefined);
   return {
     ...(id === undefined ? {} : { id }),
     name: stated.name,
     ...(label === undefined ? {} : { label }),
+    ...(group === undefined ? {} : { group }),
+    ...(fluid === undefined ? {} : { fluid }),
     kind: stated.kind,
     values:
       dark === undefined
@@ -456,11 +522,13 @@ export function applyImport(
   const taken = plan.incoming.filter(
     token => !standing.has(tokenIdentity(token))
   );
-  if (taken.length === 0) {
+  const styles = textStylesTaken(plan.extras.textStyles);
+  const siteChanges = siteDataChanges(into, plan.extras.site);
+  if (taken.length === 0 && styles === 0 && !siteChanges) {
     return {
       ok: false,
       error:
-        "Nothing in those files would change this site's variables, so nothing was changed.",
+        "Nothing in those files would change this site's design, so nothing was changed.",
       skipped: plan.skipped,
     };
   }
@@ -481,9 +549,17 @@ export function applyImport(
   }
   return {
     ok: true,
-    tokens: merged.tokens,
+    // The site's own design data laid over the merged variables, so the two
+    // save, merge and undo as one edit.
+    tokens: withSiteData(merged.tokens, plan.extras.site),
     imported: merged.landed,
     skipped: [...plan.skipped, ...merged.refused],
+    ...(styles === 0
+      ? {}
+      : {
+          textStyles: styles,
+          classes: textStylesEdit(plan.extras.textStyles),
+        }),
   };
 }
 
@@ -877,12 +953,16 @@ export interface ExportGap {
  * in version control, where a diff over one line per token is the difference
  * between a reviewable change and an opaque one.
  */
-export function exportDtcg(tokens: SiteTokenSet): ExportResult {
+export function exportDtcg(
+  tokens: SiteTokenSet,
+  classes: readonly NamedClass[] = []
+): ExportResult {
   let skipped: string[];
   let refused: string[];
   let lost: string[];
   let text: string;
   let kept: readonly string[];
+  let stylesKept: readonly NamedClass[];
   try {
     /*
      * EVERY step that reads the vendor data is inside this guard, the
@@ -894,13 +974,17 @@ export function exportDtcg(tokens: SiteTokenSet): ExportResult {
      * whole export rather than any one of its steps, which is what stops a
      * line added later from landing outside it.
      */
-    const { document, issues } = tokensToDtcg(tokens);
+    const textStyles = classes.filter(isTextStyle);
+    const { document, issues, keptTextStyles } = tokensToDtcg(tokens, {
+      textStyles,
+    });
     // Kept apart for the list: a variable the engine refused is not in the
     // file, while one whose vendor data cannot be written still is.
     refused = issues.map(issue => issue.message);
     lost = unwritable(tokens);
     skipped = [...refused, ...lost];
     kept = carriedNames(document);
+    stylesKept = textStyles.filter(style => keptTextStyles.includes(style.id));
     text = `${JSON.stringify(document, null, 2)}\n`;
   } catch {
     /*
@@ -939,7 +1023,33 @@ export function exportDtcg(tokens: SiteTokenSet): ExportResult {
     label: "variables",
     mime: "application/json",
     skipped,
-    gaps: gapsOf(tokens, refused, kept, lost),
+    gaps: [
+      ...gapsOf(tokens, refused, kept, lost),
+      ...stylesKept.map(style =>
+        textStyleGap(style, "kept", TEXT_STYLE_KEPT_WHY)
+      ),
+    ],
+  };
+}
+
+/** Why the token file keeps a text style only as Nextly data. */
+const TEXT_STYLE_KEPT_WHY =
+  "Design tools can't read this text style as it is written.";
+
+/**
+ * A text style in "What wasn't exported", under its name, apart from every
+ * variable's code name by the group the file writes text styles under.
+ */
+function textStyleGap(
+  style: NamedClass,
+  outcome: ExportGap["outcome"],
+  why: string
+): ExportGap {
+  return {
+    name: `textStyles.${style.slug}`,
+    label: sharedStyleName(style),
+    outcome,
+    why,
   };
 }
 
@@ -966,8 +1076,11 @@ const THEME_FILE = "variables.resolver.json";
  * The DTCG export: the token file, and beside it a theme file when any
  * variable has a dark value, so a tool reading the standard finds the modes.
  */
-export function exportDtcgWithTheme(tokens: SiteTokenSet): ExportResult[] {
-  const main = { ...exportDtcg(tokens), filename: DTCG_FILE };
+export function exportDtcgWithTheme(
+  tokens: SiteTokenSet,
+  classes: readonly NamedClass[] = []
+): ExportResult[] {
+  const main = { ...exportDtcg(tokens, classes), filename: DTCG_FILE };
   if (
     main.text === "" ||
     !tokens.tokens.some(token => token.values.dark !== undefined)
@@ -1066,9 +1179,14 @@ function holdsTokenAt(tree: unknown, name: string): boolean {
 /**
  * The For Figma export: one file per mode, each holding every variable, as
  * Figma's variables import asks. What Figma cannot hold is named once, on the
- * light file.
+ * light file: shadows and text styles among it, which Figma keeps as effect
+ * styles and text styles, built on the variables the files hold.
  */
-export function exportForFigma(tokens: SiteTokenSet): ExportResult[] {
+export function exportForFigma(
+  tokens: SiteTokenSet,
+  classes: readonly NamedClass[] = []
+): ExportResult[] {
+  const textStyles = classes.filter(isTextStyle);
   return (["light", "dark"] as const).map(mode => {
     const made = tokensToFigma(tokens, mode);
     const empty = Object.keys(made.document).length === 0;
@@ -1080,7 +1198,14 @@ export function exportForFigma(tokens: SiteTokenSet): ExportResult[] {
       label: `${mode} mode`,
       mime: "application/json",
       skipped,
-      gaps: gapsOf(tokens, skipped, []),
+      gaps: [
+        ...gapsOf(tokens, skipped, []),
+        ...(mode === "light"
+          ? textStyles.map(style =>
+              textStyleGap(style, "left-out", DESIGN_ACTION_WORDS.figmaStyles)
+            )
+          : []),
+      ],
     };
   });
 }
@@ -1333,7 +1458,7 @@ const PLAIN_WHY: readonly (readonly [
   RegExp,
   string | ((match: RegExpExecArray) => string),
 ])[] = [
-  [/^is a shadow\./, "Figma keeps shadows as effect styles, not variables."],
+  [/^is a shadow\./, DESIGN_ACTION_WORDS.figmaStyles],
   [
     /^carries vendor data that a file cannot hold/,
     "It holds data from another tool that a file can't store, so the file has its value but not that data. Importing the file back treats it as a new variable.",
