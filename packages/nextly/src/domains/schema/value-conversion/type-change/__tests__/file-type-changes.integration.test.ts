@@ -12,7 +12,7 @@
  * "Hello"; and the same file goes ahead over values the new type reads, so a refusal of every type
  * change is told apart too.
  */
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,7 +23,15 @@ import { drizzle as drizzleMysql } from "drizzle-orm/mysql2";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
 import { createPool, type Pool as MysqlPool } from "mysql2";
 import { Pool } from "pg";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+} from "vitest";
 
 import { defineCollection, number, select, text } from "../../../../../config";
 import { makeTestContext } from "../../../../../database/__tests__/integration/helpers/test-db";
@@ -250,6 +258,113 @@ function cases(open: () => { connection: Connection; slug: string }) {
     ]);
     // Listed, and nothing more: the values are untouched.
     await expect(judge(connection, first, next)).rejects.toBeDefined();
+  });
+
+  it("judges a translated field renamed in the translation file written beside the migration", async () => {
+    const opened = open();
+    const { connection } = opened;
+    // A table of its own, apart from the other cases' (its translations table keys into it), and
+    // short: MySQL names the translations table's foreign key after it, in at most 64 characters.
+    const slug = opened.slug.replace(/ftc_posts$/, "ftl");
+    const q = (n: string) =>
+      connection.dialect === "mysql" ? `\`${n}\`` : `"${n}"`;
+    const table = resolveCollectionTableName(slug);
+    const dropBoth = async () => {
+      await connection.run(`DROP TABLE IF EXISTS ${q(`${table}_locales`)}`);
+      await connection.run(`DROP TABLE IF EXISTS ${q(table)}`);
+    };
+    await dropBoth();
+    onTestFinished(dropBoth);
+    dir ??= await mkdtemp(join(tmpdir(), "nextly-file-type-changes-"));
+    const migrationsDir = dir;
+    /** A run of `migrate:create` over the translated collection with `field`: every file it wrote, in run order. */
+    const run = async (field: () => unknown, step: number) => {
+      const before = new Set(await readdir(migrationsDir));
+      const result = await generateMigration({
+        name: `step_${step}`,
+        dialect: connection.dialect,
+        migrationsDir,
+        defaultLocale: "en",
+        collections: toMinimalEntities(
+          [
+            defineCollection({
+              slug,
+              localized: true,
+              fields: [field()] as never,
+            }),
+          ],
+          e => resolveCollectionTableName(e.slug, e.dbName)
+        ),
+        singles: [],
+        components: [],
+        nonInteractive: true,
+        autoAcceptRenames: true,
+        now: new Date(Date.UTC(2026, 10, 18, 12, step)),
+      });
+      if (result === null) throw new Error("no migration was written");
+      const written = (await readdir(migrationsDir))
+        .filter(f => f.endsWith(".sql") && !before.has(f))
+        .sort();
+      const statementsOf = async (name: string) =>
+        splitSqlStatements(
+          parseSqlSections(await readFile(join(migrationsDir, name), "utf-8"))
+            .upSql,
+          connection.dialect
+        );
+      const main = result.sqlPath.split(/[\\/]/).pop() ?? "";
+      return {
+        filename: main,
+        all: (await Promise.all(written.map(statementsOf))).flat(),
+        main: await statementsOf(main),
+        snapshot: JSON.parse(
+          await readFile(result.snapshotPath, "utf-8")
+        ) as SnapshotFile,
+      };
+    };
+    const first = await run(
+      () => text({ name: "heading", localized: true }),
+      1
+    );
+    for (const statement of first.all) await connection.run(statement);
+    await connection.run(
+      `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("created_at")}, ${q("updated_at")}) VALUES ('r1', 'T', 'r1', '2026-11-18 00:00:00', '2026-11-18 00:00:00')`
+    );
+    await connection.run(
+      `INSERT INTO ${q(`${table}_locales`)} (${q("_parent")}, ${q("_locale")}, ${q("heading")}) VALUES ('r1', 'en', 'Hello')`
+    );
+    const next = await run(
+      () =>
+        select({
+          name: "summary",
+          localized: true,
+          options: [{ label: "A", value: "a" }],
+        }),
+      2
+    );
+    const judgedOn = (statements: string[]) =>
+      refuseFileTypeChanges(connection.db, {
+        filename: next.filename,
+        before: first.snapshot.entities,
+        target: next.snapshot.entities,
+        statements,
+        dialect: connection.dialect,
+      });
+    // The rename is in the translation file, not the migration itself.
+    expect(next.main.join("\n")).not.toMatch(/RENAME/i);
+    expect(next.all.join("\n")).toMatch(/RENAME/i);
+
+    await expect(judgedOn(next.all)).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "fields.summary",
+            code: "TYPE_CHANGE_LOSES_VALUES",
+          }),
+        ],
+      },
+    });
+    // The migration's own statements alone pair nothing: why every file of the change is given.
+    await expect(judgedOn(next.main)).resolves.toBeUndefined();
   });
 
   it("judges nothing for a file with no snapshot before it", async () => {

@@ -16,6 +16,7 @@ import type {
 } from "../../../migrate-create/entity-settings";
 import { mysqlLiveStatements } from "../../../pipeline/sql-templates/mysql-live-restate";
 import {
+  fileTypeChangeRefusals,
   type FileTypeChangeSource,
   fileTypeChangesOf,
 } from "../file-type-changes";
@@ -261,5 +262,129 @@ describe("fileTypeChangesOf", () => {
 
     expect(found?.input.translationsTable).toBe("dc_posts_locales");
     expect(found?.input.translatedBefore).toEqual(new Set(["heading"]));
+  });
+
+  it("pairs an entity by its table where the file renames its slug and keeps its table name", () => {
+    const found = fileTypeChangesOf(
+      source(
+        record({ collections: { posts: posts(TEXT, { dbName: "articles" }) } }),
+        record({
+          collections: {
+            stories: declared({
+              slug: "stories",
+              fields: [SELECT],
+              dbName: "articles",
+            }),
+          },
+        })
+      )
+    );
+
+    expect(found.map(f => [f.slug, f.input.table])).toEqual([
+      ["stories", "dc_articles"],
+    ]);
+  });
+
+  it("pairs an entity through the table rename the file makes", () => {
+    const before = record({ collections: { posts: posts(TEXT) } });
+    const target = record({
+      collections: { stories: declared({ slug: "stories", fields: [SELECT] }) },
+    });
+
+    const renamed = fileTypeChangesOf(
+      source(before, target, ['ALTER TABLE "dc_posts" RENAME TO "dc_stories"'])
+    );
+    const unrenamed = fileTypeChangesOf(source(before, target));
+
+    expect(renamed.map(f => [f.slug, f.input.table])).toEqual([
+      ["stories", "dc_stories"],
+    ]);
+    // A table dropped and another created: no type change to judge.
+    expect(unrenamed).toEqual([]);
+  });
+
+  it("pairs an entity whose table SQLite rebuilds under its own name", () => {
+    // The rebuild a type change on SQLite is written as: a scratch copy renamed to the table's name.
+    const found = fileTypeChangesOf(
+      source(
+        record({ collections: { posts: posts(TEXT) } }),
+        record({ collections: { posts: posts(SELECT) } }),
+        [
+          'CREATE TABLE "__new_dc_posts" ("id" text PRIMARY KEY, "heading" text)',
+          'INSERT INTO "__new_dc_posts" ("id", "heading") SELECT "id", "heading" FROM "dc_posts"',
+          'DROP TABLE "dc_posts"',
+          'ALTER TABLE "__new_dc_posts" RENAME TO "dc_posts"',
+        ],
+        "sqlite"
+      )
+    );
+
+    expect(found.map(f => [f.slug, f.input.table])).toEqual([
+      ["posts", "dc_posts"],
+    ]);
+  });
+
+  it("pairs two names that keep one column, with no rename statement", () => {
+    const found = fileTypeChangesOf(
+      source(
+        record({ collections: { posts: posts({ ...TEXT, name: "fooBar" }) } }),
+        record({
+          collections: { posts: posts({ ...SELECT, name: "foo_bar" }) },
+        })
+      )
+    );
+
+    expect(found[0]?.input.renamed).toEqual(new Map([["fooBar", "foo_bar"]]));
+  });
+
+  it("refuses, without reading a row, a rename on its table it cannot read beside a field of another type", async () => {
+    // A quoted PostgreSQL name in another case than lower is a rename the statement reader leaves
+    // unread.
+    const mixed = source(
+      record({
+        collections: { posts: posts(TEXT, { dbName: "LegacyPosts" }) },
+      }),
+      record({
+        collections: {
+          posts: posts(
+            { ...SELECT, name: "summary" },
+            { dbName: "LegacyPosts" }
+          ),
+        },
+      }),
+      ['ALTER TABLE "dc_LegacyPosts" RENAME COLUMN "heading" TO "summary"']
+    );
+    const lower = source(
+      record({
+        collections: { posts: posts(TEXT, { dbName: "legacy_posts" }) },
+      }),
+      record({
+        collections: {
+          posts: posts(
+            { ...SELECT, name: "summary" },
+            { dbName: "legacy_posts" }
+          ),
+        },
+      }),
+      ['ALTER TABLE "dc_legacy_posts" RENAME COLUMN "heading" TO "summary"']
+    );
+
+    // No database: the refusal reads no row.
+    const refused = await fileTypeChangeRefusals(undefined, mixed);
+
+    expect(refused).toEqual([
+      expect.objectContaining({
+        path: "summary",
+        code: "TYPE_CHANGE_BLOCKED",
+        entity: { kind: "collection", slug: "posts" },
+        message: expect.stringMatching(
+          /20261118_change\.sql[\s\S]*dc_LegacyPosts/
+        ),
+      }),
+    ]);
+    // The same rename read: paired and judged as a type change, not refused unread.
+    const [read] = fileTypeChangesOf(lower);
+    expect(read?.input.renamed).toEqual(new Map([["heading", "summary"]]));
+    expect(read?.unread).toBeUndefined();
   });
 });
