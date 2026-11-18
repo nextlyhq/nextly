@@ -197,8 +197,13 @@ function exposuresRenamed(
     for (let v = steps.from; v < steps.to; v++) {
       const to = steps.renames?.[v]?.[head];
       if (to !== undefined) head = to;
-      // An exposure into a prop the step drops goes with the prop.
-      if (steps.drops?.[v]?.includes(head) === true) {
+      // An exposure into a prop the step drops goes with the prop. A
+      // visibility exposure drives the node, not the prop its path names, so
+      // it stays.
+      if (
+        exposure.type !== "visibility" &&
+        steps.drops?.[v]?.includes(head) === true
+      ) {
         changed = true;
         return DROPPED;
       }

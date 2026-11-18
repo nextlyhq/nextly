@@ -1097,6 +1097,41 @@ describe("a step's drops", () => {
     ]);
   });
 
+  it("keep a visibility exposure whatever prop its path names", () => {
+    // Visibility drives the node, not the prop its stored path names, so a
+    // dropped prop leaves it, and its variant values, as they were.
+    const component: ComponentDocument = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        {
+          id: "toc",
+          type: "core/table-of-contents",
+          version: 1,
+          props: { content: {} },
+        },
+      ],
+      exposed: [
+        {
+          id: "shown",
+          label: "Shown",
+          nodeId: "toc",
+          propPath: "content",
+          type: "visibility",
+        },
+      ],
+      variants: { hidden: { label: "Hidden", overrides: { shown: false } } },
+    };
+    const { doc } = migrateDocument(
+      component,
+      source({ "core/table-of-contents": contents })
+    );
+    expect(exposedOf(doc)?.map(each => each.id)).toEqual(["shown"]);
+    expect(variantsOf(doc)).toEqual({
+      hidden: { label: "Hidden", overrides: { shown: false } },
+    });
+  });
+
   it("keep a variant's value for an id another exposure still carries", () => {
     // Stored data can hold one id on two rows; while one remains, the field
     // is live and its variant values stay.
