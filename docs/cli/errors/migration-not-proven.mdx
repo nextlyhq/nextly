@@ -9,7 +9,8 @@ A pending migration's schema is already in the database, but its snapshot does n
 
 The database can reach a migration's end without the migration running, for example after `nextly db:sync` on a shared database. `nextly migrate` then records the file as applied without running it, but only when its snapshot proves the file's whole effect:
 
-- every statement changes only what the snapshot records: tables, columns, indexes, constraints and foreign keys. A statement that reads or writes rows (an `UPDATE` that backfills a column, for example) or that changes anything else (a trigger, a view, a function, a sequence, an extension or a grant) is not shown by the snapshot, and the database must stand as each statement leaves it: an index it can use, a constraint it has validated;
+- every statement changes only what the snapshot records: tables, columns, indexes, constraints and foreign keys. A statement that reads or writes rows (an `UPDATE` that backfills a column, for example) or that changes anything else (a trigger, a view, a function, a sequence, an extension or a grant) is not shown by the snapshot, and the database must stand as each statement leaves it: an index it can use, a constraint it has validated, a key the database assigns where the file's table has one (`serial`, an identity column, `AUTO_INCREMENT`);
+- on MySQL, a column the file restates with `MODIFY` or `CHANGE` holds nothing the statement would reset. Such a statement restates the whole column, so running it puts back a collation, comment, visibility, `ON UPDATE`, `AUTO_INCREMENT` or generated expression set on the column by hand. A `MODIFY` or `CHANGE` that states any of these itself, or a position (`FIRST`, `AFTER`), is not shown by the snapshot;
 - the file's checksum matches the one recorded with its snapshot when `nextly migrate:create` wrote it, so it has not been edited since;
 - it has no attempt that failed or recorded no outcome.
 
@@ -17,9 +18,11 @@ If any of these fails, recording the file would skip work the database may not h
 
 A migration whose database stands where it starts always runs, data statements included.
 
+The proof reads the schema, not the rows. Where a file converts a column's values as it changes the column's type (PostgreSQL's `USING "price"::integer`), or fills a new column with a default, a database already at the file's end is recorded as it is: the values it holds, converted or filled another way, are kept.
+
 ## Fix
 
-1. Run the statements the error does not mark "the database has it" by hand, or confirm they are not needed on this database. A statement marked "the database does not stand as it leaves it" made an object the database holds but cannot use, such as a PostgreSQL index left invalid by an interrupted `CREATE INDEX CONCURRENTLY` or a constraint added `NOT VALID`: rebuild or validate it.
+1. Run the statements the error does not mark "the database has it" by hand, or confirm they are not needed on this database. A statement marked "the database does not stand as it leaves it" made an object the database holds but cannot use, such as a PostgreSQL index left invalid by an interrupted `CREATE INDEX CONCURRENTLY` or a constraint added `NOT VALID`: rebuild or validate it. A statement marked "the column keeps settings it would reset" restates a MySQL column that holds a collation, comment or other setting the statement leaves out: run the statement to reset them, or record the file to keep them.
 2. Record the file as applied: `nextly migrate:resolve --applied <migration>`.
 3. Run `nextly migrate` again.
 
