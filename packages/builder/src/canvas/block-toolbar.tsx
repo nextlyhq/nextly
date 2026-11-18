@@ -66,6 +66,7 @@ import {
   CornerLeftUp,
   Ellipsis,
   FileText,
+  Group,
   Heading,
   LayoutTemplate,
   Lock,
@@ -76,6 +77,7 @@ import {
   SquarePen,
   Trash2,
   Type,
+  Ungroup,
   Unlink,
   type LucideIcon,
 } from "lucide-react";
@@ -496,6 +498,9 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   "detach-component": Unlink,
   "duplicate-component": CopyPlus,
   "update-pattern": RefreshCw,
+  // The grouping marks: blocks gathered into one, and one let go.
+  "wrap-in-box": Group,
+  unwrap: Ungroup,
   delete: Trash2,
 };
 

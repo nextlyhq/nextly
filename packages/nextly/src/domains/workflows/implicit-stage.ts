@@ -26,6 +26,7 @@ import { container } from "../../di/container";
 import type { CollectionRegistryService } from "../collections/services/collection-registry-service";
 import { appLocalization } from "../i18n/configured-locales";
 import type { SingleRegistryService } from "../singles/services/single-registry-service";
+import { draftSlotParts } from "../versions/part-drafts";
 import { readPartIsLive } from "../versions/part-liveness";
 import { VersionsRepository } from "../versions/versions-repository";
 
@@ -111,8 +112,9 @@ export async function livePartsOf(
 
 /**
  * Which parts of a document hold changes not yet published, read on `tx`: a language with its own
- * working draft, and the shared part while any part holds one, since a draft carries the shared
- * values it changes.
+ * working draft, and the shared part where a working draft's slot holds it (`draftSlotParts`): the
+ * shared draft kept apart, or, where drafts are not kept by part, any language's draft, which
+ * holds the whole document.
  *
  * @experimental
  */
@@ -126,5 +128,6 @@ export async function pendingPartsOn(
     [document.entryId]
   );
   const pending = byEntry.get(document.entryId) ?? new Set<string | null>();
-  return part => (part === null ? pending.size > 0 : pending.has(part));
+  const sharedPending = [...pending].some(slot => draftSlotParts(slot).shared);
+  return part => (part === null ? sharedPending : pending.has(part));
 }

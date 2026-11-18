@@ -219,12 +219,11 @@ export function holdReason(
 }
 
 /**
- * Whether the gate judges a Single's publish. Off until Singles take workflow steps: a step on a
- * Single is refused today (`WORKFLOW_SINGLES_NOT_SUPPORTED`), so no Single can hold an approval,
- * and judging one would hold every publish of it. A Single with a workflow attached publishes as
- * one without; turned on, with its tests, once a Single's steps can approve it.
+ * Whether the gate judges a Single's publish. On: a Single takes workflow steps as a collection's
+ * document does (`takeWorkflowStep`, judged by the Single's own gate), so its parts can hold an
+ * approval, and a Single with a workflow attached publishes only what is approved.
  */
-const SINGLES_GOVERNED = false;
+const SINGLES_GOVERNED = true;
 
 /**
  * Whether the gate judges a publish of `scope` at all. Exported so a release holds back only what

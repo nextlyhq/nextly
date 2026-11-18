@@ -62,6 +62,12 @@ const SOURCES: readonly BindingFieldSource[] = [
  * on a caption.
  */
 const HOLDING: Readonly<Record<string, Record<string, unknown>>> = {
+  // A provider's link played on press: an Embed draws Load, Privacy mode
+  // and Poster only for one.
+  "core/embed": {
+    src: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    load: "click",
+  },
   "core/image": {
     src: "https://cdn.example/a.png",
     whenClicked: "link",

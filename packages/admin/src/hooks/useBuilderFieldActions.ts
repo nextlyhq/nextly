@@ -17,15 +17,14 @@ import type {
   BuilderFieldsApi,
 } from "@admin/components/features/schema-builder/types";
 import { toast } from "@admin/components/ui";
-import {
-  convertToFieldDefinition,
-  SYSTEM_FIELD_NAMES,
-} from "@admin/lib/builder";
+import { convertToFieldDefinition } from "@admin/lib/builder";
+import { builtInFieldNamesOf } from "@admin/lib/builder/constants";
 import {
   duplicatedFields,
   type DuplicateNaming,
 } from "@admin/lib/builder/duplicate-field";
 import { savedFieldsOffTheirLevel } from "@admin/lib/builder/move-rule";
+import type { SchemaTemplateKind } from "@admin/lib/builder/schema-templates";
 import type { FieldDefinition } from "@admin/types/collection";
 
 export interface UseBuilderFieldActionsReturn {
@@ -46,8 +45,13 @@ export interface UseBuilderFieldActionsReturn {
   ) => FieldDefinition[] | null;
 }
 
+/**
+ * @param kind which kind of entity is edited: only its built-in fields (`builtInFieldNamesOf`)
+ *   are left out of what a save sends, so a field group's own `title` or `slug` is saved.
+ */
 export function useBuilderFieldActions(
-  builder: BuilderFieldsApi
+  builder: BuilderFieldsApi,
+  kind: SchemaTemplateKind
 ): UseBuilderFieldActionsReturn {
   const handleDuplicateField = useCallback(
     (fieldId: string, naming?: DuplicateNaming) => {
@@ -60,8 +64,9 @@ export function useBuilderFieldActions(
 
   const getValidatedFields = useCallback(
     (saved?: readonly BuilderField[]): FieldDefinition[] | null => {
+      const builtInNames = builtInFieldNamesOf(kind);
       const userFields = builder.fields.filter(
-        f => !f.isSystem && !SYSTEM_FIELD_NAMES.includes(f.name)
+        f => !f.isSystem && !builtInNames.includes(f.name)
       );
       const validation = builder.validateFields(userFields);
       if (!validation.valid) {
@@ -86,7 +91,7 @@ export function useBuilderFieldActions(
       }
       return userFields.map(convertToFieldDefinition);
     },
-    [builder]
+    [builder, kind]
   );
 
   return { handleDuplicateField, getValidatedFields };

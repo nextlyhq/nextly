@@ -93,6 +93,7 @@ function Harness({
     defaultValues: {},
   });
   const state = useBuilderEntityState({
+    kind: "collection",
     entity,
     builder: fieldBuilder,
     toFields: loaded => loaded.fields,
@@ -416,8 +417,12 @@ function LayoutHarness() {
     resolver: async values => ({ values, errors: {} }),
     defaultValues: {},
   });
-  saveCheck = useBuilderFieldActions(fieldBuilder).getValidatedFields;
+  saveCheck = useBuilderFieldActions(
+    fieldBuilder,
+    "collection"
+  ).getValidatedFields;
   const state = useBuilderEntityState({
+    kind: "collection",
     entity,
     builder: fieldBuilder,
     toFields: loaded => loaded.fields,

@@ -36,7 +36,7 @@ import {
 } from "nextly/config";
 import { isFieldGroupFieldType } from "nextly/field-group-type";
 
-import { SYSTEM_FIELD_NAMES } from "./constants";
+import { builtInFieldNamesOf } from "./constants";
 import { convertToBuilderField } from "./field-transformers";
 import { builderFieldErrors } from "./field-validators";
 import { BUILT_IN_FIELD_TYPES } from "./offered-field-types";
@@ -111,16 +111,6 @@ const CONTAINER_TYPES: ReadonlySet<string> = new Set(["group", "repeater"]);
 // Where a field's key comes from, for the readers that list a template's
 // fields by the keys this check names them by.
 export { templateFieldKey };
-
-/**
- * The fields a kind's entity holds beside its own: a collection's and a
- * Single's title and slug; a field group holds none.
- */
-const BUILT_IN_FIELD_NAMES: Record<SchemaTemplateKind, readonly string[]> = {
-  collection: SYSTEM_FIELD_NAMES,
-  single: SYSTEM_FIELD_NAMES,
-  fieldGroup: [],
-};
 
 /** A field placed: where it is, what it is called, and whether it is nested. */
 interface Placed {
@@ -311,7 +301,7 @@ export function checkTemplate(
     const clashes = clashFailures(
       level,
       parent === null,
-      BUILT_IN_FIELD_NAMES[template.kind],
+      builtInFieldNamesOf(template.kind),
       ctx.startingFieldNames ?? []
     );
     for (const each of level) {

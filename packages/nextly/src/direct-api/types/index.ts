@@ -173,9 +173,12 @@ export type {
   FindQueuedEmailsArgs,
   EmailLastSentArgs,
   EmailOverdueArgs,
+  FindEmailDeliveryByIDArgs,
   ActivityPage,
   DeliveryActivity,
+  DeliveryDetail,
   QueuedEmailActivity,
+  QueuedEmailDetail,
   QueuedEmailOverdue,
   TemplatesLastSent,
 } from "./email";
