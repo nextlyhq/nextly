@@ -20,7 +20,8 @@ export const MAX_TOTAL_SECONDS = 86_400;
 
 /** What both flags bound, and what they do not. */
 const WHAT_IT_BOUNDS =
-  "It bounds the wait for a busy table, not the wait for the schema lock.";
+  "It bounds the wait for a busy table, not the wait for the schema lock another run holds; " +
+  "on SQLite it also bounds the wait for a busy database while the lock is taken.";
 
 /** The help `--lock-timeout` carries on every command that offers it. */
 export const LOCK_TIMEOUT_HELP =

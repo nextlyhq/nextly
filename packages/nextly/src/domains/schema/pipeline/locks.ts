@@ -15,6 +15,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
 import { isMissingTable } from "../../field-groups/migration/session";
+import type { BusyTableBounds } from "../busy-table/bounds";
 
 import {
   EARLIER_MIGRATE_LOCK_TABLE,
@@ -50,6 +51,11 @@ export interface MigrateLockOptions {
    */
   releaseOnInterrupt?: boolean;
   logger?: { warn?: (m: string) => void; info?: (m: string) => void };
+  /**
+   * The command's busy-table bounds, from its flags over the environment: on SQLite, how long
+   * a busy database is waited for while the lock is taken (`SchemaLockOptions.busyBounds`).
+   */
+  busyBounds?: BusyTableBounds;
 }
 
 /**
@@ -80,6 +86,7 @@ export async function withMigrateLock<T>(
       isSettled: opts.isSettled,
       releaseOnInterrupt: opts.releaseOnInterrupt ?? true,
       logger: opts.logger,
+      ...(opts.busyBounds === undefined ? {} : { busyBounds: opts.busyBounds }),
     },
     () => fn()
   );

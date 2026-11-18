@@ -43,6 +43,10 @@
  * refusal, error or, for a command, an interrupt — it releases every lock it holds before the
  * process exits.
  *
+ * On SQLite, a database another connection holds for a write of its own is busy, not a held lock:
+ * the run waits for it in the busy-table tries, a command through all of them and a save through
+ * one, and then stops with `NEXTLY_TABLE_BUSY` (`waitingForBusyDatabase`).
+ *
  * @module domains/schema/pipeline/schema-lock
  */
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -81,6 +85,12 @@ import {
   withMigrationSession,
   type MigrationSession,
 } from "../../field-groups/migration/session";
+import { busyTableBounds, type BusyTableBounds } from "../busy-table/bounds";
+import { endedWaiting } from "../busy-table/ended-waiting";
+import { readHolders } from "../busy-table/holder";
+import { tableBusyError, tryNotice } from "../busy-table/report";
+import { boundSqliteWait } from "../busy-table/sqlite-wait";
+import { withBusyTableTries } from "../busy-table/tries";
 
 import {
   UNIT_COMMENT_CLOSE,
@@ -231,6 +241,13 @@ export interface SchemaLockOptions {
    * and process out of an API response.
    */
   refusal?: "command" | "editor";
+  /**
+   * The bounds a busy SQLite database is waited for with while the lock is taken, where the
+   * caller has its own: a command's `--lock-timeout` and `--lock-timeout-total` over the
+   * environment. Absent, the environment's, or the defaults. PostgreSQL and MySQL wait for the
+   * lock's row and read none of them.
+   */
+  busyBounds?: BusyTableBounds;
   logger?: {
     warn?: (message: string, meta?: Record<string, unknown>) => void;
     info?: (message: string, meta?: Record<string, unknown>) => void;
@@ -524,10 +541,181 @@ async function ensureRow(
     });
   } catch (error) {
     if (!mayCreateTables && isMissingTable(error, dialect)) return false;
+    // SQLite's busy answer is another connection holding the whole database: it is waited for
+    // in tries (`waitingForBusyDatabase`), never taken for a seed the claim can settle.
+    if (dialect === "sqlite" && endedWaiting(error, dialect, false)) {
+      throw error;
+    }
     // Any other failure, a lost seed race among them, leaves the claim below to decide: it reads
     // the row, and refuses when there is none.
   }
   return true;
+}
+
+/**
+ * `step`, a part of taking the lock, waited for on a busy SQLite database as a schema change
+ * waits for a busy table.
+ *
+ * On SQLite the lock's row is seeded and claimed inside a `BEGIN IMMEDIATE` transaction, and a
+ * connection with a write transaction open holds the whole database, so the transaction cannot
+ * begin and SQLite answers that it is busy. The step then runs in the busy-table tries, with
+ * their bounds ({@link busyBoundsOf}) and their pauses: a holder that ends within the total lets
+ * the step run, and one that does not ends the run with `NEXTLY_TABLE_BUSY`, naming the lock's
+ * table and why SQLite names no holder. SQLite's own answer never reaches the caller as the
+ * error; it is the stop's cause.
+ *
+ * A run that refuses a held lock at once (a Schema Builder save, a request) makes one try: its
+ * caller is not kept waiting through the pauses. A command that waits for a held lock makes
+ * them all.
+ *
+ * A try that ended this way began no transaction, so nothing of the step is left and it runs
+ * again whole. No lock is held yet, so there is none to show held between tries, and no lease to
+ * end them by. PostgreSQL and MySQL wait for the row itself and run the step as it is.
+ */
+async function waitingForBusyDatabase<T>(
+  options: SchemaLockOptions,
+  dialect: SupportedDialect,
+  step: () => Promise<T>
+): Promise<T> {
+  if (dialect !== "sqlite") return step();
+  const { adapter } = options;
+  const bounds = busyBoundsOf(options);
+  if (bounds.kind === "invalid") {
+    // The bounds matter only to a database found busy: an idle one is not refused for them.
+    try {
+      return await step();
+    } catch (error) {
+      throw endedWaiting(error, dialect, false) ? bounds.error : error;
+    }
+  }
+  // SQLite's own answer to the last try, kept as the stop's cause: a caller that holds the
+  // database's write lock itself, on another connection of this process, reads it there and
+  // reports its own lock, never a table another party holds.
+  let busy: unknown;
+  try {
+    return await withBusyTableTries(
+      {
+        bounds: bounds.value,
+        // The run, as the operator knows it: the command that asked for the lock.
+        change: options.command,
+        appliedBefore: [],
+        // One line at each try after the first: to the caller's logger, or, for a caller with
+        // none, to standard error, so no run waits through its tries in silence.
+        notify: line => {
+          if (options.logger?.warn !== undefined) options.logger.warn(line);
+          else process.stderr.write(`${line}\n`);
+        },
+        notice: tryNotice,
+        assertHeld: () => Promise.resolve(),
+        stopped: tableBusyError,
+      },
+      (_tryNumber, tryMs) =>
+        boundedSqliteTry(adapter, tryMs, async () => {
+          try {
+            return { kind: "done", value: await step() };
+          } catch (error) {
+            if (!endedWaiting(error, dialect, false)) throw error;
+            busy = error;
+            return {
+              kind: "ended",
+              ended: {
+                table: SCHEMA_LOCK_TABLE,
+                holder: await readHolders(adapter, dialect, undefined),
+              },
+              // The transaction never began, so nothing was written or is left to undo.
+              undone: true,
+              committed: [],
+            };
+          }
+        })
+    );
+  } catch (error) {
+    if (
+      !(busy instanceof Error) ||
+      !NextlyError.isCode(error, "NEXTLY_TABLE_BUSY")
+    ) {
+      throw error;
+    }
+    throw new NextlyError({
+      code: error.code,
+      publicMessage: error.publicMessage,
+      logContext: error.logContext,
+      cause: busy,
+    });
+  }
+}
+
+/**
+ * The bounds a run waits for a busy SQLite database with while it takes the lock: its caller's
+ * (`busyBounds`), else the environment's, else the defaults; or, where the environment's are out
+ * of range, the refusal that says so.
+ *
+ * For a run that refuses a held lock at once, the total is one try: the first try is the only
+ * one that fits.
+ */
+function busyBoundsOf(
+  options: SchemaLockOptions
+):
+  | { kind: "valid"; value: BusyTableBounds }
+  | { kind: "invalid"; error: unknown } {
+  let bounds: BusyTableBounds;
+  try {
+    bounds = options.busyBounds ?? busyTableBounds({ env: process.env });
+  } catch (error) {
+    return { kind: "invalid", error };
+  }
+  return {
+    kind: "valid",
+    value:
+      options.whenHeld === "refuse"
+        ? { tryMs: bounds.tryMs, totalMs: bounds.tryMs }
+        : bounds,
+  };
+}
+
+/** Each adapter's bounded tries for the lock, in turn: see {@link boundedSqliteTry}. */
+const boundedTries = new WeakMap<object, Promise<unknown>>();
+
+/**
+ * `attempt` with SQLite's busy timeout, which bounds its wait for the database, at `tryMs`.
+ *
+ * The timeout is the connection's, and a server's requests share one connection, so two runs
+ * taking the lock at once would each read the other's bound as the connection's own and one
+ * would leave it changed for good. So the tries of one adapter run in turn, and the timeout is
+ * written only where it differs from the try's bound: with the default bounds it already is the
+ * bound, and nothing is written at all.
+ */
+function boundedSqliteTry<T>(
+  adapter: DrizzleAdapter,
+  tryMs: number,
+  attempt: () => Promise<T>
+): Promise<T> {
+  const bounded = async (): Promise<T> => {
+    const [row] = await adapter.executeQuery<Record<string, unknown>>(
+      "PRAGMA busy_timeout"
+    );
+    if (Number(Object.values(row ?? {})[0]) === Math.round(tryMs)) {
+      return attempt();
+    }
+    const restore = await boundSqliteWait(adapter, tryMs);
+    try {
+      return await attempt();
+    } finally {
+      await restore();
+    }
+  };
+  const turn = (boundedTries.get(adapter) ?? Promise.resolve()).then(
+    bounded,
+    bounded
+  );
+  boundedTries.set(
+    adapter,
+    turn.then(
+      () => undefined,
+      () => undefined
+    )
+  );
+  return turn;
 }
 
 type RowAttempt =
@@ -1125,12 +1313,14 @@ class SchemaLockHold {
     if (!taken.ok) return this.heldByEarlierLock(taken.holder);
     this.earlier = taken.held;
     if (this.rowReady) {
-      const row = await claimRow(
-        this.adapter,
-        this.dialect,
-        this.claim,
-        this.options.command,
-        this.timings
+      const row = await waitingForBusyDatabase(this.options, this.dialect, () =>
+        claimRow(
+          this.adapter,
+          this.dialect,
+          this.claim,
+          this.options.command,
+          this.timings
+        )
       );
       if (!row.ok) {
         await this.releaseAll();
@@ -1694,10 +1884,8 @@ export async function withSchemaLock<T>(
   const wait = new LockWait(options);
   const removeSignals = hold.installSignals();
   try {
-    hold.rowReady = await ensureRow(
-      hold.adapter,
-      hold.dialect,
-      hold.mayCreateTables
+    hold.rowReady = await waitingForBusyDatabase(options, hold.dialect, () =>
+      ensureRow(hold.adapter, hold.dialect, hold.mayCreateTables)
     );
     const outcome = await runWhenHeld(hold, wait, work);
     if (!outcome.ran) return outcome;
