@@ -168,9 +168,9 @@ function emptyTranslationsTable(
 ): string[] {
   const { dialect } = args;
   const settings = entity.entry.settings;
-  const fields = (Array.isArray(settings.fields) ? settings.fields : []).filter(
-    isRecordedField
-  );
+  const fields = (
+    Array.isArray(settings.fields) ? settings.fields : []
+  ).flatMap((field: unknown) => (isRecordedField(field) ? [field] : []));
   const derived = deriveCompanionSpec({
     builtBy: builtByFor(entity.kind, entity.entry.source === "builder"),
     slug: entity.slug,

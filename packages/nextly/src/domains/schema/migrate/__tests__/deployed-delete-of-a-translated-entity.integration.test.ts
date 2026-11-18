@@ -157,7 +157,7 @@ const KINDS: Kind[] = [
         }
       ),
     write: async site => {
-      const singles = site.getService<SingleEntryService>("singleEntryService");
+      const singles: SingleEntryService = site.getService("singleEntryService");
       for (const [locale, body] of [
         ["en", "Hello"],
         ["es", "Hola"],
