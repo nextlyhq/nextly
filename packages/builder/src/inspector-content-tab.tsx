@@ -25,6 +25,10 @@ import {
 } from "./component-fields-panel";
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
+import {
+  EMBED_BLOCK_TYPE,
+  embedLinkOp,
+} from "./canvas/embed-states-model";
 import { embedSectionBodies } from "./embed-sections";
 import { formSectionBodies } from "./form-sections";
 import { galleryContentSections } from "./gallery-fields";
@@ -139,6 +143,13 @@ export function commitProp(
   if (!propIsWritable(document, id, name, lockViewOf(editor))) return null;
   const node = findNode(document.nodes, id);
   if (node === undefined) return null;
+  // An Embed's link, typed or pasted into its Link field, takes the
+  // provider's shape with it, in the same step, as a link pasted on the
+  // canvas does.
+  if (node.type === EMBED_BLOCK_TYPE && name === "src" && typeof value === "string") {
+    const linked = embedLinkOp(document, id, value);
+    if (linked !== null) return editor.apply(linked);
+  }
   return editor.apply({
     kind: "update",
     id,
@@ -324,8 +335,6 @@ function ContentSurface({
     onCommit: (name, value) => {
       onCommit(name, value);
     },
-    onApply: op => editor.apply(op) !== null,
-    document: editor.document,
     rowsOf: fieldsFor,
   });
   // Each section the block places in Content, folding on its own, after

@@ -5,11 +5,11 @@
  * of the generated rows: the block's declaration still says what is edited
  * there, and an editor without this draws the generated rows instead.
  *
- * - **Link** takes a link as typed or pasted, and stores it through the same
- *   write the canvas's field uses (`embedLinkOp`): with a provider the block
- *   knows, the provider's shape is written as the block's own style values
- *   in the same step. Under it, what was found: "YouTube detected. Size set
- *   from the video." or "Shown as a plain frame".
+ * - **Link** is the block's own field, bindable as any is; a link typed or
+ *   pasted there takes the provider's shape in the same step (the Content
+ *   tab's one write, `commitProp`, uses the canvas field's `embedLinkOp`).
+ *   Under it, what was found: "YouTube detected. Size set from the video."
+ *   or "Shown as a plain frame".
  * - **Load** and **Poster** only for a link a provider owns, since any other
  *   link is a plain frame loaded with the page; **Poster** only while the
  *   player loads when played, as that is when a poster shows.
@@ -20,14 +20,12 @@
  * @module embed-sections
  */
 import { detectEmbed } from "@nextlyhq/blocks-react";
-import { Button, Input, Label } from "@nextlyhq/ui";
+import { Button } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { embedLinkOp, linkNote } from "./canvas/embed-states-model";
+import { linkNote } from "./canvas/embed-states-model";
 import type { ContentServices } from "./content-services";
 import type { BlockInspection, EditableProp } from "./inspector";
-import type { BuilderOp } from "./op-vocabulary";
-import { useStoredDraft } from "./stored-draft";
 
 /** The block this section is drawn for. */
 const EMBED_BLOCK = "core/embed";
@@ -51,13 +49,6 @@ export interface EmbedSectionsContext {
   /** Whether a prop may be written here: a lock or a content-only area say. */
   readonly writable: (name: string) => boolean;
   readonly onCommit: (name: string, value: unknown) => void;
-  /**
-   * Apply an edit as any other edit of the block; whether the editor took
-   * it. Used for a link, whose shape is written in the same step.
-   */
-  readonly onApply: (op: BuilderOp) => boolean;
-  /** The document the block is in, for the link's write. */
-  readonly document: Parameters<typeof embedLinkOp>[0];
   /** The generated rows for `rows`, as the tab draws any section's. */
   readonly rowsOf: (rows: readonly EditableProp[]) => React.JSX.Element;
 }
@@ -106,19 +97,12 @@ function EmbedSection({
   ];
   return (
     <>
-      <EmbedLinkField
-        id={`${inspection.nodeId}-embed-link`}
-        stored={link}
-        disabled={!writable("src")}
-        onLink={typed => {
-          if (typed === "") {
-            context.onCommit("src", "");
-            return;
-          }
-          const op = embedLinkOp(context.document, inspection.nodeId, typed);
-          if (op !== null) context.onApply(op);
-        }}
-      />
+      {context.rowsOf(rowsNamed(inspection, ["src"]))}
+      {/* What the link is, said again whenever it changes, so a screen
+          reader hears what was found without leaving the field. */}
+      <p className="nx-inspector__note nx-embed-note" role="status">
+        {linkNote(link) ?? ""}
+      </p>
       {context.rowsOf(rowsNamed(inspection, names))}
       {played && match.thumbnail !== undefined ? (
         <ThumbnailCopy
@@ -129,66 +113,6 @@ function EmbedSection({
         />
       ) : null}
     </>
-  );
-}
-
-/**
- * The Link field: holds what is typed while focused, stores it on Enter, on
- * leaving the field or at once when pasted, and says what was found.
- */
-function EmbedLinkField({
-  id,
-  stored,
-  disabled,
-  onLink,
-}: {
-  readonly id: string;
-  readonly stored: string;
-  readonly disabled: boolean;
-  readonly onLink: (typed: string) => void;
-}): React.JSX.Element {
-  const [draft, setDraft] = useStoredDraft(stored);
-  const send = (value: string): void => {
-    const typed = value.trim();
-    if (typed === stored.trim()) return;
-    onLink(typed);
-  };
-  const note = linkNote(stored);
-  return (
-    <div className="nx-inspector__field" data-content-control="url">
-      <Label htmlFor={id}>Link</Label>
-      <Input
-        id={id}
-        type="text"
-        inputMode="url"
-        value={draft}
-        disabled={disabled}
-        {...(note === undefined ? {} : { "aria-describedby": `${id}-note` })}
-        onChange={event => setDraft(event.currentTarget.value)}
-        onBlur={() => send(draft)}
-        onKeyDown={event => {
-          if (event.key !== "Enter") return;
-          event.preventDefault();
-          send(draft);
-        }}
-        onPaste={event => {
-          // A link pasted into an empty field is the whole act, as on the
-          // canvas: stored at once. Pasting into a link being edited is left
-          // to the field.
-          if (draft.trim() !== "") return;
-          const pasted = event.clipboardData.getData("text/plain").trim();
-          if (pasted === "" || /\s/.test(pasted)) return;
-          event.preventDefault();
-          setDraft(pasted);
-          send(pasted);
-        }}
-      />
-      {/* Said again whenever the link changes, so a screen reader hears what
-          was found without leaving the field. */}
-      <p className="nx-inspector__note" id={`${id}-note`} role="status">
-        {note ?? ""}
-      </p>
-    </div>
   );
 }
 
