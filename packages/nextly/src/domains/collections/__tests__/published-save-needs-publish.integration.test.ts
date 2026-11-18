@@ -18,7 +18,12 @@ import {
   grantTo,
   userWhoMay,
 } from "../../../__tests__/fixtures/permission-holders";
-import { defineCollection, defineSingle, text } from "../../../config";
+import {
+  defineCollection,
+  defineSingle,
+  password,
+  text,
+} from "../../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -38,6 +43,11 @@ afterEach(async () => {
 const PAGES = "pages";
 /** No working drafts: update changes a published post's live content. */
 const POSTS = "posts";
+/**
+ * Draft versions turned on, but no working draft can hold a password, so the
+ * admin's `draftsEnabled` is false and update changes the live content.
+ */
+const MEMBERS = "members";
 const BANNER = "banner";
 
 /** Pages and a banner Single with drafts: published edits are held until published. */
@@ -55,6 +65,12 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         slug: POSTS,
         status: true,
         fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: MEMBERS,
+        status: true,
+        versions: { drafts: true },
+        fields: [text({ name: "title" }), password({ name: "pin" })],
       }),
     ],
     singles: [
@@ -111,9 +127,9 @@ async function caller(
   actions: readonly string[]
 ): Promise<{ id: string; isActive: true }> {
   const [first, ...rest] = actions;
-  await userWhoMay(t, id, first ?? "read", [PAGES, POSTS, BANNER]);
+  await userWhoMay(t, id, first ?? "read", [PAGES, POSTS, MEMBERS, BANNER]);
   for (const action of rest) {
-    await grantTo(t, id, action, [PAGES, POSTS, BANNER]);
+    await grantTo(t, id, action, [PAGES, POSTS, MEMBERS, BANNER]);
   }
   return { id, isActive: true };
 }
@@ -294,6 +310,39 @@ describe.each(getConfiguredTestDialects())(
         where: { and: [{ column: "id", op: "=", value: id }] },
       });
       expect(row?.title).toBe("changed");
+    });
+
+    it("leaves update saving live where draft versions are on but no working draft can be held (the control)", async () => {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: MEMBERS,
+        data: { title: "live words", pin: "1234", status: "published" },
+        overrideAccess: true,
+      });
+      const id = String((created.item as { id: string | number }).id);
+      const user = await editor(t);
+
+      await t.nextly.update({
+        collection: MEMBERS,
+        id,
+        data: { title: "changed", status: "published", _overwrite: true },
+        overrideAccess: false,
+        user,
+      });
+
+      const [row] = await t.adapter.select<{ title: unknown }>(
+        `dc_${MEMBERS}`,
+        { where: { and: [{ column: "id", op: "=", value: id }] } }
+      );
+      expect(row?.title).toBe("changed");
+      expect(
+        await handlerOf(t).canMoveEntryStatus({
+          collectionName: MEMBERS,
+          entryId: id,
+          nextStatus: "published",
+          user,
+        })
+      ).toBe(true);
     });
 
     it("leaves trusted server code saving live (the control)", async () => {

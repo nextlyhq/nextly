@@ -9,7 +9,6 @@ import { describe, it, expect } from "vitest";
 import {
   resolveFirstPublishedStamp,
   resolvePublishTransition,
-  keepsWorkingDrafts,
   selectPublicationTransition,
   transitionGrantNeeded,
 } from "./status-transition";
@@ -78,7 +77,7 @@ describe("resolvePublishTransition", () => {
 });
 
 describe("transitionGrantNeeded", () => {
-  it("needs publish for a save naming published over a published row that keeps working drafts", () => {
+  it("needs publish for a save naming published over a published row that holds working drafts", () => {
     // It writes the live row, so it changes what visitors see.
     expect(transitionGrantNeeded("published", "published", true)).toBe(
       "publish"
@@ -88,7 +87,7 @@ describe("transitionGrantNeeded", () => {
     expect(resolvePublishTransition("published", "published")).toBeNull();
   });
 
-  it("needs nothing more for it where there are no working drafts", () => {
+  it("needs nothing more for it where the document holds no working drafts", () => {
     // There, update is what changes a published document's live content.
     expect(transitionGrantNeeded("published", "published", false)).toBeNull();
   });
@@ -110,31 +109,6 @@ describe("transitionGrantNeeded", () => {
     expect(transitionGrantNeeded("draft", "draft", true)).toBeNull();
     expect(transitionGrantNeeded("published", undefined, true)).toBeNull();
     expect(transitionGrantNeeded("draft", undefined, true)).toBeNull();
-  });
-});
-
-describe("keepsWorkingDrafts", () => {
-  it("is true only for a lifecycle with draft versions turned on", () => {
-    expect(
-      keepsWorkingDrafts({
-        status: true,
-        versions: { drafts: { enabled: true } },
-      })
-    ).toBe(true);
-    expect(
-      keepsWorkingDrafts({
-        status: true,
-        versions: { drafts: { enabled: false } },
-      })
-    ).toBe(false);
-    expect(keepsWorkingDrafts({ status: true })).toBe(false);
-    expect(
-      keepsWorkingDrafts({
-        status: false,
-        versions: { drafts: { enabled: true } },
-      })
-    ).toBe(false);
-    expect(keepsWorkingDrafts(null)).toBe(false);
   });
 });
 

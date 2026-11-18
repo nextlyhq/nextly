@@ -40,10 +40,7 @@ import {
 } from "../../../database/with-db-errors";
 import { getService } from "../../../di";
 import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
-import {
-  keepsWorkingDrafts,
-  transitionGrantNeeded,
-} from "../../../lib/status-transition";
+import { transitionGrantNeeded } from "../../../lib/status-transition";
 import { readCompanionLocaleStatus } from "../../i18n/companion-join";
 import { appLocalization } from "../../i18n/configured-locales";
 import {
@@ -52,6 +49,7 @@ import {
 } from "../../i18n/per-language-storage";
 import { buildCompanionSchema } from "../../i18n/runtime/companion-io";
 import { cachedCompanionReadiness } from "../../i18n/runtime/companion-readiness";
+import { schemaDraftsEnabled } from "../../versions/draft-split-eligibility";
 import type { UserContext } from "../types";
 
 import { checkSingleAccess } from "./single-query-service";
@@ -217,16 +215,23 @@ export async function singleDocumentStatusMoveAllowed(
   const document = await storedRow(slug, record.tableName);
   if (!document) return false;
   const moves = new Set<"publish" | "unpublish">();
+  // The admin's `draftsEnabled` answer for this Single: where it holds working
+  // drafts, a save naming published over its published row is a publish.
+  const holdsWorkingDrafts = await schemaDraftsEnabled({
+    status: (record as { status?: boolean }).status,
+    versions: (record as { versions?: { drafts?: { enabled?: boolean } } })
+      .versions,
+    fields: record.fields ?? [],
+    slug,
+    localized: (record as { localized?: boolean }).localized === true,
+    entityKind: "single",
+  });
   for (const prior of await statusesMovedFrom(
     record,
     document,
     subject.locale
   )) {
-    const move = transitionGrantNeeded(
-      prior,
-      nextStatus,
-      keepsWorkingDrafts(record)
-    );
+    const move = transitionGrantNeeded(prior, nextStatus, holdsWorkingDrafts);
     if (move !== null) moves.add(move);
   }
   for (const move of moves) {

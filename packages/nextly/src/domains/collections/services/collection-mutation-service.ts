@@ -117,7 +117,6 @@ import {
   LIFECYCLE_STATUSES,
   isLifecycleStatus,
   resolveFirstPublishedStamp,
-  keepsWorkingDrafts,
   transitionGrantNeeded,
   selectPublicationTransition,
   stripUndefinedStatus,
@@ -875,11 +874,11 @@ export interface TransitionAuthorization {
   publishDenied: CollectionServiceResult | null;
   unpublishDenied: CollectionServiceResult | null;
   /**
-   * Whether the collection keeps working drafts, where a save naming
+   * Whether the collection holds working drafts, where a save naming
    * published over a published row needs publish ({@link transitionGrantNeeded}).
    * Absent on a trusted write, which is denied nothing.
    */
-  keepsWorkingDrafts?: boolean;
+  holdsWorkingDrafts?: boolean;
 }
 
 /**
@@ -4969,6 +4968,43 @@ export class CollectionMutationService extends BaseService {
       if (NextlyError.isCode(error, "NOT_FOUND")) return null;
       throw error;
     }
+  }
+
+  /**
+   * Whether a published document of this collection holds a working draft for
+   * an edit: the same answer as the admin's `draftsEnabled` flag and the hold
+   * itself, from the shared eligibility predicate, so the publish gate asks
+   * for `publish` exactly where an edit could have gone to a working draft
+   * instead ({@link transitionGrantNeeded}). The component schemas are read
+   * on `executor` where the caller is inside its own transaction.
+   */
+  private async holdsWorkingDrafts(
+    collection: unknown,
+    executor?: unknown
+  ): Promise<boolean> {
+    const record = collection as {
+      status?: boolean;
+      localized?: boolean;
+      fields?: FieldConfig[];
+      versions?: ResolvedVersionsConfig | null;
+    };
+    const collectionHasStatus = record.status === true;
+    const draftsVersioningEnabled = record.versions?.drafts?.enabled === true;
+    const fields = record.fields ?? [];
+    // Read only once the cheap disqualifiers pass, as every hold decision does.
+    const componentSchemas =
+      collectionHasStatus &&
+      draftsVersioningEnabled &&
+      !hasPasswordField(fields)
+        ? await resolveComponentSchemas(fields, executor)
+        : null;
+    return isDraftSplitEligible({
+      collectionHasStatus,
+      draftsVersioningEnabled,
+      fields,
+      componentSchemas,
+      documentLocalized: record.localized === true,
+    });
   }
 
   /** Whether the collection keeps working drafts at all. */
@@ -9272,7 +9308,6 @@ export class CollectionMutationService extends BaseService {
         collectionName: params.collectionName,
         collectionHasStatus:
           (collection as { status?: boolean }).status === true,
-        keepsWorkingDrafts: keepsWorkingDrafts(collection),
         previousStatus: null,
         nextStatus: finalData.status,
         accessUser,
@@ -13937,7 +13972,7 @@ export class CollectionMutationService extends BaseService {
         params.locale
       ),
       params.nextStatus,
-      keepsWorkingDrafts(collection)
+      await this.holdsWorkingDrafts(collection)
     );
     if (move === null) return true;
     const denied = await this.refusalOfStoredUpdate(
@@ -14974,8 +15009,6 @@ export class CollectionMutationService extends BaseService {
   private async checkStatusTransitionAccess(args: {
     collectionName: string;
     collectionHasStatus: boolean;
-    /** Whether the collection keeps working drafts ({@link keepsWorkingDrafts}). */
-    keepsWorkingDrafts?: boolean;
     previousStatus: string | null;
     nextStatus: unknown;
     accessUser?: UserContext;
@@ -14989,7 +15022,8 @@ export class CollectionMutationService extends BaseService {
     const operation = transitionGrantNeeded(
       args.previousStatus,
       args.nextStatus,
-      args.keepsWorkingDrafts === true
+      // A create has no published row to save over: only its move counts.
+      false
     );
     if (!operation) return null;
 
@@ -15080,7 +15114,10 @@ export class CollectionMutationService extends BaseService {
     return {
       publishDenied,
       unpublishDenied,
-      keepsWorkingDrafts: keepsWorkingDrafts(collection),
+      holdsWorkingDrafts: await this.holdsWorkingDrafts(
+        collection,
+        args.executor
+      ),
     };
   }
 
@@ -15173,7 +15210,7 @@ export class CollectionMutationService extends BaseService {
     const op = transitionGrantNeeded(
       currentStatus,
       nextStatus,
-      auth.keepsWorkingDrafts === true
+      auth.holdsWorkingDrafts === true
     );
     if (!op) return null;
     return op === "publish" ? auth.publishDenied : auth.unpublishDenied;
@@ -17825,14 +17862,14 @@ export class CollectionMutationService extends BaseService {
             transitionGrantNeeded(
               lockedMainStatus,
               mainNextStatus,
-              keepsWorkingDrafts(collection)
+              splitEnabled
             ) === transitionGuard.op;
           const firesOnCompanion =
             companionNextStatus !== undefined &&
             transitionGrantNeeded(
               committedLocaleStatus,
               companionNextStatus,
-              keepsWorkingDrafts(collection)
+              splitEnabled
             ) === transitionGuard.op;
           // The sweep moves companion rows NEITHER test above can see, so a
           // wildcard write must be judged as the lifecycle move it is,
