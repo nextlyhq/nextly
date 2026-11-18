@@ -71,6 +71,44 @@ describe("the link text check", () => {
     ]);
   });
 
+  it("judges a screen reader label's own words, opening it", () => {
+    expect(
+      findings(
+        button("a", { label: "See our pricing", ariaLabel: "Click here" })
+      )
+    ).toEqual([
+      expect.objectContaining({
+        nodeId: "a",
+        what: "Screen reader label doesn’t say where it goes",
+        fix: { tab: "content", id: "ariaLabel" },
+      }),
+    ]);
+  });
+
+  it("leaves a rich text link or button with nowhere to go, drawn as plain words", () => {
+    const passage = block("r", "core/rich-text", {
+      content: {
+        root: {
+          type: "root",
+          children: [
+            {
+              type: "paragraph",
+              children: [
+                {
+                  type: "link",
+                  url: "",
+                  children: [{ type: "text", text: "Read more" }],
+                },
+              ],
+            },
+            { type: "button-link", text: "Click here" },
+          ],
+        },
+      },
+    });
+    expect(findings(passage)).toEqual([]);
+  });
+
   it("takes a screen reader label in place of the words", () => {
     expect(
       findings(button("a", { label: "", ariaLabel: "Open the menu" }))
