@@ -14,19 +14,7 @@
  */
 import type { BlockNode } from "@nextlyhq/blocks-engine";
 
-/** A variable, by its identity. */
-const token = (name: string) => ({ $token: name });
-
-/** The four sides of a box. */
-const sides = (block: unknown, inline: unknown = block) => ({
-  blockStart: block,
-  blockEnd: block,
-  inlineStart: inline,
-  inlineEnd: inline,
-});
-
-/** Styles at every width and state. */
-const styled = (base: Record<string, unknown>) => ({ base: { base: base } });
+import { sides, styled, token } from "../../starter-style";
 
 /** A flex column, its children `gap` apart. */
 const stackOf = (gap: string) => ({
