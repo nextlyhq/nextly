@@ -82,6 +82,7 @@ import {
 import type { EditorState } from "./editor-state";
 import { HeldByLock, HeldHere } from "./held-by-lock";
 import { lockOp, lockStatusOf, lockViewOf, renameOp } from "./inspector";
+import { MakeSettingSection } from "./make-component-setting-section";
 import {
   resetOverrideOp,
   setOverrideOp,
@@ -336,6 +337,21 @@ export function InstanceInspectorPanel({
             </HeldByLock>
           </section>
         )}
+
+        {inspection.definitionFound &&
+        !locked &&
+        definition !== undefined ? (
+          <MakeSettingSection
+            nodeId={inspection.nodeId}
+            componentId={inspection.componentId}
+            label={inspection.label}
+            usedOn={inspection.usedOn}
+            definition={definition}
+            document={editor.document}
+            services={bind.services}
+            onApply={bind.onApply}
+          />
+        ) : null}
 
         {inspection.orphaned.length > 0 ? (
           // Held by the same Layers lock as the rows: discarding a stored value
