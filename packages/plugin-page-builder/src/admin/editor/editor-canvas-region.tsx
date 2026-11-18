@@ -33,6 +33,7 @@ import { canvasNamedQueriesIn } from "../named-queries-client";
 import type { LibraryReadState } from "../pattern-library-client";
 
 import { CanvasFirstAddChoosers } from "./canvas-first-add-choosers";
+import { CanvasFormStates } from "./canvas-form-states";
 import { CanvasImageStates } from "./canvas-image-states";
 import { previewedCanvas } from "./canvas-preview-mode";
 import { DoubleHeaderNotice } from "./double-header-notice";
@@ -281,6 +282,13 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                         remotePatterns: canvasRender.hostPolicy.remotePatterns,
                       })}
                   dragging={dragging}
+                />
+                {/* A picked form that is a draft, closed or deleted, and a
+                    simple form with nowhere to send answers. */}
+                <CanvasFormStates
+                  editor={editor}
+                  locale={locale}
+                  hidden={dragging}
                 />
                 {/* An Embed with no link: "Paste a YouTube, Vimeo or other
                     link", stored with the provider's shape. */}
