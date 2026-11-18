@@ -118,6 +118,13 @@ export interface DocumentSettings {
   /** The page's own title, description and social image. */
   seo?: DocumentSeo;
   /**
+   * Code added to this page only, as the author wrote it: in the page's
+   * `<head>`, and at the end of its `<body>`. Its shape alone is the
+   * engine's; whether it may be stored, and who may change it, is the
+   * host's to judge on every write, and nothing here renders it.
+   */
+  code?: DocumentCode;
+  /**
    * Document-scoped custom CSS, as the author wrote it.
    *
    * NOT sanitized, and nothing renders it. This said "sanitized" while no
@@ -129,6 +136,31 @@ export interface DocumentSettings {
    * performs.
    */
   customCss?: string;
+}
+
+/** The fields a document's own code holds. */
+export const DOCUMENT_CODE_FIELDS = [
+  "head",
+  "body",
+  "acknowledgedCsp",
+] as const;
+
+/**
+ * Code a document adds to its own page.
+ *
+ * @experimental Settles with page code.
+ */
+export interface DocumentCode {
+  /** Added to the page's `<head>`. */
+  head?: string;
+  /** Added at the end of the page's `<body>`. */
+  body?: string;
+  /**
+   * What the author said they understood: the key of the findings the
+   * site's security policy raised against this code when it was saved, so
+   * the host can tell the code was kept knowingly.
+   */
+  acknowledgedCsp?: string;
 }
 
 /**

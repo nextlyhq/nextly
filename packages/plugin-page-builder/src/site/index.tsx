@@ -33,12 +33,14 @@ import {
   SITE_CODE_BOOTSTRAP,
   SITE_CODE_DATA_ATTRIBUTE,
 } from "../site-code/bootstrap";
+import { pageCodeOf } from "../site-code/page-code";
 import {
   siteCodeScriptKind,
   type SiteCodeAttrs,
   type SiteCodeEntry,
   type SiteCodeSlot,
 } from "../site-code/rules";
+import { sanitiseSiteCode } from "../site-code/sanitise";
 import { SITE_CODE_SLUG, storedSiteCodeEntries } from "../site-code/storage";
 
 /** What `<SiteCode>` is given. */
@@ -75,7 +77,10 @@ const DEFAULT_SKIP: readonly string[] = ["/admin"];
  * (`basePath: "/site"` serves the admin at `/site/admin`), which Next.js
  * builds into every bundle as `process.env.__NEXT_ROUTER_BASEPATH`.
  */
-function skippedPaths(props: SiteCodeProps): string[] {
+function skippedPaths(props: {
+  readonly skip?: readonly string[];
+  readonly basePath?: string;
+}): string[] {
   const base = (
     props.basePath ??
     process.env.__NEXT_ROUTER_BASEPATH ??
@@ -252,6 +257,32 @@ export async function SiteCode(
     await (props.read ?? readStoredSiteCode)(slug),
     props.slot
   );
+  return (
+    <CodeOutput
+      slot={props.slot}
+      entries={entries}
+      skip={skippedPaths(props)}
+      {...(props.nonce === undefined ? {} : { nonce: props.nonce })}
+    />
+  );
+}
+
+/**
+ * One place's code as a page carries it: what runs nothing written as is,
+ * then the data block, then the loader that starts the rest. Site code and a
+ * page's own code are both written by this, so both are guarded alike.
+ */
+function CodeOutput({
+  slot,
+  entries,
+  skip,
+  nonce,
+}: {
+  readonly slot: SiteCodeSlot;
+  readonly entries: readonly SiteCodeEntry[];
+  readonly skip: readonly string[];
+  readonly nonce?: string;
+}): JSX.Element {
   const gated = entries.filter(isGatedSiteCode);
   return (
     <>
@@ -262,22 +293,61 @@ export async function SiteCode(
         ))}
       <script
         type="application/json"
-        {...{ [SITE_CODE_DATA_ATTRIBUTE]: props.slot }}
+        {...{ [SITE_CODE_DATA_ATTRIBUTE]: slot }}
         dangerouslySetInnerHTML={{
-          __html: scriptData({
-            slot: props.slot,
-            skip: skippedPaths(props),
-            entries: gated,
-          }),
+          __html: scriptData({ slot, skip, entries: gated }),
         }}
       />
       {/* The loader reads the data block just before it. */}
       {gated.length === 0 ? null : (
         <script
-          {...(props.nonce === undefined ? {} : { nonce: props.nonce })}
+          {...(nonce === undefined ? {} : { nonce })}
           dangerouslySetInnerHTML={{ __html: SITE_CODE_BOOTSTRAP }}
         />
       )}
     </>
+  );
+}
+
+/** What `<PageCode>` is given. */
+export interface PageCodeProps {
+  /** The place on the page: the head, or the end of the body. */
+  readonly slot: SiteCodeSlot;
+  /**
+   * The page's published blocks value, in the site's default language: a
+   * page's code is kept there only.
+   */
+  readonly document: unknown;
+  /** The site's per-request nonce, as `<SiteCode>` takes it. */
+  readonly nonce?: string;
+  /** The paths code never runs under, as `<SiteCode>` takes them. */
+  readonly skip?: readonly string[];
+  /** The app's base path, as `<SiteCode>` takes it. */
+  readonly basePath?: string;
+}
+
+/**
+ * `<PageCode>`: the code a page adds to itself in its Page settings, for one
+ * place, written and guarded exactly as `<SiteCode>` writes the site's.
+ *
+ * Render it after the `<SiteCode>` of the same place, with the page's
+ * published document, so the page's code comes after the site's. What is
+ * stored was judged when it was saved; it is sanitised again here, so a
+ * value edited in the database is held to the same rules, and what fails is
+ * left out. The builder's canvas never renders it.
+ *
+ * @experimental Settles with page code.
+ */
+export function PageCode(props: PageCodeProps): JSX.Element | null {
+  const code = pageCodeOf(props.document);
+  const text = code?.[props.slot] ?? "";
+  if (text === "") return null;
+  return (
+    <CodeOutput
+      slot={props.slot}
+      entries={sanitiseSiteCode(text, props.slot).entries}
+      skip={skippedPaths(props)}
+      {...(props.nonce === undefined ? {} : { nonce: props.nonce })}
+    />
   );
 }

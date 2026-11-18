@@ -41,6 +41,7 @@ import type { ValidationPublicData } from "../../errors/public-data";
 import type {
   PluginFieldType,
   PluginFieldWrite,
+  PluginFieldWriteCaller,
   PluginStoredValue,
   PluginStoredValuesTarget,
   PluginStoredValueTarget,
@@ -233,6 +234,8 @@ export interface EntryWriteContext {
    * promises (its lifecycle `status` included). Absent, that is the data.
    */
   readonly payload?: Record<string, unknown>;
+  /** Who the write is made as; see `PluginFieldWrite.caller`. */
+  readonly caller?: PluginFieldWriteCaller;
   readStored(
     allowedType: string,
     target: PluginStoredValueTarget
@@ -278,6 +281,7 @@ function fieldWriteFor(
     ...(write.id === undefined ? {} : { id: write.id }),
     ...(locale === undefined ? {} : { locale }),
     inTransaction: write.inTransaction,
+    ...(write.caller === undefined ? {} : { caller: write.caller }),
     readStored: target => write.readStored(type, inWriteLanguage(target)),
     readStoredOf: target => write.readStoredOf(type, inWriteLanguage(target)),
   };

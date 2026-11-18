@@ -112,6 +112,11 @@ import {
   BREAKPOINT_REMOVAL_UNDONE_METADATA,
 } from "./site-breakpoint-undo";
 import {
+  PAGE_CODE_SAVED_AUDIT,
+  PAGE_CODE_SAVED_METADATA,
+  registerPageCodeAudit,
+} from "./site-code/page-code-audit";
+import {
   SITE_CODE_SAVED_AUDIT,
   SITE_CODE_SAVED_METADATA,
 } from "./site-code/route";
@@ -342,6 +347,14 @@ export const pageBuilder = (
         countPlacements
       );
       installBindingReport(ctx, def, bindingReportDeps);
+      // An audit row for each committed change to a page's own code.
+      registerPageCodeAudit({
+        ctx,
+        mayHoldBlocks: collection =>
+          def.state.writeReach.mayHoldBlocks(collection),
+        options: opts.siteCode,
+        siteOrigin: () => process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost",
+      });
       installBreakpointRemoval(
         ctx,
         def,
@@ -389,6 +402,11 @@ export const pageBuilder = (
           {
             kind: SITE_CODE_SAVED_AUDIT,
             metadataKeys: [...SITE_CODE_SAVED_METADATA],
+          },
+          // And one per committed change to a page's own code, the same.
+          {
+            kind: PAGE_CODE_SAVED_AUDIT,
+            metadataKeys: [...PAGE_CODE_SAVED_METADATA],
           },
         ],
       },

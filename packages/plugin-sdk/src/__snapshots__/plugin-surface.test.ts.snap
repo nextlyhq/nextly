@@ -790,6 +790,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PluginFieldValidateArgs (type)",
   "PluginFieldValidationResult (type)",
   "PluginFieldWrite (type)",
+  "PluginFieldWriteCaller (type)",
   "PluginFilterRegistry (type)",
   "PluginHeaderContributions (type)",
   "PluginHeaderSlotContributions (type)",

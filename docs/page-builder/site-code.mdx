@@ -69,6 +69,33 @@ including URLs a stylesheet loads. So are a referrer `<meta>` tag and a link who
 page, the admin's included. Each place holds up to 50,000 characters and 40
 elements.
 
+## Page code
+
+People who may change the site's settings can also add code to **one page**, from the
+**Code** tab in that page's **Page settings**. It is checked exactly as site code is, with
+the same rules and the same Content Security Policy check, and kept in the page's own
+document (`settings.code`), in the site's default language: it is saved in the page's
+draft, goes live when the page is published, is kept in the page's history, and comes
+back when an older version is restored.
+
+The server judges it again on every write that changes it, however the write was made:
+it refuses the change from anyone without the **Manage page builder site settings**
+permission and from any API key, refuses what the rules can't store, and keeps code the
+site's declared policy would block only where the author acknowledged exactly those
+findings. Each committed change writes an audit row with the page, the field, and the
+code's hashes, sizes and counts, never the code.
+
+Render it on your published pages with `<PageCode>`, after `<SiteCode>` for the same
+place, handing it the page's published blocks value:
+
+```tsx
+import { PageCode } from "@nextlyhq/plugin-page-builder/site";
+
+<PageCode slot="head" document={entry.content} />;
+```
+
+The builder's canvas never runs page code.
+
 ## Put it on your pages
 
 Render `<SiteCode>` in your **public site's** layout, once for each place. Never put

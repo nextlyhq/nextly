@@ -324,6 +324,13 @@ export function installComposition(
     // Through the Direct API for the validation, and on the write's own
     // transaction for the judgement under the graph lock.
     siteDefinitions: siteStyle.definitions,
+    // A page's own code, judged on every write that changes it against the
+    // policy the site declared for its site code, from the site's own
+    // origin as the app knows it.
+    pageCode: {
+      options: opts.siteCode,
+      siteOrigin: () => process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost",
+    },
     hostsOf: indexHostFinder({
       rows: () => usageTableRows(ctx.db, usageTableOf(componentUsageIndex)),
       health: () =>

@@ -68,9 +68,11 @@ import {
   type SiteSettingsRead,
 } from "../../library-contract";
 import { PAGE_BUILDER_SETTINGS_PLACE } from "../../settings-place-contract";
+import { lazyPart } from "../lazy-part";
 
 import { ManageSetsContext } from "./manage-sets";
 import type { SettingsAddress } from "./settings-address";
+import type { PageCodeTab as PageCodeTabPart } from "./settings-code";
 import { PageFieldsTab, usePageFields } from "./settings-fields";
 import { DocumentGeneral, PageGeneral } from "./settings-general";
 import type { SettingsPlace } from "./settings-place";
@@ -79,8 +81,10 @@ import {
   mayOpenSiteSettings,
   SiteSettingsDialog,
   type SettingsBreakpoints,
+  type SiteSettingsQuery,
 } from "./settings-site";
 import {
+  CODE_TAB,
   FIELDS_TAB,
   focusFieldIn,
   GENERAL_TAB,
@@ -88,6 +92,15 @@ import {
   tabForField,
 } from "./settings-tabs";
 import type { SharePreview } from "./share-preview";
+
+/**
+ * The page's Code tab, fetched when it is first drawn rather than with the
+ * editor, as Site settings' code is: it carries site code's checks and
+ * words, which an author who never opens it has no use for.
+ */
+const PageCodeTab: typeof PageCodeTabPart = lazyPart(() =>
+  import("./settings-code").then(m => m.PageCodeTab)
+);
 
 /** What the shell hands the dialog. */
 type DialogState = Parameters<
@@ -162,11 +175,14 @@ function useSettingsTabs({
   page,
   fieldName,
   place,
+  showsCode,
   onOpenChange,
 }: {
   page: boolean;
   fieldName: string;
   place: SettingsPlace | null;
+  /** Whether the Code tab ends the row. */
+  showsCode: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
   const pageFields = usePageFields(fieldName);
@@ -181,6 +197,7 @@ function useSettingsTabs({
     GENERAL_TAB,
     ...(fields === null ? [] : [FIELDS_TAB]),
     ...offered.map(tab => tab.id),
+    ...(showsCode ? [CODE_TAB] : []),
   ];
   const contentTab = contentTabOf(page, fields !== null);
   useShowMe({
@@ -219,7 +236,18 @@ export function SettingsDialog({
 }: SettingsDialogProps): JSX.Element {
   const page = kind === "page";
   const site = useSiteSettingsEntry(open);
-  const tabs = useSettingsTabs({ page, fieldName, place, onOpenChange });
+  const { showsCode, holdsHiddenCode, codeBody } = usePageCode(
+    page,
+    place,
+    site.read
+  );
+  const tabs = useSettingsTabs({
+    page,
+    fieldName,
+    place,
+    showsCode,
+    onOpenChange,
+  });
   const leaveToSets = useLeaveToSets(onOpenChange);
   const body = useRef<HTMLDivElement | null>(null);
   useFocusShownField(open, tabs.shown, tabs.focusPath, body, tabs.focused);
@@ -256,6 +284,7 @@ export function SettingsDialog({
               showsFields={tabs.fields !== null}
               // A tab that left the row keeps its panel below, hidden.
               placeTabs={tabs.offered}
+              showsCode={showsCode}
               site={site.offer}
             />
             <ReadOnlyNote />
@@ -271,8 +300,11 @@ export function SettingsDialog({
                   place={place}
                   address={address}
                   open={open}
+                  // Said, never shown, to someone who may not see it.
+                  holdsHiddenCode={holdsHiddenCode}
                 />
               }
+              code={codeBody}
             />
           </Tabs>
           <SavedWithThePage openAsForm={openAsForm} />
@@ -313,10 +345,13 @@ function SettingsBody({
   bodyRef,
   tabs,
   general,
+  code,
 }: {
   bodyRef: { current: HTMLDivElement | null };
   tabs: ReturnType<typeof useSettingsTabs>;
   general: ReactNode;
+  /** The Code tab's body, or null where the row has no Code tab. */
+  code: ReactNode | null;
 }): JSX.Element {
   return (
     <div
@@ -337,6 +372,11 @@ function SettingsBody({
           {tab.panel}
         </TabPanel>
       ))}
+      {code === null ? null : (
+        <TabPanel value={CODE_TAB} shown={tabs.shown}>
+          {code}
+        </TabPanel>
+      )}
     </div>
   );
 }
@@ -402,6 +442,7 @@ function GeneralTab({
   place,
   address,
   open,
+  holdsHiddenCode,
 }: {
   page: boolean;
   fieldName: string;
@@ -410,6 +451,8 @@ function GeneralTab({
   place: SettingsPlace | null;
   address: SettingsAddress | null;
   open: boolean;
+  /** Whether the page adds code this reader may not see. */
+  holdsHiddenCode: boolean;
 }): JSX.Element {
   if (!page) {
     return (
@@ -424,6 +467,7 @@ function GeneralTab({
       place={place}
       address={address}
       open={open}
+      holdsHiddenCode={holdsHiddenCode}
     />
   );
 }
@@ -486,10 +530,13 @@ function ReadOnlyNote(): JSX.Element | null {
 function TabRow({
   showsFields,
   placeTabs,
+  showsCode,
   site,
 }: {
   showsFields: boolean;
   placeTabs: readonly PlaceTabEntry[];
+  /** Whether the Code tab ends the row: the riskiest tab last. */
+  showsCode: boolean;
   site: (() => void) | undefined;
 }): JSX.Element {
   return (
@@ -511,6 +558,7 @@ function TabRow({
               {tab.trigger}
             </TabsTrigger>
           ))}
+          {showsCode ? <TabsTrigger value={CODE_TAB}>Code</TabsTrigger> : null}
         </TabsList>
       </div>
       {site === undefined ? null : (
@@ -632,4 +680,52 @@ function useFocusShownField(
     });
     return () => cancelAnimationFrame(frame);
   }, [open, shown, path, body]);
+}
+
+/**
+ * The Code tab's body: the page's own code, held as the title is while the
+ * page takes no edits.
+ */
+function PageCodeTabBody({
+  pageCode,
+}: {
+  pageCode: SettingsPlace["pageCode"];
+}): JSX.Element {
+  const writable = useDocumentField("title")?.writable !== false;
+  return (
+    <PageCodeTab
+      value={pageCode.value}
+      set={pageCode.set}
+      writable={writable}
+    />
+  );
+}
+
+/**
+ * The page's own code in Page settings: its tab, last, for someone who may
+ * change the site's settings, whose permission the server holds every change
+ * to; and, for anyone else, whether General says the page adds code.
+ */
+function usePageCode(
+  page: boolean,
+  place: SettingsPlace | null,
+  site: SiteSettingsQuery
+): { showsCode: boolean; holdsHiddenCode: boolean; codeBody: ReactNode } {
+  const pageCode = page && place !== null ? place.pageCode : null;
+  if (pageCode === null || site.data === undefined) {
+    return { showsCode: false, holdsHiddenCode: false, codeBody: null };
+  }
+  if (site.data.mayManageSite) {
+    return {
+      showsCode: true,
+      holdsHiddenCode: false,
+      codeBody: <PageCodeTabBody pageCode={pageCode} />,
+    };
+  }
+  const held = pageCode.value;
+  return {
+    showsCode: false,
+    holdsHiddenCode: (held?.head ?? "") !== "" || (held?.body ?? "") !== "",
+    codeBody: null,
+  };
 }

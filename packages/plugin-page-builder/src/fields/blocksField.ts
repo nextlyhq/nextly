@@ -62,6 +62,7 @@ import {
 } from "./layers-lock-judgement";
 import { newConditionIssues, newListQueryIssues } from "./list-query-judgement";
 import { readStoredForms } from "./lock-baselines";
+import { pageCodeIssues } from "./page-code-judgement";
 import { newTokenReferenceIssues } from "./token-reference-judgement";
 
 /** The engine's issue for a child of a contentOnly slot changed besides content. */
@@ -290,7 +291,7 @@ export function blocksFieldType(
    */
   blocks?: BlockRegistryReader
 ): PluginFieldType {
-  return {
+  return withPageCodeJudged(composition, {
     type: BLOCKS_TYPE,
     storage: "json",
     component: BLOCKS_FIELD_COMPONENT,
@@ -567,7 +568,7 @@ export function blocksFieldType(
         return `z.object({ formatVersion: z.literal(${DOCUMENT_FORMAT_VERSION}), kind: ${kindSchema}, nodes: z.array(z.unknown()) }).passthrough()`;
       },
     },
-  };
+  });
 }
 
 /**
@@ -578,3 +579,32 @@ export function blocksFieldType(
  * breakpoint-aware instance instead.
  */
 export const BLOCKS_FIELD_TYPE: PluginFieldType = blocksFieldType();
+
+/**
+ * The field type with a page's own code judged too, on any write that
+ * changes it, whatever the document's own rules answered, so one round fixes
+ * both: who may change it, what can't be stored, and what the site's
+ * declared policy would block unacknowledged (`page-code-judgement`).
+ */
+function withPageCodeJudged(
+  composition: (() => CompositionSetup | undefined) | undefined,
+  type: PluginFieldType
+): PluginFieldType {
+  const judged = type.validate;
+  if (judged === undefined) return type;
+  return {
+    ...type,
+    validate: (value, args) => {
+      const answered = judged(value, args);
+      const pageCode = composition?.()?.pageCode;
+      if (pageCode === undefined || args.write === undefined) return answered;
+      const label =
+        typeof args.field.label === "string" ? args.field.label : args.path;
+      return Promise.resolve(answered).then(verdict =>
+        pageCodeIssues(value, args, label, pageCode, () =>
+          storedFormsFor(args)
+        ).then(found => withLockIssues(verdict, found, args.path))
+      );
+    },
+  };
+}

@@ -298,7 +298,7 @@ async function policyChecked(
 /** The checks against each policy known: the declared one, and the live one. */
 async function policyChecks(
   entries: { head: SiteCodeEntry[]; body: SiteCodeEntry[] },
-  body: SiteCodeBodyValue,
+  body: { readonly livePolicy?: { policy: string; reportOnly: boolean } },
   siteOrigin: string,
   options: PageBuilderSiteCodeOptions | undefined
 ): Promise<SiteCodePolicyChecked[]> {
@@ -342,7 +342,7 @@ function findingsOf(checks: readonly SiteCodePolicyChecked[]): unknown[] {
 }
 
 /** The code judged and checked, as a dry run answers it. */
-interface Judged {
+export interface Judged {
   readonly checked: SiteCodeChecked;
   readonly entries: { head: SiteCodeEntry[]; body: SiteCodeEntry[] };
   readonly findings: number;
@@ -363,10 +363,27 @@ async function judge(
   req: Request,
   options: PageBuilderSiteCodeOptions | undefined
 ): Promise<Judged> {
+  return judgeCode(body, siteOriginOf(req), options);
+}
+
+/**
+ * Code for the head and the end of the body, sanitised and checked against
+ * each policy known: the site's declared one, and the live one where given.
+ * The one judgement site code and a page's own code are both held to.
+ */
+export async function judgeCode(
+  body: {
+    readonly head: string;
+    readonly body: string;
+    readonly livePolicy?: { policy: string; reportOnly: boolean };
+  },
+  siteOrigin: string,
+  options: PageBuilderSiteCodeOptions | undefined
+): Promise<Judged> {
   const head = sanitiseSiteCode(body.head, "head");
   const bodyEnd = sanitiseSiteCode(body.body, "body");
   const entries = { head: [...head.entries], body: [...bodyEnd.entries] };
-  const csp = await policyChecks(entries, body, siteOriginOf(req), options);
+  const csp = await policyChecks(entries, body, siteOrigin, options);
   const findings = findingsOf(csp);
   return {
     checked: {
@@ -433,15 +450,33 @@ async function auditMetadata(
   judged: Judged,
   siteOrigin: string
 ): Promise<Record<string, string | number | boolean>> {
+  return codeAuditMetadata(
+    body,
+    { head: textOf(before, "headSource"), body: textOf(before, "bodySource") },
+    judged,
+    siteOrigin
+  );
+}
+
+/**
+ * What an audit row of a change to code holds, for site code and a page's
+ * own code alike: hashes, sizes and counts, never the code.
+ */
+export async function codeAuditMetadata(
+  after: { readonly head: string; readonly body: string },
+  before: { readonly head: string; readonly body: string },
+  judged: Judged,
+  siteOrigin: string
+): Promise<Record<string, string | number | boolean>> {
   const all = [...judged.entries.head, ...judged.entries.body];
   const facts = await siteCodeFacts(all, siteOrigin);
   return {
-    headSha256: await sha256Hex(body.head),
-    headSha256Before: await sha256Hex(textOf(before, "headSource")),
-    bodySha256: await sha256Hex(body.body),
-    bodySha256Before: await sha256Hex(textOf(before, "bodySource")),
-    headChars: body.head.length,
-    bodyChars: body.body.length,
+    headSha256: await sha256Hex(after.head),
+    headSha256Before: await sha256Hex(before.head),
+    bodySha256: await sha256Hex(after.body),
+    bodySha256Before: await sha256Hex(before.body),
+    headChars: after.head.length,
+    bodyChars: after.body.length,
     elements: all.length,
     // Counted from the code's own entries: the loader is not the site's code.
     inlineScripts: all.filter(

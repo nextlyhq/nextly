@@ -105,6 +105,7 @@ import {
   normalizeRelationshipFields,
   relationshipValidationView,
 } from "../../../shared/lib/field-transform";
+import { fieldWriteCaller } from "../../../shared/lib/field-write-caller";
 import {
   carryStoredPasswords,
   type FieldGroupReach,
@@ -2346,18 +2347,23 @@ export class SingleMutationService extends BaseService {
         localizedFieldNames: args.localizedFieldNames,
         enforceLocalizedRequired: args.enforceLocalizedRequired,
         // Before the transaction opens, so on the pool.
-        write: storedFieldRead.entryWriteContext({
-          kind: "single",
-          slug,
-          ...(args.writeLocale === undefined
-            ? {}
-            : { locale: args.writeLocale }),
-          connection: {
-            db: this.adapter,
-            executor: undefined,
-            defaultLocale: this.localization?.defaultLocale ?? null,
-          },
-        }),
+        write: {
+          ...storedFieldRead.entryWriteContext({
+            kind: "single",
+            slug,
+            ...(args.writeLocale === undefined
+              ? {}
+              : { locale: args.writeLocale }),
+            connection: {
+              db: this.adapter,
+              executor: undefined,
+              defaultLocale: this.localization?.defaultLocale ?? null,
+            },
+          }),
+          // Who the write is made as, from the reader its access is judged
+          // by, as a collection entry's write is told it.
+          caller: fieldWriteCaller(args.reader),
+        },
       }
     );
     const validationIssues = await issuesTheReaderMaySee(judgedIssues, {
