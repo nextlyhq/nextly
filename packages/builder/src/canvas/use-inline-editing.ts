@@ -35,7 +35,11 @@ import {
   INLINE_EDIT_UNCHANGED,
   type InlineEditOutcome,
 } from "./inline-edit-outcome";
-import { inlinePropKind, type InlinePropKind } from "./inline-prop-kind";
+import {
+  editedAsRichText,
+  inlinePropKindAt,
+  type InlinePropKind,
+} from "./inline-prop-kind";
 import { firstInlineProp } from "./inline-target";
 import {
   useInlineRichText,
@@ -152,7 +156,9 @@ export function useInlineEditing(
     (nodeId: string, prop: string) => {
       const node = findNode(editor.document.nodes, nodeId);
       if (node === undefined) return null;
-      return inlinePropKind(getBlock(node.type)?.props?.[prop]);
+      // By the value's name, so an item of a list of words routes as the
+      // line of text it is.
+      return inlinePropKindAt(getBlock(node.type)?.props, prop);
     },
     [editor]
   );
@@ -185,7 +191,7 @@ export function useInlineEditing(
        * answer `begin` gives for a value that cannot be edited.
        */
       if (finished.status === "refused") return false;
-      return kind === "rich"
+      return editedAsRichText(kind)
         ? rich.begin(nodeId, prop, element, point, exposure)
         : plain.begin(nodeId, prop);
     },
@@ -285,7 +291,13 @@ export function useInlineEditing(
         });
         return;
       }
-      if (kindOf(found.nodeId, found.prop) === "rich") {
+      // A component's exposed line of text is edited as text through its
+      // placement (`composed` above); the node's own restricted value takes
+      // the rich-text editor, held to one paragraph.
+      if (
+        composed === null &&
+        editedAsRichText(kindOf(found.nodeId, found.prop))
+      ) {
         // The element the gesture landed on is passed rather than looked up
         // again: two canvases showing one document carry the same node ids, so
         // a search of the page can answer with the other one's passage.

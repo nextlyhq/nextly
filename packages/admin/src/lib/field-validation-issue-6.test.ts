@@ -189,7 +189,7 @@ describe("RichText field — required gate (Issue 6)", () => {
     expect(bad.success).toBe(false);
     if (!bad.success) {
       const issue = bad.error.issues.find(i => i.path[0] === "body");
-      expect(issue?.message).toBe("This field is required");
+      expect(issue?.message).toBe("Body is required.");
     }
   });
 

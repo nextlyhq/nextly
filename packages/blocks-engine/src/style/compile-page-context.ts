@@ -15,9 +15,9 @@ import type {
 import type { DocumentLimits } from "../limits";
 import type { ValidationIssue } from "../validation";
 
-import type { TypographicElement } from "./compile-page-states";
 import type { MayFetchUrl } from "./css-value";
 import type { NamedClass } from "./named-class";
+import type { ElementBaseKey, SiteTextMap } from "./site-text";
 import type { StyleTraceEntry } from "./style-trace";
 
 /** Everything site-level the compiler needs; the caller loads it. */
@@ -120,13 +120,23 @@ export interface StyleCompileContext {
    * equal weight a block's own default wins on source order. Both lose to a
    * named class and to a node's own value.
    *
-   * A provisional layer, not a design system. Gutenberg — the closest peer that
-   * both ships blocks and renders pages — keeps metric defaults out of block
-   * CSS and defers to a theme; Nextly has no populated typography scale yet, so
-   * this bridges the gap until the fonts manager fills it, and is shaped so
-   * that manager can supply the same record later.
+   * The block library fills it from a site's text (`siteTextElementBases`):
+   * the size and line height of each heading level, links and captions, and
+   * under the `root` key the page root's Body text, which every block inherits.
    */
-  elementBases?: Readonly<Partial<Record<TypographicElement, NodeStyles>>>;
+  elementBases?: Readonly<Partial<Record<ElementBaseKey, NodeStyles>>>;
+  /**
+   * The site's text rows, as its token set states them.
+   *
+   * The compiler does not read this. It travels with the compile for the
+   * block library, which derives the element tier from it and lays the
+   * Buttons and Captions rows over the blocks that draw a button or a
+   * caption, so every compile path is handed one map rather than each
+   * deriving its own.
+   *
+   * @experimental
+   */
+  siteText?: SiteTextMap;
 
   /**
    * The space each container block type puts between the blocks in its slots,

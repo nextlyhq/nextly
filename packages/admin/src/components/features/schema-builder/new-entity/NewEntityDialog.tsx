@@ -23,7 +23,6 @@ import {
   DialogTitle,
   Input,
   Label,
-  Textarea,
 } from "@nextlyhq/ui";
 import { type JSX, useId, useState } from "react";
 
@@ -47,6 +46,11 @@ import {
   isSwitchOn,
 } from "../builder-settings-modal/advanced-switches";
 import { AdvancedTab } from "../builder-settings-modal/AdvancedTab";
+import {
+  DescriptionField,
+  descriptionTooLong,
+  RequiredMark,
+} from "../builder-settings-modal/BasicsTab";
 import {
   ICON_PICKER_ICONS,
   IconPicker,
@@ -102,6 +106,11 @@ function createBlockedBy(
   if (values.slug.trim() === "") return "Add an API address.";
   if (check.status === "checking") return "Checking the address…";
   if (check.status === "refused") return "Choose another address.";
+  // After the names and address: the description is optional, and folded
+  // under More options.
+  if (descriptionTooLong(values.description)) {
+    return "Shorten the description.";
+  }
   return template.fields ?? template.needs;
 }
 
@@ -244,7 +253,10 @@ export function NewEntityDialog({
 
           {hasPlural && (
             <div className="space-y-1">
-              <Label htmlFor={`${ids}-plural`}>Plural name</Label>
+              <Label htmlFor={`${ids}-plural`}>
+                Plural name
+                <RequiredMark />
+              </Label>
               <Input
                 id={`${ids}-plural`}
                 required
@@ -329,7 +341,10 @@ function NameRow({
         </div>
       )}
       <div className="min-w-0 flex-1 space-y-1">
-        <Label htmlFor={`${ids}-name`}>Name</Label>
+        <Label htmlFor={`${ids}-name`}>
+          Name
+          <RequiredMark />
+        </Label>
         <Input
           id={`${ids}-name`}
           required
@@ -355,9 +370,15 @@ function AddressField({
 }): JSX.Element {
   return (
     <div className="space-y-1">
-      <Label htmlFor={`${ids}-address`}>API address</Label>
+      <Label htmlFor={`${ids}-address`}>
+        API address
+        <RequiredMark />
+      </Label>
+      {/* Required like the names: Create is held while it is blank
+          (`createBlockedBy`), even though the name normally fills it. */}
       <Input
         id={`${ids}-address`}
+        required
         className="font-mono"
         value={value}
         aria-invalid={note.refused}
@@ -412,17 +433,11 @@ function MoreOptions({
       </Button>
       {open && (
         <div className="space-y-4 rounded-md border border-border p-3">
-          <div className="space-y-1">
-            <Label htmlFor={`${ids}-description`}>Description</Label>
-            <Textarea
-              id={`${ids}-description`}
-              rows={2}
-              value={values.description ?? ""}
-              onChange={e =>
-                onChange({ ...values, description: e.target.value })
-              }
-            />
-          </div>
+          <DescriptionField
+            id={`${ids}-description`}
+            value={values.description ?? ""}
+            onChange={next => onChange({ ...values, description: next })}
+          />
           <AdvancedTab
             fields={config.advancedFields.filter(
               field => field !== "showSystemFields"

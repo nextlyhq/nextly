@@ -30,7 +30,8 @@ import {
  * Why a second Entry content block cannot be added: the words the Add panel's
  * tile and the toolbar's Duplicate say.
  */
-const ENTRY_CONTENT_ONE_REASON = "A template holds one Entry content block.";
+export const ENTRY_CONTENT_ONE_REASON =
+  "A template holds one Entry content block.";
 
 /**
  * Why an Entry content block cannot be added yet: the template's

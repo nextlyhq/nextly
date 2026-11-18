@@ -216,6 +216,7 @@ export function MediaChoice({
   Picker,
   label,
   stored,
+  selected = stored,
   accept,
   disabled,
   onChoose,
@@ -225,6 +226,11 @@ export function MediaChoice({
   Picker: React.ComponentType<MediaPickerProps>;
   label: string;
   stored: string | null;
+  /**
+   * The media id the library opens with selected: what `stored` names, unless
+   * a field stores something other than an id (a background's address).
+   */
+  selected?: string | null;
   accept: string | undefined;
   disabled: boolean;
   onChoose: (media: PickedMedia) => void;
@@ -254,7 +260,7 @@ export function MediaChoice({
           onOpenChange={setOpen}
           title={`Choose ${label.toLowerCase()}`}
           {...(accept === undefined ? {} : { accept })}
-          initialSelectedIds={new Set(stored === null ? [] : [stored])}
+          initialSelectedIds={new Set(selected === null ? [] : [selected])}
           onSelect={media => {
             const first = media[0];
             // Closed here: the picker leaves closing to whoever opened it,

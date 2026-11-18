@@ -17,7 +17,7 @@ import { Search, X } from "lucide-react";
 import * as React from "react";
 
 import { isElement } from "./dom-kind";
-import type { StyleSection } from "./style-inspector";
+import type { ParentArrangement } from "./plain-layout";
 import {
   filterEntries,
   filtering,
@@ -29,6 +29,7 @@ import {
   type SettingsFilter,
   type SettingTab,
 } from "./settings-index";
+import type { StyleSection } from "./style-inspector";
 
 /** The search and the toggle, and their setters. */
 interface FilterState extends SettingsFilter {
@@ -163,7 +164,9 @@ export function sectionShown(
 
 /**
  * A row the filter may hide. Hidden rather than taken away, so a field's
- * unsaved text and its focus outlive a search typed and cleared.
+ * unsaved text and its focus outlive a search typed and cleared. Marked with
+ * its settings' ids, so a setting asked for from outside the panel (a page
+ * check's fix) finds the row it is drawn in.
  */
 export function SettingSlot({
   ids,
@@ -176,7 +179,7 @@ export function SettingSlot({
 }): React.JSX.Element {
   const shown = useSettingShown(ids, tab);
   return (
-    <div className="nx-setting" hidden={!shown}>
+    <div className="nx-setting" data-setting={ids.join(" ")} hidden={!shown}>
       {children}
     </div>
   );
@@ -431,6 +434,13 @@ export interface ReportedStyle {
    * while one is edited, the block's otherwise. What "Also changed on" reads.
    */
   readonly styles: unknown;
+  /** How the block's parent arranges it, which "Inside its parent" offers by. */
+  readonly parent?: ParentArrangement | undefined;
+  /**
+   * Whether Arrange reads the Layout in plain words (not Custom), so its
+   * Space between draws the space properties rather than CSS properties.
+   */
+  readonly arranges?: boolean | undefined;
 }
 
 /**
@@ -464,7 +474,9 @@ export function useReportStyle(
   nodeId: string | undefined,
   sections: readonly StyleSection[] | undefined,
   shared = false,
-  styles: unknown = undefined
+  styles: unknown = undefined,
+  parent: ParentArrangement | undefined = undefined,
+  arranges: boolean | undefined = undefined
 ): void {
   const report = React.useContext(StyleReportContext);
   // Told only while the panel is filtered: unfiltered, nothing reads it, and
@@ -483,10 +495,17 @@ export function useReportStyle(
     const now = latest.current;
     report(
       on && now.sections !== undefined
-        ? { nodeId, sections: now.sections, shared, styles: now.styles }
+        ? {
+            nodeId,
+            sections: now.sections,
+            shared,
+            styles: now.styles,
+            parent,
+            arranges,
+          }
         : undefined
     );
-  }, [report, nodeId, signature, on, shared]);
+  }, [report, nodeId, signature, on, shared, parent, arranges]);
   React.useEffect(() => () => report?.(undefined), [report]);
 }
 

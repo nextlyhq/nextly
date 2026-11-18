@@ -176,7 +176,9 @@ describe("a field group's settings saved with a field change", () => {
     // A settings change: a new name, description and icon.
     await user.click(screen.getByRole("button", { name: "Settings" }));
     const settings = await screen.findByRole("dialog");
-    const name = within(settings).getByLabelText("Singular name");
+    const name = within(settings).getByRole("textbox", {
+      name: "Singular name",
+    });
     await user.clear(name);
     await user.type(name, "Banner");
     await user.type(within(settings).getByLabelText("Description"), "Top");

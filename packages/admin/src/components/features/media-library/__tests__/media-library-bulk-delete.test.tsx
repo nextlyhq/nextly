@@ -3,6 +3,10 @@
  * stubbed: two pages selected in the list view make a selection of 150,
  * which is sent as one request, so the server marks it whole or not at all,
  * and offered back by one Undo, which is one request too.
+ *
+ * And a bulk move, which is one request per file: the dialog has to hear back
+ * from every one of them, or it stays on "Moving 1 of 2..." after the files
+ * have moved.
  */
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +16,7 @@ import { renderWithProviders } from "@admin/__tests__/utils";
 const api = vi.hoisted(() => ({
   fetchMedia: vi.fn(),
   mediaFetchJson: vi.fn(),
+  moveMediaToFolder: vi.fn(),
 }));
 vi.mock("@admin/services/mediaApi", () => ({
   fetchMedia: (...a: unknown[]) => api.fetchMedia(...a),
@@ -27,7 +32,7 @@ vi.mock("@admin/services/mediaApi", () => ({
   getFolderById: vi.fn(),
   updateFolder: vi.fn(),
   deleteFolder: vi.fn(),
-  moveMediaToFolder: vi.fn(),
+  moveMediaToFolder: (...a: unknown[]) => api.moveMediaToFolder(...a),
   mediaFetchJson: (...a: unknown[]) => api.mediaFetchJson(...a),
 }));
 
@@ -45,6 +50,7 @@ vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
 import { MediaProvider } from "@admin/context/providers/MediaProvider";
 
 import { MediaLibrary } from "..";
+import { MoveToFolderDialog } from "../MoveToFolderDialog";
 
 const COUNT = 150;
 /** An item an earlier delete had already marked. */
@@ -175,4 +181,60 @@ describe("a bulk delete of more than one page of items", () => {
     );
     // Two pages of rows rendered in the list take longer than the default.
   }, 60_000);
+});
+
+describe("a bulk move to a folder", () => {
+  /** Two files moved out of `f1` to the root, as the bulk action bar does. */
+  async function moveTwoFiles(): Promise<{
+    onOpenChange: ReturnType<typeof vi.fn>;
+  }> {
+    const onOpenChange = vi.fn();
+    renderWithProviders(
+      <MoveToFolderDialog
+        open
+        onOpenChange={onOpenChange}
+        mediaIds={["m1", "m2"]}
+        currentFolderId="f1"
+      />
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Root \(No Folder\)/ })
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Move 2 Files" }));
+    return { onOpenChange };
+  }
+
+  it("closes once both files have moved, saying so", async () => {
+    api.moveMediaToFolder.mockResolvedValue(null);
+
+    const { onOpenChange } = await moveTwoFiles();
+
+    // Before the fix only the last request's callbacks ran, so the first
+    // file's promise never settled and the dialog never got here.
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(api.moveMediaToFolder).toHaveBeenCalledTimes(2);
+    expect(toasts.toast.success).toHaveBeenCalledWith(
+      "2 files moved",
+      expect.objectContaining({ description: "Moved to Root." })
+    );
+  });
+
+  it("reports a move where one of the two files failed", async () => {
+    api.moveMediaToFolder.mockImplementation((mediaId: string) =>
+      mediaId === "m2"
+        ? Promise.reject(new Error("Folder is gone"))
+        : Promise.resolve(null)
+    );
+
+    const { onOpenChange } = await moveTwoFiles();
+
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(toasts.toast.error).toHaveBeenCalledWith(
+      "Moved 1 of 2; 1 failed",
+      expect.objectContaining({
+        description: "Some files couldn't be moved to Root.",
+      })
+    );
+    expect(toasts.toast.success).not.toHaveBeenCalled();
+  });
 });

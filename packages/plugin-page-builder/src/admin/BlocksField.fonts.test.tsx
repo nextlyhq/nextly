@@ -132,6 +132,10 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // Where the page opens and the pin's id, which the top bar reads; no
+  // collection is named here, so the exit goes to the form.
+  useDocumentOpensIn: () => null,
+  PIN_TO_DASHBOARD_ACTION: "pin-to-dashboard",
   // The canvas's media read, answering nothing: these cases draw no image.
   // One function for every call, as the admin's own hook keeps it.
   useMediaResolver: (
@@ -361,8 +365,9 @@ describe("the fonts panel reaching an author", () => {
       )
     );
     expect(scroll).toHaveBeenCalled();
-    // No panel is asked for: the variables are in the tab already open.
-    expect(screen.getByTestId("request").textContent).toBe("");
+    // No panel is asked for: the variables are in the tab already open. The
+    // one request is the empty page's own, opening Add when the editor did.
+    expect(screen.getByTestId("request").textContent).toBe("add:");
   });
 
   it("draws a read still in flight as loading rather than as a site with no fonts", async () => {

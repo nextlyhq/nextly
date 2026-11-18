@@ -39,6 +39,8 @@ import { asFormDocument, asSubmissionDocument } from "./document-shapes";
 import { submissionAnswers } from "./emails/answers";
 import { formsEmailTemplates } from "./emails/starter-messages";
 import { addressedFormPages, FORM_EDITOR_VIEW } from "./form-pages";
+import { botCheckScriptRoute } from "./form-provider/bot-check-script";
+import { registerFormProvider } from "./form-provider/register";
 import {
   botCheckDefaults,
   botCheckHosts,
@@ -428,6 +430,9 @@ export function formBuilder(
         // What a submissions list shows, as CSV or JSON; see
         // `routes/submissions-export`.
         submissionsExportRoute(resolvedConfig),
+        // The script that draws a form's bot check on a page builder page;
+        // see `form-provider/bot-check-script`.
+        botCheckScriptRoute(),
         {
           // The builder UI reads the host's resolved field enable/disable map
           // from here, so the plugin option actually gates the type picker.
@@ -535,6 +540,12 @@ export function formBuilder(
       // one-response key is taken inside its write's transaction, where a
       // first use is refused.
       await nextly.security.digests.prepare();
+
+      // The forms, offered to the page builder's Form block: drawn on a page
+      // and sent there as a plain HTML form, with every rule of this plugin.
+      // Through its cross-plugin service, so neither package imports the
+      // other; without the page builder there is nowhere to offer them.
+      registerFormProvider(nextly, resolvedConfig);
 
       // Hook/event subscriptions are idempotent across HMR — the platform
       // clears a plugin's prior subscriptions before re-init (B2), so the old

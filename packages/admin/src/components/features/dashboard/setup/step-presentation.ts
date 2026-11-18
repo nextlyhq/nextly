@@ -95,8 +95,3 @@ export function stepPresentation(step: SetupStep): StepPresentation {
     ? { label: "Finish setup", detail: step.kind }
     : present(step);
 }
-
-/** Where a Single is filled in. */
-export function singleHref(slug: string): string {
-  return buildRoute(ROUTES.SINGLE_EDIT, { slug });
-}

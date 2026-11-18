@@ -92,9 +92,13 @@ async function chooseDevice(
   await devices(page)
     .getByRole("radio", { name: new RegExp(`^${name}`) })
     .click();
+  // The device buttons are icons, so the chosen one's width is in its
+  // accessible name ("Desktop · 1280px · styles for …"), not its text.
   const chosen = devices(page).getByRole("radio", { checked: true });
-  await expect(chosen).toHaveText(new RegExp(`^${name} · \\d+px$`));
-  const width = Number((await chosen.textContent())?.match(/(\d+)px$/)?.[1]);
+  await expect(chosen).toHaveAccessibleName(new RegExp(`^${name} · \\d+px · `));
+  const width = Number(
+    (await chosen.getAttribute("aria-label"))?.match(/ · (\d+)px · /)?.[1]
+  );
   if (!Number.isFinite(width) || width <= 0) {
     throw new Error(`the ${name} device names no width`);
   }

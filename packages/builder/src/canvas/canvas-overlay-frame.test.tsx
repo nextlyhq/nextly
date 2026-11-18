@@ -300,10 +300,11 @@ describe("chrome drawn over a frame lines up with the page", () => {
     ).not.toBe(before);
     layOut(frame);
 
-    // Selected on the new root: the ring moves to the other block.
+    // Selected on the new root: the ring moves to the other block, which
+    // sits at the page's left edge, where the ring keeps to the page.
     rerender(drawn("second", "other"));
     await act(async () => undefined);
-    await vi.waitFor(() => expect(ringLeft()).toBe("-4px"));
+    await vi.waitFor(() => expect(ringLeft()).toBe("0px"));
   });
 
   it("draws the drop line at the frame's scale", () => {

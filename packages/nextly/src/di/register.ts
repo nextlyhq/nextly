@@ -49,7 +49,7 @@ import type {
   SanitizedApiKeysConfig,
   SecurityConfig,
 } from "../collections/config/define-config";
-import { assertCollectionOpensIn } from "../collections/config/opens-in";
+import { assertOpensIn } from "../collections/config/opens-in";
 import type { FieldConfig } from "../collections/fields/types";
 import { loadDialectTables } from "../database/dialect-tables";
 import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
@@ -391,6 +391,7 @@ import {
   registerWebhookServices,
   registerWorkflowComparisonBaselines,
   registerWorkflowNoticeKinds,
+  registerWorkflowPublishGate,
   resetWidgetRegistries,
   type RegistrationContext,
 } from "./registrations";
@@ -819,6 +820,9 @@ export function registerDomainServices(ctx: RegistrationContext): void {
   // The comparisons a review shows, "since submitted" and "since approved", registered with the
   // history's baselines so its comparison names them as it names its own.
   registerWorkflowComparisonBaselines();
+  // What a publish asks of a workflow: a part goes live only approved, or without review by
+  // someone who may, whichever door the publish came through.
+  registerWorkflowPublishGate(ctx);
 }
 
 /** How a caller registers the services. */
@@ -1798,10 +1802,14 @@ function validateBootContributions(
   // `defineSingle`, and a plugin must not take a page the site declares.
   assertConfiguredPublicAddresses(transformedConfig);
 
-  // Fail fast on a collection that opens its entries in a view it does not
-  // have: every link to them would lead nowhere. Asked of the merged
+  // Fail fast on a collection, or a Single, that opens in a view it does not
+  // have: every link to it would lead nowhere. Asked of the merged
   // configuration against every plugin's views, disabled ones included.
-  assertCollectionOpensIn(transformedConfig.collections, transformedPlugins);
+  assertOpensIn(
+    transformedConfig.collections,
+    transformedPlugins,
+    transformedConfig.singles
+  );
 
   // Fail fast on role-bundle collisions. Validation only here; roles are
   // re-derived + seeded (resolving permission slugs→ids) in runPostInitTasks.

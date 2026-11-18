@@ -17,19 +17,13 @@
   padding: 0.5rem 0.75rem 0;
 }
 
-.nx-vars__controls,
-.nx-vars__preview {
+.nx-vars__controls {
   display: flex;
   align-items: center;
   gap: 0.375rem;
 }
 
-.nx-vars__preview-label {
-  font-size: 11px;
-  color: var(--nx-muted-foreground);
-}
-
-/* A segmented pair: the preview switch, and keep-or-use in the import. */
+/* A segmented choice: keep-or-use in the import, and other few-way picks. */
 .nx-vars__seg {
   display: inline-flex;
   padding: 2px;
@@ -402,45 +396,83 @@
   cursor: progress;
 }
 
-.nx-vars__report {
+.nx-vars__menu {
+  min-width: 11rem;
+}
+
+/* The ⋯ menu's design token export: its name, with the format beside it as
+   a quieter hint. */
+.nx-design-more__item {
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.nx-design-more__hint {
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/* "What wasn't exported": one row per variable, its name and what happened
+   on one line, why under them. Scrolls inside the dialog when long. */
+.nx-design-gaps__list {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 0.375rem;
-  padding: 0.5rem;
+  gap: 0.5rem;
+  max-height: 60vh;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.nx-design-gaps__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.125rem 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--nx-border);
   font-size: var(--text-xs);
   line-height: 1.4;
-  border: 1px solid var(--nx-border);
-  border-radius: var(--radius-sm);
-  background: var(--nx-muted);
 }
 
-.nx-vars__report[data-tone="refused"] {
-  color: var(--nx-destructive);
-  border-color: var(--nx-destructive);
+.nx-design-gaps__row:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
-.nx-vars__report p {
-  margin: 0;
+.nx-design-gaps__name {
+  overflow-wrap: anywhere;
   font-weight: 600;
 }
 
-.nx-vars__report ul {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  margin: 0;
-  padding-inline-start: 1rem;
+.nx-design-gaps__outcome {
+  color: var(--nx-muted-foreground);
+  white-space: nowrap;
 }
 
-.nx-vars__menu {
-  min-width: 11rem;
+.nx-design-gaps__why {
+  grid-column: 1 / -1;
+  color: var(--nx-muted-foreground);
+}
+
+/* An import's refused values, listed in the message that stays until it is
+   dismissed. Scrolls within the message rather than growing past the window. */
+.nx-design-toast__list {
+  max-height: 12rem;
+  margin: 0.25rem 0 0;
+  padding-inline-start: 1rem;
+  overflow-y: auto;
+  list-style: disc;
 }
 
 /* The editor beside the panel. Two classes, to outrank the popover's width. */
 [data-slot="popover-content"].nx-vars-editor {
   width: 240px;
   padding: 0.75rem;
+  /* Inside the window, scrolling within: a shadow of several layers is
+     taller than a laptop window. */
+  max-height: var(--radix-popover-content-available-height, 100vh);
+  overflow-y: auto;
 }
 
 .nx-vars-editor__body,
@@ -473,6 +505,85 @@
 .nx-vars-editor__code code {
   font-family: var(--font-mono, ui-monospace, monospace);
   color: var(--nx-foreground);
+}
+
+/* "Fluid…" under a size, and its two sizes in place while it is open. */
+.nx-vars-editor__fluid {
+  align-self: flex-start;
+  font-size: var(--text-xs);
+}
+
+.nx-fluid {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+}
+
+.nx-fluid__sizes {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.375rem 0.5rem;
+}
+
+/* The site's fluid range: two widths, in the Type tab and from "Fluid…". */
+.nx-fluid__range {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.375rem 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.nx-fluid__range > .nx-fluid__said {
+  grid-column: 1 / -1;
+}
+
+.nx-fluid__range-link {
+  align-self: flex-start;
+  font-size: var(--text-xs);
+}
+
+.nx-fluid__said {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/* What a built-in variable is for, under its name. */
+.nx-vars-editor__description {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--nx-muted-foreground);
+}
+
+/* A spacing's preview: a bar as long as the value at the desktop width,
+   held to the row's room, before its value. */
+.nx-vars__tail {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.nx-vars__bar {
+  flex: none;
+  max-width: 3rem;
+  height: 6px;
+  background: var(--nx-muted-foreground);
+  opacity: 0.55;
+}
+
+/* A radius's preview: a square wearing that radius on its corners. */
+.nx-vars__radius {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--nx-muted-foreground);
+  border-right-color: transparent;
+  border-bottom-color: transparent;
 }
 
 /* ☀ or ☾ before "Light" or "Dark", muted beside the words. */

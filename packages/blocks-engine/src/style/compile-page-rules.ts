@@ -16,6 +16,7 @@ import {
   unknownBreakpointWarnings,
   UNSATISFIABLE_CONDITION,
 } from "./compile-page-breakpoints";
+import { containerLinkRule } from "./compile-page-links";
 import {
   PREVIEW_STATE_SELECTORS,
   STATE_SELECTORS,
@@ -82,6 +83,12 @@ interface EnvelopeContext {
   weightlessAnchor?: string;
   /** Emit the forceable form of each interaction state. See the context field. */
   previewStates?: boolean;
+  /**
+   * Set when this envelope styles a container whose links take its text
+   * colour: what narrows the rule that makes them, `""` for nothing more than
+   * the envelope's own selector. See `compile-page-links`.
+   */
+  linksNarrowing?: string;
 }
 
 /** Compile one styles envelope into rules under one selector. */
@@ -114,6 +121,7 @@ export function envelopeRules(
     weightlessAnchor,
     previewStates,
     routing,
+    linksNarrowing,
   } = about;
   // Chosen ONCE per envelope rather than per rule: it is a property of the
   // compile, and re-deciding it inside the loop invites the two forms to
@@ -232,6 +240,15 @@ export function envelopeRules(
           context.atRule
         );
         if (flags !== undefined) rules.push(flags);
+        // The links inside a container its rule colours; not traced either.
+        const links = containerLinkRule(
+          rule,
+          linksNarrowing,
+          `${selector}${stateSelectors[state]}`,
+          weightlessAnchor,
+          context.atRule
+        );
+        if (links !== undefined) rules.push(links);
         // Recorded here, from the same declarations that were just emitted, in the same loop.
         // Anywhere else it would be a second reading of the document, and a second reading can
         // disagree with the first — which is the one failure a provenance record must not have.
