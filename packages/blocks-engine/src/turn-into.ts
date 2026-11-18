@@ -23,10 +23,16 @@
  */
 import { bindablePropKind } from "./binding-rules";
 import type { AnyBlockDefinition, PropSchema } from "./block";
-import type { BlockDocument, BlockNode, NodeStyles } from "./document";
+import {
+  isComponentDocument,
+  type BlockDocument,
+  type BlockNode,
+  type NodeStyles,
+} from "./document";
 import type { BuilderOp } from "./ops-vocabulary";
 import { getBlock } from "./registry";
 import { STYLE_CATALOG } from "./style/catalog";
+import { isLook, type NamedClass } from "./style/named-class";
 import { supportsAllowStyleProperty } from "./style/supports-map";
 import { findNode } from "./tree";
 
@@ -98,6 +104,15 @@ export function turnIntoTargets(
  * `to` or `to` is not registered, where the block holds blocks inside it
  * (turning it would lose them), and where the converter says no.
  *
+ * A block style (a look) belongs to one block type and is not drawn on any
+ * other, so a look the block wears that the new type cannot is kept as the
+ * new block's own styles, under the ones it set itself, when `library` names
+ * it; its id is then left off. Without the library its id is carried as is.
+ *
+ * Refused too in a component, for a block whose props the component offers to
+ * its placements: their saved values name this block's props, which the new
+ * type does not have.
+ *
  * Whether a lock allows the edit is the apply's question and the editor's,
  * asked of the op this returns.
  *
@@ -107,7 +122,8 @@ export function planTurnInto(
   document: BlockDocument,
   id: string,
   to: string,
-  definitions: TurnIntoDefinitions = getBlock
+  definitions: TurnIntoDefinitions = getBlock,
+  library: readonly NamedClass[] = []
 ): TurnIntoResult {
   const node = findNode(document.nodes, id);
   if (node === undefined) return { refused: "This block is no longer here." };
@@ -122,6 +138,12 @@ export function planTurnInto(
   if (holdsBlocks(node)) {
     return { refused: "It holds other blocks, which would be lost." };
   }
+  if (offeredToPlacements(document, id)) {
+    return {
+      refused:
+        "Placements of this component fill in this block, so it can't be turned into another.",
+    };
+  }
   const converted = converter.convert(node.props);
   if ("refused" in converted) return { refused: converted.refused };
 
@@ -131,7 +153,11 @@ export function planTurnInto(
     target,
     converter.carries ?? {}
   );
-  const styles = supportedStyles(node.styles, target);
+  const worn = lookOf(node, to, library);
+  const styles = supportedStyles(
+    worn.look === undefined ? node.styles : under(worn.look, node.styles),
+    target
+  );
   const turned: BlockNode = {
     id: node.id,
     type: to,
@@ -140,7 +166,9 @@ export function planTurnInto(
     ...(bindings === undefined ? {} : { bindings }),
     ...(styles === undefined ? {} : { styles }),
     ...keptFields(node),
+    ...(worn.classes === undefined ? {} : { classes: worn.classes }),
   };
+  if (worn.classes?.length === 0) delete turned.classes;
   return {
     op: { kind: "turnInto", id: node.id, node: turned },
     ...(converted.dropped === undefined ? {} : { dropped: converted.dropped }),
@@ -154,6 +182,51 @@ function labelOf(
   name: string
 ): string {
   return definition?.editor?.label ?? name;
+}
+
+/** Whether a component offers any of this block's props to its placements. */
+function offeredToPlacements(document: BlockDocument, id: string): boolean {
+  if (!isComponentDocument(document)) return false;
+  return (document.exposed ?? []).some(exposed => exposed.nodeId === id);
+}
+
+/**
+ * The look the block wears that the new type cannot, merged in library order
+ * when it wears several, and its classes without them; nothing when it wears
+ * none the library names.
+ */
+function lookOf(
+  node: BlockNode,
+  to: string,
+  library: readonly NamedClass[]
+): { look?: NodeStyles; classes?: string[] } {
+  const worn = new Set(node.classes ?? []);
+  const looks = library
+    .filter(cls => worn.has(cls.id) && isLook(cls) && cls.blockType !== to)
+    .sort((a, b) => a.orderIndex - b.orderIndex);
+  if (looks.length === 0) return {};
+  const gone = new Set(looks.map(look => look.id));
+  return {
+    look: looks.reduce<NodeStyles>((all, look) => under(all, look.styles), {}),
+    classes: (node.classes ?? []).filter(cls => !gone.has(cls)),
+  };
+}
+
+/** `below` with `above` laid over it, value by value: `above` wins. */
+function under(below: NodeStyles, above: NodeStyles | undefined): NodeStyles {
+  const out: Record<string, Record<string, Record<string, unknown>>> = {};
+  for (const layer of [below, above ?? {}]) {
+    for (const [state, breakpoints] of Object.entries(layer)) {
+      for (const [breakpoint, values] of Object.entries(breakpoints ?? {})) {
+        out[state] ??= {};
+        out[state][breakpoint] = {
+          ...out[state][breakpoint],
+          ...structuredClone(values),
+        };
+      }
+    }
+  }
+  return out;
 }
 
 /** Whether any of the block's slots holds a block. */

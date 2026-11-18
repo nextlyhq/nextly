@@ -27,6 +27,8 @@
 
 import {
   registryNestingSource,
+  type BlockDocument,
+  type NamedClass,
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
 import { useIsomorphicLayoutEffect, useShortcuts } from "@nextlyhq/ui";
@@ -91,7 +93,7 @@ import {
   selectionMove,
 } from "./selection-ops";
 import { blockActionRunners } from "./shell/builder-commands";
-import { runTurnInto } from "./turn-into-verb";
+import { runTurnInto, turnIntoOffers } from "./turn-into-verb";
 
 // The keys and what is announced, the contexts the toolbar and menus read,
 // and what the hook takes and returns live in modules of their own beside
@@ -899,7 +901,12 @@ export function useBlockKeyboardActions({
     onSaveAsSharedStyle?.();
   }, [selectionActions, onSaveAsSharedStyle, announce]);
   const editSelectedComponent = useEditComponentVerb(editor, onEditComponent);
-  const turnSelectedInto = useTurnIntoVerb(editor, nestingSource, announce);
+  const turnVerbs = useTurnIntoVerbs(
+    editor,
+    nestingSource,
+    sharedLibrary,
+    announce
+  );
 
   const actions = React.useMemo<BlockActions>(
     () => ({
@@ -914,11 +921,11 @@ export function useBlockKeyboardActions({
       duplicateComponent: () => runComponentVerb("duplicate-component"),
       updatePattern: () => runComponentVerb("update-pattern"),
       saveAsSharedStyle,
-      turnInto: turnSelectedInto,
+      ...turnVerbs,
     }),
     [
       saveAsSharedStyle,
-      turnSelectedInto,
+      turnVerbs,
       moveSelected,
       deleteSelected,
       duplicateSelected,
@@ -960,36 +967,54 @@ function CanvasFrameReader({ into }: { into: CanvasFrameSlot }): null {
 }
 
 /**
- * The "Turn into" verb: turns the one selected block into another type as one
- * undo step, saying what it removed or why it could not (`runTurnInto`).
- * Silent for a selection of more than one block, which is offered no turn.
+ * The "Turn into" verbs: the one selected block turned into another type as
+ * one undo step, saying what it removed or why it could not (`runTurnInto`),
+ * and the same for a block in a page a caller holds (the format bar's). Each
+ * is judged with the site's styles, so a block style the new type cannot wear
+ * is kept as its own styles. Silent for a selection of more than one block,
+ * which is offered no turn.
  */
-function useTurnIntoVerb(
+function useTurnIntoVerbs(
   editor: EditorState,
   nesting: NestingSource,
+  library: readonly NamedClass[] | undefined,
   announce: (words: string) => void
-): (to: string) => void {
+): Pick<BlockActions, "turnInto" | "turnIntoIn"> {
   const { document, selectedId, selection, apply, lockRefusalFor } = editor;
-  return React.useCallback(
+  const turnIntoIn = React.useMemo(
+    () => ({
+      choices: (page: BlockDocument, id: string) =>
+        turnIntoOffers(page, id, {
+          ask: lockRefusalFor,
+          planned: true,
+          nesting,
+          ...(library === undefined ? {} : { library }),
+        }),
+      run: (page: BlockDocument, id: string, to: string) => {
+        runTurnInto(
+          { document: page, apply, lockRefusalFor },
+          id,
+          to,
+          announce,
+          {
+            nesting,
+            ...(library === undefined ? {} : { library }),
+          }
+        );
+      },
+    }),
+    [apply, lockRefusalFor, nesting, library, announce]
+  );
+  const turnInto = React.useCallback(
     (to: string) => {
       if (selectedId === null || selection.ids.length !== 1) return;
-      runTurnInto(
-        { document, apply, lockRefusalFor },
-        selectedId,
-        to,
-        announce,
-        { nesting }
-      );
+      turnIntoIn.run(document, selectedId, to);
     },
-    [
-      document,
-      selectedId,
-      selection.ids,
-      apply,
-      lockRefusalFor,
-      nesting,
-      announce,
-    ]
+    [document, selectedId, selection.ids, turnIntoIn]
+  );
+  return React.useMemo(
+    () => ({ turnInto, turnIntoIn }),
+    [turnInto, turnIntoIn]
   );
 }
 

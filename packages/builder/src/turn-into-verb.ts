@@ -27,6 +27,7 @@ import {
   turnIntoTargets,
   type BlockDocument,
   type BuilderOp,
+  type NamedClass,
   type NestingSource,
   type TurnIntoDefinitions,
   type TurnIntoPlan,
@@ -101,6 +102,11 @@ export interface TurnIntoJudging {
   readonly planned?: boolean;
   readonly nesting?: NestingSource;
   readonly definitions?: TurnIntoDefinitions;
+  /**
+   * The site's styles, so a block style the new type cannot wear is kept as
+   * its own styles (`planTurnInto`). Absent, its id is carried as is.
+   */
+  readonly library?: readonly NamedClass[];
 }
 
 /** What a turn removes, as one line: the converter's words, then a binding. */
@@ -177,7 +183,13 @@ function judge(
     const reason = lockedBlockWording(locked, id, "change").headline;
     return { offer: { ...base, enabled: false, reason } };
   }
-  const plan = planTurnInto(document, id, to, judging.definitions);
+  const plan = planTurnInto(
+    document,
+    id,
+    to,
+    judging.definitions,
+    judging.library
+  );
   if ("refused" in plan) {
     return { offer: { ...base, enabled: false, reason: plan.refused } };
   }

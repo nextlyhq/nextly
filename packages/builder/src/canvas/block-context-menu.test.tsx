@@ -21,6 +21,7 @@ import {
   hasBlock,
   registerBlocks,
   type ComponentLookup,
+  type NamedClass,
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
@@ -103,16 +104,30 @@ function editorSpy(doc: BlockDocument, selectedId: string | null): EditorState {
     canRedo: false,
     undoDepth: 0,
     lockRefusalFor: () => undefined,
+    composed: () => undefined,
   } as unknown as EditorState;
 }
 
-function mount(editor: EditorState, definitions?: ComponentLookup) {
+function mount(
+  editor: EditorState,
+  definitions?: ComponentLookup,
+  library?: readonly NamedClass[]
+) {
   return render(
     <ShortcutProvider>
       <BlockKeyboardActions
         onSaveAsPattern={() => undefined}
         editor={editor}
         {...(definitions === undefined ? {} : { definitions })}
+        {...(library === undefined
+          ? {}
+          : {
+              sharedStyles: {
+                library,
+                mayChange: true,
+                onSaveAsSharedStyle: () => undefined,
+              },
+            })}
       >
         <BlockContextMenu editor={editor}>
           <Canvas
@@ -564,6 +579,38 @@ describe("Turn into, in the right-click menu", () => {
     expect(last).toBe(first + 1);
     expect(children[first - 1]?.getAttribute("role")).toBe("separator");
     expect(children[last + 1]?.getAttribute("role")).toBe("separator");
+  });
+
+  it("keeps the Text's block style as the Heading's own styles", () => {
+    registerBlocks(coreBlocks as never, { source: "core" });
+    const lead: NamedClass = {
+      id: "look-lead",
+      slug: "lead",
+      orderIndex: 0,
+      blockType: "core/text",
+      styles: { base: { desktop: { fontSize: "1.5rem" } } },
+    };
+    const page = textPage();
+    const first = page.nodes[0] as BlockNode;
+    first.classes = ["look-lead"];
+    const editor = editorSpy(page, "a");
+    const { container } = mount(editor, undefined, [lead]);
+    fireEvent.contextMenu(blockElement(container));
+    fireEvent.pointerUp(
+      screen.getByRole("menuitem", { name: /^Turn into Heading/ }),
+      { pointerType: "mouse", button: 0 }
+    );
+    expect(vi.mocked(editor.apply).mock.calls[0]?.[0]).toMatchObject({
+      kind: "turnInto",
+      node: {
+        type: "core/heading",
+        styles: { base: { desktop: { fontSize: "1.5rem" } } },
+      },
+    });
+    const turned = (
+      vi.mocked(editor.apply).mock.calls[0]?.[0] as { node: BlockNode }
+    ).node;
+    expect(turned.classes).toBeUndefined();
   });
 
   it("turns the block with one op when chosen", () => {

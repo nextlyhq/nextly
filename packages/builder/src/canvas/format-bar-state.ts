@@ -14,7 +14,7 @@
  * @module format-bar-state
  */
 
-import type { TurnIntoOffer } from "../turn-into-verb";
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
 
 /** One thing the bar offers. */
 export type FormatAction = "bold" | "italic" | "link" | "turnInto";
@@ -64,13 +64,16 @@ export interface FormatTarget {
 }
 
 /**
- * "Turn into" for the block whose words are being edited: the types it can
- * become, asked when the choices open, and the turn itself, which finishes
- * the edit first so the words typed are what is turned.
+ * What "Turn into" needs from the passage being edited: the block, the page
+ * as it would stand with the words typed so far (what the choices are judged
+ * on), and a way to finish the edit, answering the page it left, or `null`
+ * when the words could not be written. The choices and the turn are the
+ * editor's own verbs (`BlockActions.turnIntoIn`).
  */
 export interface FormatTurnInto {
-  readonly choices: () => readonly TurnIntoOffer[];
-  readonly run: (to: string) => void;
+  readonly nodeId: string;
+  readonly typedPage: () => BlockDocument;
+  readonly finish: () => BlockDocument | null;
 }
 
 /** Everything the bar draws from. */

@@ -1,11 +1,12 @@
 /**
- * The format bar's "Turn into", for the block whose words are being edited.
+ * The format bar's "Turn into", for the block whose words are being edited:
+ * what the editor's verbs (`BlockActions.turnIntoIn`) need from the passage.
  *
- * The choices are the block menu's own (`turnIntoOffers`), asked of the page
- * as it would stand with the words typed so far, so what a choice says it
- * removes is about those words. Choosing one finishes the edit first, then
- * turns the block in the page the edit wrote: the words typed are what is
- * turned, and the turn is its own undo step after the edit's.
+ * The choices are judged on the page as it would stand with the words typed
+ * so far, so what a choice says it removes is about those words. Choosing one
+ * finishes the edit first, then turns the block in the page the edit wrote:
+ * the words typed are what is turned, and the turn is its own undo step after
+ * the edit's.
  *
  * Not offered for a component's exposed words, which are a placement's value
  * rather than a block of their own, nor for a block that turns into nothing.
@@ -13,10 +14,14 @@
  * @module format-turn-into
  */
 
-import { applyOp, type BlockDocument } from "@nextlyhq/blocks-engine";
+import {
+  applyOp,
+  findNode,
+  turnIntoTargets,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
 
 import type { EditorState } from "../editor-state";
-import { runTurnInto, turnIntoOffers } from "../turn-into-verb";
 
 import type { FormatTurnInto } from "./format-bar-state";
 import type { InlineEditOutcome } from "./inline-edit-outcome";
@@ -76,36 +81,13 @@ export function formatTurnInto(
 ): FormatTurnInto | undefined {
   const { editing } = source;
   if (editing.exposure !== undefined) return undefined;
-  const offered = turnIntoOffers(source.editor().document, editing.nodeId);
-  if (offered.length === 0) return undefined;
+  const node = findNode(source.editor().document.nodes, editing.nodeId);
+  if (node === undefined || turnIntoTargets(node.type).length === 0) {
+    return undefined;
+  }
   return {
-    choices: () => {
-      const editor = source.editor();
-      return turnIntoOffers(
-        pageAsTyped(editor, source.typed()),
-        editing.nodeId,
-        {
-          ask: editor.lockRefusalFor,
-          planned: true,
-        }
-      );
-    },
-    run: to => {
-      const editor = source.editor();
-      const page = pageAfter(source.commit(), editor);
-      if (page === null) return;
-      runTurnInto(
-        {
-          document: page,
-          apply: editor.apply,
-          lockRefusalFor: editor.lockRefusalFor,
-        },
-        editing.nodeId,
-        to,
-        // What the turn removes was said beside the choice, and a refusal
-        // the page gives is said by the editor's own notices.
-        () => undefined
-      );
-    },
+    nodeId: editing.nodeId,
+    typedPage: () => pageAsTyped(source.editor(), source.typed()),
+    finish: () => pageAfter(source.commit(), source.editor()),
   };
 }

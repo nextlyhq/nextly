@@ -13,12 +13,14 @@
 
 import {
   registryNestingSource,
+  type BlockDocument,
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import type { MoveDirection } from "./keyboard-move";
 import type { SelectionOffer } from "./selection-offer";
+import type { TurnIntoOffer } from "./turn-into-verb";
 
 /**
  * The structural verbs, as callables.
@@ -87,6 +89,19 @@ export interface BlockActions {
    * before it keeps compiling.
    */
   readonly turnInto?: (to: string) => void;
+  /**
+   * "Turn into" for a block in a page the caller holds rather than the
+   * selection: the format bar's, which writes the words typed first and turns
+   * the block in the page that left. The same judging and words as
+   * {@link turnInto}.
+   */
+  readonly turnIntoIn?: {
+    readonly choices: (
+      document: BlockDocument,
+      id: string
+    ) => readonly TurnIntoOffer[];
+    readonly run: (document: BlockDocument, id: string, to: string) => void;
+  };
 }
 
 /**

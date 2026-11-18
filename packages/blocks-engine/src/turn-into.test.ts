@@ -16,6 +16,7 @@ import {
   type BlockNode,
 } from "./document";
 import { applyOp } from "./ops";
+import type { NamedClass } from "./style/named-class";
 import { planTurnInto, turnIntoTargets, type TurnIntoPlan } from "./turn-into";
 
 /** Words to words; the converter copies them and says nothing is lost. */
@@ -256,6 +257,92 @@ describe("planTurnInto", () => {
       expect(
         planTurnInto(page(WORDS), "gone", "test/title", lookup)
       ).toHaveProperty("refused");
+    });
+  });
+});
+
+describe("a block style, which belongs to one block type", () => {
+  /** The words' "Loud" look, and a shared style any block may wear. */
+  const LIBRARY: NamedClass[] = [
+    {
+      id: "look-loud",
+      slug: "loud",
+      orderIndex: 0,
+      blockType: "test/words",
+      styles: {
+        base: { desktop: { color: "#0c0", fontSize: "3rem" } },
+        hover: { desktop: { color: "#f00" } },
+      },
+    },
+    {
+      id: "shared-brand",
+      slug: "brand",
+      orderIndex: 1,
+      styles: { base: { desktop: { color: "#00c" } } },
+    },
+  ];
+
+  it("is kept as the new block's own styles, under the ones it set itself, and its id goes", () => {
+    const plan = planTurnInto(
+      page(WORDS),
+      "w1",
+      "test/passage",
+      lookup,
+      LIBRARY
+    );
+    if ("refused" in plan) throw new Error(plan.refused);
+    // The look's styles first, the block's own over them: its own colour
+    // wins, the look's font size and hover colour come through.
+    expect(plan.op.node.styles).toEqual({
+      base: {
+        desktop: { color: "#c00", fontSize: "2rem" },
+        mobile: { fontSize: "1rem" },
+      },
+      hover: { desktop: { color: "#900" } },
+    });
+    const looks = { ...WORDS, styles: undefined };
+    const bare = planTurnInto(
+      page(looks),
+      "w1",
+      "test/passage",
+      lookup,
+      LIBRARY
+    );
+    if ("refused" in bare) throw new Error(bare.refused);
+    expect(bare.op.node.styles).toEqual(LIBRARY[0]?.styles);
+    // The shared style is any block's to wear, so it stays a class.
+    expect(bare.op.node.classes).toEqual(["shared-brand"]);
+  });
+
+  it("keeps only what the new block supports of it", () => {
+    const looks = { ...WORDS, styles: undefined };
+    const plan = planTurnInto(page(looks), "w1", "test/title", lookup, LIBRARY);
+    if ("refused" in plan) throw new Error(plan.refused);
+    expect(plan.op.node.styles).toEqual({
+      base: { desktop: { color: "#0c0" } },
+      hover: { desktop: { color: "#f00" } },
+    });
+  });
+});
+
+describe("a component's offered words", () => {
+  it("refuses to turn a block whose props the component offers to its placements", () => {
+    const component = {
+      ...page(WORDS),
+      kind: "component",
+      exposed: [
+        {
+          id: "x1",
+          label: "Greeting",
+          nodeId: "w1",
+          propPath: "words",
+          type: "text",
+        },
+      ],
+    } as unknown as BlockDocument;
+    expect(planTurnInto(component, "w1", "test/title", lookup)).toEqual({
+      refused:
+        "Placements of this component fill in this block, so it can't be turned into another.",
     });
   });
 });

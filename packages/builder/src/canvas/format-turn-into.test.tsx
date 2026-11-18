@@ -23,6 +23,7 @@ import {
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 
 import type { EditorState } from "../editor-state";
+import { runTurnInto, turnIntoOffers } from "../turn-into-verb";
 
 import { formatBar } from "./format-bar-state";
 import { useInlineEditing } from "./use-inline-editing";
@@ -100,31 +101,40 @@ async function openText(type: string, typed: unknown, version = 2) {
 const BOLD_HI = paragraph(words("Hi", TEXT_FORMAT.BOLD));
 
 describe("the format bar's Turn into, for a Text", () => {
-  it("is served, with choices about the words as typed", async () => {
+  it("is served, judged on the page as the words are typed", async () => {
     registerBlocks(coreBlocks as never, { source: "core" });
     await openText("core/text", BOLD_HI);
     const turnInto = formatBar.get().target?.turnInto;
-    expect(turnInto).toBeDefined();
-    const choices = turnInto?.choices() ?? [];
+    expect(turnInto?.nodeId).toBe("t");
+    const typed = turnInto?.typedPage();
+    // The stored words are "Hello"; the page judged holds the words typed.
+    expect(typed?.nodes[0]?.props.text).toEqual(BOLD_HI);
+    // So a choice says what it removes from those words.
+    const choices = turnIntoOffers(typed as BlockDocument, "t");
     expect(choices.map(choice => [choice.name, choice.note])).toEqual([
       ["Rich text", undefined],
-      // The stored words carry no bold; the typed ones do.
       ["Heading", "Bold and links are removed"],
     ]);
   });
 
-  it("writes the words typed, then turns the block, as two steps", async () => {
+  it("finishes by writing the words typed, and the turn after it is a step of its own", async () => {
     registerBlocks(coreBlocks as never, { source: "core" });
     const { editor, applied } = await openText("core/text", BOLD_HI);
-    act(() => formatBar.get().target?.turnInto?.run("core/heading"));
+    let page: BlockDocument | null = null;
+    act(() => {
+      page = formatBar.get().target?.turnInto?.finish() ?? null;
+    });
+    expect(applied.map(op => op.kind)).toEqual(["update"]);
+    expect(page).toBe(editor.document);
+    // The edit is finished: the bar serves nothing.
+    expect(formatBar.get().target).toBeNull();
+    runTurnInto(editor, "t", "core/heading", () => undefined);
     expect(applied.map(op => op.kind)).toEqual(["update", "turnInto"]);
     expect(editor.document.nodes[0]).toMatchObject({
       id: "t",
       type: "core/heading",
       props: { text: "Hi", level: "h2" },
     });
-    // The edit is finished: the bar serves nothing.
-    expect(formatBar.get().target).toBeNull();
   });
 
   it("is not served for a block that turns into nothing", async () => {
