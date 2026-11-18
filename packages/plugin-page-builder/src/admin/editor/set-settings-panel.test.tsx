@@ -71,6 +71,28 @@ const writes = vi.hoisted(() => ({
 }));
 vi.mock("../layout-writes-client", () => writes);
 
+const made = vi.hoisted(() => ({
+  createAreaComponent: vi.fn(async (area: string) => ({
+    id: `${area}-new`,
+    title: area === "header" ? "Header 2" : "Footer 2",
+    area,
+  })),
+}));
+vi.mock("../layout-area-client", () => made);
+
+const copies = vi.hoisted(() => ({
+  send: vi.fn(async () => ({
+    component: { id: "ridgeline-copy", title: "Ridgeline header copy" },
+  })),
+  asked: [] as string[],
+}));
+vi.mock("../component-actions-client", () => ({
+  useDuplicate: (componentId: string) => {
+    copies.asked.push(componentId);
+    return { send: copies.send, error: undefined };
+  },
+}));
+
 const flows = vi.hoisted(() => ({ makeDefault: vi.fn(), remove: vi.fn() }));
 vi.mock("../make-default-action", () => ({
   useMakeDefaultFlow: () => ({ start: flows.makeDefault, dialog: null }),
@@ -102,10 +124,18 @@ afterEach(cleanup);
 /** The form's values, as the last render saw them. */
 let values: FieldValues = {};
 
+const editArea = vi.fn();
+
 function Panel({ initial }: { initial: FieldValues }) {
   const form = useForm({ defaultValues: initial });
   values = form.watch();
-  return <SetSettingsPanel set={{ id: "main" }} control={form.control} />;
+  return (
+    <SetSettingsPanel
+      set={{ id: "main" }}
+      control={form.control}
+      onEditArea={editArea}
+    />
+  );
 }
 
 function render(initial: FieldValues = MAIN_FORM) {
@@ -124,7 +154,11 @@ const MAIN_FORM = {
   ],
 };
 
-function choicesWith(defaultLayout: string, published = true) {
+function choicesWith(
+  defaultLayout: string,
+  published = true,
+  others: readonly { id: string; title: string; header: string }[] = []
+) {
   return {
     items: [
       {
@@ -135,6 +169,14 @@ function choicesWith(defaultLayout: string, published = true) {
         regions: [],
         areasFilled: [],
       },
+      ...others.map(other => ({
+        id: other.id,
+        title: other.title,
+        published: true,
+        draftChangesNotLive: false,
+        regions: [{ area: "header", componentId: other.header }],
+        areasFilled: ["header"],
+      })),
     ],
     meta: {
       defaultLayout,
@@ -201,17 +243,20 @@ describe("a set's settings", () => {
     ).toBe("base");
   });
 
-  it("lists the components marked for the area first, then Other components, then None, each with its picture", async () => {
+  it("lists the components marked for the area first, then Other components, then None and + Create a header, each choice with its picture", async () => {
     render();
     await userEvent.click(screen.getByLabelText("Header"));
     const list = screen.getByRole("listbox");
-    const options = within(list).getAllByRole("option");
-    expect(options.map(option => option.textContent)).toEqual([
+    const all = within(list).getAllByRole("option");
+    expect(all.map(option => option.textContent)).toEqual([
       expect.stringContaining("Ridgeline header"),
       expect.stringContaining("Starter header"),
       expect.stringContaining("Banner"),
       expect.stringContaining("None"),
+      "+ Create a header",
     ]);
+    // The choices, each with its picture; the create row makes one.
+    const options = all.slice(0, -1);
     expect(within(list).getByText("Other components")).toBeTruthy();
     expect(
       options.map(option => within(option).getByTestId("picture").textContent)
@@ -403,5 +448,106 @@ describe("a set's settings", () => {
     );
     await userEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
     expect(flows.remove).toHaveBeenCalled();
+  });
+
+  it("says which other sets use the header, with Make a separate copy", async () => {
+    choices = choicesWith("main", true, [
+      { id: "landing", title: "Landing", header: "ridgeline" },
+      { id: "promo", title: "Promo", header: "banner" },
+    ]);
+    render();
+    expect(screen.getByText("Also used by Landing")).toBeTruthy();
+    // The footer is this set's alone: nothing is said under it.
+    expect(screen.getAllByText(/^Also used by/)).toHaveLength(1);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Make a separate copy" })
+    );
+    expect(copies.send).toHaveBeenCalledWith({});
+    expect(copies.asked).toContain("ridgeline");
+    // Only this set's form points at the copy; the other area is kept.
+    expect(values.areas).toEqual([
+      { id: "r1", area: "header", component: "ridgeline-copy" },
+      { id: "r2", area: "footer", component: "base" },
+    ]);
+  });
+
+  it("names the other sets in the picker's rows too", async () => {
+    choices = choicesWith("main", true, [
+      { id: "promo", title: "Promo", header: "banner" },
+    ]);
+    render();
+    await userEvent.click(screen.getByLabelText("Header"));
+    expect(
+      screen.getByRole("option", { name: /Banner/ }).textContent
+    ).toContain("Also used by Promo");
+  });
+
+  it("says nothing of other sets while no other set uses the header", () => {
+    choices = choicesWith("main", true, [
+      { id: "promo", title: "Promo", header: "banner" },
+    ]);
+    render();
+    expect(screen.queryByText(/^Also used by/)).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Make a separate copy" })
+    ).toBeNull();
+  });
+
+  it("offers + Create a header last, which makes one and chooses it in the set's form", async () => {
+    render();
+    await userEvent.click(screen.getByLabelText("Header"));
+    const options = screen.getAllByRole("option");
+    expect(options.at(-1)?.textContent).toBe("+ Create a header");
+    await userEvent.click(
+      screen.getByRole("option", { name: "+ Create a header" })
+    );
+    expect(made.createAreaComponent).toHaveBeenCalledWith("header");
+    await vi.waitFor(() =>
+      expect(values.areas).toEqual([
+        { id: "r1", area: "header", component: "header-new" },
+        { id: "r2", area: "footer", component: "base" },
+      ])
+    );
+    // Said, with the way to edit it in place.
+    const [words, options2] = toasts.success.mock.calls.at(-1) ?? [];
+    expect(words).toBe(
+      "Header 2 was created as this set's header. Save or publish the set to keep it."
+    );
+    (options2 as { action: { onClick: () => void } }).action.onClick();
+    expect(editArea).toHaveBeenCalledWith("header");
+  });
+
+  it("words the footer's as + Create a footer", async () => {
+    render();
+    await userEvent.click(screen.getByLabelText("Footer"));
+    expect(
+      screen.getByRole("option", { name: "+ Create a footer" })
+    ).toBeTruthy();
+  });
+
+  it("says a refused create, choosing nothing", async () => {
+    made.createAreaComponent.mockRejectedValueOnce(
+      new Error("You don't have permission to create components.")
+    );
+    render();
+    await userEvent.click(screen.getByLabelText("Header"));
+    await userEvent.click(
+      screen.getByRole("option", { name: "+ Create a header" })
+    );
+    await vi.waitFor(() =>
+      expect(toasts.error).toHaveBeenCalledWith(
+        "You don't have permission to create components."
+      )
+    );
+    expect(values.areas).toEqual(MAIN_FORM.areas);
+  });
+
+  it("names its open list from the trigger, and holds only options and groups in it", async () => {
+    render();
+    const trigger = screen.getByLabelText("Header");
+    await userEvent.click(trigger);
+    const list = screen.getByRole("listbox");
+    expect(trigger.getAttribute("aria-controls")).toBe(list.id);
+    expect(list.querySelector('[role="separator"]')).toBeNull();
   });
 });

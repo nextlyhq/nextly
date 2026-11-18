@@ -166,6 +166,55 @@ export function starterComponentData(
   };
 }
 
+/**
+ * Create the starter's design for `area` as a published component marked for
+ * it, AS THE CALLER, under the first title and slug no component holds: the
+ * one create both "Create a header" on the band and a set's picker make. The
+ * components collection's own create and publish rules judge it.
+ */
+export async function createStarterComponent(
+  ctx: PluginRouteContext,
+  store: ComponentStore,
+  area: LayoutArea
+): Promise<{ id: string; title: string }> {
+  const components =
+    store.collection ??
+    ctx.self.collections[COMPONENTS_SLUG] ??
+    COMPONENTS_SLUG;
+  const pages = ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG;
+  const nextly = requireNextly();
+  // Every title and slug a component holds, read as the system: a name the
+  // caller cannot see still holds its unique slug.
+  const taken = await takenNames(nextly, components);
+  const title = createdTitle(area, taken.titles);
+  for (let attempt = 1; ; attempt += 1) {
+    const slug = createdSlug(area, taken.slugs);
+    try {
+      const created = await nextly.create({
+        collection: components,
+        data: starterComponentData(area, {
+          title,
+          slug,
+          field: store.field,
+          pagesSlug: pages,
+        }),
+        ...(await readingAsUser(ctx)),
+      });
+      const id = relationId(created.item);
+      if (id === null) {
+        throw NextlyError.internal({
+          logContext: { reason: "area-component-create-without-id", area },
+        });
+      }
+      return { id, title };
+    } catch (error) {
+      if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
+      if (attempt >= SLUG_ATTEMPTS) throw error;
+      taken.slugs.add(slug);
+    }
+  }
+}
+
 /** The Direct API for the create, as the caller except for the cleanup. */
 function directCreateInAreaWrites(
   ctx: PluginRouteContext,
@@ -175,7 +224,6 @@ function directCreateInAreaWrites(
     store.collection ??
     ctx.self.collections[COMPONENTS_SLUG] ??
     COMPONENTS_SLUG;
-  const pages = ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG;
   return {
     ...directLayoutAreaWrites(ctx, store),
     defaultSet: async () =>
@@ -187,39 +235,7 @@ function directCreateInAreaWrites(
             PAGE_BUILDER_SETTINGS_SLUG,
         })
       ).defaultLayout,
-    createStarter: async area => {
-      const nextly = requireNextly();
-      // Every title and slug a component holds, read as the system: a name
-      // the caller cannot see still holds its unique slug.
-      const taken = await takenNames(nextly, components);
-      const title = createdTitle(area, taken.titles);
-      for (let attempt = 1; ; attempt += 1) {
-        const slug = createdSlug(area, taken.slugs);
-        try {
-          const created = await nextly.create({
-            collection: components,
-            data: starterComponentData(area, {
-              title,
-              slug,
-              field: store.field,
-              pagesSlug: pages,
-            }),
-            ...(await readingAsUser(ctx)),
-          });
-          const id = relationId(created.item);
-          if (id === null) {
-            throw NextlyError.internal({
-              logContext: { reason: "default-area-create-without-id", area },
-            });
-          }
-          return { id, title };
-        } catch (error) {
-          if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
-          if (attempt >= SLUG_ATTEMPTS) throw error;
-          taken.slugs.add(slug);
-        }
-      }
-    },
+    createStarter: area => createStarterComponent(ctx, store, area),
     removeCreated: id =>
       deleteUnplacedComponent(
         {
