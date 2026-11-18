@@ -2,8 +2,9 @@
  * A collection's Schema Builder save that the development push applies, and that fails: whether
  * its migration files stay depends on whether the push may have changed the database.
  *
- * - A refusal before the push runs, or a busy table's stop that says nothing ran, leaves nothing:
- *   no file, no snapshot, no change to the definition, the table or the registry row.
+ * - A refusal before the push runs, a refusal inside it before any statement ran, or a busy
+ *   table's stop that says nothing ran, leaves nothing: no file, no snapshot, no change to the
+ *   definition, the table or the registry row.
  * - On MySQL, which commits each schema statement as it runs, and on SQLite, whose push keeps the
  *   statements before the one that fails, a push that fails after a statement ran keeps its
  *   files, recorded applied nowhere, and the admin is told the database holds part of the change
@@ -200,6 +201,27 @@ for (const dialect of getConfiguredTestDialects()) {
       },
       60_000
     );
+
+    // A refusal inside the push, before it runs any statement: a column on the table that no field
+    // describes, which the push would drop and nothing the save decides answers. MySQL and SQLite
+    // keep what a push ran, so whether this one changed anything is read from the tables.
+    it("leaves nothing when the push refuses before running any statement", async () => {
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      await exec(
+        `ALTER TABLE ${q("dc_posts")} ADD COLUMN ${q("legacy_notes")} text`
+      );
+      const before = await standing();
+
+      // The push's own refusal, in its words: the apply reports a refused push by its message.
+      await expect(save(SWITCHED)).rejects.toMatchObject({
+        publicMessage: expect.stringContaining(
+          'holds a column "legacy_notes" that no field describes'
+        ),
+      });
+
+      expect(await standing()).toEqual(before);
+    }, 60_000);
 
     it("leaves nothing when a refusal before the push stops it", async () => {
       // Two posts sharing a code: a code made unique over them is refused before anything runs

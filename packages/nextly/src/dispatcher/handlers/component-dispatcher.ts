@@ -60,7 +60,10 @@ import type { Resolution } from "../../domains/schema/pipeline/resolution/types"
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
 import { recordedFieldsOf } from "../../domains/schema/services/collection-schema-apply";
-import { getComponentRowColumnDescriptor } from "../../domains/schema/services/field-column-descriptor";
+import {
+  collectionOwnTables,
+  getComponentRowColumnDescriptor,
+} from "../../domains/schema/services/field-column-descriptor";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
@@ -903,7 +906,22 @@ export const COMPONENTS_METHODS: Record<
                 legacyBundle,
               ],
             }),
-            dialect
+            dialect,
+            // Whether a failed push changed anything is read from the tables it can reach: the
+            // main table, its translations table and any junction, before the save and after.
+            {
+              adapter,
+              tables: [
+                ...collectionOwnTables(
+                  tableName,
+                  (component.fields ?? []) as unknown as FieldDefinition[]
+                ),
+                ...collectionOwnTables(
+                  tableName,
+                  fields as unknown as FieldDefinition[]
+                ),
+              ],
+            }
           );
           // Notes once the push may have changed the database, so a failure after it keeps the
           // files that record it.
